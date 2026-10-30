@@ -1,0 +1,39 @@
+name: Build iPhone app
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build unsigned app for iPhone
+        run: |
+          xcodebuild -version
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Release -sdk iphoneos \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          mkdir -p dist/Payload
+          cp -R build/Build/Products/Release-iphoneos/MacPro.app dist/Payload/
+          (cd dist && zip -qry MacPro.ipa Payload && rm -rf Payload)
+      - name: Launch in the simulator and take a screenshot
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))][0].udid')
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          xcrun simctl launch "$DEVICE" local.macpro.MacPro
+          sleep 15
+          xcrun simctl io "$DEVICE" screenshot dist/launch.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MacPro-app
+          path: dist/
+          retention-days: 30
