@@ -29,6 +29,12 @@ struct Status: Decodable {
     struct OCLP: Decodable { let version: String; let patchedFor: String; let patchedAt: String; let kdk: String }
     struct Sharing: Decodable { let ssh: Bool; let vnc: Bool }
     struct Temp: Decodable, Identifiable { let name: String; let c: Double; var id: String { name } }
+    struct SeedApp: Decodable, Identifiable {
+        let file: String; let name: String; let version: String; let build: String; let phoneBuild: String
+        let installedAt: Double; let expires: Double; let state: String; let message: String; let own: Bool
+        var id: String { file.isEmpty ? name : file }
+    }
+    struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let apps: [SeedApp] }
     struct IOSJob: Decodable { let state: String; let message: String }
     struct IOSStatus: Decodable {
         let hasPhone: Bool; let signedIn: Bool; let ready: Bool; let installedAt: Double; let nextDue: Double
@@ -42,6 +48,7 @@ struct Status: Decodable {
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
     let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
     let temps: [Temp]?
+    let iosApps: SeedStatus?
 }
 
 enum APIError: LocalizedError {
@@ -89,6 +96,18 @@ struct API {
         let err = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
         if code == 401 { throw APIError.signInNeeded }
         throw APIError.message(err ?? "That did not work.")
+    }
+
+    // Hands an app package to the Mac's library, ready to seed.
+    func upload(_ file: URL) async throws {
+        let name = file.lastPathComponent.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? file.lastPathComponent
+        var r = request("/api/ios-upload?name=\(name)", method: "POST")
+        r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
+        r.setValue("1", forHTTPHeaderField: "x-dash")
+        r.timeoutInterval = 600
+        let (data, response) = try await session.upload(for: r, fromFile: file)
+        if (response as? HTTPURLResponse)?.statusCode == 200 { return }
+        throw APIError.message((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String ?? "The Mac refused that file.")
     }
 
     func login(code: String) async throws { try await post("/login", body: ["code": code]) }

@@ -180,6 +180,7 @@ struct AppsTab: View {
     let s: Status
     init(_ s: Status) { self.s = s }
     var body: some View {
+        if let seed = s.iosApps { SeedSection(seed: seed) }
         Section("Open apps (\(s.apps.count))") {
             ForEach(s.apps) { a in
                 VStack(alignment: .leading) {
@@ -446,5 +447,66 @@ struct SignInView: View {
         code = ""
         await model.refresh()
         if model.needsSignIn { note = "This address needs an access code." } else { dismiss() }
+    }
+}
+
+// Apps the Mac can put on this iPhone, and what the iPhone itself reports having.
+struct SeedSection: View {
+    @EnvironmentObject var model: AppModel
+    let seed: Status.SeedStatus
+    @State private var picking = false
+    @State private var note: String?
+    @State private var uploading = false
+
+    func label(_ a: Status.SeedApp) -> (String, Color) {
+        switch a.state {
+        case "installing": return ("Installing…", .blue)
+        case "failed": return ("Install failed", .red)
+        case "missing": return ("Not on this iPhone", .orange)
+        case "update": return ("Update ready: build \(a.build)", .blue)
+        case "external": return ("Installed outside the Mac", .secondary)
+        case "unknown": return ("Checking…", .secondary)
+        default:
+            if a.expires > 0 {
+                let days = Int(ceil((a.expires / 1000 - Date().timeIntervalSince1970) / 86400))
+                return (days > 0 ? "Up to date · \(days)d left" : "Expired", days > 1 ? .green : days > 0 ? .orange : .red)
+            }
+            return ("Up to date", .green)
+        }
+    }
+    var body: some View {
+        Section {
+            ForEach(seed.apps) { a in
+                let l = label(a)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(a.name)
+                        Text(l.0).font(.footnote).foregroundStyle(l.1)
+                        Text(a.version.isEmpty ? "Build \(a.phoneBuild.isEmpty ? a.build : a.phoneBuild)" : "\(a.version) (\(a.phoneBuild.isEmpty ? a.build : a.phoneBuild))").font(.caption2).foregroundStyle(.secondary)
+                        if !a.message.isEmpty { Text(a.message).font(.caption2).foregroundStyle(.secondary).lineLimit(3) }
+                    }
+                    Spacer()
+                    if a.own {
+                        Button(a.state == "missing" ? "Install" : a.state == "update" ? "Update" : "Renew") {
+                            Task { note = await model.run("ios-seed", ["file": a.file]) }
+                        }.buttonStyle(.bordered).disabled(!seed.seeding.isEmpty || !seed.reachable)
+                    }
+                }
+            }
+            Button(uploading ? "Sending to the Mac…" : "Add an app (.ipa)") { picking = true }.disabled(uploading)
+            if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
+        } header: { Text("On this iPhone") } footer: {
+            Text(seed.reachable ? "Connected to the Mac over \(seed.via == "USB" ? "USB" : "Wi-Fi"). New builds install by themselves." : "The Mac can’t reach this iPhone right now. It installs and renews when you’re back on the same Wi-Fi.")
+        }
+        .fileImporter(isPresented: $picking, allowedContentTypes: [.item]) { result in
+            guard case .success(let url) = result else { return }
+            Task {
+                uploading = true; defer { uploading = false }
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                do { try await model.api.upload(url); note = "Added. Tap Install when it appears." ; await model.refresh() }
+                catch { note = error.localizedDescription }
+            }
+        }
     }
 }
