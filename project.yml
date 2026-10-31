@@ -33,7 +33,9 @@ targets:
   MacProWidget:
     type: app-extension
     platform: iOS
-    sources: [Widget]
+    sources:
+      - Widget
+      - path: Shared/Gauges.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.MacPro.Widget
@@ -82,3 +84,29 @@ targets:
           NSAllowsArbitraryLoads: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  GalleryMac:
+    type: application
+    platform: iOS
+    sources:
+      - Widget/MacProWidget.swift
+      - Widget/Assets.xcassets
+      - Shared/Gauges.swift
+      - ci/gallery-mac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryMac
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+  GalleryChumby:
+    type: application
+    platform: iOS
+    sources:
+      - ChumbyWidget/ChumbyWidgets.swift
+      - ChumbyApp/Sources/ChumbyAPI.swift
+      - ChumbyApp/Sources/ChumbyArt.swift
+      - ci/gallery-chumby
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryChumby
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES

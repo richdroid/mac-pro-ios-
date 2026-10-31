@@ -7,7 +7,7 @@ struct MacProApp: App {
     @Environment(\.scenePhase) private var phase
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(model)
+            RootView().environmentObject(model).environmentObject(model.liveStore)
                 .onChange(of: phase) { _, p in if p == .active { model.start() } else { model.stop() } }
                 .onAppear { model.start() }
         }
@@ -80,30 +80,65 @@ struct StateRow: View {
     }
 }
 
-struct Spark: View {
-    let values: [Double]; var top: Double?
-    var body: some View {
-        Chart(Array(values.enumerated()), id: \.offset) { i, v in
-            AreaMark(x: .value("Sample", i), y: .value("Value", v)).foregroundStyle(Color.accentColor.opacity(0.15))
-            LineMark(x: .value("Sample", i), y: .value("Value", v)).foregroundStyle(Color.accentColor).lineStyle(.init(lineWidth: 2))
+// CPU and memory as dials, the network as lines. Watching LiveStore keeps these redraws to this view alone.
+struct LiveTiles: View {
+    @EnvironmentObject var store: LiveStore
+    let s: Status
+    func dial(_ title: String, _ icon: String, _ v: Double, _ big: String, _ color: Color, _ spark: [Double]) -> some View {
+        VStack(spacing: 8) {
+            ArcGauge(v, style: color, width: 9) {
+                VStack(spacing: 1) {
+                    Image(systemName: icon).font(.footnote).foregroundStyle(color)
+                    Text(big).font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
+                }
+            }
+            .frame(maxWidth: 124)
+            SparkLine(values: spark, top: 100, color: color).frame(height: 28)
+            Text(title).font(.footnote).foregroundStyle(.secondary)
         }
-        .chartXAxis(.hidden).chartYAxis(.hidden)
-        .chartYScale(domain: 0...(top ?? max(values.max() ?? 1, 1)))
-        .frame(height: 40)
-        .accessibilityLabel("Recent history")
+        .frame(maxWidth: .infinity)
+    }
+    func net(_ title: String, _ icon: String, _ rate: Double, _ spark: [Double], _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(Format.rate(rate), systemImage: icon).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(color).contentTransition(.numericText())
+            SparkLine(values: spark, color: color).frame(height: 30)
+        }
+        .frame(maxWidth: .infinity).accessibilityLabel(title)
+    }
+    var body: some View {
+        let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, netNow = store.live?.net ?? s.net, h = store.live?.hist ?? s.hist
+        VStack(spacing: 18) {
+            HStack(alignment: .top, spacing: 16) {
+                dial("CPU", "cpu", Double(cpu.total) / 100, "\(cpu.total)%", Color(red: 0.2, green: 0.6, blue: 1), h.cpu)
+                dial("Memory", "memorychip", mem.total > 0 ? mem.used / mem.total : 0, Format.bytes(mem.used), Color(red: 0.95, green: 0.35, blue: 0.6), h.mem)
+            }
+            HStack(spacing: 16) {
+                net("Download", "arrow.down", netNow.rxRate, h.rx, .teal)
+                net("Upload", "arrow.up", netNow.txRate, h.tx, .indigo)
+            }
+        }
+        .padding(.vertical, 6)
+        .animation(.easeOut(duration: 0.25), value: cpu.total)
     }
 }
 
-struct Tile: View {
-    let title: String; let value: String; let detail: String; var spark: [Double] = []; var top: Double?
+// One dial per sensor: the number and the colour say it all.
+struct TempDials: View {
+    @EnvironmentObject var store: LiveStore
+    let s: Status
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-            Text(value).font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-            Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-            if spark.count > 1 { Spark(values: spark, top: top).padding(.top, 6) }
+        let temps = store.live?.temps ?? s.temps ?? []
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 12, alignment: .top)], spacing: 14) {
+            ForEach(temps) { t in
+                VStack(spacing: 5) {
+                    ArcGauge(Heat.level(t.c), style: Heat.gradient, width: 7) {
+                        Text("\(Heat.f(t.c))°").font(.system(.callout, design: .rounded).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
+                    }
+                    Text(t.name).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                }
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
     }
 }
 
@@ -117,8 +152,11 @@ struct Hero: View {
         let text = VStack(alignment: wide ? .leading : .center, spacing: 2) {
             Text("Mac Pro").font(.title.bold())
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
-            Label(healthy ? "All systems go" : "Needs attention", systemImage: healthy ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .font(.footnote.weight(.medium)).foregroundStyle(healthy ? Color.green : Color.orange).padding(.top, 6)
+            HStack(spacing: 4) {
+                Image(systemName: healthy ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                Text(healthy ? "All systems go" : "Needs attention")
+            }
+            .font(.footnote.weight(.medium)).foregroundStyle(healthy ? Color.green : Color.orange).padding(.top, 6)
         }
         Group {
             if wide { HStack(spacing: 20) { art; text } } else { VStack(spacing: 2) { art; text } }
@@ -135,33 +173,16 @@ struct StatusTab: View {
     var body: some View {
         if side != .right {
         Section { Hero(s: s) }.listRowBackground(Color.clear)
-        Section("Live") {
-            LazyVGrid(columns: tileColumns, spacing: 18) {
-                Tile(title: "CPU", value: "\(s.cpu.total)%", detail: String(format: "Load %.2f", s.load.first ?? 0), spark: s.hist.cpu, top: 100)
-                Tile(title: "Memory", value: Format.bytes(s.mem.used), detail: "of \(Format.bytes(s.mem.total))", spark: s.hist.mem, top: 100)
-                Tile(title: "Download", value: Format.rate(s.net.rxRate), detail: s.net.kind, spark: s.hist.rx)
-                Tile(title: "Upload", value: Format.rate(s.net.txRate), detail: s.net.ip, spark: s.hist.tx)
-            }
-            .padding(.vertical, 4)
-        }
+        Section("Live") { LiveTiles(s: s) }
         if let temps = s.temps, !temps.isEmpty {
-            Section("Temperatures") {
-                LazyVGrid(columns: tileColumns, spacing: 14) {
-                    ForEach(temps) { t in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(t.name).font(.footnote).foregroundStyle(.secondary)
-                            Text("\(Int((t.c * 9 / 5 + 32).rounded()))°F").font(.title3.weight(.semibold)).monospacedDigit().foregroundStyle(t.c >= 90 ? .red : t.c >= 75 ? .orange : .primary)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }.padding(.vertical, 4)
-            }
+            Section("Temperatures °F") { TempDials(s: s) }
         }
         Section("Disk") {
-            VStack(alignment: .leading) {
-                Text("\(Format.bytes(s.disk.free)) free").font(.title3.weight(.semibold))
-                ProgressView(value: s.disk.used, total: s.disk.total)
-                Text("\(Format.bytes(s.disk.used)) used of \(Format.bytes(s.disk.total))").font(.footnote).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: s.disk.used, total: s.disk.total).tint(s.disk.used / max(s.disk.total, 1) > 0.9 ? .red : .accentColor)
+                Text("\(Format.bytes(s.disk.free)) free").font(.subheadline.weight(.medium)).monospacedDigit()
             }
+            .padding(.vertical, 2)
         }
         }
         if side != .left {
@@ -271,24 +292,24 @@ struct UsageTab: View {
     func limit(_ title: String, _ pct: Double?, _ resets: Double?) -> some View {
         let now = Date().timeIntervalSince1970 * 1000
         let over = (resets ?? .infinity) <= now
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-            if let pct, !over {
-                Text("\(Int(pct.rounded()))%").font(.title2.weight(.semibold)).monospacedDigit()
-                ProgressView(value: min(pct, 100), total: 100).tint(pct > 90 ? .red : pct > 75 ? .orange : .accentColor)
-                if let resets { Text("Resets in \(Format.span((resets - now) / 1000))").font(.footnote).foregroundStyle(.secondary) }
-            } else {
-                Text(over ? "Reset" : "No reading").font(.title2.weight(.semibold))
-                Text(over ? "Waiting for the next response" : "Use Claude Code in a terminal to get one").font(.footnote).foregroundStyle(.secondary)
+        let live = !over && pct != nil
+        let v = pct ?? 0
+        return VStack(spacing: 6) {
+            ArcGauge(live ? v / 100 : 0, style: v > 90 ? Color.red : v > 75 ? Color.orange : Color.accentColor, width: 9) {
+                Text(live ? "\(Int(v.rounded()))%" : "–").font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit()
             }
+            .frame(maxWidth: 110)
+            Text(title).font(.footnote.weight(.medium))
+            Text(over ? "Reset" : live ? (resets.map { "in \(Format.span(($0 - now) / 1000))" } ?? "") : "No reading").font(.caption).foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity)
     }
     var body: some View {
         if side != .right {
         Section {
-            LazyVGrid(columns: tileColumns, spacing: 18) {
-                limit("5-hour limit", u.plan?.fiveHour, u.plan?.fiveHourResets)
-                limit("7-day limit", u.plan?.sevenDay, u.plan?.sevenDayResets)
+            HStack(alignment: .top, spacing: 16) {
+                limit("5 hours", u.plan?.fiveHour, u.plan?.fiveHourResets)
+                limit("This week", u.plan?.sevenDay, u.plan?.sevenDayResets)
             }
             .padding(.vertical, 4)
         } header: { Text("Plan limits") } footer: {

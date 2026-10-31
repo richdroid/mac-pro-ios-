@@ -8,10 +8,11 @@ struct ChumbyWidgetAddress: WidgetConfigurationIntent {
     @Parameter(title: "Different address (optional)") var address: String?
 }
 
-func chumbyBase(_ override: String?) -> URL? {
-    var text = (override ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    if text.isEmpty { text = Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "" }
-    return URL(string: text).flatMap { $0.host == nil ? nil : $0 }
+// The Mac's cache first; straight to the Chumby at home if Tailscale is off.
+func chumbyRoutes(_ override: String?) -> [URL] {
+    let o = (override ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let list = [o, Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "", Bundle.main.object(forInfoDictionaryKey: "ChumbyFallback") as? String ?? ""]
+    return list.compactMap { URL(string: $0) }.filter { $0.host != nil }
 }
 
 struct ChumbyEntry: TimelineEntry {
@@ -20,38 +21,32 @@ struct ChumbyEntry: TimelineEntry {
     var sys = Sys()
     var nextAlarm: Alarm?
     var nextAt: Date?
-    var shot: Data?
-    var sample = false
     var channel: String { sys.chan.isEmpty ? "Awake" : sys.chan }
-    var image: Image? { shot.flatMap { d in PlatformWidgetImage(data: d).map { Image(platform: $0) } } }
 }
-#if canImport(UIKit)
-import UIKit
-typealias PlatformWidgetImage = UIImage
-extension Image { init(platform i: UIImage) { self.init(uiImage: i) } }
-#else
-import AppKit
-typealias PlatformWidgetImage = NSImage
-extension Image { init(platform i: NSImage) { self.init(nsImage: i) } }
-#endif
 
 struct ChumbyProvider: AppIntentTimelineProvider {
-    var wantsShot = false
-    func placeholder(in context: Context) -> ChumbyEntry { ChumbyEntry(date: Date(), reachable: true, sample: true) }
-    func snapshot(for c: ChumbyWidgetAddress, in context: Context) async -> ChumbyEntry { await load(c) }
+    func placeholder(in context: Context) -> ChumbyEntry { Self.sample }
+    func snapshot(for c: ChumbyWidgetAddress, in context: Context) async -> ChumbyEntry { context.isPreview ? Self.sample : await load(c) }
     func timeline(for c: ChumbyWidgetAddress, in context: Context) async -> Timeline<ChumbyEntry> {
         Timeline(entries: [await load(c)], policy: .after(Date().addingTimeInterval(15 * 60)))
     }
+    static var sample: ChumbyEntry {
+        var s = Sys(); s.chan = "Default"; s.vol = 40; s.wifi = 71; s.up = 291000
+        var a = Alarm(); a.time = "405"; a.name = "Work"
+        return ChumbyEntry(date: Date(), reachable: true, sys: s, nextAlarm: a, nextAt: Date().addingTimeInterval(5 * 3600))
+    }
     func load(_ c: ChumbyWidgetAddress) async -> ChumbyEntry {
         var e = ChumbyEntry(date: Date())
-        guard let base = chumbyBase(c.address) else { return e }
-        let api = ChumbyAPI(base: base)
-        if let s = try? await api.get("sys", as: Sys.self) { e.sys = s; e.reachable = true }
-        if let st = try? await api.get("state", as: ChumbyState.self) {
-            let next = st.alarms.compactMap { a in a.nextFire().map { (a, $0) } }.min { $0.1 < $1.1 }
-            e.nextAlarm = next?.0; e.nextAt = next?.1
+        for base in chumbyRoutes(c.address) {
+            let api = ChumbyAPI(base: base)
+            guard let s = try? await api.get("sys", as: Sys.self) else { continue }
+            e.sys = s; e.reachable = true
+            if let st = try? await api.get("state", as: ChumbyState.self) {
+                let next = st.alarms.compactMap { a in a.nextFire().map { (a, $0) } }.min { $0.1 < $1.1 }
+                e.nextAlarm = next?.0; e.nextAt = next?.1
+            }
+            break
         }
-        if wantsShot { e.shot = try? await api.shot() }
         return e
     }
 }
@@ -65,237 +60,216 @@ struct ChumbyPress: AppIntent {
     init() {}
     init(_ command: String, _ value: String? = nil) { self.command = command; self.value = value }
     func perform() async throws -> some IntentResult {
-        if let base = chumbyBase(nil) { try await ChumbyAPI(base: base).cmd(command, value) }
+        for base in chumbyRoutes(nil) {
+            if (try? await ChumbyAPI(base: base).cmd(command, value)) != nil { break }
+        }
         return .result()
     }
 }
 
-struct Sea: ViewModifier {
+struct SeaFor: View {
     @Environment(\.colorScheme) private var scheme
-    func body(content: Content) -> some View {
-        content.containerBackground(for: .widget) { StillSea(dark: scheme == .dark) }
-    }
+    var body: some View { StillSea(dark: scheme == .dark) }
 }
 extension Font { static func trebuchet(_ s: CGFloat, _ w: Font.Weight = .regular) -> Font { .custom("Trebuchet MS", size: s).weight(w) } }
+private let octoBlue = ChumbyPalette.hex(0x2c5bae)
 
-let buddyLines = ["chumbalicious!", "blub.", "eight arms, one job", "squeeze me!", "i run on 175 MHz and vibes", "enjoy tinkering?", "wake up to your internet life", "still ticking since 2008", "who’s a good gadget?", "ink-credible."]
-func unreachableLine(_ e: ChumbyEntry) -> String { e.reachable || e.sample ? "" : "Can’t reach me. Is Tailscale on?" }
-
-// MARK: - The screen, in its photo
-struct ScreenView: View {
-    @Environment(\.widgetFamily) private var family
-    let entry: ChumbyEntry
-    var device: some View {
-        Image("Device").resizable().scaledToFit()
-            .overlay {
-                GeometryReader { g in
-                    ZStack {
-                        Color(red: 0.04, green: 0.04, blue: 0.05)
-                        if let i = entry.image { i.resizable() }
-                        else { OctopusMark(color: ChumbyPalette.hex(0x79bbff)).frame(width: g.size.width * 0.2) }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-                    .frame(width: g.size.width * 0.6065, height: g.size.height * 0.517)
-                    .position(x: g.size.width * (0.1833 + 0.6065 / 2), y: g.size.height * (0.234 + 0.517 / 2))
-                }
-            }
-    }
-    var body: some View {
-        Group {
-            if family == .systemMedium {
-                HStack(spacing: 10) {
-                    device
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(entry.channel).font(.trebuchet(15, .bold)).lineLimit(2)
-                        Text(entry.date, style: .time).font(.trebuchet(11)).foregroundStyle(.secondary)
-                        if let at = entry.nextAt { Label(at.formatted(date: .omitted, time: .shortened), systemImage: "alarm").font(.trebuchet(12)) }
-                        Spacer(minLength: 0)
-                        Text(unreachableLine(entry).isEmpty ? "As of the last peek" : unreachableLine(entry)).font(.trebuchet(10)).foregroundStyle(.secondary)
-                    }.frame(maxWidth: 110, alignment: .leading)
-                }
-            } else {
-                device
-            }
-        }
-        .modifier(Sea())
-    }
+let buddyLines = ["chumbalicious!", "blub.", "eight arms, one job", "squeeze me!", "i run on 175 MHz and vibes", "enjoy tinkering?", "still ticking since 2008", "who’s a good gadget?", "ink-credible."]
+func entryDuration(_ s: Int) -> String {
+    let d = s / 86400, h = s / 3600 % 24, m = s / 60 % 60
+    return d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m"
 }
-struct ChumbyScreenWidget: Widget {
-    var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "ChumbyScreen", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider(wantsShot: true)) { ScreenView(entry: $0) }
-            .configurationDisplayName("Chumby Screen")
-            .description("A peek at what your Chumby is showing.")
-            .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
-            .contentMarginsDisabled()
+
+// A sad octopus when the Chumby can't be reached.
+struct Lost: View {
+    var body: some View {
+        VStack(spacing: 4) {
+            OctopusMark(color: octoBlue.opacity(0.45)).frame(maxHeight: 62)
+            Label("Tailscale off?", systemImage: "wifi.slash").font(.trebuchet(11, .bold)).opacity(0.75)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
 // MARK: - Next alarm
-struct AlarmView: View {
-    @Environment(\.widgetFamily) private var family
+struct AlarmBody: View {
+    let family: WidgetFamily
     let entry: ChumbyEntry
     var clock: (String, String)? { entry.nextAlarm.map { ($0.clock, $0.meridiem) } }
     var body: some View {
-        Group {
-            switch family {
-            case .accessoryCircular:
-                ZStack {
-                    AccessoryWidgetBackground()
-                    VStack(spacing: 0) {
-                        Image(systemName: "alarm").font(.system(size: 11))
-                        Text(clock?.0 ?? "—").font(.system(size: 14, weight: .semibold)).minimumScaleFactor(0.6)
-                    }
-                }
-            case .accessoryInline:
-                Label(clock.map { "\($0.0) \($0.1)" } ?? "No Chumby alarm", systemImage: "alarm")
-            case .accessoryRectangular:
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Chumby alarm").font(.caption2.weight(.semibold))
-                    if let c = clock, let at = entry.nextAt {
-                        Text("\(c.0) \(c.1)").font(.headline)
-                        Text(at, style: .relative).font(.caption2)
-                    } else { Text("Sleep in. Nothing set.").font(.caption) }
-                }
-            default:
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(entry.nextAlarm?.name.isEmpty == false ? entry.nextAlarm!.name : "next alarm").font(.trebuchet(12, .bold)).foregroundStyle(.secondary).lineLimit(1)
-                        Spacer()
-                        OctopusMark(color: ChumbyPalette.orange).frame(width: 24)
-                    }
-                    Spacer(minLength: 0)
-                    if let c = clock, let at = entry.nextAt {
-                        HStack(alignment: .firstTextBaseline, spacing: 2) {
-                            Text(c.0).font(.trebuchet(36)).minimumScaleFactor(0.6).monospacedDigit()
-                            Text(c.1).font(.trebuchet(14))
-                        }
-                        Text(at, style: .relative).font(.trebuchet(12)).foregroundStyle(.secondary).lineLimit(1)
-                        Text(entry.nextAlarm!.soundText).font(.trebuchet(11)).foregroundStyle(.secondary).lineLimit(1)
-                    } else {
-                        Text(entry.reachable ? "Nothing set." : "Can’t reach me.").font(.trebuchet(20, .bold))
-                        Text(entry.reachable ? "Sleep in, friend." : "Is Tailscale on?").font(.trebuchet(12)).foregroundStyle(.secondary)
-                    }
+        switch family {
+        case .accessoryCircular:
+            ZStack {
+                AccessoryWidgetBackground()
+                VStack(spacing: 0) {
+                    Image(systemName: "alarm").font(.system(size: 11))
+                    Text(clock?.0 ?? "–").font(.system(size: 14, weight: .semibold)).minimumScaleFactor(0.6)
                 }
             }
+        case .accessoryInline:
+            Label(clock.map { "\($0.0) \($0.1)" } ?? "No alarm", systemImage: "alarm")
+        case .accessoryRectangular:
+            HStack(spacing: 6) {
+                Image(systemName: "alarm.fill").font(.title3)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(clock.map { "\($0.0) \($0.1)" } ?? "No alarm").font(.headline)
+                    if let at = entry.nextAt { Text(at, style: .relative).font(.caption2).lineLimit(1) }
+                }
+            }
+        default:
+            if !entry.reachable { Lost() }
+            else if let c = clock, let at = entry.nextAt {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top) {
+                        Image(systemName: "alarm.fill").font(.system(size: 17)).foregroundStyle(ChumbyPalette.orange)
+                        Spacer()
+                        OctopusMark(color: octoBlue).frame(width: 40)
+                    }
+                    Spacer(minLength: 0)
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(c.0).font(.trebuchet(38, .bold)).minimumScaleFactor(0.6).monospacedDigit()
+                        Text(c.1).font(.trebuchet(14, .bold))
+                    }
+                    Text(at, style: .relative).font(.trebuchet(12)).opacity(0.7).lineLimit(1)
+                }
+            } else {
+                VStack(spacing: 6) {
+                    OctopusMark(color: octoBlue, blink: 0.08).frame(maxHeight: 74)
+                    Text("sleep in").font(.trebuchet(15, .bold))
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
-        .modifier(Sea())
     }
+}
+
+// MARK: - The octopus himself
+struct BuddyBody: View {
+    let entry: ChumbyEntry
+    var line: String {
+        if !entry.reachable { return "where’d you go?" }
+        if Calendar.current.component(.hour, from: entry.date) < 6 { return "shh. sleeping." }
+        return buddyLines[(Calendar.current.ordinality(of: .hour, in: .year, for: entry.date) ?? 0) % buddyLines.count]
+    }
+    var body: some View {
+        VStack(spacing: 4) {
+            OctopusMark(color: octoBlue, blink: Calendar.current.component(.hour, from: entry.date) < 6 ? 0.08 : 1).frame(maxHeight: .infinity)
+            Text(line).font(.trebuchet(13, .bold)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - A remote you can press
+struct RemoteBody: View {
+    let entry: ChumbyEntry
+    func press(_ icon: String, _ intent: ChumbyPress, _ label: String, big: Bool = false) -> some View {
+        Button(intent: intent) {
+            Image(systemName: icon).font(.system(size: big ? 22 : 18)).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .buttonStyle(.plain).background(.white.opacity(0.42), in: Circle()).accessibilityLabel(label)
+    }
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                OctopusMark(color: octoBlue).frame(width: 26)
+                Text(entry.reachable ? entry.channel : "Tailscale off?").font(.trebuchet(13, .bold)).lineLimit(1)
+                Spacer()
+            }
+            HStack(spacing: 10) {
+                press("moon.fill", ChumbyPress("night", "on"), "Night")
+                press("backward.fill", ChumbyPress("prev"), "Previous widget", big: true)
+                press("forward.fill", ChumbyPress("next"), "Next widget", big: true)
+                press("sun.max.fill", ChumbyPress("night", "off"), "Wake")
+                press("speaker.slash.fill", ChumbyPress("stopmusic"), "Stop music")
+            }
+        }
+    }
+}
+
+// MARK: - Right now
+struct SignalBars: View {
+    let value: Int
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 2.5) {
+            ForEach(0..<4, id: \.self) { i in
+                RoundedRectangle(cornerRadius: 1.5).fill(value > i * 25 ? octoBlue : octoBlue.opacity(0.2)).frame(width: 5, height: CGFloat(6 + i * 4))
+            }
+        }
+    }
+}
+struct RightNowBody: View {
+    let entry: ChumbyEntry
+    var body: some View {
+        if !entry.reachable { Lost() } else {
+            HStack(spacing: 14) {
+                OctopusMark(color: octoBlue).frame(width: 74)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(entry.channel).font(.trebuchet(16, .bold)).lineLimit(1)
+                    HStack(spacing: 14) {
+                        SignalBars(value: entry.sys.wifi)
+                        HStack(spacing: 5) {
+                            Image(systemName: "speaker.wave.2.fill").font(.system(size: 12))
+                            ProgressView(value: Double(max(entry.sys.vol, 0)), total: 100).tint(ChumbyPalette.orange).frame(width: 52)
+                        }
+                    }
+                    if let at = entry.nextAt {
+                        Label(at.formatted(.dateTime.weekday(.abbreviated).hour().minute()), systemImage: "alarm.fill").font(.trebuchet(13, .bold))
+                    } else {
+                        Label("No alarm", systemImage: "alarm").font(.trebuchet(13)).opacity(0.7)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+}
+
+// MARK: - The widgets
+struct InSea<C: View>: View {
+    @Environment(\.widgetFamily) private var family
+    let content: (WidgetFamily) -> C
+    var body: some View { content(family).containerBackground(for: .widget) { SeaFor() } }
 }
 struct ChumbyAlarmWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "ChumbyAlarm", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { AlarmView(entry: $0) }
+        AppIntentConfiguration(kind: "ChumbyAlarm", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { e in InSea { AlarmBody(family: $0, entry: e) } }
             .configurationDisplayName("Next Alarm")
             .description("When your Chumby wakes you next.")
             .supportedFamilies([.systemSmall, .accessoryCircular, .accessoryRectangular, .accessoryInline])
     }
 }
-
-// MARK: - The octopus himself
-struct BuddyView: View {
-    let entry: ChumbyEntry
-    var line: String {
-        let hour = Calendar.current.component(.hour, from: entry.date)
-        if !entry.reachable && !entry.sample { return "where’d you go?" }
-        if hour < 6 { return "shh. sleeping." }
-        return buddyLines[(Calendar.current.ordinality(of: .hour, in: .year, for: entry.date) ?? 0) % buddyLines.count]
-    }
-    var body: some View {
-        VStack(spacing: 4) {
-            OctopusMark(color: ChumbyPalette.hex(0x2c5bae))
-                .frame(maxHeight: .infinity)
-            Text(line).font(.trebuchet(13, .bold)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.7)
-            if entry.reachable { Text("awake \(entryDuration(entry.sys.up))").font(.trebuchet(10)).foregroundStyle(.secondary) }
-        }
-        .modifier(Sea())
-    }
-}
-func entryDuration(_ s: Int) -> String {
-    let d = s / 86400, h = s / 3600 % 24, m = s / 60 % 60
-    return d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m"
-}
 struct ChumbyBuddyWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "ChumbyBuddy", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { BuddyView(entry: $0) }
+        AppIntentConfiguration(kind: "ChumbyBuddy", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { e in InSea { _ in BuddyBody(entry: e) } }
             .configurationDisplayName("Octopus")
-            .description("Your little octopus, with something to say every hour.")
+            .description("Your little octopus, with something new to say every hour.")
             .supportedFamilies([.systemSmall])
-    }
-}
-
-// MARK: - A remote you can press
-struct RemoteView: View {
-    let entry: ChumbyEntry
-    func press(_ icon: String, _ intent: ChumbyPress, _ label: String) -> some View {
-        Button(intent: intent) {
-            Image(systemName: icon).font(.system(size: 17)).frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .buttonStyle(.plain).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous)).accessibilityLabel(label)
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                OctopusMark(color: ChumbyPalette.hex(0x2c5bae)).frame(width: 22)
-                Text(entry.reachable || entry.sample ? entry.channel : "Can’t reach the Chumby").font(.trebuchet(13, .bold)).lineLimit(1)
-                Spacer()
-                if entry.sys.vol >= 0 { Label("\(entry.sys.vol)%", systemImage: "speaker.wave.2.fill").font(.trebuchet(11)).foregroundStyle(.secondary) }
-            }
-            HStack(spacing: 8) {
-                press("backward.fill", ChumbyPress("prev"), "Previous widget")
-                press("forward.fill", ChumbyPress("next"), "Next widget")
-                press("moon.fill", ChumbyPress("night", "on"), "Night")
-                press("sun.max.fill", ChumbyPress("night", "off"), "Wake")
-                press("speaker.slash.fill", ChumbyPress("stopmusic"), "Stop music")
-            }
-        }
-        .modifier(Sea())
     }
 }
 struct ChumbyRemoteWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "ChumbyRemote", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { RemoteView(entry: $0) }
+        AppIntentConfiguration(kind: "ChumbyRemote", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { e in InSea { _ in RemoteBody(entry: e) } }
             .configurationDisplayName("Chumby Remote")
             .description("Skip, sleep, wake and hush from your Home Screen.")
             .supportedFamilies([.systemMedium])
     }
 }
-
-// MARK: - Right now
-struct RightNowView: View {
-    let entry: ChumbyEntry
-    func stat(_ icon: String, _ text: String) -> some View {
-        Label(text, systemImage: icon).font(.trebuchet(12)).lineLimit(1)
-    }
-    var body: some View {
-        HStack(spacing: 12) {
-            OctopusMark(color: ChumbyPalette.hex(0x2c5bae)).frame(width: 62)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(entry.reachable || entry.sample ? entry.channel : "Can’t reach the Chumby").font(.trebuchet(16, .bold)).lineLimit(1)
-                stat("alarm", entry.nextAt.map { $0.formatted(.dateTime.weekday(.abbreviated).hour().minute()) } ?? "No alarm set")
-                stat("wifi", entry.sys.wifi >= 0 ? "Wi-Fi \(entry.sys.wifi)/100" : "No Wi-Fi")
-                stat("speaker.wave.2.fill", entry.sys.vol >= 0 ? "Volume \(entry.sys.vol)%" : "Volume unknown")
-                stat("clock", "Awake \(entryDuration(entry.sys.up))")
-            }
-            Spacer(minLength: 0)
-        }
-        .modifier(Sea())
-    }
-}
 struct ChumbyRightNowWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "ChumbyRightNow", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { RightNowView(entry: $0) }
+        AppIntentConfiguration(kind: "ChumbyRightNow", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { e in InSea { _ in RightNowBody(entry: e) } }
             .configurationDisplayName("Right Now")
-            .description("Channel, next alarm, Wi-Fi, volume and uptime.")
+            .description("Channel, Wi-Fi, volume and your next alarm.")
             .supportedFamilies([.systemMedium])
     }
 }
 
+#if !GALLERY
 @main
 struct ChumbyWidgets: WidgetBundle {
     var body: some Widget {
-        ChumbyScreenWidget()
         ChumbyAlarmWidget()
         ChumbyBuddyWidget()
         ChumbyRemoteWidget()
         ChumbyRightNowWidget()
     }
 }
+#endif

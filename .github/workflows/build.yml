@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: xcode-27
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Generate Xcode project
@@ -27,14 +27,14 @@ jobs:
           ls build/Build/Products/Release-iphoneos/MacPro.app/PlugIns
       - name: Screenshot in the simulator
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 24
         run: |
           set +x
           exec > >(tee dist/sim.log) 2>&1
           set +e
           DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
           xcrun simctl list devices available | grep -m1 "$DEVICE"
-          for APP in MacPro Chumby; do
+          for APP in MacPro Chumby GalleryMac GalleryChumby; do
             xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
               -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build
           done
@@ -42,6 +42,8 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryMac.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryChumby.app
           node ci/mock-chumby.js &
           shots() { # display, file suffix
             for T in 0 1 2 3 4; do
@@ -58,6 +60,12 @@ jobs:
             done
           }
           shots 1 ""
+          for G in Mac Chumby; do
+            xcrun simctl launch "$DEVICE" local.macpro.Gallery$G
+            sleep 6
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/gallery-$G.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Gallery$G
+          done
           # Unfold the Duo through Device Hub; display 3 is then live.
           git clone -q --depth 1 https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10

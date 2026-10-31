@@ -2,7 +2,11 @@ import Foundation
 import SwiftUI
 
 @MainActor
+final class LiveStore: ObservableObject { @Published var live: LiveStatus? }
+
+@MainActor
 final class AppModel: ObservableObject {
+    let liveStore = LiveStore()
     @Published var status: Status?
     @Published var problem: String?
     @Published var needsSignIn = false
@@ -35,8 +39,9 @@ final class AppModel: ObservableObject {
     func stop() { loops.forEach { $0.cancel() }; loops = [] }
 
     func refreshLive() async {
-        guard status != nil, problem == nil, !address.isEmpty, let l = try? await api.live() else { return }
-        status?.uptime = l.uptime; status?.load = l.load; status?.cpu = l.cpu; status?.mem = l.mem; status?.net = l.net; status?.hist = l.hist; status?.temps = l.temps
+        // Only the live views watch this, so the other tabs and lists stay still.
+        guard tab == 0, problem == nil, !address.isEmpty, let l = try? await api.live() else { return }
+        liveStore.live = l
     }
 
     func refresh() async {

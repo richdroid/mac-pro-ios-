@@ -12,290 +12,276 @@ struct WidgetStatus: Decodable {
     struct CPU: Decodable { let total: Int }
     struct Memory: Decodable { let used: Double; let total: Double }
     struct Disk: Decodable { let free: Double; let total: Double }
-    struct Plan: Decodable { let fiveHour: Double?; let sevenDay: Double?; let fiveHourResets: Double?; let sevenDayResets: Double? }
+    struct Plan: Decodable { let fiveHour: Double?; let sevenDay: Double? }
     struct Usage: Decodable { let plan: Plan? }
-    struct Claude: Decodable { let remoteControl: Bool }
     struct Temp: Decodable { let name: String; let c: Double }
+    struct History: Decodable { let cpu: [Double] }
     struct SeedApp: Decodable { let name: String; let expires: Double; let state: String; let own: Bool }
     struct Seed: Decodable { let reachable: Bool; let apps: [SeedApp] }
-    let macos: String; let uptime: Double
-    let cpu: CPU; let mem: Memory; let disk: Disk; let usage: Usage; let claude: Claude; let temps: [Temp]?; let iosApps: Seed?
+    let uptime: Double
+    let cpu: CPU; let mem: Memory; let disk: Disk; let usage: Usage; let temps: [Temp]?; let iosApps: Seed?; let hist: History
+}
+
+// What the widgets draw, whether it came from the Mac or is a sample in the widget gallery.
+struct MacSnapshot {
+    var cpu = 0.0, mem = 0.0, disk = 0.0
+    var fiveHour: Double?, week: Double?
+    var uptime = ""
+    var temps: [(name: String, c: Double)] = []
+    var history: [Double] = []
+    var apps: [(name: String, days: Int?)] = []
+    static let sample = MacSnapshot(cpu: 0.34, mem: 0.52, disk: 0.58, fiveHour: 6, week: 47, uptime: "2d 4h",
+        temps: [("CPU", 54), ("GPU A", 44), ("GPU B", 47), ("Memory", 42), ("Chipset", 52), ("Drive", 38)],
+        history: [20, 24, 30, 18, 26, 44, 38, 30, 52, 40, 33, 28, 36, 34],
+        apps: [("Mac Pro", 6), ("Chumby", 2), ("SideStore", nil)])
+    init(cpu: Double, mem: Double, disk: Double, fiveHour: Double?, week: Double?, uptime: String, temps: [(name: String, c: Double)], history: [Double], apps: [(name: String, days: Int?)]) {
+        self.cpu = cpu; self.mem = mem; self.disk = disk; self.fiveHour = fiveHour; self.week = week; self.uptime = uptime; self.temps = temps; self.history = history; self.apps = apps
+    }
+    init(_ s: WidgetStatus, now: Date) {
+        cpu = Double(s.cpu.total) / 100
+        mem = s.mem.total > 0 ? s.mem.used / s.mem.total : 0
+        disk = s.disk.total > 0 ? 1 - s.disk.free / s.disk.total : 0
+        fiveHour = s.usage.plan?.fiveHour; week = s.usage.plan?.sevenDay
+        let u = Int(s.uptime), d = u / 86400, h = u / 3600 % 24, m = u / 60 % 60
+        uptime = d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m"
+        temps = (s.temps ?? []).map { ($0.name, $0.c) }
+        history = Array(s.hist.cpu.suffix(40))
+        apps = (s.iosApps?.apps ?? []).map { a in
+            (a.name, a.expires > 0 ? Int(ceil((a.expires / 1000 - now.timeIntervalSince1970) / 86400)) : nil)
+        }
+    }
+    var hottest: (name: String, c: Double)? { temps.max { $0.c < $1.c } }
+    var cpuTemp: Double? { temps.first { $0.name == "CPU" }?.c ?? hottest?.c }
+    // One dial per part: the hotter GPU stands for both.
+    var dials: [(icon: String, c: Double)] {
+        var out: [(String, Double)] = []
+        if let c = temps.first(where: { $0.name == "CPU" })?.c { out.append(("cpu", c)) }
+        if let g = temps.filter({ $0.name.hasPrefix("GPU") }).map(\.c).max() { out.append(("display", g)) }
+        if let c = temps.first(where: { $0.name == "Memory" })?.c { out.append(("memorychip", c)) }
+        if let c = temps.first(where: { $0.name == "Drive" })?.c { out.append(("internaldrive", c)) }
+        return out
+    }
 }
 
 struct MacEntry: TimelineEntry {
-    enum State { case ok(WidgetStatus), noAddress, unreachable, sample }
     let date: Date
-    let state: State
-    var status: WidgetStatus? { if case .ok(let s) = state { return s }; return nil }
-    var isSample: Bool { if case .sample = state { return true }; return false }
-    var problem: String? {
-        switch state {
-        case .noAddress: return "No address set."
-        case .unreachable: return "Can’t reach it. Is Tailscale on?"
-        default: return nil
-        }
-    }
-    var temps: [WidgetStatus.Temp] { isSample ? [.init(name: "CPU", c: 54), .init(name: "GPU A", c: 44), .init(name: "GPU B", c: 45), .init(name: "Memory", c: 42)] : status?.temps ?? [] }
-    var uptime: String {
-        let u = Int(status?.uptime ?? 187200), d = u / 86400, h = u / 3600 % 24, m = u / 60 % 60
-        return d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m"
-    }
+    var snapshot: MacSnapshot?
+    var problem = ""
 }
 
 struct MacProvider: AppIntentTimelineProvider {
-    func placeholder(in context: Context) -> MacEntry { MacEntry(date: Date(), state: .sample) }
-    func snapshot(for c: WidgetAddress, in context: Context) async -> MacEntry { context.isPreview ? MacEntry(date: Date(), state: .sample) : await load(c) }
+    func placeholder(in context: Context) -> MacEntry { MacEntry(date: Date(), snapshot: .sample) }
+    func snapshot(for c: WidgetAddress, in context: Context) async -> MacEntry { context.isPreview ? MacEntry(date: Date(), snapshot: .sample) : await load(c) }
     func timeline(for c: WidgetAddress, in context: Context) async -> Timeline<MacEntry> {
         Timeline(entries: [await load(c)], policy: .after(Date().addingTimeInterval(15 * 60)))
     }
     private func load(_ c: WidgetAddress) async -> MacEntry {
         var text = (c.address ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { text = Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "" }
-        if text.isEmpty { return MacEntry(date: Date(), state: .noAddress) }
         if !text.contains("://") { text = "https://" + text }
-        guard let url = URL(string: text + "/api/status") else { return MacEntry(date: Date(), state: .noAddress) }
+        guard let url = URL(string: text + "/api/status") else { return MacEntry(date: Date(), problem: "No address") }
         var r = URLRequest(url: url); r.timeoutInterval = 15; r.cachePolicy = .reloadIgnoringLocalCacheData
         guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
-              let s = try? JSONDecoder().decode(WidgetStatus.self, from: d) else { return MacEntry(date: Date(), state: .unreachable) }
-        return MacEntry(date: Date(), state: .ok(s))
+              let s = try? JSONDecoder().decode(WidgetStatus.self, from: d) else { return MacEntry(date: Date(), problem: "Tailscale off?") }
+        return MacEntry(date: Date(), snapshot: MacSnapshot(s, now: Date()))
     }
 }
 
-// The cylinder's own look: dark graphite with a cool glow.
-struct Graphite: ViewModifier {
-    func body(content: Content) -> some View {
-        content.foregroundStyle(.white).containerBackground(for: .widget) {
-            ZStack {
-                LinearGradient(colors: [Color(white: 0.17), Color(white: 0.05)], startPoint: .top, endPoint: .bottom)
-                RadialGradient(colors: [Color(red: 0.55, green: 0.62, blue: 0.74).opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 170)
-            }
-        }
-    }
-}
-func fahrenheit(_ c: Double) -> Int { Int((c * 9 / 5 + 32).rounded()) }
-func heatColor(_ c: Double) -> Color { c >= 90 ? .red : c >= 75 ? .orange : c >= 60 ? .yellow : Color(red: 0.45, green: 0.85, blue: 0.95) }
-func heatLine(_ c: Double) -> String { c >= 90 ? "Fans, please!" : c >= 75 ? "Getting toasty" : c >= 60 ? "Warming up" : "Cool as a trash can" }
-func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
-
-struct Meter: View {
-    let label: String, value: Double, text: String
+// The cylinder's own look: graphite, with a cool glow.
+struct GraphiteBackground: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack { Text(label); Spacer(); Text(text).monospacedDigit().opacity(0.7) }.font(.caption2)
-            ProgressView(value: min(max(value, 0), 1)).tint(value > 0.85 ? .red : value > 0.65 ? .orange : Color(red: 0.45, green: 0.75, blue: 1))
+        ZStack {
+            LinearGradient(colors: [Color(white: 0.18), Color(white: 0.05)], startPoint: .top, endPoint: .bottom)
+            RadialGradient(colors: [Color(red: 0.55, green: 0.62, blue: 0.74).opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 170)
         }
     }
 }
-struct Problem: View {
+struct Unreachable: View {
     let text: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Image("MacPro").resizable().scaledToFit().frame(height: 44)
-            Text("Mac Pro").font(.caption.weight(.semibold))
-            Text(text).font(.caption2).opacity(0.7)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        VStack(spacing: 6) {
+            Image("MacPro").resizable().scaledToFit().opacity(0.45).frame(maxHeight: 64)
+            Label(text, systemImage: "wifi.slash").font(.caption2.weight(.medium)).opacity(0.75)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+private let cpuBlue = Color(red: 0.35, green: 0.72, blue: 1), memPink = Color(red: 0.98, green: 0.42, blue: 0.66), diskGold = Color(red: 1, green: 0.76, blue: 0.3)
 
 // MARK: - Status
-struct StatusView: View {
-    @Environment(\.widgetFamily) private var family
+struct StatusBody: View {
+    let family: WidgetFamily
     let entry: MacEntry
-    var n: (cpu: Double, mem: Double, disk: Double, week: Double?)? {
-        if entry.isSample { return (0.12, 0.41, 0.58, 47) }
-        guard let s = entry.status else { return nil }
-        return (Double(s.cpu.total) / 100, s.mem.total > 0 ? s.mem.used / s.mem.total : 0, s.disk.total > 0 ? 1 - s.disk.free / s.disk.total : 0, s.usage.plan?.sevenDay)
-    }
-    var body: some View {
-        Group {
-            switch family {
-            case .accessoryCircular:
-                if let n { Gauge(value: n.cpu) { Text("CPU") } currentValueLabel: { Text("\(Int(n.cpu * 100))") }.gaugeStyle(.accessoryCircular) }
-                else { Image(systemName: "exclamationmark.triangle") }
-            case .accessoryRectangular:
-                if let n {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("Mac Pro").font(.headline)
-                        Text("CPU \(pct(n.cpu)) · Mem \(pct(n.mem))")
-                        Text("Up \(entry.uptime)").opacity(0.7)
-                    }.font(.caption)
-                } else { Text("Mac Pro unreachable").font(.caption) }
-            case .systemSmall:
-                if let n {
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 6) {
-                            Image("MacPro").resizable().scaledToFit().frame(width: 24, height: 32)
-                            VStack(alignment: .leading, spacing: 0) {
-                                Text("Mac Pro").font(.caption.weight(.semibold))
-                                Text("Up \(entry.uptime)").font(.caption2).opacity(0.7)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                        Meter(label: "CPU", value: n.cpu, text: pct(n.cpu))
-                        Meter(label: "Memory", value: n.mem, text: pct(n.mem))
-                    }
-                } else { Problem(text: entry.problem ?? "") }
-            default:
-                if let n {
-                    HStack(spacing: 14) {
-                        VStack(spacing: 4) {
-                            Image("MacPro").resizable().scaledToFit().frame(height: 92)
-                            Text("Up \(entry.uptime)").font(.caption2).opacity(0.7)
-                        }
-                        VStack(alignment: .leading, spacing: 5) {
-                            Meter(label: "CPU", value: n.cpu, text: pct(n.cpu))
-                            Meter(label: "Memory", value: n.mem, text: pct(n.mem))
-                            Meter(label: "Disk", value: n.disk, text: pct(n.disk))
-                            if let w = n.week { Meter(label: "Claude this week", value: w / 100, text: "\(Int(w))%") }
-                        }
-                    }
-                } else { Problem(text: entry.problem ?? "") }
+    func dial(_ v: Double, _ c: Color, _ icon: String) -> some View {
+        ArcGauge(v, style: c, width: 6) {
+            VStack(spacing: 0) {
+                Image(systemName: icon).font(.system(size: 11)).foregroundStyle(c)
+                Text("\(Int((v * 100).rounded()))").font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
             }
         }
-        .modifier(Graphite())
     }
-}
-struct MacProWidget: Widget {
-    var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "MacProStatus", intent: WidgetAddress.self, provider: MacProvider()) { StatusView(entry: $0) }
-            .configurationDisplayName("Mac Pro Status")
-            .description("CPU, memory, disk, uptime and Claude.")
-            .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular, .accessoryCircular])
+    var body: some View {
+        if let n = entry.snapshot {
+            switch family {
+            case .accessoryCircular:
+                Gauge(value: n.cpu) { Image(systemName: "cpu") } currentValueLabel: { Text("\(Int(n.cpu * 100))") }.gaugeStyle(.accessoryCircular)
+            case .accessoryRectangular:
+                HStack(spacing: 8) {
+                    Gauge(value: n.cpu) { Image(systemName: "cpu") }.gaugeStyle(.accessoryCircularCapacity).scaleEffect(0.8)
+                    Gauge(value: n.mem) { Image(systemName: "memorychip") }.gaugeStyle(.accessoryCircularCapacity).scaleEffect(0.8)
+                    Gauge(value: n.disk) { Image(systemName: "internaldrive") }.gaugeStyle(.accessoryCircularCapacity).scaleEffect(0.8)
+                }
+            case .systemSmall:
+                ZStack {
+                    Ring(value: n.cpu, color: cpuBlue, width: 10)
+                    Ring(value: n.mem, color: memPink, width: 10).padding(13)
+                    Ring(value: n.disk, color: diskGold, width: 10).padding(26)
+                    Image("MacPro").resizable().scaledToFit().frame(height: 36)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            default:
+                HStack(spacing: 12) {
+                    Image("MacPro").resizable().scaledToFit().frame(maxHeight: 112)
+                    VStack(spacing: 8) {
+                        HStack(spacing: 8) {
+                            dial(n.cpu, cpuBlue, "cpu")
+                            dial(n.mem, memPink, "memorychip")
+                            dial(n.disk, diskGold, "internaldrive")
+                        }
+                        SparkLine(values: n.history, top: 100, color: cpuBlue).frame(height: 24)
+                    }
+                }
+            }
+        } else if family == .accessoryCircular || family == .accessoryRectangular {
+            Image(systemName: "wifi.slash")
+        } else { Unreachable(text: entry.problem) }
     }
 }
 
 // MARK: - Temperatures
-struct TempView: View {
-    @Environment(\.widgetFamily) private var family
+struct TempBody: View {
+    let family: WidgetFamily
     let entry: MacEntry
-    var hottest: WidgetStatus.Temp? { entry.temps.max { $0.c < $1.c } }
-    var cpu: Double? { entry.temps.first { $0.name == "CPU" }?.c ?? hottest?.c }
     var body: some View {
-        Group {
+        if let n = entry.snapshot, let hot = n.hottest {
             switch family {
             case .accessoryCircular:
-                if let c = cpu { Gauge(value: min(c, 100), in: 20...100) { Text("°F") } currentValueLabel: { Text("\(fahrenheit(c))") }.gaugeStyle(.accessoryCircular) }
-                else { Image(systemName: "thermometer.medium") }
+                Gauge(value: Heat.level(n.cpuTemp ?? hot.c)) { Image(systemName: "thermometer.medium") } currentValueLabel: { Text("\(Heat.f(n.cpuTemp ?? hot.c))") }.gaugeStyle(.accessoryCircular)
             case .accessoryInline:
-                Label(cpu.map { "CPU \(fahrenheit($0))°F" } ?? "Mac Pro unreachable", systemImage: "thermometer.medium")
+                Label("\(Heat.f(n.cpuTemp ?? hot.c))°F", systemImage: "thermometer.medium")
             case .systemSmall:
-                if let h = hottest {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack { Image(systemName: "thermometer.medium").foregroundStyle(heatColor(h.c)); Spacer(); Text(h.name).font(.caption2).opacity(0.7) }
-                        Spacer(minLength: 0)
-                        Text("\(fahrenheit(h.c))°").font(.system(size: 46, weight: .semibold, design: .rounded)).foregroundStyle(heatColor(h.c)).monospacedDigit()
-                        Text(heatLine(h.c)).font(.caption.weight(.medium)).lineLimit(2).minimumScaleFactor(0.8)
+                ArcGauge(Heat.level(hot.c), style: Heat.gradient, width: 12) {
+                    VStack(spacing: 0) {
+                        Text("\(Heat.f(hot.c))°").font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                        Image(systemName: "thermometer.medium").font(.system(size: 13)).foregroundStyle(Heat.color(hot.c))
                     }
-                } else { Problem(text: entry.problem ?? "No sensors yet.") }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             default:
-                if let h = hottest {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack { Text(heatLine(h.c)).font(.subheadline.weight(.semibold)); Spacer(); Image(systemName: "thermometer.medium").foregroundStyle(heatColor(h.c)) }
-                        let shown = Array(entry.temps.prefix(family == .systemLarge ? 8 : 6))
-                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible())], spacing: 7) {
-                            ForEach(shown, id: \.name) { t in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack { Text(t.name).lineLimit(1); Spacer(); Text("\(fahrenheit(t.c))°").monospacedDigit().fontWeight(.semibold).foregroundStyle(heatColor(t.c)) }.font(.caption2)
-                                    ProgressView(value: min(max((t.c - 20) / 80, 0), 1)).tint(heatColor(t.c))
-                                }
+                HStack(spacing: 10) {
+                    ForEach(n.dials, id: \.icon) { d in
+                        VStack(spacing: 6) {
+                            ArcGauge(Heat.level(d.c), style: Heat.gradient, width: 7) {
+                                Text("\(Heat.f(d.c))°").font(.system(size: 17, weight: .semibold, design: .rounded)).monospacedDigit()
                             }
+                            Image(systemName: d.icon).font(.system(size: 15)).foregroundStyle(Heat.color(d.c))
                         }
-                        Spacer(minLength: 0)
                     }
-                } else { Problem(text: entry.problem ?? "No sensors yet.") }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }
-        .modifier(Graphite())
+        } else if family == .accessoryCircular || family == .accessoryInline {
+            Image(systemName: "thermometer.medium")
+        } else { Unreachable(text: entry.problem) }
+    }
+}
+
+// MARK: - Claude
+struct ClaudeBody: View {
+    let entry: MacEntry
+    static let clay = Color(red: 0.85, green: 0.5, blue: 0.36)
+    var body: some View {
+        if let n = entry.snapshot, let w = n.week {
+            ZStack {
+                Ring(value: w / 100, color: Self.clay, width: 12)
+                Ring(value: (n.fiveHour ?? 0) / 100, color: Color(red: 0.98, green: 0.8, blue: 0.62), width: 12).padding(16)
+                VStack(spacing: 0) {
+                    Image(systemName: "sparkle").font(.system(size: 13)).foregroundStyle(Self.clay)
+                    Text("\(Int(w))%").font(.system(size: 19, weight: .semibold, design: .rounded)).monospacedDigit()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else { Unreachable(text: entry.problem.isEmpty ? "No reading" : entry.problem) }
+    }
+}
+
+// MARK: - Sideloaded apps
+struct AppsBody: View {
+    let entry: MacEntry
+    func color(_ d: Int) -> Color { d > 2 ? .green : d > 0 ? .orange : .red }
+    var body: some View {
+        if let n = entry.snapshot, !n.apps.isEmpty {
+            VStack(spacing: 11) {
+                ForEach(Array(n.apps.prefix(4)), id: \.name) { a in
+                    HStack(spacing: 10) {
+                        Text(a.name).font(.footnote.weight(.medium)).lineLimit(1).frame(width: 84, alignment: .leading)
+                        if let d = a.days {
+                            ProgressView(value: Double(min(max(d, 0), 7)), total: 7).tint(color(d))
+                            Text("\(max(d, 0))d").font(.footnote.weight(.semibold)).monospacedDigit().foregroundStyle(color(d)).frame(width: 26, alignment: .trailing)
+                        } else {
+                            ProgressView(value: 1, total: 1).tint(.white.opacity(0.25))
+                            Image(systemName: "infinity").font(.footnote).opacity(0.6).frame(width: 26, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else { Unreachable(text: entry.problem.isEmpty ? "No apps" : entry.problem) }
+    }
+}
+
+// MARK: - The widgets
+struct InWidget<C: View>: View {
+    @Environment(\.widgetFamily) private var family
+    let content: (WidgetFamily) -> C
+    var body: some View {
+        content(family).foregroundStyle(.white).containerBackground(for: .widget) { GraphiteBackground() }
+    }
+}
+
+struct MacProWidget: Widget {
+    var body: some WidgetConfiguration {
+        AppIntentConfiguration(kind: "MacProStatus", intent: WidgetAddress.self, provider: MacProvider()) { e in InWidget { StatusBody(family: $0, entry: e) } }
+            .configurationDisplayName("Mac Pro Status")
+            .description("CPU, memory and disk at a glance.")
+            .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular, .accessoryCircular])
     }
 }
 struct MacTempWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "MacProTemps", intent: WidgetAddress.self, provider: MacProvider()) { TempView(entry: $0) }
+        AppIntentConfiguration(kind: "MacProTemps", intent: WidgetAddress.self, provider: MacProvider()) { e in InWidget { TempBody(family: $0, entry: e) } }
             .configurationDisplayName("Mac Pro Temperatures")
             .description("How hot the trash can is running.")
             .supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryInline])
     }
 }
-
-// MARK: - Claude usage
-struct Ring: View {
-    let value: Double, label: String
-    var color: Color { value >= 85 ? .red : value >= 65 ? .orange : Color(red: 0.85, green: 0.55, blue: 0.4) }
-    var body: some View {
-        VStack(spacing: 4) {
-            ZStack {
-                Circle().stroke(.white.opacity(0.15), lineWidth: 8)
-                Circle().trim(from: 0, to: min(value / 100, 1)).stroke(color, style: StrokeStyle(lineWidth: 8, lineCap: .round)).rotationEffect(.degrees(-90))
-                Text("\(Int(value))%").font(.caption.weight(.semibold)).monospacedDigit()
-            }
-            Text(label).font(.caption2).opacity(0.7)
-        }
-    }
-}
-struct ClaudeView: View {
-    let entry: MacEntry
-    var plan: (Double, Double)? {
-        if entry.isSample { return (6, 47) }
-        guard let p = entry.status?.usage.plan, let f = p.fiveHour, let w = p.sevenDay else { return nil }
-        return (f, w)
-    }
-    var body: some View {
-        Group {
-            if let p = plan {
-                VStack(spacing: 8) {
-                    HStack { Image(systemName: "sparkle"); Text("Claude").font(.caption.weight(.semibold)); Spacer() }
-                    HStack(spacing: 12) { Ring(value: p.0, label: "5 hours"); Ring(value: p.1, label: "This week") }
-                }
-            } else { Problem(text: entry.problem ?? "Waiting for Claude’s usage.") }
-        }
-        .modifier(Graphite())
-    }
-}
 struct MacClaudeWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "MacProClaude", intent: WidgetAddress.self, provider: MacProvider()) { ClaudeView(entry: $0) }
+        AppIntentConfiguration(kind: "MacProClaude", intent: WidgetAddress.self, provider: MacProvider()) { e in InWidget { _ in ClaudeBody(entry: e) } }
             .configurationDisplayName("Claude Usage")
-            .description("How much of your Claude limits are left.")
+            .description("This week’s limit outside, the 5-hour limit inside.")
             .supportedFamilies([.systemSmall])
-    }
-}
-
-// MARK: - Sideloaded apps
-struct AppsView: View {
-    let entry: MacEntry
-    func left(_ a: WidgetStatus.SeedApp) -> (String, Color) {
-        guard a.expires > 0 else { return (a.own ? "New" : "SideStore’s", .white.opacity(0.6)) }
-        let d = Int(ceil((a.expires / 1000 - entry.date.timeIntervalSince1970) / 86400))
-        return d > 0 ? ("\(d)d left", d > 1 ? .green : .orange) : ("Expired", .red)
-    }
-    var body: some View {
-        Group {
-            if let s = entry.status?.iosApps {
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack {
-                        Text("On this iPhone").font(.caption.weight(.semibold)); Spacer()
-                        Label(s.reachable ? "Mac can reach it" : "Away from the Mac", systemImage: s.reachable ? "wifi" : "airplane").font(.caption2).opacity(0.7)
-                    }
-                    ForEach(Array(s.apps.prefix(4)), id: \.name) { a in
-                        let l = left(a)
-                        HStack { Text(a.name).font(.caption).lineLimit(1); Spacer(); Text(l.0).font(.caption2.weight(.medium)).foregroundStyle(l.1) }
-                    }
-                    Spacer(minLength: 0)
-                }
-            } else { Problem(text: entry.problem ?? "Checking your apps.") }
-        }
-        .modifier(Graphite())
     }
 }
 struct MacAppsWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "MacProApps", intent: WidgetAddress.self, provider: MacProvider()) { AppsView(entry: $0) }
+        AppIntentConfiguration(kind: "MacProApps", intent: WidgetAddress.self, provider: MacProvider()) { e in InWidget { _ in AppsBody(entry: e) } }
             .configurationDisplayName("Sideloaded Apps")
-            .description("Days left on your apps, before they need renewing.")
+            .description("Days left before your apps need renewing.")
             .supportedFamilies([.systemMedium])
     }
 }
 
+#if !GALLERY
 @main
 struct MacProWidgets: WidgetBundle {
     var body: some Widget {
@@ -305,3 +291,4 @@ struct MacProWidgets: WidgetBundle {
         MacAppsWidget()
     }
 }
+#endif
