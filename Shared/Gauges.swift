@@ -5,7 +5,7 @@ enum Heat {
     static func f(_ c: Double) -> Int { Int((c * 9 / 5 + 32).rounded()) }
     static func level(_ c: Double) -> Double { min(max((c - 20) / 80, 0), 1) }
     static func color(_ c: Double) -> Color { c >= 90 ? .red : c >= 75 ? .orange : c >= 60 ? .yellow : Color(red: 0.3, green: 0.75, blue: 0.95) }
-    static let gradient = AngularGradient(colors: [Color(red: 0.3, green: 0.75, blue: 0.95), .green, .yellow, .orange, .red], center: .center, startAngle: .degrees(135), endAngle: .degrees(405))
+    static let gradient = AngularGradient(colors: [Color(red: 0.3, green: 0.75, blue: 0.95), .green, .yellow, .orange, .red], center: .center, startAngle: .degrees(0), endAngle: .degrees(270))  // before the dial is rotated into place
 }
 
 // An open dial, like a car gauge: value 0...1, with whatever goes in the middle.
