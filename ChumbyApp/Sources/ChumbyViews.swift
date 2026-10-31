@@ -400,16 +400,45 @@ struct HomeTab: View {
         }
         .padding(.bottom, 20)
     }
+    @State private var homeVolume = 0.0
+    @State private var dragging = false
     var rightNow: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Right now").font(.custom("Trebuchet MS", size: 14).weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark)).padding(.leading, 18)
-            VStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 14) {
+                if let n = model.nextAlarm() {
+                    Button { model.tab = 2 } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "alarm.fill").foregroundStyle(ChumbyPalette.orange)
+                            Text(n.formatted(.dateTime.weekday(.abbreviated).hour().minute()))
+                            Spacer()
+                            Text(n, style: .relative).font(.custom("Trebuchet MS", size: 13)).foregroundStyle(ChumbyPalette.sub(dark)).lineLimit(1)
+                        }
+                    }.buttonStyle(.plain)
+                }
+                HStack(spacing: 10) {
+                    Image(systemName: "speaker.wave.2.fill").font(.footnote)
+                    Slider(value: $homeVolume, in: 0...100, step: 1) { e in
+                        dragging = e
+                        if !e { model.cmd("volume", String(Int(homeVolume))) }
+                    }
+                    .tint(ChumbyPalette.orange).accessibilityLabel("Volume")
+                    Button { model.cmd("stopmusic", nil, "Music stopped") } label: { Image(systemName: "stop.fill") }.buttonStyle(.bordered).buttonBorderShape(.circle).accessibilityLabel("Stop music")
+                }
+                if !model.state.channelNames.isEmpty {
+                    Menu {
+                        ForEach(model.state.channelNames, id: \.self) { n in Button(n) { model.state.channel = n; model.cmd("channel", n, "Switching channel") } }
+                    } label: {
+                        HStack { Image(systemName: "tv"); Text(model.state.channel.isEmpty ? "Channel" : model.state.channel).lineLimit(1); Spacer(); Image(systemName: "chevron.up.chevron.down").font(.footnote) }
+                    }.foregroundStyle(.tint)
+                }
                 Segments(title: "Night mode", options: [("Off", "off"), ("On", "on"), ("Dim", "dim"), ("Dark", "dark")]) { model.cmd("night", $0, "Night mode \($0)") }
                 Segments(title: "Screen", options: [("Bright", "bright"), ("Dim", "dim"), ("Off", "off")]) { model.cmd("screen", $0, "Screen \($0)") }
             }
             .padding(14).card()
         }
         .padding(.bottom, 20)
+        .task(id: model.sys.vol) { if !dragging && model.sys.vol >= 0 { homeVolume = Double(model.sys.vol) } }
     }
     var wordmark: some View {
         ArtShape(art: ChumbyArt.word, box: ChumbyArt.wordBox).fill(ChumbyPalette.word(dark), style: FillStyle(eoFill: true))
@@ -640,6 +669,13 @@ struct AlarmsTab: View {
     var body: some View {
         TwoPane {
             PageTitle("Alarms")
+            Section("Quick nap") {
+                HStack(spacing: 8) {
+                    ForEach([10, 20, 30, 60], id: \.self) { m in
+                        Button("\(m) min") { nap(m) }.buttonStyle(.bordered).frame(maxWidth: .infinity)
+                    }
+                }
+            }
             Section {
                 let shown = model.state.alarms.enumerated().filter { !$0.element.isPlaceholder }.sorted { $0.element.localMinutes < $1.element.localMinutes }
                 if shown.isEmpty { Text("No alarms yet. Tap + to add one.").foregroundStyle(.secondary) }
@@ -688,6 +724,18 @@ struct AlarmsTab: View {
         .toolbar { ToolbarItem(placement: .primaryAction) { Button { editing = EditTarget(index: -1) } label: { Image(systemName: "plus") }.accessibilityLabel("Add alarm").disabled(model.state.alarms.count >= 16) } }
         .sheet(item: $editing) { t in AlarmEditor(index: t.index).environmentObject(model) }
         .refreshable { await model.loadState() }
+    }
+    // A one-time alarm from now, using whichever tone is first.
+    func nap(_ minutes: Int) {
+        guard model.state.alarms.count < 16 else { model.say("The Chumby holds 16 alarms at most"); return }
+        var a = Alarm()
+        a.name = "Nap"; a.when = "once"; a.enabled = "1"
+        a.time = String(Int((Date().timeIntervalSince1970 / 60).rounded(.up)) + minutes)
+        let tone = model.state.tones.first ?? "Beep"
+        a.type = "beep"; a.arg = tone; a.param_description = tone; a.duration = "5"
+        model.state.alarms.append(a)
+        model.tick()
+        Task { await model.saveAlarms("Nap alarm in \(minutes) minutes") }
     }
     static func date(_ s: String) -> Date {
         let p = s.split(separator: ":").compactMap { Int($0) }

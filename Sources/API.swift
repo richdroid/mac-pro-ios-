@@ -36,6 +36,7 @@ struct Status: Decodable {
     }
     struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let fetch: Fetch?; let apps: [SeedApp] }
     struct Fetch: Decodable { let state: String; let message: String }
+    struct Service: Decodable, Identifiable { let label: String; let name: String; let running: Bool; var id: String { label } }
     struct IOSJob: Decodable { let state: String; let message: String }
     struct IOSStatus: Decodable {
         let hasPhone: Bool; let signedIn: Bool; let ready: Bool; let installedAt: Double; let nextDue: Double
@@ -49,6 +50,7 @@ struct Status: Decodable {
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
     let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
     var temps: [Temp]?
+    let services: [Service]?
     let iosApps: SeedStatus?
 }
 
@@ -79,6 +81,20 @@ struct API {
         r.cachePolicy = .reloadIgnoringLocalCacheData
         r.timeoutInterval = 25
         return r
+    }
+
+    func clipboard() async throws -> String {
+        struct Clip: Decodable { let text: String }
+        let (d, _) = try await session.data(for: request("/api/clipboard"))
+        return try JSONDecoder().decode(Clip.self, from: d).text
+    }
+    func setClipboard(_ text: String) async throws {
+        var r = request("/api/clipboard", method: "POST")
+        r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
+        r.setValue("1", forHTTPHeaderField: "x-dash")
+        r.httpBody = Data(text.utf8)
+        let (_, resp) = try await session.data(for: r)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
     }
 
     func hotProbe() async throws -> (Data, URLResponse) { try await session.data(for: request("/ios/hot/HotProbe")) }

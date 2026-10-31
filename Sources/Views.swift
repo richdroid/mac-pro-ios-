@@ -180,6 +180,56 @@ struct Hero: View {
     }
 }
 
+// The things reached for most, one tap from the top of the app.
+struct QuickActions: View {
+    @EnvironmentObject var model: AppModel
+    @State private var toast: String?
+    func button(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) { face(icon, title) }.buttonStyle(.plain)
+    }
+    func face(_ icon: String, _ title: String) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 20)).frame(width: 52, height: 52).background(Color(white: 0.16), in: Circle())
+            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity)
+    }
+    func say(_ t: String) {
+        toast = t
+        Task { try? await Task.sleep(nanoseconds: 2_000_000_000); toast = nil }
+    }
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 4) {
+                NavigationLink { RemoteScreenView() } label: { face("macwindow", "Screen") }.buttonStyle(.plain)
+                button("moon", "Display off") { Task { _ = await model.run("display-off"); say("Display off") } }
+                button("square.and.arrow.down", "Copy from Mac") {
+                    Task {
+                        guard let t = try? await model.api.clipboard() else { say("Couldn’t reach the Mac"); return }
+                        #if canImport(UIKit)
+                        UIPasteboard.general.string = t
+                        #endif
+                        say(t.isEmpty ? "The Mac’s clipboard is empty" : "Copied from the Mac")
+                    }
+                }
+                button("square.and.arrow.up", "Send to Mac") {
+                    #if canImport(UIKit)
+                    let t = UIPasteboard.general.string ?? ""
+                    #else
+                    let t = ""
+                    #endif
+                    Task {
+                        if t.isEmpty { say("Nothing copied on this iPhone"); return }
+                        do { try await model.api.setClipboard(t); say("On the Mac’s clipboard") } catch { say("Couldn’t reach the Mac") }
+                    }
+                }
+            }
+            if let toast { Text(toast).font(.footnote).foregroundStyle(.secondary).transition(.opacity) }
+        }
+        .animation(.easeOut(duration: 0.2), value: toast)
+    }
+}
+
 struct StatusTab: View {
     @EnvironmentObject var model: AppModel
     let s: Status
@@ -188,6 +238,7 @@ struct StatusTab: View {
     var body: some View {
         if side != .right {
         Section { Hero(s: s) }.listRowBackground(Color.clear).listRowSeparator(.hidden)
+        Section { QuickActions() }.listRowBackground(Color.clear).listRowSeparator(.hidden)
         Section { LiveTiles(s: s) }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         if let temps = s.temps, !temps.isEmpty {
             Section("Temperatures") { TempDials(s: s) }
@@ -466,6 +517,18 @@ struct ControlTab: View {
             Section {
                 Link("Open public link", destination: URL(string: s.publicUrl)!)
             } header: { Text("Public link") } footer: { Text("This address changes whenever the Mac restarts.") }
+        }
+        if let list = s.services {
+            Section("Services") {
+                ForEach(list) { v in
+                    HStack {
+                        Circle().fill(v.running ? Color.green : Color.red).frame(width: 9, height: 9)
+                        Text(v.name)
+                        Spacer()
+                        Button("Restart") { Task { model.note = await model.run("service-restart", ["label": v.label]) } }.buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+            }
         }
         Section("Connected devices") {
             if s.tailscale.peers.isEmpty { Text("No other devices yet").foregroundStyle(.secondary) }
