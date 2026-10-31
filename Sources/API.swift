@@ -81,6 +81,8 @@ struct API {
         return r
     }
 
+    func hotProbe() async throws -> (Data, URLResponse) { try await session.data(for: request("/ios/hot/HotProbe")) }
+
     func live() async throws -> LiveStatus {
         var r = request("/api/live"); r.timeoutInterval = 6
         let (data, response) = try await session.data(for: r)

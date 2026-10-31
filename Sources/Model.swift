@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
 
     func start() {
         stop()
+        Task { [weak self] in await self?.hotProbeOnce() }
         loops = [
             // Everything, every 10 seconds; the live numbers every second in between.
             Task { [weak self] in while !Task.isCancelled { await self?.refresh(); try? await Task.sleep(nanoseconds: 10_000_000_000) } },
@@ -37,6 +38,24 @@ final class AppModel: ObservableObject {
         ]
     }
     func stop() { loops.forEach { $0.cancel() }; loops = [] }
+
+    // Tests whether code fetched from the Mac can run here, and tells the Mac what happened.
+    func hotProbeOnce() async {
+        guard let (data, resp) = try? await api.hotProbe(), (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { return }
+        let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Hot")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("HotProbe-\(data.count)")
+        try? FileManager.default.removeItem(at: file)
+        guard (try? data.write(to: file)) != nil else { _ = await run("ios-probe", ["result": "could not save"]); return }
+        var result: String
+        if let h = dlopen(file.path, RTLD_NOW) {
+            typealias Probe = @convention(c) () -> UnsafePointer<CChar>?
+            if let sym = dlsym(h, "hot_probe"), let out = unsafeBitCast(sym, to: Probe.self)() { result = "OK: " + String(cString: out) }
+            else { result = "opened, but no function" }
+        } else { result = "dlopen failed: " + (dlerror().map { String(cString: $0) } ?? "unknown") }
+        result += " (\(data.count) bytes)"
+        _ = await run("ios-probe", ["result": result])
+    }
 
     func refreshLive() async {
         // Only the live views watch this, so the other tabs and lists stay still.
