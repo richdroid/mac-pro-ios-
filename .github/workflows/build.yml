@@ -27,6 +27,7 @@ jobs:
           ls build/Build/Products/Release-iphoneos/MacPro.app/PlugIns
       - name: Screenshot in the simulator
         continue-on-error: true
+        timeout-minutes: 14
         run: |
           set +x
           exec > >(tee dist/sim.log) 2>&1
@@ -61,10 +62,13 @@ jobs:
           done
       - name: Screenshot the wide layout on a tablet-sized simulator
         continue-on-error: true
+        timeout-minutes: 8
         run: |
           set +e
           exec > >(tee dist/wide.log) 2>&1
+          xcrun simctl list devices available | grep -i ipad | head -3
           IPAD=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPad Pro 11|^iPad Air 11|^iPad"))][0].udid')
+          [ "$IPAD" = null ] && { echo "No tablet simulator on this runner"; exit 0; }
           xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator -derivedDataPath build-wide CODE_SIGNING_ALLOWED=NO TARGETED_DEVICE_FAMILY=1,2 build | tail -1
           xcrun simctl boot "$IPAD"; xcrun simctl bootstatus "$IPAD" -b
           xcrun simctl install "$IPAD" build-wide/Build/Products/Debug-iphonesimulator/Chumby.app
