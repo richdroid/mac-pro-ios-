@@ -96,11 +96,37 @@ struct GraphiteBackground: View {
         }
     }
 }
+// Full colour gets the photo. A clear or tinted Home Screen gets a drawn glyph in its one tone,
+// with the opening, a highlight and the vent slots cut out, so it still reads as the machine.
+struct CylinderGlyph: Shape {
+    func path(in r: CGRect) -> Path {
+        let h = min(r.height, r.width / 0.62), w = h * 0.62
+        let o = CGPoint(x: r.midX - w / 2, y: r.midY - h / 2)
+        func rect(_ x: CGFloat, _ y: CGFloat, _ wide: CGFloat, _ tall: CGFloat) -> CGRect { CGRect(x: o.x + x * w, y: o.y + y * h, width: wide * w, height: tall * h) }
+        var p = Path()
+        p.addRoundedRect(in: rect(0, 0, 1, 1), cornerSize: CGSize(width: w * 0.2, height: w * 0.2), style: .continuous)
+        p.addEllipse(in: rect(0.1, 0.045, 0.8, 0.125))       // the rim
+        p.addEllipse(in: rect(0.17, 0.067, 0.66, 0.085))     // the dark opening inside it
+        p.addRoundedRect(in: rect(0.15, 0.26, 0.05, 0.58), cornerSize: CGSize(width: w * 0.025, height: w * 0.025))   // highlight
+        for i in 0..<9 {                                     // the vent slots around the base
+            let t = (CGFloat(i) - 4) / 4
+            p.addRoundedRect(in: rect(0.5 + t * 0.34 - 0.012, 0.915 + (1 - t * t) * 0.022 - 0.022, 0.024, 0.045), cornerSize: CGSize(width: 1, height: 1))
+        }
+        return p
+    }
+}
 struct Cylinder: View {
+    @Environment(\.widgetRenderingMode) private var mode
     var body: some View {
-        Image("MacPro").resizable().widgetAccentedRenderingMode(.fullColor).scaledToFit()
-            .background(RadialGradient(colors: [.white.opacity(0.2), .clear], center: .center, startRadius: 2, endRadius: 58))
-            .accessibilityLabel("Mac Pro")
+        Group {
+            if mode == .fullColor {
+                Image("MacPro").resizable().scaledToFit()
+                    .background(RadialGradient(colors: [.white.opacity(0.2), .clear], center: .center, startRadius: 2, endRadius: 58))
+            } else {
+                CylinderGlyph().fill(.primary, style: FillStyle(eoFill: true)).aspectRatio(0.62, contentMode: .fit)
+            }
+        }
+        .accessibilityLabel("Mac Pro")
     }
 }
 struct Unreachable: View {
