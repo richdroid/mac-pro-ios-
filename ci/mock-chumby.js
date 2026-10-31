@@ -17,6 +17,7 @@ const data = {
 };
 http.createServer((q, s) => {
   const a = new URL(q.url, 'http://x').searchParams.get('a');
+  if (a === 'shot') { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); return; }
   if (a === 'cat') { s.end('<a href="/guide/AB-1/category"><img alt="Clocks"></a>'); return; }
   if (q.method === 'POST') { s.end('{"ok":true}'); return; }
   if (data[a]) { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(data[a])); return; }

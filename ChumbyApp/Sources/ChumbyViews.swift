@@ -16,81 +16,76 @@ struct ChumbyApp: App {
 }
 
 // MARK: - The sea, the ghost, the glass
+// Soft gradients moved by the compositor: the same drifting colour with no per-frame blur.
 struct SeaBackground: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var still
+    @State private var drift = false
     var body: some View {
         let c = ChumbyPalette.sea(scheme == .dark)
         GeometryReader { g in
             let m = max(g.size.width, g.size.height)
-            TimelineView(.animation(minimumInterval: 1.0 / 20, paused: still)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate
-                ZStack {
-                    c[0]
-                    blob(c[1], m * 0.70, -0.30, -0.28, 26, 0, t, m)
-                    blob(c[2], m * 0.46, 0.34, -0.10, 33, 7, t, m)
-                    blob(c[3], m * 0.50, -0.22, 0.32, 29, 13, t, m)
-                    blob(c[4], m * 0.32, 0.26, 0.32, 37, 3, t, m)
-                }
-                .frame(width: g.size.width, height: g.size.height)
-                .drawingGroup()
+            ZStack {
+                c[0]
+                blob(c[1], m * 1.05, -0.30, -0.28, 26, m)
+                blob(c[2], m * 0.75, 0.34, -0.10, 33, m)
+                blob(c[3], m * 0.80, -0.22, 0.32, 29, m)
+                blob(c[4], m * 0.55, 0.26, 0.32, 37, m)
             }
+            .frame(width: g.size.width, height: g.size.height)
         }
+        .onAppear { if !still { drift = true } }
     }
-    func blob(_ color: Color, _ size: CGFloat, _ x: CGFloat, _ y: CGFloat, _ period: Double, _ delay: Double, _ t: Double, _ m: CGFloat) -> some View {
-        let p = 0.5 - 0.5 * cos(2 * .pi * (t + delay) / (period * 2))
-        return Circle().fill(color).frame(width: size, height: size).blur(radius: 60).opacity(0.9)
-            .scaleEffect(1 + 0.14 * p)
-            .offset(x: m * x + size * (-0.05 + 0.12 * p), y: m * y + size * (-0.03 + 0.09 * p))
+    func blob(_ color: Color, _ size: CGFloat, _ x: CGFloat, _ y: CGFloat, _ period: Double, _ m: CGFloat) -> some View {
+        Circle().fill(RadialGradient(colors: [color, color.opacity(0.75), color.opacity(0)], center: .center, startRadius: 0, endRadius: size / 2))
+            .frame(width: size, height: size)
+            .scaleEffect(drift ? 1.14 : 1)
+            .offset(x: m * x + size * (drift ? 0.07 : -0.05), y: m * y + size * (drift ? 0.06 : -0.03))
+            .animation(.easeInOut(duration: period).repeatForever(autoreverses: true), value: drift)
     }
 }
 
 struct GhostOctopus: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var still
+    @State private var drift = false
     var body: some View {
         GeometryReader { g in
-            TimelineView(.animation(minimumInterval: 1.0 / 20, paused: still)) { ctx in
-                let p = 0.5 - 0.5 * cos(2 * .pi * ctx.date.timeIntervalSinceReferenceDate / 28)
-                ArtShape(art: ChumbyArt.octBody, box: ChumbyArt.octBox)
-                    .fill(scheme == .dark ? ChumbyPalette.hex(0x79bbff).opacity(0.08) : Color.white.opacity(0.34), style: FillStyle(eoFill: true))
-                    .frame(width: min(g.size.width, g.size.height) * 1.5)
-                    .rotationEffect(.degrees(-3 + 6 * p))
-                    .offset(y: -8 + 22 * p)
-                    .position(x: g.size.width / 2, y: g.size.height * 0.42)
-            }
+            ArtShape(art: ChumbyArt.octBody, box: ChumbyArt.octBox)
+                .fill(scheme == .dark ? ChumbyPalette.hex(0x79bbff).opacity(0.08) : Color.white.opacity(0.34), style: FillStyle(eoFill: true))
+                .frame(width: min(g.size.width, g.size.height) * 1.5)
+                .rotationEffect(.degrees(drift ? 3 : -3))
+                .offset(y: drift ? 14 : -8)
+                .position(x: g.size.width / 2, y: g.size.height * 0.42)
+                .animation(.easeInOut(duration: 14).repeatForever(autoreverses: true), value: drift)
         }
         .allowsHitTesting(false)
+        .onAppear { if !still { drift = true } }
     }
 }
 
-struct GlassFill: ViewModifier {
+// Content sits on soft translucent cards, per Apple's guidance to keep Liquid Glass off the content layer.
+struct CardFill: ViewModifier {
     @Environment(\.colorScheme) private var scheme
-    let shape: AnyShape
+    let radius: CGFloat
     func body(content: Content) -> some View {
-        let dark = scheme == .dark
         content.background {
-            ZStack {
-                shape.fill(.ultraThinMaterial)
-                shape.fill(LinearGradient(colors: dark ? [Color(red: 0.12, green: 0.24, blue: 0.47).opacity(0.56), Color(red: 0.04, green: 0.12, blue: 0.29).opacity(0.46)] : [.white.opacity(0.62), .white.opacity(0.26)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                shape.strokeBorder(LinearGradient(colors: [.white.opacity(dark ? 0.46 : 0.95), .white.opacity(dark ? 0.2 : 0.5)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
-            }
-            .shadow(color: (dark ? Color.black.opacity(0.42) : Color(red: 0.04, green: 0.2, blue: 0.47).opacity(0.2)), radius: 17, y: 12)
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(LinearGradient(colors: scheme == .dark ? [Color(red: 0.12, green: 0.24, blue: 0.47).opacity(0.7), Color(red: 0.04, green: 0.12, blue: 0.29).opacity(0.6)] : [.white.opacity(0.72), .white.opacity(0.42)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).stroke(.white.opacity(scheme == .dark ? 0.22 : 0.7), lineWidth: 1))
         }
     }
 }
-extension AnyShape {
-    func strokeBorder<S: ShapeStyle>(_ s: S, lineWidth: CGFloat) -> some View { self.stroke(s, lineWidth: lineWidth) }
-}
 extension View {
-    func glass(_ radius: CGFloat = 26) -> some View { modifier(GlassFill(shape: AnyShape(RoundedRectangle(cornerRadius: radius, style: .continuous)))) }
-    func glassCircle() -> some View { modifier(GlassFill(shape: AnyShape(Circle()))) }
+    func card(_ radius: CGFloat = 26) -> some View { modifier(CardFill(radius: radius)) }
+    func glass(_ radius: CGFloat = 26) -> some View { self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous)) }
+    func glassCircle() -> some View { self.glassEffect(.regular.interactive(), in: Circle()) }
     func seaList() -> some View { self.scrollContentBackground(.hidden).listSectionSpacing(14) }
 }
 struct GlassRow: View {
     @Environment(\.colorScheme) private var scheme
     var body: some View {
-        Rectangle().fill(.ultraThinMaterial).overlay(LinearGradient(colors: scheme == .dark ? [Color(red: 0.12, green: 0.24, blue: 0.47).opacity(0.5), Color(red: 0.04, green: 0.12, blue: 0.29).opacity(0.4)] : [.white.opacity(0.55), .white.opacity(0.22)], startPoint: .topLeading, endPoint: .bottomTrailing))
+        Rectangle().fill(scheme == .dark ? Color(red: 0.09, green: 0.19, blue: 0.38).opacity(0.62) : Color.white.opacity(0.6))
     }
 }
 struct PageTitle<Trailing: View>: View {
@@ -107,35 +102,18 @@ struct PageTitle<Trailing: View>: View {
     }
 }
 
-// MARK: - iPhone Duo
-// Unfolded the Duo is 951 points wide with a 40-point fold down the middle, so nothing may sit on the centre line.
-// The camera strip on one side makes the safe area lopsided, so the panes are measured from the physical centre.
-enum Duo {
-    static let wideAt: CGFloat = 600, foldGap: CGFloat = 48
-    static func panes(_ g: GeometryProxy) -> (left: CGFloat, right: CGFloat) {
-        let centre = (g.safeAreaInsets.leading + g.size.width + g.safeAreaInsets.trailing) / 2
-        return (centre - foldGap / 2 - g.safeAreaInsets.leading, centre - foldGap / 2 - g.safeAreaInsets.trailing)
-    }
-}
-private struct WideKey: EnvironmentKey { static let defaultValue = false }
-private struct PanesKey: EnvironmentKey { static let defaultValue: (left: CGFloat, right: CGFloat) = (0, 0) }
-extension EnvironmentValues {
-    var wide: Bool { get { self[WideKey.self] } set { self[WideKey.self] = newValue } }
-    var panes: (left: CGFloat, right: CGFloat) { get { self[PanesKey.self] } set { self[PanesKey.self] = newValue } }
-}
-
+// MARK: - iPhone Duo panes
 struct TwoPane<L: View, R: View>: View {
-    @Environment(\.wide) private var wide
-    @Environment(\.panes) private var panes
+    @Environment(\.horizontalSizeClass) private var size
     let left: L, right: R
     init(@ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) { self.left = left(); self.right = right() }
     var body: some View {
-        if wide {
-            HStack(spacing: Duo.foldGap) {
-                List { Group { left }.listRowBackground(GlassRow()) }.frame(width: panes.left)
-                List { Color.clear.frame(height: 36).listRowBackground(Color.clear).listRowSeparator(.hidden); Group { right }.listRowBackground(GlassRow()) }.frame(width: panes.right)
+        if size == .regular {
+            FoldSplit {
+                List { Group { left }.listRowBackground(GlassRow()) }
+            } right: {
+                List { Color.clear.frame(height: 36).listRowBackground(Color.clear).listRowSeparator(.hidden); Group { right }.listRowBackground(GlassRow()) }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .seaList()
         } else {
             List { Group { left; right }.listRowBackground(GlassRow()) }
@@ -144,83 +122,45 @@ struct TwoPane<L: View, R: View>: View {
 }
 
 // MARK: - The shell
+// System tabs get Liquid Glass and move to the Duo's right edge by themselves.
 struct RootView: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.colorScheme) private var scheme
-    static let tabs: [(String, String)] = [("my chumby", ""), ("channels", "tv"), ("alarms", "alarm"), ("sounds", "music.note"), ("tinker", "wrench.adjustable")]
+    @Environment(\.horizontalSizeClass) private var size
     var body: some View {
-        GeometryReader { g in
-            let wide = g.size.width >= Duo.wideAt
-            let panes = Duo.panes(g)
-            let half = panes.left
+        ScreenMeasure {
             ZStack {
                 SeaBackground().ignoresSafeArea()
                 GhostOctopus().ignoresSafeArea()
-                pane(0) { HomeTab() }
-                pane(1) { ChannelsTab() }
-                pane(2) { AlarmsTab() }
-                pane(3) { SoundsTab() }
-                pane(4) { TinkerTab() }
+                TabView(selection: $model.tab) {
+                    Tab(value: 0) { HomeTab().tabBG() } label: { Label { Text("my chumby") } icon: { Image("OctoTab") } }
+                    Tab("channels", systemImage: "tv", value: 1) { ChannelsTab().tabBG() }
+                    Tab("alarms", systemImage: "alarm", value: 2) { AlarmsTab().tabBG() }
+                    Tab("sounds", systemImage: "music.note", value: 3) { SoundsTab().tabBG() }
+                    Tab("tinker", systemImage: "wrench.adjustable", value: 4) { TinkerTab().tabBG() }
+                }
+                .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab") }
             }
-            .environment(\.wide, wide)
-            .environment(\.panes, panes)
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                HStack { tabBar.frame(maxWidth: wide ? half : .infinity); if wide { Spacer(minLength: 0) } }
-            }
-            .overlay(alignment: wide ? .bottomLeading : .bottom) {
+            .overlay(alignment: size == .regular ? .bottomTrailing : .bottom) {
                 if let t = model.toast {
                     Text(t).font(.custom("Trebuchet MS", size: 15).weight(.bold)).multilineTextAlignment(.center).padding(.horizontal, 18).padding(.vertical, 11).glass(22)
-                        .frame(maxWidth: wide ? half : .infinity)
-                        .padding(.bottom, 96).padding(.horizontal, wide ? 0 : 20)
-                        .transition(.scale(scale: 0.9).combined(with: .move(edge: .bottom)).combined(with: .opacity))
+                        .padding(.bottom, size == .regular ? 24 : 96).padding(.horizontal, 28)
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
                 }
             }
-            .overlay(alignment: wide ? .topLeading : .top) {
-                if model.offline {
-                    Label("Can’t reach the Chumby. Is Tailscale on?", systemImage: "wifi.exclamationmark").font(.footnote.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8).background(.red.opacity(0.85), in: Capsule()).padding(.top, 4)
-                        .frame(maxWidth: wide ? half : .infinity)
+            .overlay(alignment: .top) {
+                if model.offline || model.dead {
+                    Label(model.dead ? "The Chumby isn’t answering. Showing the last it said." : "Can’t reach the Chumby. Is Tailscale on?", systemImage: "wifi.exclamationmark").font(.footnote.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8).background(.red.opacity(0.85), in: Capsule()).padding(.top, 4)
                 }
             }
-            .animation(.spring(duration: 0.42, bounce: 0.45), value: model.toast)
+            .animation(.spring(duration: 0.3, bounce: 0.35), value: model.toast)
         }
         .sheet(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
     }
-    func pane<C: View>(_ i: Int, @ViewBuilder _ c: () -> C) -> some View {
-        c().opacity(model.tab == i ? 1 : 0).offset(y: model.tab == i ? 0 : 14).scaleEffect(model.tab == i ? 1 : 0.985)
-            .allowsHitTesting(model.tab == i).accessibilityHidden(model.tab != i)
-            .animation(.spring(duration: 0.45, bounce: 0.3), value: model.tab)
-    }
-    var tabBar: some View {
-        GeometryReader { g in
-            let w = (g.size.width - 8) / 5
-            ZStack(alignment: .leading) {
-                Capsule().fill(scheme == .dark ? .white.opacity(0.2) : .white.opacity(0.75)).overlay(Capsule().stroke(.white.opacity(scheme == .dark ? 0.3 : 0.8), lineWidth: 1))
-                    .frame(width: w).padding(.vertical, 4).offset(x: 4 + w * CGFloat(model.tab))
-                    .animation(.spring(duration: 0.5, bounce: 0.5), value: model.tab)
-                HStack(spacing: 0) {
-                    ForEach(Self.tabs.indices, id: \.self) { i in
-                        Button {
-                            model.tab = i; UserDefaults.standard.set(i, forKey: "tab")
-                        } label: {
-                            VStack(spacing: 2) {
-                                if i == 0 { OctopusMark(color: .primary, eyes: .clear).frame(width: 26, height: 24) }
-                                else { Image(systemName: Self.tabs[i].1 + (model.tab == i && i < 3 ? ".fill" : "")).font(.system(size: 19)).frame(height: 24) }
-                                Text(Self.tabs[i].0).font(.custom("Trebuchet MS", size: 10.5).weight(.bold))
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-                            .foregroundStyle(model.tab == i ? ChumbyPalette.acc(scheme == .dark) : ChumbyPalette.ink(scheme == .dark))
-                        }.buttonStyle(.plain)
-                    }
-                }.padding(.horizontal, 4)
-            }
-        }
-        .frame(height: 66).frame(maxWidth: 520)
-        .glass(33)
-        .padding(.horizontal, 12).padding(.bottom, 4)
-    }
 }
+extension View { func tabBG() -> some View { self.containerBackground(.clear, for: .tabView) } }
 
 struct ConnectionView: View {
     @EnvironmentObject var model: ChumbyModel
@@ -262,9 +202,10 @@ struct Bubble: Identifiable { let id = UUID(); let x: CGFloat, size: CGFloat, dx
 struct LiveOctopus: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var still
+    @EnvironmentObject var model: ChumbyModel
     let squishedAt: Date?
     var body: some View {
-        TimelineView(.animation(paused: still)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still || model.tab != 0)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let bob = -7 * (0.5 - 0.5 * cos(2 * .pi * t / 4.2))
             let wave = sin(2 * .pi * t / 3)
@@ -277,7 +218,6 @@ struct LiveOctopus: View {
                 .modifier(SkewEffect(skew: CGFloat(wave) * 4.5 * .pi / 180, anchorY: 0.16))
                 .scaleEffect(x: sx, y: sy, anchor: UnitPoint(x: 0.5, y: 0.9))
                 .offset(y: bob + dy)
-                .shadow(color: Color(red: 0.02, green: 0.09, blue: 0.26).opacity(0.3), radius: 3, y: 6)
         }
     }
     func squish(at now: Date) -> (CGFloat, CGFloat, CGFloat) {
@@ -295,8 +235,8 @@ struct LiveOctopus: View {
 // MARK: - My Chumby
 struct HomeTab: View {
     @EnvironmentObject var model: ChumbyModel
-    @Environment(\.wide) private var wide
-    @Environment(\.panes) private var panes
+    @Environment(\.horizontalSizeClass) private var hsize
+    var wide: Bool { hsize == .regular }
     @Environment(\.colorScheme) private var scheme
     @State private var moreInfo = false
     @State private var say: String?
@@ -309,6 +249,7 @@ struct HomeTab: View {
     var dark: Bool { scheme == .dark }
 
     func poke() {
+        model.tick()
         squishedAt = Date()
         withAnimation(.spring(duration: 0.38, bounce: 0.6)) { say = Self.lines[line % Self.lines.count] }
         line += 1
@@ -419,7 +360,7 @@ struct HomeTab: View {
             }
             if !wide {
                 Button(moreInfo ? "Less Info…" : "More Info…") { withAnimation(.spring(duration: 0.4, bounce: 0.3)) { moreInfo.toggle() } }
-                    .buttonStyle(GlassButton()).padding(.top, 16)
+                    .font(.custom("Trebuchet MS", size: 15).weight(.bold)).buttonStyle(.glass).padding(.top, 16)
             }
             Text("Welcome back. Tap the screen to touch it; tap the octopus to say hi.").font(.custom("Trebuchet MS", size: 13)).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.center).padding(.top, 12).padding(.bottom, 20).padding(.horizontal, 16)
         }
@@ -434,7 +375,7 @@ struct HomeTab: View {
             infoRow("Power", model.sys.wall == 1 ? "Wall power" : "Battery")
             infoRow("Hardware", "3.8")
         }
-        .glass().padding(.bottom, 20)
+        .card().padding(.bottom, 20)
     }
     func infoRow(_ k: String, _ v: String) -> some View {
         HStack { Text(k); Spacer(); Text(v).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.trailing) }
@@ -456,7 +397,7 @@ struct HomeTab: View {
                 Segments(title: "Night mode", options: [("Off", "off"), ("On", "on"), ("Dim", "dim"), ("Dark", "dark")]) { model.cmd("night", $0, "Night mode \($0)") }
                 Segments(title: "Screen", options: [("Bright", "bright"), ("Dim", "dim"), ("Off", "off")]) { model.cmd("screen", $0, "Screen \($0)") }
             }
-            .padding(14).glass()
+            .padding(14).card()
         }
         .padding(.bottom, 20)
     }
@@ -471,8 +412,9 @@ struct HomeTab: View {
         Group {
             if wide {
                 // Each side scrolls on its own, so the octopus stays put while you use the controls.
-                HStack(alignment: .top, spacing: Duo.foldGap) {
-                    ScrollView { VStack(spacing: 0) { wordmark.padding(.top, 6); about }.padding(.horizontal, 12) }.frame(width: panes.left)
+                FoldSplit {
+                    ScrollView { VStack(spacing: 0) { wordmark.padding(.top, 6); about }.padding(.horizontal, 12) }
+                } right: {
                     ScrollView {
                         VStack(spacing: 0) {
                             HStack { Spacer(); gear }.padding(.top, 6).padding(.bottom, 8)
@@ -480,9 +422,8 @@ struct HomeTab: View {
                             rightNow
                             more
                         }.padding(.horizontal, 12)
-                    }.frame(width: panes.right)
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 ScrollView {
                     ZStack(alignment: .trailing) { wordmark; gear }.padding(.horizontal, 16).padding(.top, 6)
@@ -504,16 +445,6 @@ struct InkDrop: View {
     }
 }
 
-struct GlassButton: ButtonStyle {
-    var circle = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.custom("Trebuchet MS", size: 15).weight(.bold)).padding(.horizontal, circle ? 0 : 22).padding(.vertical, circle ? 0 : 9)
-            .modifier(GlassFill(shape: circle ? AnyShape(Circle()) : AnyShape(Capsule())))
-            .scaleEffect(configuration.isPressed ? 0.93 : 1)
-            .animation(.spring(duration: 0.3, bounce: 0.7), value: configuration.isPressed)
-    }
-}
-
 func duration(_ s: Int) -> String {
     let d = s / 86400, h = s / 3600 % 24, m = s / 60 % 60
     return (d > 0 ? "\(d)d " : "") + (h > 0 ? "\(h)h " : "") + "\(m)m"
@@ -527,7 +458,7 @@ struct RemoteButton: View {
         Button(action: action) {
             Image(systemName: icon).font(.system(size: big ? 26 : 22)).frame(width: big ? 76 : 64, height: big ? 76 : 64)
         }
-        .buttonStyle(GlassButton(circle: true)).accessibilityLabel(label)
+        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
     }
 }
 
@@ -536,7 +467,11 @@ struct Segments: View {
     @Environment(\.colorScheme) private var scheme
     let title: String, options: [(String, String)]
     let action: (String) -> Void
-    @State private var picked = ""
+    @AppStorage private var picked: String
+    init(title: String, options: [(String, String)], action: @escaping (String) -> Void) {
+        self.title = title; self.options = options; self.action = action
+        _picked = AppStorage(wrappedValue: "", "segment." + title)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -664,7 +599,7 @@ struct ChannelsTab: View {
             }
         } right: {
             Section {
-                Picker("Edit channel", selection: $picked) { ForEach(channels, id: \.id) { Text(title($0)).tag($0.id) } }
+                Picker("Channel", selection: $picked) { ForEach(channels, id: \.id) { Text(title($0)).tag($0.id) } }
                     .onChange(of: picked) { _, _ in pick() }
                 ForEach($rows) { $w in
                     VStack(alignment: .leading, spacing: 6) {
@@ -678,24 +613,20 @@ struct ChannelsTab: View {
                             ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
                         }.font(.footnote).onChange(of: w.secs) { _, _ in changed() }
                     }
-                    .swipeActions(edge: .leading) {
-                        Button("To top") { if let i = rows.firstIndex(of: w) { rows.insert(rows.remove(at: i), at: 0); changed() } }.tint(.blue)
-                    }
-                    .swipeActions(edge: .trailing) {
-                        Button("Up") { if let i = rows.firstIndex(of: w), i > 0 { rows.swapAt(i, i - 1); changed() } }.tint(.indigo)
-                        Button("Down") { if let i = rows.firstIndex(of: w), i < rows.count - 1 { rows.swapAt(i, i + 1); changed() } }.tint(.teal)
-                    }
                 }
+                .onMove { rows.move(fromOffsets: $0, toOffset: $1); changed() }
+                .deleteDisabled(true)
                 Menu("Add a widget") {
                     ForEach(allWidgets.filter { w in !rows.contains { $0.id == w[0] } }, id: \.self) { w in
                         Button(w[1]) { rows.insert(EditorRow(id: w[0], name: w[1], on: true, secs: 0, own: w.count > 2 ? Int(w[2]) ?? 0 : 0), at: 0); changed() }
                     }
                 }
-            } header: { Text("Edit channel") } footer: {
-                Text((model.state.shuffle == 1 ? "Shuffle is on, so your order won’t show until you turn it off. " : "") + "Swipe a widget to reorder it. New widgets go to the top, and changes apply within a few seconds.")
+            } header: { Text("Edit a channel") } footer: {
+                Text((model.state.shuffle == 1 ? "Shuffle is on, so your order won’t show until you turn it off. " : "") + "Drag a widget to reorder it. New widgets go to the top.")
             }
         }
         .seaList()
+        .dragToReorder()
         .task { await model.loadChannels(); if picked.isEmpty { picked = (model.channelData?.cur ?? "").trimmingCharacters(in: .whitespacesAndNewlines); if picked.isEmpty { picked = channels.first?.id ?? "" }; pick() }; await loadCategories() }
         .refreshable { await model.loadChannels(); await model.loadState(); pick() }
     }
@@ -751,8 +682,8 @@ struct AlarmsTab: View {
                         }.labelsHidden()
                     }
                 }
-                .onDelete { model.state.schedule.remove(atOffsets: $0); Task { await model.saveSchedule() } }
-                Button("Add a time") { model.state.schedule.append(ScheduleItem()); Task { await model.saveSchedule() } }
+                .onDelete { model.state.schedule.remove(atOffsets: $0); model.state.reindex(); Task { await model.saveSchedule() } }
+                Button("Add a time") { model.state.schedule.append(ScheduleItem()); model.state.reindex(); Task { await model.saveSchedule() } }
             } header: { Text("Daily schedule") } footer: { Text("Runs every day at these times, even with your phone away.") }
         }
         .seaList()
@@ -1074,5 +1005,15 @@ struct TinkerTab: View {
                 model.cmd(c, nil, c == "reboot" ? "Rebooting" : "Restarting")
             }
         }
+    }
+}
+
+extension View {
+    @ViewBuilder func dragToReorder() -> some View {
+        #if os(iOS)
+        self.environment(\.editMode, .constant(.active))
+        #else
+        self
+        #endif
     }
 }

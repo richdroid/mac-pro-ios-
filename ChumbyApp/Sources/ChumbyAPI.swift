@@ -31,7 +31,7 @@ struct Sys: Decodable {
 }
 
 struct Alarm: Codable, Identifiable, Equatable {
-    var id = UUID()
+    var id = 0     // its place in the list, so rows keep their identity across refreshes
     var name = "", enabled = "1", time = "420", when = "daily", type = "beep", arg = "Beep", param = ""
     var param_description = "Beep", duration = "30", snooze = "9", auto_dismiss = "0"
     var action = "", action_param = "", backup = "1", backupDelay = "5"
@@ -94,7 +94,7 @@ struct Stream: Codable, Identifiable, Equatable { var id = ""; var name = ""; va
     var key: String { id + url } }
 struct NamedID: Decodable, Identifiable, Hashable { let id: String; let name: String }
 struct MineWidget: Decodable, Identifiable { let name: String; let secs: Int; var id: String { name } }
-struct ScheduleItem: Codable, Identifiable, Equatable { var id = UUID(); var time = "22:00"; var cmd = "night"; var val = "on"
+struct ScheduleItem: Codable, Identifiable, Equatable { var id = 0; var time = "22:00"; var cmd = "night"; var val = "on"
     enum CodingKeys: String, CodingKey { case time, cmd, val } }
 
 struct ChumbyState: Decodable {
@@ -128,6 +128,11 @@ struct ChumbyState: Decodable {
         channelNames = try c.decodeIfPresent([String].self, forKey: .channelNames) ?? []
         widgetNames = try c.decodeIfPresent([String].self, forKey: .widgetNames) ?? []
         mine = try c.decodeIfPresent([MineWidget].self, forKey: .mine) ?? []
+        reindex()
+    }
+    mutating func reindex() {
+        for i in alarms.indices { alarms[i].id = i }
+        for i in schedule.indices { schedule[i].id = i }
     }
     enum Key: String, CodingKey { case volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine }
 }
@@ -151,8 +156,15 @@ actor ChumbyAPI {
 
     private func url(_ query: String) -> URL { URL(string: base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + ChumbyAPI.appPath + "?" + query)! }
 
+    // The bytes and how old the Mac's copy is, so an unchanged answer costs nothing.
+    func raw(_ action: String) async throws -> (data: Data, age: Double) {
+        var r = URLRequest(url: url("a=" + action)); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 8
+        let (d, resp) = try await URLSession.shared.data(for: r)
+        guard let h = resp as? HTTPURLResponse, h.statusCode == 200 else { throw ChumbyError.message("No answer") }
+        return (d, Double(h.value(forHTTPHeaderField: "X-Chumby-Age") ?? "") ?? 0)
+    }
     func get<T: Decodable>(_ action: String, as: T.Type) async throws -> T {
-        var r = URLRequest(url: url("a=" + action)); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 15
+        var r = URLRequest(url: url("a=" + action)); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 8
         return try JSONDecoder().decode(T.self, from: try await URLSession.shared.data(for: r).0)
     }
     func text(_ query: String) async throws -> String {
@@ -160,7 +172,7 @@ actor ChumbyAPI {
         return String(decoding: try await URLSession.shared.data(for: r).0, as: UTF8.self)
     }
     func shot() async throws -> Data {
-        var r = URLRequest(url: url("a=shot&n=\(Int(Date().timeIntervalSince1970))")); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 10
+        var r = URLRequest(url: url("a=shot&n=\(Int(Date().timeIntervalSince1970))")); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 6
         let (data, response) = try await URLSession.shared.data(for: r)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ChumbyError.message("No picture") }
         return data
@@ -181,7 +193,7 @@ actor ChumbyAPI {
     @discardableResult
     func post(_ action: String, extra: String = "", body: String = "") async throws -> [String: Any] {
         let t = try await getToken()
-        var r = URLRequest(url: url("a=\(action)&t=\(t)\(extra)")); r.httpMethod = "POST"; r.timeoutInterval = 25
+        var r = URLRequest(url: url("a=\(action)&t=\(t)\(extra)")); r.httpMethod = "POST"; r.timeoutInterval = 15
         r.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type"); r.httpBody = Data(body.utf8)
         let (data, _) = try await URLSession.shared.data(for: r)
         let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]

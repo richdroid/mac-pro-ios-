@@ -42,14 +42,19 @@ struct Status: Decodable {
         let lastResult: String; let resigning: Bool; let job: IOSJob
     }
 
-    let model: String; let macos: String; let build: String; let uptime: Double; let load: [Double]; let cpuModel: String
-    let cpu: CPU; let mem: Memory; let disk: Disk; let net: Network; let hist: History
+    let model: String; let macos: String; let build: String; var uptime: Double; var load: [Double]; let cpuModel: String
+    var cpu: CPU; var mem: Memory; let disk: Disk; var net: Network; var hist: History
     let apps: [App]; let installed: [String]; let procs: [Process]; let tailscale: Tailscale
     let claude: Claude; let usage: Usage; let upgrade: Upgrade; let oclp: OCLP; let sharing: Sharing
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
     let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
-    let temps: [Temp]?
+    var temps: [Temp]?
     let iosApps: SeedStatus?
+}
+
+// The numbers that change every second.
+struct LiveStatus: Decodable {
+    let uptime: Double; let load: [Double]; let cpu: Status.CPU; let mem: Status.Memory; let net: Status.Network; let hist: Status.History; let temps: [Status.Temp]?
 }
 
 enum APIError: LocalizedError {
@@ -74,6 +79,21 @@ struct API {
         r.cachePolicy = .reloadIgnoringLocalCacheData
         r.timeoutInterval = 25
         return r
+    }
+
+    func live() async throws -> LiveStatus {
+        var r = request("/api/live"); r.timeoutInterval = 6
+        let (data, response) = try await session.data(for: r)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(LiveStatus.self, from: data)
+    }
+
+    func statusData() async throws -> Data {
+        let (data, response) = try await session.data(for: request("/api/status"))
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 401 || code == 403 { throw APIError.signInNeeded }
+        guard code == 200 else { throw APIError.badResponse }
+        return data
     }
 
     func status() async throws -> Status {

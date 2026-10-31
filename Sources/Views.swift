@@ -14,80 +14,24 @@ struct MacProApp: App {
     }
 }
 
-// Unfolded the iPhone Duo is 951 points wide with a 40-point fold at its physical centre, so nothing may sit on it.
-enum Duo {
-    static let wideAt: CGFloat = 600, foldGap: CGFloat = 48
-    static func panes(_ g: GeometryProxy) -> (left: CGFloat, right: CGFloat) {
-        let centre = (g.safeAreaInsets.leading + g.size.width + g.safeAreaInsets.trailing) / 2
-        return (centre - foldGap / 2 - g.safeAreaInsets.leading, centre - foldGap / 2 - g.safeAreaInsets.trailing)
-    }
-}
 enum Side { case all, left, right }
-private struct WideKey: EnvironmentKey { static let defaultValue = false }
-private struct PanesKey: EnvironmentKey { static let defaultValue: (left: CGFloat, right: CGFloat) = (0, 0) }
-extension EnvironmentValues {
-    var wide: Bool { get { self[WideKey.self] } set { self[WideKey.self] = newValue } }
-    var panes: (left: CGFloat, right: CGFloat) { get { self[PanesKey.self] } set { self[PanesKey.self] = newValue } }
-}
-#if canImport(UIKit)
-let groupedBackground = Color(uiColor: .systemGroupedBackground)
-#else
-let groupedBackground = Color.gray.opacity(0.1)
-#endif
 
+// System tabs and navigation get Liquid Glass and move to the Duo's right edge by themselves.
 struct RootView: View {
     @EnvironmentObject var model: AppModel
-    static let tabs = [("Status", "gauge.with.dots.needle.33percent"), ("Apps", "square.grid.2x2"), ("Claude", "sparkle"), ("Usage", "chart.bar"), ("Updates", "arrow.up.circle"), ("Control", "display")]
     var body: some View {
-        GeometryReader { g in
-            let wide = g.size.width >= Duo.wideAt
-            let panes = Duo.panes(g)
-            ZStack {
-                pane(0) { Screen { StatusTab($0, side: $1) } }
-                pane(1) { Screen { AppsTab($0, side: $1) } }
-                pane(2) { Screen { ClaudeTab($0, side: $1) } }
-                pane(3) { Screen { UsageTab($0, side: $1) } }
-                pane(4) { Screen { UpgradeTab($0, side: $1) } }
-                pane(5) { Screen { ControlTab($0, side: $1) } }
+        ScreenMeasure {
+            TabView(selection: $model.tab) {
+                Tab("Status", systemImage: "gauge.with.dots.needle.33percent", value: 0) { Screen { StatusTab($0, side: $1) } }
+                Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Screen { AppsTab($0, side: $1) } }
+                Tab("Claude", systemImage: "sparkle", value: 2) { Screen { ClaudeTab($0, side: $1) } }
+                Tab("Usage", systemImage: "chart.bar", value: 3) { Screen { UsageTab($0, side: $1) } }
+                Tab("Updates", systemImage: "arrow.up.circle", value: 4) { Screen { UpgradeTab($0, side: $1) } }
+                Tab("Control", systemImage: "display", value: 5) { Screen { ControlTab($0, side: $1) } }
             }
-            .environment(\.wide, wide)
-            .environment(\.panes, panes)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                HStack { bar.frame(maxWidth: wide ? panes.left : .infinity); if wide { Spacer(minLength: 0) } }
-            }
+            .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
         }
         .sheet(isPresented: $model.needsSignIn) { SignInView().environmentObject(model) }
-    }
-    func pane<C: View>(_ i: Int, @ViewBuilder _ c: () -> C) -> some View {
-        c().opacity(model.tab == i ? 1 : 0).allowsHitTesting(model.tab == i).accessibilityHidden(model.tab != i)
-    }
-    var bar: some View {
-        GeometryReader { g in
-            let w = (g.size.width - 8) / CGFloat(Self.tabs.count)
-            ZStack(alignment: .leading) {
-                Capsule().fill(.primary.opacity(0.1)).frame(width: w).padding(.vertical, 4).offset(x: 4 + w * CGFloat(model.tab))
-                    .animation(.spring(duration: 0.45, bounce: 0.35), value: model.tab)
-                HStack(spacing: 0) {
-                    ForEach(Self.tabs.indices, id: \.self) { i in
-                        Button {
-                            model.tab = i; UserDefaults.standard.set(i, forKey: "tab")
-                        } label: {
-                            VStack(spacing: 2) {
-                                Image(systemName: Self.tabs[i].1).font(.system(size: 18)).frame(height: 24)
-                                Text(Self.tabs[i].0).font(.system(size: 10, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-                            .foregroundStyle(model.tab == i ? Color.accentColor : Color.primary)
-                        }.buttonStyle(.plain)
-                    }
-                }.padding(.horizontal, 4)
-            }
-        }
-        .frame(height: 60)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().stroke(.primary.opacity(0.08), lineWidth: 1))
-        .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
-        .padding(.horizontal, 12).padding(.bottom, 4)
     }
 }
 
@@ -96,8 +40,7 @@ let tileColumns = [GridItem(.adaptive(minimum: 170), spacing: 18, alignment: .to
 // Shared frame for each tab: a large title, the unreachable notice, and pull to refresh.
 struct Screen<Content: View>: View {
     @EnvironmentObject var model: AppModel
-    @Environment(\.wide) private var wide
-    @Environment(\.panes) private var panes
+    @Environment(\.horizontalSizeClass) private var size
     @State private var settings = false
     let content: (Status, Side) -> Content
     init(@ViewBuilder content: @escaping (Status, Side) -> Content) { self.content = content }
@@ -112,19 +55,11 @@ struct Screen<Content: View>: View {
     var body: some View {
         NavigationStack {
             Group {
-                if wide {
-                    HStack(spacing: Duo.foldGap) {
-                        list(.left).frame(width: panes.left)
-                        list(.right).frame(width: panes.right)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(groupedBackground.ignoresSafeArea())
-                    .navigationBarTitleDisplayMode(.inline)
-                } else {
-                    list(.all).navigationTitle("Mac Pro")
-                }
+                if size == .regular { FoldSplit { list(.left) } right: { list(.right) }.navigationBarTitleDisplayMode(.inline) }
+                else { list(.all) }
             }
-            .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") } } }
+            .navigationTitle("Mac Pro")
+            .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Connection") } }
             .sheet(isPresented: $settings) { SignInView().environmentObject(model) }
         }
     }

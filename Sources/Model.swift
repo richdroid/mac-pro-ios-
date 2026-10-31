@@ -11,31 +11,41 @@ final class AppModel: ObservableObject {
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
 
     var api: API { API(base: URL(string: address) ?? URL(string: "https://invalid.invalid")!) }
-    private var loop: Task<Void, Never>?
+    private var loops: [Task<Void, Never>] = []
 
     // The Mac bakes its address into the build when it collects it, so it never has to live in the source.
     init() {
         let saved = UserDefaults.standard.string(forKey: "address") ?? ""
         address = saved.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : saved
         needsSignIn = address.isEmpty
+        // Show the last known state at once; fresh numbers replace it moments later.
+        if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(Status.self, from: d) }
     }
 
+    private static var cacheFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("status.json") }
+
     func start() {
-        loop?.cancel()
-        loop = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.refresh()
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-            }
-        }
+        stop()
+        loops = [
+            // Everything, every 10 seconds; the live numbers every second in between.
+            Task { [weak self] in while !Task.isCancelled { await self?.refresh(); try? await Task.sleep(nanoseconds: 10_000_000_000) } },
+            Task { [weak self] in while !Task.isCancelled { await self?.refreshLive(); try? await Task.sleep(nanoseconds: 1_000_000_000) } },
+        ]
     }
-    func stop() { loop?.cancel(); loop = nil }
+    func stop() { loops.forEach { $0.cancel() }; loops = [] }
+
+    func refreshLive() async {
+        guard status != nil, problem == nil, !address.isEmpty, let l = try? await api.live() else { return }
+        status?.uptime = l.uptime; status?.load = l.load; status?.cpu = l.cpu; status?.mem = l.mem; status?.net = l.net; status?.hist = l.hist; status?.temps = l.temps
+    }
 
     func refresh() async {
         if address.isEmpty { needsSignIn = true; return }
         do {
-            status = try await api.status()
+            let data = try await api.statusData()
+            status = try JSONDecoder().decode(Status.self, from: data)
             problem = nil; needsSignIn = false
+            try? data.write(to: Self.cacheFile, options: .atomic)
         } catch APIError.signInNeeded {
             needsSignIn = true
         } catch is CancellationError {
