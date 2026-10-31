@@ -107,37 +107,69 @@ struct PageTitle<Trailing: View>: View {
     }
 }
 
+// MARK: - iPhone Duo
+// Unfolded the Duo is 951 points wide with a 40-point fold down the middle, so nothing may sit on the centre line.
+enum Duo { static let wideAt: CGFloat = 600, foldGap: CGFloat = 44 }
+private struct WideKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var wide: Bool { get { self[WideKey.self] } set { self[WideKey.self] = newValue } } }
+
+struct TwoPane<L: View, R: View>: View {
+    @Environment(\.wide) private var wide
+    let left: L, right: R
+    init(@ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) { self.left = left(); self.right = right() }
+    var body: some View {
+        if wide {
+            HStack(spacing: Duo.foldGap) {
+                List { Group { left }.listRowBackground(GlassRow()) }
+                List { Color.clear.frame(height: 36).listRowBackground(Color.clear).listRowSeparator(.hidden); Group { right }.listRowBackground(GlassRow()) }
+            }
+            .seaList()
+        } else {
+            List { Group { left; right }.listRowBackground(GlassRow()) }
+        }
+    }
+}
+
 // MARK: - The shell
 struct RootView: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.colorScheme) private var scheme
     static let tabs: [(String, String)] = [("my chumby", ""), ("channels", "tv"), ("alarms", "alarm"), ("sounds", "music.note"), ("tinker", "wrench.adjustable")]
     var body: some View {
-        ZStack {
-            SeaBackground().ignoresSafeArea()
-            GhostOctopus().ignoresSafeArea()
-            pane(0) { HomeTab() }
-            pane(1) { ChannelsTab() }
-            pane(2) { AlarmsTab() }
-            pane(3) { SoundsTab() }
-            pane(4) { TinkerTab() }
-        }
-        .tint(ChumbyPalette.acc(scheme == .dark))
-        .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
-        .safeAreaInset(edge: .bottom) { tabBar }
-        .overlay(alignment: .bottom) {
-            if let t = model.toast {
-                Text(t).font(.custom("Trebuchet MS", size: 15).weight(.bold)).multilineTextAlignment(.center).padding(.horizontal, 18).padding(.vertical, 11).glass(22)
-                    .padding(.bottom, 96).padding(.horizontal, 20)
-                    .transition(.scale(scale: 0.9).combined(with: .move(edge: .bottom)).combined(with: .opacity))
+        GeometryReader { g in
+            let wide = g.size.width >= Duo.wideAt
+            let half = (g.size.width - Duo.foldGap) / 2
+            ZStack {
+                SeaBackground().ignoresSafeArea()
+                GhostOctopus().ignoresSafeArea()
+                pane(0) { HomeTab() }
+                pane(1) { ChannelsTab() }
+                pane(2) { AlarmsTab() }
+                pane(3) { SoundsTab() }
+                pane(4) { TinkerTab() }
             }
-        }
-        .overlay(alignment: .top) {
-            if model.offline {
-                Label("Can’t reach the Chumby. Is Tailscale on?", systemImage: "wifi.exclamationmark").font(.footnote.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8).background(.red.opacity(0.85), in: Capsule()).padding(.top, 4)
+            .environment(\.wide, wide)
+            .tint(ChumbyPalette.acc(scheme == .dark))
+            .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                HStack { tabBar.frame(maxWidth: wide ? half : .infinity); if wide { Spacer(minLength: 0) } }
             }
+            .overlay(alignment: wide ? .bottomLeading : .bottom) {
+                if let t = model.toast {
+                    Text(t).font(.custom("Trebuchet MS", size: 15).weight(.bold)).multilineTextAlignment(.center).padding(.horizontal, 18).padding(.vertical, 11).glass(22)
+                        .frame(maxWidth: wide ? half : .infinity)
+                        .padding(.bottom, 96).padding(.horizontal, wide ? 0 : 20)
+                        .transition(.scale(scale: 0.9).combined(with: .move(edge: .bottom)).combined(with: .opacity))
+                }
+            }
+            .overlay(alignment: wide ? .topLeading : .top) {
+                if model.offline {
+                    Label("Can’t reach the Chumby. Is Tailscale on?", systemImage: "wifi.exclamationmark").font(.footnote.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8).background(.red.opacity(0.85), in: Capsule()).padding(.top, 4)
+                        .frame(maxWidth: wide ? half : .infinity)
+                }
+            }
+            .animation(.spring(duration: 0.42, bounce: 0.45), value: model.toast)
         }
-        .animation(.spring(duration: 0.42, bounce: 0.45), value: model.toast)
         .sheet(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
     }
     func pane<C: View>(_ i: Int, @ViewBuilder _ c: () -> C) -> some View {
@@ -248,7 +280,7 @@ struct LiveOctopus: View {
 // MARK: - My Chumby
 struct HomeTab: View {
     @EnvironmentObject var model: ChumbyModel
-    @Environment(\.horizontalSizeClass) private var size
+    @Environment(\.wide) private var wide
     @Environment(\.colorScheme) private var scheme
     @State private var moreInfo = false
     @State private var say: String?
@@ -298,7 +330,7 @@ struct HomeTab: View {
                 }
                 .offset(y: -58)
             }
-            .frame(maxWidth: 380)
+            .frame(maxWidth: wide ? 300 : 320)
             .padding(.top, 64)
     }
     var bubbleLayer: some View {
@@ -369,8 +401,10 @@ struct HomeTab: View {
                 spec("Software", "1.7.2 (build 1830)")
                 spec("Playing", model.offline ? "Can’t reach the Chumby" : !model.sys.lock.isEmpty ? "Busy: \(model.sys.lock)" : model.sys.chan.isEmpty ? "Awake" : model.sys.chan)
             }
-            Button(moreInfo ? "Less Info…" : "More Info…") { withAnimation(.spring(duration: 0.4, bounce: 0.3)) { moreInfo.toggle() } }
-                .buttonStyle(GlassButton()).padding(.top, 16)
+            if !wide {
+                Button(moreInfo ? "Less Info…" : "More Info…") { withAnimation(.spring(duration: 0.4, bounce: 0.3)) { moreInfo.toggle() } }
+                    .buttonStyle(GlassButton()).padding(.top, 16)
+            }
             Text("Welcome back. Tap the screen to touch it; tap the octopus to say hi.").font(.custom("Trebuchet MS", size: 13)).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.center).padding(.top, 12).padding(.bottom, 20).padding(.horizontal, 16)
         }
     }
@@ -410,27 +444,36 @@ struct HomeTab: View {
         }
         .padding(.bottom, 20)
     }
-    var word: some View {
-        ZStack(alignment: .trailing) {
-            ArtShape(art: ChumbyArt.word, box: ChumbyArt.wordBox).fill(ChumbyPalette.word(dark), style: FillStyle(eoFill: true))
-                .frame(height: 30).frame(maxWidth: .infinity).accessibilityLabel("chumby")
-            Button { settings = true } label: { Image(systemName: "gearshape").frame(width: 38, height: 38).glassCircle() }.accessibilityLabel("Connection")
-        }
-        .padding(.horizontal, 16).padding(.top, 6)
-        .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
+    var wordmark: some View {
+        ArtShape(art: ChumbyArt.word, box: ChumbyArt.wordBox).fill(ChumbyPalette.word(dark), style: FillStyle(eoFill: true))
+            .frame(height: 30).frame(maxWidth: .infinity).accessibilityLabel("chumby")
+    }
+    var gear: some View {
+        Button { settings = true } label: { Image(systemName: "gearshape").frame(width: 38, height: 38).glassCircle() }.accessibilityLabel("Connection")
     }
     var body: some View {
-        ScrollView {
-            word
-            if size == .regular {
-                HStack(alignment: .top, spacing: 28) {
-                    about.frame(maxWidth: .infinity)
-                    VStack(spacing: 0) { if moreInfo { more }; remote; rightNow }.frame(maxWidth: .infinity).padding(.top, 44)
-                }.padding(.horizontal, 12)
+        Group {
+            if wide {
+                // Each side scrolls on its own, so the octopus stays put while you use the controls.
+                HStack(alignment: .top, spacing: Duo.foldGap) {
+                    ScrollView { VStack(spacing: 0) { wordmark.padding(.top, 6); about }.padding(.horizontal, 12) }
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            HStack { Spacer(); gear }.padding(.top, 6).padding(.bottom, 8)
+                            remote
+                            rightNow
+                            more
+                        }.padding(.horizontal, 12)
+                    }
+                }
             } else {
-                VStack(spacing: 0) { about; if moreInfo { more }; remote; rightNow }.padding(.horizontal, 16)
+                ScrollView {
+                    ZStack(alignment: .trailing) { wordmark; gear }.padding(.horizontal, 16).padding(.top, 6)
+                    VStack(spacing: 0) { about; if moreInfo { more }; remote; rightNow }.padding(.horizontal, 16)
+                }
             }
         }
+        .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
     }
 }
 
@@ -578,7 +621,7 @@ struct ChannelsTab: View {
     }
 
     var body: some View {
-        List { Group {
+        TwoPane {
             PageTitle("Channels")
             Section("Now playing") {
                 Picker("Channel", selection: Binding(get: { model.state.channel }, set: { n in model.state.channel = n; model.cmd("channel", n, "Switching channel") })) {
@@ -621,6 +664,7 @@ struct ChannelsTab: View {
             } header: { Text("Edit channel") } footer: {
                 Text((model.state.shuffle == 1 ? "Shuffle is on, so your order won’t show until you turn it off. " : "") + "Swipe a widget to reorder it. New widgets go to the top, and changes apply within a few seconds.")
             }
+            } right: {
             Section("Catalog") {
                 Picker("Category", selection: $category) {
                     Text("Choose…").tag("")
@@ -633,7 +677,7 @@ struct ChannelsTab: View {
                 }
                 if more { Button("Load more") { page += 1; Task { await loadCatalog() } } }
             }
-        } .listRowBackground(GlassRow()) }
+        }
         .seaList()
         .task { await model.loadChannels(); if picked.isEmpty { picked = (model.channelData?.cur ?? "").trimmingCharacters(in: .whitespacesAndNewlines); if picked.isEmpty { picked = channels.first?.id ?? "" }; pick() }; await loadCategories() }
         .refreshable { await model.loadChannels(); await model.loadState(); pick() }
@@ -648,7 +692,7 @@ struct AlarmsTab: View {
     static let actions = [("night", "on", "Night mode on"), ("night", "dim", "Night mode dim"), ("night", "dark", "Night mode dark"), ("night", "off", "Night mode off"), ("screen", "bright", "Screen bright"), ("screen", "dim", "Screen dim"), ("screen", "off", "Screen off")]
 
     var body: some View {
-        List { Group {
+        TwoPane {
             PageTitle("Alarms") { Button { editing = EditTarget(index: -1) } label: { Image(systemName: "plus").font(.title2).frame(width: 44, height: 44).glassCircle() }.accessibilityLabel("Add alarm").disabled(model.state.alarms.count >= 16) }
             Section {
                 let shown = model.state.alarms.enumerated().filter { !$0.element.isPlaceholder }.sorted { $0.element.localMinutes < $1.element.localMinutes }
@@ -675,6 +719,7 @@ struct AlarmsTab: View {
             } header: {
                 if let n = model.nextAlarm() { Text("Next: " + n.formatted(.dateTime.weekday(.wide).hour().minute())) } else { Text("No alarm set") }
             } footer: { if model.state.pending { Text("Updating the Chumby…") } }
+            } right: {
             Section {
                 ForEach($model.state.schedule) { $e in
                     HStack {
@@ -692,7 +737,7 @@ struct AlarmsTab: View {
                 .onDelete { model.state.schedule.remove(atOffsets: $0); Task { await model.saveSchedule() } }
                 Button("Add a time") { model.state.schedule.append(ScheduleItem()); Task { await model.saveSchedule() } }
             } header: { Text("Daily schedule") } footer: { Text("Runs every day at these times, even with your phone away.") }
-        } .listRowBackground(GlassRow()) }
+        }
         .seaList()
         .sheet(item: $editing) { t in AlarmEditor(index: t.index).environmentObject(model) }
         .refreshable { await model.loadState() }
@@ -886,7 +931,7 @@ struct SoundsTab: View {
     }
 
     var body: some View {
-        List { Group {
+        TwoPane {
             PageTitle("Sounds")
             Section("Now") {
                 LabeledContent("Volume", value: "\(Int(volume))%")
@@ -912,6 +957,7 @@ struct SoundsTab: View {
                     }
                 }
             } header: { Text("Pandora") } footer: { if let scanNote { Text(scanNote) } }
+            } right: {
             Section("Alarm sound") {
                 LabeledContent("Alarm volume", value: "\(Int(alarmVolume))%")
                 Slider(value: $alarmVolume, in: 0...100, step: 5) { e in
@@ -931,7 +977,7 @@ struct SoundsTab: View {
                 }
                 Button("Add a stream…") { addStream = true }
             }
-        } .listRowBackground(GlassRow()) }
+        }
         .seaList()
         .task(id: model.sys.vol) { if !dragging && model.sys.vol >= 0 { volume = Double(model.sys.vol) } }
         .task(id: model.state.volume) { alarmVolume = Double(model.state.volume) }
@@ -965,7 +1011,7 @@ struct TinkerTab: View {
     func romName(_ f: String) -> String { f.replacingOccurrences(of: ".nes.gz", with: "").replacingOccurrences(of: ".nes", with: "").replacingOccurrences(of: "_", with: " ") }
 
     var body: some View {
-        List { Group {
+        TwoPane {
             PageTitle("Enjoy tinkering?")
             Section {
                 TextField("NASA, BBCBreaking", text: $accounts).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -983,6 +1029,7 @@ struct TinkerTab: View {
                 }
                 Button("Stop game", role: .destructive) { model.cmd("nesstop", nil, "Back to the channel") }
             }
+            } right: {
             Section("Time on screen: your widgets") {
                 ForEach(model.state.mine) { w in
                     Picker(w.name, selection: Binding(get: { w.secs }, set: { s in
@@ -1000,7 +1047,7 @@ struct TinkerTab: View {
                 Button("Reboot", role: .destructive) { confirm = "reboot" }
             }
             Text("Black Chumby photo: Edward Yanquen, Wikimedia Commons, CC BY 2.0, cut out and retouched. Octopus and wordmark: Chumby’s own artwork, from this device.").font(.caption2).foregroundStyle(.secondary).listRowBackground(Color.clear)
-        } .listRowBackground(GlassRow()) }
+        }
         .seaList()
         .task(id: model.sys.tw) { if !edited { accounts = model.sys.tw.joined(separator: ", ") } }
         .refreshable { await model.loadSys(); await model.loadState() }

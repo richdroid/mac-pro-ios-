@@ -47,12 +47,32 @@ jobs:
           xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-open.png
           xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "MacPro was not running"
           node ci/mock-chumby.js &
+          # Unfold the Duo through Device Hub if the runner allows it; display 3 is then live.
+          git clone -q --depth 1 https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && swift build -c release 2>&1 | tail -1)
+          open -a DeviceHub; sleep 10
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
+          sleep 5
           for T in 0 1 2 3 4; do
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/chumby-$T.png
             xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-$T-open.png
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || echo "Chumby tab $T was not running"
+          done
+      - name: Screenshot the wide layout on a tablet-sized simulator
+        continue-on-error: true
+        run: |
+          set +e
+          exec > >(tee dist/wide.log) 2>&1
+          IPAD=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPad Pro 11|^iPad Air 11|^iPad"))][0].udid')
+          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator -derivedDataPath build-wide CODE_SIGNING_ALLOWED=NO TARGETED_DEVICE_FAMILY=1,2 build | tail -1
+          xcrun simctl boot "$IPAD"; xcrun simctl bootstatus "$IPAD" -b
+          xcrun simctl install "$IPAD" build-wide/Build/Products/Debug-iphonesimulator/Chumby.app
+          for T in 0 1 2 3 4; do
+            xcrun simctl launch "$IPAD" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
+            sleep 8
+            xcrun simctl io "$IPAD" screenshot dist/wide-$T.png
+            xcrun simctl terminate "$IPAD" local.macpro.Chumby
           done
       - name: Collect crash reports
         if: always()
