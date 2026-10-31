@@ -458,6 +458,19 @@ struct SeedSection: View {
     @State private var note: String?
     @State private var uploading = false
     @State private var link = ""
+    @State private var handing: String?
+    @State private var shareFile: ShareFile?
+    struct ShareFile: Identifiable { let url: URL; var id: URL { url } }
+
+    // Away from home, the Mac can't reach this iPhone, so SideStore installs it from here.
+    func handOff(_ file: String) {
+        Task {
+            handing = file; defer { handing = nil }
+            note = "Getting it from the Mac…"
+            do { shareFile = ShareFile(url: try await model.api.download(file)); note = "Choose SideStore. LocalDevVPN needs to be on." }
+            catch { note = error.localizedDescription }
+        }
+    }
 
     func label(_ a: Status.SeedApp) -> (String, Color) {
         switch a.state {
@@ -488,9 +501,10 @@ struct SeedSection: View {
                     }
                     Spacer()
                     if a.own {
-                        Button(a.state == "missing" ? "Install" : a.state == "update" ? "Update" : "Renew") {
-                            Task { note = await model.run("ios-seed", ["file": a.file]) }
-                        }.buttonStyle(.bordered).disabled(!seed.seeding.isEmpty || !seed.reachable)
+                        Button(seed.reachable ? (a.state == "missing" ? "Install" : a.state == "update" ? "Update" : "Renew") : "Install") {
+                            if seed.reachable { Task { note = await model.run("ios-seed", ["file": a.file]) } }
+                            else { handOff(a.file) }
+                        }.buttonStyle(.bordered).disabled(!seed.seeding.isEmpty || handing != nil)
                     }
                 }
             }
@@ -503,17 +517,34 @@ struct SeedSection: View {
             Button(uploading ? "Sending to the Mac…" : "Add an app (.ipa)") { picking = true }.disabled(uploading)
             if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
         } header: { Text("On this iPhone") } footer: {
-            Text(seed.reachable ? "Connected to the Mac over \(seed.via == "USB" ? "USB" : "Wi-Fi"). New builds install by themselves." : "The Mac can’t reach this iPhone right now. It installs and renews when you’re back on the same Wi-Fi.")
+            Text(seed.reachable ? "Connected to the Mac over \(seed.via == "USB" ? "USB" : "Wi-Fi"). New builds install by themselves." : "Away from the Mac. Install hands the app to SideStore, which installs it from anywhere. Everything else catches up on home Wi-Fi.")
         }
+        .sheet(item: $shareFile) { ShareSheet(url: $0.url) }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.item]) { result in
             guard case .success(let url) = result else { return }
             Task {
                 uploading = true; defer { uploading = false }
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                do { try await model.api.upload(url); note = "Added. Tap Install when it appears." ; await model.refresh() }
+                do {
+                    try await model.api.upload(url)
+                    await model.refresh()
+                    if seed.reachable { note = "Sent to the Mac. It installs on this iPhone by itself within 5 minutes." }
+                    else { handOff(url.lastPathComponent) }
+                }
                 catch { note = error.localizedDescription }
             }
         }
     }
 }
+
+#if canImport(UIKit)
+import UIKit
+struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: [url], applicationActivities: nil) }
+    func updateUIViewController(_ c: UIActivityViewController, context: Context) {}
+}
+#else
+struct ShareSheet: View { let url: URL; var body: some View { Text(url.lastPathComponent) } }
+#endif

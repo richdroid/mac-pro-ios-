@@ -40,6 +40,8 @@ targets:
     type: application
     platform: iOS
     sources: [ChumbyApp/Sources, ChumbyApp/Assets.xcassets]
+    dependencies:
+      - target: ChumbyWidget
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.Chumby
@@ -54,3 +56,21 @@ targets:
         NSBonjourServices: [_http._tcp]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+  ChumbyWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - ChumbyWidget
+      - path: ChumbyApp/Sources/ChumbyAPI.swift
+      - path: ChumbyApp/Sources/ChumbyArt.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.Chumby.Widget
+    info:
+      path: ChumbyWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Chumby Widgets
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

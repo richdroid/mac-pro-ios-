@@ -111,6 +111,18 @@ struct API {
         throw APIError.message((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String ?? "The Mac refused that file.")
     }
 
+    // Fetches an app from the Mac, so this iPhone can hand it to SideStore when it's away from home.
+    func download(_ file: String) async throws -> URL {
+        let name = file.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file
+        var r = request("/ios/app/\(name)"); r.timeoutInterval = 600
+        let (temp, response) = try await session.download(for: r)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.message("The Mac couldn’t send that app.") }
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(file)
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.moveItem(at: temp, to: dest)
+        return dest
+    }
+
     func login(code: String) async throws { try await post("/login", body: ["code": code]) }
     func action(_ name: String, _ body: [String: Any] = [:]) async throws { try await post("/api/action/\(name)", body: body) }
 

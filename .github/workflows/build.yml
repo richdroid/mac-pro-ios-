@@ -28,6 +28,8 @@ jobs:
       - name: Screenshot in the simulator
         continue-on-error: true
         run: |
+          set +x
+          exec > >(tee dist/sim.log) 2>&1
           set +e
           DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
           xcrun simctl list devices available | grep -m1 "$DEVICE"

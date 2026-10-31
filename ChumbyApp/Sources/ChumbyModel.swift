@@ -19,6 +19,7 @@ final class ChumbyModel: ObservableObject {
     @Published var offline = false
     @Published var toast: String?
     @Published var needsAddress = false
+    @Published var tab = UserDefaults.standard.integer(forKey: "tab")
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); api = Self.makeAPI(address) } }
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []
