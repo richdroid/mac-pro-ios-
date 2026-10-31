@@ -144,8 +144,13 @@ struct ChannelList: Decodable {
 }
 
 enum ChumbyError: LocalizedError {
-    case message(String)
-    var errorDescription: String? { if case .message(let m) = self { return m }; return nil }
+    case message(String), deviceDown
+    var errorDescription: String? {
+        switch self {
+        case .message(let m): return m
+        case .deviceDown: return "The Chumby isn’t answering."
+        }
+    }
 }
 
 actor ChumbyAPI {
@@ -160,7 +165,10 @@ actor ChumbyAPI {
     func raw(_ action: String) async throws -> (data: Data, age: Double) {
         var r = URLRequest(url: url("a=" + action)); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 8
         let (d, resp) = try await URLSession.shared.data(for: r)
-        guard let h = resp as? HTTPURLResponse, h.statusCode == 200 else { throw ChumbyError.message("No answer") }
+        guard let h = resp as? HTTPURLResponse else { throw ChumbyError.message("No answer") }
+        // The Mac answered, but says the Chumby itself isn't responding.
+        if h.statusCode == 502 { throw ChumbyError.deviceDown }
+        guard h.statusCode == 200 else { throw ChumbyError.message("No answer") }
         return (d, Double(h.value(forHTTPHeaderField: "X-Chumby-Age") ?? "") ?? 0)
     }
     func get<T: Decodable>(_ action: String, as: T.Type) async throws -> T {

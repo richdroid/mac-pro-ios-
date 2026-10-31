@@ -543,6 +543,7 @@ struct SeedSection: View {
     func label(_ a: Status.SeedApp) -> (String, Color) {
         switch a.state {
         case "installing": return ("Installing…", .blue)
+        case "waiting": return ("Build \(a.build) ready. Installs on home Wi-Fi.", .blue)
         case "failed": return ("Install failed", .red)
         case "missing": return ("Not on this iPhone", .orange)
         case "update": return ("Update ready: build \(a.build)", .blue)
@@ -569,7 +570,7 @@ struct SeedSection: View {
                     }
                     Spacer()
                     if a.own {
-                        Button(seed.reachable ? (a.state == "missing" ? "Install" : a.state == "update" ? "Update" : "Renew") : "Install") {
+                        Button(seed.reachable ? (a.state == "missing" ? "Install" : a.state == "update" ? "Update" : "Renew") : "Via SideStore") {
                             if seed.reachable { Task { note = await model.run("ios-seed", ["file": a.file]) } }
                             else { handOff(a.file) }
                         }.buttonStyle(.bordered).disabled(!seed.seeding.isEmpty || handing != nil)

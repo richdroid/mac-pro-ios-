@@ -22,6 +22,8 @@ struct ChumbyEntry: TimelineEntry {
     var nextAlarm: Alarm?
     var nextAt: Date?
     var channel: String { sys.chan.isEmpty ? "Awake" : sys.chan }
+    var deviceDown = false
+    var problem: String { deviceDown ? "Chumby not answering" : "Tailscale off?" }
 }
 
 struct ChumbyProvider: AppIntentTimelineProvider {
@@ -39,8 +41,11 @@ struct ChumbyProvider: AppIntentTimelineProvider {
         var e = ChumbyEntry(date: Date())
         for base in chumbyRoutes(c.address) {
             let api = ChumbyAPI(base: base)
-            guard let s = try? await api.get("sys", as: Sys.self) else { continue }
-            e.sys = s; e.reachable = true
+            do {
+                let r = try await api.raw("sys")
+                guard let s = try? JSONDecoder().decode(Sys.self, from: r.data) else { continue }
+                e.sys = s; e.reachable = true; e.deviceDown = r.age > 60
+            } catch ChumbyError.deviceDown { e.deviceDown = true; continue } catch { continue }
             if let st = try? await api.get("state", as: ChumbyState.self) {
                 let next = st.alarms.compactMap { a in a.nextFire().map { (a, $0) } }.min { $0.1 < $1.1 }
                 e.nextAlarm = next?.0; e.nextAt = next?.1
@@ -82,10 +87,11 @@ func entryDuration(_ s: Int) -> String {
 
 // A sad octopus when the Chumby can't be reached.
 struct Lost: View {
+    var text = "Tailscale off?"
     var body: some View {
         VStack(spacing: 4) {
             OctopusMark(color: octoBlue.opacity(0.45)).frame(maxHeight: 62)
-            Label("Tailscale off?", systemImage: "wifi.slash").font(.trebuchet(11, .bold)).opacity(0.75)
+            Label(text, systemImage: "wifi.slash").font(.trebuchet(11, .bold)).opacity(0.75)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -116,7 +122,7 @@ struct AlarmBody: View {
                 }
             }
         default:
-            if !entry.reachable { Lost() }
+            if !entry.reachable { Lost(text: entry.problem) }
             else if let c = clock, let at = entry.nextAt {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top) {
@@ -171,7 +177,7 @@ struct RemoteBody: View {
         VStack(spacing: 0) {
             HStack(spacing: 7) {
                 OctopusMark(color: octoBlue).frame(width: 30)
-                Text(entry.reachable ? entry.channel : "Tailscale off?").font(.trebuchet(14, .bold)).lineLimit(1)
+                Text(entry.reachable ? entry.channel : entry.problem).font(.trebuchet(14, .bold)).lineLimit(1)
                 Spacer(minLength: 0)
             }
             Spacer(minLength: 6)
@@ -205,7 +211,7 @@ struct SignalBars: View {
 struct RightNowBody: View {
     let entry: ChumbyEntry
     var body: some View {
-        if !entry.reachable { Lost() } else {
+        if !entry.reachable { Lost(text: entry.problem) } else {
             HStack(spacing: 16) {
                 OctopusMark(color: octoBlue).frame(width: 96)
                 VStack(alignment: .leading, spacing: 9) {

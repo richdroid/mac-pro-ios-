@@ -68,6 +68,8 @@ final class ChumbyModel: ObservableObject {
             sys = try JSONDecoder().decode(Sys.self, from: r.data)
             try? r.data.write(to: Self.cache("sys"), options: .atomic)
         } catch is CancellationError {
+        } catch ChumbyError.deviceDown {
+            failures = 0; offline = false; dead = true
         } catch {
             if Task.isCancelled { return }
             failures += 1

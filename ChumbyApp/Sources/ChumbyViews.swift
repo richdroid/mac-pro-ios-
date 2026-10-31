@@ -157,7 +157,7 @@ struct RootView: View {
             }
             .overlay(alignment: .top) {
                 if model.offline || model.dead {
-                    Label(model.dead ? "The Chumby isn’t answering. Showing the last it said." : "Can’t reach the Chumby. Is Tailscale on?", systemImage: "wifi.exclamationmark").font(.footnote.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8).background(.red.opacity(0.85), in: Capsule()).padding(.top, 4)
+                    Label(model.dead ? "The Chumby isn’t answering. Try unplugging it for a moment." : "Can’t reach the Chumby. Is Tailscale on?", systemImage: "wifi.exclamationmark").font(.footnote.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8).background(.red.opacity(0.85), in: Capsule()).padding(.top, 4)
                 }
             }
             .animation(.spring(duration: 0.3, bounce: 0.35), value: model.toast)
