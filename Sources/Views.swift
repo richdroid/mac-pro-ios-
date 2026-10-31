@@ -27,9 +27,19 @@ struct RootView: View {
             Screen { UpgradeTab($0) }.tabItem { Label("Upgrade", systemImage: "arrow.up.circle") }
             Screen { ControlTab($0) }.tabItem { Label("Control", systemImage: "display") }
         }
+        .modifier(AdaptiveTabs())
         .sheet(isPresented: $model.needsSignIn) { SignInView().environmentObject(model) }
     }
 }
+
+// Unfolded, the iPhone Duo's wide screen gets the system's adaptable tabs; folded stays a normal tab bar.
+struct AdaptiveTabs: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) { content.tabViewStyle(.sidebarAdaptable) } else { content }
+    }
+}
+
+let tileColumns = [GridItem(.adaptive(minimum: 170), spacing: 18, alignment: .top)]
 
 // Shared frame for each tab: a large title, the unreachable notice, and pull to refresh.
 struct Screen<Content: View>: View {
@@ -89,15 +99,20 @@ struct Tile: View {
 }
 
 struct Hero: View {
+    @Environment(\.horizontalSizeClass) private var size
     let s: Status
     var healthy: Bool { s.claude.remoteControl && (s.tailscale.state == "Running" || !s.publicUrl.isEmpty) }
     var body: some View {
-        VStack(spacing: 2) {
-            Image("MacPro").resizable().scaledToFit().frame(height: 140).accessibilityLabel("Mac Pro, Late 2013")
+        let wide = size == .regular
+        let art = Image("MacPro").resizable().scaledToFit().frame(height: wide ? 120 : 140).accessibilityLabel("Mac Pro, Late 2013")
+        let text = VStack(alignment: wide ? .leading : .center, spacing: 2) {
             Text("Mac Pro").font(.title.bold())
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
             Label(healthy ? "All systems go" : "Needs attention", systemImage: healthy ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                 .font(.footnote.weight(.medium)).foregroundStyle(healthy ? Color.green : Color.orange).padding(.top, 6)
+        }
+        Group {
+            if wide { HStack(spacing: 20) { art; text } } else { VStack(spacing: 2) { art; text } }
         }
         .frame(maxWidth: .infinity)
     }
@@ -109,10 +124,13 @@ struct StatusTab: View {
     var body: some View {
         Section { Hero(s: s) }.listRowBackground(Color.clear)
         Section("Live") {
-            Tile(title: "CPU", value: "\(s.cpu.total)%", detail: String(format: "Load %.2f", s.load.first ?? 0), spark: s.hist.cpu, top: 100)
-            Tile(title: "Memory", value: Format.bytes(s.mem.used), detail: "of \(Format.bytes(s.mem.total))", spark: s.hist.mem, top: 100)
-            Tile(title: "Download", value: Format.rate(s.net.rxRate), detail: s.net.kind, spark: s.hist.rx)
-            Tile(title: "Upload", value: Format.rate(s.net.txRate), detail: s.net.ip, spark: s.hist.tx)
+            LazyVGrid(columns: tileColumns, spacing: 18) {
+                Tile(title: "CPU", value: "\(s.cpu.total)%", detail: String(format: "Load %.2f", s.load.first ?? 0), spark: s.hist.cpu, top: 100)
+                Tile(title: "Memory", value: Format.bytes(s.mem.used), detail: "of \(Format.bytes(s.mem.total))", spark: s.hist.mem, top: 100)
+                Tile(title: "Download", value: Format.rate(s.net.rxRate), detail: s.net.kind, spark: s.hist.rx)
+                Tile(title: "Upload", value: Format.rate(s.net.txRate), detail: s.net.ip, spark: s.hist.tx)
+            }
+            .padding(.vertical, 4)
         }
         Section("Disk") {
             VStack(alignment: .leading) {
@@ -227,8 +245,11 @@ struct UsageTab: View {
     }
     var body: some View {
         Section {
-            limit("5-hour limit", u.plan?.fiveHour, u.plan?.fiveHourResets)
-            limit("7-day limit", u.plan?.sevenDay, u.plan?.sevenDayResets)
+            LazyVGrid(columns: tileColumns, spacing: 18) {
+                limit("5-hour limit", u.plan?.fiveHour, u.plan?.fiveHourResets)
+                limit("7-day limit", u.plan?.sevenDay, u.plan?.sevenDayResets)
+            }
+            .padding(.vertical, 4)
         } header: { Text("Plan limits") } footer: {
             if let p = u.plan { Text("Reading \(Format.ago(ms: p.at)) from \(p.source). It updates with each response in a terminal Claude session.") }
         }
