@@ -121,6 +121,12 @@ struct TwoPane<L: View, R: View>: View {
     }
 }
 
+extension View {
+    func overSea() -> some View {
+        self.background { ZStack { SeaBackground(); GhostOctopus() }.ignoresSafeArea() }
+    }
+}
+
 // MARK: - The shell
 // System tabs get Liquid Glass and move to the Duo's right edge by themselves.
 struct RootView: View {
@@ -130,14 +136,13 @@ struct RootView: View {
     var body: some View {
         ScreenMeasure {
             ZStack {
-                SeaBackground().ignoresSafeArea()
-                GhostOctopus().ignoresSafeArea()
+                // Each tab paints its own sea: the system tab view is opaque behind its content.
                 TabView(selection: $model.tab) {
-                    Tab(value: 0) { HomeTab() } label: { Label { Text("my chumby") } icon: { Image("OctoTab") } }
-                    Tab("channels", systemImage: "tv", value: 1) { ChannelsTab() }
-                    Tab("alarms", systemImage: "alarm", value: 2) { AlarmsTab() }
-                    Tab("sounds", systemImage: "music.note", value: 3) { SoundsTab() }
-                    Tab("tinker", systemImage: "wrench.adjustable", value: 4) { TinkerTab() }
+                    Tab(value: 0) { HomeTab().overSea() } label: { Label { Text("my chumby") } icon: { Image("OctoTab") } }
+                    Tab("channels", systemImage: "tv", value: 1) { ChannelsTab().overSea() }
+                    Tab("alarms", systemImage: "alarm", value: 2) { AlarmsTab().overSea() }
+                    Tab("sounds", systemImage: "music.note", value: 3) { SoundsTab().overSea() }
+                    Tab("tinker", systemImage: "wrench.adjustable", value: 4) { TinkerTab().overSea() }
                 }
                 .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab") }
             }

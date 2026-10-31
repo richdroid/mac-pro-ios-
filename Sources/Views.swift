@@ -15,6 +15,11 @@ struct MacProApp: App {
 }
 
 enum Side { case all, left, right }
+#if canImport(UIKit)
+let groupedBackground = Color(uiColor: .systemGroupedBackground)
+#else
+let groupedBackground = Color.gray.opacity(0.1)
+#endif
 
 // System tabs and navigation get Liquid Glass and move to the Duo's right edge by themselves.
 struct RootView: View {
@@ -58,6 +63,7 @@ struct Screen<Content: View>: View {
                 if size == .regular { FoldSplit { list(.left) } right: { list(.right) }.navigationBarTitleDisplayMode(.inline) }
                 else { list(.all) }
             }
+            .background(groupedBackground.ignoresSafeArea())
             .navigationTitle("Mac Pro")
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Connection") } }
             .sheet(isPresented: $settings) { SignInView().environmentObject(model) }
