@@ -1,4 +1,5 @@
 import SwiftUI
+import WidgetKit
 
 // The Chumby's own octopus and wordmark, parsed from the device's Flash files.
 enum ChumbyArt {
@@ -40,11 +41,19 @@ struct OctopusMark: View {
     var color: Color = Color(red: 0.17, green: 0.36, blue: 0.68)
     var eyes: Color = .white
     var blink: CGFloat = 1
+    @Environment(\.widgetRenderingMode) private var mode
     var body: some View {
         ZStack {
+            // A clear or tinted Home Screen flattens colours to one tone, so cut the eyes out of the body.
+            if mode != .fullColor {
+                var both = ChumbyArt.octBody
+                let _ = both.addPath(ChumbyArt.octEyes)
+                ArtShape(art: both, box: ChumbyArt.octBox).fill(color, style: FillStyle(eoFill: true))
+            } else {
             ArtShape(art: ChumbyArt.octBody, box: ChumbyArt.octBox).fill(color, style: FillStyle(eoFill: true))
             ArtShape(art: ChumbyArt.octEyes, box: ChumbyArt.octBox).fill(eyes, style: FillStyle(eoFill: true))
                 .scaleEffect(x: 1, y: blink, anchor: ChumbyPalette.eyeAnchor)
+            }
         }
         .aspectRatio(ChumbyArt.octBox.width / ChumbyArt.octBox.height, contentMode: .fit)
     }

@@ -100,7 +100,7 @@ struct Unreachable: View {
     let text: String
     var body: some View {
         VStack(spacing: 6) {
-            Image("MacPro").resizable().scaledToFit().opacity(0.45).frame(maxHeight: 64)
+            Image("MacPro").widgetAccentedRenderingMode(.fullColor).resizable().scaledToFit().opacity(0.45).frame(maxHeight: 64)
             Label(text, systemImage: "wifi.slash").font(.caption2.weight(.medium)).opacity(0.75)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -135,12 +135,12 @@ struct StatusBody: View {
                     Ring(value: n.cpu, color: cpuBlue, width: 10)
                     Ring(value: n.mem, color: memPink, width: 10).padding(13)
                     Ring(value: n.disk, color: diskGold, width: 10).padding(26)
-                    Image("MacPro").resizable().scaledToFit().frame(height: 36)
+                    Image("MacPro").widgetAccentedRenderingMode(.fullColor).resizable().scaledToFit().frame(height: 36)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             default:
                 HStack(spacing: 12) {
-                    Image("MacPro").resizable().scaledToFit().frame(maxHeight: 112)
+                    Image("MacPro").widgetAccentedRenderingMode(.fullColor).resizable().scaledToFit().frame(maxHeight: 112)
                     VStack(spacing: 8) {
                         HStack(spacing: 8) {
                             dial(n.cpu, cpuBlue, "cpu")
