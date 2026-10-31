@@ -109,20 +109,33 @@ struct PageTitle<Trailing: View>: View {
 
 // MARK: - iPhone Duo
 // Unfolded the Duo is 951 points wide with a 40-point fold down the middle, so nothing may sit on the centre line.
-enum Duo { static let wideAt: CGFloat = 600, foldGap: CGFloat = 44 }
+// The camera strip on one side makes the safe area lopsided, so the panes are measured from the physical centre.
+enum Duo {
+    static let wideAt: CGFloat = 600, foldGap: CGFloat = 48
+    static func panes(_ g: GeometryProxy) -> (left: CGFloat, right: CGFloat) {
+        let centre = (g.safeAreaInsets.leading + g.size.width + g.safeAreaInsets.trailing) / 2
+        return (centre - foldGap / 2 - g.safeAreaInsets.leading, centre - foldGap / 2 - g.safeAreaInsets.trailing)
+    }
+}
 private struct WideKey: EnvironmentKey { static let defaultValue = false }
-extension EnvironmentValues { var wide: Bool { get { self[WideKey.self] } set { self[WideKey.self] = newValue } } }
+private struct PanesKey: EnvironmentKey { static let defaultValue: (left: CGFloat, right: CGFloat) = (0, 0) }
+extension EnvironmentValues {
+    var wide: Bool { get { self[WideKey.self] } set { self[WideKey.self] = newValue } }
+    var panes: (left: CGFloat, right: CGFloat) { get { self[PanesKey.self] } set { self[PanesKey.self] = newValue } }
+}
 
 struct TwoPane<L: View, R: View>: View {
     @Environment(\.wide) private var wide
+    @Environment(\.panes) private var panes
     let left: L, right: R
     init(@ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) { self.left = left(); self.right = right() }
     var body: some View {
         if wide {
             HStack(spacing: Duo.foldGap) {
-                List { Group { left }.listRowBackground(GlassRow()) }
-                List { Color.clear.frame(height: 36).listRowBackground(Color.clear).listRowSeparator(.hidden); Group { right }.listRowBackground(GlassRow()) }
+                List { Group { left }.listRowBackground(GlassRow()) }.frame(width: panes.left)
+                List { Color.clear.frame(height: 36).listRowBackground(Color.clear).listRowSeparator(.hidden); Group { right }.listRowBackground(GlassRow()) }.frame(width: panes.right)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .seaList()
         } else {
             List { Group { left; right }.listRowBackground(GlassRow()) }
@@ -138,7 +151,8 @@ struct RootView: View {
     var body: some View {
         GeometryReader { g in
             let wide = g.size.width >= Duo.wideAt
-            let half = (g.size.width - Duo.foldGap) / 2
+            let panes = Duo.panes(g)
+            let half = panes.left
             ZStack {
                 SeaBackground().ignoresSafeArea()
                 GhostOctopus().ignoresSafeArea()
@@ -149,6 +163,7 @@ struct RootView: View {
                 pane(4) { TinkerTab() }
             }
             .environment(\.wide, wide)
+            .environment(\.panes, panes)
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -281,6 +296,7 @@ struct LiveOctopus: View {
 struct HomeTab: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.wide) private var wide
+    @Environment(\.panes) private var panes
     @Environment(\.colorScheme) private var scheme
     @State private var moreInfo = false
     @State private var say: String?
@@ -456,7 +472,7 @@ struct HomeTab: View {
             if wide {
                 // Each side scrolls on its own, so the octopus stays put while you use the controls.
                 HStack(alignment: .top, spacing: Duo.foldGap) {
-                    ScrollView { VStack(spacing: 0) { wordmark.padding(.top, 6); about }.padding(.horizontal, 12) }
+                    ScrollView { VStack(spacing: 0) { wordmark.padding(.top, 6); about }.padding(.horizontal, 12) }.frame(width: panes.left)
                     ScrollView {
                         VStack(spacing: 0) {
                             HStack { Spacer(); gear }.padding(.top, 6).padding(.bottom, 8)
@@ -464,8 +480,9 @@ struct HomeTab: View {
                             rightNow
                             more
                         }.padding(.horizontal, 12)
-                    }
+                    }.frame(width: panes.right)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 ScrollView {
                     ZStack(alignment: .trailing) { wordmark; gear }.padding(.horizontal, 16).padding(.top, 6)
@@ -633,6 +650,19 @@ struct ChannelsTab: View {
                 }
                 Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", on ? "Shuffle on" : "Shuffle off") }))
             }
+            Section("Catalog") {
+                Picker("Category", selection: $category) {
+                    Text("Choose…").tag("")
+                    ForEach(categories, id: \.0) { Text($0.1).tag($0.0) }
+                }
+                .onChange(of: category) { _, _ in catalog = []; page = 1; Task { await loadCatalog() } }
+                if busy { ProgressView() }
+                ForEach(catalog.filter { c in !rows.contains { $0.id == c.0 } }, id: \.0) { c in
+                    Button(c.1) { rows.insert(EditorRow(id: c.0, name: c.1, on: true, secs: 0, own: 0), at: 0); changed() }
+                }
+                if more { Button("Load more") { page += 1; Task { await loadCatalog() } } }
+            }
+        } right: {
             Section {
                 Picker("Edit channel", selection: $picked) { ForEach(channels, id: \.id) { Text(title($0)).tag($0.id) } }
                     .onChange(of: picked) { _, _ in pick() }
@@ -663,19 +693,6 @@ struct ChannelsTab: View {
                 }
             } header: { Text("Edit channel") } footer: {
                 Text((model.state.shuffle == 1 ? "Shuffle is on, so your order won’t show until you turn it off. " : "") + "Swipe a widget to reorder it. New widgets go to the top, and changes apply within a few seconds.")
-            }
-            } right: {
-            Section("Catalog") {
-                Picker("Category", selection: $category) {
-                    Text("Choose…").tag("")
-                    ForEach(categories, id: \.0) { Text($0.1).tag($0.0) }
-                }
-                .onChange(of: category) { _, _ in catalog = []; page = 1; Task { await loadCatalog() } }
-                if busy { ProgressView() }
-                ForEach(catalog.filter { c in !rows.contains { $0.id == c.0 } }, id: \.0) { c in
-                    Button(c.1) { rows.insert(EditorRow(id: c.0, name: c.1, on: true, secs: 0, own: 0), at: 0); changed() }
-                }
-                if more { Button("Load more") { page += 1; Task { await loadCatalog() } } }
             }
         }
         .seaList()
