@@ -28,7 +28,8 @@ final class ChumbyModel: ObservableObject {
     private static func makeAPI(_ a: String) -> ChumbyAPI? { URL(string: a).flatMap { $0.host == nil ? nil : ChumbyAPI(base: $0) } }
 
     init() {
-        let saved = UserDefaults.standard.string(forKey: "address") ?? ""
+        let stored = UserDefaults.standard.string(forKey: "address") ?? ""
+        let saved = stored.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : stored
         address = saved
         api = Self.makeAPI(saved)
         needsAddress = api == nil

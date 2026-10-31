@@ -23,7 +23,7 @@ struct RootView: View {
             Screen { AppsTab($0) }.tabItem { Label("Apps", systemImage: "square.grid.2x2") }
             Screen { ClaudeTab($0) }.tabItem { Label("Claude", systemImage: "sparkle") }
             Screen { UsageTab($0) }.tabItem { Label("Usage", systemImage: "chart.bar") }
-            Screen { UpgradeTab($0) }.tabItem { Label("Upgrade", systemImage: "arrow.up.circle") }
+            Screen { UpgradeTab($0) }.tabItem { Label("Updates", systemImage: "arrow.up.circle") }
             Screen { ControlTab($0) }.tabItem { Label("Control", systemImage: "display") }
         }
         .modifier(AdaptiveTabs())
@@ -131,6 +131,18 @@ struct StatusTab: View {
             }
             .padding(.vertical, 4)
         }
+        if let temps = s.temps, !temps.isEmpty {
+            Section("Temperatures") {
+                LazyVGrid(columns: tileColumns, spacing: 14) {
+                    ForEach(temps) { t in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(t.name).font(.footnote).foregroundStyle(.secondary)
+                            Text("\(Int(t.c.rounded()))°C").font(.title3.weight(.semibold)).monospacedDigit().foregroundStyle(t.c >= 90 ? .red : t.c >= 75 ? .orange : .primary)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }.padding(.vertical, 4)
+            }
+        }
         Section("Disk") {
             VStack(alignment: .leading) {
                 Text("\(Format.bytes(s.disk.free)) free").font(.title3.weight(.semibold))
@@ -166,9 +178,6 @@ struct AppsTab: View {
     let s: Status
     init(_ s: Status) { self.s = s }
     var body: some View {
-        Section {
-            Link("Open Stremio", destination: URL(string: "https://web.stremio.com/")!)
-        } header: { Text("On this iPhone") } footer: { Text("Stremio runs in Safari. Tap Share, then Add to Home Screen.") }
         Section("Open apps (\(s.apps.count))") {
             ForEach(s.apps) { a in
                 VStack(alignment: .leading) {
@@ -282,35 +291,19 @@ struct UsageTab: View {
 
 struct UpgradeTab: View {
     @EnvironmentObject var model: AppModel
-    @State private var password = ""
-    @State private var confirm = false
     @State private var note: String?
-    @State private var busy = false
     @State private var agentPassword = ""
     let s: Status
     init(_ s: Status) { self.s = s }
     var onTahoe: Bool { (Int(s.macos.split(separator: ".").first ?? "") ?? 0) >= 26 }
     var body: some View {
-        Section("macOS Tahoe") {
+        Section("macOS and OCLP") {
             Text(s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : s.upgrade.status) : onTahoe ? "On Tahoe" : "Waiting for your password to start").font(.headline)
             LabeledContent("Running", value: "\(s.macos) (\(s.build))")
             LabeledContent("OCLP", value: s.upgrade.state["oclp_tag"] ?? s.oclp.version)
             LabeledContent("Root patches for", value: s.oclp.patchedFor.isEmpty ? "None yet" : s.oclp.patchedFor)
             LabeledContent("KDK", value: s.oclp.kdk.isEmpty ? "None" : s.oclp.kdk)
             if s.upgrade.installed { Button("Run update check now") { Task { note = await model.run("upgrade-run") } } }
-        }
-        if !s.upgrade.installed && !onTahoe {
-            Section {
-                SecureField("Mac password", text: $password).textContentType(.password)
-                Button("Start Tahoe upgrade", role: .destructive) { confirm = true }.disabled(password.isEmpty || busy)
-            } header: { Text("Start the upgrade") } footer: {
-                Text("Uses OCLP’s prerelease build, which warns of possible data loss. This Mac has no backup. It restarts several times and is offline until its Wi-Fi patch runs. If a boot fails, someone has to be at the Mac. Your password is used once and never stored.")
-            }
-            .confirmationDialog("Start the Tahoe upgrade now?", isPresented: $confirm, titleVisibility: .visible) {
-                Button("Start Upgrade", role: .destructive) {
-                    Task { busy = true; note = await model.runSealed("upgrade-start", secret: password) ?? "Started."; password = ""; busy = false }
-                }
-            }
         }
         if s.agentStale {
             Section {
@@ -397,7 +390,7 @@ struct ControlTab: View {
                 Button("Sign out of Apple account", role: .destructive) { Task { note = await model.run("ios-logout") } }
             }
         } header: { Text("App re-signing") } footer: {
-            Text("The Mac re-signs a day before the 7-day limit, and keeps retrying until the phone is on USB or Wi-Fi sync.")
+            Text("The Mac renews both apps a day before the 7-day limit, and installs new builds, whenever this iPhone is on the same Wi-Fi or plugged in.")
         }
         if !s.publicUrl.isEmpty {
             Section {

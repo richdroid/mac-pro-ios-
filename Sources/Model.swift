@@ -11,9 +11,10 @@ final class AppModel: ObservableObject {
     var api: API { API(base: URL(string: address) ?? URL(string: "https://invalid.invalid")!) }
     private var loop: Task<Void, Never>?
 
-    // The address is entered on first launch, so it never has to live in the source.
+    // The Mac bakes its address into the build when it collects it, so it never has to live in the source.
     init() {
-        address = UserDefaults.standard.string(forKey: "address") ?? ""
+        let saved = UserDefaults.standard.string(forKey: "address") ?? ""
+        address = saved.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : saved
         needsSignIn = address.isEmpty
     }
 

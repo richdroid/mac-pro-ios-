@@ -28,6 +28,7 @@ struct Status: Decodable {
     struct Upgrade: Decodable { let installed: Bool; let status: String; let state: [String: String]; let log: String }
     struct OCLP: Decodable { let version: String; let patchedFor: String; let patchedAt: String; let kdk: String }
     struct Sharing: Decodable { let ssh: Bool; let vnc: Bool }
+    struct Temp: Decodable, Identifiable { let name: String; let c: Double; var id: String { name } }
     struct IOSJob: Decodable { let state: String; let message: String }
     struct IOSStatus: Decodable {
         let hasPhone: Bool; let signedIn: Bool; let ready: Bool; let installedAt: Double; let nextDue: Double
@@ -40,6 +41,7 @@ struct Status: Decodable {
     let claude: Claude; let usage: Usage; let upgrade: Upgrade; let oclp: OCLP; let sharing: Sharing
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
     let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
+    let temps: [Temp]?
 }
 
 enum APIError: LocalizedError {

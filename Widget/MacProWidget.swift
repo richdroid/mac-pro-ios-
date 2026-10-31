@@ -6,7 +6,7 @@ import WidgetKit
 struct WidgetAddress: WidgetConfigurationIntent {
     static var title: LocalizedStringResource = "Mac Pro"
     static var description = IntentDescription("Shows your Mac Pro's status.")
-    @Parameter(title: "Tailscale address") var address: String?
+    @Parameter(title: "Different address (optional)") var address: String?
 }
 
 struct WidgetStatus: Decodable {
@@ -16,8 +16,9 @@ struct WidgetStatus: Decodable {
     struct Plan: Decodable { let fiveHour: Double?; let sevenDay: Double? }
     struct Usage: Decodable { let plan: Plan? }
     struct Claude: Decodable { let remoteControl: Bool }
+    struct Temp: Decodable { let name: String; let c: Double }
     let macos: String; let uptime: Double
-    let cpu: CPU; let mem: Memory; let disk: Disk; let usage: Usage; let claude: Claude
+    let cpu: CPU; let mem: Memory; let disk: Disk; let usage: Usage; let claude: Claude; let temps: [Temp]?
 }
 
 struct MacEntry: TimelineEntry {
@@ -36,6 +37,7 @@ struct MacProvider: AppIntentTimelineProvider {
     }
     private func load(_ c: WidgetAddress) async -> MacEntry {
         var text = (c.address ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { text = Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "" }
         if text.isEmpty { return MacEntry(date: Date(), state: .noAddress) }
         if !text.contains("://") { text = "https://" + text }
         guard let url = URL(string: text + "/api/status") else { return MacEntry(date: Date(), state: .noAddress) }
@@ -60,18 +62,18 @@ struct MacWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let entry: MacEntry
 
-    var numbers: (cpu: Double, mem: Double, disk: Double, fiveHour: Double?, week: Double?, up: String, title: String, online: Bool)? {
+    var numbers: (cpu: Double, mem: Double, disk: Double, fiveHour: Double?, week: Double?, up: String, title: String, online: Bool, heat: String)? {
         switch entry.state {
         case .ok(let s):
             let d = Int(s.uptime) / 86400, h = Int(s.uptime) / 3600 % 24, m = Int(s.uptime) / 60 % 60
             let up = d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m"
-            return (Double(s.cpu.total) / 100, s.mem.total > 0 ? s.mem.used / s.mem.total : 0, s.disk.total > 0 ? 1 - s.disk.free / s.disk.total : 0, s.usage.plan?.fiveHour, s.usage.plan?.sevenDay, up, "macOS " + s.macos, s.claude.remoteControl)
-        case .preview: return (0.12, 0.41, 0.58, 6, 47, "2d 4h", "macOS Tahoe", true)
+            return (Double(s.cpu.total) / 100, s.mem.total > 0 ? s.mem.used / s.mem.total : 0, s.disk.total > 0 ? 1 - s.disk.free / s.disk.total : 0, s.usage.plan?.fiveHour, s.usage.plan?.sevenDay, up, "macOS " + s.macos, s.claude.remoteControl, (s.temps ?? []).filter { $0.name == "CPU" || $0.name == "GPU A" }.map { "\($0.name == "GPU A" ? "GPU" : $0.name) \(Int($0.c.rounded()))°" }.joined(separator: " · "))
+        case .preview: return (0.12, 0.41, 0.58, 6, 47, "2d 4h", "macOS Tahoe", true, "CPU 53° · GPU 43°")
         default: return nil
         }
     }
     var problem: String {
-        if case .noAddress = entry.state { return "Hold this widget, choose Edit Widget, and enter your Tailscale address." }
+        if case .noAddress = entry.state { return "No address set. Reinstall the app from the Mac." }
         return "Can’t reach it. Is Tailscale on?"
     }
     func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
@@ -88,7 +90,7 @@ struct MacWidgetView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("Mac Pro").font(.headline)
                         Text("CPU \(pct(n.cpu)) · Mem \(pct(n.mem))")
-                        Text("Up \(n.up)").foregroundStyle(.secondary)
+                        Text(n.heat.isEmpty ? "Up \(n.up)" : n.heat).foregroundStyle(.secondary)
                     }.font(.caption)
                 } else { Text("Mac Pro unreachable").font(.caption) }
             case .systemSmall:
@@ -98,7 +100,7 @@ struct MacWidgetView: View {
                             Image("MacPro").resizable().scaledToFit().frame(width: 24, height: 30)
                             VStack(alignment: .leading, spacing: 0) {
                                 Text("Mac Pro").font(.caption.weight(.semibold))
-                                Label("Up \(n.up)", systemImage: "circle.fill").labelStyle(StatusDot()).font(.caption2).foregroundStyle(.secondary)
+                                Label(n.heat.isEmpty ? "Up \(n.up)" : n.heat, systemImage: "circle.fill").labelStyle(StatusDot()).font(.caption2).foregroundStyle(.secondary)
                             }
                         }
                         Spacer(minLength: 0)
@@ -114,7 +116,7 @@ struct MacWidgetView: View {
                             Text("Up \(n.up)").font(.caption2).foregroundStyle(.secondary)
                         }
                         VStack(alignment: .leading, spacing: 5) {
-                            HStack { Text("Mac Pro").font(.subheadline.weight(.semibold)); Spacer(); Text(n.title).font(.caption2).foregroundStyle(.secondary) }
+                            HStack { Text("Mac Pro").font(.subheadline.weight(.semibold)); Spacer(); Text(n.heat.isEmpty ? n.title : n.heat).font(.caption2).foregroundStyle(.secondary) }
                             Meter(label: "CPU", value: n.cpu, text: pct(n.cpu))
                             Meter(label: "Memory", value: n.mem, text: pct(n.mem))
                             Meter(label: "Disk", value: n.disk, text: pct(n.disk))
@@ -143,7 +145,7 @@ struct MacProWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: "MacProStatus", intent: WidgetAddress.self, provider: MacProvider()) { MacWidgetView(entry: $0) }
             .configurationDisplayName("Mac Pro Status")
-            .description("CPU, memory, disk, uptime and Claude usage.")
+            .description("CPU, memory, disk, temperatures, uptime and Claude usage.")
             .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular, .accessoryCircular])
     }
 }
