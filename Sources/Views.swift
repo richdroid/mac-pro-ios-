@@ -120,7 +120,6 @@ struct Screen<Content: View>: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(groupedBackground.ignoresSafeArea())
                     .navigationBarTitleDisplayMode(.inline)
-                    .toolbar { ToolbarItem(placement: .navigation) { Text("Mac Pro").font(.title3.weight(.bold)) } }
                 } else {
                     list(.all).navigationTitle("Mac Pro")
                 }
