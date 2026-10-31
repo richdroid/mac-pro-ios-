@@ -133,11 +133,11 @@ struct RootView: View {
                 SeaBackground().ignoresSafeArea()
                 GhostOctopus().ignoresSafeArea()
                 TabView(selection: $model.tab) {
-                    Tab(value: 0) { HomeTab().tabBG() } label: { Label { Text("my chumby") } icon: { Image("OctoTab") } }
-                    Tab("channels", systemImage: "tv", value: 1) { ChannelsTab().tabBG() }
-                    Tab("alarms", systemImage: "alarm", value: 2) { AlarmsTab().tabBG() }
-                    Tab("sounds", systemImage: "music.note", value: 3) { SoundsTab().tabBG() }
-                    Tab("tinker", systemImage: "wrench.adjustable", value: 4) { TinkerTab().tabBG() }
+                    Tab(value: 0) { HomeTab() } label: { Label { Text("my chumby") } icon: { Image("OctoTab") } }
+                    Tab("channels", systemImage: "tv", value: 1) { ChannelsTab() }
+                    Tab("alarms", systemImage: "alarm", value: 2) { AlarmsTab() }
+                    Tab("sounds", systemImage: "music.note", value: 3) { SoundsTab() }
+                    Tab("tinker", systemImage: "wrench.adjustable", value: 4) { TinkerTab() }
                 }
                 .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab") }
             }
@@ -160,7 +160,6 @@ struct RootView: View {
         .sheet(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
     }
 }
-extension View { func tabBG() -> some View { self.containerBackground(.clear, for: .tabView) } }
 
 struct ConnectionView: View {
     @EnvironmentObject var model: ChumbyModel
