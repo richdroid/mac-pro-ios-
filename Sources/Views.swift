@@ -14,27 +14,80 @@ struct MacProApp: App {
     }
 }
 
-struct RootView: View {
-    @EnvironmentObject var model: AppModel
-    var body: some View {
-        // The system tab bar picks up Liquid Glass by itself on iOS 26 and later.
-        TabView {
-            Screen { StatusTab($0) }.tabItem { Label("Status", systemImage: "gauge.with.dots.needle.33percent") }
-            Screen { AppsTab($0) }.tabItem { Label("Apps", systemImage: "square.grid.2x2") }
-            Screen { ClaudeTab($0) }.tabItem { Label("Claude", systemImage: "sparkle") }
-            Screen { UsageTab($0) }.tabItem { Label("Usage", systemImage: "chart.bar") }
-            Screen { UpgradeTab($0) }.tabItem { Label("Updates", systemImage: "arrow.up.circle") }
-            Screen { ControlTab($0) }.tabItem { Label("Control", systemImage: "display") }
-        }
-        .modifier(AdaptiveTabs())
-        .sheet(isPresented: $model.needsSignIn) { SignInView().environmentObject(model) }
+// Unfolded the iPhone Duo is 951 points wide with a 40-point fold at its physical centre, so nothing may sit on it.
+enum Duo {
+    static let wideAt: CGFloat = 600, foldGap: CGFloat = 48
+    static func panes(_ g: GeometryProxy) -> (left: CGFloat, right: CGFloat) {
+        let centre = (g.safeAreaInsets.leading + g.size.width + g.safeAreaInsets.trailing) / 2
+        return (centre - foldGap / 2 - g.safeAreaInsets.leading, centre - foldGap / 2 - g.safeAreaInsets.trailing)
     }
 }
+enum Side { case all, left, right }
+private struct WideKey: EnvironmentKey { static let defaultValue = false }
+private struct PanesKey: EnvironmentKey { static let defaultValue: (left: CGFloat, right: CGFloat) = (0, 0) }
+extension EnvironmentValues {
+    var wide: Bool { get { self[WideKey.self] } set { self[WideKey.self] = newValue } }
+    var panes: (left: CGFloat, right: CGFloat) { get { self[PanesKey.self] } set { self[PanesKey.self] = newValue } }
+}
+#if canImport(UIKit)
+let groupedBackground = Color(uiColor: .systemGroupedBackground)
+#else
+let groupedBackground = Color.gray.opacity(0.1)
+#endif
 
-// Unfolded, the iPhone Duo's wide screen gets the system's adaptable tabs; folded stays a normal tab bar.
-struct AdaptiveTabs: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 18.0, *) { content.tabViewStyle(.sidebarAdaptable) } else { content }
+struct RootView: View {
+    @EnvironmentObject var model: AppModel
+    static let tabs = [("Status", "gauge.with.dots.needle.33percent"), ("Apps", "square.grid.2x2"), ("Claude", "sparkle"), ("Usage", "chart.bar"), ("Updates", "arrow.up.circle"), ("Control", "display")]
+    var body: some View {
+        GeometryReader { g in
+            let wide = g.size.width >= Duo.wideAt
+            let panes = Duo.panes(g)
+            ZStack {
+                pane(0) { Screen { StatusTab($0, side: $1) } }
+                pane(1) { Screen { AppsTab($0, side: $1) } }
+                pane(2) { Screen { ClaudeTab($0, side: $1) } }
+                pane(3) { Screen { UsageTab($0, side: $1) } }
+                pane(4) { Screen { UpgradeTab($0, side: $1) } }
+                pane(5) { Screen { ControlTab($0, side: $1) } }
+            }
+            .environment(\.wide, wide)
+            .environment(\.panes, panes)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                HStack { bar.frame(maxWidth: wide ? panes.left : .infinity); if wide { Spacer(minLength: 0) } }
+            }
+        }
+        .sheet(isPresented: $model.needsSignIn) { SignInView().environmentObject(model) }
+    }
+    func pane<C: View>(_ i: Int, @ViewBuilder _ c: () -> C) -> some View {
+        c().opacity(model.tab == i ? 1 : 0).allowsHitTesting(model.tab == i).accessibilityHidden(model.tab != i)
+    }
+    var bar: some View {
+        GeometryReader { g in
+            let w = (g.size.width - 8) / CGFloat(Self.tabs.count)
+            ZStack(alignment: .leading) {
+                Capsule().fill(.primary.opacity(0.1)).frame(width: w).padding(.vertical, 4).offset(x: 4 + w * CGFloat(model.tab))
+                    .animation(.spring(duration: 0.45, bounce: 0.35), value: model.tab)
+                HStack(spacing: 0) {
+                    ForEach(Self.tabs.indices, id: \.self) { i in
+                        Button {
+                            model.tab = i; UserDefaults.standard.set(i, forKey: "tab")
+                        } label: {
+                            VStack(spacing: 2) {
+                                Image(systemName: Self.tabs[i].1).font(.system(size: 18)).frame(height: 24)
+                                Text(Self.tabs[i].0).font(.system(size: 10, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+                            .foregroundStyle(model.tab == i ? Color.accentColor : Color.primary)
+                        }.buttonStyle(.plain)
+                    }
+                }.padding(.horizontal, 4)
+            }
+        }
+        .frame(height: 60)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().stroke(.primary.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
+        .padding(.horizontal, 12).padding(.bottom, 4)
     }
 }
 
@@ -43,18 +96,35 @@ let tileColumns = [GridItem(.adaptive(minimum: 170), spacing: 18, alignment: .to
 // Shared frame for each tab: a large title, the unreachable notice, and pull to refresh.
 struct Screen<Content: View>: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.wide) private var wide
+    @Environment(\.panes) private var panes
     @State private var settings = false
-    let content: (Status) -> Content
-    init(@ViewBuilder content: @escaping (Status) -> Content) { self.content = content }
+    let content: (Status, Side) -> Content
+    init(@ViewBuilder content: @escaping (Status, Side) -> Content) { self.content = content }
+    func list(_ side: Side) -> some View {
+        List {
+            if side != .right, let p = model.problem { Section { Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.red) } }
+            if let s = model.status { content(s, side) }
+            else if side != .right, model.problem == nil { Section { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) } } }
+        }
+        .refreshable { await model.refresh() }
+    }
     var body: some View {
         NavigationStack {
-            List {
-                if let p = model.problem { Section { Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.red) } }
-                if let s = model.status { content(s) }
-                else if model.problem == nil { Section { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) } } }
+            Group {
+                if wide {
+                    HStack(spacing: Duo.foldGap) {
+                        list(.left).frame(width: panes.left)
+                        list(.right).frame(width: panes.right)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(groupedBackground.ignoresSafeArea())
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .navigation) { Text("Mac Pro").font(.title3.weight(.bold)) } }
+                } else {
+                    list(.all).navigationTitle("Mac Pro")
+                }
             }
-            .refreshable { await model.refresh() }
-            .navigationTitle("Mac Pro")
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") } } }
             .sheet(isPresented: $settings) { SignInView().environmentObject(model) }
         }
@@ -120,8 +190,10 @@ struct Hero: View {
 struct StatusTab: View {
     @EnvironmentObject var model: AppModel
     let s: Status
-    init(_ s: Status) { self.s = s }
+    var side: Side = .all
+    init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
     var body: some View {
+        if side != .right {
         Section { Hero(s: s) }.listRowBackground(Color.clear)
         Section("Live") {
             LazyVGrid(columns: tileColumns, spacing: 18) {
@@ -151,6 +223,8 @@ struct StatusTab: View {
                 Text("\(Format.bytes(s.disk.used)) used of \(Format.bytes(s.disk.total))").font(.footnote).foregroundStyle(.secondary)
             }
         }
+        }
+        if side != .left {
         Section("Remote access") {
             StateRow(label: "Claude remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
             StateRow(label: "Claude desktop", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
@@ -168,6 +242,7 @@ struct StatusTab: View {
         Section("Top processes") {
             ForEach(s.procs) { p in LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)) }
         }
+        }
     }
 }
 
@@ -178,9 +253,13 @@ struct AppsTab: View {
     @State private var alert: String?
     struct PendingQuit: Identifiable { let app: Status.App; let force: Bool; var id: String { "\(app.pid)\(force)" } }
     let s: Status
-    init(_ s: Status) { self.s = s }
+    var side: Side = .all
+    init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
     var body: some View {
+        if side != .right {
         if let seed = s.iosApps { SeedSection(seed: seed) }
+        }
+        if side != .left {
         Section("Open apps (\(s.apps.count))") {
             ForEach(s.apps) { a in
                 VStack(alignment: .leading) {
@@ -203,6 +282,7 @@ struct AppsTab: View {
             }
         } message: { if pending?.force == true { Text("Unsaved work is lost.") } }
         .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
+        }
     }
 }
 
@@ -210,8 +290,10 @@ struct ClaudeTab: View {
     @EnvironmentObject var model: AppModel
     @State private var confirm = false
     let s: Status
-    init(_ s: Status) { self.s = s }
+    var side: Side = .all
+    init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
     var body: some View {
+        if side != .right {
         Section("Claude") {
             StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
             StateRow(label: "Auto-restart", good: s.claude.keepAlive, value: s.claude.keepAlive ? "Armed" : "Off")
@@ -224,6 +306,8 @@ struct ClaudeTab: View {
         .confirmationDialog("Restart remote control?", isPresented: $confirm, titleVisibility: .visible) {
             Button("Restart", role: .destructive) { Task { _ = await model.run("rc-restart") } }
         } message: { Text("Connected sessions drop briefly, then reconnect.") }
+        }
+        if side != .left {
         Section("Sessions on this Mac (\(s.claude.sessions.count))") {
             if s.claude.sessions.isEmpty { Text("None running").foregroundStyle(.secondary) }
             ForEach(s.claude.sessions) { x in
@@ -235,12 +319,14 @@ struct ClaudeTab: View {
                 }
             }
         }
+        }
     }
 }
 
 struct UsageTab: View {
     let s: Status
-    init(_ s: Status) { self.s = s }
+    var side: Side = .all
+    init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
     var u: Status.Usage { s.usage }
     func limit(_ title: String, _ pct: Double?, _ resets: Double?) -> some View {
         let now = Date().timeIntervalSince1970 * 1000
@@ -258,6 +344,7 @@ struct UsageTab: View {
         }
     }
     var body: some View {
+        if side != .right {
         Section {
             LazyVGrid(columns: tileColumns, spacing: 18) {
                 limit("5-hour limit", u.plan?.fiveHour, u.plan?.fiveHourResets)
@@ -278,6 +365,8 @@ struct UsageTab: View {
                 .chartYAxis(.hidden).frame(height: 90)
             }
         }
+        }
+        if side != .left {
         Section {
             LabeledContent("Last 5 hours", value: Format.count(u.fiveHours.tokens))
             LabeledContent("Last 24 hours", value: Format.count(u.day.tokens))
@@ -289,6 +378,7 @@ struct UsageTab: View {
                 LabeledContent(name.replacingOccurrences(of: "claude-", with: ""), value: "\(Format.count(v.tokens)) · \(v.messages)")
             }
         }
+        }
     }
 }
 
@@ -297,9 +387,11 @@ struct UpgradeTab: View {
     @State private var note: String?
     @State private var agentPassword = ""
     let s: Status
-    init(_ s: Status) { self.s = s }
+    var side: Side = .all
+    init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
     var onTahoe: Bool { (Int(s.macos.split(separator: ".").first ?? "") ?? 0) >= 26 }
     var body: some View {
+        if side != .right {
         Section("macOS and OCLP") {
             Text(s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : s.upgrade.status) : onTahoe ? "On Tahoe" : "Waiting for your password to start").font(.headline)
             LabeledContent("Running", value: "\(s.macos) (\(s.build))")
@@ -317,8 +409,11 @@ struct UpgradeTab: View {
             } header: { Text("Update service improvements") } footer: { Text("A newer version of the update service is ready. Your password is used once.") }
         }
         if let note { Section { Text(note) } }
+        }
+        if side != .left {
         Section("Log") {
             Text(s.upgrade.log.isEmpty ? "No log yet" : s.upgrade.log).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+        }
         }
     }
 }
@@ -328,44 +423,45 @@ struct ControlTab: View {
     @State private var macPassword = ""
     @State private var text = ""
     @State private var pressReturn = false
-    @State private var note: String?
     @State private var appleEmail = ""
     @State private var applePassword = ""
     @State private var appleCode = ""
     @State private var confirmRestart = false
     let s: Status
-    init(_ s: Status) { self.s = s }
+    var side: Side = .all
+    init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
 
     func when(_ ms: Double) -> String {
         ms > 0 ? Date(timeIntervalSince1970: ms / 1000).formatted(date: .abbreviated, time: .shortened) : "Not yet"
     }
 
     var body: some View {
+        if side != .right {
         Section {
             StateRow(label: "Screen", good: s.screen != "locked", value: s.screen == "locked" ? "Locked" : s.screen == "display off" ? "Display off" : "Unlocked")
             if s.macLogin {
-                if s.screen == "locked" { Button("Unlock") { Task { note = await model.run("mac-unlock") } } }
-                Button("Forget password", role: .destructive) { Task { note = await model.run("mac-logout") } }
+                if s.screen == "locked" { Button("Unlock") { Task { model.note = await model.run("mac-unlock") } } }
+                Button("Forget password", role: .destructive) { Task { model.note = await model.run("mac-logout") } }
             } else {
                 SecureField("Mac password", text: $macPassword)
                 Button("Log in") {
-                    Task { note = await model.runSealed("mac-login", secret: macPassword); macPassword = "" }
+                    Task { model.note = await model.runSealed("mac-login", secret: macPassword); macPassword = "" }
                 }.disabled(macPassword.isEmpty)
             }
-            if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
+            if let note = model.note { Text(note).font(.footnote).foregroundStyle(.secondary) }
         } header: { Text("Log in to this Mac") } footer: {
             Text(s.macLogin ? "Logged in, and it stays that way after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
         }
         Section {
             NavigationLink("Open screen") { RemoteScreenView() }
-            Button("Sign in to Chrome") { Task { note = await model.run("chrome-signin") } }
+            Button("Sign in to Chrome") { Task { model.note = await model.run("chrome-signin") } }
         } header: { Text("Remote desktop") } footer: { Text("Tap to click, pinch to zoom, and drag to scroll. Drag moves the view while zoomed.") }
         Section {
             if s.macLogin || s.typing == "trusted" {
                 SecureField("Text or password", text: $text)
                 Toggle("Press Return afterward", isOn: $pressReturn)
                 Button("Type on Mac") {
-                    Task { note = await model.runSealed("type-text", secret: text, extra: ["enter": pressReturn]) ?? "Typed."; text = "" }
+                    Task { model.note = await model.runSealed("type-text", secret: text, extra: ["enter": pressReturn]) ?? "Typed."; text = "" }
                 }.disabled(text.isEmpty)
             } else {
                 Text("Log in to this Mac above to use this.").foregroundStyle(.secondary)
@@ -373,6 +469,8 @@ struct ControlTab: View {
         } header: { Text("Sign-ins on the Mac") } footer: {
             Text("For Apple ID or any other prompt. It is encrypted on this phone and typed once. Nothing is saved.")
         }
+        }
+        if side != .left {
         Section {
             LabeledContent("iPhone on USB", value: s.iphone ? "Connected" : "Not connected")
             LabeledContent("Apple account", value: s.ios.signedIn ? "Signed in" : "Needed")
@@ -381,16 +479,16 @@ struct ControlTab: View {
             if !s.ios.lastResult.isEmpty { Text(s.ios.lastResult).font(.footnote).foregroundStyle(.secondary) }
             if s.ios.job.state == "code" {
                 TextField("6-digit code", text: $appleCode)
-                Button("Send code") { Task { note = await model.runSealed("ios-code", secret: appleCode); appleCode = "" } }.disabled(appleCode.isEmpty)
+                Button("Send code") { Task { model.note = await model.runSealed("ios-code", secret: appleCode); appleCode = "" } }.disabled(appleCode.isEmpty)
             } else if !s.ios.signedIn {
                 TextField("Apple account email", text: $appleEmail).textInputAutocapitalization(.never).autocorrectionDisabled()
                 SecureField("Apple account password", text: $applePassword)
                 Button("Sign in to Apple") {
-                    Task { note = await model.runSealed("ios-login", secret: appleEmail + "\n" + applePassword); applePassword = "" }
+                    Task { model.note = await model.runSealed("ios-login", secret: appleEmail + "\n" + applePassword); applePassword = "" }
                 }.disabled(appleEmail.isEmpty || applePassword.isEmpty)
             } else {
-                Button(s.ios.resigning ? "Working…" : "Re-sign now") { Task { note = await model.run("ios-resign") } }.disabled(s.ios.resigning)
-                Button("Sign out of Apple account", role: .destructive) { Task { note = await model.run("ios-logout") } }
+                Button(s.ios.resigning ? "Working…" : "Re-sign now") { Task { model.note = await model.run("ios-resign") } }.disabled(s.ios.resigning)
+                Button("Sign out of Apple account", role: .destructive) { Task { model.note = await model.run("ios-logout") } }
             }
         } header: { Text("App re-signing") } footer: {
             Text("The Mac renews both apps a day before the 7-day limit, and installs new builds, whenever this iPhone is on the same Wi-Fi or plugged in.")
@@ -408,7 +506,8 @@ struct ControlTab: View {
             Button("Restart Mac", role: .destructive) { confirmRestart = true }
         }
         .confirmationDialog("Restart the Mac in one minute?", isPresented: $confirmRestart, titleVisibility: .visible) {
-            Button("Restart", role: .destructive) { Task { note = await model.run("mac-restart") } }
+            Button("Restart", role: .destructive) { Task { model.note = await model.run("mac-restart") } }
+        }
         }
     }
 }

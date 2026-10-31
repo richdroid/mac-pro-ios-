@@ -6,6 +6,8 @@ final class AppModel: ObservableObject {
     @Published var status: Status?
     @Published var problem: String?
     @Published var needsSignIn = false
+    @Published var note: String?
+    @Published var tab = UserDefaults.standard.integer(forKey: "tab")
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
 
     var api: API { API(base: URL(string: address) ?? URL(string: "https://invalid.invalid")!) }

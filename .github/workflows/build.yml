@@ -27,7 +27,7 @@ jobs:
           ls build/Build/Products/Release-iphoneos/MacPro.app/PlugIns
       - name: Screenshot in the simulator
         continue-on-error: true
-        timeout-minutes: 14
+        timeout-minutes: 20
         run: |
           set +x
           exec > >(tee dist/sim.log) 2>&1
@@ -42,18 +42,21 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
-          xcrun simctl launch "$DEVICE" local.macpro.MacPro
-          sleep 12
-          xcrun simctl io "$DEVICE" screenshot --display=1 dist/macpro.png
-          xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-open.png
-          xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "MacPro was not running"
           node ci/mock-chumby.js &
-          shots() { for T in 0 1 2 3 4; do
+          shots() { # display, file suffix
+            for T in 0 1 2 3 4; do
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
-              sleep 8
+              sleep 7
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$T$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || echo "Chumby tab $T was not running"
-            done; }
+            done
+            for T in 0 1 2 3 4 5; do
+              xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab $T
+              sleep 7
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-$T$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "Mac Pro tab $T was not running"
+            done
+          }
           shots 1 ""
           # Unfold the Duo through Device Hub; display 3 is then live.
           git clone -q --depth 1 https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && swift build -c release 2>&1 | tail -1)

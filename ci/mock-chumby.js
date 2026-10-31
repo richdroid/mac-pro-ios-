@@ -22,3 +22,6 @@ http.createServer((q, s) => {
   if (data[a]) { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(data[a])); return; }
   s.statusCode = 404; s.end();
 }).listen(9000, '127.0.0.1');
+// And a sample Mac for the Mac Pro app.
+const macStatus = require('fs').readFileSync(__dirname + '/mock-status.json');
+http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9001, '127.0.0.1');

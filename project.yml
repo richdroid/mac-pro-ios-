@@ -22,6 +22,14 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Mac Pro
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+    info:
+      path: MacProInfo.plist
+      properties:
+        CFBundleDisplayName: Mac Pro
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
   MacProWidget:
     type: app-extension
     platform: iOS
