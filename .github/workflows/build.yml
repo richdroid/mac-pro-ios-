@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: xcode-27
@@ -15,11 +17,12 @@ jobs:
           xcodegen generate
       - name: Build unsigned apps for iPhone
         run: |
+          set -o pipefail
           xcodebuild -version
           mkdir -p dist
           for APP in MacPro Chumby; do
             xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Release -sdk iphoneos \
-              -derivedDataPath build CURRENT_PROJECT_VERSION=$GITHUB_RUN_NUMBER CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+              -derivedDataPath build CURRENT_PROJECT_VERSION=$GITHUB_RUN_NUMBER CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee -a dist/build.log | tail -1
             rm -rf dist/Payload; mkdir -p dist/Payload
             cp -R build/Build/Products/Release-iphoneos/$APP.app dist/Payload/
             (cd dist && zip -qry $APP.ipa Payload && rm -rf Payload)
@@ -77,9 +80,13 @@ jobs:
         run: |
           mkdir -p dist/crashes
           cp ~/Library/Logs/DiagnosticReports/*.ips dist/crashes/ 2>/dev/null || true
-      - uses: actions/upload-artifact@v4
+      # A public release, so the Mac can fetch the result with no sign-in. Nothing personal is in these builds.
+      - name: Publish the result
         if: always()
-        with:
-          name: iPhone-apps
-          path: dist/
-          retention-days: 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qry ../apps.zip .)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "Latest build" --notes "Built by the workflow. Fetched by the Mac."
+          gh release upload latest apps.zip status.txt --clobber

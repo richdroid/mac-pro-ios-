@@ -377,7 +377,6 @@ struct UpgradeTab: View {
             LabeledContent("OCLP", value: s.upgrade.state["oclp_tag"] ?? s.oclp.version)
             LabeledContent("Root patches for", value: s.oclp.patchedFor.isEmpty ? "None yet" : s.oclp.patchedFor)
             LabeledContent("Patched", value: s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)
-            LabeledContent("KDK", value: s.oclp.kdk.isEmpty ? "None" : s.oclp.kdk)
             if s.upgrade.installed { Button("Run update check now") { confirmRun = true } }
         }
         .confirmationDialog("Run the update service now?", isPresented: $confirmRun, titleVisibility: .visible) {
@@ -414,10 +413,6 @@ struct ControlTab: View {
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
 
-    func when(_ ms: Double) -> String {
-        ms > 0 ? Date(timeIntervalSince1970: ms / 1000).formatted(date: .abbreviated, time: .shortened) : "Not yet"
-    }
-
     var body: some View {
         if side != .right {
         Section {
@@ -437,7 +432,6 @@ struct ControlTab: View {
         }
         Section {
             NavigationLink("Open screen") { RemoteScreenView() }
-            Button("Sign in to Chrome") { Task { model.note = await model.run("chrome-signin") } }
         } header: { Text("Remote desktop") } footer: { Text("Tap to click, pinch to zoom, and drag to scroll. Drag moves the view while zoomed.") }
         Section {
             if s.macLogin || s.typing == "trusted" {
@@ -454,27 +448,20 @@ struct ControlTab: View {
         }
         }
         if side != .left {
-        Section {
-            LabeledContent("iPhone on USB", value: s.iphone ? "Connected" : "Not connected")
-            LabeledContent("Apple account", value: s.ios.signedIn ? "Signed in" : "Needed")
-            LabeledContent("Last installed", value: when(s.ios.installedAt))
-            LabeledContent("Next re-sign", value: when(s.ios.nextDue))
-            if !s.ios.lastResult.isEmpty { Text(s.ios.lastResult).font(.footnote).foregroundStyle(.secondary) }
-            if s.ios.job.state == "code" {
-                TextField("6-digit code", text: $appleCode)
-                Button("Send code") { Task { model.note = await model.runSealed("ios-code", secret: appleCode); appleCode = "" } }.disabled(appleCode.isEmpty)
-            } else if !s.ios.signedIn {
-                TextField("Apple account email", text: $appleEmail).textInputAutocapitalization(.never).autocorrectionDisabled()
-                SecureField("Apple account password", text: $applePassword)
-                Button("Sign in to Apple") {
-                    Task { model.note = await model.runSealed("ios-login", secret: appleEmail + "\n" + applePassword); applePassword = "" }
-                }.disabled(appleEmail.isEmpty || applePassword.isEmpty)
-            } else {
-                Button(s.ios.resigning ? "Working…" : "Re-sign now") { Task { model.note = await model.run("ios-resign") } }.disabled(s.ios.resigning)
-                Button("Sign out of Apple account", role: .destructive) { Task { model.note = await model.run("ios-logout") } }
-            }
-        } header: { Text("App re-signing") } footer: {
-            Text("The Mac renews both apps a day before the 7-day limit, and installs new builds, whenever this iPhone is on the same Wi-Fi or plugged in.")
+        // Installs and renewals live on the Apps tab; this only appears if Apple needs you again.
+        if !s.ios.signedIn || s.ios.job.state == "code" {
+            Section {
+                if s.ios.job.state == "code" {
+                    TextField("6-digit code", text: $appleCode)
+                    Button("Send code") { Task { model.note = await model.runSealed("ios-code", secret: appleCode); appleCode = "" } }.disabled(appleCode.isEmpty)
+                } else {
+                    TextField("Apple account email", text: $appleEmail).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("Apple account password", text: $applePassword)
+                    Button("Sign in to Apple") {
+                        Task { model.note = await model.runSealed("ios-login", secret: appleEmail + "\n" + applePassword); applePassword = "" }
+                    }.disabled(appleEmail.isEmpty || applePassword.isEmpty)
+                }
+            } header: { Text("Apple account") } footer: { Text("The Mac needs this to renew your apps.") }
         }
         if !s.publicUrl.isEmpty {
             Section {

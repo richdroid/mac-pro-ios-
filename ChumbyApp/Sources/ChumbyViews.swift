@@ -989,18 +989,6 @@ struct TinkerTab: View {
                 Button("Stop game", role: .destructive) { model.cmd("nesstop", nil, "Back to the channel") }
             }
             } right: {
-            Section("Time on screen: your widgets") {
-                ForEach(model.state.mine) { w in
-                    Picker(w.name, selection: Binding(get: { w.secs }, set: { s in
-                        Task {
-                            do { try await model.api?.post("wtime", extra: "&w=" + ChumbyAPI.enc(w.name) + "&s=\(s)"); model.say(w.name + ": saved"); await model.loadState() }
-                            catch { model.say("Couldn’t: \(error.localizedDescription)") }
-                        }
-                    })) {
-                        ForEach(widgetTimes.contains(w.secs) ? widgetTimes : (widgetTimes + [w.secs]).sorted(), id: \.self) { Text(timeText($0)).tag($0) }
-                    }
-                }
-            }
             Section("The Chumby itself") {
                 Button("Restart channel") { confirm = "restart" }
                 Button("Reboot", role: .destructive) { confirm = "reboot" }
