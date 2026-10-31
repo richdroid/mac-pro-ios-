@@ -457,6 +457,7 @@ struct SeedSection: View {
     @State private var picking = false
     @State private var note: String?
     @State private var uploading = false
+    @State private var link = ""
 
     func label(_ a: Status.SeedApp) -> (String, Color) {
         switch a.state {
@@ -493,6 +494,12 @@ struct SeedSection: View {
                     }
                 }
             }
+            HStack {
+                TextField("Paste a link to an .ipa", text: $link).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("Get") { Task { note = await model.run("ios-fetch", ["url": link]); if note == nil { link = "" } } }
+                    .buttonStyle(.bordered).disabled(link.isEmpty || seed.fetch?.state == "working")
+            }
+            if let f = seed.fetch, f.state != "idle" { Text(f.message).font(.footnote).foregroundStyle(f.state == "failed" ? .red : .secondary) }
             Button(uploading ? "Sending to the Mac…" : "Add an app (.ipa)") { picking = true }.disabled(uploading)
             if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
         } header: { Text("On this iPhone") } footer: {

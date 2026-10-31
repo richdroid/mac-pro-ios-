@@ -34,7 +34,8 @@ struct Status: Decodable {
         let installedAt: Double; let expires: Double; let state: String; let message: String; let own: Bool
         var id: String { file.isEmpty ? name : file }
     }
-    struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let apps: [SeedApp] }
+    struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let fetch: Fetch?; let apps: [SeedApp] }
+    struct Fetch: Decodable { let state: String; let message: String }
     struct IOSJob: Decodable { let state: String; let message: String }
     struct IOSStatus: Decodable {
         let hasPhone: Bool; let signedIn: Bool; let ready: Bool; let installedAt: Double; let nextDue: Double
