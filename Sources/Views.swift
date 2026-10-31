@@ -118,6 +118,7 @@ struct Hero: View {
 }
 
 struct StatusTab: View {
+    @EnvironmentObject var model: AppModel
     let s: Status
     init(_ s: Status) { self.s = s }
     var body: some View {
@@ -162,6 +163,7 @@ struct StatusTab: View {
             LabeledContent("Model", value: s.model)
             LabeledContent("Processor", value: s.cpuModel.replacingOccurrences(of: "(R)", with: "").replacingOccurrences(of: "CPU ", with: ""))
             LabeledContent("Tailnet", value: s.tailscale.name ?? "Not signed in")
+            Button("Change connection") { model.needsSignIn = true }
         }
         Section("Top processes") {
             ForEach(s.procs) { p in LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)) }
