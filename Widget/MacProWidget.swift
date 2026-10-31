@@ -87,69 +87,78 @@ struct MacProvider: AppIntentTimelineProvider {
     }
 }
 
-// The cylinder's own look: graphite, with a cool glow.
+// Black like the app, so the cylinder melts into it with the same soft glow.
 struct GraphiteBackground: View {
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color(white: 0.18), Color(white: 0.05)], startPoint: .top, endPoint: .bottom)
-            RadialGradient(colors: [Color(red: 0.55, green: 0.62, blue: 0.74).opacity(0.28), .clear], center: .center, startRadius: 10, endRadius: 170)
+            Color.black
+            RadialGradient(colors: [Color(white: 0.2), .clear], center: UnitPoint(x: 0.5, y: 0.35), startRadius: 4, endRadius: 190)
         }
+    }
+}
+struct Cylinder: View {
+    var body: some View {
+        Image("MacPro").resizable().widgetAccentedRenderingMode(.fullColor).scaledToFit()
+            .background(RadialGradient(colors: [.white.opacity(0.2), .clear], center: .center, startRadius: 2, endRadius: 58))
+            .accessibilityLabel("Mac Pro")
     }
 }
 struct Unreachable: View {
     let text: String
     var body: some View {
-        VStack(spacing: 6) {
-            Image("MacPro").resizable().widgetAccentedRenderingMode(.fullColor).scaledToFit().opacity(0.45).frame(maxHeight: 64)
+        VStack(spacing: 8) {
+            Cylinder().opacity(0.5).frame(maxHeight: 66)
             Label(text, systemImage: "wifi.slash").font(.caption2.weight(.medium)).opacity(0.75)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
-private let cpuBlue = Color(red: 0.35, green: 0.72, blue: 1), memPink = Color(red: 0.98, green: 0.42, blue: 0.66), diskGold = Color(red: 1, green: 0.76, blue: 0.3)
+private func rounded(_ s: CGFloat) -> Font { .system(size: s, weight: .semibold, design: .default) }
 
 // MARK: - Status
 struct StatusBody: View {
     let family: WidgetFamily
     let entry: MacEntry
-    func dial(_ v: Double, _ c: Color, _ icon: String) -> some View {
-        ArcGauge(v, style: c, width: 6) {
-            VStack(spacing: 0) {
-                Image(systemName: icon).font(.system(size: 11)).foregroundStyle(c)
-                Text("\(Int((v * 100).rounded()))").font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
+    func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))" }
+    func dial(_ v: Double, _ icon: String) -> some View {
+        VStack(spacing: 5) {
+            ArcGauge(v, tint: v > 0.9 ? .red : v > 0.75 ? .orange : macBlue, ticks: 30, length: 6, width: 2.2) {
+                Text(pct(v)).font(rounded(19)).monospacedDigit()
             }
+            Image(systemName: icon).font(.system(size: 12, weight: .medium)).opacity(0.65)
         }
     }
     var body: some View {
         if let n = entry.snapshot {
             switch family {
             case .accessoryCircular:
-                Gauge(value: n.cpu) { Image(systemName: "cpu") } currentValueLabel: { Text("\(Int(n.cpu * 100))") }.gaugeStyle(.accessoryCircular)
+                Gauge(value: n.cpu) { Image(systemName: "cpu") } currentValueLabel: { Text(pct(n.cpu)) }.gaugeStyle(.accessoryCircular)
             case .accessoryRectangular:
-                HStack(spacing: 8) {
-                    Gauge(value: n.cpu) { Image(systemName: "cpu") }.gaugeStyle(.accessoryCircularCapacity).scaleEffect(0.8)
-                    Gauge(value: n.mem) { Image(systemName: "memorychip") }.gaugeStyle(.accessoryCircularCapacity).scaleEffect(0.8)
-                    Gauge(value: n.disk) { Image(systemName: "internaldrive") }.gaugeStyle(.accessoryCircularCapacity).scaleEffect(0.8)
+                HStack(spacing: 6) {
+                    Gauge(value: n.cpu) { Image(systemName: "cpu") }.gaugeStyle(.accessoryCircularCapacity)
+                    Gauge(value: n.mem) { Image(systemName: "memorychip") }.gaugeStyle(.accessoryCircularCapacity)
+                    Gauge(value: n.disk) { Image(systemName: "internaldrive") }.gaugeStyle(.accessoryCircularCapacity)
                 }
             case .systemSmall:
                 ZStack {
-                    Ring(value: n.cpu, color: cpuBlue, width: 10)
-                    Ring(value: n.mem, color: memPink, width: 10).padding(13)
-                    Ring(value: n.disk, color: diskGold, width: 10).padding(26)
-                    Image("MacPro").resizable().widgetAccentedRenderingMode(.fullColor).scaledToFit().frame(height: 36)
+                    ArcGauge(n.cpu, ticks: 44, length: 11, width: 3) { EmptyView() }
+                    ArcGauge(n.mem, tint: .white, ticks: 34, length: 7, width: 2.4) { EmptyView() }.padding(17)
+                    Cylinder().frame(height: 56).offset(y: -2)
+                    Text(pct(n.cpu) + "%").font(rounded(13)).monospacedDigit().frame(maxHeight: .infinity, alignment: .bottom)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             default:
-                HStack(spacing: 12) {
-                    Image("MacPro").resizable().widgetAccentedRenderingMode(.fullColor).scaledToFit().frame(maxHeight: 112)
+                HStack(spacing: 14) {
+                    Cylinder().frame(width: 82)
                     VStack(spacing: 8) {
-                        HStack(spacing: 8) {
-                            dial(n.cpu, cpuBlue, "cpu")
-                            dial(n.mem, memPink, "memorychip")
-                            dial(n.disk, diskGold, "internaldrive")
+                        HStack(spacing: 10) {
+                            dial(n.cpu, "cpu")
+                            dial(n.mem, "memorychip")
+                            dial(n.disk, "internaldrive")
                         }
-                        SparkLine(values: n.history, top: 100, color: cpuBlue).frame(height: 24)
+                        SparkLine(values: n.history, top: 100).frame(height: 26)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else if family == .accessoryCircular || family == .accessoryRectangular {
             Image(systemName: "wifi.slash")
@@ -169,21 +178,21 @@ struct TempBody: View {
             case .accessoryInline:
                 Label("\(Heat.f(n.cpuTemp ?? hot.c))°F", systemImage: "thermometer.medium")
             case .systemSmall:
-                ArcGauge(Heat.level(hot.c), style: Heat.gradient, width: 12) {
-                    VStack(spacing: 0) {
-                        Text("\(Heat.f(hot.c))°").font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
-                        Image(systemName: "thermometer.medium").font(.system(size: 13)).foregroundStyle(Heat.color(hot.c))
+                ArcGauge(Heat.level(hot.c), heat: true, ticks: 44, length: 12, width: 3) {
+                    VStack(spacing: 1) {
+                        Text("\(Heat.f(hot.c))°").font(rounded(34)).monospacedDigit()
+                        Text("°F").font(.caption2.weight(.medium)).opacity(0.6).hidden()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             default:
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     ForEach(n.dials, id: \.icon) { d in
-                        VStack(spacing: 6) {
-                            ArcGauge(Heat.level(d.c), style: Heat.gradient, width: 7) {
-                                Text("\(Heat.f(d.c))°").font(.system(size: 17, weight: .semibold, design: .rounded)).monospacedDigit()
+                        VStack(spacing: 7) {
+                            ArcGauge(Heat.level(d.c), heat: true, ticks: 30, length: 7, width: 2.2) {
+                                Text("\(Heat.f(d.c))°").font(rounded(17)).monospacedDigit()
                             }
-                            Image(systemName: d.icon).font(.system(size: 15)).foregroundStyle(Heat.color(d.c))
+                            Image(systemName: d.icon).font(.system(size: 14, weight: .medium)).opacity(0.65)
                         }
                     }
                 }
@@ -198,16 +207,13 @@ struct TempBody: View {
 // MARK: - Claude
 struct ClaudeBody: View {
     let entry: MacEntry
-    static let clay = Color(red: 0.85, green: 0.5, blue: 0.36)
+    static let clay = Color(red: 0.85, green: 0.47, blue: 0.34)
     var body: some View {
         if let n = entry.snapshot, let w = n.week {
             ZStack {
-                Ring(value: w / 100, color: Self.clay, width: 12)
-                Ring(value: (n.fiveHour ?? 0) / 100, color: Color(red: 0.98, green: 0.8, blue: 0.62), width: 12).padding(16)
-                VStack(spacing: 0) {
-                    Image(systemName: "sparkle").font(.system(size: 13)).foregroundStyle(Self.clay)
-                    Text("\(Int(w))%").font(.system(size: 19, weight: .semibold, design: .rounded)).monospacedDigit()
-                }
+                ArcGauge(w / 100, tint: Self.clay, ticks: 44, length: 11, width: 3) { EmptyView() }
+                ArcGauge((n.fiveHour ?? 0) / 100, tint: .white, ticks: 34, length: 7, width: 2.4) { EmptyView() }.padding(17)
+                Text("\(Int(w))%").font(rounded(22)).monospacedDigit()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else { Unreachable(text: entry.problem.isEmpty ? "No reading" : entry.problem) }
@@ -217,20 +223,22 @@ struct ClaudeBody: View {
 // MARK: - Sideloaded apps
 struct AppsBody: View {
     let entry: MacEntry
-    func color(_ d: Int) -> Color { d > 2 ? .green : d > 0 ? .orange : .red }
+    func color(_ d: Int) -> Color { d > 2 ? macBlue : d > 0 ? .orange : .red }
     var body: some View {
         if let n = entry.snapshot, !n.apps.isEmpty {
-            VStack(spacing: 11) {
+            VStack(spacing: 12) {
                 ForEach(Array(n.apps.prefix(4)), id: \.name) { a in
                     HStack(spacing: 10) {
-                        Text(a.name).font(.footnote.weight(.medium)).lineLimit(1).frame(width: 84, alignment: .leading)
-                        if let d = a.days {
-                            ProgressView(value: Double(min(max(d, 0), 7)), total: 7).tint(color(d))
-                            Text("\(max(d, 0))d").font(.footnote.weight(.semibold)).monospacedDigit().foregroundStyle(color(d)).frame(width: 26, alignment: .trailing)
-                        } else {
-                            ProgressView(value: 1, total: 1).tint(.white.opacity(0.25))
-                            Image(systemName: "infinity").font(.footnote).opacity(0.6).frame(width: 26, alignment: .trailing)
+                        Text(a.name).font(.footnote.weight(.medium)).lineLimit(1).frame(width: 78, alignment: .leading)
+                        // One slot for each of the 7 days an app lasts.
+                        HStack(spacing: 3) {
+                            ForEach(0..<7, id: \.self) { i in
+                                Capsule().fill(a.days == nil ? Color.white.opacity(0.28) : i < (a.days ?? 0) ? color(a.days ?? 0) : Color.white.opacity(0.14)).frame(height: 14)
+                            }
                         }
+                        Group {
+                            if let d = a.days { Text("\(max(d, 0))d").monospacedDigit() } else { Image(systemName: "infinity") }
+                        }.font(.footnote.weight(.semibold)).frame(width: 24, alignment: .trailing)
                     }
                 }
             }
@@ -268,7 +276,7 @@ struct MacClaudeWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: "MacProClaude", intent: WidgetAddress.self, provider: MacProvider()) { e in InWidget { _ in ClaudeBody(entry: e) } }
             .configurationDisplayName("Claude Usage")
-            .description("This week’s limit outside, the 5-hour limit inside.")
+            .description("This week’s limit on the outside, the 5-hour limit inside.")
             .supportedFamilies([.systemSmall])
     }
 }

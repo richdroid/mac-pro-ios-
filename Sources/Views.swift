@@ -8,6 +8,7 @@ struct MacProApp: App {
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(model).environmentObject(model.liveStore)
+                .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in if p == .active { model.start() } else { model.stop() } }
                 .onAppear { model.start() }
         }
@@ -56,6 +57,8 @@ struct Screen<Content: View>: View {
             else if side != .right, model.problem == nil { Section { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) } } }
         }
         .refreshable { await model.refresh() }
+        .textCase(.uppercase)
+        .contentMargins(.top, 4, for: .scrollContent)
     }
     var body: some View {
         NavigationStack {
@@ -80,86 +83,99 @@ struct StateRow: View {
     }
 }
 
-// CPU and memory as dials, the network as lines. Watching LiveStore keeps these redraws to this view alone.
+// The web dashboard's tile: a label, a big number and a line you can drag along to read the past.
+struct WebTile: View {
+    let title: String, value: String, detail: String
+    var spark: [Double] = []
+    var top: Double?
+    var read: (Double) -> String = { _ in "" }
+    @State private var probe: Int?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
+            Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+            if spark.count > 1 {
+                SparkLine(values: spark, top: top)
+                    .frame(height: 42).padding(.top, 8)
+                    .overlay {
+                        GeometryReader { g in
+                            Color.clear.contentShape(Rectangle())
+                                .gesture(DragGesture(minimumDistance: 8)
+                                    .onChanged { v in probe = max(0, min(spark.count - 1, Int(v.location.x / g.size.width * CGFloat(spark.count - 1)))) }
+                                    .onEnded { _ in probe = nil })
+                            if let probe, probe < spark.count {
+                                Rectangle().fill(.white.opacity(0.55)).frame(width: 1).offset(x: CGFloat(probe) / CGFloat(spark.count - 1) * g.size.width)
+                            }
+                        }
+                    }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            if let probe, probe < spark.count {
+                Text("\(read(spark[probe])) · \(Format.span(Double(spark.count - 1 - probe))) ago").font(.caption2.weight(.semibold)).monospacedDigit().padding(.horizontal, 7).padding(.vertical, 3).background(.black.opacity(0.75), in: Capsule()).padding(8)
+            }
+        }
+    }
+}
+
 struct LiveTiles: View {
     @EnvironmentObject var store: LiveStore
     let s: Status
-    func dial(_ title: String, _ icon: String, _ v: Double, _ big: String, _ color: Color, _ spark: [Double]) -> some View {
-        VStack(spacing: 8) {
-            ArcGauge(v, style: color, width: 9) {
-                VStack(spacing: 1) {
-                    Image(systemName: icon).font(.footnote).foregroundStyle(color)
-                    Text(big).font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
-                }
-            }
-            .frame(maxWidth: 124)
-            SparkLine(values: spark, top: 100, color: color).frame(height: 28)
-            Text(title).font(.footnote).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-    func net(_ title: String, _ icon: String, _ rate: Double, _ spark: [Double], _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) { Image(systemName: icon); Text(Format.rate(rate)).contentTransition(.numericText()) }.font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(color)
-            SparkLine(values: spark, color: color).frame(height: 30)
-        }
-        .frame(maxWidth: .infinity).accessibilityLabel(title)
-    }
     var body: some View {
-        let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, netNow = store.live?.net ?? s.net, h = store.live?.hist ?? s.hist
-        VStack(spacing: 18) {
-            HStack(alignment: .top, spacing: 16) {
-                dial("CPU", "cpu", Double(cpu.total) / 100, "\(cpu.total)%", Color(red: 0.2, green: 0.6, blue: 1), h.cpu)
-                dial("Memory", "memorychip", mem.total > 0 ? mem.used / mem.total : 0, Format.bytes(mem.used), Color(red: 0.95, green: 0.35, blue: 0.6), h.mem)
+        let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net, h = store.live?.hist ?? s.hist, load = store.live?.load ?? s.load
+        VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                WebTile(title: "CPU", value: "\(cpu.total)%", detail: String(format: "Load %.2f", load.first ?? 0), spark: h.cpu, top: 100, read: { "\(Int($0))%" })
+                WebTile(title: "Memory", value: Format.bytes(mem.used), detail: "of \(Format.bytes(mem.total))", spark: h.mem, top: 100, read: { "\(Int($0))%" })
             }
-            HStack(spacing: 16) {
-                net("Download", "arrow.down", netNow.rxRate, h.rx, .teal)
-                net("Upload", "arrow.up", netNow.txRate, h.tx, .indigo)
+            HStack(spacing: 12) {
+                WebTile(title: "Download", value: Format.rate(net.rxRate), detail: net.kind, spark: h.rx, read: Format.rate)
+                WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.ip, spark: h.tx, read: Format.rate)
             }
         }
-        .padding(.vertical, 6)
         .animation(.easeOut(duration: 0.25), value: cpu.total)
     }
 }
 
-// One dial per sensor: the number and the colour say it all.
+// One dial per sensor: the number and how far the ticks reach say it all.
 struct TempDials: View {
     @EnvironmentObject var store: LiveStore
     let s: Status
     var body: some View {
         let temps = store.live?.temps ?? s.temps ?? []
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 12, alignment: .top)], spacing: 14) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 12, alignment: .top)], spacing: 16) {
             ForEach(temps) { t in
-                VStack(spacing: 5) {
-                    ArcGauge(Heat.level(t.c), style: Heat.gradient, width: 7) {
-                        Text("\(Heat.f(t.c))°").font(.system(.callout, design: .rounded).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
+                VStack(spacing: 6) {
+                    ArcGauge(Heat.level(t.c), heat: true, ticks: 32, length: 7, width: 2.2) {
+                        Text("\(Heat.f(t.c))°").font(.system(.body).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
                     }
                     Text(t.name).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
     }
 }
 
 struct Hero: View {
-    @Environment(\.horizontalSizeClass) private var size
     let s: Status
     var healthy: Bool { s.claude.remoteControl && (s.tailscale.state == "Running" || !s.publicUrl.isEmpty) }
     var body: some View {
-        let wide = size == .regular
-        let art = Image("MacPro").resizable().scaledToFit().frame(height: wide ? 120 : 140).accessibilityLabel("Mac Pro, Late 2013")
-        let text = VStack(alignment: wide ? .leading : .center, spacing: 2) {
-            Text("Mac Pro").font(.title.bold())
+        VStack(spacing: 2) {
+            Image("MacPro").resizable().scaledToFit().frame(height: 148)
+                .background(RadialGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadius: 4, endRadius: 96).frame(width: 190, height: 190))
+                .accessibilityLabel("Mac Pro, Late 2013")
+            Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
-            HStack(spacing: 4) {
-                Image(systemName: healthy ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            HStack(spacing: 6) {
+                Circle().fill(healthy ? Color.green : Color.orange).frame(width: 9, height: 9)
                 Text(healthy ? "All systems go" : "Needs attention")
             }
-            .font(.footnote.weight(.medium)).foregroundStyle(healthy ? Color.green : Color.orange).padding(.top, 6)
-        }
-        Group {
-            if wide { HStack(spacing: 20) { art; text } } else { VStack(spacing: 2) { art; text } }
+            .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).background(Color(white: 0.16), in: Capsule()).padding(.top, 9)
         }
         .frame(maxWidth: .infinity)
     }
@@ -172,15 +188,16 @@ struct StatusTab: View {
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
     var body: some View {
         if side != .right {
-        Section { Hero(s: s) }.listRowBackground(Color.clear)
-        Section("Live") { LiveTiles(s: s) }
+        Section { Hero(s: s) }.listRowBackground(Color.clear).listRowSeparator(.hidden)
+        Section { LiveTiles(s: s) }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         if let temps = s.temps, !temps.isEmpty {
-            Section("Temperatures °F") { TempDials(s: s) }
+            Section("Temperatures") { TempDials(s: s) }
         }
         Section("Disk") {
-            VStack(alignment: .leading, spacing: 6) {
-                ProgressView(value: s.disk.used, total: s.disk.total).tint(s.disk.used / max(s.disk.total, 1) > 0.9 ? .red : .accentColor)
-                Text("\(Format.bytes(s.disk.free)) free").font(.subheadline.weight(.medium)).monospacedDigit()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(Format.bytes(s.disk.free)) free").font(.system(size: 26, weight: .semibold)).monospacedDigit()
+                Text("\(Format.bytes(s.disk.used)) used of \(Format.bytes(s.disk.total))").font(.footnote).foregroundStyle(.secondary)
+                ProgressView(value: s.disk.used, total: s.disk.total).tint(s.disk.used / max(s.disk.total, 1) > 0.9 ? .red : macBlue).padding(.top, 8)
             }
             .padding(.vertical, 2)
         }
@@ -188,7 +205,7 @@ struct StatusTab: View {
         if side != .left {
         Section("Remote access") {
             StateRow(label: "Claude remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
-            StateRow(label: "Claude desktop", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
+            StateRow(label: "Claude desktop (Dispatch)", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
             StateRow(label: "Tailscale", good: s.tailscale.state == "Running", value: s.tailscale.state == "Running" ? "Connected" : "Off")
             StateRow(label: "Public link", good: !s.publicUrl.isEmpty, value: s.publicUrl.isEmpty ? "Off" : "Active")
             StateRow(label: "Screen Sharing", good: s.sharing.vnc, value: s.sharing.vnc ? "On" : "Off")
@@ -295,7 +312,7 @@ struct UsageTab: View {
         let live = !over && pct != nil
         let v = pct ?? 0
         return VStack(spacing: 6) {
-            ArcGauge(live ? v / 100 : 0, style: v > 90 ? Color.red : v > 75 ? Color.orange : Color.accentColor, width: 9) {
+            ArcGauge(live ? v / 100 : 0, tint: v > 90 ? .red : v > 75 ? .orange : macBlue, ticks: 36, length: 9, width: 2.6) {
                 Text(live ? "\(Int(v.rounded()))%" : "–").font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit()
             }
             .frame(maxWidth: 110)
@@ -347,6 +364,7 @@ struct UpgradeTab: View {
     @EnvironmentObject var model: AppModel
     @State private var note: String?
     @State private var agentPassword = ""
+    @State private var confirmRun = false
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -358,9 +376,13 @@ struct UpgradeTab: View {
             LabeledContent("Running", value: "\(s.macos) (\(s.build))")
             LabeledContent("OCLP", value: s.upgrade.state["oclp_tag"] ?? s.oclp.version)
             LabeledContent("Root patches for", value: s.oclp.patchedFor.isEmpty ? "None yet" : s.oclp.patchedFor)
+            LabeledContent("Patched", value: s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)
             LabeledContent("KDK", value: s.oclp.kdk.isEmpty ? "None" : s.oclp.kdk)
-            if s.upgrade.installed { Button("Run update check now") { Task { note = await model.run("upgrade-run") } } }
+            if s.upgrade.installed { Button("Run update check now") { confirmRun = true } }
         }
+        .confirmationDialog("Run the update service now?", isPresented: $confirmRun, titleVisibility: .visible) {
+            Button("Run Now") { Task { note = await model.run("upgrade-run") } }
+        } message: { Text("It may restart the Mac.") }
         if s.agentStale {
             Section {
                 SecureField("Mac password", text: $agentPassword)

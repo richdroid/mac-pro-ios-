@@ -163,25 +163,31 @@ struct RemoteBody: View {
     let entry: ChumbyEntry
     func press(_ icon: String, _ intent: ChumbyPress, _ label: String, big: Bool = false) -> some View {
         Button(intent: intent) {
-            Image(systemName: icon).font(.system(size: big ? 22 : 18)).frame(maxWidth: .infinity, maxHeight: .infinity)
+            Image(systemName: icon).font(.system(size: big ? 22 : 17, weight: .medium)).frame(width: 54, height: 54).background(.white.opacity(0.32), in: Circle())
         }
-        .buttonStyle(.plain).background(.white.opacity(0.42), in: Circle()).accessibilityLabel(label)
+        .buttonStyle(.plain).accessibilityLabel(label)
     }
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 6) {
-                OctopusMark(color: octoBlue).frame(width: 26)
-                Text(entry.reachable ? entry.channel : "Tailscale off?").font(.trebuchet(13, .bold)).lineLimit(1)
-                Spacer()
+        VStack(spacing: 0) {
+            HStack(spacing: 7) {
+                OctopusMark(color: octoBlue).frame(width: 30)
+                Text(entry.reachable ? entry.channel : "Tailscale off?").font(.trebuchet(14, .bold)).lineLimit(1)
+                Spacer(minLength: 0)
             }
-            HStack(spacing: 10) {
+            Spacer(minLength: 6)
+            HStack(spacing: 0) {
                 press("moon.fill", ChumbyPress("night", "on"), "Night")
+                Spacer(minLength: 0)
                 press("backward.fill", ChumbyPress("prev"), "Previous widget", big: true)
+                Spacer(minLength: 0)
                 press("forward.fill", ChumbyPress("next"), "Next widget", big: true)
+                Spacer(minLength: 0)
                 press("sun.max.fill", ChumbyPress("night", "off"), "Wake")
+                Spacer(minLength: 0)
                 press("speaker.slash.fill", ChumbyPress("stopmusic"), "Stop music")
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -200,9 +206,9 @@ struct RightNowBody: View {
     let entry: ChumbyEntry
     var body: some View {
         if !entry.reachable { Lost() } else {
-            HStack(spacing: 14) {
-                OctopusMark(color: octoBlue).frame(width: 74)
-                VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 16) {
+                OctopusMark(color: octoBlue).frame(width: 96)
+                VStack(alignment: .leading, spacing: 9) {
                     Text(entry.channel).font(.trebuchet(16, .bold)).lineLimit(1)
                     HStack(spacing: 14) {
                         SignalBars(value: entry.sys.wifi)
@@ -219,6 +225,7 @@ struct RightNowBody: View {
                 }
                 Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }

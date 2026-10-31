@@ -208,15 +208,19 @@ struct LiveOctopus: View {
     @Environment(\.accessibilityReduceMotion) private var still
     @EnvironmentObject var model: ChumbyModel
     let squishedAt: Date?
+    var scale: CGFloat = 1
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still || model.tab != 0)) { ctx in
+        TimelineView(.animation(paused: still || model.tab != 0)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
-            let bob = -7 * (0.5 - 0.5 * cos(2 * .pi * t / 4.2))
-            let wave = sin(2 * .pi * t / 3)
-            let lift = 0.5 + 0.5 * wave
+            // The same curves as the web app's CSS: ease-in-out both ways, as a sine.
+            let bob = -7 * scale * (0.5 - 0.5 * cos(2 * .pi * t / 4.2))
+            let swing = 0.5 - 0.5 * cos(2 * .pi * t / 3)
+            let wave = swing * 2 - 1
+            let lift = swing
             let cycle = t.truncatingRemainder(dividingBy: 5.3) / 5.3
             let blink: CGFloat = cycle > 0.94 ? (cycle < 0.97 ? 1 - (cycle - 0.94) / 0.03 * 0.94 : 0.06 + (cycle - 0.97) / 0.03 * 0.94) : 1
-            let (sx, sy, dy) = squish(at: ctx.date)
+            let (sx, sy, dy0) = squish(at: ctx.date)
+            let dy = dy0 * scale
             OctopusMark(color: ChumbyPalette.oct(scheme == .dark), blink: blink)
                 .scaleEffect(x: 1, y: 1 + 0.035 * lift, anchor: UnitPoint(x: 0.5, y: 0.16))
                 .modifier(SkewEffect(skew: CGFloat(wave) * 4.5 * .pi / 180, anchorY: 0.16))
@@ -267,6 +271,9 @@ struct HomeTab: View {
         }
     }
 
+    // The web app's proportions: the octopus is 92 wide on a 380 stage and sits 58 above its top edge.
+    var stageWidth: CGFloat { wide ? 340 : 330 }
+    var k: CGFloat { stageWidth / 380 }
     var stage: some View {
         Image("Device").resizable().scaledToFit()
             .shadow(color: Color(red: 0.02, green: 0.09, blue: 0.26).opacity(0.45), radius: 22, y: 24)
@@ -279,20 +286,20 @@ struct HomeTab: View {
             }
             .overlay(alignment: .top) {
                 ZStack {
-                    LiveOctopus(squishedAt: squishedAt).frame(width: 92, height: 72)
+                    LiveOctopus(squishedAt: squishedAt, scale: k).frame(width: 92 * k)
                         .contentShape(Rectangle())
                         .onTapGesture { poke() }
                         .accessibilityLabel("Octopus").accessibilityAddTraits(.isButton)
                     if let say {
                         Text(say).font(.custom("Trebuchet MS", size: 14).weight(.bold)).lineLimit(1).fixedSize().padding(.horizontal, 15).padding(.vertical, 7).glass(18)
-                            .offset(y: -50).transition(.scale(scale: 0.3).combined(with: .opacity))
+                            .offset(y: -46 * k - 8).transition(.scale(scale: 0.3).combined(with: .opacity))
                     }
                     bubbleLayer
                 }
-                .offset(y: -58)
+                .offset(y: -58 * k)
             }
-            .frame(maxWidth: wide ? 300 : 320)
-            .padding(.top, 64)
+            .frame(maxWidth: stageWidth)
+            .padding(.top, 64 * k)
     }
     var bubbleLayer: some View {
         TimelineView(.animation(paused: bubbles.isEmpty)) { ctx in

@@ -26,6 +26,7 @@ targets:
       path: MacProInfo.plist
       properties:
         CFBundleDisplayName: Mac Pro
+        CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
@@ -60,6 +61,7 @@ targets:
       path: ChumbyApp/Info.plist
       properties:
         CFBundleDisplayName: Chumby
+        CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSLocalNetworkUsageDescription: Chumby connects to your Chumby on your home network.
