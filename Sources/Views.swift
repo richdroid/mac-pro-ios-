@@ -138,7 +138,7 @@ struct StatusTab: View {
                     ForEach(temps) { t in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(t.name).font(.footnote).foregroundStyle(.secondary)
-                            Text("\(Int(t.c.rounded()))°C").font(.title3.weight(.semibold)).monospacedDigit().foregroundStyle(t.c >= 90 ? .red : t.c >= 75 ? .orange : .primary)
+                            Text("\(Int((t.c * 9 / 5 + 32).rounded()))°F").font(.title3.weight(.semibold)).monospacedDigit().foregroundStyle(t.c >= 90 ? .red : t.c >= 75 ? .orange : .primary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }.padding(.vertical, 4)

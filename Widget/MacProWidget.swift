@@ -72,6 +72,7 @@ struct Graphite: ViewModifier {
         }
     }
 }
+func fahrenheit(_ c: Double) -> Int { Int((c * 9 / 5 + 32).rounded()) }
 func heatColor(_ c: Double) -> Color { c >= 90 ? .red : c >= 75 ? .orange : c >= 60 ? .yellow : Color(red: 0.45, green: 0.85, blue: 0.95) }
 func heatLine(_ c: Double) -> String { c >= 90 ? "Fans, please!" : c >= 75 ? "Getting toasty" : c >= 60 ? "Warming up" : "Cool as a trash can" }
 func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
@@ -173,16 +174,16 @@ struct TempView: View {
         Group {
             switch family {
             case .accessoryCircular:
-                if let c = cpu { Gauge(value: min(c, 100), in: 20...100) { Text("°C") } currentValueLabel: { Text("\(Int(c))") }.gaugeStyle(.accessoryCircular) }
+                if let c = cpu { Gauge(value: min(c, 100), in: 20...100) { Text("°F") } currentValueLabel: { Text("\(fahrenheit(c))") }.gaugeStyle(.accessoryCircular) }
                 else { Image(systemName: "thermometer.medium") }
             case .accessoryInline:
-                Label(cpu.map { "CPU \(Int($0))°C" } ?? "Mac Pro unreachable", systemImage: "thermometer.medium")
+                Label(cpu.map { "CPU \(fahrenheit($0))°F" } ?? "Mac Pro unreachable", systemImage: "thermometer.medium")
             case .systemSmall:
                 if let h = hottest {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack { Image(systemName: "thermometer.medium").foregroundStyle(heatColor(h.c)); Spacer(); Text(h.name).font(.caption2).opacity(0.7) }
                         Spacer(minLength: 0)
-                        Text("\(Int(h.c.rounded()))°").font(.system(size: 46, weight: .semibold, design: .rounded)).foregroundStyle(heatColor(h.c)).monospacedDigit()
+                        Text("\(fahrenheit(h.c))°").font(.system(size: 46, weight: .semibold, design: .rounded)).foregroundStyle(heatColor(h.c)).monospacedDigit()
                         Text(heatLine(h.c)).font(.caption.weight(.medium)).lineLimit(2).minimumScaleFactor(0.8)
                     }
                 } else { Problem(text: entry.problem ?? "No sensors yet.") }
@@ -194,7 +195,7 @@ struct TempView: View {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible())], spacing: 7) {
                             ForEach(shown, id: \.name) { t in
                                 VStack(alignment: .leading, spacing: 2) {
-                                    HStack { Text(t.name).lineLimit(1); Spacer(); Text("\(Int(t.c.rounded()))°").monospacedDigit().fontWeight(.semibold).foregroundStyle(heatColor(t.c)) }.font(.caption2)
+                                    HStack { Text(t.name).lineLimit(1); Spacer(); Text("\(fahrenheit(t.c))°").monospacedDigit().fontWeight(.semibold).foregroundStyle(heatColor(t.c)) }.font(.caption2)
                                     ProgressView(value: min(max((t.c - 20) / 80, 0), 1)).tint(heatColor(t.c))
                                 }
                             }
