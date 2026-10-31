@@ -1,4 +1,4 @@
-name: Build iPhone app
+name: Build iPhone apps
 on:
   push:
     branches: [main]
@@ -6,34 +6,50 @@ on:
 jobs:
   build:
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: Generate Xcode project
         run: |
           brew install xcodegen
           xcodegen generate
-      - name: Build unsigned app for iPhone
+      - name: Build unsigned apps for iPhone
         run: |
           xcodebuild -version
-          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Release -sdk iphoneos \
-            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
-          mkdir -p dist/Payload
-          cp -R build/Build/Products/Release-iphoneos/MacPro.app dist/Payload/
-          (cd dist && zip -qry MacPro.ipa Payload && rm -rf Payload)
-      - name: Launch in the simulator and take a screenshot
+          mkdir -p dist
+          for APP in MacPro Chumby; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Release -sdk iphoneos \
+              -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+            rm -rf dist/Payload; mkdir -p dist/Payload
+            cp -R build/Build/Products/Release-iphoneos/$APP.app dist/Payload/
+            (cd dist && zip -qry $APP.ipa Payload && rm -rf Payload)
+          done
+          ls build/Build/Products/Release-iphoneos/MacPro.app/PlugIns
+      - name: Screenshot in the simulator
         run: |
-          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))][0].udid')
-          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
-            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          for APP in MacPro Chumby; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build
+          done
           xcrun simctl boot "$DEVICE"
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
           xcrun simctl launch "$DEVICE" local.macpro.MacPro
-          sleep 15
-          xcrun simctl io "$DEVICE" screenshot dist/launch.png
+          sleep 12
+          xcrun simctl io "$DEVICE" screenshot dist/macpro.png
+          xcrun simctl terminate "$DEVICE" local.macpro.MacPro
+          node ci/mock-chumby.js &
+          for T in 0 1 2 3 4; do
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
+            sleep 8
+            xcrun simctl io "$DEVICE" screenshot dist/chumby-$T.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby
+          done
       - uses: actions/upload-artifact@v4
         with:
-          name: MacPro-app
+          name: iPhone-apps
           path: dist/
           retention-days: 30

@@ -1,6 +1,5 @@
 import Charts
 import SwiftUI
-import WebKit
 
 @main
 struct MacProApp: App {
@@ -167,6 +166,9 @@ struct AppsTab: View {
     let s: Status
     init(_ s: Status) { self.s = s }
     var body: some View {
+        Section {
+            Link("Open Stremio", destination: URL(string: "https://web.stremio.com/")!)
+        } header: { Text("On this iPhone") } footer: { Text("Stremio runs in Safari. Tap Share, then Add to Home Screen.") }
         Section("Open apps (\(s.apps.count))") {
             ForEach(s.apps) { a in
                 VStack(alignment: .leading) {
@@ -284,6 +286,7 @@ struct UpgradeTab: View {
     @State private var confirm = false
     @State private var note: String?
     @State private var busy = false
+    @State private var agentPassword = ""
     let s: Status
     init(_ s: Status) { self.s = s }
     var onTahoe: Bool { (Int(s.macos.split(separator: ".").first ?? "") ?? 0) >= 26 }
@@ -309,6 +312,14 @@ struct UpgradeTab: View {
                 }
             }
         }
+        if s.agentStale {
+            Section {
+                SecureField("Mac password", text: $agentPassword)
+                Button("Apply update") {
+                    Task { note = await model.runSealed("agent-update", secret: agentPassword) ?? "Applied."; agentPassword = "" }
+                }.disabled(agentPassword.isEmpty)
+            } header: { Text("Update service improvements") } footer: { Text("A newer version of the update service is ready. Your password is used once.") }
+        }
         if let note { Section { Text(note) } }
         Section("Log") {
             Text(s.upgrade.log.isEmpty ? "No log yet" : s.upgrade.log).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
@@ -318,32 +329,83 @@ struct UpgradeTab: View {
 
 struct ControlTab: View {
     @EnvironmentObject var model: AppModel
+    @State private var macPassword = ""
     @State private var text = ""
     @State private var pressReturn = false
     @State private var note: String?
+    @State private var appleEmail = ""
+    @State private var applePassword = ""
+    @State private var appleCode = ""
     @State private var confirmRestart = false
     let s: Status
     init(_ s: Status) { self.s = s }
-    var desktopURL: URL? { URL(string: "/screen.html", relativeTo: model.api.base) }
+
+    func when(_ ms: Double) -> String {
+        ms > 0 ? Date(timeIntervalSince1970: ms / 1000).formatted(date: .abbreviated, time: .shortened) : "Not yet"
+    }
+
     var body: some View {
         Section {
-            if let desktopURL { NavigationLink("Open screen") { RemoteDesktop(url: desktopURL).navigationTitle("Screen").ignoresSafeArea(edges: .bottom) } }
-        } header: { Text("Remote desktop") } footer: { Text("See and control the Mac’s screen. Sign in with your Mac username and password.") }
+            StateRow(label: "Screen", good: s.screen != "locked", value: s.screen == "locked" ? "Locked" : s.screen == "display off" ? "Display off" : "Unlocked")
+            if s.macLogin {
+                if s.screen == "locked" { Button("Unlock") { Task { note = await model.run("mac-unlock") } } }
+                Button("Forget password", role: .destructive) { Task { note = await model.run("mac-logout") } }
+            } else {
+                SecureField("Mac password", text: $macPassword)
+                Button("Log in") {
+                    Task { note = await model.runSealed("mac-login", secret: macPassword); macPassword = "" }
+                }.disabled(macPassword.isEmpty)
+            }
+            if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
+        } header: { Text("Log in to this Mac") } footer: {
+            Text(s.macLogin ? "Logged in, and it stays that way after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
+        }
         Section {
-            if s.typing == "trusted" {
-                SecureField("Text or password", text: $text).textContentType(.password)
+            NavigationLink("Open screen") { RemoteScreenView() }
+            Button("Sign in to Chrome") { Task { note = await model.run("chrome-signin") } }
+        } header: { Text("Remote desktop") } footer: { Text("Tap to click, pinch to zoom, and drag to scroll. Drag moves the view while zoomed.") }
+        Section {
+            if s.macLogin || s.typing == "trusted" {
+                SecureField("Text or password", text: $text)
                 Toggle("Press Return afterward", isOn: $pressReturn)
                 Button("Type on Mac") {
                     Task { note = await model.runSealed("type-text", secret: text, extra: ["enter": pressReturn]) ?? "Typed."; text = "" }
                 }.disabled(text.isEmpty)
             } else {
-                Button("Ask the Mac for permission") { Task { note = await model.run("type-setup") ?? "Now approve it on the Mac’s screen." } }
+                Text("Log in to this Mac above to use this.").foregroundStyle(.secondary)
             }
-            if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
         } header: { Text("Sign-ins on the Mac") } footer: {
-            Text("For Apple ID or any other prompt: open the screen, click into the field, then send it here. It is encrypted on this phone and typed once. Nothing is saved.")
+            Text("For Apple ID or any other prompt. It is encrypted on this phone and typed once. Nothing is saved.")
+        }
+        Section {
+            LabeledContent("iPhone on USB", value: s.iphone ? "Connected" : "Not connected")
+            LabeledContent("Apple account", value: s.ios.signedIn ? "Signed in" : "Needed")
+            LabeledContent("Last installed", value: when(s.ios.installedAt))
+            LabeledContent("Next re-sign", value: when(s.ios.nextDue))
+            if !s.ios.lastResult.isEmpty { Text(s.ios.lastResult).font(.footnote).foregroundStyle(.secondary) }
+            if s.ios.job.state == "code" {
+                TextField("6-digit code", text: $appleCode)
+                Button("Send code") { Task { note = await model.runSealed("ios-code", secret: appleCode); appleCode = "" } }.disabled(appleCode.isEmpty)
+            } else if !s.ios.signedIn {
+                TextField("Apple account email", text: $appleEmail).textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField("Apple account password", text: $applePassword)
+                Button("Sign in to Apple") {
+                    Task { note = await model.runSealed("ios-login", secret: appleEmail + "\n" + applePassword); applePassword = "" }
+                }.disabled(appleEmail.isEmpty || applePassword.isEmpty)
+            } else {
+                Button(s.ios.resigning ? "Working…" : "Re-sign now") { Task { note = await model.run("ios-resign") } }.disabled(s.ios.resigning)
+                Button("Sign out of Apple account", role: .destructive) { Task { note = await model.run("ios-logout") } }
+            }
+        } header: { Text("App re-signing") } footer: {
+            Text("The Mac re-signs a day before the 7-day limit, and keeps retrying until the phone is on USB or Wi-Fi sync.")
+        }
+        if !s.publicUrl.isEmpty {
+            Section {
+                Link("Open public link", destination: URL(string: s.publicUrl)!)
+            } header: { Text("Public link") } footer: { Text("This address changes whenever the Mac restarts.") }
         }
         Section("Connected devices") {
+            if s.tailscale.peers.isEmpty { Text("No other devices yet").foregroundStyle(.secondary) }
             ForEach(s.tailscale.peers) { p in StateRow(label: p.name, good: p.online, value: p.os) }
         }
         Section("Power") {
@@ -390,19 +452,4 @@ struct SignInView: View {
         await model.refresh()
         if model.needsSignIn { note = "This address needs an access code." } else { dismiss() }
     }
-}
-
-struct RemoteDesktop: UIViewRepresentable {
-    let url: URL
-    func makeUIView(context: Context) -> WKWebView {
-        let web = WKWebView()
-        // The public link's login cookie lives in the app's URL session; the web view keeps its own store.
-        let store = web.configuration.websiteDataStore.httpCookieStore
-        let cookies = HTTPCookieStorage.shared.cookies(for: url) ?? []
-        let group = DispatchGroup()
-        for c in cookies { group.enter(); store.setCookie(c) { group.leave() } }
-        group.notify(queue: .main) { web.load(URLRequest(url: url)) }
-        return web
-    }
-    func updateUIView(_ view: WKWebView, context: Context) {}
 }
