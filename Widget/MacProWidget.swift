@@ -121,7 +121,6 @@ struct Cylinder: View {
         Group {
             if mode == .fullColor {
                 Image("MacPro").resizable().scaledToFit()
-                    .background(RadialGradient(colors: [.white.opacity(0.2), .clear], center: .center, startRadius: 2, endRadius: 58))
             } else {
                 CylinderGlyph().fill(.primary, style: FillStyle(eoFill: true)).aspectRatio(0.62, contentMode: .fit)
             }

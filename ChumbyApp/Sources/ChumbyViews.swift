@@ -138,11 +138,11 @@ struct RootView: View {
             ZStack {
                 // Each tab paints its own sea: the system tab view is opaque behind its content.
                 TabView(selection: $model.tab) {
-                    Tab(value: 0) { HomeTab().overSea() } label: { Label { Text("my chumby") } icon: { Image("OctoTab") } }
-                    Tab("channels", systemImage: "tv", value: 1) { ChannelsTab().overSea() }
-                    Tab("alarms", systemImage: "alarm", value: 2) { AlarmsTab().overSea() }
-                    Tab("sounds", systemImage: "music.note", value: 3) { SoundsTab().overSea() }
-                    Tab("tinker", systemImage: "wrench.adjustable", value: 4) { TinkerTab().overSea() }
+                    Tab(value: 0) { NavigationStack { HomeTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } } label: { Label { Text("my chumby") } icon: { Image("OctoTab") } }
+                    Tab("channels", systemImage: "tv", value: 1) { NavigationStack { ChannelsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } }
+                    Tab("alarms", systemImage: "alarm", value: 2) { NavigationStack { AlarmsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } }
+                    Tab("sounds", systemImage: "music.note", value: 3) { NavigationStack { SoundsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } }
+                    Tab("tinker", systemImage: "wrench.adjustable", value: 4) { NavigationStack { TinkerTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } }
                 }
                 .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab") }
             }
@@ -357,7 +357,6 @@ struct HomeTab: View {
     var serial: String { Bundle.main.object(forInfoDictionaryKey: "ChumbySerial") as? String ?? "" }
     var about: some View {
         VStack(spacing: 0) {
-            stage
             Text("Chumby Classic").font(.custom("Trebuchet MS", size: 30).weight(.bold)).padding(.top, 20)
             Text("Black, 3.5-inch, 2008").font(.custom("Trebuchet MS", size: 14)).foregroundStyle(ChumbyPalette.sub(dark)).padding(.top, 2).padding(.bottom, 16)
             Grid(horizontalSpacing: 12, verticalSpacing: 5) {
@@ -416,19 +415,16 @@ struct HomeTab: View {
         ArtShape(art: ChumbyArt.word, box: ChumbyArt.wordBox).fill(ChumbyPalette.word(dark), style: FillStyle(eoFill: true))
             .frame(height: 30).frame(maxWidth: .infinity).accessibilityLabel("chumby")
     }
-    var gear: some View {
-        Button { settings = true } label: { Image(systemName: "gearshape").frame(width: 38, height: 38).glassCircle() }.accessibilityLabel("Connection")
-    }
     var body: some View {
         Group {
             if wide {
                 // Each side scrolls on its own, so the octopus stays put while you use the controls.
                 FoldSplit {
-                    ScrollView { VStack(spacing: 0) { wordmark.padding(.top, 6); about }.padding(.horizontal, 12) }
+                    ScrollView { VStack(spacing: 0) { wordmark.padding(.top, 6); stage; about }.padding(.horizontal, 12) }
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
-                            HStack { Spacer(); gear }.padding(.top, 6).padding(.bottom, 8)
+                            Color.clear.frame(height: 40)
                             remote
                             rightNow
                             more
@@ -437,11 +433,13 @@ struct HomeTab: View {
                 }
             } else {
                 ScrollView {
-                    ZStack(alignment: .trailing) { wordmark; gear }.padding(.horizontal, 16).padding(.top, 6)
-                    VStack(spacing: 0) { about; if moreInfo { more }; remote; rightNow }.padding(.horizontal, 16)
+                    wordmark.padding(.horizontal, 16).padding(.top, 6)
+                    // The remote sits right under the device, within reach of the thumb.
+                    VStack(spacing: 0) { stage; remote.padding(.top, 20); rightNow; about; if moreInfo { more } }.padding(.horizontal, 16)
                 }
             }
         }
+        .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Connection") } }
         .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
     }
 }
@@ -467,15 +465,14 @@ struct RemoteButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: big ? 26 : 22)).frame(width: big ? 76 : 64, height: big ? 76 : 64)
+            Image(systemName: icon).font(.system(size: big ? 24 : 20)).frame(width: big ? 52 : 40, height: big ? 52 : 40)
         }
-        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
+        .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large).accessibilityLabel(label)
     }
 }
 
-// The web app's segmented controls, with a pill that lands on your choice.
+// A system segmented control that remembers your choice, since the Chumby can't report it.
 struct Segments: View {
-    @Environment(\.colorScheme) private var scheme
     let title: String, options: [(String, String)]
     let action: (String) -> Void
     @AppStorage private var picked: String
@@ -486,20 +483,10 @@ struct Segments: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-            HStack(spacing: 0) {
-                ForEach(options, id: \.1) { o in
-                    Button {
-                        withAnimation(.spring(duration: 0.3, bounce: 0.4)) { picked = o.1 }
-                        action(o.1)
-                    } label: {
-                        Text(o.0).font(.custom("Trebuchet MS", size: 13).weight(picked == o.1 ? .bold : .regular))
-                            .frame(maxWidth: .infinity).padding(.vertical, 8)
-                            .background { if picked == o.1 { RoundedRectangle(cornerRadius: 15, style: .continuous).fill(scheme == .dark ? .white.opacity(0.2) : .white.opacity(0.75)) } }
-                            .contentShape(Rectangle())
-                    }.buttonStyle(.plain)
-                }
+            Picker(title, selection: Binding(get: { picked }, set: { picked = $0; action($0) })) {
+                ForEach(options, id: \.1) { Text($0.0).tag($0.1) }
             }
-            .padding(3).background(scheme == .dark ? Color.white.opacity(0.12) : Color.white.opacity(0.42), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .pickerStyle(.segmented).labelsHidden()
         }
     }
 }
@@ -652,7 +639,7 @@ struct AlarmsTab: View {
 
     var body: some View {
         TwoPane {
-            PageTitle("Alarms") { Button { editing = EditTarget(index: -1) } label: { Image(systemName: "plus").font(.title2).frame(width: 44, height: 44).glassCircle() }.accessibilityLabel("Add alarm").disabled(model.state.alarms.count >= 16) }
+            PageTitle("Alarms")
             Section {
                 let shown = model.state.alarms.enumerated().filter { !$0.element.isPlaceholder }.sorted { $0.element.localMinutes < $1.element.localMinutes }
                 if shown.isEmpty { Text("No alarms yet. Tap + to add one.").foregroundStyle(.secondary) }
@@ -698,6 +685,7 @@ struct AlarmsTab: View {
             } header: { Text("Daily schedule") } footer: { Text("Runs every day at these times, even with your phone away.") }
         }
         .seaList()
+        .toolbar { ToolbarItem(placement: .primaryAction) { Button { editing = EditTarget(index: -1) } label: { Image(systemName: "plus") }.accessibilityLabel("Add alarm").disabled(model.state.alarms.count >= 16) } }
         .sheet(item: $editing) { t in AlarmEditor(index: t.index).environmentObject(model) }
         .refreshable { await model.loadState() }
     }

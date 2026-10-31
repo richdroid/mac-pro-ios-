@@ -57,7 +57,6 @@ struct Screen<Content: View>: View {
             else if side != .right, model.problem == nil { Section { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) } } }
         }
         .refreshable { await model.refresh() }
-        .textCase(.uppercase)
         .contentMargins(.top, 4, for: .scrollContent)
     }
     var body: some View {
