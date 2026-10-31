@@ -100,7 +100,7 @@ struct LiveTiles: View {
     }
     func net(_ title: String, _ icon: String, _ rate: Double, _ spark: [Double], _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Label(Format.rate(rate), systemImage: icon).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(color).contentTransition(.numericText())
+            HStack(spacing: 4) { Image(systemName: icon); Text(Format.rate(rate)).contentTransition(.numericText()) }.font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(color)
             SparkLine(values: spark, color: color).frame(height: 30)
         }
         .frame(maxWidth: .infinity).accessibilityLabel(title)

@@ -8,7 +8,8 @@ func card<C: View>(_ w: CGFloat, _ h: CGFloat, @ViewBuilder _ c: () -> C) -> som
     let e = MacEntry(date: Date(), snapshot: .sample)
     var body: some Scene { WindowGroup {
         ScrollView { VStack(spacing: 14) {
-            HStack(spacing: 14) { card(158, 158) { StatusBody(family: .systemSmall, entry: e) }; card(158, 158) { TempBody(family: .systemSmall, entry: e) }; card(158, 158) { ClaudeBody(entry: e) } }
+            HStack(spacing: 14) { card(158, 158) { StatusBody(family: .systemSmall, entry: e) }; card(158, 158) { TempBody(family: .systemSmall, entry: e) }; }
+            card(158, 158) { ClaudeBody(entry: e) }
             card(338, 158) { StatusBody(family: .systemMedium, entry: e) }
             card(338, 158) { TempBody(family: .systemMedium, entry: e) }
             card(338, 158) { AppsBody(entry: e) }
