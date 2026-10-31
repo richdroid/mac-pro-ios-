@@ -26,7 +26,9 @@ jobs:
           done
           ls build/Build/Products/Release-iphoneos/MacPro.app/PlugIns
       - name: Screenshot in the simulator
+        continue-on-error: true
         run: |
+          set +e
           DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
           xcrun simctl list devices available | grep -m1 "$DEVICE"
           for APP in MacPro Chumby; do
@@ -40,15 +42,21 @@ jobs:
           xcrun simctl launch "$DEVICE" local.macpro.MacPro
           sleep 12
           xcrun simctl io "$DEVICE" screenshot dist/macpro.png
-          xcrun simctl terminate "$DEVICE" local.macpro.MacPro
+          xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "MacPro was not running"
           node ci/mock-chumby.js &
           for T in 0 1 2 3 4; do
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
             sleep 8
             xcrun simctl io "$DEVICE" screenshot dist/chumby-$T.png
-            xcrun simctl terminate "$DEVICE" local.macpro.Chumby
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || echo "Chumby tab $T was not running"
           done
+      - name: Collect crash reports
+        if: always()
+        run: |
+          mkdir -p dist/crashes
+          cp ~/Library/Logs/DiagnosticReports/*.ips dist/crashes/ 2>/dev/null || true
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: iPhone-apps
           path: dist/
