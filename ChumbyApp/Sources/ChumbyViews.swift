@@ -580,7 +580,7 @@ struct ChannelsTab: View {
                 }
                 Menu("Jump to a widget") {
                     ForEach(model.state.widgetNames.sorted(), id: \.self) { n in Button(n) { model.cmd("widget", n, "Jumping") } }
-                }
+                }.foregroundStyle(.tint)
                 Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", on ? "Shuffle on" : "Shuffle off") }))
             }
             Section("Catalog") {
@@ -618,7 +618,7 @@ struct ChannelsTab: View {
                     ForEach(allWidgets.filter { w in !rows.contains { $0.id == w[0] } }, id: \.self) { w in
                         Button(w[1]) { rows.insert(EditorRow(id: w[0], name: w[1], on: true, secs: 0, own: w.count > 2 ? Int(w[2]) ?? 0 : 0), at: 0); changed() }
                     }
-                }
+                }.foregroundStyle(.tint)
             } header: { Text("Edit a channel") } footer: {
                 Text((model.state.shuffle == 1 ? "Shuffle is on, so your order won’t show until you turn it off. " : "") + "Drag a widget to reorder it. New widgets go to the top.")
             }
@@ -681,7 +681,7 @@ struct AlarmsTab: View {
                     }
                 }
                 .onDelete { model.state.schedule.remove(atOffsets: $0); model.state.reindex(); Task { await model.saveSchedule() } }
-                Button("Add a time") { model.state.schedule.append(ScheduleItem()); model.state.reindex(); Task { await model.saveSchedule() } }
+                Button("Add a time") { model.state.schedule.append(ScheduleItem()); model.state.reindex(); Task { await model.saveSchedule() } }.foregroundStyle(.tint)
             } header: { Text("Daily schedule") } footer: { Text("Runs every day at these times, even with your phone away.") }
         }
         .seaList()
@@ -782,7 +782,7 @@ struct AlarmEditor: View {
                         Picker("Backup after", selection: $alarm.backupDelay) { ForEach(["1", "2", "5", "10", "15", "30"], id: \.self) { Text("\($0) min").tag($0) } }
                     }
                 }
-                if index >= 0 { Section { Button("Delete Alarm", role: .destructive) { confirmDelete = true } } }
+                if index >= 0 { Section { Button("Delete Alarm", role: .destructive) { confirmDelete = true }.foregroundStyle(.red) } }
             } .listRowBackground(GlassRow()) }
             .seaList().background { SeaBackground().ignoresSafeArea() }
             .navigationTitle(index >= 0 ? "Edit Alarm" : "Add Alarm").navigationBarTitleDisplayMode(.inline)
@@ -902,7 +902,7 @@ struct SoundsTab: View {
                         do { try await model.api?.post("pscan"); model.state.pandoraScan = "waiting"; model.say("Now open Pandora on the Chumby") }
                         catch { model.say("Couldn’t: \(error.localizedDescription)") }
                     }
-                }
+                }.foregroundStyle(.tint)
             } header: { Text("Pandora") } footer: { if let scanNote { Text(scanNote) } }
             } right: {
             Section("Alarm sound") {
@@ -919,10 +919,10 @@ struct SoundsTab: View {
                     HStack {
                         Text(s.name.isEmpty ? s.url : s.name).lineLimit(1)
                         Spacer()
-                        Button("Remove", role: .destructive) { pendingRemoval = s }.buttonStyle(.borderless)
+                        Button("Remove", role: .destructive) { pendingRemoval = s }.buttonStyle(.borderless).foregroundStyle(.red)
                     }
                 }
-                Button("Add a stream…") { addStream = true }
+                Button("Add a stream…") { addStream = true }.foregroundStyle(.tint)
             }
         }
         .seaList()
@@ -968,18 +968,18 @@ struct TinkerTab: View {
                         do { try await model.api?.post("twset", body: ChumbyAPI.form([("v", accounts)])); model.say("Saved. Applies from its next turn"); edited = false; await model.loadSys() }
                         catch { model.say("Couldn’t: \(error.localizedDescription)") }
                     }
-                }.disabled(!edited)
+                }.disabled(!edited).foregroundStyle(edited ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
             } header: { Text("X (Twitter) accounts") }
             Section("NES") {
                 ForEach(model.sys.roms, id: \.self) { f in
-                    HStack { Text(romName(f)); Spacer(); Button("Play") { model.cmd("nes", f, "Starting on the Chumby") }.buttonStyle(.borderless) }
+                    HStack { Text(romName(f)); Spacer(); Button("Play") { model.cmd("nes", f, "Starting on the Chumby") }.buttonStyle(.borderless).foregroundStyle(.tint) }
                 }
-                Button("Stop game", role: .destructive) { model.cmd("nesstop", nil, "Back to the channel") }
+                Button("Stop game", role: .destructive) { model.cmd("nesstop", nil, "Back to the channel") }.foregroundStyle(.red)
             }
             } right: {
             Section("The Chumby itself") {
-                Button("Restart channel") { confirm = "restart" }
-                Button("Reboot", role: .destructive) { confirm = "reboot" }
+                Button("Restart channel") { confirm = "restart" }.foregroundStyle(.tint)
+                Button("Reboot", role: .destructive) { confirm = "reboot" }.foregroundStyle(.red)
             }
             Text("Black Chumby photo: Edward Yanquen, Wikimedia Commons, CC BY 2.0, cut out and retouched. Octopus and wordmark: Chumby’s own artwork, from this device.").font(.caption2).foregroundStyle(.secondary).listRowBackground(Color.clear)
         }
