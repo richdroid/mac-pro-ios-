@@ -96,94 +96,98 @@ struct GraphiteBackground: View {
         }
     }
 }
-// Full colour gets the photo. A clear or tinted Home Screen gets a drawn glyph in its one tone,
-// with the opening, a highlight and the vent slots cut out, so it still reads as the machine.
-struct CylinderGlyph: Shape {
-    func path(in r: CGRect) -> Path {
-        let h = min(r.height, r.width / 0.62), w = h * 0.62
-        let o = CGPoint(x: r.midX - w / 2, y: r.midY - h / 2)
-        func rect(_ x: CGFloat, _ y: CGFloat, _ wide: CGFloat, _ tall: CGFloat) -> CGRect { CGRect(x: o.x + x * w, y: o.y + y * h, width: wide * w, height: tall * h) }
-        var p = Path()
-        p.addRoundedRect(in: rect(0, 0, 1, 1), cornerSize: CGSize(width: w * 0.2, height: w * 0.2), style: .continuous)
-        p.addEllipse(in: rect(0.1, 0.045, 0.8, 0.125))       // the rim
-        p.addEllipse(in: rect(0.17, 0.067, 0.66, 0.085))     // the dark opening inside it
-        p.addRoundedRect(in: rect(0.15, 0.26, 0.05, 0.58), cornerSize: CGSize(width: w * 0.025, height: w * 0.025))   // highlight
-        for i in 0..<9 {                                     // the vent slots around the base
-            let t = (CGFloat(i) - 4) / 4
-            p.addRoundedRect(in: rect(0.5 + t * 0.34 - 0.012, 0.915 + (1 - t * t) * 0.022 - 0.022, 0.024, 0.045), cornerSize: CGSize(width: 1, height: 1))
-        }
-        return p
-    }
-}
-struct Cylinder: View {
+// The Mac Pro as the gauge: a drawn cylinder that fills from the base, with its rim, highlight and vents.
+struct CylinderMeter: View {
+    let value: Double
+    var tint: Color = macBlue
+    var flat = false        // one tone, for clear and tinted Home Screens
     @Environment(\.widgetRenderingMode) private var mode
     var body: some View {
-        Group {
-            if mode == .fullColor {
-                Image("MacPro").resizable().scaledToFit()
-            } else {
-                CylinderGlyph().fill(.primary, style: FillStyle(eoFill: true)).aspectRatio(0.62, contentMode: .fit)
+        let mono = flat || mode != .fullColor
+        Canvas { ctx, size in
+            let h = min(size.height, size.width / 0.62), w = h * 0.62
+            let o = CGPoint(x: (size.width - w) / 2, y: (size.height - h) / 2)
+            let corner = w * 0.24
+            let body = Path(roundedRect: CGRect(x: o.x, y: o.y, width: w, height: h), cornerRadius: corner, style: .continuous)
+            let ink: Color = mono ? .white : tint
+            ctx.fill(body, with: .color(mono ? .white.opacity(0.22) : Color(white: 0.17)))
+            // The level.
+            var level = ctx
+            level.clip(to: body)
+            let v = CGFloat(min(max(value, 0), 1))
+            let fillTop = o.y + h * (1 - v)
+            level.fill(Path(CGRect(x: o.x, y: fillTop, width: w, height: h * v)), with: mono ? .color(ink) : .linearGradient(Gradient(colors: [tint.opacity(0.75), tint]), startPoint: CGPoint(x: o.x, y: fillTop), endPoint: CGPoint(x: o.x, y: o.y + h)))
+            // The rim and its opening.
+            let rim = CGRect(x: o.x + w * 0.09, y: o.y + h * 0.035, width: w * 0.82, height: h * 0.13)
+            ctx.stroke(Path(ellipseIn: rim), with: .color(mono ? .white : Color(white: 0.72)), lineWidth: max(1, h * 0.012))
+            // The long reflection down the side.
+            ctx.fill(Path(roundedRect: CGRect(x: o.x + w * 0.13, y: o.y + h * 0.24, width: w * 0.045, height: h * 0.6), cornerRadius: w * 0.02), with: .color(.white.opacity(mono ? 0.35 : 0.22)))
+            // The vent slots around the base.
+            for i in 0..<9 {
+                let t = (CGFloat(i) - 4) / 4
+                let slot = CGRect(x: o.x + w * (0.5 + t * 0.34) - w * 0.012, y: o.y + h * (0.905 + (1 - t * t) * 0.03), width: w * 0.024, height: h * 0.035)
+                ctx.fill(Path(roundedRect: slot, cornerRadius: 1), with: .color(mono ? .white.opacity(0.5) : .black.opacity(0.55)))
             }
         }
-        .accessibilityLabel("Mac Pro")
+        .aspectRatio(0.62, contentMode: .fit)
     }
 }
 struct Unreachable: View {
     let text: String
     var body: some View {
         VStack(spacing: 8) {
-            Cylinder().opacity(0.5).frame(maxHeight: 66)
+            CylinderMeter(value: 0).frame(maxHeight: 70)
             Label(text, systemImage: "wifi.slash").font(.caption2.weight(.medium)).opacity(0.75)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
-private func rounded(_ s: CGFloat) -> Font { .system(size: s, weight: .semibold, design: .default) }
+private func levelTint(_ v: Double) -> Color { v > 0.9 ? .red : v > 0.75 ? .orange : macBlue }
+private func heatTint(_ c: Double) -> Color { c >= 90 ? .red : c >= 75 ? .orange : c >= 60 ? Color(red: 1, green: 0.8, blue: 0.1) : macBlue }
+
+struct MeterColumn: View {
+    let value: Double, text: String, icon: String
+    var tint: Color = macBlue
+    var flat = false
+    var size: CGFloat = 16
+    var body: some View {
+        VStack(spacing: 5) {
+            CylinderMeter(value: value, tint: tint, flat: flat)
+            Text(text).font(.system(size: size, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+            Image(systemName: icon).font(.system(size: size - 5, weight: .medium)).opacity(0.6)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
 
 // MARK: - Status
 struct StatusBody: View {
     let family: WidgetFamily
     let entry: MacEntry
-    func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))" }
-    func dial(_ v: Double, _ icon: String) -> some View {
-        VStack(spacing: 5) {
-            ArcGauge(v, tint: v > 0.9 ? .red : v > 0.75 ? .orange : macBlue, ticks: 30, length: 6, width: 2.2) {
-                Text(pct(v)).font(rounded(19)).monospacedDigit()
-            }
-            Image(systemName: icon).font(.system(size: 12, weight: .medium)).opacity(0.65)
-        }
-    }
+    var flat = false
+    func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
     var body: some View {
         if let n = entry.snapshot {
             switch family {
             case .accessoryCircular:
-                Gauge(value: n.cpu) { Image(systemName: "cpu") } currentValueLabel: { Text(pct(n.cpu)) }.gaugeStyle(.accessoryCircular)
+                Gauge(value: n.cpu) { Image(systemName: "cpu") } currentValueLabel: { Text("\(Int(n.cpu * 100))") }.gaugeStyle(.accessoryCircular)
             case .accessoryRectangular:
-                HStack(spacing: 6) {
-                    Gauge(value: n.cpu) { Image(systemName: "cpu") }.gaugeStyle(.accessoryCircularCapacity)
-                    Gauge(value: n.mem) { Image(systemName: "memorychip") }.gaugeStyle(.accessoryCircularCapacity)
-                    Gauge(value: n.disk) { Image(systemName: "internaldrive") }.gaugeStyle(.accessoryCircularCapacity)
+                HStack(spacing: 8) {
+                    CylinderMeter(value: n.cpu); CylinderMeter(value: n.mem); CylinderMeter(value: n.disk)
+                    Text(pct(n.cpu)).font(.headline).monospacedDigit()
                 }
             case .systemSmall:
-                ZStack {
-                    ArcGauge(n.cpu, ticks: 44, length: 11, width: 3) { EmptyView() }
-                    ArcGauge(n.mem, tint: .white, ticks: 34, length: 7, width: 2.4) { EmptyView() }.padding(17)
-                    Cylinder().frame(height: 56).offset(y: -2)
-                    Text(pct(n.cpu) + "%").font(rounded(13)).monospacedDigit().frame(maxHeight: .infinity, alignment: .bottom)
+                HStack(spacing: 10) {
+                    MeterColumn(value: n.cpu, text: "\(Int(n.cpu * 100))", icon: "cpu", tint: levelTint(n.cpu), flat: flat, size: 14)
+                    MeterColumn(value: n.mem, text: "\(Int(n.mem * 100))", icon: "memorychip", tint: levelTint(n.mem), flat: flat, size: 14)
+                    MeterColumn(value: n.disk, text: "\(Int(n.disk * 100))", icon: "internaldrive", tint: levelTint(n.disk), flat: flat, size: 14)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             default:
-                HStack(spacing: 14) {
-                    Cylinder().frame(width: 82)
-                    VStack(spacing: 8) {
-                        HStack(spacing: 10) {
-                            dial(n.cpu, "cpu")
-                            dial(n.mem, "memorychip")
-                            dial(n.disk, "internaldrive")
-                        }
-                        SparkLine(values: n.history, top: 100).frame(height: 26)
-                    }
+                HStack(spacing: 24) {
+                    MeterColumn(value: n.cpu, text: pct(n.cpu), icon: "cpu", tint: levelTint(n.cpu), flat: flat)
+                    MeterColumn(value: n.mem, text: pct(n.mem), icon: "memorychip", tint: levelTint(n.mem), flat: flat)
+                    MeterColumn(value: n.disk, text: pct(n.disk), icon: "internaldrive", tint: levelTint(n.disk), flat: flat)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 12)
             }
         } else if family == .accessoryCircular || family == .accessoryRectangular {
             Image(systemName: "wifi.slash")
@@ -195,6 +199,7 @@ struct StatusBody: View {
 struct TempBody: View {
     let family: WidgetFamily
     let entry: MacEntry
+    var flat = false
     var body: some View {
         if let n = entry.snapshot, let hot = n.hottest {
             switch family {
@@ -203,25 +208,18 @@ struct TempBody: View {
             case .accessoryInline:
                 Label("\(Heat.f(n.cpuTemp ?? hot.c))°F", systemImage: "thermometer.medium")
             case .systemSmall:
-                ArcGauge(Heat.level(hot.c), heat: true, ticks: 44, length: 12, width: 3) {
-                    VStack(spacing: 1) {
-                        Text("\(Heat.f(hot.c))°").font(rounded(34)).monospacedDigit()
-                        Text("°F").font(.caption2.weight(.medium)).opacity(0.6).hidden()
-                    }
+                HStack(spacing: 12) {
+                    CylinderMeter(value: Heat.level(hot.c), tint: heatTint(hot.c), flat: flat)
+                    Text("\(Heat.f(hot.c))°").font(.system(size: 30, weight: .semibold)).monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             default:
-                HStack(spacing: 12) {
+                HStack(spacing: 16) {
                     ForEach(n.dials, id: \.icon) { d in
-                        VStack(spacing: 7) {
-                            ArcGauge(Heat.level(d.c), heat: true, ticks: 30, length: 7, width: 2.2) {
-                                Text("\(Heat.f(d.c))°").font(rounded(17)).monospacedDigit()
-                            }
-                            Image(systemName: d.icon).font(.system(size: 14, weight: .medium)).opacity(0.65)
-                        }
+                        MeterColumn(value: Heat.level(d.c), text: "\(Heat.f(d.c))°", icon: d.icon, tint: heatTint(d.c), flat: flat)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 6)
             }
         } else if family == .accessoryCircular || family == .accessoryInline {
             Image(systemName: "thermometer.medium")
@@ -232,15 +230,14 @@ struct TempBody: View {
 // MARK: - Claude
 struct ClaudeBody: View {
     let entry: MacEntry
+    var flat = false
     static let clay = Color(red: 0.85, green: 0.47, blue: 0.34)
     var body: some View {
         if let n = entry.snapshot, let w = n.week {
-            ZStack {
-                ArcGauge(w / 100, tint: Self.clay, ticks: 44, length: 11, width: 3) { EmptyView() }
-                ArcGauge((n.fiveHour ?? 0) / 100, tint: .white, ticks: 34, length: 7, width: 2.4) { EmptyView() }.padding(17)
-                Text("\(Int(w))%").font(rounded(22)).monospacedDigit()
+            HStack(spacing: 14) {
+                MeterColumn(value: (n.fiveHour ?? 0) / 100, text: "\(Int(n.fiveHour ?? 0))%", icon: "clock", tint: Self.clay, flat: flat, size: 15)
+                MeterColumn(value: w / 100, text: "\(Int(w))%", icon: "calendar", tint: Self.clay, flat: flat, size: 15)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else { Unreachable(text: entry.problem.isEmpty ? "No reading" : entry.problem) }
     }
 }

@@ -402,7 +402,7 @@ struct HomeTab: View {
     }
     var rightNow: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("RIGHT NOW").font(.custom("Trebuchet MS", size: 12).weight(.bold)).kerning(1).foregroundStyle(ChumbyPalette.sub(dark)).padding(.leading, 18)
+            Text("Right now").font(.custom("Trebuchet MS", size: 14).weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark)).padding(.leading, 18)
             VStack(spacing: 14) {
                 Segments(title: "Night mode", options: [("Off", "off"), ("On", "on"), ("Dim", "dim"), ("Dark", "dark")]) { model.cmd("night", $0, "Night mode \($0)") }
                 Segments(title: "Screen", options: [("Bright", "bright"), ("Dim", "dim"), ("Off", "off")]) { model.cmd("screen", $0, "Screen \($0)") }
