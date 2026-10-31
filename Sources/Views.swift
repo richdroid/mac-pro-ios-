@@ -184,6 +184,7 @@ struct Hero: View {
 struct QuickActions: View {
     @EnvironmentObject var model: AppModel
     @State private var toast: String?
+    @State private var openScreen = false
     func button(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) { face(icon, title) }.buttonStyle(.plain)
     }
@@ -201,7 +202,7 @@ struct QuickActions: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(alignment: .top, spacing: 4) {
-                NavigationLink { RemoteScreenView() } label: { face("macwindow", "Screen") }.buttonStyle(.plain)
+                button("macwindow", "Screen") { openScreen = true }
                 button("moon", "Display off") { Task { _ = await model.run("display-off"); say("Display off") } }
                 button("square.and.arrow.down", "Copy from Mac") {
                     Task {
@@ -227,6 +228,7 @@ struct QuickActions: View {
             if let toast { Text(toast).font(.footnote).foregroundStyle(.secondary).transition(.opacity) }
         }
         .animation(.easeOut(duration: 0.2), value: toast)
+        .navigationDestination(isPresented: $openScreen) { RemoteScreenView() }
     }
 }
 
