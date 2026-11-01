@@ -488,6 +488,7 @@ struct TVWidgets: WidgetBundle {
         TVRemoteWidget()
         TVScreenWidget()
         TVAppsWidget()
+        TVIslandWidget()
         TVFlickControl()
         TVPlayControl()
         TVVolumeUpControl()

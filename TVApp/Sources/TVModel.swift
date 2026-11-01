@@ -57,6 +57,9 @@ final class TVModel: ObservableObject {
         guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
               let s = try? JSONDecoder().decode(TVStatus.self, from: d) else { if !Task.isCancelled { reachable = false }; return }
         reachable = true
+        #if os(iOS)
+        await TVIsland.sync(s)
+        #endif
         if s != status { status = s; if s.online { try? d.write(to: Self.cacheFile, options: .atomic) } }
     }
     func setMirror(_ on: Bool) {

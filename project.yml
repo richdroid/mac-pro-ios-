@@ -114,6 +114,7 @@ targets:
         CFBundleDisplayName: TV
         CFBundleURLTypes: [{ CFBundleURLName: tvremoteapp, CFBundleURLSchemes: [tvremoteapp] }]
         CADisableMinimumFrameDurationOnPhone: true
+        NSSupportsLiveActivities: true
         NSAppleMusicUsageDescription: Sees which song is playing on this iPhone, so a flick can send it to the TV.
         UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
@@ -126,6 +127,7 @@ targets:
       - TVWidget
       - path: TVApp/Sources/TVShared.swift
       - path: TVApp/Sources/TVTheme.swift
+      - path: TVApp/Sources/TVIsland.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV.Widget
