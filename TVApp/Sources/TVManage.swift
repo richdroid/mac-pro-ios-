@@ -6,6 +6,7 @@ struct ManageState: Decodable {
         let pkg: String, name: String
         let removable: Bool, hasIcon: Bool
         var wide: Bool?
+        var row: String?
         var id: String { pkg }
     }
     var settings: [String: Double]
@@ -48,35 +49,60 @@ struct TVManageSections: View {
 struct ManageAppsView: View {
     @ObservedObject var store: ManageStore
     @State private var removing: ManageState.App?
+    func rows(_ s: ManageState) -> [String] {
+        var seen = Set<String>()
+        return s.apps.map { $0.row ?? "APPS" }.filter { seen.insert($0).inserted }
+    }
+    func rowTitle(_ row: String) -> String { row.prefix(1).uppercased() + row.dropFirst().lowercased() }
+    func move(in row: String, from: IndexSet, to: Int) {
+        guard var apps = store.state?.apps else { return }
+        var inRow = apps.filter { ($0.row ?? "APPS") == row }
+        inRow.move(fromOffsets: from, toOffset: to)
+        // Slots this row already held are refilled in the new order, leaving the other rows where they were.
+        var next = inRow.makeIterator()
+        for i in apps.indices where (apps[i].row ?? "APPS") == row { if let a = next.next() { apps[i] = a } }
+        store.state?.apps = apps
+        store.send("app-layout", ["order": apps.map(\.pkg)])
+    }
+    func appRow(_ app: ManageState.App) -> some View {
+        HStack(spacing: 12) {
+            ZStack {
+                TVLook.bannerTile
+                if app.hasIcon, let u = TVBridge.url("/api/tv/icon?pkg=\(app.pkg)") {
+                    Art(url: u) { i in
+                        if app.wide == true { i.resizable().scaledToFill() } else { i.resizable().scaledToFit().padding(5) }
+                    } placeholder: { Color.clear }
+                }
+            }
+            .frame(width: 71, height: 40).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            Text(app.name).lineLimit(1)
+            Spacer(minLength: 0)
+            if !app.removable { Image(systemName: "lock.fill").font(.footnote).foregroundStyle(.tertiary).accessibilityLabel("Can’t be removed") }
+        }
+        .swipeActions {
+            if app.removable { Button("Delete", role: .destructive) { removing = app } }
+        }
+    }
     var body: some View {
         List {
             if let s = store.state {
-                Section {
-                    ForEach(s.apps) { app in
-                        HStack(spacing: 12) {
-                            ZStack {
-                                TVLook.bannerTile
-                                if app.hasIcon, let u = TVBridge.url("/api/tv/icon?pkg=\(app.pkg)") {
-                                    Art(url: u) { i in
-                                        if app.wide == true { i.resizable().scaledToFill() } else { i.resizable().scaledToFit().padding(5) }
-                                    } placeholder: { Color.clear }
-                                }
-                            }
-                            .frame(width: 71, height: 40).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            Text(app.name).lineLimit(1)
-                            Spacer(minLength: 0)
-                            if !app.removable { Image(systemName: "lock.fill").font(.footnote).foregroundStyle(.tertiary).accessibilityLabel("Can’t be removed") }
+                // An app can only move within its own row on the TV, so that's how they're grouped here.
+                ForEach(rows(s), id: \.self) { row in
+                    Section(rowTitle(row)) {
+                        ForEach(s.apps.filter { ($0.row ?? "APPS") == row }) { app in
+                            appRow(app)
                         }
-                        .swipeActions {
-                            if app.removable { Button("Delete", role: .destructive) { removing = app } }
+                        .onMove(perform: s.canArrange ? { from, to in move(in: row, from: from, to: to) } : nil)
+                    }
+                }
+                Section {
+                    if s.canArrange {
+                        Button("Back to automatic order") {
+                            store.send("app-layout", ["order": [String]()]) { await store.load() }
                         }
                     }
-                    .onMove(perform: s.canArrange ? { from, to in
-                        store.state?.apps.move(fromOffsets: from, toOffset: to)
-                        store.send("app-layout", ["order": (store.state?.apps ?? []).map(\.pkg)])
-                    } : nil)
                 } footer: {
-                    Text((s.canArrange ? "Drag to change the order on the TV’s home screen. " : "") + "Swipe an app to delete it from the TV. Locked apps are what this setup depends on.")
+                    Text((s.canArrange ? "Tap Edit to drag apps into your order on the TV’s home screen. " : "") + "Swipe an app to delete it from the TV. Locked apps are what this setup depends on.")
                 }
             } else if store.failed {
                 ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again."))
