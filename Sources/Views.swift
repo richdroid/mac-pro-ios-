@@ -40,7 +40,7 @@ let groupedBackground = Color.gray.opacity(0.1)
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
-        Group {
+        PaneReader {
             TabView(selection: $model.tab) {
                 Tab("Status", systemImage: "gauge.with.dots.needle.33percent", value: 0) { Screen(title: "Status") { StatusTab($0, side: $1) } }
                 Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Screen(title: "Apps") { AppsTab($0, side: $1) } }
@@ -71,7 +71,7 @@ let tileColumns = [GridItem(.adaptive(minimum: 170), spacing: 18, alignment: .to
 // Shared frame for each tab: a large title, the unreachable notice, and pull to refresh.
 struct Screen<Content: View>: View {
     @EnvironmentObject var model: AppModel
-    @Environment(\.horizontalSizeClass) private var size
+    @Environment(\.paneLayout) private var panes
     @State private var settings = false
     let title: String
     let content: (Status, Side) -> Content
@@ -88,7 +88,7 @@ struct Screen<Content: View>: View {
     var body: some View {
         NavigationStack {
             Group {
-                if size == .regular { FoldSplit { list(.left) } right: { list(.right) }.navigationBarTitleDisplayMode(.inline) }
+                if panes { FoldSplit { list(.left) } right: { list(.right) }.navigationBarTitleDisplayMode(.inline) }
                 else { list(.all) }
             }
             .background(groupedBackground.ignoresSafeArea())

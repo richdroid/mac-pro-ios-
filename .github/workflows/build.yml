@@ -72,8 +72,9 @@ jobs:
             done
           }
           # Apple's own apps, to measure our bars against.
+          xcrun simctl listapps "$DEVICE" | grep -E "CFBundleIdentifier" | head -40 || true
           reference() { # display, file suffix
-            for A in com.apple.mobiletimer com.apple.reminders; do
+            for A in com.apple.Health com.apple.DocumentsApp; do
               xcrun simctl launch "$DEVICE" $A || echo "$A did not open"
               sleep 8
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/apple-$A$2.png

@@ -33,7 +33,7 @@ struct RootView: View {
         return nil
     }
     var body: some View {
-        Group {
+        PaneReader {
             TabView(selection: $model.tab) {
                 Tab("Remote", systemImage: "av.remote", value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() } }
                 Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Page(title: "Apps") { AppsTab() } }
@@ -68,7 +68,7 @@ struct RootView: View {
 // Each tab's frame: the art behind it, its title, and the gear.
 struct Page<C: View>: View {
     @EnvironmentObject var model: TVModel
-    @Environment(\.horizontalSizeClass) private var size
+    @Environment(\.paneLayout) private var panes
     @State private var settings = false
     let title: String
     var alwaysInline = false
@@ -79,7 +79,7 @@ struct Page<C: View>: View {
                 .background { Wall(art: model.status?.music?.art) }
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
-                .navigationBarTitleDisplayMode(alwaysInline || size == .regular ? .inline : .large)
+                .navigationBarTitleDisplayMode(alwaysInline || panes ? .inline : .large)
                 .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
                 .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
         }
@@ -459,7 +459,7 @@ struct BannerRow: View {
 }
 struct AppsTab: View {
     @EnvironmentObject var model: TVModel
-    @Environment(\.horizontalSizeClass) private var size
+    @Environment(\.paneLayout) private var panes
     static let listen = ["com.codex.musicwebtv", "com.google.android.youtube.tvmusic"]
     static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.google.android.play.games", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.ionitech.airscreen", "com.macropinch.axe"]
     static let watchOrder = ["com.mint.letterboxd", "com.stremio.one", "com.google.android.youtube.tv", "com.google.android.youtube.tvunplugged", "com.netflix.ninja", "com.plexapp.android", "com.apple.atve.androidtv.appletv", "com.amazon.amazonvideo.livingroom", "com.cbs.ott"]
@@ -486,7 +486,7 @@ struct AppsTab: View {
     var body: some View {
         if all.isEmpty {
             ScrollView { VStack(alignment: .leading, spacing: 24) { SendBar().padding(.horizontal, 20); waiting }.padding(.vertical, 12) }
-        } else if size == .regular {
+        } else if panes {
             FoldSplit {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
@@ -655,7 +655,7 @@ struct NowControls: View {
 }
 struct PlayingTab: View {
     @EnvironmentObject var model: TVModel
-    @Environment(\.horizontalSizeClass) private var size
+    @Environment(\.paneLayout) private var panes
     @State private var query = ""
     @State private var kind = "song"
     var music: TVStatus.Music? { model.status?.music }
@@ -668,7 +668,7 @@ struct PlayingTab: View {
             // Another app's video outranks a song left paused in Mint.
             if let m = music, !otherAppIsActive {
                 Art(url: URL(string: m.art)) { i in i.resizable().scaledToFit() } placeholder: { Color.white.opacity(0.08) }
-                    .aspectRatio(1, contentMode: .fit).frame(maxWidth: size == .regular ? 300 : 180)
+                    .aspectRatio(1, contentMode: .fit).frame(maxWidth: panes ? 300 : 180)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)
                 VStack(spacing: 3) {
                     Text(m.title).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
@@ -712,7 +712,7 @@ struct PlayingTab: View {
     }
     var body: some View {
         Group {
-            if size == .regular {
+            if panes {
                 FoldSplit { ScrollView { now.padding(20) } } right: { ScrollView { send.padding(20) } }
             } else {
                 ScrollView { VStack(spacing: 24) { now; send }.padding(.horizontal, 16).padding(.bottom, 16) }
@@ -765,12 +765,12 @@ struct FilmGrid: View {
 }
 struct FilmsTab: View {
     @EnvironmentObject var model: TVModel
-    @Environment(\.horizontalSizeClass) private var size
+    @Environment(\.paneLayout) private var panes
     var body: some View {
         Group {
             if model.friends.isEmpty && model.watchlist.isEmpty {
                 ScrollView { ContentUnavailableView(model.filmsNote ?? "No films yet", systemImage: "film").padding(.top, 80) }
-            } else if size == .regular {
+            } else if panes {
                 FoldSplit { FilmGrid(title: "Friends", films: model.friends) } right: { FilmGrid(title: "Watchlist", films: model.watchlist) }
             } else {
                 ScrollView {

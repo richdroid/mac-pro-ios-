@@ -105,11 +105,11 @@ struct PageTitle<Trailing: View>: View {
 
 // MARK: - iPhone Duo panes
 struct TwoPane<L: View, R: View>: View {
-    @Environment(\.horizontalSizeClass) private var size
+    @Environment(\.paneLayout) private var panes
     let left: L, right: R
     init(@ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) { self.left = left(); self.right = right() }
     var body: some View {
-        if size == .regular {
+        if panes {
             FoldSplit {
                 List { Group { left }.listRowBackground(GlassRow()) }
             } right: {
@@ -146,7 +146,7 @@ struct RootView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.horizontalSizeClass) private var size
     var body: some View {
-        Group {
+        PaneReader {
             ZStack {
                 // Each tab paints its own sea: the system tab view is opaque behind its content.
                 TabView(selection: $model.tab) {
@@ -255,8 +255,7 @@ struct LiveOctopus: View {
 // MARK: - My Chumby
 struct HomeTab: View {
     @EnvironmentObject var model: ChumbyModel
-    @Environment(\.horizontalSizeClass) private var hsize
-    var wide: Bool { hsize == .regular }
+    @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
     @State private var moreInfo = false
     @State private var say: String?
