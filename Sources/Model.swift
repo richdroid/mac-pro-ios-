@@ -8,6 +8,7 @@ final class LiveStore: ObservableObject { @Published var live: LiveStatus? }
 final class AppModel: ObservableObject {
     let liveStore = LiveStore()
     let screen = RemoteScreen()
+    @Published var screenOpen = false
     @Published var status: Status?
     @Published var problem: String?
     @Published var needsSignIn = false

@@ -324,8 +324,15 @@ struct RemoteScreenView: View {
             toolbar
         }
         .navigationTitle("Screen")
-        .onAppear { screen.open(base: model.api.base) }
-        .onDisappear { screen.close() }
+        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { model.screenOpen = false } } }
+        .onAppear {
+            screen.open(base: model.api.base)
+            keepAwake(true)
+        }
+        .onDisappear {
+            screen.close()
+            keepAwake(false)
+        }
         .onChange(of: scene) { _, p in
             if p == .background { screen.enteredBackground() }
             if p == .active { screen.enteredForeground() }
@@ -342,6 +349,13 @@ struct RemoteScreenView: View {
             Button("Send + Return") { screen.type(text); screen.key(0xff0d); text = "" }
             Button("Cancel", role: .cancel) { text = "" }
         }
+    }
+
+    // Watching doesn't count as touching, so keep the iPhone's display on while the Mac's screen is open.
+    private func keepAwake(_ on: Bool) {
+        #if canImport(UIKit)
+        UIApplication.shared.isIdleTimerDisabled = on
+        #endif
     }
 
     @ViewBuilder private var status: some View {

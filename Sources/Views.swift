@@ -16,6 +16,15 @@ struct MacProApp: App {
 }
 
 enum Side { case all, left, right }
+extension View {
+    @ViewBuilder func screenCover<C: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> C) -> some View {
+        #if os(iOS)
+        self.fullScreenCover(isPresented: isPresented, content: content)
+        #else
+        self.sheet(isPresented: isPresented, content: content)
+        #endif
+    }
+}
 #if canImport(UIKit)
 let groupedBackground = Color(uiColor: .systemGroupedBackground)
 #else
@@ -37,6 +46,7 @@ struct RootView: View {
             }
             .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
         }
+        .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
         .sheet(isPresented: $model.needsSignIn) { SignInView().environmentObject(model) }
     }
 }
@@ -184,7 +194,6 @@ struct Hero: View {
 struct QuickActions: View {
     @EnvironmentObject var model: AppModel
     @State private var toast: String?
-    @State private var openScreen = false
     func button(_ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) { face(icon, title) }.buttonStyle(.plain)
     }
@@ -202,7 +211,7 @@ struct QuickActions: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(alignment: .top, spacing: 4) {
-                button("macwindow", "Screen") { openScreen = true }
+                button("macwindow", "Screen") { model.screenOpen = true }
                 button("moon", "Display off") { Task { _ = await model.run("display-off"); say("Display off") } }
                 button("square.and.arrow.down", "Copy from Mac") {
                     Task {
@@ -228,7 +237,6 @@ struct QuickActions: View {
             if let toast { Text(toast).font(.footnote).foregroundStyle(.secondary).transition(.opacity) }
         }
         .animation(.easeOut(duration: 0.2), value: toast)
-        .navigationDestination(isPresented: $openScreen) { RemoteScreenView(model: model) }
     }
 }
 
@@ -484,7 +492,7 @@ struct ControlTab: View {
             Text(s.macLogin ? "Logged in, and it stays that way after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
         }
         Section {
-            NavigationLink("Open screen") { RemoteScreenView(model: model) }
+            Button("Open screen") { model.screenOpen = true }
         } header: { Text("Remote desktop") } footer: { Text("Tap to click, pinch to zoom, and drag to scroll. Drag moves the view while zoomed.") }
         Section {
             Button { signingIn = true } label: { Label("Sign in on the Mac", systemImage: "key.fill") }.disabled(!(s.macLogin || s.typing == "trusted"))
