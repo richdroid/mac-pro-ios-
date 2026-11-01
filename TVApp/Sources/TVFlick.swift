@@ -70,7 +70,8 @@ struct FlickScreen: View {
     // How far the card has come towards the top edge: 0 in the hand, 1 with its top at the edge.
     var nearEdge: CGFloat { arrived ? min(1.3, max(0, -cardY) / max(cardFrame.minY, 1)) : 0 }
     var charge: CGFloat { landed ? 1 : min(1, nearEdge * 1.3) }
-    var cardWidth: CGFloat { source == .mint ? 176 : 148 }
+    // A series gives up some card for its list of episodes.
+    var cardWidth: CGFloat { source == .mint ? 176 : seasons.isEmpty ? 148 : 112 }
     var shown: MediaItem {
         guard let e = episode else { return item }
         return MediaItem(title: item.title, subtitle: "S\(e.season) E\(e.episode) · \(e.name)", art: item.art, id: item.id, kind: item.kind)
@@ -316,7 +317,7 @@ struct FlickScreen: View {
         guard source == .stremio, let ref = item.stremioRef,
               let d = await TVBridge.data(TVBridge.url("/api/tv/stremio-meta?type=\(ref.type)&id=\(ref.imdb)"), timeout: 15),
               let m = try? JSONDecoder().decode(StremioMeta.self, from: d) else { return }
-        meta = m
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { meta = m }
         // A card that's part way through a series starts on that episode.
         episode = m.episodes.first { $0.id == ref.video }
         season = episode?.season ?? m.episodes.first?.season ?? 0

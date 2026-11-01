@@ -56,7 +56,7 @@ struct HistoryView: View {
     @State private var hours = 24
     @State private var picked: Date?
 
-    struct Mark: Identifiable { let date: Date; let value: Double; let run: Int; var id: Date { date } }
+    struct Mark: Identifiable { let date: Date; let value: Double; let run: Int; var peak: Double?; var id: Date { date } }
 
     var shown: [TrendPoint] {
         let from = Date().addingTimeInterval(-Double(hours) * 3600).timeIntervalSince1970 * 1000
@@ -70,7 +70,7 @@ struct HistoryView: View {
         for key in groups.keys.sorted() {
             let g = groups[key]!, date = Date(timeIntervalSince1970: key * bucket + bucket / 2)
             if let last = out.last, date.timeIntervalSince(last.date) > max(240, bucket * 2.5) { run += 1 }
-            out.append(Mark(date: date, value: g.map(\.v).reduce(0, +) / Double(g.count), run: run))
+            out.append(Mark(date: date, value: g.map(\.v).reduce(0, +) / Double(g.count), run: run, peak: g.compactMap(\.peak).max()))
         }
         return out
     }
@@ -98,10 +98,15 @@ struct HistoryView: View {
         let list = marks, domain = Date().addingTimeInterval(-Double(hours) * 3600)...Date()
         return Chart {
             ForEach(list) { m in
-                AreaMark(x: .value("Time", m.date), y: .value(metric.title, m.value), series: .value("Run", m.run))
+                AreaMark(x: .value("Time", m.date), y: .value(metric.title, m.value), series: .value("Run", "\(m.run)"))
                     .foregroundStyle(LinearGradient(colors: [macBlue.opacity(0.32), macBlue.opacity(0.02)], startPoint: .top, endPoint: .bottom))
-                LineMark(x: .value("Time", m.date), y: .value(metric.title, m.value), series: .value("Run", m.run))
+                LineMark(x: .value("Time", m.date), y: .value(metric.title, m.value), series: .value("Run", "\(m.run)"))
                     .foregroundStyle(macBlue).lineStyle(StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                // Each minute's short spikes, so the highest figure below can be seen on the chart too.
+                if let peak = m.peak {
+                    LineMark(x: .value("Time", m.date), y: .value(metric.title, peak), series: .value("Run", "peak \(m.run)"))
+                        .foregroundStyle(macBlue.opacity(0.3)).lineStyle(StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round))
+                }
             }
             if let p = pickedMark {
                 RuleMark(x: .value("Time", p.date)).foregroundStyle(.white.opacity(0.55)).lineStyle(StrokeStyle(lineWidth: 1))
