@@ -94,6 +94,7 @@ struct ConnectionView: View {
     var body: some View {
         NavigationStack {
             Form {
+                TVManageSections()
                 Section {
                     TextField("Address", text: $address).autocorrectionDisabled()
                 } header: { Text("Mac Pro address") } footer: { Text("The TV is reached through your Mac, so this works anywhere with Tailscale on.") }
@@ -102,7 +103,7 @@ struct ConnectionView: View {
                     Button("Open launcher settings on the TV") { model.post("launcher-settings", say: "Opening") }
                 }
             }
-            .navigationTitle("Connection")
+            .navigationTitle("TV")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { model.address = address; model.start(); dismiss() } } }
             .onAppear { address = model.address }
         }
@@ -495,7 +496,7 @@ struct AppsTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.paneLayout) private var panes
     static let listen = ["com.codex.musicwebtv", "com.google.android.youtube.tvmusic"]
-    static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.google.android.play.games", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.ionitech.airscreen", "com.macropinch.axe"]
+    static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.google.android.play.games", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.macropinch.axe"]
     static let watchOrder = ["com.mint.letterboxd", "com.stremio.one", "com.google.android.youtube.tv", "com.google.android.youtube.tvunplugged", "com.netflix.ninja", "com.plexapp.android", "com.apple.atve.androidtv.appletv", "com.amazon.amazonvideo.livingroom", "com.cbs.ott"]
     var all: [TVStatus.App] { model.status?.apps ?? [] }
     static func watching(_ all: [TVStatus.App]) -> [TVStatus.App] {
