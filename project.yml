@@ -100,6 +100,7 @@ targets:
       - path: Shared/Duo.swift
     dependencies:
       - target: TVShare
+      - target: TVWidget
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV
@@ -115,6 +116,24 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+  TVWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - TVWidget
+      - TVApp/RobotoVariable.ttf
+      - path: TVApp/Sources/TVShared.swift
+      - path: TVApp/Sources/TVTheme.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV.Widget
+    info:
+      path: TVWidget/Info.plist
+      properties:
+        CFBundleDisplayName: TV Widgets
+        UIAppFonts: [RobotoVariable.ttf]
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
   TVShare:
     type: app-extension
     platform: iOS
@@ -160,6 +179,24 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryChumby
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+  GalleryTV:
+    type: application
+    platform: iOS
+    sources:
+      - TVWidget/TVWidgets.swift
+      - TVApp/RobotoVariable.ttf
+      - TVApp/Sources/TVShared.swift
+      - TVApp/Sources/TVTheme.swift
+      - ci/gallery-tv
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryTV
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    info:
+      path: ci/gallery-tv/Info.plist
+      properties:
+        UIAppFonts: [RobotoVariable.ttf]
   HotProbe:
     type: framework
     platform: iOS

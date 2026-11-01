@@ -48,6 +48,7 @@ struct RootView: View {
             if let t = model.toast { Text(t).font(Mint.font(14)).padding(.horizontal, 16).padding(.vertical, 10).background(Mint.band, in: RoundedRectangle(cornerRadius: Mint.radius)).shadow(radius: 12, y: 6).padding(.bottom, 24).transition(.opacity) }
         }
         .animation(Mint.focus, value: model.toast)
+        .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in model.tab = 2 }
     }
     func page<C: View>(@ViewBuilder _ c: () -> C) -> some View {
         NavigationStack {
@@ -434,6 +435,11 @@ struct FlickCard: View {
             refresh()
             #if os(iOS)
             MPMusicPlayerController.systemMusicPlayer.beginGeneratingPlaybackNotifications()
+            // Sent here by the Action Button or Siri, with nothing in Apple Music to send.
+            if FlickRequest.wantsAirPlay {
+                FlickRequest.wantsAirPlay = false
+                Task { try? await Task.sleep(nanoseconds: 500_000_000); _ = RoutePicker.open() }
+            }
             #endif
         }
         #if os(iOS)

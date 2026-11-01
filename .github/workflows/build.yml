@@ -37,7 +37,7 @@ jobs:
           set +e
           DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
           xcrun simctl list devices available | grep -m1 "$DEVICE"
-          for APP in MacPro Chumby TV GalleryMac GalleryChumby; do
+          for APP in MacPro Chumby TV GalleryMac GalleryChumby GalleryTV; do
             xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
               -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build
           done
@@ -48,6 +48,7 @@ jobs:
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryMac.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryChumby.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryTV.app
           xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
           node ci/mock-chumby.js &
           shots() { # display, file suffix
@@ -71,7 +72,7 @@ jobs:
             done
           }
           shots 1 ""
-          for G in Mac Chumby; do
+          for G in Mac Chumby TV; do
             xcrun simctl launch "$DEVICE" local.macpro.Gallery$G
             sleep 6
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/gallery-$G.png

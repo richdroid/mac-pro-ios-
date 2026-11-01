@@ -1,28 +1,5 @@
 import Foundation
 import SwiftUI
-#if canImport(UIKit)
-import UIKit
-typealias TVImage = UIImage
-extension Image { init(tv i: UIImage) { self.init(uiImage: i) } }
-#else
-import AppKit
-typealias TVImage = NSImage
-extension Image { init(tv i: NSImage) { self.init(nsImage: i) } }
-#endif
-
-struct TVStatus: Decodable, Equatable {
-    struct Music: Decodable, Equatable { let title: String; let artist: String; let album: String; let art: String; let playing: Bool; let position: Double; let duration: Double; let sampledAt: Double }
-    struct Session: Decodable, Equatable { let pkg: String; let playing: Bool; let description: [String] }
-    struct App: Decodable, Identifiable, Equatable { let pkg: String; let name: String; let hasIcon: Bool; var wide: Bool?; var id: String { pkg } }
-    let online: Bool
-    var screen: String?
-    var app: String?
-    var volume: Int?
-    var volumeMax: Int?
-    var music: Music?
-    var session: Session?
-    var apps: [App]?
-}
 struct Film: Identifiable, Hashable { let slug: String, title: String, year: String, poster: String, note: String; var id: String { slug + note } }
 
 @MainActor
