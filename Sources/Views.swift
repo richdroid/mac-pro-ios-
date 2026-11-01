@@ -52,6 +52,13 @@ struct RootView: View {
         }
         .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
         .sheet(isPresented: $model.needsSignIn) { SignInView().environmentObject(model) }
+        // Up here, so unfolding doesn't close it and lose what's typed.
+        .sheet(isPresented: $model.signingIn) {
+            LoginSheet { u, p in
+                let filled = u.isEmpty ? p : u + "\t" + p
+                return await model.runSealed("type-text", secret: filled, extra: ["enter": true])
+            }
+        }
     }
 }
 
@@ -472,14 +479,12 @@ struct UpgradeTab: View {
 
 struct ControlTab: View {
     @EnvironmentObject var model: AppModel
-    @State private var macPassword = ""
-    @State private var text = ""
     @State private var pressReturn = false
     @State private var appleEmail = ""
     @State private var applePassword = ""
     @State private var appleCode = ""
     @State private var confirmRestart = false
-    @State private var signingIn = false
+    @ObservedObject private var drafts = Drafts.shared
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -492,10 +497,10 @@ struct ControlTab: View {
                 if s.screen == "locked" { Button("Unlock") { Task { model.note = await model.run("mac-unlock") } } }
                 Button("Forget password", role: .destructive) { Task { model.note = await model.run("mac-logout") } }
             } else {
-                SecureField("Mac password", text: $macPassword).textContentType(.password)
+                SecureField("Mac password", text: $drafts.macPassword).textContentType(.password)
                 Button("Log in") {
-                    Task { model.note = await model.runSealed("mac-login", secret: macPassword); macPassword = "" }
-                }.disabled(macPassword.isEmpty)
+                    Task { model.note = await model.runSealed("mac-login", secret: drafts.macPassword); drafts.macPassword = "" }
+                }.disabled(drafts.macPassword.isEmpty)
             }
             if let note = model.note { Text(note).font(.footnote).foregroundStyle(.secondary) }
         } header: { Text("Log in to this Mac") } footer: {
@@ -505,14 +510,16 @@ struct ControlTab: View {
             Button("Open screen") { model.screenOpen = true }
         } header: { Text("Remote desktop") } footer: { Text("Tap to click, pinch to zoom, and drag to scroll. Drag moves the view while zoomed.") }
         Section {
-            Button { signingIn = true } label: { Label("Sign in on the Mac", systemImage: "key.fill") }.disabled(!(s.macLogin || s.typing == "trusted"))
+            Button { model.signingIn = true } label: { Label("Sign in on the Mac", systemImage: "key.fill") }.disabled(!(s.macLogin || s.typing == "trusted"))
             if s.macLogin || s.typing == "trusted" {
                 HStack {
-                    SecureField("Or type any text", text: $text)
+                    SecureField("Or type any text", text: $drafts.typed)
                     Button {
-                        Task { model.note = await model.runSealed("type-text", secret: text, extra: ["enter": pressReturn]) ?? "Typed."; text = "" }
+                        // It's encrypted on this iPhone, and that has a size limit. Keep the text so nothing is lost.
+                        guard drafts.typed.utf8.count <= 130 else { model.note = "That’s too long to type in one go. Try under 130 characters."; return }
+                        Task { model.note = await model.runSealed("type-text", secret: drafts.typed, extra: ["enter": pressReturn]) ?? "Typed."; drafts.typed = "" }
                     } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
-                    .buttonStyle(.plain).foregroundStyle(text.isEmpty ? Color.secondary : macBlue).disabled(text.isEmpty).accessibilityLabel("Type on Mac")
+                    .buttonStyle(.plain).foregroundStyle(drafts.typed.isEmpty ? Color.secondary : macBlue).disabled(drafts.typed.isEmpty).accessibilityLabel("Type on Mac")
                 }
                 Toggle("Press Return afterward", isOn: $pressReturn)
             } else {
@@ -520,12 +527,6 @@ struct ControlTab: View {
             }
         } header: { Text("Sign-ins on the Mac") } footer: {
             Text("Click the field on the Mac first. Saved logins stay on this iPhone behind Face ID.")
-        }
-        .sheet(isPresented: $signingIn) {
-            LoginSheet { u, p in
-                let filled = u.isEmpty ? p : u + "\t" + p
-                return await model.runSealed("type-text", secret: filled, extra: ["enter": true])
-            }
         }
         }
         if side != .left {
@@ -546,7 +547,7 @@ struct ControlTab: View {
         }
         if !s.publicUrl.isEmpty {
             Section {
-                Link("Open public link", destination: URL(string: s.publicUrl)!)
+                if let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
             } header: { Text("Public link") } footer: { Text("This address changes whenever the Mac restarts.") }
         }
         if let list = s.services {

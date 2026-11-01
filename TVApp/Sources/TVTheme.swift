@@ -44,12 +44,29 @@ struct MintKeyStyle: ButtonStyle {
 @MainActor
 final class ImageStore {
     static let shared = ImageStore()
-    private let cache = NSCache<NSURL, TVImage>()
+    private let cache: NSCache<NSURL, TVImage> = {
+        let c = NSCache<NSURL, TVImage>()
+        c.totalCostLimit = 120 << 20
+        return c
+    }()
+    // The wall, the cover and the band often ask for the same picture at once; fetch it once.
+    private var fetching: [URL: Task<TVImage?, Never>] = [:]
     func cached(_ url: URL?) -> TVImage? { url.flatMap { cache.object(forKey: $0 as NSURL) } }
     func load(_ url: URL) async -> TVImage? {
         if let i = cached(url) { return i }
-        guard let (d, resp) = try? await URLSession.shared.data(from: url), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) else { return nil }
-        cache.setObject(i, forKey: url as NSURL)
+        if let t = fetching[url] { return await t.value }
+        let t = Task.detached(priority: .utility) { () -> TVImage? in
+            guard let (d, resp) = try? await URLSession.shared.data(from: url), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) else { return nil }
+            #if canImport(UIKit)
+            return i.preparingForDisplay() ?? i
+            #else
+            return i
+            #endif
+        }
+        fetching[url] = t
+        let i = await t.value
+        fetching[url] = nil
+        if let i { cache.setObject(i, forKey: url as NSURL, cost: Int(i.size.width * i.size.height) * 4) }
         return i
     }
 }

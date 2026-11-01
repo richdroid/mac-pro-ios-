@@ -19,7 +19,11 @@ struct SendToTV: AppIntent {
     static var title: LocalizedStringResource = "Send to the TV"
     static var description = IntentDescription("Opens a link on the TV, or searches for words.")
     @Parameter(title: "Link or words") var text: String
-    func perform() async throws -> some IntentResult { try await TVBridge.post("send", ["text": text]); return .result() }
+    func perform() async throws -> some IntentResult {
+        let d = try await TVBridge.post("send", ["text": text])
+        guard (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["ok"] as? Bool == true else { throw TVIntentError.cantOpen }
+        return .result()
+    }
 }
 struct TVKeyIntent: AppIntent {
     static var title: LocalizedStringResource = "Press a TV Remote Button"

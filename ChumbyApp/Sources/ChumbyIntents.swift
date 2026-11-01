@@ -67,7 +67,14 @@ struct ChumbyNapIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         // Read the list fresh, since a save replaces all of it.
         try await chumbyTry { api in
-            var s = try await api.get("state", as: ChumbyState.self)
+            // The cache's first answer can be hours old, and it fetches a new one on being asked.
+            var r = try await api.raw("state")
+            for _ in 0..<4 where r.age >= 30 {
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                r = try await api.raw("state")
+            }
+            guard r.age < 30 else { throw ChumbyError.deviceDown }
+            var s = try JSONDecoder().decode(ChumbyState.self, from: r.data)
             s.addNap(minutes: minutes)
             try await api.post("save", body: ChumbyAPI.form(s.alarmForm()))
         }

@@ -14,6 +14,6 @@ func card<C: View, B: View>(_ w: CGFloat, _ h: CGFloat, _ bg: B, @ViewBuilder _ 
             card(338, 158, Mint.plane) { RemoteBody(family: .systemMedium, entry: e) }
             card(338, 158, WidgetWall(image: e.wall)) { AppsBody(entry: e) }
             card(338, 354, Mint.plane) { RemoteBody(family: .systemLarge, entry: e) }
-        }.padding(10) }.background(Color(white: 0.8))
+        }.padding(10).scaleEffect(0.62, anchor: .top).frame(height: 680) }.background(Color(white: 0.8))
     } }
 }

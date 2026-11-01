@@ -42,7 +42,7 @@ struct LoginSheet: View {
     @Environment(\.dismiss) private var dismiss
     // Types what it's given into the Mac: username (if any), Tab, password, Return.
     let fill: (_ username: String, _ password: String) async -> String?
-    @State private var saved = LoginVault.all()
+    @State private var saved: [SavedLogin] = []
     @State private var username = ""
     @State private var password = ""
     @State private var name = ""
@@ -92,6 +92,7 @@ struct LoginSheet: View {
             .navigationTitle("Sign In on Mac")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
+        .task { saved = LoginVault.all() }
     }
     @ViewBuilder private var field: some View {
         #if os(iOS)

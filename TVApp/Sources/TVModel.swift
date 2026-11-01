@@ -5,7 +5,7 @@ struct Film: Identifiable, Hashable { let slug: String, title: String, year: Str
 @MainActor
 final class TVModel: ObservableObject {
     @Published var status: TVStatus?
-    @Published var mirror: TVImage?
+    let mirrorStore = MirrorStore()
     @Published var mirrorLive = false
     @Published var reachable = true
     @Published var watchlist: [Film] = []
@@ -59,14 +59,19 @@ final class TVModel: ObservableObject {
         reachable = true
         if s != status { status = s; if s.online { try? d.write(to: Self.cacheFile, options: .atomic) } }
     }
+    func setMirror(_ on: Bool) {
+        lastTouch = Date()
+        mirrorLive = on
+        if on { Task { await loadMirror() } }
+    }
     func loadMirror() async {
         guard let u = url("/api/tv/shot") else { return }
         var r = URLRequest(url: u); r.timeoutInterval = 10; r.cachePolicy = .reloadIgnoringLocalCacheData
-        if let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) { mirror = i }
+        if let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) { mirrorStore.image = i }
     }
     func loadFilms(force: Bool = false) async {
         if filmsLoaded && !force { return }
-        guard let u = url("/api/tv/letterboxd"), let (d, _) = try? await URLSession.shared.data(from: u),
+        guard let u = url("/api/tv/letterboxd"), let (d, resp) = try? await URLSession.shared.data(from: u), (resp as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { filmsNote = "Can’t reach your films. Pull down to try again."; return }
         filmsLoaded = true
         filmsNote = j["signedIn"] as? Bool == false ? "Sign in to Letterboxd on the TV." : nil
@@ -100,7 +105,7 @@ final class TVModel: ObservableObject {
     }
     private func request(_ path: String, _ body: [String: Any]) -> URLRequest? {
         guard let u = url("/api/tv/" + path), let base = URL(string: address) else { return nil }
-        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 6
+        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 12
         r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
         r.setValue("1", forHTTPHeaderField: "x-dash"); r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try? JSONSerialization.data(withJSONObject: body)
@@ -147,4 +152,15 @@ final class TVModel: ObservableObject {
             }
         }
     }
+}
+
+// The mirror changes every 1.5 s. Only the mirror should redraw when it does.
+@MainActor
+final class MirrorStore: ObservableObject { @Published var image: TVImage? }
+
+// A half-typed link outlives unfolding, which rebuilds the layout.
+@MainActor
+final class SendDraft: ObservableObject {
+    static let shared = SendDraft()
+    @Published var text = ""
 }

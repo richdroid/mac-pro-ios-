@@ -33,22 +33,24 @@ enum TVBridge {
         return stored.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : stored
     }
     static func url(_ path: String) -> URL? { URL(string: address.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) }
-    static func post(_ path: String, _ body: [String: Any] = [:]) async throws {
+    @discardableResult
+    static func post(_ path: String, _ body: [String: Any] = [:]) async throws -> Data {
         guard let u = url("/api/tv/" + path), let base = URL(string: address) else { throw URLError(.badURL) }
-        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 8
+        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 12
         r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
         r.setValue("1", forHTTPHeaderField: "x-dash"); r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (_, resp) = try await URLSession.shared.data(for: r)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+        let (d, resp) = try await URLSession.shared.data(for: r)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw TVIntentError.noAnswer }
+        return d
     }
-    static func data(_ url: URL?, timeout: TimeInterval = 8) async -> Data? {
+    static func data(_ url: URL?, timeout: TimeInterval = 8, cached: Bool = false) async -> Data? {
         guard let url else { return nil }
-        var r = URLRequest(url: url); r.timeoutInterval = timeout; r.cachePolicy = .reloadIgnoringLocalCacheData
+        var r = URLRequest(url: url); r.timeoutInterval = timeout; r.cachePolicy = cached ? .useProtocolCachePolicy : .reloadIgnoringLocalCacheData
         guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return d
     }
-    static func status() async -> TVStatus? { (await data(url("/api/tv/status"))).flatMap { try? JSONDecoder().decode(TVStatus.self, from: $0) } }
+    static func status(timeout: TimeInterval = 8) async -> TVStatus? { (await data(url("/api/tv/status"), timeout: timeout)).flatMap { try? JSONDecoder().decode(TVStatus.self, from: $0) } }
 }
 
 struct TVPress: AppIntent {
@@ -68,8 +70,9 @@ struct TVPower: AppIntent {
     static var title: LocalizedStringResource = "Turn the TV on or off"
     static var description = IntentDescription("Wakes the TV if it’s asleep, and puts it to sleep if it’s on.")
     func perform() async throws -> some IntentResult {
-        let asleep = await TVBridge.status()?.screen == "asleep"
-        try await TVBridge.post("key", ["key": asleep ? "wake" : "sleep"])
+        // A sleeping box is slow to answer. Guessing wrong would do the opposite of what was asked.
+        guard let s = await TVBridge.status(timeout: 20), s.online, let screen = s.screen else { throw TVIntentError.noAnswer }
+        try await TVBridge.post("key", ["key": screen == "asleep" ? "wake" : "sleep"])
         return .result()
     }
 }
@@ -84,12 +87,21 @@ struct TVOpenApp: AppIntent {
 struct TVOpenRemote: AppIntent {
     static var title: LocalizedStringResource = "Open the TV remote"
     static var openAppWhenRun = true
-    func perform() async throws -> some IntentResult { .result() }
+    @MainActor func perform() async throws -> some IntentResult {
+        FlickRequest.wantsRemote = true
+        NotificationCenter.default.post(name: FlickRequest.airPlay, object: nil)
+        return .result()
+    }
 }
 
 enum TVIntentError: LocalizedError {
-    case noAnswer
-    var errorDescription: String? { "The TV didn’t answer. Is Tailscale on?" }
+    case noAnswer, cantOpen
+    var errorDescription: String? {
+        switch self {
+        case .noAnswer: return "The TV didn’t answer. Is Tailscale on?"
+        case .cantOpen: return "That link can’t open on the TV. Try AirPlay."
+        }
+    }
 }
 
 // Any app on the TV, for Shortcuts, Siri and the widget's settings.
@@ -119,6 +131,7 @@ struct TVOpenOnTV: AppIntent {
 enum FlickRequest {
     static let airPlay = Notification.Name("tvFlickAirPlay")
     @MainActor static var wantsAirPlay = false
+    @MainActor static var wantsRemote = false
 }
 // A flick without looking: assign it to the Action Button or Control Center. Apple Music goes straight across; anything else opens AirPlay.
 struct FlickToTV: AppIntent {
@@ -129,8 +142,9 @@ struct FlickToTV: AppIntent {
         #if canImport(UIKit)
         let player = MPMusicPlayerController.systemMusicPlayer
         if MPMediaLibrary.authorizationStatus() == .authorized, player.playbackState == .playing, let item = player.nowPlayingItem, let title = item.title {
-            player.pause()
+            // Only stop the phone once the TV has it.
             try await TVBridge.post("flick", ["title": title, "artist": item.artist ?? ""])
+            player.pause()
             return .result()
         }
         #endif

@@ -49,7 +49,13 @@ struct RootView: View {
             if let t = model.toast { Text(t).font(Mint.font(14)).padding(.horizontal, 16).padding(.vertical, 10).background(Mint.band, in: RoundedRectangle(cornerRadius: Mint.radius)).shadow(radius: 12, y: 6).padding(.bottom, 24).transition(.opacity) }
         }
         .animation(Mint.focus, value: model.toast)
-        .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in model.tab = 2 }
+        .onAppear { followRequest() }
+        .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
+    }
+    // Control Center and Siri can ask before this view exists, so the request waits in a flag.
+    func followRequest() {
+        if FlickRequest.wantsRemote { FlickRequest.wantsRemote = false; model.tab = 0 }
+        if FlickRequest.wantsAirPlay { model.tab = 2 }
     }
     func page<C: View>(@ViewBuilder _ c: () -> C) -> some View {
         NavigationStack {
@@ -86,7 +92,7 @@ struct ConnectionView: View {
 // The launcher's search row: the blue orb and a quiet prompt. Takes words or any link.
 struct SendBar: View {
     @EnvironmentObject var model: TVModel
-    @State private var text = ""
+    @ObservedObject private var draft = SendDraft.shared
     @FocusState private var focused: Bool
     var body: some View {
         HStack(spacing: 14) {
@@ -98,9 +104,9 @@ struct SendBar: View {
                 Image(systemName: "arrow.up").font(.system(size: 20, weight: .medium)).foregroundStyle(.white).frame(width: 46, height: 46).background(Mint.orb, in: Circle())
             }
             .buttonStyle(.plain).accessibilityLabel("Send what you copied to the TV")
-            TextField("Send a link or search", text: $text)
+            TextField("Send a link or search", text: $draft.text)
                 .font(Mint.font(17, weight: 300)).italic().focused($focused).autocorrectionDisabled()
-                .onSubmit { if !text.isEmpty { model.send(text); text = "" } }
+                .onSubmit { if !draft.text.isEmpty { model.send(draft.text); draft.text = "" } }
         }
     }
 }
@@ -114,10 +120,11 @@ struct RowTitle: View {
 // MARK: - Remote
 struct MirrorView: View {
     @EnvironmentObject var model: TVModel
+    @ObservedObject var store: MirrorStore
     var body: some View {
         ZStack {
             Mint.plane.opacity(0.5)
-            if let m = model.mirror, model.mirrorLive { Image(tv: m).resizable().scaledToFit() }
+            if let m = store.image, model.mirrorLive { Image(tv: m).resizable().scaledToFit() }
             if !model.mirrorLive { MirrorToggle() }
         }
         .aspectRatio(16.0 / 9, contentMode: .fit)
@@ -130,8 +137,7 @@ struct MirrorToggle: View {
     @EnvironmentObject var model: TVModel
     var body: some View {
         Button {
-            model.mirrorLive.toggle()
-            if model.mirrorLive { Task { await model.loadMirror() } }
+            model.setMirror(!model.mirrorLive)
         } label: { Image(systemName: model.mirrorLive ? "eye.slash" : "eye").font(.system(size: 20)) }
         .buttonStyle(MintKeyStyle(diameter: 44))
         .accessibilityLabel(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen")
@@ -151,22 +157,30 @@ struct TouchPad: View {
     @State private var ripple: CGPoint?
     @State private var restPoint = CGPoint.zero
     @State private var restSince = Date()
+    // Resets by itself when the system takes the touch away, which ends the drag with no callback.
+    @GestureState private var touching = false
     let step: CGFloat = 40
     // Repeats only once the finger has come to rest at the end of a swipe, so a slow swipe never overshoots.
     func hold(_ key: String) {
         guard heldKey != key else { return }
         heldKey = key
         repeater?.cancel()
+        let started = Date()
         repeater = Task {
-            while !Task.isCancelled {
+            // Ten seconds is further than any row goes; never run away.
+            while !Task.isCancelled, Date().timeIntervalSince(started) < 10 {
                 if Date().timeIntervalSince(restSince) > 0.3 { model.key(key, repeating: true) }
                 try? await Task.sleep(nanoseconds: 110_000_000)
             }
         }
     }
     func finish() {
+        let tapped = began && !moved && !longFired
+        cancel()
+        if tapped { model.key("ok") }
+    }
+    func cancel() {
         repeater?.cancel(); repeater = nil; longTimer?.cancel(); longTimer = nil
-        if !moved && !longFired { model.key("ok") }
         moved = false; began = false; longFired = false; heldKey = nil; ripple = nil
     }
     var body: some View {
@@ -176,7 +190,10 @@ struct TouchPad: View {
                 if let ripple { Circle().fill(Mint.text.opacity(0.12)).frame(width: 88, height: 88).position(ripple).allowsHitTesting(false) }
             }
             .contentShape(Rectangle())
+            .onChange(of: touching) { _, now in if !now { cancel() } }
+            .onDisappear { cancel() }
             .gesture(DragGesture(minimumDistance: 0)
+                .updating($touching) { _, state, _ in state = true }
                 .onChanged { v in
                     ripple = v.location
                     if hypot(v.location.x - restPoint.x, v.location.y - restPoint.y) > 6 { restPoint = v.location; restSince = Date() }
@@ -245,7 +262,7 @@ struct RemoteTab: View {
         Group {
             if size == .regular {
                 FoldSplit {
-                    VStack(alignment: .leading, spacing: 12) { title; MirrorView(); SendBar(); Spacer(minLength: 0) }.padding(20)
+                    VStack(alignment: .leading, spacing: 12) { title; MirrorView(store: model.mirrorStore); SendBar(); Spacer(minLength: 0) }.padding(20)
                 } right: {
                     VStack(spacing: 12) { TouchPad().frame(maxHeight: .infinity); keys }.padding(20)
                 }
@@ -253,7 +270,7 @@ struct RemoteTab: View {
                 // Folded, the pad gets the room until the screen is asked for.
                 VStack(spacing: 10) {
                     HStack { title; MirrorToggle() }
-                    if model.mirrorLive { MirrorView() }
+                    if model.mirrorLive { MirrorView(store: model.mirrorStore) }
                     TouchPad().frame(minHeight: 120, maxHeight: .infinity)
                     keys
                 }
@@ -408,13 +425,28 @@ struct FlickCard: View {
         if let i = item?.artwork?.image(at: CGSize(width: 160, height: 160)) { art = Image(uiImage: i) } else { art = nil }
         #endif
     }
+    #if os(iOS)
+    // Sent here by the Action Button or Siri, with nothing in Apple Music to send.
+    func openAirPlayIfAsked() {
+        guard FlickRequest.wantsAirPlay else { return }
+        FlickRequest.wantsAirPlay = false
+        Task { try? await Task.sleep(nanoseconds: 500_000_000); _ = RoutePicker.open() }
+    }
+    #endif
     func flick() {
         model.tick()
         #if os(iOS)
         refresh()
         if !title.isEmpty {
-            MPMusicPlayerController.systemMusicPlayer.pause()
-            model.post("flick", ["title": title, "artist": artist], say: "Sent to the TV")
+            let song = title, by = artist
+            Task {
+                // The phone only stops once the TV has it, so a failed send never silences the music.
+                do {
+                    try await TVBridge.post("flick", ["title": song, "artist": by])
+                    MPMusicPlayerController.systemMusicPlayer.pause()
+                    model.say("Sent to the TV")
+                } catch { model.say("The TV didn’t get that") }
+            }
         } else {
             // Mint comes to the front first, ready to receive.
             model.post("music-now")
@@ -451,14 +483,11 @@ struct FlickCard: View {
             refresh()
             #if os(iOS)
             MPMusicPlayerController.systemMusicPlayer.beginGeneratingPlaybackNotifications()
-            // Sent here by the Action Button or Siri, with nothing in Apple Music to send.
-            if FlickRequest.wantsAirPlay {
-                FlickRequest.wantsAirPlay = false
-                Task { try? await Task.sleep(nanoseconds: 500_000_000); _ = RoutePicker.open() }
-            }
+            openAirPlayIfAsked()
             #endif
         }
         #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in openAirPlayIfAsked() }
         .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerPlaybackStateDidChange)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerNowPlayingItemDidChange)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refresh() }

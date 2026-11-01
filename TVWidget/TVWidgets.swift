@@ -1,4 +1,5 @@
 import AppIntents
+import ImageIO
 import SwiftUI
 import WidgetKit
 
@@ -27,6 +28,7 @@ struct TVEntry: TimelineEntry {
 }
 
 struct TVProvider: TimelineProvider {
+    var art = false
     var mirror = false
     func placeholder(in context: Context) -> TVEntry { Self.sample }
     func getSnapshot(in context: Context, completion: @escaping (TVEntry) -> Void) {
@@ -36,20 +38,33 @@ struct TVProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<TVEntry>) -> Void) {
         Task {
             let e = await load()
-            // Back when the song ends, if one is playing; otherwise at the usual pace.
-            let wait = e.music?.playing == true ? max(e.remaining + 2, 60) : 15 * 60
-            completion(Timeline(entries: [e], policy: .after(Date().addingTimeInterval(wait))))
+            // The progress line moves on its own between reloads, which iOS only allows now and then.
+            var entries = [e]
+            if art, e.music?.playing == true {
+                let steps = Int(min(e.remaining, 600) / 30)
+                if steps > 0 { for i in 1...steps { var n = e; n.date = e.date.addingTimeInterval(Double(i) * 30); entries.append(n) } }
+            }
+            completion(Timeline(entries: entries, policy: .after(Date().addingTimeInterval(e.music?.playing == true ? 600 : 1800))))
         }
     }
     func load() async -> TVEntry {
         var e = TVEntry()
         e.status = await TVBridge.status()
-        if let art = e.music?.art, let d = await TVBridge.data(URL(string: art)), let i = TVImage(data: d) { e.cover = Self.shrunk(i, to: 320); e.wall = Self.shrunk(i, to: 16) }
+        if art, let url = e.music?.art, let d = await TVBridge.data(URL(string: url)), let i = Self.thumbnail(d, 320) { e.cover = i; e.wall = Self.shrunk(i, to: 16) }
         if mirror, e.status?.online == true, !e.asleep, let d = await TVBridge.data(TVBridge.url("/api/tv/shot")), let i = TVImage(data: d) { e.mirror = i }
         return e
     }
     static let favourites = ["com.codex.musicwebtv", "com.mint.letterboxd", "com.stremio.one", "com.google.android.youtube.tv", "com.netflix.ninja", "com.apple.atve.androidtv.appletv"]
-    // Widgets get very little memory, so nothing bigger than it will be drawn is kept.
+    // Widgets get very little memory, so a picture is never decoded at full size.
+    static func thumbnail(_ d: Data, _ side: Int) -> TVImage? {
+        #if canImport(UIKit)
+        guard let source = CGImageSourceCreateWithData(d as CFData, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: side, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
+        #else
+        return TVImage(data: d)
+        #endif
+    }
     static func shrunk(_ i: TVImage, to side: CGFloat) -> TVImage {
         #if canImport(UIKit)
         let f = UIGraphicsImageRendererFormat(); f.scale = 1; f.opaque = true
@@ -144,7 +159,8 @@ struct CardArt: View {
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             Mint.plane
-            if let image { Image(tv: image).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFill() }
+            // In an overlay, so a filled picture can't push the band out of the card.
+            if let image { Color.clear.overlay { Image(tv: image).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFill() }.clipped() }
             else { Image(systemName: "music.note").font(.system(size: 28)).foregroundStyle(Mint.text.opacity(0.4)).frame(maxWidth: .infinity, maxHeight: .infinity).widgetAccentable() }
             if let playing {
                 LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .init(x: 0.5, y: 0.6), endPoint: .bottom)
@@ -180,6 +196,7 @@ struct NowBody: View {
                     }
                     .padding(.horizontal, 11).frame(height: 44).background(Mint.band)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }.buttonStyle(.plain).accessibilityLabel(playing ? "Pause \(title)" : "Play \(title)")
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 1) {
@@ -217,7 +234,7 @@ struct NowWidgetView: View {
 }
 struct TVNowWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "TVNow", provider: TVProvider()) { NowWidgetView(entry: $0) }
+        StaticConfiguration(kind: "TVNow", provider: TVProvider(art: true)) { NowWidgetView(entry: $0) }
             .configurationDisplayName("Playing on TV")
             .description("The launcher’s now-playing card. Tap to play or pause.")
             .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
@@ -336,10 +353,10 @@ struct TVAppsProvider: AppIntentTimelineProvider {
     func load(_ c: TVAppsConfig) async -> TVEntry {
         var e = TVEntry()
         e.status = await TVBridge.status()
-        if let art = e.music?.art, let d = await TVBridge.data(URL(string: art)), let i = TVImage(data: d) { e.wall = TVProvider.shrunk(i, to: 16) }
+        if let url = e.music?.art, let d = await TVBridge.data(URL(string: url), cached: true), let i = TVProvider.thumbnail(d, 64) { e.wall = TVProvider.shrunk(i, to: 16) }
         for pkg in c.picks() {
             e.chosen.append(TVAppEntity(id: pkg, name: e.status?.apps?.first { $0.pkg == pkg }?.name ?? ""))
-            if let d = await TVBridge.data(TVBridge.url("/api/tv/icon?pkg=\(pkg)"), timeout: 4), let i = TVImage(data: d) { e.logos[pkg] = i }
+            if let d = await TVBridge.data(TVBridge.url("/api/tv/icon?pkg=\(pkg)"), timeout: 4, cached: true), let i = TVProvider.thumbnail(d, 320) { e.logos[pkg] = i }
         }
         return e
     }

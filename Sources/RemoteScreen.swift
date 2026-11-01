@@ -7,6 +7,19 @@ import UIKit
 
 // A native Screen Sharing client. The dashboard's bridge signs in to the Mac, so this side speaks plain RFB over
 // a WebSocket with no login of its own. Raw encoding keeps it simple; only changed areas are sent after the first frame.
+// The picture's memory, shared with the image drawn from it, so a new image doesn't copy 15 MB each time.
+final class FrameBuffer {
+    let bytes: UnsafeMutableRawPointer
+    let size: Int
+    init(size: Int) { self.size = size; bytes = calloc(max(size, 1), 1) }
+    deinit { free(bytes) }
+    func provider() -> CGDataProvider? {
+        CGDataProvider(dataInfo: Unmanaged.passRetained(self).toOpaque(), data: bytes, size: size) { info, _, _ in
+            if let info { Unmanaged<FrameBuffer>.fromOpaque(info).release() }
+        }
+    }
+}
+
 @MainActor
 final class RemoteScreen: ObservableObject {
     enum Phase: Equatable { case idle, connecting, reconnecting, connected, needsLogin, failed(String) }
@@ -16,7 +29,10 @@ final class RemoteScreen: ObservableObject {
 
     private var socket: URLSessionWebSocketTask?
     private var buffer = Data()
-    private var frame = Data()
+    private var frame = FrameBuffer(size: 0)
+    private var trailingPublish: Task<Void, Never>?
+    // Nothing is drawn while the screen is closed, so nothing is built either.
+    var paused = false { didSet { if !paused { publish() } } }
     private var width = 0, height = 0
     private var buttons: UInt8 = 0
     private var lastPublish = Date.distantPast
@@ -170,7 +186,7 @@ final class RemoteScreen: ObservableObject {
                 let nameLength = be32(buffer, 20)
                 guard let head = take(24 + nameLength) else { return }
                 width = be16(head, 0); height = be16(head, 2)
-                frame = Data(count: width * height * 4)
+                frame = FrameBuffer(size: width * height * 4)
                 size = CGSize(width: width, height: height)
                 // 32-bit little-endian BGRA, then raw rectangles only.
                 send([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0])
@@ -213,10 +229,10 @@ final class RemoteScreen: ObservableObject {
             let x = be16(buffer, read), y = be16(buffer, read + 2), w = be16(buffer, read + 4), h = be16(buffer, read + 6)
             read += 12
             let start = buffer.startIndex + read
-            frame.withUnsafeMutableBytes { dst in
+            do {
                 buffer.withUnsafeBytes { src in
                     for row in 0..<h where y + row < height && x + w <= width {
-                        memcpy(dst.baseAddress! + ((y + row) * width + x) * 4, src.baseAddress! + (start - buffer.startIndex) + row * w * 4, w * 4)
+                        memcpy(frame.bytes + ((y + row) * width + x) * 4, src.baseAddress! + (start - buffer.startIndex) + row * w * 4, w * 4)
                     }
                 }
             }
@@ -229,7 +245,20 @@ final class RemoteScreen: ObservableObject {
     }
 
     private func publish() {
-        guard Date().timeIntervalSince(lastPublish) > 0.08, let provider = CGDataProvider(data: frame as CFData) else { return }
+        guard !paused, width > 0 else { return }
+        let since = Date().timeIntervalSince(lastPublish)
+        // Too soon: come back once, so the last change of a burst is never left undrawn.
+        guard since > 0.08 else {
+            if trailingPublish == nil {
+                trailingPublish = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64((0.085 - since) * 1e9))
+                    self?.trailingPublish = nil
+                    self?.publish()
+                }
+            }
+            return
+        }
+        guard let provider = frame.provider() else { return }
         lastPublish = Date()
         image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
                         space: CGColorSpaceCreateDeviceRGB(),

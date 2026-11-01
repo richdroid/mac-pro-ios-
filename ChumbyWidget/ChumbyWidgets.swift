@@ -35,7 +35,9 @@ struct ChumbyProvider: AppIntentTimelineProvider {
         for base in chumbyRoutes(c.address) {
             let api = ChumbyAPI(base: base)
             do {
-                let r = try await api.raw("sys")
+                var r = try await api.raw("sys")
+                // Old is normal after a quiet spell, and asking starts a refresh. Only old twice means trouble.
+                if r.age > 60 { try await Task.sleep(nanoseconds: 3_000_000_000); r = try await api.raw("sys") }
                 guard let s = try? JSONDecoder().decode(Sys.self, from: r.data) else { continue }
                 e.sys = s; e.reachable = true; e.deviceDown = r.age > 60
             } catch ChumbyError.deviceDown { e.deviceDown = true; continue } catch { continue }

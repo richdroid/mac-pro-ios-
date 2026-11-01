@@ -221,7 +221,7 @@ struct LiveOctopus: View {
     let squishedAt: Date?
     var scale: CGFloat = 1
     var body: some View {
-        TimelineView(.animation(paused: still || model.tab != 0)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still || model.tab != 0)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             // The same curves as the web app's CSS: ease-in-out both ways, as a sine.
             let bob = -7 * scale * (0.5 - 0.5 * cos(2 * .pi * t / 4.2))
@@ -313,7 +313,7 @@ struct HomeTab: View {
             .padding(.top, 64 * k)
     }
     var bubbleLayer: some View {
-        TimelineView(.animation(paused: bubbles.isEmpty)) { ctx in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: bubbles.isEmpty)) { ctx in
             ZStack {
                 ForEach(bubbles) { b in
                     let p = (ctx.date.timeIntervalSince(b.born) - b.delay) / 1.7
@@ -353,8 +353,8 @@ struct HomeTab: View {
         .task(id: model.tab) {
             guard model.tab == 0 else { return }
             while !Task.isCancelled {
-                let ok = await model.refreshShot()
-                try? await Task.sleep(nanoseconds: ok ? 1_000_000_000 : 3_000_000_000)
+                let ok = model.running ? await model.refreshShot() : true
+                try? await Task.sleep(nanoseconds: model.direct ? 10_000_000_000 : ok ? 1_000_000_000 : 3_000_000_000)
             }
         }
     }
@@ -512,18 +512,14 @@ struct RemoteButton: View {
 }
 
 // A system segmented control that remembers your choice, since the Chumby can't report it.
+// The Chumby can't report these, and other things change them, so they act like buttons rather than remembering a choice.
 struct Segments: View {
     let title: String, options: [(String, String)]
     let action: (String) -> Void
-    @AppStorage private var picked: String
-    init(title: String, options: [(String, String)], action: @escaping (String) -> Void) {
-        self.title = title; self.options = options; self.action = action
-        _picked = AppStorage(wrappedValue: "", "segment." + title)
-    }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-            Picker(title, selection: Binding(get: { picked }, set: { picked = $0; action($0) })) {
+            Picker(title, selection: Binding(get: { "" }, set: { action($0) })) {
                 ForEach(options, id: \.1) { Text($0.0).tag($0.1) }
             }
             .pickerStyle(.segmented).labelsHidden()
@@ -541,6 +537,9 @@ struct ChannelsTab: View {
     @State private var picked = ""
     @State private var rows: [EditorRow] = []
     @State private var saveTask: Task<Void, Never>?
+    @State private var unsent: (rows: [EditorRow], id: String)?
+    @State private var edited: [String: [EditorRow]] = [:]   // what was saved here, until the Chumby's own list catches up
+    @State private var switching = false
     @State private var categories: [(String, String)] = []
     @State private var category = ""
     @State private var catalog: [(String, String)] = []
@@ -558,8 +557,13 @@ struct ChannelsTab: View {
     }
 
     func pick() {
+        flush()
+        // Filling the rows isn't an edit, so it mustn't look like one to the change handlers.
+        switching = true
+        Task { try? await Task.sleep(nanoseconds: 200_000_000); switching = false }
+        if let mine = edited[picked] { rows = mine; return }
         guard let ch = channels.first(where: { $0.id == picked }) else { rows = []; return }
-        let all = ch.list.filter { $0.first != "#" }
+        let all = ch.list.filter { $0.first != "#" && $0.count > 1 }
         var seen = Set<String>(), out: [EditorRow] = []
         for f in ch.conf where f.count > 2 {
             if let w = all.first(where: { $0[0] == f[0] }) ?? allWidgets.first(where: { $0[0] == f[0] }) {
@@ -573,17 +577,28 @@ struct ChannelsTab: View {
         rows = out
     }
     func changed() {
+        guard !switching else { return }
         saveTask?.cancel()
-        let snapshot = rows, id = picked
+        unsent = (rows, picked)
+        edited[picked] = rows
         saveTask = Task {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard !Task.isCancelled else { return }
-            var o: [(String, String)] = [("n", "\(snapshot.count)")]
-            for (i, w) in snapshot.enumerated() { o += [("\(i)_id", w.id), ("\(i)_on", w.on ? "1" : "0"), ("\(i)_secs", "\(w.secs)")] }
+            flush()
+        }
+    }
+    // Sends a waiting edit now, so moving to another channel can't lose it.
+    func flush() {
+        guard let u = unsent else { return }
+        saveTask?.cancel()
+        unsent = nil
+        Task {
+            var o: [(String, String)] = [("n", "\(u.rows.count)")]
+            for (i, w) in u.rows.enumerated() { o += [("\(i)_id", w.id), ("\(i)_on", w.on ? "1" : "0"), ("\(i)_secs", "\(w.secs)")] }
             do {
-                let j = try await model.api?.post("chedit", extra: "&p=" + ChumbyAPI.enc(id), body: ChumbyAPI.form(o))
+                let j = try await model.api?.post("chedit", extra: "&p=" + ChumbyAPI.enc(u.id), body: ChumbyAPI.form(o))
                 model.say(j?["missing"] != nil ? "Saved, but a widget couldn’t be downloaded" : "Channel saved")
-            } catch { model.say("Couldn’t: \(error.localizedDescription)") }
+            } catch { model.say("Couldn’t: \(error.localizedDescription)"); edited[u.id] = nil }
         }
     }
     func decode(_ s: String) -> String {
@@ -666,7 +681,7 @@ struct ChannelsTab: View {
         .seaList()
         .dragToReorder()
         .task { await model.loadChannels(); if picked.isEmpty { picked = (model.channelData?.cur ?? "").trimmingCharacters(in: .whitespacesAndNewlines); if picked.isEmpty { picked = channels.first?.id ?? "" }; pick() }; await loadCategories() }
-        .refreshable { await model.loadChannels(); await model.loadState(); pick() }
+        .refreshable { flush(); edited = [:]; await model.loadChannels(); await model.loadState(); pick() }
     }
 }
 
@@ -716,7 +731,7 @@ struct AlarmsTab: View {
             Section {
                 ForEach($model.state.schedule) { $e in
                     HStack {
-                        DatePicker("Time", selection: Binding(get: { Self.date(e.time) }, set: { e.time = Self.hhmm($0); Task { await model.saveSchedule() } }), displayedComponents: .hourAndMinute).labelsHidden()
+                        DatePicker("Time", selection: Binding(get: { Self.date(e.time) }, set: { e.time = Self.hhmm($0); model.saveScheduleSoon() }), displayedComponents: .hourAndMinute).labelsHidden()
                         Picker("Action", selection: Binding(get: { e.cmd + ":" + e.val }, set: { v in
                             let parts = v.split(separator: ":", maxSplits: 1).map(String.init)
                             e.cmd = parts[0]; e.val = parts.count > 1 ? parts[1] : ""

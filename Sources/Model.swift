@@ -8,7 +8,8 @@ final class LiveStore: ObservableObject { @Published var live: LiveStatus? }
 final class AppModel: ObservableObject {
     let liveStore = LiveStore()
     let screen = RemoteScreen()
-    @Published var screenOpen = false
+    @Published var screenOpen = false { didSet { screen.paused = !screenOpen } }
+    @Published var signingIn = false
     @Published var status: Status?
     @Published var problem: String?
     @Published var needsSignIn = false
@@ -32,11 +33,18 @@ final class AppModel: ObservableObject {
 
     func start() {
         stop()
-        Task { [weak self] in await self?.hotProbeOnce() }
+        // One answer per build is all the Mac needs.
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        if UserDefaults.standard.string(forKey: "hotProbedBuild") != build {
+            Task { [weak self] in
+                await self?.hotProbeOnce()
+                UserDefaults.standard.set(build, forKey: "hotProbedBuild")
+            }
+        }
         loops = [
             // Everything, every 10 seconds; the live numbers every second in between.
-            Task { [weak self] in while !Task.isCancelled { await self?.refresh(); try? await Task.sleep(nanoseconds: 10_000_000_000) } },
-            Task { [weak self] in while !Task.isCancelled { await self?.refreshLive(); try? await Task.sleep(nanoseconds: 1_000_000_000) } },
+            Task { [weak self] in while !Task.isCancelled { if self?.screenOpen != true { await self?.refresh() }; try? await Task.sleep(nanoseconds: 10_000_000_000) } },
+            Task { [weak self] in while !Task.isCancelled { if self?.screenOpen != true { await self?.refreshLive() }; try? await Task.sleep(nanoseconds: 1_000_000_000) } },
         ]
     }
     func stop() { loops.forEach { $0.cancel() }; loops = [] }
@@ -69,9 +77,14 @@ final class AppModel: ObservableObject {
         if address.isEmpty { needsSignIn = true; return }
         do {
             let data = try await api.statusData()
-            status = try JSONDecoder().decode(Status.self, from: data)
+            let file = Self.cacheFile
+            let decoded = try await Task.detached(priority: .userInitiated) {
+                let s = try JSONDecoder().decode(Status.self, from: data)
+                try? data.write(to: file, options: .atomic)
+                return s
+            }.value
+            status = decoded
             problem = nil; needsSignIn = false
-            try? data.write(to: Self.cacheFile, options: .atomic)
         } catch APIError.signInNeeded {
             needsSignIn = true
         } catch is CancellationError {
@@ -114,4 +127,12 @@ enum Format {
         let s = Date().timeIntervalSince1970 - ms / 1000
         return s < 60 ? "just now" : span(s) + " ago"
     }
+}
+
+// What's being typed outlives the layout: unfolding rebuilds the tabs.
+@MainActor
+final class Drafts: ObservableObject {
+    static let shared = Drafts()
+    @Published var typed = ""
+    @Published var macPassword = ""
 }
