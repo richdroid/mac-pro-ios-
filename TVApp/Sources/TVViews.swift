@@ -40,6 +40,7 @@ struct RootView: View {
                 Tab(value: 4) { Page(title: "Browse", alwaysInline: true) { BrowseTab() } } label: { tabLabel("Browse", "rectangle.stack") }
                 Tab(value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() } } label: { tabLabel("Playing", "play.circle") }
                 Tab(value: 3) { Page(title: "Films") { FilmsTab() } } label: { tabLabel("Films", "film") }
+                Tab(value: 5) { Page(title: "Status") { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
             }
             .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
         }
@@ -201,88 +202,81 @@ struct MirrorView: View {
     }
 }
 
-// Swipe to move, keep your finger down to keep moving, tap to select, hold to long-press. Lifting stops the TV at once.
-struct TouchPad: View {
+// One arrow or the centre of the D-pad: a press acts at once, holding repeats until you lift.
+private struct PadKey<Face: View>: View {
     @EnvironmentObject var model: TVModel
-    @State private var moved = false
-    @State private var anchor = CGPoint.zero
-    @State private var began = false
-    @State private var heldKey: String?
-    @State private var repeater: Task<Void, Never>?
-    @State private var longTimer: Task<Void, Never>?
-    @State private var longFired = false
-    @State private var ripple: CGPoint?
-    @State private var restPoint = CGPoint.zero
-    @State private var restSince = Date()
-    // Resets by itself when the system takes the touch away, which ends the drag with no callback.
+    let key: String
+    var longPress = false
+    let label: String
+    @ViewBuilder let face: (Bool) -> Face
     @GestureState private var touching = false
-    @AppStorage("padLearned") private var learned = false
-    let step: CGFloat = 40
-    // Repeats only once the finger has come to rest at the end of a swipe, so a slow swipe never overshoots.
-    func hold(_ key: String) {
-        guard heldKey != key else { return }
-        heldKey = key
-        repeater?.cancel()
-        let started = Date()
-        repeater = Task {
+    @State private var held: Task<Void, Never>?
+    @State private var fired = false
+    func begin() {
+        guard held == nil else { return }
+        fired = false
+        if !longPress { model.key(key) }
+        held = Task {
+            try? await Task.sleep(nanoseconds: longPress ? 600_000_000 : 350_000_000)
+            if Task.isCancelled { return }
+            if longPress { fired = true; model.key(key, long: true); return }
             // Ten seconds is further than any row goes; never run away.
+            let started = Date()
             while !Task.isCancelled, Date().timeIntervalSince(started) < 10 {
-                if Date().timeIntervalSince(restSince) > 0.3 { model.key(key, repeating: true) }
+                model.key(key, repeating: true)
                 try? await Task.sleep(nanoseconds: 110_000_000)
             }
         }
     }
-    func finish() {
-        let tapped = began && !moved && !longFired
-        cancel()
-        if tapped { model.key("ok") }
-    }
-    func cancel() {
-        repeater?.cancel(); repeater = nil; longTimer?.cancel(); longTimer = nil
-        moved = false; began = false; longFired = false; heldKey = nil; ripple = nil
+    func end(tapped: Bool) {
+        held?.cancel(); held = nil
+        if tapped && longPress && !fired { model.key(key) }
     }
     var body: some View {
-        RoundedRectangle(cornerRadius: 30, style: .continuous)
-            .fill(.ultraThinMaterial)
-            .overlay {
-                RoundedRectangle(cornerRadius: 30, style: .continuous).strokeBorder(.white.opacity(0.08))
-                if let ripple {
-                    Circle().fill(.white.opacity(0.14)).frame(width: 96, height: 96).position(ripple).allowsHitTesting(false)
-                } else if !learned {
-                    VStack(spacing: 8) {
-                        Image(systemName: "hand.draw").font(.system(size: 30, weight: .light))
-                        Text("Swipe to move. Tap to select.").font(.footnote)
-                    }
-                    .foregroundStyle(.secondary).allowsHitTesting(false).transition(.opacity)
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        face(touching)
             .contentShape(Rectangle())
-            .onChange(of: touching) { _, now in if !now { cancel() } }
-            .onDisappear { cancel() }
+            // Resets by itself if the system takes the touch away, so a key can't get stuck.
             .gesture(DragGesture(minimumDistance: 0)
                 .updating($touching) { _, state, _ in state = true }
-                .onChanged { v in
-                    ripple = v.location
-                    if hypot(v.location.x - restPoint.x, v.location.y - restPoint.y) > 6 { restPoint = v.location; restSince = Date() }
-                    if !began {
-                        began = true; anchor = v.startLocation
-                        longTimer = Task {
-                            try? await Task.sleep(nanoseconds: 600_000_000)
-                            if !Task.isCancelled, !moved { longFired = true; model.key("ok", long: true) }
+                .onChanged { _ in begin() }
+                .onEnded { _ in end(tapped: true) })
+            .onChange(of: touching) { _, now in if !now { end(tapped: false) } }
+            .onDisappear { end(tapped: false) }
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { model.key(key) }
+    }
+}
+struct DPad: View {
+    func arrow(_ icon: String, _ key: String, _ label: String, _ side: CGFloat) -> some View {
+        PadKey(key: key, label: label) { down in
+            Image(systemName: icon).font(.system(size: side * 0.34, weight: .semibold))
+                .frame(width: side, height: side)
+                .background(Circle().fill(.white.opacity(down ? 0.2 : 0)))
+                .scaleEffect(down ? 0.92 : 1).animation(TVLook.press, value: down)
+        }
+    }
+    var body: some View {
+        GeometryReader { g in
+            let d = min(g.size.width, g.size.height), side = d / 3
+            ZStack {
+                Circle().fill(.ultraThinMaterial).overlay { Circle().strokeBorder(.white.opacity(0.08)) }
+                VStack(spacing: 0) {
+                    arrow("chevron.up", "up", "Up", side)
+                    HStack(spacing: 0) {
+                        arrow("chevron.left", "left", "Left", side)
+                        PadKey(key: "ok", longPress: true, label: "Select. Hold for a long press.") { down in
+                            Circle().fill(.white.opacity(down ? 0.75 : 0.92)).padding(side * 0.1).frame(width: side, height: side)
+                                .scaleEffect(down ? 0.92 : 1).animation(TVLook.press, value: down)
                         }
+                        arrow("chevron.right", "right", "Right", side)
                     }
-                    let dx = v.location.x - anchor.x, dy = v.location.y - anchor.y
-                    if abs(dx) > step || abs(dy) > step {
-                        moved = true; longTimer?.cancel(); learned = true
-                        let k = abs(dx) > abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up")
-                        model.key(k)
-                        anchor = v.location
-                        hold(k)
-                    }
+                    arrow("chevron.down", "down", "Down", side)
                 }
-                .onEnded { _ in finish() })
-            .accessibilityLabel("Touch pad. Swipe to move, tap to select.")
+            }
+            .frame(width: d, height: d)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 
@@ -390,13 +384,13 @@ struct RemoteTab: View {
                         side(apps: false)
                     }
                 } right: {
-                    VStack(spacing: 14) { TouchPad().frame(maxHeight: .infinity); keys }.padding(.horizontal, 20).padding(.bottom, 16)
+                    VStack(spacing: 14) { DPad().frame(maxHeight: .infinity); keys }.padding(.horizontal, 20).padding(.bottom, 16)
                 }
             } else {
                 // Folded, the pad gets the room until the screen is asked for.
                 VStack(spacing: 14) {
                     if model.mirrorLive { MirrorView(store: model.mirrorStore) }
-                    TouchPad().frame(minHeight: 150, maxHeight: .infinity)
+                    DPad().frame(minHeight: 150, maxHeight: .infinity)
                     keys
                 }
                 .padding(.horizontal, 14).padding(.bottom, 12)
