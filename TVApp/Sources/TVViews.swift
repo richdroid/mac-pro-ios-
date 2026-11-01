@@ -726,7 +726,16 @@ struct PlayingTab: View {
                 Image(systemName: s.playing ? "play.tv.fill" : "pause.circle").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
                 Text(s.description.first ?? "Playing").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                 Text(model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg).font(.subheadline).foregroundStyle(.secondary)
-                PlayKey(playing: s.playing, tint: .white, size: 74).padding(.top, 6)
+                HStack(spacing: 18) {
+                    GlassKey(icon: "gobackward.10", label: "Back 10 seconds", key: "rewind", size: 56)
+                    PlayKey(playing: s.playing, tint: .white, size: 74)
+                    GlassKey(icon: "goforward.10", label: "Forward 10 seconds", key: "forward", size: 56)
+                }
+                .padding(.top, 6)
+                HStack(spacing: 18) {
+                    GlassKey(icon: "captions.bubble", label: "Subtitles", key: "captions", size: 50)
+                    GlassKey(icon: "waveform", label: "Audio track", key: "audiotrack", size: 50)
+                }
             } else {
                 ContentUnavailableView("Nothing playing", systemImage: "music.note", description: Text("Search below, or flick something from this iPhone."))
             }
