@@ -26,3 +26,15 @@ http.createServer((q, s) => {
 // And a sample Mac for the Mac Pro app.
 const macStatus = require('fs').readFileSync(__dirname + '/mock-status.json');
 http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9001, '127.0.0.1');
+// And a sample TV for the TV app.
+const tvStatus = JSON.stringify({ online: true, screen: 'on', app: 'com.stremio.one', volume: 12, volumeMax: 25,
+  music: { title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', art: '', playing: true, position: 40000, duration: 180000, sampledAt: Date.now() },
+  apps: ['Stremio', 'YouTube', 'Mint Music', 'Letterboxd', 'Netflix', 'Plex', 'Settings', 'Apple TV'].map(n => ({ pkg: 'x.' + n.replace(/ /g, ''), name: n, hasIcon: false })) });
+const tvFilms = JSON.stringify({ signedIn: true,
+  watchlist: ['Dirty Harry', 'Chinatown', 'Heat', 'Alien'].map(t => ({ film_slug: t.toLowerCase().replace(/ /g, '-'), film_title: t, film_year: '1971', poster_url: '', friends_count: '4', friends_rating_avg: '3.5' })),
+  friends: ['Battle Heater', 'Paris, Texas', 'Ran'].map(t => ({ film_slug: t.toLowerCase().replace(/[ ,]+/g, '-'), film_title: t, film_year: '1989', poster_url: '', friend_name: 'a friend', rating: '4.0' })) });
+http.createServer((q, s) => {
+  if (q.url === '/api/tv/shot') { s.setHeader('content-type', 'image/jpeg'); return s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); }
+  s.setHeader('content-type', 'application/json');
+  s.end(q.url === '/api/tv/status' ? tvStatus : q.url === '/api/tv/letterboxd' ? tvFilms : '{"ok":true}');
+}).listen(9002, '127.0.0.1');

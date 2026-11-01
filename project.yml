@@ -90,6 +90,26 @@ targets:
           NSAllowsArbitraryLoads: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  TV:
+    type: application
+    platform: iOS
+    sources:
+      - TVApp/Sources
+      - TVApp/Assets.xcassets
+      - path: Shared/Duo.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: TVApp/Info.plist
+      properties:
+        CFBundleDisplayName: TV
+        CADisableMinimumFrameDurationOnPhone: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
   GalleryMac:
     type: application
     platform: iOS

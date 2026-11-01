@@ -20,7 +20,7 @@ jobs:
           set -o pipefail
           xcodebuild -version
           mkdir -p dist
-          for APP in MacPro Chumby; do
+          for APP in MacPro Chumby TV; do
             xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Release -sdk iphoneos \
               -derivedDataPath build CURRENT_PROJECT_VERSION=$GITHUB_RUN_NUMBER CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee -a dist/build.log | tail -1
             rm -rf dist/Payload; mkdir -p dist/Payload
@@ -30,14 +30,14 @@ jobs:
           ls build/Build/Products/Release-iphoneos/MacPro.app/PlugIns
       - name: Screenshot in the simulator
         continue-on-error: true
-        timeout-minutes: 24
+        timeout-minutes: 28
         run: |
           set +x
           exec > >(tee dist/sim.log) 2>&1
           set +e
           DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
           xcrun simctl list devices available | grep -m1 "$DEVICE"
-          for APP in MacPro Chumby GalleryMac GalleryChumby; do
+          for APP in MacPro Chumby TV GalleryMac GalleryChumby; do
             xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
               -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build
           done
@@ -45,6 +45,7 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryMac.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryChumby.app
           node ci/mock-chumby.js &
@@ -54,6 +55,12 @@ jobs:
               sleep 7
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$T$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || echo "Chumby tab $T was not running"
+            done
+            for T in 0 1 2 3; do
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab $T
+              sleep 7
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$T$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || echo "TV tab $T was not running"
             done
             for T in 0 1 2 3 4 5; do
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab $T
