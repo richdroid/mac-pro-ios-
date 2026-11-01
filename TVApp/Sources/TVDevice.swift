@@ -56,7 +56,7 @@ struct DeviceTab: View {
     var hero: some View {
         VStack(spacing: 4) {
             Art(url: TVBridge.url("/api/tv/device-image")) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
-                .frame(height: 170)
+                .frame(height: panes ? 260 : 170)
                 .background(RadialGradient(colors: [.white.opacity(0.16), .clear], center: .center, startRadius: 4, endRadius: 110).frame(width: 240, height: 240))
                 .accessibilityLabel("The TV box and its remote")
             Text(info?.model ?? "Google TV").font(.title.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7).padding(.top, 6)
@@ -99,9 +99,9 @@ struct DeviceTab: View {
         Group {
             if panes {
                 FoldSplit {
-                    ScrollView { VStack(spacing: 18) { hero; if let info { details(info) } }.padding(20) }
+                    hero.padding(20).frame(maxHeight: .infinity)
                 } right: {
-                    ScrollView { if let info { tiles(info).padding(20) } }
+                    ScrollView { if let info { VStack(spacing: 18) { tiles(info); details(info) }.padding(20) } }
                 }
             } else {
                 ScrollView {
