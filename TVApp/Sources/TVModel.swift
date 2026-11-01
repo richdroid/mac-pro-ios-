@@ -71,7 +71,7 @@ final class TVModel: ObservableObject {
     }
     func loadFilms(force: Bool = false) async {
         if filmsLoaded && !force { return }
-        guard let u = url("/api/tv/letterboxd"), let (d, resp) = try? await URLSession.shared.data(from: u), (resp as? HTTPURLResponse)?.statusCode == 200,
+        guard let u = url("/api/tv/letterboxd" + (force ? "?fresh=1" : "")), let (d, resp) = try? await URLSession.shared.data(from: u), (resp as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { filmsNote = "Can’t reach your films. Pull down to try again."; return }
         filmsLoaded = true
         filmsNote = j["signedIn"] as? Bool == false ? "Sign in to Letterboxd on the TV." : nil

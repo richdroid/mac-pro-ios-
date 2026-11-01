@@ -35,11 +35,11 @@ struct RootView: View {
     var body: some View {
         PaneReader {
             TabView(selection: $model.tab) {
-                Tab("Remote", systemImage: "av.remote", value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() } }
-                Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Page(title: "Apps") { AppsTab() } }
-                Tab("Browse", systemImage: "rectangle.stack", value: 4) { Page(title: "Browse", alwaysInline: true) { BrowseTab() } }
-                Tab("Playing", systemImage: "play.circle", value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() } }
-                Tab("Films", systemImage: "film", value: 3) { Page(title: "Films") { FilmsTab() } }
+                Tab(value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
+                Tab(value: 1) { Page(title: "Apps") { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
+                Tab(value: 4) { Page(title: "Browse", alwaysInline: true) { BrowseTab() } } label: { tabLabel("Browse", "rectangle.stack") }
+                Tab(value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() } } label: { tabLabel("Playing", "play.circle") }
+                Tab(value: 3) { Page(title: "Films") { FilmsTab() } } label: { tabLabel("Films", "film") }
             }
             .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
         }

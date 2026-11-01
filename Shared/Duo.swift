@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // Two panes only when there's room side by side. Open in portrait the bars go horizontal and the fold runs across,
 // so lists read better as one column, the same as on the outer display.
@@ -46,5 +49,18 @@ struct FoldSplit<L: View, R: View>: View {
             left.frame(maxWidth: .infinity)
             right.frame(maxWidth: .infinity)
         }
+    }
+}
+
+// Side bar icons in outline at one lighter size. Left alone, the system fills wide symbols like the display and film strip.
+func tabLabel(_ title: String, _ symbol: String) -> some View {
+    Label {
+        Text(title)
+    } icon: {
+        #if canImport(UIKit)
+        Image(uiImage: (UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)) ?? UIImage()).withRenderingMode(.alwaysTemplate))
+        #else
+        Image(systemName: symbol)
+        #endif
     }
 }

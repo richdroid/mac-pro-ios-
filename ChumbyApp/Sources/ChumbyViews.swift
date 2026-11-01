@@ -151,10 +151,10 @@ struct RootView: View {
                 // Each tab paints its own sea: the system tab view is opaque behind its content.
                 TabView(selection: $model.tab) {
                     Tab(value: 0) { NavigationStack { HomeTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } } label: { Label { Text("my chumby") } icon: { Image("OctoTab") } }
-                    Tab("channels", systemImage: "tv", value: 1) { NavigationStack { ChannelsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } }
-                    Tab("alarms", systemImage: "alarm", value: 2) { NavigationStack { AlarmsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } }
-                    Tab("sounds", systemImage: "music.note", value: 3) { NavigationStack { SoundsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } }
-                    Tab("tinker", systemImage: "wrench.adjustable", value: 4) { NavigationStack { TinkerTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } }
+                    Tab(value: 1) { NavigationStack { ChannelsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } } label: { tabLabel("channels", "tv") }
+                    Tab(value: 2) { NavigationStack { AlarmsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } } label: { tabLabel("alarms", "alarm") }
+                    Tab(value: 3) { NavigationStack { SoundsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } } label: { tabLabel("sounds", "music.note") }
+                    Tab(value: 4) { NavigationStack { TinkerTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } } label: { tabLabel("tinker", "wrench.adjustable") }
                 }
                 .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab") }
             }

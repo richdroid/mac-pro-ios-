@@ -7,6 +7,7 @@ import UIKit
 struct MediaItem: Decodable, Identifiable, Hashable {
     let title: String, subtitle: String, art: String, id: String, kind: String
     var about: String?
+    var progress: Double?
 }
 struct MediaRow: Decodable, Identifiable {
     let title: String, items: [MediaItem]
@@ -67,6 +68,17 @@ struct MediaCard: View {
             Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(hex: 0x37474F) }
                 .frame(width: width, height: width / source.coverAspect)
                 .clipped()
+                .overlay(alignment: .bottom) {
+                    // How far through it you are, as on the TV's own cards.
+                    if let p = item.progress, p > 0 {
+                        GeometryReader { g in
+                            ZStack(alignment: .leading) {
+                                Color.white.opacity(0.25)
+                                TVLook.accent.frame(width: g.size.width * min(p, 1))
+                            }
+                        }.frame(height: 3)
+                    }
+                }
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.title).font(.system(size: width > 200 ? 18 : 14)).lineLimit(1)
                 Text(item.subtitle).font(.system(size: width > 200 ? 14 : 11.5)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
