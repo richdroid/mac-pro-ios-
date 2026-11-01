@@ -43,8 +43,8 @@ enum TVBridge {
         return stored.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : stored
     }
     static func url(_ path: String) -> URL? { URL(string: address.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) }
-    @discardableResult
     struct Gone: Error {}
+    @discardableResult
     static func post(_ path: String, _ body: [String: Any] = [:], timeout: TimeInterval = 12) async throws -> Data {
         guard let u = url("/api/tv/" + path), let base = URL(string: address) else { throw URLError(.badURL) }
         var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = timeout
