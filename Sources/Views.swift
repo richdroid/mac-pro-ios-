@@ -95,6 +95,7 @@ struct Screen<Content: View>: View {
             .navigationTitle(title)
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
             .sheet(isPresented: $settings) { SignInView().environmentObject(model) }
+            .navigationDestination(item: title == "Status" ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
         }
     }
 }
@@ -114,10 +115,15 @@ struct WebTile: View {
     var spark: [Double] = []
     var top: Double?
     var read: (Double) -> String = { _ in "" }
+    var open: () -> Void = {}
     @State private var probe: Int?
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+            }
             Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
             Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             if spark.count > 1 {
@@ -144,22 +150,28 @@ struct WebTile: View {
                 Text("\(read(spark[probe])) · \(Format.span(Double(spark.count - 1 - probe))) ago").font(.caption2.weight(.semibold)).monospacedDigit().padding(.horizontal, 7).padding(.vertical, 3).background(.black.opacity(0.75), in: Capsule()).padding(8)
             }
         }
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture(perform: open)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: "Show the past 24 hours", open)
     }
 }
 
 struct LiveTiles: View {
+    @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: LiveStore
     let s: Status
     var body: some View {
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net, h = store.live?.hist ?? s.hist, load = store.live?.load ?? s.load
         VStack(spacing: 12) {
             HStack(spacing: 12) {
-                WebTile(title: "CPU", value: "\(cpu.total)%", detail: String(format: "Load %.2f", load.first ?? 0), spark: h.cpu, top: 100, read: { "\(Int($0))%" })
-                WebTile(title: "Memory", value: Format.bytes(mem.used), detail: "of \(Format.bytes(mem.total))", spark: h.mem, top: 100, read: { "\(Int($0))%" })
+                WebTile(title: "CPU", value: "\(cpu.total)%", detail: String(format: "Load %.2f", load.first ?? 0), spark: h.cpu, top: 100, read: { "\(Int($0))%" }, open: { model.history = .cpu })
+                WebTile(title: "Memory", value: Format.bytes(mem.used), detail: "of \(Format.bytes(mem.total))", spark: h.mem, top: 100, read: { "\(Int($0))%" }, open: { model.history = .memory })
             }
             HStack(spacing: 12) {
-                WebTile(title: "Download", value: Format.rate(net.rxRate), detail: net.kind, spark: h.rx, read: Format.rate)
-                WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.ip, spark: h.tx, read: Format.rate)
+                WebTile(title: "Download", value: Format.rate(net.rxRate), detail: net.kind, spark: h.rx, read: Format.rate, open: { model.history = .download })
+                WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.ip, spark: h.tx, read: Format.rate, open: { model.history = .upload })
             }
         }
         .animation(.easeOut(duration: 0.25), value: cpu.total)
@@ -168,6 +180,7 @@ struct LiveTiles: View {
 
 // One dial per sensor: the number and how far the ticks reach say it all.
 struct TempDials: View {
+    @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: LiveStore
     let s: Status
     var body: some View {
@@ -180,6 +193,10 @@ struct TempDials: View {
                     }
                     Text(t.name).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                 }
+                .contentShape(Rectangle())
+                .onTapGesture { model.history = .temperature(t.name) }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
             }
         }
         .padding(.vertical, 6)
@@ -228,7 +245,7 @@ struct QuickActions: View {
         VStack(spacing: 8) {
             HStack(alignment: .top, spacing: 4) {
                 button("macwindow", "Screen") { model.screenOpen = true }
-                button("moon", "Display off") { Task { _ = await model.run("display-off"); say("Display off") } }
+                DisplayHoldButton(say: say)
                 button("square.and.arrow.down", "Copy from Mac") {
                     Task {
                         guard let t = try? await model.api.clipboard() else { say("Couldn’t reach the Mac"); return }
@@ -270,12 +287,20 @@ struct StatusTab: View {
             Section("Temperatures") { TempDials(s: s) }
         }
         Section("Disk") {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(Format.bytes(s.disk.free)) free").font(.system(size: 26, weight: .semibold)).monospacedDigit()
-                Text("\(Format.bytes(s.disk.used)) used of \(Format.bytes(s.disk.total))").font(.footnote).foregroundStyle(.secondary)
-                ProgressView(value: s.disk.used, total: s.disk.total).tint(s.disk.used / max(s.disk.total, 1) > 0.9 ? .red : macBlue).padding(.top, 8)
+            Button { model.history = .disk } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text("\(Format.bytes(s.disk.free)) free").font(.system(size: 26, weight: .semibold)).monospacedDigit()
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                    Text("\(Format.bytes(s.disk.used)) used of \(Format.bytes(s.disk.total))").font(.footnote).foregroundStyle(.secondary)
+                    ProgressView(value: s.disk.used, total: s.disk.total).tint(s.disk.used / max(s.disk.total, 1) > 0.9 ? .red : macBlue).padding(.top, 8)
+                }
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 2)
+            .buttonStyle(.plain)
         }
         }
         if side != .left {

@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
     @Published var problem: String?
     @Published var needsSignIn = false
     @Published var note: String?
+    @Published var history: HistoryMetric?  // kept here so unfolding doesn't close it
     @Published var tab = UserDefaults.standard.integer(forKey: "tab")
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
 
@@ -25,6 +26,7 @@ final class AppModel: ObservableObject {
         let saved = UserDefaults.standard.string(forKey: "address") ?? ""
         address = saved.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : saved
         needsSignIn = address.isEmpty
+        history = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         // Show the last known state at once; fresh numbers replace it moments later.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(Status.self, from: d) }
     }

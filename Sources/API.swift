@@ -49,6 +49,7 @@ struct Status: Decodable {
     let claude: Claude; let usage: Usage; let upgrade: Upgrade; let oclp: OCLP; let sharing: Sharing
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
     let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
+    var displayOn: Bool?
     var temps: [Temp]?
     let services: [Service]?
     let iosApps: SeedStatus?
@@ -104,6 +105,14 @@ struct API {
         let (data, response) = try await session.data(for: r)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
         return try JSONDecoder().decode(LiveStatus.self, from: data)
+    }
+
+    func trend(_ key: String) async throws -> [TrendPoint] {
+        struct Answer: Decodable { let points: [TrendPoint] }
+        let term = key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? key
+        let (data, response) = try await session.data(for: request("/api/trend?m=\(term)"))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(Answer.self, from: data).points
     }
 
     func statusData() async throws -> Data {

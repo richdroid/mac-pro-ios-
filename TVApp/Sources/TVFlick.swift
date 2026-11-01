@@ -12,6 +12,10 @@ struct FlickTarget: Identifiable {
 struct StremioEpisode: Decodable, Identifiable, Hashable {
     let id: String, season: Int, episode: Int, name: String, thumb: String
 }
+struct StremioStream: Decodable, Identifiable, Hashable {
+    let token: String, addon: String, name: String, description: String
+    var id: String { token }
+}
 struct StremioMeta: Decodable {
     let about: String
     let episodes: [StremioEpisode]
@@ -35,6 +39,10 @@ struct FlickScreen: View {
     @State private var meta: StremioMeta?
     @State private var season = 0
     @State private var episode: StremioEpisode?
+    @State private var streams: [StremioStream] = []
+    @State private var stream: StremioStream?
+    @State private var findingStreams = false
+    @State private var noStreams = false
     @State private var tvFrame = CGRect.zero
     @State private var cardFrame = CGRect.zero
     @State private var arrived = false
@@ -116,6 +124,7 @@ struct FlickScreen: View {
                     Text(about).font(.subheadline).foregroundStyle(.secondary).lineLimit(5)
                 }
                 if !seasons.isEmpty { episodes }
+                if source == .stremio, item.stremioRef != nil { streamPicker }
                 if let slug = item.slug, !slug.isEmpty {
                     Button { model.tick(); model.post("film", ["slug": slug], say: "Opening in Letterboxd"); dismiss() } label: {
                         Label("Open in Letterboxd", systemImage: "film")
@@ -144,6 +153,8 @@ struct FlickScreen: View {
                 Button {
                     model.tick()
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { episode = episode == e ? nil : e }
+                    // Streams belong to one episode.
+                    streams = []; stream = nil; noStreams = false
                 } label: {
                     HStack(spacing: 11) {
                         Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color(white: 0.14) }
@@ -158,6 +169,54 @@ struct FlickScreen: View {
                 .accessibilityAddTraits(episode == e ? .isSelected : [])
             }
         }
+    }
+
+    // Optional: left alone, the TV opens the title and its own list of streams.
+    @ViewBuilder var streamPicker: some View {
+        let isSeries = item.stremioRef?.type == "series"
+        if streams.isEmpty {
+            if !isSeries || episode != nil {
+                Button { Task { await findStreams() } } label: {
+                    HStack(spacing: 8) {
+                        if findingStreams { ProgressView().controlSize(.small) } else { Image(systemName: "play.rectangle.on.rectangle") }
+                        Text(findingStreams ? "Asking your addons…" : noStreams ? "No streams found. Try again" : "Choose a stream")
+                    }
+                    .font(.subheadline.weight(.semibold)).padding(.horizontal, 14).frame(height: 40).background(Color(white: 0.14), in: Capsule())
+                }
+                .buttonStyle(.plain).disabled(findingStreams)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Streams").font(.headline).padding(.bottom, 6)
+                ForEach(streams) { s in
+                    Button { model.tick(); withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { stream = stream == s ? nil : s } } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(s.name.isEmpty ? s.addon : s.name).font(.subheadline.weight(.semibold)).lineLimit(2)
+                                if !s.description.isEmpty { Text(s.description).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
+                            }
+                            .multilineTextAlignment(.leading)
+                            Spacer(minLength: 0)
+                            if stream == s { Image(systemName: "checkmark.circle.fill").foregroundStyle(TVLook.accent) }
+                        }
+                        .padding(.vertical, 8).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(stream == s ? .isSelected : [])
+                }
+            }
+        }
+    }
+    func findStreams() async {
+        guard let ref = item.stremioRef else { return }
+        findingStreams = true; noStreams = false
+        defer { findingStreams = false }
+        let video = episode?.id ?? ref.imdb
+        let term = video.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? video
+        struct Answer: Decodable { let streams: [StremioStream] }
+        guard let d = await TVBridge.data(TVBridge.url("/api/tv/streams?type=\(ref.type)&id=\(ref.imdb)&video=\(term)"), timeout: 25),
+              let a = try? JSONDecoder().decode(Answer.self, from: d), !a.streams.isEmpty else { noStreams = true; return }
+        withAnimation { streams = a.streams }
     }
 
     // The card, resting at the bottom until you throw it.
@@ -215,6 +274,7 @@ struct FlickScreen: View {
         season = episode?.season ?? m.episodes.first?.season ?? 0
     }
     var order: (String, [String: Any]) {
+        if let stream { return ("play-stream", ["token": stream.token]) }
         if source == .mint { return ("mint-open", ["link": item.id, "title": item.title, "subtitle": item.subtitle, "art": item.art, "kind": item.kind, "play": true]) }
         if let ref = item.stremioRef {
             if let e = episode { return ("stremio-open", ["id": "stremio:///detail/series/\(ref.imdb)/" + e.id.replacingOccurrences(of: ":", with: "%3A")]) }
@@ -238,14 +298,15 @@ struct FlickScreen: View {
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 #endif
-                withAnimation { note = source == .mint ? "On the TV" : "On the TV. Pick a stream with the remote." }
+                withAnimation { note = source == .mint || stream != nil ? "On the TV" : "On the TV. Pick a stream with the remote." }
                 try? await Task.sleep(nanoseconds: 1_100_000_000)
                 dismiss()
             } catch {
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
                 #endif
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.55)) { landed = false; flown = false; note = "The TV didn’t get that" }
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.55)) { landed = false; flown = false; note = stream != nil ? "That stream has gone. Pick again." : "The TV didn’t get that" }
+                if stream != nil { stream = nil; streams = []; await findStreams() }
             }
         }
     }
