@@ -708,8 +708,12 @@ struct PlayingTab: View {
     }
     var now: some View {
         VStack(spacing: 14) {
-            // Another app's video outranks a song left paused in Mint.
-            if let m = music, !otherAppIsActive {
+            // Sound from the phone that isn't music: not Mint's, whatever Mint last played.
+            if let a = model.status?.airplay, a.active, a.kind == "unknown", let title = a.title, !title.isEmpty {
+                Image(systemName: a.handoff == "youtube" ? "play.rectangle.fill" : "iphone").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
+                Text(title).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
+                Text(a.handoff == "youtube" ? "Opened in YouTube on the TV" : "Playing from this iPhone").font(.subheadline).foregroundStyle(.secondary)
+            } else if let m = music, !otherAppIsActive {
                 Art(url: URL(string: m.art)) { i in i.resizable().scaledToFit() } placeholder: { Color.white.opacity(0.08) }
                     .aspectRatio(1, contentMode: .fit).frame(maxWidth: panes ? 300 : 180)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)

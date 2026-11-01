@@ -24,6 +24,16 @@ struct TVStatus: Decodable, Equatable {
     var music: Music?
     var session: Session?
     var apps: [App]?
+    var airplay: AirPlayState?
+    // Sound coming from the phone. Anything but music stays out of Mint.
+    struct AirPlayState: Decodable, Equatable {
+        var active: Bool
+        var kind: String?
+        var playing: Bool?
+        var title: String?
+        var artist: String?
+        var handoff: String?
+    }
 }
 
 // What widgets, Control Center and Shortcuts use to reach the TV. They run outside the app, so they carry their own address.
