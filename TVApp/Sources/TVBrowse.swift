@@ -38,6 +38,7 @@ final class BrowseStore: ObservableObject {
     @Published var failed = false
     private var loadedFor: String?
     private var inFlight: String?
+    private var generation = 0
     private var loadedAt = Date.distantPast
     private static var stores: [MediaSource: BrowseStore] = [:]
     // One for each app, so going back in shows what was there straight away.
@@ -55,12 +56,22 @@ final class BrowseStore: ObservableObject {
         // Unfolded, both sides ask at once.
         if inFlight == q && !force { return }
         inFlight = q
+        generation += 1
+        let mine = generation
         loading = true; failed = false
-        defer { loading = false; inFlight = nil }
-        let data = await TVBridge.data(TVBridge.url(source.endpoint(q)), timeout: 20)
+        // Only the newest request gets to say it has finished.
+        defer { if mine == generation { loading = false; inFlight = nil } }
+        // Its own task, so unfolding, which replaces the view that asked, doesn't cancel it for the view that's waiting.
+        let address = TVBridge.url(source.endpoint(q))
+        let data = await Task { await TVBridge.data(address, timeout: 20) }.value
         // A slower, older search must not replace a newer one.
         guard q == query.trimmingCharacters(in: .whitespaces) else { return }
-        guard let data, let a = try? JSONDecoder().decode(Answer.self, from: data) else { failed = rows.isEmpty; return }
+        guard let data, let a = try? JSONDecoder().decode(Answer.self, from: data) else {
+            // Results for some other search aren't an answer to this one.
+            if loadedFor != q { rows = []; loadedFor = nil }
+            failed = rows.isEmpty
+            return
+        }
         rows = a.rows; loadedFor = q; loadedAt = Date()
     }
     func searchSoon() {

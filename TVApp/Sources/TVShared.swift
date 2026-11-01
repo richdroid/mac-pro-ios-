@@ -44,13 +44,15 @@ enum TVBridge {
     }
     static func url(_ path: String) -> URL? { URL(string: address.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) }
     @discardableResult
-    static func post(_ path: String, _ body: [String: Any] = [:]) async throws -> Data {
+    struct Gone: Error {}
+    static func post(_ path: String, _ body: [String: Any] = [:], timeout: TimeInterval = 12) async throws -> Data {
         guard let u = url("/api/tv/" + path), let base = URL(string: address) else { throw URLError(.badURL) }
-        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 12
+        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = timeout
         r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
         r.setValue("1", forHTTPHeaderField: "x-dash"); r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (d, resp) = try await URLSession.shared.data(for: r)
+        if (resp as? HTTPURLResponse)?.statusCode == 409 { throw Gone() }
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw TVIntentError.noAnswer }
         return d
     }

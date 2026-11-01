@@ -46,7 +46,6 @@ struct FlickScreen: View {
     @State private var stream: StremioStream?
     @State private var findingStreams = false
     @State private var noStreams = false
-    @State private var tvFrame = CGRect.zero
     @State private var cardFrame = CGRect.zero
     @State private var arrived = false
     @State private var flown = false
@@ -84,20 +83,20 @@ struct FlickScreen: View {
                 Color.black.ignoresSafeArea().opacity(arrived ? 1 : 0)
                 if g.size.width > g.size.height {
                     HStack(spacing: 24) {
-                        details.frame(maxWidth: .infinity).opacity(calm)
+                        details.frame(maxWidth: .infinity).opacity(calm).allowsHitTesting(!flown)
                         VStack(spacing: 0) { tv.padding(.top, 20); Spacer(minLength: 16); hand }.frame(maxWidth: .infinity)
                     }
                 } else {
                     VStack(spacing: 0) {
                         tv.padding(.top, 14)
-                        details.frame(maxHeight: .infinity).opacity(calm).zIndex(-1)
+                        details.frame(maxHeight: .infinity).opacity(calm).zIndex(-1).allowsHitTesting(!flown)
                         hand
                     }
                 }
                 Button { leave() } label: {
                     Image(systemName: "xmark").font(.body.weight(.semibold)).frame(width: 40, height: 40).contentShape(Circle())
                 }
-                .buttonStyle(.plain).glassEffect(.regular, in: Circle()).padding(14).opacity(calm).accessibilityLabel("Close")
+                .buttonStyle(.plain).glassEffect(.regular, in: Circle()).padding(14).opacity(calm).disabled(flown).accessibilityLabel("Close")
             }
             .coordinateSpace(name: "flick")
         }
@@ -136,7 +135,6 @@ struct FlickScreen: View {
                     .animation(.easeOut(duration: 0.65), value: landed)
             }
             .scaleEffect(1 + 0.05 * charge)
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { tvFrame = $0 }
             Capsule().fill(.white.opacity(0.28)).frame(width: 52, height: 3)
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.55), value: charge)
@@ -238,11 +236,14 @@ struct FlickScreen: View {
         guard let ref = item.stremioRef else { return }
         findingStreams = true; noStreams = false
         defer { findingStreams = false }
-        let video = episode?.id ?? ref.imdb
+        let chosen = episode
+        let video = chosen?.id ?? ref.imdb
         let term = video.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? video
         struct Answer: Decodable { let streams: [StremioStream] }
-        guard let d = await TVBridge.data(TVBridge.url("/api/tv/streams?type=\(ref.type)&id=\(ref.imdb)&video=\(term)"), timeout: 25),
-              let a = try? JSONDecoder().decode(Answer.self, from: d), !a.streams.isEmpty else { noStreams = true; return }
+        let d = await TVBridge.data(TVBridge.url("/api/tv/streams?type=\(ref.type)&id=\(ref.imdb)&video=\(term)"), timeout: 25)
+        // These tokens play the episode they were asked for, so an answer for another one is thrown away.
+        guard episode == chosen else { return }
+        guard let d, let a = try? JSONDecoder().decode(Answer.self, from: d), !a.streams.isEmpty else { noStreams = true; return }
         withAnimation { streams = a.streams }
     }
 
@@ -261,8 +262,6 @@ struct FlickScreen: View {
     var calm: Double { arrived ? 1 - 0.8 * min(1, nearEdge * 1.4) : 0 }
     var card: some View {
         MediaCard(item: shown, source: source, width: cardWidth, image: target.image)
-            // Measured before anything moves it, so it doesn't redraw the screen on every frame.
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { if !flown { cardFrame = $0 } }
             .shadow(color: .black.opacity(0.6), radius: 18 + 26 * nearEdge, y: 10 + 22 * nearEdge)
             .phaseAnimator([CGFloat(0), -7]) { c, y in
                 // A small bob while it waits, so it looks like something to pick up.
@@ -273,6 +272,8 @@ struct FlickScreen: View {
             .scaleEffect(1 + 0.55 * pow(nearEdge, 1.25))
             .rotationEffect(.degrees(Double(flown ? exitX : drag.width) / 18))
             .offset(x: flown ? exitX : drag.width * 0.6, y: cardY)
+            // Where it rests, whatever is moving it: an offset doesn't change this, so it isn't rewritten every frame.
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { cardFrame = $0 }
             .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("flick"))
                 .updating($touching) { _, on, _ in on = true }
                 .onChanged { drag = $0.translation }
@@ -326,6 +327,8 @@ struct FlickScreen: View {
         if source == .mint { return ("mint-open", ["link": item.id, "title": item.title, "subtitle": item.subtitle, "art": item.art, "kind": item.kind, "play": true]) }
         if let ref = item.stremioRef {
             if let e = episode { return ("stremio-open", ["id": "stremio:///detail/series/\(ref.imdb)/" + e.id.replacingOccurrences(of: ":", with: "%3A")]) }
+            // An episode card with its episode deselected means the series, once the list has made that possible.
+            if ref.type == "series", meta != nil { return ("stremio-open", ["type": "series", "id": ref.imdb]) }
             return ("stremio-open", item.id.hasPrefix("stremio:") ? ["id": item.id] : ["type": ref.type, "id": ref.imdb])
         }
         return ("film", ["slug": item.slug ?? ""])
@@ -347,12 +350,13 @@ struct FlickScreen: View {
             try? await Task.sleep(nanoseconds: 190_000_000)
             withAnimation(.spring(response: 0.42, dampingFraction: 0.52)) { landed = true }
             do {
-                try await TVBridge.post(order.0, order.1)
+                // Longer than the bridge gives a sleeping TV to wake.
+                try await TVBridge.post(order.0, order.1, timeout: 30)
                 target.sent?()
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 #endif
-                withAnimation { note = source == .mint || stream != nil ? "On the TV" : "On the TV. Pick a stream with the remote." }
+                withAnimation { note = source == .mint || stream != nil || item.stremioRef == nil ? "On the TV" : "On the TV. Pick a stream with the remote." }
                 try? await Task.sleep(nanoseconds: 1_100_000_000)
                 leave()
             } catch {
@@ -360,8 +364,10 @@ struct FlickScreen: View {
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
                 #endif
                 drag = .zero
-                withAnimation(.spring(response: 0.55, dampingFraction: 0.6)) { landed = false; flown = false; note = stream != nil ? "That stream has gone. Pick again." : "The TV didn’t get that" }
-                if stream != nil { stream = nil; streams = []; await findStreams() }
+                let gone = error is TVBridge.Gone
+                withAnimation(.spring(response: 0.55, dampingFraction: 0.6)) { landed = false; flown = false; note = gone ? "That stream has gone. Pick again." : "The TV didn’t get that" }
+                // Only a stale stream needs a new list; the choice stands if the TV just didn't answer.
+                if gone { stream = nil; streams = []; await findStreams() }
             }
         }
     }

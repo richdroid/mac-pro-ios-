@@ -120,7 +120,7 @@ struct HistoryView: View {
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 4)) { _ in
                 AxisGridLine().foregroundStyle(.white.opacity(0.06))
-                AxisValueLabel(format: .dateTime.hour())
+                AxisValueLabel(format: hours == 1 ? .dateTime.hour().minute() : .dateTime.hour())
             }
         }
         .overlay {
