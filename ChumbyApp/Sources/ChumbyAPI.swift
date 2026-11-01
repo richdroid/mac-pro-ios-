@@ -110,6 +110,9 @@ struct ChumbyState: Decodable {
     var channelNames: [String] = []
     var widgetNames: [String] = []
     var mine: [MineWidget] = []
+    // Alarms that came due while it was frozen, off or restarting.
+    struct Missed: Decodable, Identifiable, Hashable { let at: Double; let rang: Bool; let name: String; var id: Double { at } }
+    var missed: [Missed] = []
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: Key.self)
@@ -128,13 +131,14 @@ struct ChumbyState: Decodable {
         channelNames = try c.decodeIfPresent([String].self, forKey: .channelNames) ?? []
         widgetNames = try c.decodeIfPresent([String].self, forKey: .widgetNames) ?? []
         mine = try c.decodeIfPresent([MineWidget].self, forKey: .mine) ?? []
+        missed = try c.decodeIfPresent([Missed].self, forKey: .missed) ?? []
         reindex()
     }
     mutating func reindex() {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine }
+    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine }
 }
 
 // ?a=chlist: per channel, [id, name, secs] rows (a "#" row names the channel) and saved [id, on, secs] edits.
@@ -170,6 +174,12 @@ actor ChumbyAPI {
         if h.statusCode == 502 { throw ChumbyError.deviceDown }
         guard h.statusCode == 200 else { throw ChumbyError.message("No answer") }
         return (d, Double(h.value(forHTTPHeaderField: "X-Chumby-Age") ?? "") ?? 0)
+    }
+    // Only the Mac can say this: when the Chumby last answered it. Nil when going straight to the Chumby.
+    func lastSeen() async -> Date? {
+        struct Health: Decodable { let lastSeen: Double? }
+        guard let h = try? await get("health", as: Health.self), let t = h.lastSeen else { return nil }
+        return Date(timeIntervalSince1970: t)
     }
     func get<T: Decodable>(_ action: String, as: T.Type) async throws -> T {
         var r = URLRequest(url: url("a=" + action)); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 8

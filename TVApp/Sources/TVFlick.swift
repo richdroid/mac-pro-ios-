@@ -232,11 +232,12 @@ struct FlickScreen: View {
     var card: some View {
         MediaCard(item: shown, source: source, width: cardWidth)
             .shadow(color: .black.opacity(0.6), radius: 18, y: 10)
+            // Measured before the bob, so it doesn't redraw the screen on every frame.
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { if !flown { cardFrame = $0 } }
             .phaseAnimator([CGFloat(0), -7]) { c, y in
                 // A small bob while it waits, so it looks like something to pick up.
                 c.offset(y: drag == .zero && !flown && note == nil ? y : 0)
             } animation: { _ in .easeInOut(duration: 1.3) }
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { if !flown { cardFrame = $0 } }
             .rotationEffect(.degrees(flown ? 0 : Double(drag.width) / 16))
             .scaleEffect(flown ? 0.3 : 1 + 0.07 * charge)
             .offset(x: flown ? tvFrame.midX - cardFrame.midX : drag.width * 0.55,

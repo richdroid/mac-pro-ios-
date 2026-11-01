@@ -376,7 +376,7 @@ struct TVAppsProvider: AppIntentTimelineProvider {
         let logos = await withTaskGroup(of: (String, TVImage?).self) { group -> [String: TVImage] in
             for pkg in c.picks() {
                 group.addTask {
-                    let d = await TVBridge.data(TVBridge.url("/api/tv/icon?pkg=\(pkg)"), timeout: 6, cached: true)
+                    let d = await TVBridge.data(TVBridge.url("/api/tv/icon?pkg=\(pkg)&v=2"), timeout: 6, cached: true)
                     return (pkg, d.flatMap { TVProvider.thumbnail($0, 320) })
                 }
             }

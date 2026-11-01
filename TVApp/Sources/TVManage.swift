@@ -68,7 +68,7 @@ struct ManageAppsView: View {
         HStack(spacing: 12) {
             ZStack {
                 TVLook.bannerTile
-                if app.hasIcon, let u = TVBridge.url("/api/tv/icon?pkg=\(app.pkg)") {
+                if app.hasIcon, let u = TVBridge.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
                     Art(url: u) { i in
                         if app.wide == true { i.resizable().scaledToFill() } else { i.resizable().scaledToFit().padding(5) }
                     } placeholder: { Color.clear }

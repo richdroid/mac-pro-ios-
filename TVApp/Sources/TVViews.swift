@@ -459,7 +459,7 @@ struct Banner: View {
         } label: {
             ZStack {
                 TVLook.bannerTile
-                if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)") {
+                if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
                     Art(url: u) { i in
                         if app.wide == true { i.resizable().scaledToFill() }
                         else {

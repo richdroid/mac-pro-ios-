@@ -169,7 +169,7 @@ struct RootView: View {
             }
             .overlay(alignment: .top) {
                 if model.offline || model.dead {
-                    Label(model.dead ? "The Chumby isn’t answering. Try unplugging it for a moment." : "Can’t reach the Chumby. Is Tailscale on?", systemImage: "wifi.exclamationmark").font(.footnote.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8).background(.red.opacity(0.85), in: Capsule()).padding(.top, 4)
+                    Label(model.dead ? model.deadText : "Can’t reach the Chumby. Is Tailscale on?", systemImage: "wifi.exclamationmark").font(.footnote.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8).background(.red.opacity(0.85), in: Capsule()).padding(.top, 4)
                 }
             }
             .animation(.spring(duration: 0.3, bounce: 0.35), value: model.toast)
@@ -696,6 +696,18 @@ struct AlarmsTab: View {
     var body: some View {
         TwoPane {
             PageTitle("Alarms")
+            if !model.state.missed.isEmpty {
+                Section {
+                    ForEach(model.state.missed.suffix(3).reversed()) { m in
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(m.rang ? "Rang late" : "Missed").font(.body.weight(.semibold))
+                                Text([Date(timeIntervalSince1970: m.at).formatted(.dateTime.weekday(.abbreviated).hour().minute()), m.name].filter { !$0.isEmpty }.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                            }
+                        } icon: { Image(systemName: "alarm.waves.left.and.right.fill").foregroundStyle(.orange) }
+                    }
+                } footer: { Text("The Chumby was frozen or off when these came due.") }
+            }
             Section("Quick nap") {
                 HStack(spacing: 8) {
                     ForEach([10, 20, 30, 60], id: \.self) { m in
@@ -704,7 +716,7 @@ struct AlarmsTab: View {
                 }
             }
             Section {
-                let shown = model.state.alarms.enumerated().filter { !$0.element.isPlaceholder }.sorted { $0.element.localMinutes < $1.element.localMinutes }
+                let shown = model.state.alarms.enumerated().filter { !$0.element.isPlaceholder && $0.element.name != "Catch-up" }.sorted { $0.element.localMinutes < $1.element.localMinutes }
                 if shown.isEmpty { Text("No alarms yet. Tap + to add one.").foregroundStyle(.secondary) }
                 ForEach(shown, id: \.element.id) { i, a in
                     HStack {

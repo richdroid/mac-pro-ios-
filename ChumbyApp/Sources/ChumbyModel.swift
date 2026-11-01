@@ -27,6 +27,15 @@ final class ChumbyModel: ObservableObject {
     private var toastTask: Task<Void, Never>?
     var editingAlarm = false
     @Published var dead = false        // the Mac answers, but the Chumby itself has gone quiet
+    @Published var lastSeen: Date?     // when the Mac last heard from it
+    // It restarts itself within a few minutes of hanging (chwd on the device), so only then is it worth getting up.
+    var deadText: String {
+        guard let lastSeen else { return "The Chumby isn’t answering. It should restart itself within a few minutes." }
+        let at = lastSeen.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        return Date().timeIntervalSince(lastSeen) < 600
+            ? "The Chumby stopped answering at \(at). It should restart itself within a few minutes."
+            : "The Chumby stopped answering at \(at) and hasn’t restarted. Try unplugging it for a moment."
+    }
     private var fallback: String { Bundle.main.object(forInfoDictionaryKey: "ChumbyFallback") as? String ?? "" }
     private var usingFallback = false
     private var failures = 0
@@ -102,6 +111,7 @@ final class ChumbyModel: ObservableObject {
         } catch is CancellationError {
         } catch ChumbyError.deviceDown {
             failures = 0; offline = false; dead = true; staleReadings = 3
+            lastSeen = await api.lastSeen()
         } catch {
             if Task.isCancelled { return }
             failures += 1

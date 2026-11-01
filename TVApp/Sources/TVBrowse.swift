@@ -37,6 +37,7 @@ final class BrowseStore: ObservableObject {
     @Published var loading = false
     @Published var failed = false
     private var loadedFor: String?
+    private var inFlight: String?
     private var loadedAt = Date.distantPast
     private static var stores: [MediaSource: BrowseStore] = [:]
     // One for each app, so going back in shows what was there straight away.
@@ -51,8 +52,11 @@ final class BrowseStore: ObservableObject {
         // Recent enough to skip, though what's on the TV moves on, so never for long.
         if !force && loadedFor == q && !rows.isEmpty && Date().timeIntervalSince(loadedAt) < 60 { return }
         struct Answer: Decodable { let rows: [MediaRow] }
+        // Unfolded, both sides ask at once.
+        if inFlight == q && !force { return }
+        inFlight = q
         loading = true; failed = false
-        defer { loading = false }
+        defer { loading = false; inFlight = nil }
         let data = await TVBridge.data(TVBridge.url(source.endpoint(q)), timeout: 20)
         // A slower, older search must not replace a newer one.
         guard q == query.trimmingCharacters(in: .whitespaces) else { return }
