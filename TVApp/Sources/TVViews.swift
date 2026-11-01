@@ -728,9 +728,16 @@ struct PlayingTab: View {
                 Text(s.description.first ?? "Playing").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                 Text(model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg).font(.subheadline).foregroundStyle(.secondary)
                 HStack(spacing: 18) {
-                    GlassKey(icon: "gobackward.10", label: "Back 10 seconds", key: "rewind", size: 56)
-                    PlayKey(playing: s.playing, tint: .white, size: 74)
-                    GlassKey(icon: "goforward.10", label: "Forward 10 seconds", key: "forward", size: 56)
+                    if s.pkg == "com.stremio.one" {
+                        // Its player ignores the skip keys, so the bridge moves its seek bar instead.
+                        seekButton("gobackward.10", "Back 10 seconds", forward: false)
+                        PlayKey(playing: s.playing, tint: .white, size: 74)
+                        seekButton("goforward.10", "Forward 10 seconds", forward: true)
+                    } else {
+                        GlassKey(icon: "gobackward.10", label: "Back 10 seconds", key: "rewind", size: 56)
+                        PlayKey(playing: s.playing, tint: .white, size: 74)
+                        GlassKey(icon: "goforward.10", label: "Forward 10 seconds", key: "forward", size: 56)
+                    }
                 }
                 .padding(.top, 6)
                 // Stremio's menus can be read and chosen from here. Nothing else offers that, so other apps just get the key.
@@ -750,6 +757,12 @@ struct PlayingTab: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+    func seekButton(_ icon: String, _ label: String, forward: Bool) -> some View {
+        Button { model.tick(); model.post("player-seek", ["forward": forward]) } label: {
+            Image(systemName: icon).font(.system(size: 22, weight: .medium)).frame(width: 56, height: 56).contentShape(Circle())
+        }
+        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
     }
     func trackButton(_ title: String, _ icon: String, _ id: String) -> some View {
         Button { model.tick(); tracks = TrackKind(id: id) } label: {

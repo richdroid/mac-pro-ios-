@@ -434,13 +434,13 @@ struct FlickScreen: View {
             try? await Task.sleep(nanoseconds: 170_000_000)
             withAnimation(.spring(response: 0.42, dampingFraction: 0.55)) { landed = true }
             do {
-                // Longer than the bridge gives a sleeping TV to wake.
-                try await TVBridge.post(order.0, order.1, timeout: 30)
+                // Longer than the bridge can take to wake the TV, restart Stremio and see the player start.
+                try await TVBridge.post(order.0, order.1, timeout: 60)
                 target.sent?()
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 #endif
-                withAnimation { note = source == .mint || stream != nil || item.stremioRef == nil || target.send != nil ? "On the TV" : "On the TV. Pick a stream with the remote." }
+                withAnimation { note = source == .mint || stream != nil || item.stremioRef == nil || target.send != nil ? "Playing on the TV" : "On the TV. Pick a stream with the remote." }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 leave()
             } catch {
@@ -495,7 +495,7 @@ struct TrackSheet: View {
         if let lang { body["lang"] = lang }
         if let track { body["track"] = track }
         Task {
-            do { try await TVBridge.post("player-pick", body, timeout: 30); model.say("\(kind.title) changed") }
+            do { try await TVBridge.post("player-pick", body, timeout: 45); model.say("\(kind.title) changed") }
             catch { model.say("The TV didn’t get that") }
             dismiss()
         }
