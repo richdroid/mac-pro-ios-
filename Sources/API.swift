@@ -97,7 +97,7 @@ struct API {
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
     }
 
-    func hotProbe() async throws -> (Data, URLResponse) { try await session.data(for: request("/ios/hot/HotProbe")) }
+    func hotProbe(_ part: String = "HotProbe") async throws -> (Data, URLResponse) { try await session.data(for: request("/ios/hot/\(part)")) }
 
     func live() async throws -> LiveStatus {
         var r = request("/api/live"); r.timeoutInterval = 6

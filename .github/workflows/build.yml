@@ -58,7 +58,7 @@ jobs:
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$T$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || echo "Chumby tab $T was not running"
             done
-            for T in 0 1 2 3; do
+            for T in 0 1 2 3 4; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab $T
               sleep 7
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$T$2.png
@@ -72,10 +72,10 @@ jobs:
             done
           }
           # Apple's own apps, to measure our bars against.
-          xcrun simctl listapps "$DEVICE" | grep -E "CFBundleIdentifier" | head -40 || true
+          xcrun simctl listapps "$DEVICE" > dist/simulator-apps.txt 2>&1 || true
           reference() { # display, file suffix
-            for A in com.apple.Health com.apple.DocumentsApp; do
-              xcrun simctl launch "$DEVICE" $A || echo "$A did not open"
+            for A in com.apple.mobileslideshow com.apple.mobilecal com.apple.Preferences; do
+              xcrun simctl launch "$DEVICE" $A >> dist/reference-launch.txt 2>&1 || echo "$A did not open" >> dist/reference-launch.txt
               sleep 8
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/apple-$A$2.png
               xcrun simctl terminate "$DEVICE" $A || true

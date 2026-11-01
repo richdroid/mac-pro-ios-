@@ -37,8 +37,8 @@ final class AppModel: ObservableObject {
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
         if UserDefaults.standard.string(forKey: "hotProbedBuild") != build {
             Task { [weak self] in
-                await self?.hotProbeOnce()
-                UserDefaults.standard.set(build, forKey: "hotProbedBuild")
+                // Not counted as tried if the Mac wasn't ready to hand it over.
+                if await self?.hotProbeOnce() == true { UserDefaults.standard.set(build, forKey: "hotProbedBuild") }
             }
         }
         loops = [
@@ -50,21 +50,34 @@ final class AppModel: ObservableObject {
     func stop() { loops.forEach { $0.cancel() }; loops = [] }
 
     // Tests whether code fetched from the Mac can run here, and tells the Mac what happened.
-    func hotProbeOnce() async {
-        guard let (data, resp) = try? await api.hotProbe(), (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { return }
-        let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Hot")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("HotProbe-\(data.count)")
-        try? FileManager.default.removeItem(at: file)
-        guard (try? data.write(to: file)) != nil else { _ = await run("ios-probe", ["result": "could not save"]); return }
+    func hotProbeOnce() async -> Bool {
+        // Whole, as it was signed: the signature was made for a framework bundle, and alone it was refused.
+        let fm = FileManager.default
+        let base = fm.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Hot").appendingPathComponent("HotProbe.framework")
+        try? fm.removeItem(at: base)
+        var binary = 0
+        for part in ["HotProbe", "Info.plist", "_CodeSignature/CodeResources"] {
+            guard let (data, resp) = try? await api.hotProbe(part), (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else {
+                return false
+            }
+            let file = base.appendingPathComponent(part)
+            try? fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            guard (try? data.write(to: file, options: .noFileProtection)) != nil else { _ = await run("ios-probe", ["result": "could not save \(part)"]); return false }
+            if part == "HotProbe" { binary = data.count }
+        }
         var result: String
-        if let h = dlopen(file.path, RTLD_NOW) {
+        if let h = dlopen(base.appendingPathComponent("HotProbe").path, RTLD_NOW) {
             typealias Probe = @convention(c) () -> UnsafePointer<CChar>?
             if let sym = dlsym(h, "hot_probe"), let out = unsafeBitCast(sym, to: Probe.self)() { result = "OK: " + String(cString: out) }
             else { result = "opened, but no function" }
-        } else { result = "dlopen failed: " + (dlerror().map { String(cString: $0) } ?? "unknown") }
-        result += " (\(data.count) bytes)"
+        } else {
+            // Paths are long and the reason comes last, so send the end of the message.
+            let message = dlerror().map { String(cString: $0) } ?? "unknown"
+            result = "whole framework failed: " + String(message.suffix(300))
+        }
+        result += " (\(binary) bytes)"
         _ = await run("ios-probe", ["result": result])
+        return true
     }
 
     func refreshLive() async {

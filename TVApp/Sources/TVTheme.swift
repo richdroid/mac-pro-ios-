@@ -29,6 +29,30 @@ final class ImageStore {
     }()
     // The wall, the cover and the band often ask for the same picture at once; fetch it once.
     private var fetching: [URL: Task<TVImage?, Never>] = [:]
+    // A cover's band colour, as Mint tints its items: the picture's average, muted and darkened so white text reads.
+    private var bands: [URL: Color] = [:]
+    func band(_ url: URL) async -> Color? {
+        if let b = bands[url] { return b }
+        guard let image = await load(url) else { return nil }
+        #if canImport(UIKit)
+        let rgb: (Double, Double, Double)? = await Task.detached(priority: .utility) {
+            guard let cg = image.cgImage else { return nil }
+            var px = [UInt8](repeating: 0, count: 8 * 8 * 4)
+            guard let c = CGContext(data: &px, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            c.draw(cg, in: CGRect(x: 0, y: 0, width: 8, height: 8))
+            var r = 0.0, g = 0.0, b = 0.0
+            for i in stride(from: 0, to: px.count, by: 4) { r += Double(px[i]); g += Double(px[i + 1]); b += Double(px[i + 2]) }
+            return (r / 64 / 255, g / 64 / 255, b / 64 / 255)
+        }.value
+        guard let rgb else { return nil }
+        let top = max(rgb.0, rgb.1, rgb.2, 0.01), k = 0.42 / top
+        let color = Color(red: rgb.0 * k, green: rgb.1 * k, blue: rgb.2 * k)
+        bands[url] = color
+        return color
+        #else
+        return nil
+        #endif
+    }
     func cached(_ url: URL?) -> TVImage? { url.flatMap { cache.object(forKey: $0 as NSURL) } }
     func load(_ url: URL) async -> TVImage? {
         if let i = cached(url) { return i }

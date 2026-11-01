@@ -54,7 +54,11 @@ const film = (t, more) => ({ film_slug: t.toLowerCase().replace(/[ ,]+/g, '-'), 
 const tvFilms = JSON.stringify({ signedIn: true,
   watchlist: ['Dirty Harry', 'Chinatown', 'Heat', 'Alien', 'Ran', 'Klute', 'Thief', 'Le Samourai'].map(t => film(t, { friends_count: '4', friends_rating_avg: '3.5' })),
   friends: ['Battle Heater', 'Paris, Texas', 'Ran', 'Vertigo', 'Stalker', 'Tampopo', 'Ikiru', 'Paris, Texas'].map(t => film(t, { friend_name: 'a friend', rating: '4.0' })) });
+const tvMint = JSON.stringify({ rows: ['Recently played', 'Made for you', 'New releases'].map(title => ({ title, items: ['Sample Album', 'Another Album', 'Third Album', 'Fourth Album'].map(t => ({ title: t, subtitle: 'Sample Artist', art: tvBase + '/art.png', id: 'https://music.apple.com/us/album/x/1', kind: 'album' })) })) });
+const tvStremio = JSON.stringify({ rows: ['Popular movies', 'Popular series'].map(title => ({ title, items: ['Heat', 'Alien', 'Chinatown', 'Thief'].map(t => ({ title: t, subtitle: '1995 · ★ 8.3', art: tvBase + '/poster.png', id: 'tt0113277', kind: 'movie', about: 'A sample description of the film.' })) })) });
 http.createServer((q, s) => {
+  if (q.url.startsWith('/api/tv/mint')) { s.setHeader('content-type', 'application/json'); return s.end(tvMint); }
+  if (q.url.startsWith('/api/tv/stremio')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }
   if (q.url === '/api/tv/shot') { s.setHeader('content-type', 'image/jpeg'); return s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); }
   if (q.url.startsWith('/api/tv/icon')) { s.setHeader('content-type', 'image/png'); const a = tvApps.find(x => q.url.endsWith(x[0])); return s.end(a && a[2] ? pictures.wide : pictures.square); }
   if (q.url === '/poster.png' || q.url === '/art.png') { s.setHeader('content-type', 'image/png'); return s.end(pictures[q.url.slice(1, -4)]); }

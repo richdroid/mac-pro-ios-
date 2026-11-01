@@ -37,6 +37,7 @@ struct RootView: View {
             TabView(selection: $model.tab) {
                 Tab("Remote", systemImage: "av.remote", value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() } }
                 Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Page(title: "Apps") { AppsTab() } }
+                Tab("Browse", systemImage: "rectangle.stack", value: 4) { Page(title: "Browse", alwaysInline: true) { BrowseTab() } }
                 Tab("Playing", systemImage: "play.circle", value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() } }
                 Tab("Films", systemImage: "film", value: 3) { Page(title: "Films") { FilmsTab() } }
             }
