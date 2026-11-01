@@ -462,6 +462,92 @@ struct FlickScreen: View {
     }
 }
 
+// Stremio's own subtitle or audio menu, read off the TV and chosen from here. It's open on the TV while this is.
+struct TrackMenu: Decodable {
+    struct Track: Decodable, Identifiable { let label: String, tag: String; var id: String { label + tag } }
+    let languages: [String]
+    let tracks: [Track]
+}
+struct TrackKind: Identifiable {
+    let id: String
+    var title: String { id == "subtitles" ? "Subtitles" : "Audio" }
+}
+struct TrackSheet: View {
+    @EnvironmentObject var model: TVModel
+    @Environment(\.dismiss) private var dismiss
+    let kind: TrackKind
+    @State private var menu: TrackMenu?
+    @State private var language: String?
+    @State private var working = true
+    @State private var failed = false
+    @State private var picked = false
+    func load(_ lang: String? = nil) async {
+        working = true; failed = false
+        defer { working = false }
+        var path = "/api/tv/player-tracks?kind=\(kind.id)"
+        if let lang, let term = lang.addingPercentEncoding(withAllowedCharacters: .alphanumerics) { path += "&lang=\(term)" }
+        guard let d = await TVBridge.data(TVBridge.url(path), timeout: 30), let m = try? JSONDecoder().decode(TrackMenu.self, from: d) else { failed = menu == nil; return }
+        withAnimation(.snappy) { menu = m; if let lang { language = lang } }
+    }
+    func pick(lang: String?, track: Int?) {
+        model.tick(); picked = true; working = true
+        var body: [String: Any] = ["kind": kind.id]
+        if let lang { body["lang"] = lang }
+        if let track { body["track"] = track }
+        Task {
+            do { try await TVBridge.post("player-pick", body, timeout: 30); model.say("\(kind.title) changed") }
+            catch { model.say("The TV didn’t get that") }
+            dismiss()
+        }
+    }
+    var body: some View {
+        NavigationStack {
+            List {
+                if let menu {
+                    if menu.languages.count > 1 {
+                        Section("Language") {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(menu.languages, id: \.self) { l in
+                                        Button {
+                                            if l == "Disabled" { pick(lang: l, track: nil) } else { model.tick(); Task { await load(l) } }
+                                        } label: {
+                                            Text(l == "Disabled" ? "Off" : l).font(.footnote.weight(.semibold)).padding(.horizontal, 13).frame(height: 32)
+                                                .background(language == l ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.white.opacity(0.12)), in: Capsule())
+                                                .foregroundStyle(language == l ? .black : .white)
+                                        }.buttonStyle(.plain).disabled(working)
+                                    }
+                                }
+                            }
+                            .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                        }
+                    }
+                    Section(language ?? "Tracks") {
+                        ForEach(Array(menu.tracks.enumerated()), id: \.offset) { i, t in
+                            Button { pick(lang: language, track: i) } label: {
+                                HStack {
+                                    Text(t.label)
+                                    if !t.tag.isEmpty { Text(t.tag).font(.caption2.weight(.semibold)).foregroundStyle(.secondary) }
+                                    Spacer()
+                                }.contentShape(Rectangle())
+                            }.buttonStyle(.plain).disabled(working)
+                        }
+                    }
+                } else if failed {
+                    ContentUnavailableView("Can’t read the menu", systemImage: "exclamationmark.bubble", description: Text("It only works with a video open in Stremio on the TV."))
+                }
+            }
+            .overlay { if working { ProgressView().controlSize(.large) } }
+            .navigationTitle(kind.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+        .task { await load() }
+        .onDisappear { if !picked { model.post("player-menu-close") } }
+    }
+}
+
 // Cards give under the finger, as anything you can pick up should.
 struct PressCard: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {

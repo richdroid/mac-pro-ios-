@@ -700,6 +700,7 @@ struct PlayingTab: View {
     @Environment(\.paneLayout) private var panes
     @State private var query = ""
     @State private var kind = "song"
+    @State private var tracks: TrackKind?
     var music: TVStatus.Music? { model.status?.music }
     var otherAppIsActive: Bool {
         guard let s = model.status?.session, s.pkg != "com.codex.musicwebtv" else { return false }
@@ -732,15 +733,29 @@ struct PlayingTab: View {
                     GlassKey(icon: "goforward.10", label: "Forward 10 seconds", key: "forward", size: 56)
                 }
                 .padding(.top, 6)
-                HStack(spacing: 18) {
-                    GlassKey(icon: "captions.bubble", label: "Subtitles", key: "captions", size: 50)
-                    GlassKey(icon: "waveform", label: "Audio track", key: "audiotrack", size: 50)
+                // Stremio's menus can be read and chosen from here. Nothing else offers that, so other apps just get the key.
+                if s.pkg == "com.stremio.one" {
+                    HStack(spacing: 12) {
+                        trackButton("Subtitles", "captions.bubble", "subtitles")
+                        trackButton("Audio", "waveform", "audio")
+                    }
+                } else {
+                    HStack(spacing: 18) {
+                        GlassKey(icon: "captions.bubble", label: "Subtitles", key: "captions", size: 50)
+                        GlassKey(icon: "waveform", label: "Audio track", key: "audiotrack", size: 50)
+                    }
                 }
             } else {
                 ContentUnavailableView("Nothing playing", systemImage: "music.note", description: Text("Search below, or flick something from this iPhone."))
             }
         }
         .frame(maxWidth: .infinity)
+    }
+    func trackButton(_ title: String, _ icon: String, _ id: String) -> some View {
+        Button { model.tick(); tracks = TrackKind(id: id) } label: {
+            Label(title, systemImage: icon).font(.subheadline.weight(.semibold)).padding(.horizontal, 16).frame(height: 44)
+        }
+        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
     }
     func play(shuffle: Bool = false) {
         guard !query.isEmpty else { return }
@@ -773,6 +788,7 @@ struct PlayingTab: View {
                 ScrollView { VStack(spacing: 24) { now; send }.padding(.horizontal, 16).padding(.bottom, 16) }
             }
         }
+        .sheet(item: $tracks) { TrackSheet(kind: $0).environmentObject(model) }
     }
 }
 
