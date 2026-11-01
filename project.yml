@@ -96,7 +96,10 @@ targets:
     sources:
       - TVApp/Sources
       - TVApp/Assets.xcassets
+      - TVApp/RobotoVariable.ttf
       - path: Shared/Duo.swift
+    dependencies:
+      - target: TVShare
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV
@@ -106,10 +109,30 @@ targets:
       properties:
         CFBundleDisplayName: TV
         CADisableMinimumFrameDurationOnPhone: true
+        UIAppFonts: [RobotoVariable.ttf]
+        NSAppleMusicUsageDescription: Sees which song is playing on this iPhone, so a flick can send it to the TV.
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+  TVShare:
+    type: app-extension
+    platform: iOS
+    sources: [TVShare]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV.Share
+    info:
+      path: TVShare/Info.plist
+      properties:
+        CFBundleDisplayName: Send to TV
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
   GalleryMac:
     type: application
     platform: iOS
