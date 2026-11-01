@@ -11,6 +11,7 @@ struct ChumbyApp: App {
                 .toggleStyle(SwitchToggleStyle(tint: ChumbyPalette.on))
                 .onChange(of: phase) { _, p in if p == .active { model.start() } else { model.stop() } }
                 .onAppear { model.start() }
+                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
         }
     }
 }
@@ -307,10 +308,11 @@ struct HomeTab: View {
                     }
                     bubbleLayer
                 }
-                .offset(y: -58 * k)
+                // The octopus sits clear above the device, not on it.
+                .offset(y: -58 * k - 15)
             }
             .frame(maxWidth: stageWidth)
-            .padding(.top, 64 * k)
+            .padding(.top, 64 * k + 15)
     }
     var bubbleLayer: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: bubbles.isEmpty)) { ctx in
@@ -652,7 +654,7 @@ struct ChannelsTab: View {
             }
         } right: {
             Section {
-                Picker("Channel", selection: $picked) { ForEach(channels, id: \.id) { Text(title($0)).tag($0.id) } }
+                Picker("Editing", selection: $picked) { ForEach(channels, id: \.id) { Text(title($0)).tag($0.id) } }
                     .onChange(of: picked) { _, _ in pick() }
                 ForEach($rows) { $w in
                     VStack(alignment: .leading, spacing: 6) {
@@ -963,7 +965,7 @@ struct SoundsTab: View {
                         }.accessibilityLabel("Volume").tint(ChumbyPalette.orange)
                     }
                 }
-                Button("Stop music") { model.cmd("stopmusic", nil, "Music stopped") }
+                Button("Stop music") { model.cmd("stopmusic", nil, "Music stopped") }.foregroundStyle(.tint)
                 Toggle("AirPlay receiver", isOn: Binding(get: { model.sys.airplayOn }, set: { on in model.sys.airplayOn = on; model.cmd("airplay", on ? "1" : "0", on ? "AirPlay on" : "AirPlay off") }))
             }
             Section {
@@ -977,10 +979,12 @@ struct SoundsTab: View {
             } header: { Text("Pandora") } footer: { if let scanNote { Text(scanNote) } }
             } right: {
             Section("Alarm sound") {
-                LabeledContent("Alarm volume", value: "\(Int(alarmVolume))%")
-                Slider(value: $alarmVolume, in: 0...100, step: 5) { e in
-                    if !e { model.state.volume = Int(alarmVolume); Task { await model.saveAlarms("Volume saved") } }
-                }.accessibilityLabel("Alarm volume").tint(ChumbyPalette.orange)
+                VStack(spacing: 10) {
+                    LabeledContent("Alarm volume", value: "\(Int(alarmVolume))%")
+                    Slider(value: $alarmVolume, in: 0...100, step: 5) { e in
+                        if !e { model.state.volume = Int(alarmVolume); Task { await model.saveAlarms("Volume saved") } }
+                    }.accessibilityLabel("Alarm volume").tint(ChumbyPalette.orange)
+                }
                 Picker("Fade in", selection: Binding(get: { model.state.fade }, set: { model.state.fade = $0; Task { await model.saveAlarms("Fade saved") } })) {
                     ForEach([(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")], id: \.0) { Text($0.1).tag($0.0) }
                 }

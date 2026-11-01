@@ -14,6 +14,6 @@ func card<C: View, B: View>(_ w: CGFloat, _ h: CGFloat, _ bg: B, @ViewBuilder _ 
             card(338, 158, Color(hex: 0x14181C)) { RemoteBody(family: .systemMedium, entry: e) }
             card(338, 158, Color(hex: 0x14181C)) { AppsBody(entry: e) }
             card(338, 354, Color(hex: 0x14181C)) { RemoteBody(family: .systemLarge, entry: e) }
-        }.padding(10).scaleEffect(0.62, anchor: .top).frame(height: 680) }.background(Color(white: 0.8))
+        }.padding(10).scaleEffect(0.6, anchor: .top).frame(height: 680, alignment: .top) }.background(Color(white: 0.8))
     } }
 }

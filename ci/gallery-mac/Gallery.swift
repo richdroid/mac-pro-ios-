@@ -14,7 +14,8 @@ func card<C: View>(_ w: CGFloat, _ h: CGFloat, clear: Bool = false, @ViewBuilder
             card(338, 158, clear: true) { StatusBody(family: .systemMedium, entry: e, flat: true) }
             HStack(spacing: 12) { card(158, 158) { StatusBody(family: .systemSmall, entry: e) }; card(158, 158, clear: true) { StatusBody(family: .systemSmall, entry: e, flat: true) } }
             card(338, 158) { TempBody(family: .systemMedium, entry: e) }
+            card(338, 158, clear: true) { TempBody(family: .systemMedium, entry: e, flat: true) }
             HStack(spacing: 12) { card(158, 158) { TempBody(family: .systemSmall, entry: e) }; card(158, 158) { ClaudeBody(entry: e) } }
-        }.padding(10) }.background(Color(white: 0.8))
+        }.padding(10).scaleEffect(0.72, anchor: .top).frame(height: 680, alignment: .top) }.background(Color(white: 0.8))
     } }
 }

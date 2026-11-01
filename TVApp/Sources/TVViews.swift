@@ -20,6 +20,7 @@ struct TVApp: App {
             RootView().environmentObject(model).preferredColorScheme(.dark).tint(TVLook.accent)
                 .onChange(of: phase) { _, p in if p == .active { model.start() } else { model.stop() } }
                 .onAppear { model.start() }
+                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
         }
     }
 }
@@ -36,7 +37,7 @@ struct RootView: View {
             TabView(selection: $model.tab) {
                 Tab("Remote", systemImage: "av.remote", value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() } }
                 Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Page(title: "Apps") { AppsTab() } }
-                Tab("Playing", systemImage: "play.circle", value: 2) { Page(title: "Playing") { PlayingTab() } }
+                Tab("Playing", systemImage: "play.circle", value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() } }
                 Tab("Films", systemImage: "film", value: 3) { Page(title: "Films") { FilmsTab() } }
             }
             .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
@@ -180,6 +181,7 @@ struct TouchPad: View {
     @State private var restSince = Date()
     // Resets by itself when the system takes the touch away, which ends the drag with no callback.
     @GestureState private var touching = false
+    @AppStorage("padLearned") private var learned = false
     let step: CGFloat = 40
     // Repeats only once the finger has come to rest at the end of a swipe, so a slow swipe never overshoots.
     func hold(_ key: String) {
@@ -211,8 +213,12 @@ struct TouchPad: View {
                 RoundedRectangle(cornerRadius: 30, style: .continuous).strokeBorder(.white.opacity(0.08))
                 if let ripple {
                     Circle().fill(.white.opacity(0.14)).frame(width: 96, height: 96).position(ripple).allowsHitTesting(false)
-                } else {
-                    Image(systemName: "hand.draw").font(.system(size: 30, weight: .light)).foregroundStyle(.tertiary).allowsHitTesting(false)
+                } else if !learned {
+                    VStack(spacing: 8) {
+                        Image(systemName: "hand.draw").font(.system(size: 30, weight: .light))
+                        Text("Swipe to move. Tap to select.").font(.footnote)
+                    }
+                    .foregroundStyle(.secondary).allowsHitTesting(false).transition(.opacity)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
@@ -233,7 +239,7 @@ struct TouchPad: View {
                     }
                     let dx = v.location.x - anchor.x, dy = v.location.y - anchor.y
                     if abs(dx) > step || abs(dy) > step {
-                        moved = true; longTimer?.cancel()
+                        moved = true; longTimer?.cancel(); learned = true
                         let k = abs(dx) > abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up")
                         model.key(k)
                         anchor = v.location
@@ -329,16 +335,25 @@ struct RemoteTab: View {
             }
         }
     }
+    func side(apps: Bool) -> some View {
+        VStack(spacing: 14) {
+            MirrorView(store: model.mirrorStore)
+            if let m = model.status?.music { MiniPlayer(music: m) }
+            if apps, model.status?.apps?.isEmpty == false { QuickApps() }
+            Spacer(minLength: 0)
+            SendBar()
+        }
+        .padding(.horizontal, 20).padding(.bottom, 16)
+    }
     var body: some View {
         Group {
             if size == .regular {
                 FoldSplit {
-                    VStack(spacing: 14) {
-                        MirrorView(store: model.mirrorStore)
-                        if let m = model.status?.music { MiniPlayer(music: m) }
-                        Spacer(minLength: 0)
-                        SendBar()
-                    }.padding(.horizontal, 20).padding(.bottom, 16)
+                    // The apps come along when there's room, and step aside when held in portrait.
+                    ViewThatFits(in: .vertical) {
+                        side(apps: true)
+                        side(apps: false)
+                    }
                 } right: {
                     VStack(spacing: 14) { TouchPad().frame(maxHeight: .infinity); keys }.padding(.horizontal, 20).padding(.bottom, 16)
                 }
@@ -365,6 +380,17 @@ struct RemoteTab: View {
             Button("Delete") { model.key("del") }
             Button("Cancel", role: .cancel) { text = "" }
         } message: { Text("Goes into the box that’s focused on the TV. Not for passwords.") }
+    }
+}
+struct QuickApps: View {
+    @EnvironmentObject var model: TVModel
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: TVLook.gap) {
+                ForEach(AppsTab.watching(model.status?.apps ?? []).prefix(8)) { Banner(app: $0) }
+            }.scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.viewAligned).frame(height: TVLook.bannerSize.height)
     }
 }
 struct MiniPlayer: View {
@@ -438,10 +464,11 @@ struct AppsTab: View {
     static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.google.android.play.games", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.ionitech.airscreen", "com.macropinch.axe"]
     static let watchOrder = ["com.mint.letterboxd", "com.stremio.one", "com.google.android.youtube.tv", "com.google.android.youtube.tvunplugged", "com.netflix.ninja", "com.plexapp.android", "com.apple.atve.androidtv.appletv", "com.amazon.amazonvideo.livingroom", "com.cbs.ott"]
     var all: [TVStatus.App] { model.status?.apps ?? [] }
-    var watch: [TVStatus.App] {
-        let rest = all.filter { !Self.tools.contains($0.pkg) && !Self.listen.contains($0.pkg) }
-        return rest.sorted { (Self.watchOrder.firstIndex(of: $0.pkg) ?? 99) < (Self.watchOrder.firstIndex(of: $1.pkg) ?? 99) }
+    static func watching(_ all: [TVStatus.App]) -> [TVStatus.App] {
+        let rest = all.filter { !tools.contains($0.pkg) && !listen.contains($0.pkg) }
+        return rest.sorted { (watchOrder.firstIndex(of: $0.pkg) ?? 99) < (watchOrder.firstIndex(of: $1.pkg) ?? 99) }
     }
+    var watch: [TVStatus.App] { Self.watching(all) }
     var listen: [TVStatus.App] { Self.listen.compactMap { p in all.first { $0.pkg == p } } }
     var tools: [TVStatus.App] { all.filter { Self.tools.contains($0.pkg) } }
     @ViewBuilder func row(_ title: String, _ apps: [TVStatus.App]) -> some View {
@@ -598,7 +625,6 @@ struct FlickCard: View {
 struct NowControls: View {
     @EnvironmentObject var model: TVModel
     let music: TVStatus.Music
-    @State private var tint = TVLook.accent
     static func clock(_ ms: Double) -> String { let t = Int(max(ms, 0) / 1000); return String(format: "%d:%02d", t / 60, t % 60) }
     var body: some View {
         VStack(spacing: 14) {
@@ -621,13 +647,9 @@ struct NowControls: View {
             }
             HStack(spacing: 26) {
                 GlassKey(icon: "backward.fill", label: "Previous", key: "previous", size: 54)
-                PlayKey(playing: music.playing, tint: tint, size: 74)
+                PlayKey(playing: music.playing, tint: .white, size: 74)
                 GlassKey(icon: "forward.fill", label: "Next", key: "next", size: 54)
             }
-        }
-        .animation(.easeOut(duration: 0.3), value: tint)
-        .task(id: music.art) {
-            if let u = URL(string: music.art), let i = await ImageStore.shared.load(u) { tint = CoverTint.of(i) } else { tint = TVLook.accent }
         }
     }
 }
@@ -646,7 +668,7 @@ struct PlayingTab: View {
             // Another app's video outranks a song left paused in Mint.
             if let m = music, !otherAppIsActive {
                 Art(url: URL(string: m.art)) { i in i.resizable().scaledToFit() } placeholder: { Color.white.opacity(0.08) }
-                    .aspectRatio(1, contentMode: .fit).frame(maxWidth: size == .regular ? 300 : 210)
+                    .aspectRatio(1, contentMode: .fit).frame(maxWidth: size == .regular ? 300 : 180)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)
                 VStack(spacing: 3) {
                     Text(m.title).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
@@ -658,7 +680,7 @@ struct PlayingTab: View {
                 Image(systemName: s.playing ? "play.tv.fill" : "pause.circle").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
                 Text(s.description.first ?? "Playing").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                 Text(model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg).font(.subheadline).foregroundStyle(.secondary)
-                PlayKey(playing: s.playing, size: 74).padding(.top, 6)
+                PlayKey(playing: s.playing, tint: .white, size: 74).padding(.top, 6)
             } else {
                 ContentUnavailableView("Nothing playing", systemImage: "music.note", description: Text("Search below, or flick something from this iPhone."))
             }
@@ -736,7 +758,7 @@ struct FilmGrid: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 RowTitle(title)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 118, maximum: 130), spacing: 12, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(films) { FilmCard(film: $0) } }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 118, maximum: 118), spacing: 14, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(films) { FilmCard(film: $0) } }
             }.padding(.horizontal, 20).padding(.vertical, 12)
         }
     }

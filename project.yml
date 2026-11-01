@@ -29,6 +29,7 @@ targets:
       path: MacProInfo.plist
       properties:
         CFBundleDisplayName: Mac Pro
+        CFBundleURLTypes: [{ CFBundleURLName: macproapp, CFBundleURLSchemes: [macproapp] }]
         CADisableMinimumFrameDurationOnPhone: true
         NSFaceIDUsageDescription: Unlocks your saved logins before filling them on the Mac.
         UILaunchScreen: { UIColorName: LaunchColor }
@@ -66,6 +67,7 @@ targets:
       path: ChumbyApp/Info.plist
       properties:
         CFBundleDisplayName: Chumby
+        CFBundleURLTypes: [{ CFBundleURLName: chumbyapp, CFBundleURLSchemes: [chumbyapp] }]
         CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
@@ -110,6 +112,7 @@ targets:
       path: TVApp/Info.plist
       properties:
         CFBundleDisplayName: TV
+        CFBundleURLTypes: [{ CFBundleURLName: tvremoteapp, CFBundleURLSchemes: [tvremoteapp] }]
         CADisableMinimumFrameDurationOnPhone: true
         NSAppleMusicUsageDescription: Sees which song is playing on this iPhone, so a flick can send it to the TV.
         UILaunchScreen: { UIColorName: LaunchColor }

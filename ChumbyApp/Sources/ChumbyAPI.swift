@@ -173,7 +173,10 @@ actor ChumbyAPI {
     }
     func get<T: Decodable>(_ action: String, as: T.Type) async throws -> T {
         var r = URLRequest(url: url("a=" + action)); r.cachePolicy = .reloadIgnoringLocalCacheData; r.timeoutInterval = 8
-        return try JSONDecoder().decode(T.self, from: try await URLSession.shared.data(for: r).0)
+        let (d, resp) = try await URLSession.shared.data(for: r)
+        // An error page must not read as an empty answer, or a failure looks like "no alarms".
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw ChumbyError.message("No answer") }
+        return try JSONDecoder().decode(T.self, from: d)
     }
     func text(_ query: String) async throws -> String {
         var r = URLRequest(url: url(query)); r.timeoutInterval = 25

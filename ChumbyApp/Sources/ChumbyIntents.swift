@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import WidgetKit
 
 // The Mac's cache first; straight to the Chumby at home if Tailscale is off.
 func chumbyRoutes(_ override: String?) -> [URL] {
@@ -78,6 +79,7 @@ struct ChumbyNapIntent: AppIntent {
             s.addNap(minutes: minutes)
             try await api.post("save", body: ChumbyAPI.form(s.alarmForm()))
         }
+        WidgetCenter.shared.reloadAllTimelines()
         return .result(dialog: IntentDialog(stringLiteral: "Blub. Waking you in \(minutes) minutes."))
     }
 }

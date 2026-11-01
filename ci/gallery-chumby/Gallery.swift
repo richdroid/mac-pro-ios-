@@ -12,8 +12,8 @@ func card<C: View>(_ w: CGFloat, _ h: CGFloat, @ViewBuilder _ c: () -> C) -> som
             HStack(spacing: 14) { card(158, 158) { AlarmBody(family: .systemSmall, entry: e) }; card(158, 158) { BuddyBody(entry: e) }; }
             card(158, 158) { AlarmBody(family: .systemSmall, entry: off) }
             card(338, 158) { RemoteBody(entry: e) }
-            card(338, 158) { RightNowBody(entry: e) }
-            card(338, 158) { RightNowBody(entry: off) }
+            card(338, 158) { RemoteBody(entry: off) }
+            HStack(spacing: 14) { card(158, 158) { BuddyBody(entry: e) }.environment(\.colorScheme, .dark); card(158, 158) { AlarmBody(family: .systemSmall, entry: e) }.environment(\.colorScheme, .dark) }
         }.padding(10) }.background(Color(white: 0.8))
     } }
 }

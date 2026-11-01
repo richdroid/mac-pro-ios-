@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WidgetKit
 #if canImport(UIKit)
 import UIKit
 typealias PlatformImage = UIImage
@@ -171,7 +172,7 @@ final class ChumbyModel: ObservableObject {
         let task = Task { [weak self] in
             await before?.value
             guard let self, self.newestSave[action] == number else { return }
-            do { try await self.api?.post(action, body: body) }
+            do { try await self.api?.post(action, body: body); WidgetCenter.shared.reloadAllTimelines() }
             catch { self.say("Couldn’t save: \(error.localizedDescription)"); self.stateHold = .distantPast }
         }
         saveTail = task

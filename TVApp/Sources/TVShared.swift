@@ -62,7 +62,7 @@ struct TVPress: AppIntent {
     func perform() async throws -> some IntentResult {
         try await TVBridge.post("key", ["key": key])
         // Long enough that the widget's refresh shows what the press did.
-        try? await Task.sleep(nanoseconds: 500_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         return .result()
     }
 }
