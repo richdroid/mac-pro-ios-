@@ -48,6 +48,7 @@ jobs:
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryMac.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryChumby.app
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
           node ci/mock-chumby.js &
           shots() { # display, file suffix
             for T in 0 1 2 3 4; do

@@ -8,6 +8,12 @@ import MediaPlayer
 struct TVApp: App {
     @StateObject private var model = TVModel()
     @Environment(\.scenePhase) private var phase
+    init() {
+        #if os(iOS)
+        // Long-form audio is what lets the AirPlay list move the whole phone's audio, not only this app's.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio)
+        #endif
+    }
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(model).preferredColorScheme(.dark).tint(Mint.progress).foregroundStyle(Mint.text)
@@ -108,19 +114,25 @@ struct MirrorView: View {
     @EnvironmentObject var model: TVModel
     var body: some View {
         ZStack {
-            Color.black
-            if let m = model.mirror { Image(tv: m).resizable().scaledToFit() }
-            if !model.mirrorLive {
-                Button { model.mirrorLive = true; Task { await model.loadMirror() } } label: {
-                    Image(systemName: "eye").font(.system(size: 22)).frame(width: 56, height: 56).background(Color.black.opacity(0.55), in: Circle())
-                }.buttonStyle(.plain).accessibilityLabel("Show the TV’s screen")
-            }
+            Mint.plane.opacity(0.5)
+            if let m = model.mirror, model.mirrorLive { Image(tv: m).resizable().scaledToFit() }
+            if !model.mirrorLive { MirrorToggle() }
         }
         .aspectRatio(16.0 / 9, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: Mint.radius))
         .contentShape(Rectangle())
         .onTapGesture { if model.mirrorLive { model.mirrorLive = false } }
-        .onDisappear { model.mirrorLive = false }
+    }
+}
+struct MirrorToggle: View {
+    @EnvironmentObject var model: TVModel
+    var body: some View {
+        Button {
+            model.mirrorLive.toggle()
+            if model.mirrorLive { Task { await model.loadMirror() } }
+        } label: { Image(systemName: model.mirrorLive ? "eye.slash" : "eye").font(.system(size: 20)) }
+        .buttonStyle(MintKeyStyle(diameter: 44))
+        .accessibilityLabel(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen")
     }
 }
 
@@ -135,14 +147,19 @@ struct TouchPad: View {
     @State private var longTimer: Task<Void, Never>?
     @State private var longFired = false
     @State private var ripple: CGPoint?
+    @State private var restPoint = CGPoint.zero
+    @State private var restSince = Date()
     let step: CGFloat = 40
+    // Repeats only once the finger has come to rest at the end of a swipe, so a slow swipe never overshoots.
     func hold(_ key: String) {
         guard heldKey != key else { return }
         heldKey = key
         repeater?.cancel()
         repeater = Task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            while !Task.isCancelled { model.key(key, repeating: true); try? await Task.sleep(nanoseconds: 110_000_000) }
+            while !Task.isCancelled {
+                if Date().timeIntervalSince(restSince) > 0.3 { model.key(key, repeating: true) }
+                try? await Task.sleep(nanoseconds: 110_000_000)
+            }
         }
     }
     func finish() {
@@ -160,6 +177,7 @@ struct TouchPad: View {
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { v in
                     ripple = v.location
+                    if hypot(v.location.x - restPoint.x, v.location.y - restPoint.y) > 6 { restPoint = v.location; restSince = Date() }
                     if !began {
                         began = true; anchor = v.startLocation
                         longTimer = Task {
@@ -193,7 +211,10 @@ struct GlyphKey: View {
             Image(systemName: icon).font(.system(size: size * 0.38, weight: .regular))
         }
         .buttonStyle(MintKeyStyle(diameter: size))
-        .simultaneousGesture(LongPressGesture(minimumDuration: 0.6).onEnded { _ in longPressed = true; model.key(key, long: true) })
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0.6).onEnded { _ in
+            longPressed = true; model.key(key, long: true)
+            Task { try? await Task.sleep(nanoseconds: 2_000_000_000); longPressed = false }
+        })
         .accessibilityLabel(label)
     }
 }
@@ -227,9 +248,17 @@ struct RemoteTab: View {
                     VStack(spacing: 12) { TouchPad().frame(maxHeight: .infinity); keys }.padding(20)
                 }
             } else {
-                VStack(spacing: 10) { title; MirrorView(); TouchPad().frame(minHeight: 120, maxHeight: .infinity); keys }.padding(.horizontal, 14).padding(.bottom, 6)
+                // Folded, the pad gets the room until the screen is asked for.
+                VStack(spacing: 10) {
+                    HStack { title; MirrorToggle() }
+                    if model.mirrorLive { MirrorView() }
+                    TouchPad().frame(minHeight: 120, maxHeight: .infinity)
+                    keys
+                }
+                .padding(.horizontal, 14).padding(.bottom, 6)
             }
         }
+        .onDisappear { model.mirrorLive = false }
         .alert("Type on TV", isPresented: $typing) {
             TextField("Text", text: $text)
             Button("Send") { model.post("text", ["text": text]); text = "" }
@@ -251,7 +280,7 @@ struct Banner: View {
             ZStack {
                 Mint.banner
                 if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)") {
-                    AsyncImage(url: u) { i in
+                    Art(url: u) { i in
                         if app.wide == true { i.resizable().scaledToFill() } else { i.resizable().scaledToFit().padding(14) }
                     } placeholder: { name }
                 } else { name }
@@ -266,31 +295,58 @@ struct Banner: View {
     }
     var name: some View { Text(app.name).font(Mint.font(14, condensed: true)).multilineTextAlignment(.center).padding(6) }
 }
+// Rows run edge to edge and stop at the tab rail, so nothing slides under the gear.
 struct BannerRow: View {
     let title: String, apps: [TVStatus.App]
+    var pad: CGFloat = 20
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            RowTitle(title)
+            RowTitle(title).padding(.leading, pad)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: Mint.gap) { ForEach(apps) { Banner(app: $0) } }.padding(.vertical, 10).scrollTargetLayout()
+                LazyHStack(spacing: Mint.gap) { ForEach(apps) { Banner(app: $0) } }.padding(.vertical, 10).padding(.horizontal, pad).scrollTargetLayout()
             }
-            .scrollTargetBehavior(.viewAligned).scrollClipDisabled()
+            .scrollTargetBehavior(.viewAligned).clipped()
         }
     }
 }
 struct AppsTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.horizontalSizeClass) private var size
+    static let listen = ["com.codex.musicwebtv", "com.google.android.youtube.tvmusic"]
     static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.google.android.play.games", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.ionitech.airscreen", "com.macropinch.axe"]
+    static let watchOrder = ["com.mint.letterboxd", "com.stremio.one", "com.google.android.youtube.tv", "com.google.android.youtube.tvunplugged", "com.netflix.ninja", "com.plexapp.android", "com.apple.atve.androidtv.appletv", "com.amazon.amazonvideo.livingroom", "com.cbs.ott"]
     var all: [TVStatus.App] { model.status?.apps ?? [] }
+    var watch: [TVStatus.App] {
+        let rest = all.filter { !Self.tools.contains($0.pkg) && !Self.listen.contains($0.pkg) }
+        return rest.sorted { (Self.watchOrder.firstIndex(of: $0.pkg) ?? 99) < (Self.watchOrder.firstIndex(of: $1.pkg) ?? 99) }
+    }
+    var listen: [TVStatus.App] { Self.listen.compactMap { p in all.first { $0.pkg == p } } }
+    var tools: [TVStatus.App] { all.filter { Self.tools.contains($0.pkg) } }
+    @ViewBuilder func row(_ title: String, _ apps: [TVStatus.App], pad: CGFloat) -> some View {
+        if !apps.isEmpty { BannerRow(title: title, apps: apps, pad: pad) }
+    }
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Mint.rowGap) {
-                SendBar()
-                BannerRow(title: "Apps", apps: all.filter { !Self.tools.contains($0.pkg) })
-                BannerRow(title: "Tools and settings", apps: all.filter { Self.tools.contains($0.pkg) })
+        if size == .regular {
+            FoldSplit {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Mint.rowGap) {
+                        SendBar().padding(.horizontal, 20)
+                        row("Watch", watch, pad: 20)
+                        row("Listen", listen, pad: 20)
+                    }.padding(.vertical, 12)
+                }
+            } right: {
+                ScrollView { row("Tools and settings", tools, pad: 20).padding(.vertical, 12) }
             }
-            .padding(.horizontal, size == .regular ? 56 : 20).padding(.vertical, 12)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Mint.rowGap) {
+                    SendBar().padding(.horizontal, 20)
+                    row("Watch", watch, pad: 20)
+                    row("Listen", listen, pad: 20)
+                    row("Tools and settings", tools, pad: 20)
+                }.padding(.vertical, 12)
+            }
         }
     }
 }
@@ -298,8 +354,15 @@ struct AppsTab: View {
 // MARK: - Playing
 #if os(iOS)
 struct RoutePicker: UIViewRepresentable {
+    private static weak var current: AVRoutePickerView?
+    // iOS has no call for this, so press the picker's own button. If that ever stops working, the button is still there.
+    static func open() -> Bool {
+        guard let b = current?.subviews.compactMap({ $0 as? UIButton }).first else { return false }
+        b.sendActions(for: .touchUpInside)
+        return true
+    }
     func makeUIView(context: Context) -> AVRoutePickerView {
-        let v = AVRoutePickerView(); v.tintColor = UIColor(Mint.text); v.activeTintColor = UIColor(Mint.progress); v.prioritizesVideoDevices = false
+        let v = AVRoutePickerView(); Self.current = v; v.tintColor = UIColor(Mint.text); v.activeTintColor = UIColor(Mint.progress); v.prioritizesVideoDevices = false
         return v
     }
     func updateUIView(_ v: AVRoutePickerView, context: Context) {}
@@ -321,7 +384,9 @@ struct FlickCard: View {
             if MPMediaLibrary.authorizationStatus() == .notDetermined { MPMediaLibrary.requestAuthorization { _ in Task { @MainActor in refresh() } } }
             return
         }
-        let item = MPMusicPlayerController.systemMusicPlayer.nowPlayingItem
+        // A paused song is left over from earlier; whatever is really playing belongs to another app, so AirPlay it.
+        let player = MPMusicPlayerController.systemMusicPlayer
+        let item = player.playbackState == .playing ? player.nowPlayingItem : nil
         title = item?.title ?? ""; artist = item?.artist ?? ""
         if let i = item?.artwork?.image(at: CGSize(width: 160, height: 160)) { art = Image(uiImage: i) } else { art = nil }
         #endif
@@ -329,10 +394,15 @@ struct FlickCard: View {
     func flick() {
         model.tick()
         #if os(iOS)
+        refresh()
         if !title.isEmpty {
             MPMusicPlayerController.systemMusicPlayer.pause()
             model.post("flick", ["title": title, "artist": artist], say: "Sent to the TV")
-        } else { showPicker = true; model.say("Pick Mint Music in the AirPlay list") }
+        } else {
+            // Mint comes to the front first, ready to receive.
+            model.post("music-now")
+            if RoutePicker.open() { model.say("Choose Mint Music") } else { showPicker = true }
+        }
         #endif
     }
     var body: some View {
@@ -360,8 +430,15 @@ struct FlickCard: View {
                 if v.translation.height < -50 || v.predictedEndTranslation.height < -140 { flick() }
                 withAnimation(Mint.glide) { offset = 0 }
             })
-        .onAppear { refresh() }
+        .onAppear {
+            refresh()
+            #if os(iOS)
+            MPMusicPlayerController.systemMusicPlayer.beginGeneratingPlaybackNotifications()
+            #endif
+        }
         #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerPlaybackStateDidChange)) { _ in refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerNowPlayingItemDidChange)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refresh() }
         .alert("AirPlay to the TV", isPresented: $showPicker) { Button("OK", role: .cancel) {} } message: { Text("Tap the AirPlay button on this card and choose Mint Music. AirPlay only reaches the TV on home Wi-Fi.") }
         #endif
@@ -376,7 +453,7 @@ struct PlayingTab: View {
     var now: some View {
         VStack(spacing: 12) {
             if let m = music {
-                AsyncImage(url: URL(string: m.art)) { i in i.resizable().scaledToFit() } placeholder: { Mint.band }
+                Art(url: URL(string: m.art)) { i in i.resizable().scaledToFit() } placeholder: { Mint.band }
                     .aspectRatio(1, contentMode: .fit).frame(maxWidth: 280).clipShape(RoundedRectangle(cornerRadius: Mint.radius))
                 Text(m.title).font(Mint.font(26, weight: 300)).lineLimit(2).multilineTextAlignment(.center)
                 Text([m.artist, m.album].filter { !$0.isEmpty }.joined(separator: " · ")).font(Mint.font(14)).opacity(0.7).lineLimit(1)
@@ -410,7 +487,7 @@ struct PlayingTab: View {
             FlickCard()
             RowTitle("Play on TV")
             HStack(spacing: 6) {
-                ForEach([("Song", "song"), ("Album", "album"), ("Playlist", "playlist"), ("Artist", "artist")], id: \.1) { k in
+                ForEach([("Song", "song"), ("Album", "album"), ("Playlist", "playlist"), ("Artist", "artist"), ("Station", "station")], id: \.1) { k in
                     Button(k.0) { kind = k.1 }.font(Mint.font(14, weight: kind == k.1 ? 500 : 400, condensed: true)).buttonStyle(.plain).padding(.horizontal, 10).padding(.vertical, 7)
                         .background(kind == k.1 ? Mint.band : .clear, in: RoundedRectangle(cornerRadius: Mint.radius))
                 }
@@ -438,7 +515,7 @@ struct FilmCard: View {
     var body: some View {
         Button { model.tick(); model.post("film", ["slug": film.slug], say: "Opening on TV") } label: {
             VStack(alignment: .leading, spacing: 0) {
-                AsyncImage(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Mint.banner }
+                Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Mint.banner }
                     .frame(width: 117, height: 176).clipped()
                 VStack(alignment: .leading, spacing: 1) {
                     Text(film.title).font(Mint.font(13.4)).lineLimit(1)
@@ -454,10 +531,23 @@ struct FilmRow: View {
     let title: String, films: [Film]
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            RowTitle(title)
+            RowTitle(title).padding(.leading, 20)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 8) { ForEach(films) { FilmCard(film: $0) } }.scrollTargetLayout()
-            }.scrollTargetBehavior(.viewAligned)
+                LazyHStack(alignment: .top, spacing: 8) { ForEach(films) { FilmCard(film: $0) } }.padding(.horizontal, 20).scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned).clipped()
+        }
+    }
+}
+// Unfolded, a whole pane of posters is worth more than one row and a blank half screen.
+struct FilmGrid: View {
+    let title: String, films: [Film]
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                RowTitle(title)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 117, maximum: 117), spacing: 8, alignment: .top)], alignment: .leading, spacing: 8) { ForEach(films) { FilmCard(film: $0) } }
+            }.padding(.horizontal, 20).padding(.vertical, 12)
         }
     }
 }
@@ -467,21 +557,17 @@ struct FilmsTab: View {
     var body: some View {
         Group {
             if size == .regular {
-                FoldSplit {
-                    ScrollView { if !model.friends.isEmpty { FilmRow(title: "Friends", films: model.friends).padding(.leading, 56) } }
-                } right: {
-                    ScrollView { if !model.watchlist.isEmpty { FilmRow(title: "Watchlist", films: model.watchlist).padding(.leading, 12) } }
-                }
+                FoldSplit { FilmGrid(title: "Friends", films: model.friends) } right: { FilmGrid(title: "Watchlist", films: model.watchlist) }
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Mint.rowGap) {
                         if !model.friends.isEmpty { FilmRow(title: "Friends", films: model.friends) }
                         if !model.watchlist.isEmpty { FilmRow(title: "Watchlist", films: model.watchlist) }
-                    }.padding(.leading, 20).padding(.vertical, 12)
+                    }.padding(.vertical, 12)
                 }
-                .refreshable { await model.loadFilms(force: true) }
             }
         }
+        .refreshable { await model.loadFilms(force: true) }
         .task(id: model.tab) { if model.tab == 3 { await model.loadFilms() } }
     }
 }

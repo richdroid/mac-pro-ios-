@@ -40,20 +40,56 @@ struct MintKeyStyle: ButtonStyle {
     }
 }
 
-// The soft wall behind the rows: art shrunk to almost nothing, then stretched. Cheap, with no live blur.
+// Pictures stay in memory, so scrolling back never flashes a placeholder.
+@MainActor
+final class ImageStore {
+    static let shared = ImageStore()
+    private let cache = NSCache<NSURL, TVImage>()
+    func cached(_ url: URL?) -> TVImage? { url.flatMap { cache.object(forKey: $0 as NSURL) } }
+    func load(_ url: URL) async -> TVImage? {
+        if let i = cached(url) { return i }
+        guard let (d, resp) = try? await URLSession.shared.data(from: url), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) else { return nil }
+        cache.setObject(i, forKey: url as NSURL)
+        return i
+    }
+}
+struct Art<Content: View, Placeholder: View>: View {
+    let url: URL?
+    @ViewBuilder let content: (Image) -> Content
+    @ViewBuilder let placeholder: () -> Placeholder
+    @State private var loaded: TVImage?
+    var body: some View {
+        Group {
+            if let i = ImageStore.shared.cached(url) ?? loaded { content(Image(tv: i)) } else { placeholder() }
+        }
+        .task(id: url) { if let url { loaded = await ImageStore.shared.load(url) } }
+    }
+}
+
+// The soft wall behind the rows: art really shrunk to a few pixels, then stretched. Cheap, with no live blur.
 struct Wall: View {
     let art: String?
+    @State private var small: TVImage?
     var body: some View {
         ZStack {
             Color.black
-            if let art, let u = URL(string: art) {
-                AsyncImage(url: u) { i in
-                    i.resizable().frame(width: 6, height: 6).scaleEffect(90).opacity(0.42).frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                } placeholder: { Color.clear }
+            if let small {
+                Color.clear
+                    .overlay { Image(tv: small).resizable().interpolation(.high).scaledToFill().opacity(0.42) }
+                    .clipped().transition(.opacity)
             }
             LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
+        .animation(.easeOut(duration: 0.26), value: small)
+        .task(id: art) {
+            guard let art, let u = URL(string: art), let i = await ImageStore.shared.load(u) else { small = nil; return }
+            #if canImport(UIKit)
+            small = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 16)).image { _ in i.draw(in: CGRect(x: 0, y: 0, width: 16, height: 16)) }
+            #else
+            small = i
+            #endif
+        }
     }
 }

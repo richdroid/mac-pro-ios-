@@ -33,7 +33,6 @@ final class TVModel: ObservableObject {
     @Published var reachable = true
     @Published var watchlist: [Film] = []
     @Published var friends: [Film] = []
-    @Published var watched: [Film] = []
     @Published var toast: String?
     @Published var tab = UserDefaults.standard.integer(forKey: "tab")
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
@@ -93,9 +92,12 @@ final class TVModel: ObservableObject {
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
         filmsLoaded = true
         func list(_ key: String, _ note: ([String: String]) -> String) -> [Film] {
-            ((j[key] as? [[String: String]]) ?? []).compactMap { r in
+            // A friend can log the same film twice; show it once.
+            var seen = Set<String>()
+            return ((j[key] as? [[String: String]]) ?? []).compactMap { r in
                 guard let slug = r["film_slug"], !slug.isEmpty else { return nil }
-                return Film(slug: slug, title: r["film_title"] ?? slug, year: r["film_year"] ?? "", poster: r["poster_url"] ?? "", note: note(r))
+                let f = Film(slug: slug, title: r["film_title"] ?? slug, year: r["film_year"] ?? "", poster: r["poster_url"] ?? "", note: note(r))
+                return seen.insert(f.id).inserted ? f : nil
             }
         }
         watchlist = list("watchlist") { r in
@@ -130,9 +132,11 @@ final class TVModel: ObservableObject {
         lastKeyAt = Date(); lastTouch = Date()
         if !repeating { tick() }
         guard let r = request("key", ["key": name, "long": long, "repeat": repeating]) else { return }
-        let before = keyChain
+        let before = keyChain, sent = Date(), power = name == "wake" || name == "sleep"
         keyChain = Task { [weak self] in
             await before?.value
+            // A slow network must not replay old presses at the TV.
+            if !power && Date().timeIntervalSince(sent) > 1.5 { return }
             let result = try? await URLSession.shared.data(for: r)
             if (result?.1 as? HTTPURLResponse)?.statusCode != 200, !repeating { self?.say("The TV didn’t get that") }
             if self?.mirrorLive == true && !repeating { try? await Task.sleep(nanoseconds: 400_000_000); await self?.loadMirror() }

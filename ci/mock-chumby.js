@@ -26,15 +26,31 @@ http.createServer((q, s) => {
 // And a sample Mac for the Mac Pro app.
 const macStatus = require('fs').readFileSync(__dirname + '/mock-status.json');
 http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9001, '127.0.0.1');
-// And a sample TV for the TV app.
+// And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
+const zlib = require('zlib');
+const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc = b => { let c = 0xffffffff; for (const x of b) c = crcTable[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+const chunk = (t, d) => { const n = Buffer.alloc(4), r = Buffer.alloc(4), b = Buffer.concat([Buffer.from(t), d]); n.writeUInt32BE(d.length); r.writeUInt32BE(crc(b)); return Buffer.concat([n, b, r]); };
+const png = (w, h, a, b) => {
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0, o = 0; y < h; y++) { o++; for (let x = 0; x < w; x++) { const t = (x / w + y / h) / 2; for (let c = 0; c < 3; c++) raw[o++] = a[c] + (b[c] - a[c]) * t; } }
+  const head = Buffer.alloc(13); head.writeUInt32BE(w, 0); head.writeUInt32BE(h, 4); head[8] = 8; head[9] = 2;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+};
+const pictures = { wide: png(284, 160, [200, 40, 60], [240, 150, 40]), square: png(160, 160, [230, 230, 240], [120, 200, 240]), poster: png(234, 352, [40, 70, 120], [220, 120, 70]), art: png(300, 300, [190, 40, 120], [30, 90, 200]) };
+const tvBase = 'http://127.0.0.1:9002';
+const tvApps = [['com.codex.musicwebtv', 'Mint Music', 1], ['com.mint.letterboxd', 'Letterboxd', 1], ['com.stremio.one', 'Stremio', 0], ['com.google.android.youtube.tv', 'YouTube', 1], ['com.google.android.youtube.tvmusic', 'YouTube Music', 0], ['com.netflix.ninja', 'Netflix', 1], ['com.plexapp.android', 'Plex', 1], ['com.apple.atve.androidtv.appletv', 'Apple TV', 1], ['com.android.tv.settings', 'Settings', 1], ['com.google.android.play.games', 'Google Play Games', 1], ['flar2.homebutton', 'Button Mapper', 1]];
 const tvStatus = JSON.stringify({ online: true, screen: 'on', app: 'com.stremio.one', volume: 12, volumeMax: 25,
-  music: { title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', art: '', playing: true, position: 40000, duration: 180000, sampledAt: Date.now() },
-  apps: ['Stremio', 'YouTube', 'Mint Music', 'Letterboxd', 'Netflix', 'Plex', 'Settings', 'Apple TV'].map(n => ({ pkg: 'x.' + n.replace(/ /g, ''), name: n, hasIcon: false })) });
+  music: { title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', art: tvBase + '/art.png', playing: true, position: 40000, duration: 180000, sampledAt: Date.now() },
+  apps: tvApps.map(([pkg, name, wide]) => ({ pkg, name, hasIcon: pkg !== 'flar2.homebutton', wide: !!wide })) });
+const film = (t, more) => ({ film_slug: t.toLowerCase().replace(/[ ,]+/g, '-'), film_title: t, film_year: '1971', poster_url: tvBase + '/poster.png', ...more });
 const tvFilms = JSON.stringify({ signedIn: true,
-  watchlist: ['Dirty Harry', 'Chinatown', 'Heat', 'Alien'].map(t => ({ film_slug: t.toLowerCase().replace(/ /g, '-'), film_title: t, film_year: '1971', poster_url: '', friends_count: '4', friends_rating_avg: '3.5' })),
-  friends: ['Battle Heater', 'Paris, Texas', 'Ran'].map(t => ({ film_slug: t.toLowerCase().replace(/[ ,]+/g, '-'), film_title: t, film_year: '1989', poster_url: '', friend_name: 'a friend', rating: '4.0' })) });
+  watchlist: ['Dirty Harry', 'Chinatown', 'Heat', 'Alien', 'Ran', 'Klute', 'Thief', 'Le Samourai'].map(t => film(t, { friends_count: '4', friends_rating_avg: '3.5' })),
+  friends: ['Battle Heater', 'Paris, Texas', 'Ran', 'Vertigo', 'Stalker', 'Tampopo', 'Ikiru', 'Paris, Texas'].map(t => film(t, { friend_name: 'a friend', rating: '4.0' })) });
 http.createServer((q, s) => {
   if (q.url === '/api/tv/shot') { s.setHeader('content-type', 'image/jpeg'); return s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); }
+  if (q.url.startsWith('/api/tv/icon')) { s.setHeader('content-type', 'image/png'); const a = tvApps.find(x => q.url.endsWith(x[0])); return s.end(a && a[2] ? pictures.wide : pictures.square); }
+  if (q.url === '/poster.png' || q.url === '/art.png') { s.setHeader('content-type', 'image/png'); return s.end(pictures[q.url.slice(1, -4)]); }
   s.setHeader('content-type', 'application/json');
   s.end(q.url === '/api/tv/status' ? tvStatus : q.url === '/api/tv/letterboxd' ? tvFilms : '{"ok":true}');
 }).listen(9002, '127.0.0.1');
