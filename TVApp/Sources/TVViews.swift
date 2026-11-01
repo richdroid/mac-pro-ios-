@@ -551,7 +551,12 @@ struct RoutePicker: UIViewRepresentable {
     private static weak var current: AVRoutePickerView?
     // iOS has no call for this, so press the picker's own button. If that ever stops working, the button is still there.
     static func open() -> Bool {
-        guard let b = current?.subviews.compactMap({ $0 as? UIButton }).first else { return false }
+        func button(in v: UIView) -> UIButton? {
+            if let b = v as? UIButton { return b }
+            for s in v.subviews { if let b = button(in: s) { return b } }
+            return nil
+        }
+        guard let current, let b = button(in: current) else { return false }
         b.sendActions(for: .touchUpInside)
         return true
     }
@@ -626,6 +631,9 @@ struct FlickCard: View {
                 Label(title.isEmpty ? "Flick up to AirPlay" : "Flick up to send", systemImage: "chevron.up").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
+            // The same thing as a flick, for when a flick isn't handy.
+            Button(action: flick) { Image(systemName: "arrow.up.circle.fill").font(.title2).frame(width: 44, height: 44).contentShape(Rectangle()) }
+                .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Send to the TV")
             #if os(iOS)
             RoutePicker().frame(width: 44, height: 44).accessibilityLabel("AirPlay")
             #endif
@@ -634,7 +642,8 @@ struct FlickCard: View {
         .tvCard()
         .scaleEffect(offset < -20 ? 0.97 : 1)
         .offset(y: offset)
-        .gesture(DragGesture(minimumDistance: 12)
+        // Ahead of the page's own scrolling, which would otherwise take every upward drag.
+        .highPriorityGesture(DragGesture(minimumDistance: 12)
             .onChanged { v in offset = min(0, v.translation.height) * 0.7 }
             .onEnded { v in
                 if v.translation.height < -50 || v.predictedEndTranslation.height < -140 { flick() }

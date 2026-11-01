@@ -111,7 +111,8 @@ struct MediaSheet: View {
                     .shadow(color: .black.opacity(0.45), radius: 22, y: 12)
                     .offset(y: offset)
                     .opacity(sending ? 0 : 1)
-                    .gesture(DragGesture(minimumDistance: 8)
+                    // Ahead of the page's own scrolling, which would otherwise take every upward drag.
+                    .highPriorityGesture(DragGesture(minimumDistance: 8)
                         .onChanged { v in offset = min(0, v.translation.height) * 0.8 }
                         .onEnded { v in
                             if v.translation.height < -60 || v.predictedEndTranslation.height < -160 { send() }
@@ -144,7 +145,8 @@ struct MediaSheet: View {
             ? ("mint-open", ["link": item.id, "title": item.title, "subtitle": item.subtitle, "art": item.art, "kind": item.kind, "play": true])
             : ("stremio-open", ["type": item.kind, "id": item.id])
         Task {
-            do { try await TVBridge.post(body.0, body.1); model.say("On the TV") }
+            // Stremio stops at its list of streams, and which one to play is a choice for the remote.
+            do { try await TVBridge.post(body.0, body.1); model.say(source == .mint ? "On the TV" : "On the TV. Pick a stream with the remote.") }
             catch { model.say("The TV didn’t get that") }
             dismiss()
         }
