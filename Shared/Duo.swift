@@ -55,7 +55,7 @@ struct FoldSplit<L: View, R: View>: View {
 // Side bar icons, every one fitted to the same box. Symbols and logos have their own natural proportions, which is
 // what makes a wide display look bigger than a narrow remote.
 #if canImport(UIKit)
-private func evenIcon(_ source: UIImage?, fit: CGFloat = 22) -> UIImage {
+private func evenIcon(_ source: UIImage?, fit: CGFloat = 26) -> UIImage {
     let canvas = fit + 4
     guard let source, source.size.width > 0, source.size.height > 0 else { return UIImage() }
     let k = fit / max(source.size.width, source.size.height)
@@ -77,7 +77,7 @@ func tabLabel(_ title: String, _ symbol: String) -> some View {
         #endif
     }
 }
-func tabLabel(_ title: String, asset: String, fit: CGFloat = 22) -> some View {
+func tabLabel(_ title: String, asset: String, fit: CGFloat = 26) -> some View {
     Label {
         Text(title)
     } icon: {
