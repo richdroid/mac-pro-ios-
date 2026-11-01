@@ -444,33 +444,67 @@ struct FlickCard: View {
         #endif
     }
 }
+// Mint's control band: cover colour, a hairline along the top, times at the ends and a round Play in the middle.
+struct ControlBand: View {
+    @EnvironmentObject var model: TVModel
+    let music: TVStatus.Music
+    @State private var tint = Mint.band
+    static func clock(_ ms: Double) -> String { let t = Int(max(ms, 0) / 1000); return String(format: "%d:%02d", t / 60, t % 60) }
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let raw = music.playing ? music.position + ctx.date.timeIntervalSince1970 * 1000 - music.sampledAt : music.position
+            let now = min(max(raw, 0), max(music.duration, 0))
+            VStack(spacing: 0) {
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Rectangle().fill(Mint.text.opacity(0.22))
+                        Rectangle().fill(Mint.text).frame(width: g.size.width * (music.duration > 0 ? now / music.duration : 0))
+                    }
+                }.frame(height: 2)
+                HStack(spacing: 0) {
+                    Text(Self.clock(now)).font(Mint.font(12)).monospacedDigit().frame(width: 44, alignment: .leading)
+                    Spacer(minLength: 0)
+                    GlyphKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: 48)
+                    Button { model.key("play") } label: {
+                        Image(systemName: music.playing ? "pause.fill" : "play.fill").font(.system(size: 22)).foregroundStyle(Color.black.opacity(0.85))
+                            .frame(width: 58, height: 58).background(Color.white.opacity(0.62).blendMode(.normal), in: Circle()).background(tint, in: Circle())
+                    }.buttonStyle(.plain).padding(.horizontal, 14).accessibilityLabel(music.playing ? "Pause" : "Play")
+                    GlyphKey(icon: "forward.end.fill", label: "Next", key: "next", size: 48)
+                    Spacer(minLength: 0)
+                    Text("−" + Self.clock(music.duration - now)).font(Mint.font(12)).monospacedDigit().frame(width: 44, alignment: .trailing)
+                }
+                .padding(.horizontal, 12).frame(height: 74)
+            }
+        }
+        .background(tint)
+        .clipShape(RoundedRectangle(cornerRadius: Mint.radius))
+        .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
+        .animation(.easeOut(duration: 0.26), value: tint)
+        .task(id: music.art) {
+            if let u = URL(string: music.art), let i = await ImageStore.shared.load(u) { tint = CoverTint.of(i) } else { tint = Mint.band }
+        }
+    }
+}
+
 struct PlayingTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.horizontalSizeClass) private var size
     @State private var query = ""
     @State private var kind = "song"
     var music: TVStatus.Music? { model.status?.music }
+    var otherAppIsActive: Bool {
+        guard let s = model.status?.session, s.pkg != "com.codex.musicwebtv" else { return false }
+        return s.playing || music == nil || music?.playing == false
+    }
     var now: some View {
         VStack(spacing: 12) {
-            if let m = music {
+            // Another app's video outranks a song left paused in Mint.
+            if let m = music, !otherAppIsActive {
                 Art(url: URL(string: m.art)) { i in i.resizable().scaledToFit() } placeholder: { Mint.band }
-                    .aspectRatio(1, contentMode: .fit).frame(maxWidth: 280).clipShape(RoundedRectangle(cornerRadius: Mint.radius))
+                    .aspectRatio(1, contentMode: .fit).frame(maxWidth: size == .regular ? 280 : 190).clipShape(RoundedRectangle(cornerRadius: Mint.radius))
                 Text(m.title).font(Mint.font(26, weight: 300)).lineLimit(2).multilineTextAlignment(.center)
                 Text([m.artist, m.album].filter { !$0.isEmpty }.joined(separator: " · ")).font(Mint.font(14)).opacity(0.7).lineLimit(1)
-                TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                    let t = m.playing ? m.position + ctx.date.timeIntervalSince1970 * 1000 - m.sampledAt : m.position
-                    GeometryReader { g in
-                        ZStack(alignment: .leading) {
-                            Rectangle().fill(Mint.text.opacity(0.18))
-                            Rectangle().fill(Mint.progress).frame(width: g.size.width * min(max(t / max(m.duration, 1), 0), 1))
-                        }
-                    }.frame(height: 2)
-                }
-                HStack(spacing: 20) {
-                    GlyphKey(icon: "backward.end", label: "Previous", key: "previous")
-                    GlyphKey(icon: m.playing ? "pause" : "play", label: "Play or pause", key: "play", size: 68)
-                    GlyphKey(icon: "forward.end", label: "Next", key: "next")
-                }
+                ControlBand(music: m)
                 Button("Show on TV") { model.post("music-now", say: "Showing on TV") }.font(Mint.font(13)).buttonStyle(.plain).opacity(0.8)
             } else if let s = model.status?.session {
                 Image(systemName: s.playing ? "play" : "pause").font(.system(size: 44, weight: .light)).padding(.top, 20)

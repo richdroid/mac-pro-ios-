@@ -66,6 +66,32 @@ struct Art<Content: View, Placeholder: View>: View {
     }
 }
 
+// The colour Mint's now-playing band takes from the cover: its most vivid pixel, held to a dark enough level for text.
+enum CoverTint {
+    static func of(_ image: TVImage) -> Color {
+        #if canImport(UIKit)
+        guard let cg = image.cgImage else { return Mint.band }
+        var px = [UInt8](repeating: 0, count: 16 * 16 * 4)
+        guard let c = CGContext(data: &px, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 64, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return Mint.band }
+        c.draw(cg, in: CGRect(x: 0, y: 0, width: 16, height: 16))
+        var best = (0.0, 0.0, 0.0), score = -1.0
+        for i in stride(from: 0, to: px.count, by: 4) {
+            let r = Double(px[i]) / 255, g = Double(px[i + 1]) / 255, b = Double(px[i + 2]) / 255
+            let top = max(r, g, b), low = min(r, g, b)
+            let v = (top - low) * top
+            if v > score { score = v; best = (r, g, b) }
+        }
+        let top = max(best.0, best.1, best.2)
+        // A grey cover has no colour to lend.
+        if score < 0.12 || top == 0 { return Mint.band }
+        let k = 0.62 / top
+        return Color(red: best.0 * k, green: best.1 * k, blue: best.2 * k)
+        #else
+        return Mint.band
+        #endif
+    }
+}
+
 // The soft wall behind the rows: art really shrunk to a few pixels, then stretched. Cheap, with no live blur.
 struct Wall: View {
     let art: String?
