@@ -85,7 +85,7 @@ extension View {
 struct GlassRow: View {
     @Environment(\.colorScheme) private var scheme
     var body: some View {
-        Rectangle().fill(scheme == .dark ? Color(red: 0.09, green: 0.19, blue: 0.38).opacity(0.62) : Color.white.opacity(0.6))
+        Rectangle().fill(scheme == .dark ? Color(red: 0.09, green: 0.19, blue: 0.38).opacity(0.62) : Color.white.opacity(0.46))
     }
 }
 struct PageTitle<Trailing: View>: View {
@@ -127,7 +127,7 @@ private struct ConnectionButton: ViewModifier {
     @State private var settings = false
     func body(content: Content) -> some View {
         content
-            .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Connection") } }
+            .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
             .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
     }
 }
@@ -145,7 +145,7 @@ struct RootView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.horizontalSizeClass) private var size
     var body: some View {
-        ScreenMeasure {
+        Group {
             ZStack {
                 // Each tab paints its own sea: the system tab view is opaque behind its content.
                 TabView(selection: $model.tab) {
@@ -479,7 +479,7 @@ struct HomeTab: View {
                 }
             }
         }
-        .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Connection") } }
+        .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
         .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
     }
 }
@@ -747,7 +747,7 @@ struct AlarmsTab: View {
             } header: { Text("Daily schedule") } footer: { Text("Runs every day at these times, even with your phone away.") }
         }
         .seaList()
-        .toolbar { ToolbarItem(placement: .primaryAction) { Button { editing = EditTarget(index: -1) } label: { Image(systemName: "plus") }.accessibilityLabel("Add alarm").disabled(model.state.alarms.count >= 16) } }
+        .toolbar { ToolbarItem(placement: .primaryAction) { Button { editing = EditTarget(index: -1) } label: { Label("Add alarm", systemImage: "plus") }.accessibilityLabel("Add alarm").disabled(model.state.alarms.count >= 16) } }
         .sheet(item: $editing) { t in AlarmEditor(index: t.index).environmentObject(model) }
         .refreshable { await model.loadState() }
     }

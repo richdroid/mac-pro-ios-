@@ -1,35 +1,23 @@
 import SwiftUI
 
-// The iPhone Duo open has a fold at its physical centre. System bars move by themselves, so the
-// content region is lopsided: measure from the real centre and leave the crease empty.
-enum Duo { static let foldGap: CGFloat = 48 }
-private struct ScreenWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
-extension EnvironmentValues { var screenWidth: CGFloat { get { self[ScreenWidthKey.self] } set { self[ScreenWidthKey.self] = newValue } } }
-
+// Two panes, in Apple's container for this: side by side in landscape, stacked in portrait, and clear of the fold when
+// partly closed. Bars are the system's own; they sit on the side or the bottom by themselves.
 struct FoldSplit<L: View, R: View>: View {
-    @Environment(\.screenWidth) private var screen
     let left: L, right: R
     init(@ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) { self.left = left(); self.right = right() }
     var body: some View {
-        GeometryReader { g in
-            let f = g.frame(in: .global)
-            let centre = (screen > 0 ? screen : f.maxX + f.minX) / 2
-            let l = max(0, centre - Duo.foldGap / 2 - f.minX), r = max(0, f.maxX - centre - Duo.foldGap / 2)
-            HStack(spacing: Duo.foldGap) {
-                left.frame(width: l)
-                right.frame(width: r)
-            }
-            .frame(width: f.width, height: f.height, alignment: .leading)
-        }
+        #if os(iOS)
+        if #available(iOS 27.1, *) {
+            ArrangementView { left } secondary: { right }.arrangementViewStyle(.split)
+        } else { sideBySide }
+        #else
+        sideBySide
+        #endif
     }
-}
-
-struct ScreenMeasure<C: View>: View {
-    let content: C
-    init(@ViewBuilder _ content: () -> C) { self.content = content() }
-    var body: some View {
-        GeometryReader { g in
-            content.environment(\.screenWidth, g.size.width + g.safeAreaInsets.leading + g.safeAreaInsets.trailing)
+    private var sideBySide: some View {
+        HStack(spacing: 0) {
+            left.frame(maxWidth: .infinity)
+            right.frame(maxWidth: .infinity)
         }
     }
 }

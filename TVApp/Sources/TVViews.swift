@@ -32,7 +32,7 @@ struct RootView: View {
         return nil
     }
     var body: some View {
-        ScreenMeasure {
+        Group {
             TabView(selection: $model.tab) {
                 Tab("Remote", systemImage: "av.remote", value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() } }
                 Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Page(title: "Apps") { AppsTab() } }
@@ -79,7 +79,7 @@ struct Page<C: View>: View {
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(alwaysInline || size == .regular ? .inline : .large)
-                .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Connection") } }
+                .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
                 .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
         }
     }
@@ -355,8 +355,7 @@ struct RemoteTab: View {
         .navigationSubtitle(state)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { model.setMirror(!model.mirrorLive) } label: { Image(systemName: model.mirrorLive ? "eye.slash" : "eye") }
-                    .accessibilityLabel(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen")
+                Button { model.setMirror(!model.mirrorLive) } label: { Label(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen", systemImage: model.mirrorLive ? "eye.slash" : "eye") }
             }
         }
         .onDisappear { model.mirrorLive = false }

@@ -71,7 +71,27 @@ jobs:
               xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "Mac Pro tab $T was not running"
             done
           }
+          # Apple's own apps, to measure our bars against.
+          reference() { # display, file suffix
+            for A in com.apple.mobiletimer com.apple.reminders; do
+              xcrun simctl launch "$DEVICE" $A || echo "$A did not open"
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/apple-$A$2.png
+              xcrun simctl terminate "$DEVICE" $A || true
+            done
+          }
+          # One screen per app, for the poses that get less attention.
+          pose_shots() { # display, file suffix
+            for P in "Chumby 1 9000" "TV 0 9002" "TV 1 9002" "MacPro 3 9001"; do
+              read -r APP TAB PORT <<< "$P"
+              xcrun simctl launch "$DEVICE" local.macpro.$APP -address http://127.0.0.1:$PORT -tab $TAB
+              sleep 7
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/$APP-$TAB$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.$APP || true
+            done
+          }
           shots 1 ""
+          reference 1 "-closed"
           for G in Mac Chumby TV; do
             xcrun simctl launch "$DEVICE" local.macpro.Gallery$G
             sleep 6
@@ -84,6 +104,13 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
           sleep 5
           shots 3 "-open"
+          reference 3 "-open"
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
+          pose_shots 3 "-partial" || echo "partial shots incomplete"
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; sleep 3
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
+          pose_shots 3 "-portrait" || echo "portrait shots incomplete"
+          reference 3 "-portrait"
       - name: Collect crash reports
         if: always()
         run: |

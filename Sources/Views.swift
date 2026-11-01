@@ -39,7 +39,7 @@ let groupedBackground = Color.gray.opacity(0.1)
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
-        ScreenMeasure {
+        Group {
             TabView(selection: $model.tab) {
                 Tab("Status", systemImage: "gauge.with.dots.needle.33percent", value: 0) { Screen(title: "Status") { StatusTab($0, side: $1) } }
                 Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Screen(title: "Apps") { AppsTab($0, side: $1) } }
@@ -92,7 +92,7 @@ struct Screen<Content: View>: View {
             }
             .background(groupedBackground.ignoresSafeArea())
             .navigationTitle(title)
-            .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Connection") } }
+            .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
             .sheet(isPresented: $settings) { SignInView().environmentObject(model) }
         }
     }
