@@ -32,7 +32,7 @@ const macMock = JSON.parse(require('fs').readFileSync(__dirname + '/mock-status.
   macMock.usage.hours.forEach((h, i, all) => { h.t = now - (all.length - 1 - i) * 3600e3; });
 }
 const macStatus = JSON.stringify(macMock);
-http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9001, '127.0.0.1');
+http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9001, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
 const zlib = require('zlib');
 const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
@@ -55,9 +55,11 @@ const tvFilms = JSON.stringify({ signedIn: true,
   watchlist: ['Dirty Harry', 'Chinatown', 'Heat', 'Alien', 'Ran', 'Klute', 'Thief', 'Le Samourai'].map(t => film(t, { friends_count: '4', friends_rating_avg: '3.5' })),
   friends: ['Battle Heater', 'Paris, Texas', 'Ran', 'Vertigo', 'Stalker', 'Tampopo', 'Ikiru', 'Paris, Texas'].map(t => film(t, { friend_name: 'a friend', rating: '4.0' })) });
 const tvMint = JSON.stringify({ rows: ['Recently played', 'Made for you', 'New releases'].map(title => ({ title, items: ['Sample Album', 'Another Album', 'Third Album', 'Fourth Album'].map(t => ({ title: t, subtitle: 'Sample Artist', art: tvBase + '/art.png', id: 'https://music.apple.com/us/album/' + title + t, kind: 'album' })) })) });
-const tvStremio = JSON.stringify({ rows: ['Popular movies', 'Popular series'].map(title => ({ title, items: ['Heat', 'Alien', 'Chinatown', 'Thief'].map(t => ({ title: t, subtitle: '1995 · ★ 8.3', art: tvBase + '/poster.png', id: title + t, kind: 'movie', progress: t === 'Alien' ? 0.4 : undefined, about: 'A sample description of the film.' })) })) });
+const tvStremio = JSON.stringify({ rows: ['Popular movies', 'Popular series'].map(title => ({ title, items: ['Heat', 'Alien', 'Chinatown', 'Thief'].map(t => ({ title: t, subtitle: '1995 · ★ 8.3', art: tvBase + '/poster.png', id: title === 'Popular series' ? 'tt1234567' : 'tt7654321', kind: title === 'Popular series' ? 'series' : 'movie', progress: t === 'Alien' ? 0.4 : undefined, about: 'A sample description of the film.' })) })) });
 http.createServer((q, s) => {
   if (q.url.startsWith('/api/tv/mint')) { s.setHeader('content-type', 'application/json'); return s.end(tvMint); }
+  if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: 'Episode ' + n, thumb: tvBase + '/poster.png' }))) })); }
+  if (q.url.startsWith('/api/tv/recs')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ films: ['Rope', 'Match Point', 'Blue Velvet', 'Klute'].map(title => ({ title, year: '1990', slug: title.toLowerCase(), imdb: 'tt1234567', art: tvBase + '/poster.png', why: 'Because you liked Heat' })) })); }
   if (q.url.startsWith('/api/tv/stremio')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }
   if (q.url === '/api/tv/device-image') { s.setHeader('content-type', 'image/png'); return s.end(pictures.square); }
   if (q.url === '/api/tv/device') { const up = [12, 18, 9, 22, 30, 14, 11, 16, 25, 19]; s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 18, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 2.4e6, txRate: 8e4, hist: { cpu: up, mem: up.map(x => x + 50), rx: up, tx: up } })); }

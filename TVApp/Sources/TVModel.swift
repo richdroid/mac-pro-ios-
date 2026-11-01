@@ -1,6 +1,11 @@
 import Foundation
 import SwiftUI
-struct Film: Identifiable, Hashable { let slug: String, title: String, year: String, poster: String, note: String; var id: String { slug + note } }
+struct Film: Identifiable, Hashable {
+    let slug: String, title: String, year: String, poster: String, note: String
+    var imdb = ""
+    var id: String { slug + note }
+    var media: MediaItem { MediaItem(title: title, subtitle: note.isEmpty ? year : note, art: poster, id: imdb, kind: "movie", slug: slug) }
+}
 
 @MainActor
 final class TVModel: ObservableObject {
@@ -10,9 +15,13 @@ final class TVModel: ObservableObject {
     @Published var reachable = true
     @Published var watchlist: [Film] = []
     @Published var friends: [Film] = []
+    @Published var recommended: [Film] = []
+    @Published var flicking: FlickTarget?
+    @Published var browsing: MediaSource?
     @Published var toast: String?
     @Published var filmsNote: String? = "Loading your films…"
-    @Published var tab = UserDefaults.standard.integer(forKey: "tab")
+    // Browse used to be tab 4; the apps' banners lead there now.
+    @Published var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t }()
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
     private var loops: [Task<Void, Never>] = []
     private var toastTask: Task<Void, Never>?
@@ -83,7 +92,7 @@ final class TVModel: ObservableObject {
             var seen = Set<String>()
             return ((j[key] as? [[String: String]]) ?? []).compactMap { r in
                 guard let slug = r["film_slug"], !slug.isEmpty else { return nil }
-                let f = Film(slug: slug, title: r["film_title"] ?? slug, year: r["film_year"] ?? "", poster: r["poster_url"] ?? "", note: note(r))
+                let f = Film(slug: slug, title: r["film_title"] ?? slug, year: r["film_year"] ?? "", poster: r["poster_url"] ?? "", note: note(r), imdb: r["imdb_id"] ?? "")
                 return seen.insert(f.id).inserted ? f : nil
             }
         }
@@ -94,6 +103,10 @@ final class TVModel: ObservableObject {
         friends = list("friends") { r in
             let who = r["friend_name"] ?? "", rating = Double(r["rating"] ?? "") ?? 0
             return rating > 0 ? who + String(format: " ★ %.1f", rating) : who
+        }
+        struct Recs: Decodable { struct One: Decodable { let title, year, slug, imdb, art, why: String }; let films: [One] }
+        if let d = await TVBridge.data(url("/api/tv/recs"), timeout: 10), let r = try? JSONDecoder().decode(Recs.self, from: d) {
+            recommended = r.films.map { Film(slug: $0.slug, title: $0.title, year: $0.year, poster: $0.art, note: $0.why, imdb: $0.imdb) }
         }
     }
     func say(_ t: String) {

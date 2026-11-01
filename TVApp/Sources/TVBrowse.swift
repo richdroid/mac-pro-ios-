@@ -8,6 +8,7 @@ struct MediaItem: Decodable, Identifiable, Hashable {
     let title: String, subtitle: String, art: String, id: String, kind: String
     var about: String?
     var progress: Double?
+    var slug: String?
 }
 struct MediaRow: Decodable, Identifiable {
     let title: String, items: [MediaItem]
@@ -17,6 +18,8 @@ enum MediaSource: String, CaseIterable, Identifiable {
     case mint, stremio
     var id: String { rawValue }
     var name: String { self == .mint ? "Mint Music" : "Stremio" }
+    var pkg: String { self == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
+    static func of(pkg: String) -> MediaSource? { allCases.first { $0.pkg == pkg } }
     var prompt: String { self == .mint ? "Search music" : "Search films and series" }
     var coverAspect: CGFloat { self == .mint ? 1 : 2.0 / 3 }
     var cardWidth: CGFloat { self == .mint ? 150 : 124 }
@@ -33,13 +36,20 @@ final class BrowseStore: ObservableObject {
     @Published var query = ""
     @Published var loading = false
     @Published var failed = false
-    @Published var picked: MediaItem?   // kept here so unfolding doesn't close the sheet
     private var loadedFor: String?
+    private var loadedAt = Date.distantPast
+    private static var stores: [MediaSource: BrowseStore] = [:]
+    // One for each app, so going back in shows what was there straight away.
+    static func shared(_ source: MediaSource) -> BrowseStore {
+        if let s = stores[source] { return s }
+        let s = BrowseStore(source); stores[source] = s; return s
+    }
     private var searching: Task<Void, Never>?
     init(_ source: MediaSource) { self.source = source }
     func load(force: Bool = false) async {
         let q = query.trimmingCharacters(in: .whitespaces)
-        if !force && loadedFor == q && !rows.isEmpty { return }
+        // Recent enough to skip, though what's on the TV moves on, so never for long.
+        if !force && loadedFor == q && !rows.isEmpty && Date().timeIntervalSince(loadedAt) < 60 { return }
         struct Answer: Decodable { let rows: [MediaRow] }
         loading = true; failed = false
         defer { loading = false }
@@ -47,7 +57,7 @@ final class BrowseStore: ObservableObject {
         // A slower, older search must not replace a newer one.
         guard q == query.trimmingCharacters(in: .whitespaces) else { return }
         guard let data, let a = try? JSONDecoder().decode(Answer.self, from: data) else { failed = rows.isEmpty; return }
-        rows = a.rows; loadedFor = q
+        rows = a.rows; loadedFor = q; loadedAt = Date()
     }
     func searchSoon() {
         searching?.cancel()
@@ -97,76 +107,15 @@ struct MediaCard: View {
     }
 }
 
-// Flick the cover up and it goes to the TV. The button does the same, for anyone not flicking.
-struct MediaSheet: View {
-    @EnvironmentObject var model: TVModel
-    @Environment(\.dismiss) private var dismiss
-    let item: MediaItem
-    let source: MediaSource
-    @State private var flown: CGFloat = 0
-    @State private var sending = false
-    // Goes back by itself if the system takes the touch away, so the cover can't get stuck raised.
-    @GestureState private var dragged: CGFloat = 0
-    var offset: CGFloat { flown + dragged }
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                MediaCard(item: item, source: source, width: source == .mint ? 250 : 200)
-                    .shadow(color: .black.opacity(0.45), radius: 22, y: 12)
-                    .offset(y: offset)
-                    .opacity(sending ? 0 : 1)
-                    // Ahead of the page's own scrolling, which would otherwise take every upward drag.
-                    .highPriorityGesture(DragGesture(minimumDistance: 8)
-                        .updating($dragged, body: { v, state, t in
-                            state = min(0, v.translation.height) * 0.8
-                            t.animation = .spring(duration: 0.3, bounce: 0.3)
-                        })
-                        .onEnded { v in if v.translation.height < -60 || v.predictedEndTranslation.height < -160 { send() } })
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityAction(named: "Send to TV") { send() }
-                Label("Flick up to send to the TV", systemImage: "chevron.up").font(.footnote).foregroundStyle(.secondary)
-                Button(action: send) {
-                    Label("Send to TV", systemImage: "tv").font(.body.weight(.semibold)).frame(maxWidth: 280, minHeight: 34)
-                }
-                .buttonStyle(.borderedProminent)
-                if let about = item.about, !about.isEmpty {
-                    Text(about).font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: 420, alignment: .leading).padding(.top, 2)
-                }
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity)
-        }
-        .presentationDetents([.large])
-        .presentationBackground(.ultraThinMaterial)
-    }
-    func send() {
-        guard !sending else { return }
-        #if canImport(UIKit)
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        #endif
-        withAnimation(.easeIn(duration: 0.22)) { flown = -700; sending = true }
-        let body: (String, [String: Any]) = source == .mint
-            ? ("mint-open", ["link": item.id, "title": item.title, "subtitle": item.subtitle, "art": item.art, "kind": item.kind, "play": true])
-            : ("stremio-open", ["type": item.kind, "id": item.id])
-        // Gone with the flick; the message reports how it went, however long the TV takes.
-        Task { try? await Task.sleep(nanoseconds: 220_000_000); dismiss() }
-        Task {
-            // Stremio stops at its list of streams, and which one to play is a choice for the remote.
-            do { try await TVBridge.post(body.0, body.1); model.say(source == .mint ? "On the TV" : "On the TV. Pick a stream with the remote.") }
-            catch { model.say("The TV didn’t get that") }
-        }
-    }
-}
-
 // A whole row as a list. Tapping an item opens the same flick sheet as its card.
 struct MediaList: View {
+    @EnvironmentObject var model: TVModel
     let row: MediaRow
     let source: MediaSource
-    @State private var picked: MediaItem?
     var body: some View {
         RowList(title: row.title) {
             ForEach(row.items) { item in
-                Button { picked = item } label: {
+                Button { model.flicking = FlickTarget(item: item, source: source) } label: {
                     HStack(spacing: 12) {
                         Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                             .frame(width: 50, height: 50 / source.coverAspect).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -182,16 +131,22 @@ struct MediaList: View {
                 .accessibilityLabel("\(item.title), \(item.subtitle)")
             }
         }
-        .sheet(item: $picked) { MediaSheet(item: $0, source: source) }
     }
 }
 
 struct BrowseColumn: View {
+    enum Part { case all, left, right }
+    @EnvironmentObject var model: TVModel
     @ObservedObject var store: BrowseStore
+    var part = Part.all
+    // Unfolded, the rows take turns on each side of the fold.
+    var shown: [MediaRow] {
+        part == .all ? store.rows : store.rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)
+    }
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
-                HStack(spacing: 8) {
+                if part != .right { HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField(store.source.prompt, text: $store.query).autocorrectionDisabled().submitLabel(.search)
                         .onChange(of: store.query) { _, _ in store.searchSoon() }
@@ -201,8 +156,8 @@ struct BrowseColumn: View {
                 }
                 .padding(.horizontal, 16).frame(height: 46)
                 .glassEffect(.regular, in: Capsule())
-                .padding(.horizontal, 20)
-                if store.rows.isEmpty {
+                .padding(.horizontal, 20) }
+                if store.rows.isEmpty && part != .right {
                     Group {
                         if store.loading { ProgressView() }
                         else if store.failed { ContentUnavailableView("Can’t reach \(store.source.name)", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again.")) }
@@ -210,13 +165,13 @@ struct BrowseColumn: View {
                     }
                     .frame(maxWidth: .infinity).padding(.top, 60)
                 }
-                ForEach(store.rows) { row in
+                ForEach(shown) { row in
                     VStack(alignment: .leading, spacing: 0) {
                         RowHeader(title: row.title) { MediaList(row: row, source: store.source) }.padding(.leading, 20)
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 10) {
                                 ForEach(row.items) { item in
-                                    Button { store.picked = item } label: { MediaCard(item: item, source: store.source, width: store.source.cardWidth) }
+                                    Button { model.flicking = FlickTarget(item: item, source: store.source) } label: { MediaCard(item: item, source: store.source, width: store.source.cardWidth) }
                                         .buttonStyle(.plain).accessibilityLabel("\(item.title), \(item.subtitle)")
                                 }
                             }
@@ -230,29 +185,5 @@ struct BrowseColumn: View {
         }
         .refreshable { await store.load(force: true) }
         .task { await store.load() }
-    }
-}
-
-struct BrowseTab: View {
-    @Environment(\.paneLayout) private var panes
-    @StateObject private var mint = BrowseStore(.mint)
-    @StateObject private var stremio = BrowseStore(.stremio)
-    @AppStorage("browseSource") private var source = MediaSource.mint.rawValue
-    var body: some View {
-        Group {
-            if panes {
-                FoldSplit { BrowseColumn(store: mint) } right: { BrowseColumn(store: stremio) }
-            } else {
-                VStack(spacing: 8) {
-                    Picker("Source", selection: $source) {
-                        ForEach(MediaSource.allCases) { Text($0.name).tag($0.rawValue) }
-                    }
-                    .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
-                    BrowseColumn(store: source == MediaSource.mint.rawValue ? mint : stremio).id(source)
-                }
-            }
-        }
-        .sheet(item: $mint.picked) { MediaSheet(item: $0, source: .mint) }
-        .sheet(item: $stremio.picked) { MediaSheet(item: $0, source: .stremio) }
     }
 }

@@ -20,7 +20,7 @@ struct TVApp: App {
             RootView().environmentObject(model).preferredColorScheme(.dark).tint(TVLook.accent)
                 .onChange(of: phase) { _, p in if p == .active { model.start() } else { model.stop() } }
                 .onAppear { model.start() }
-                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
+                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t == 4 ? 1 : t } }
         }
     }
 }
@@ -32,18 +32,28 @@ struct RootView: View {
         if model.status?.online == false { return "The Mac can’t reach the TV" }
         return nil
     }
+    // The build's simulator shots ask for screens a launch alone can't reach.
+    func poseForShots() {
+        guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
+        model.browsing = .stremio
+        guard pose == "flick" else { return }
+        Task {
+            await BrowseStore.shared(.stremio).load()
+            if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == "series" }) { model.flicking = FlickTarget(item: item, source: .stremio) }
+        }
+    }
     var body: some View {
         PaneReader {
             TabView(selection: $model.tab) {
                 Tab(value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
                 Tab(value: 1) { Page(title: "Apps") { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
-                Tab(value: 4) { Page(title: "Browse", alwaysInline: true) { BrowseTab() } } label: { tabLabel("Browse", "rectangle.stack") }
                 Tab(value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() } } label: { tabLabel("Playing", "play.circle") }
                 Tab(value: 3) { Page(title: "Films") { FilmsTab() } } label: { tabLabel("Films", "film") }
                 Tab(value: 5) { Page(title: "Status") { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
             }
             .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
         }
+        .fullScreenCover(item: $model.flicking) { FlickScreen(target: $0).environmentObject(model) }
         .overlay(alignment: .top) {
             if let problem {
                 Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 9)
@@ -57,7 +67,7 @@ struct RootView: View {
             }
         }
         .animation(TVLook.press, value: model.toast)
-        .onAppear { followRequest() }
+        .onAppear { followRequest(); poseForShots() }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
     }
     // Control Center and Siri can ask before this view exists, so the request waits in a flag.
@@ -437,10 +447,15 @@ struct MiniPlayer: View {
 struct Banner: View {
     @EnvironmentObject var model: TVModel
     let app: TVStatus.App
+    var browses = false
     var current: Bool { model.status?.app == app.pkg }
+    func open() { model.tick(); model.post("open", ["pkg": app.pkg], say: "Opening \(app.name)") }
     var body: some View {
         Button {
-            model.tick(); model.post("open", ["pkg": app.pkg], say: "Opening \(app.name)")
+            // An app with something to choose from opens that here; the rest go straight to the TV.
+            if browses, let s = MediaSource.of(pkg: app.pkg) { model.tick(); model.browsing = s }
+            else if browses, app.pkg == "com.mint.letterboxd" { model.tick(); model.tab = 3 }
+            else { open() }
         } label: {
             ZStack {
                 TVLook.bannerTile
@@ -460,6 +475,7 @@ struct Banner: View {
             }
         }
         .buttonStyle(.plain).accessibilityLabel(app.name).accessibilityAddTraits(current ? .isSelected : [])
+        .contextMenu { if browses { Button("Open on TV", systemImage: "tv") { open() } } }
     }
     var name: some View { Text(app.name).font(.footnote.weight(.medium)).multilineTextAlignment(.center).padding(6) }
 }
@@ -469,7 +485,7 @@ struct BannerRow: View {
         VStack(alignment: .leading, spacing: 0) {
             RowTitle(title).padding(.leading, 20)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: TVLook.gap) { ForEach(apps) { Banner(app: $0) } }.padding(.horizontal, 20).scrollTargetLayout()
+                LazyHStack(spacing: TVLook.gap) { ForEach(apps) { Banner(app: $0, browses: true) } }.padding(.horizontal, 20).scrollTargetLayout()
             }
             .scrollTargetBehavior(.viewAligned).clipped()
         }
@@ -502,6 +518,9 @@ struct AppsTab: View {
         .padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading).clipped()
     }
     var body: some View {
+        content.navigationDestination(item: $model.browsing) { AppBrowse(source: $0) }
+    }
+    @ViewBuilder var content: some View {
         if all.isEmpty {
             ScrollView { VStack(alignment: .leading, spacing: 24) { SendBar().padding(.horizontal, 20); waiting }.padding(.vertical, 12) }
         } else if panes {
@@ -763,7 +782,7 @@ struct FilmCard: View {
     @EnvironmentObject var model: TVModel
     let film: Film
     var body: some View {
-        Button { model.tick(); model.post("film", ["slug": film.slug], say: "Opening on TV") } label: {
+        Button { model.tick(); model.flicking = FlickTarget(item: film.media, source: .stremio) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                     .frame(width: 118, height: 177).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -794,7 +813,7 @@ struct FilmList: View {
     var body: some View {
         RowList(title: title) {
             ForEach(films) { film in
-                Button { model.tick(); model.post("film", ["slug": film.slug], say: "Opening on TV") } label: {
+                Button { model.tick(); model.flicking = FlickTarget(item: film.media, source: .stremio) } label: {
                     HStack(spacing: 12) {
                         Art(url: URL(string: film.poster)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                             .frame(width: 50, height: 75).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -811,7 +830,7 @@ struct FilmList: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Open \(film.title) on the TV")
+                .accessibilityLabel(film.title)
             }
         }
     }
@@ -836,10 +855,20 @@ struct FilmsTab: View {
             if model.friends.isEmpty && model.watchlist.isEmpty {
                 ScrollView { ContentUnavailableView(model.filmsNote ?? "No films yet", systemImage: "film").padding(.top, 80) }
             } else if panes {
-                FoldSplit { FilmGrid(title: "Friends", films: model.friends) } right: { FilmGrid(title: "Watchlist", films: model.watchlist) }
+                FoldSplit {
+                    if model.recommended.isEmpty { FilmGrid(title: "Friends", films: model.friends) } else { FilmGrid(title: "Recommended for you", films: model.recommended) }
+                } right: {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 26) {
+                            if !model.recommended.isEmpty, !model.friends.isEmpty { FilmRow(title: "Friends", films: model.friends) }
+                            if !model.watchlist.isEmpty { FilmRow(title: "Watchlist", films: model.watchlist) }
+                        }.padding(.vertical, 12)
+                    }
+                }
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
+                        if !model.recommended.isEmpty { FilmRow(title: "Recommended for you", films: model.recommended) }
                         if !model.friends.isEmpty { FilmRow(title: "Friends", films: model.friends) }
                         if !model.watchlist.isEmpty { FilmRow(title: "Watchlist", films: model.watchlist) }
                     }.padding(.vertical, 12)
