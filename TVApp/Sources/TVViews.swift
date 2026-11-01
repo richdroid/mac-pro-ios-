@@ -38,8 +38,11 @@ struct RootView: View {
         model.browsing = .stremio
         guard pose != "browse" else { return }
         Task {
-            await BrowseStore.shared(.stremio).load()
-            if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == "series" }) { model.flick(FlickTarget(item: item, source: .stremio)) }
+            // The page is loading the same list, so wait for it rather than asking again.
+            for _ in 0..<40 {
+                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == "series" }) { model.flick(FlickTarget(item: item, source: .stremio)); return }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
         }
     }
     var body: some View {
