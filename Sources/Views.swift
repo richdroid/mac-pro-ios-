@@ -228,7 +228,7 @@ struct QuickActions: View {
             if let toast { Text(toast).font(.footnote).foregroundStyle(.secondary).transition(.opacity) }
         }
         .animation(.easeOut(duration: 0.2), value: toast)
-        .navigationDestination(isPresented: $openScreen) { RemoteScreenView() }
+        .navigationDestination(isPresented: $openScreen) { RemoteScreenView(model: model) }
     }
 }
 
@@ -461,6 +461,7 @@ struct ControlTab: View {
     @State private var applePassword = ""
     @State private var appleCode = ""
     @State private var confirmRestart = false
+    @State private var signingIn = false
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -473,7 +474,7 @@ struct ControlTab: View {
                 if s.screen == "locked" { Button("Unlock") { Task { model.note = await model.run("mac-unlock") } } }
                 Button("Forget password", role: .destructive) { Task { model.note = await model.run("mac-logout") } }
             } else {
-                SecureField("Mac password", text: $macPassword)
+                SecureField("Mac password", text: $macPassword).textContentType(.password)
                 Button("Log in") {
                     Task { model.note = await model.runSealed("mac-login", secret: macPassword); macPassword = "" }
                 }.disabled(macPassword.isEmpty)
@@ -483,11 +484,12 @@ struct ControlTab: View {
             Text(s.macLogin ? "Logged in, and it stays that way after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
         }
         Section {
-            NavigationLink("Open screen") { RemoteScreenView() }
+            NavigationLink("Open screen") { RemoteScreenView(model: model) }
         } header: { Text("Remote desktop") } footer: { Text("Tap to click, pinch to zoom, and drag to scroll. Drag moves the view while zoomed.") }
         Section {
+            Button { signingIn = true } label: { Label("Sign in on the Mac", systemImage: "key.fill") }.disabled(!(s.macLogin || s.typing == "trusted"))
             if s.macLogin || s.typing == "trusted" {
-                SecureField("Text or password", text: $text)
+                SecureField("Or type any text", text: $text)
                 Toggle("Press Return afterward", isOn: $pressReturn)
                 Button("Type on Mac") {
                     Task { model.note = await model.runSealed("type-text", secret: text, extra: ["enter": pressReturn]) ?? "Typed."; text = "" }
@@ -496,7 +498,13 @@ struct ControlTab: View {
                 Text("Log in to this Mac above to use this.").foregroundStyle(.secondary)
             }
         } header: { Text("Sign-ins on the Mac") } footer: {
-            Text("For Apple ID or any other prompt. It is encrypted on this phone and typed once. Nothing is saved.")
+            Text("Click the field on the Mac first. Saved logins stay on this iPhone behind Face ID.")
+        }
+        .sheet(isPresented: $signingIn) {
+            LoginSheet { u, p in
+                let filled = u.isEmpty ? p : u + "\t" + p
+                return await model.runSealed("type-text", secret: filled, extra: ["enter": true])
+            }
         }
         }
         if side != .left {
@@ -507,8 +515,8 @@ struct ControlTab: View {
                     TextField("6-digit code", text: $appleCode)
                     Button("Send code") { Task { model.note = await model.runSealed("ios-code", secret: appleCode); appleCode = "" } }.disabled(appleCode.isEmpty)
                 } else {
-                    TextField("Apple account email", text: $appleEmail).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    SecureField("Apple account password", text: $applePassword)
+                    TextField("Apple account email", text: $appleEmail).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("Apple account password", text: $applePassword).textContentType(.password)
                     Button("Sign in to Apple") {
                         Task { model.note = await model.runSealed("ios-login", secret: appleEmail + "\n" + applePassword); applePassword = "" }
                     }.disabled(appleEmail.isEmpty || applePassword.isEmpty)

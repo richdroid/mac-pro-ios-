@@ -1,12 +1,15 @@
 import CoreGraphics
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // A native Screen Sharing client. The dashboard's bridge signs in to the Mac, so this side speaks plain RFB over
 // a WebSocket with no login of its own. Raw encoding keeps it simple; only changed areas are sent after the first frame.
 @MainActor
 final class RemoteScreen: ObservableObject {
-    enum Phase: Equatable { case idle, connecting, connected, needsLogin, failed(String) }
+    enum Phase: Equatable { case idle, connecting, reconnecting, connected, needsLogin, failed(String) }
     @Published var phase = Phase.idle
     @Published var image: CGImage?
     @Published var size = CGSize.zero
@@ -20,9 +23,71 @@ final class RemoteScreen: ObservableObject {
     private var running = false
     private enum Stage { case version, security, result, serverInit, messages }
     private var stage = Stage.version
+    private var base: URL?
+    private var wanted = false          // someone wants the screen, so a drop means reconnect
+    private var attempts = 0
+    private var retry: Task<Void, Never>?
+    private var closeLater: Task<Void, Never>?
+    #if canImport(UIKit)
+    private var background = UIBackgroundTaskIdentifier.invalid
+    #endif
+
+    // Keeps showing the last picture throughout, so a drop looks like nothing happened.
+    func open(base: URL) {
+        closeLater?.cancel()
+        wanted = true
+        self.base = base
+        if running, socket != nil { return }
+        attempts = 0
+        connect(base: base)
+    }
+    // Leaving the view keeps the connection for a moment, so popping back is instant.
+    func close() {
+        closeLater?.cancel()
+        closeLater = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 45_000_000_000)
+            if !Task.isCancelled { self?.wanted = false; self?.disconnect() }
+        }
+    }
+    func enteredBackground() {
+        #if canImport(UIKit)
+        // iOS gives a little time before it suspends the network.
+        background = UIApplication.shared.beginBackgroundTask { [weak self] in self?.endBackground() }
+        #endif
+    }
+    private func endBackground() {
+        #if canImport(UIKit)
+        if background != .invalid { UIApplication.shared.endBackgroundTask(background); background = .invalid }
+        #endif
+    }
+    func enteredForeground() {
+        endBackground()
+        guard wanted, let base else { return }
+        attempts = 0
+        retry?.cancel()
+        if !running || socket == nil { connect(base: base) }
+        else { request(incremental: false) }   // a stale socket shows up as a failed send, which reconnects
+    }
+    func dropConnection() { socket?.cancel(with: .abnormalClosure, reason: nil) }
+
+    private func scheduleRetry() {
+        guard wanted, let base else { return }
+        attempts += 1
+        let wait = min(Double(attempts), 5)
+        phase = .reconnecting
+        retry?.cancel()
+        retry = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            if !Task.isCancelled, self?.wanted == true { self?.connect(base: base) }
+        }
+    }
 
     func connect(base: URL) {
-        disconnect()
+        retry?.cancel()
+        running = false
+        socket?.cancel(with: .goingAway, reason: nil)
+        socket = nil
+        self.base = base
         guard var parts = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return }
         parts.scheme = parts.scheme == "http" ? "ws" : "wss"
         parts.path = "/novnc/ws/vnc"
@@ -33,7 +98,7 @@ final class RemoteScreen: ObservableObject {
         let task = URLSession.shared.webSocketTask(with: request)
         task.maximumMessageSize = 32 << 20
         socket = task
-        buffer = Data(); stage = .version; running = true; phase = .connecting
+        buffer = Data(); stage = .version; running = true; phase = image == nil ? .connecting : .reconnecting
         task.resume()
         Task { await receiveLoop(task, base: base) }
     }
@@ -57,8 +122,12 @@ final class RemoteScreen: ObservableObject {
             } catch {
                 guard running, socket === task else { return }
                 let code = (task.response as? HTTPURLResponse)?.statusCode ?? 0
-                phase = code == 409 ? .needsLogin : .failed("The screen connection dropped.")
                 running = false
+                socket = nil
+                if code == 409 { phase = .needsLogin; return }
+                // Dropped: try again quietly. Only say so if it keeps failing.
+                if attempts >= 8 && image == nil { phase = .failed("Can’t reach the Mac’s screen."); return }
+                scheduleRetry()
                 return
             }
         }
@@ -70,7 +139,13 @@ final class RemoteScreen: ObservableObject {
         buffer = Data(buffer.dropFirst(n))
         return out
     }
-    private func send(_ bytes: [UInt8]) { socket?.send(.data(Data(bytes))) { _ in } }
+    private func send(_ bytes: [UInt8]) {
+        let task = socket
+        task?.send(.data(Data(bytes))) { [weak self] error in
+            // A send on a socket iOS already killed fails here; the receive loop reconnects, but nudge it.
+            if error != nil { Task { @MainActor in if self?.socket === task { self?.dropConnection() } } }
+        }
+    }
     private func be16(_ d: Data, _ i: Int) -> Int { Int(d[d.startIndex + i]) << 8 | Int(d[d.startIndex + i + 1]) }
     private func be32(_ d: Data, _ i: Int) -> Int { be16(d, i) << 16 | be16(d, i + 2) }
 
@@ -103,6 +178,7 @@ final class RemoteScreen: ObservableObject {
                 request(incremental: false)
                 stage = .messages
                 phase = .connected
+                attempts = 0
             case .messages:
                 guard let type = buffer.first else { return }
                 switch type {
@@ -186,11 +262,20 @@ final class RemoteScreen: ObservableObject {
     func type(_ text: String) {
         for scalar in text.unicodeScalars { key(scalar.value < 256 ? scalar.value : 0x0100_0000 | scalar.value) }
     }
+    func fillLogin(username: String, password: String) {
+        if !username.isEmpty { type(username); key(0xff09) }
+        type(password)
+        key(0xff0d)
+    }
 }
 
 struct RemoteScreenView: View {
-    @EnvironmentObject var model: AppModel
-    @StateObject private var screen = RemoteScreen()
+    let model: AppModel
+    init(model: AppModel) { self.model = model; observed = model.screen }
+    private var screen: RemoteScreen { model.screen }
+    @ObservedObject private var observed: RemoteScreen
+    @Environment(\.scenePhase) private var scene
+    @State private var signingIn = false
     @State private var zoom: CGFloat = 1
     @State private var zoomBase: CGFloat = 1
     @State private var pan = CGSize.zero
@@ -239,8 +324,18 @@ struct RemoteScreenView: View {
             toolbar
         }
         .navigationTitle("Screen")
-        .onAppear { screen.connect(base: model.api.base) }
-        .onDisappear { screen.disconnect() }
+        .onAppear { screen.open(base: model.api.base) }
+        .onDisappear { screen.close() }
+        .onChange(of: scene) { _, p in
+            if p == .background { screen.enteredBackground() }
+            if p == .active { screen.enteredForeground() }
+        }
+        .sheet(isPresented: $signingIn) {
+            LoginSheet { u, p in
+                screen.fillLogin(username: u, password: p)
+                return nil
+            }
+        }
         .alert("Type on Mac", isPresented: $typing) {
             TextField("Text", text: $text)
             Button("Send") { screen.type(text); text = "" }
@@ -252,6 +347,11 @@ struct RemoteScreenView: View {
     @ViewBuilder private var status: some View {
         switch screen.phase {
         case .connecting: ProgressView("Connecting…").tint(.white).foregroundStyle(.white)
+        case .reconnecting:
+            VStack {
+                Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath").font(.footnote.weight(.medium)).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 6).background(.black.opacity(0.65), in: Capsule()).padding(.top, 10)
+                Spacer()
+            }
         case .needsLogin: Text("Log in to this Mac on the Control tab first.").foregroundStyle(.white).padding()
         case .failed(let m):
             VStack(spacing: 10) {
@@ -265,6 +365,8 @@ struct RemoteScreenView: View {
     private var toolbar: some View {
         HStack {
             Button { typing = true } label: { Label("Type", systemImage: "keyboard") }
+            Spacer()
+            Button { signingIn = true } label: { Label("Sign in", systemImage: "key.fill") }
             Spacer()
             Button { screen.key(0xff0d) } label: { Label("Return", systemImage: "return") }
             Spacer()

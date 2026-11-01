@@ -30,6 +30,7 @@ targets:
       properties:
         CFBundleDisplayName: Mac Pro
         CADisableMinimumFrameDurationOnPhone: true
+        NSFaceIDUsageDescription: Unlocks your saved logins before filling them on the Mac.
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
