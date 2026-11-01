@@ -180,7 +180,7 @@ struct BrowseColumn: View {
                             LazyHStack(alignment: .top, spacing: 10) {
                                 ForEach(row.items) { item in
                                     Button { model.flick(FlickTarget(item: item, source: store.source)) } label: { MediaCard(item: item, source: store.source, width: store.source.cardWidth) }
-                                        .buttonStyle(.plain).accessibilityLabel("\(item.title), \(item.subtitle)")
+                                        .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
                                 }
                             }
                             .padding(.horizontal, 20).scrollTargetLayout()

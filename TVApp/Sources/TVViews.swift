@@ -474,7 +474,7 @@ struct Banner: View {
                 if current { RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2.5) }
             }
         }
-        .buttonStyle(.plain).accessibilityLabel(app.name).accessibilityAddTraits(current ? .isSelected : [])
+        .buttonStyle(PressCard()).accessibilityLabel(app.name).accessibilityAddTraits(current ? .isSelected : [])
         .contextMenu { if browses { Button("Open on TV", systemImage: "tv") { open() } } }
     }
     var name: some View { Text(app.name).font(.footnote.weight(.medium)).multilineTextAlignment(.center).padding(6) }
@@ -779,7 +779,7 @@ struct FilmCard: View {
                 }
                 .frame(width: 118, alignment: .leading)
             }
-        }.buttonStyle(.plain).accessibilityLabel(film.title)
+        }.buttonStyle(PressCard()).accessibilityLabel(film.title)
     }
 }
 struct FilmRow: View {

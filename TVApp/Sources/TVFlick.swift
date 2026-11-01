@@ -104,7 +104,10 @@ struct FlickScreen: View {
         .preferredColorScheme(.dark)
         // Its own way in and out, so nothing slides over the card.
         .presentationBackground(.clear)
-        .sensoryFeedback(.impact(weight: .light), trigger: armed) { _, now in now }
+        // A soft touch on picking it up, ticks that quicken towards the edge, and a firmer one where a flick would send it.
+        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.5), trigger: touching) { _, now in now }
+        .sensoryFeedback(.selection, trigger: Int(nearEdge * 6)) { old, new in touching && new > old }
+        .sensoryFeedback(.impact(weight: .medium, intensity: 0.8), trigger: armed) { _, now in now && touching }
         .task {
             withAnimation(.spring(response: 0.5, dampingFraction: 0.66)) { arrived = true }
             await loadMeta()
@@ -126,6 +129,12 @@ struct FlickScreen: View {
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.28 + 0.5 * charge), lineWidth: 1.5) }
             .shadow(color: TVLook.accent.opacity(0.75 * charge), radius: 26)
+            // A ring goes out from the screen as the card arrives.
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2)
+                    .scaleEffect(landed ? 1.55 : 1).opacity(landed ? 0 : (flown ? 0.9 : 0))
+                    .animation(.easeOut(duration: 0.65), value: landed)
+            }
             .scaleEffect(1 + 0.05 * charge)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { tvFrame = $0 }
             Capsule().fill(.white.opacity(0.28)).frame(width: 52, height: 3)
@@ -289,6 +298,9 @@ struct FlickScreen: View {
     }
     func settle() {
         guard drag != .zero else { return }
+        #if canImport(UIKit)
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.6)
+        #endif
         withAnimation(.spring(response: 0.42, dampingFraction: 0.56)) { drag = .zero }
     }
     func leave() {
@@ -321,7 +333,7 @@ struct FlickScreen: View {
     func send(flicked velocity: CGSize = .zero) {
         guard !flown else { return }
         #if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
         #endif
         note = nil
         // Leaves at the speed it was thrown, so there's no seam between the finger and the flight.
@@ -352,6 +364,16 @@ struct FlickScreen: View {
                 if stream != nil { stream = nil; streams = []; await findStreams() }
             }
         }
+    }
+}
+
+// Cards give under the finger, as anything you can pick up should.
+struct PressCard: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .brightness(configuration.isPressed ? -0.06 : 0)
+            .animation(.spring(response: 0.26, dampingFraction: 0.55), value: configuration.isPressed)
     }
 }
 
