@@ -139,6 +139,34 @@ struct MediaSheet: View {
     }
 }
 
+// A whole row as a list. Tapping an item opens the same flick sheet as its card.
+struct MediaList: View {
+    let row: MediaRow
+    let source: MediaSource
+    @State private var picked: MediaItem?
+    var body: some View {
+        RowList(title: row.title) {
+            ForEach(row.items) { item in
+                Button { picked = item } label: {
+                    HStack(spacing: 12) {
+                        Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
+                            .frame(width: 50, height: 50 / source.coverAspect).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.title).font(.body.weight(.semibold)).lineLimit(2)
+                            Text(item.subtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(item.title), \(item.subtitle)")
+            }
+        }
+        .sheet(item: $picked) { MediaSheet(item: $0, source: source) }
+    }
+}
+
 struct BrowseColumn: View {
     @ObservedObject var store: BrowseStore
     @State private var picked: MediaItem?
@@ -166,7 +194,7 @@ struct BrowseColumn: View {
                 }
                 ForEach(store.rows) { row in
                     VStack(alignment: .leading, spacing: 0) {
-                        RowTitle(row.title).padding(.leading, 20)
+                        RowHeader(title: row.title) { MediaList(row: row, source: store.source) }.padding(.leading, 20)
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 10) {
                                 ForEach(row.items) { item in

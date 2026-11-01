@@ -144,6 +144,39 @@ struct RowTitle: View {
     var body: some View { Text(title).font(.title3.weight(.bold)).padding(.bottom, 8) }
 }
 
+// A row's heading: tap it to see everything in that row as one scrolling list.
+struct RowHeader<Destination: View>: View {
+    let title: String
+    @ViewBuilder let destination: () -> Destination
+    var body: some View {
+        NavigationLink { destination() } label: {
+            HStack(spacing: 5) {
+                Text(title).font(.title3.weight(.bold))
+                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
+            }
+            .padding(.bottom, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("See all of \(title)")
+    }
+}
+// The same frame for every full list: the art behind it and the rows on top.
+struct RowList<Content: View>: View {
+    @EnvironmentObject var model: TVModel
+    let title: String
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        List { content().listRowBackground(Color.clear) }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background { Wall(art: model.status?.music?.art) }
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 // MARK: - Remote
 struct MirrorView: View {
     @EnvironmentObject var model: TVModel
@@ -744,11 +777,39 @@ struct FilmRow: View {
     let title: String, films: [Film]
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            RowTitle(title).padding(.leading, 20)
+            RowHeader(title: title) { FilmList(title: title, films: films) }.padding(.leading, 20)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 12) { ForEach(films) { FilmCard(film: $0) } }.padding(.horizontal, 20).scrollTargetLayout()
             }
             .scrollTargetBehavior(.viewAligned).clipped()
+        }
+    }
+}
+struct FilmList: View {
+    @EnvironmentObject var model: TVModel
+    let title: String, films: [Film]
+    var body: some View {
+        RowList(title: title) {
+            ForEach(films) { film in
+                Button { model.tick(); model.post("film", ["slug": film.slug], say: "Opening on TV") } label: {
+                    HStack(spacing: 12) {
+                        Art(url: URL(string: film.poster)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
+                            .frame(width: 50, height: 75).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(film.title).font(.body.weight(.semibold)).lineLimit(2)
+                            HStack(spacing: 6) {
+                                if !film.year.isEmpty { Text(film.year) }
+                                if !film.note.isEmpty, film.note != film.year { Text(film.note).lineLimit(1) }
+                            }.font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "tv").foregroundStyle(TVLook.accent).accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(film.title) on the TV")
+            }
         }
     }
 }
@@ -758,7 +819,7 @@ struct FilmGrid: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                RowTitle(title)
+                RowHeader(title: title) { FilmList(title: title, films: films) }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 118, maximum: 118), spacing: 14, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(films) { FilmCard(film: $0) } }
             }.padding(.horizontal, 20).padding(.vertical, 12)
         }

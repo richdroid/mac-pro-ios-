@@ -247,7 +247,7 @@ struct ClaudeView: View {
         Group {
             if let p = plan {
                 VStack(spacing: 8) {
-                    HStack { Image(systemName: "sparkle"); Text("Claude").font(.caption.weight(.semibold)); Spacer() }
+                    HStack { Image("ClaudeTab").resizable().scaledToFit().frame(width: 15, height: 15); Text("Claude").font(.caption.weight(.semibold)); Spacer() }
                     HStack(spacing: 12) { Ring(value: p.0, label: "5 hours"); Ring(value: p.1, label: "This week") }
                 }
             } else { Problem(text: entry.problem ?? "Waiting for Claude’s usage.") }
