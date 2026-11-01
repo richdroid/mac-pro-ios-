@@ -3,40 +3,18 @@ import SwiftUI
 import UIKit
 #endif
 
-// The launcher's own values, from its colors.xml, dimens.xml and integers.xml. dp maps to pt 1:1, since the Duo open
-// (951pt) is almost exactly its 960dp canvas.
-enum Mint {
-    static let text = Color(hex: 0xEEEEEE), banner = Color(hex: 0x455A64), band = Color(hex: 0x37474F), plane = Color(hex: 0x263238)
-    static let progress = Color(hex: 0x17FFFF), press = Color(hex: 0x4A4F51), orb = Color(hex: 0x4285F4)
+// An iPhone app first. A few things carry over from the TV's launcher: its cyan, its banner shape, and the soft wall of colour from the art.
+enum TVLook {
+    static let accent = Color(hex: 0x3FE3E8)
+    static let bannerTile = Color(hex: 0x3A4A52)
     static let bannerSize = CGSize(width: 142, height: 80)
-    static let radius: CGFloat = 2, gap: CGFloat = 12, rowGap: CGFloat = 36
-    static let focus = Animation.easeInOut(duration: 0.15)
-    static let glide = Animation.timingCurve(0.3, 0, 0.1, 1, duration: 0.32)
-
-    static func font(_ size: CGFloat, weight: CGFloat = 400, condensed: Bool = false) -> Font {
-        #if canImport(UIKit)
-        // wght and wdth axes of the bundled Roboto.
-        let axes: [NSNumber: NSNumber] = [2003265652: NSNumber(value: Double(weight)), 2003072104: NSNumber(value: condensed ? 75.0 : 100.0)]
-        let d = UIFontDescriptor(fontAttributes: [.name: "Roboto-Regular", UIFontDescriptor.AttributeName(rawValue: kCTFontVariationAttribute as String): axes])
-        return Font(UIFont(descriptor: d, size: size))
-        #else
-        return .system(size: size)
-        #endif
-    }
-    static func rowTitle() -> Font { font(18, condensed: true) }
+    static let card: CGFloat = 22, banner: CGFloat = 12, gap: CGFloat = 12
+    static let press = Animation.spring(duration: 0.25, bounce: 0.25)
 }
 extension Color { init(hex: UInt32) { self.init(red: Double(hex >> 16 & 255) / 255, green: Double(hex >> 8 & 255) / 255, blue: Double(hex & 255) / 255) } }
-
-// The launcher's flat glyph key: nothing at rest, a soft circle when pressed.
-struct MintKeyStyle: ButtonStyle {
-    var diameter: CGFloat = 56
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .frame(width: diameter, height: diameter)
-            .background(Circle().fill(Mint.press).opacity(configuration.isPressed ? 1 : 0))
-            .foregroundStyle(Mint.text)
-            .contentShape(Circle())
-            .animation(Mint.focus, value: configuration.isPressed)
+extension View {
+    func tvCard(_ radius: CGFloat = TVLook.card) -> some View {
+        background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 }
 
@@ -83,13 +61,13 @@ struct Art<Content: View, Placeholder: View>: View {
     }
 }
 
-// The colour Mint's now-playing band takes from the cover: its most vivid pixel, held to a dark enough level for text.
+// The Play button takes the cover's most vivid colour.
 enum CoverTint {
     static func of(_ image: TVImage) -> Color {
         #if canImport(UIKit)
-        guard let cg = image.cgImage else { return Mint.band }
+        guard let cg = image.cgImage else { return TVLook.accent }
         var px = [UInt8](repeating: 0, count: 16 * 16 * 4)
-        guard let c = CGContext(data: &px, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 64, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return Mint.band }
+        guard let c = CGContext(data: &px, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 64, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return TVLook.accent }
         c.draw(cg, in: CGRect(x: 0, y: 0, width: 16, height: 16))
         var best = (0.0, 0.0, 0.0), score = -1.0
         for i in stride(from: 0, to: px.count, by: 4) {
@@ -100,11 +78,12 @@ enum CoverTint {
         }
         let top = max(best.0, best.1, best.2)
         // A grey cover has no colour to lend.
-        if score < 0.12 || top == 0 { return Mint.band }
-        let k = 0.62 / top
+        if score < 0.12 || top == 0 { return TVLook.accent }
+        // Bright enough to sit under a dark glyph.
+        let k = 0.95 / top
         return Color(red: best.0 * k, green: best.1 * k, blue: best.2 * k)
         #else
-        return Mint.band
+        return TVLook.accent
         #endif
     }
 }
@@ -118,10 +97,10 @@ struct Wall: View {
             Color.black
             if let small {
                 Color.clear
-                    .overlay { Image(tv: small).resizable().interpolation(.high).scaledToFill().opacity(0.42) }
+                    .overlay { Image(tv: small).resizable().interpolation(.high).scaledToFill().opacity(0.55) }
                     .clipped().transition(.opacity)
             }
-            LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
+            LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)

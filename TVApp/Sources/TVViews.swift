@@ -17,7 +17,7 @@ struct TVApp: App {
     }
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(model).preferredColorScheme(.dark).tint(Mint.progress).foregroundStyle(Mint.text)
+            RootView().environmentObject(model).preferredColorScheme(.dark).tint(TVLook.accent)
                 .onChange(of: phase) { _, p in if p == .active { model.start() } else { model.stop() } }
                 .onAppear { model.start() }
         }
@@ -26,7 +26,6 @@ struct TVApp: App {
 
 struct RootView: View {
     @EnvironmentObject var model: TVModel
-    @State private var settings = false
     var problem: String? {
         if !model.reachable { return "Can’t reach the Mac. Is Tailscale on?" }
         if model.status?.online == false { return "The Mac can’t reach the TV" }
@@ -35,20 +34,26 @@ struct RootView: View {
     var body: some View {
         ScreenMeasure {
             TabView(selection: $model.tab) {
-                Tab("Remote", systemImage: "av.remote", value: 0) { page { RemoteTab() } }
-                Tab("Apps", systemImage: "square.grid.2x2", value: 1) { page { AppsTab() } }
-                Tab("Playing", systemImage: "play.circle", value: 2) { page { PlayingTab() } }
-                Tab("Films", systemImage: "film", value: 3) { page { FilmsTab() } }
+                Tab("Remote", systemImage: "av.remote", value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() } }
+                Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Page(title: "Apps") { AppsTab() } }
+                Tab("Playing", systemImage: "play.circle", value: 2) { Page(title: "Playing") { PlayingTab() } }
+                Tab("Films", systemImage: "film", value: 3) { Page(title: "Films") { FilmsTab() } }
             }
             .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
         }
         .overlay(alignment: .top) {
-            if let problem { Label(problem, systemImage: "wifi.exclamationmark").font(Mint.font(13, weight: 500)).padding(.horizontal, 14).padding(.vertical, 8).background(Color(hex: 0xB3261E), in: RoundedRectangle(cornerRadius: Mint.radius)).padding(.top, 4) }
+            if let problem {
+                Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(Color.red.opacity(0.85), in: Capsule()).padding(.top, 4)
+            }
         }
         .overlay(alignment: .bottom) {
-            if let t = model.toast { Text(t).font(Mint.font(14)).padding(.horizontal, 16).padding(.vertical, 10).background(Mint.band, in: RoundedRectangle(cornerRadius: Mint.radius)).shadow(radius: 12, y: 6).padding(.bottom, 24).transition(.opacity) }
+            if let t = model.toast {
+                Text(t).font(.subheadline.weight(.semibold)).padding(.horizontal, 18).padding(.vertical, 11)
+                    .glassEffect(.regular, in: Capsule()).padding(.bottom, 24).transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
         }
-        .animation(Mint.focus, value: model.toast)
+        .animation(TVLook.press, value: model.toast)
         .onAppear { followRequest() }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
     }
@@ -57,10 +62,23 @@ struct RootView: View {
         if FlickRequest.wantsRemote { FlickRequest.wantsRemote = false; model.tab = 0 }
         if FlickRequest.wantsAirPlay { model.tab = 2 }
     }
-    func page<C: View>(@ViewBuilder _ c: () -> C) -> some View {
+}
+
+// Each tab's frame: the art behind it, its title, and the gear.
+struct Page<C: View>: View {
+    @EnvironmentObject var model: TVModel
+    @Environment(\.horizontalSizeClass) private var size
+    @State private var settings = false
+    let title: String
+    var alwaysInline = false
+    @ViewBuilder let content: () -> C
+    var body: some View {
         NavigationStack {
-            c().background { Wall(art: model.status?.music?.art) }
+            content()
+                .background { Wall(art: model.status?.music?.art) }
                 .toolbarBackground(.hidden, for: .navigationBar)
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(alwaysInline || size == .regular ? .inline : .large)
                 .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Connection") } }
                 .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
         }
@@ -89,32 +107,39 @@ struct ConnectionView: View {
     }
 }
 
-// The launcher's search row: the blue orb and a quiet prompt. Takes words or any link.
+// Type or paste anything: a link opens in the right app, words become a search.
 struct SendBar: View {
     @EnvironmentObject var model: TVModel
     @ObservedObject private var draft = SendDraft.shared
     @FocusState private var focused: Bool
     var body: some View {
-        HStack(spacing: 14) {
-            Button {
-                #if canImport(UIKit)
-                if let s = UIPasteboard.general.string, !s.isEmpty { model.send(s) } else { focused = true }
-                #endif
-            } label: {
-                Image(systemName: "arrow.up").font(.system(size: 20, weight: .medium)).foregroundStyle(.white).frame(width: 46, height: 46).background(Mint.orb, in: Circle())
-            }
-            .buttonStyle(.plain).accessibilityLabel("Send what you copied to the TV")
+        HStack(spacing: 8) {
+            Image(systemName: "paperplane").foregroundStyle(.secondary).padding(.leading, 14)
             TextField("Send a link or search", text: $draft.text)
-                .font(Mint.font(17, weight: 300)).italic().focused($focused).autocorrectionDisabled()
-                .onSubmit { if !draft.text.isEmpty { model.send(draft.text); draft.text = "" } }
+                .focused($focused).autocorrectionDisabled().submitLabel(.send)
+                .onSubmit { submit() }
+            if draft.text.isEmpty {
+                Button {
+                    #if canImport(UIKit)
+                    if let s = UIPasteboard.general.string, !s.isEmpty { model.send(s) } else { focused = true }
+                    #endif
+                } label: { Image(systemName: "doc.on.clipboard").frame(width: 44, height: 44) }
+                .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Send what you copied to the TV")
+            } else {
+                Button(action: submit) { Image(systemName: "arrow.up.circle.fill").font(.title2).frame(width: 44, height: 44) }
+                    .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Send to the TV")
+            }
         }
+        .frame(height: 50)
+        .glassEffect(.regular, in: Capsule())
     }
+    func submit() { if !draft.text.isEmpty { model.send(draft.text); draft.text = "" } }
 }
 
 struct RowTitle: View {
     let title: String
     init(_ t: String) { title = t }
-    var body: some View { Text(title).font(Mint.rowTitle()).frame(height: 32, alignment: .leading) }
+    var body: some View { Text(title).font(.title3.weight(.bold)).padding(.bottom, 8) }
 }
 
 // MARK: - Remote
@@ -123,24 +148,20 @@ struct MirrorView: View {
     @ObservedObject var store: MirrorStore
     var body: some View {
         ZStack {
-            Mint.plane.opacity(0.5)
-            if let m = store.image, model.mirrorLive { Image(tv: m).resizable().scaledToFit() }
-            if !model.mirrorLive { MirrorToggle() }
+            Color.black.opacity(0.35)
+            if let m = store.image, model.mirrorLive {
+                Image(tv: m).resizable().scaledToFit()
+            } else if !model.mirrorLive {
+                Button { model.setMirror(true) } label: {
+                    Label("Show the TV’s screen", systemImage: "eye").font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 11)
+                }
+                .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
+            } else {
+                ProgressView()
+            }
         }
         .aspectRatio(16.0 / 9, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: Mint.radius))
-        .contentShape(Rectangle())
-        .onTapGesture { if model.mirrorLive { model.mirrorLive = false } }
-    }
-}
-struct MirrorToggle: View {
-    @EnvironmentObject var model: TVModel
-    var body: some View {
-        Button {
-            model.setMirror(!model.mirrorLive)
-        } label: { Image(systemName: model.mirrorLive ? "eye.slash" : "eye").font(.system(size: 20)) }
-        .buttonStyle(MintKeyStyle(diameter: 44))
-        .accessibilityLabel(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen")
+        .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
     }
 }
 
@@ -184,11 +205,17 @@ struct TouchPad: View {
         moved = false; began = false; longFired = false; heldKey = nil; ripple = nil
     }
     var body: some View {
-        RoundedRectangle(cornerRadius: Mint.radius)
-            .fill(Mint.plane)
+        RoundedRectangle(cornerRadius: 30, style: .continuous)
+            .fill(.ultraThinMaterial)
             .overlay {
-                if let ripple { Circle().fill(Mint.text.opacity(0.12)).frame(width: 88, height: 88).position(ripple).allowsHitTesting(false) }
+                RoundedRectangle(cornerRadius: 30, style: .continuous).strokeBorder(.white.opacity(0.08))
+                if let ripple {
+                    Circle().fill(.white.opacity(0.14)).frame(width: 96, height: 96).position(ripple).allowsHitTesting(false)
+                } else {
+                    Image(systemName: "hand.draw").font(.system(size: 30, weight: .light)).foregroundStyle(.tertiary).allowsHitTesting(false)
+                }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
             .contentShape(Rectangle())
             .onChange(of: touching) { _, now in if !now { cancel() } }
             .onDisappear { cancel() }
@@ -218,23 +245,55 @@ struct TouchPad: View {
     }
 }
 
-struct GlyphKey: View {
+struct GlassKey: View {
     @EnvironmentObject var model: TVModel
     let icon: String, label: String, key: String
-    var size: CGFloat = 56
+    var size: CGFloat = 54
     @State private var longPressed = false
     var body: some View {
         Button {
             if longPressed { longPressed = false } else { model.key(key) }
         } label: {
-            Image(systemName: icon).font(.system(size: size * 0.38, weight: .regular))
+            Image(systemName: icon).font(.system(size: size * 0.36, weight: .medium)).frame(width: size, height: size).contentShape(Circle())
         }
-        .buttonStyle(MintKeyStyle(diameter: size))
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
         .simultaneousGesture(LongPressGesture(minimumDuration: 0.6).onEnded { _ in
             longPressed = true; model.key(key, long: true)
             Task { try? await Task.sleep(nanoseconds: 2_000_000_000); longPressed = false }
         })
         .accessibilityLabel(label)
+    }
+}
+struct PlayKey: View {
+    @EnvironmentObject var model: TVModel
+    var playing: Bool?
+    var tint: Color = TVLook.accent
+    var size: CGFloat = 68
+    var body: some View {
+        Button { model.key("play") } label: {
+            Image(systemName: playing == nil ? "playpause.fill" : playing == true ? "pause.fill" : "play.fill")
+                .font(.system(size: size * 0.36, weight: .semibold)).foregroundStyle(.black.opacity(0.85))
+                .frame(width: size, height: size).background(tint, in: Circle())
+        }
+        .buttonStyle(.plain).accessibilityLabel(playing == true ? "Pause" : playing == false ? "Play" : "Play or pause")
+    }
+}
+struct VolumeBar: View {
+    @EnvironmentObject var model: TVModel
+    func segment(_ icon: String, _ key: String, _ label: String) -> some View {
+        Button { model.key(key) } label: { Image(systemName: icon).font(.system(size: 18, weight: .medium)).frame(maxWidth: .infinity, minHeight: 50).contentShape(Rectangle()) }
+            .buttonStyle(.plain).accessibilityLabel(label)
+    }
+    var body: some View {
+        HStack(spacing: 0) {
+            segment("speaker.minus.fill", "voldown", "Volume down")
+            Divider().frame(height: 24)
+            segment("speaker.slash.fill", "mute", "Mute")
+            Divider().frame(height: 24)
+            segment("speaker.plus.fill", "volup", "Volume up")
+        }
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 }
 
@@ -245,36 +304,59 @@ struct RemoteTab: View {
     @State private var text = ""
     var state: String {
         guard let s = model.status, s.online else { return "Connecting…" }
-        return s.screen == "asleep" ? "Asleep. Press anything to wake it." : s.screen == "screensaver" ? "Screensaver" : (s.apps?.first { $0.pkg == s.app }?.name ?? "Home")
+        return s.screen == "asleep" ? "Asleep. Press anything to wake it." : s.screen == "screensaver" ? "Screensaver" : "On " + (s.apps?.first { $0.pkg == s.app }?.name ?? "Home")
     }
     var keys: some View {
-        VStack(spacing: 6) {
-            HStack { GlyphKey(icon: "arrow.left", label: "Back", key: "back"); Spacer(); GlyphKey(icon: "house.fill", label: "Home", key: "home"); Spacer()
-                Button { typing = true } label: { Image(systemName: "keyboard").font(.system(size: 21)) }.buttonStyle(MintKeyStyle()).accessibilityLabel("Type on TV")
-                Spacer(); GlyphKey(icon: "line.3.horizontal", label: "Menu", key: "menu") }
-            HStack { GlyphKey(icon: "backward.end.fill", label: "Previous", key: "previous"); Spacer(); GlyphKey(icon: "gobackward.10", label: "Rewind", key: "rewind"); Spacer(); GlyphKey(icon: "playpause.fill", label: "Play or pause", key: "play", size: 66); Spacer(); GlyphKey(icon: "goforward.10", label: "Fast forward", key: "forward"); Spacer(); GlyphKey(icon: "forward.end.fill", label: "Next", key: "next") }
-            HStack { GlyphKey(icon: "speaker.minus.fill", label: "Volume down", key: "voldown"); Spacer(); GlyphKey(icon: "speaker.slash.fill", label: "Mute", key: "mute"); Spacer(); GlyphKey(icon: "speaker.plus.fill", label: "Volume up", key: "volup"); Spacer()
-                GlyphKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep") }
+        VStack(spacing: 12) {
+            HStack {
+                GlassKey(icon: "chevron.left", label: "Back", key: "back"); Spacer()
+                GlassKey(icon: "house.fill", label: "Home", key: "home"); Spacer()
+                Button { typing = true } label: { Image(systemName: "keyboard").font(.system(size: 19, weight: .medium)).frame(width: 54, height: 54).contentShape(Circle()) }
+                    .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel("Type on TV")
+                Spacer()
+                GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu")
+            }
+            HStack {
+                GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: 50); Spacer()
+                GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: 50); Spacer()
+                PlayKey(); Spacer()
+                GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: 50); Spacer()
+                GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: 50)
+            }
+            HStack(spacing: 12) {
+                VolumeBar()
+                GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep", size: 50)
+            }
         }
     }
-    var title: some View { Text(state).font(Mint.font(15.4)).foregroundStyle(Mint.text.opacity(0.8)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading) }
     var body: some View {
         Group {
             if size == .regular {
                 FoldSplit {
-                    VStack(alignment: .leading, spacing: 12) { title; MirrorView(store: model.mirrorStore); SendBar(); Spacer(minLength: 0) }.padding(20)
+                    VStack(spacing: 14) {
+                        MirrorView(store: model.mirrorStore)
+                        if let m = model.status?.music { MiniPlayer(music: m) }
+                        Spacer(minLength: 0)
+                        SendBar()
+                    }.padding(.horizontal, 20).padding(.bottom, 16)
                 } right: {
-                    VStack(spacing: 12) { TouchPad().frame(maxHeight: .infinity); keys }.padding(20)
+                    VStack(spacing: 14) { TouchPad().frame(maxHeight: .infinity); keys }.padding(.horizontal, 20).padding(.bottom, 16)
                 }
             } else {
                 // Folded, the pad gets the room until the screen is asked for.
-                VStack(spacing: 10) {
-                    HStack { title; MirrorToggle() }
+                VStack(spacing: 14) {
                     if model.mirrorLive { MirrorView(store: model.mirrorStore) }
-                    TouchPad().frame(minHeight: 120, maxHeight: .infinity)
+                    TouchPad().frame(minHeight: 150, maxHeight: .infinity)
                     keys
                 }
-                .padding(.horizontal, 14).padding(.bottom, 6)
+                .padding(.horizontal, 14).padding(.bottom, 12)
+            }
+        }
+        .navigationSubtitle(state)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { model.setMirror(!model.mirrorLive) } label: { Image(systemName: model.mirrorLive ? "eye.slash" : "eye") }
+                    .accessibilityLabel(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen")
             }
         }
         .onDisappear { model.mirrorLive = false }
@@ -284,6 +366,27 @@ struct RemoteTab: View {
             Button("Delete") { model.key("del") }
             Button("Cancel", role: .cancel) { text = "" }
         } message: { Text("Goes into the box that’s focused on the TV. Not for passwords.") }
+    }
+}
+struct MiniPlayer: View {
+    @EnvironmentObject var model: TVModel
+    let music: TVStatus.Music
+    var body: some View {
+        HStack(spacing: 12) {
+            Button { model.tab = 2 } label: {
+                HStack(spacing: 12) {
+                    Art(url: URL(string: music.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
+                        .frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(music.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text(music.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel("Now playing: \(music.title)")
+            PlayKey(playing: music.playing, size: 44)
+        }
+        .padding(10).tvCard()
     }
 }
 
@@ -297,36 +400,33 @@ struct Banner: View {
             model.tick(); model.post("open", ["pkg": app.pkg], say: "Opening \(app.name)")
         } label: {
             ZStack {
-                Mint.banner
+                TVLook.bannerTile
                 if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)") {
                     Art(url: u) { i in
                         if app.wide == true { i.resizable().scaledToFill() }
                         else {
-                            // The launcher's fallback for an app with no banner: its icon over its name.
-                            VStack(spacing: 3) { i.resizable().scaledToFit().frame(width: 30, height: 30); Text(app.name).font(Mint.font(15, condensed: true)).lineLimit(1).padding(.horizontal, 8) }
+                            VStack(spacing: 4) { i.resizable().scaledToFit().frame(width: 30, height: 30); Text(app.name).font(.caption.weight(.medium)).lineLimit(1).padding(.horizontal, 8) }
                         }
                     } placeholder: { name }
                 } else { name }
             }
-            .frame(width: Mint.bannerSize.width, height: Mint.bannerSize.height)
-            .clipShape(RoundedRectangle(cornerRadius: Mint.radius))
-            .scaleEffect(current ? 1.14 : 1)
-            .shadow(color: .black.opacity(current ? 0.6 : 0), radius: 10, y: 6)
-            .animation(Mint.focus, value: current)
+            .frame(width: TVLook.bannerSize.width, height: TVLook.bannerSize.height)
+            .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
+            .overlay {
+                if current { RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2.5) }
+            }
         }
-        .buttonStyle(.plain).accessibilityLabel(app.name)
+        .buttonStyle(.plain).accessibilityLabel(app.name).accessibilityAddTraits(current ? .isSelected : [])
     }
-    var name: some View { Text(app.name).font(Mint.font(14, condensed: true)).multilineTextAlignment(.center).padding(6) }
+    var name: some View { Text(app.name).font(.footnote.weight(.medium)).multilineTextAlignment(.center).padding(6) }
 }
-// Rows run edge to edge and stop at the tab rail, so nothing slides under the gear.
 struct BannerRow: View {
     let title: String, apps: [TVStatus.App]
-    var pad: CGFloat = 20
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            RowTitle(title).padding(.leading, pad)
+            RowTitle(title).padding(.leading, 20)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: Mint.gap) { ForEach(apps) { Banner(app: $0) } }.padding(.vertical, 10).padding(.horizontal, pad).scrollTargetLayout()
+                LazyHStack(spacing: TVLook.gap) { ForEach(apps) { Banner(app: $0) } }.padding(.horizontal, 20).scrollTargetLayout()
             }
             .scrollTargetBehavior(.viewAligned).clipped()
         }
@@ -345,40 +445,40 @@ struct AppsTab: View {
     }
     var listen: [TVStatus.App] { Self.listen.compactMap { p in all.first { $0.pkg == p } } }
     var tools: [TVStatus.App] { all.filter { Self.tools.contains($0.pkg) } }
-    @ViewBuilder func row(_ title: String, _ apps: [TVStatus.App], pad: CGFloat) -> some View {
-        if !apps.isEmpty { BannerRow(title: title, apps: apps, pad: pad) }
+    @ViewBuilder func row(_ title: String, _ apps: [TVStatus.App]) -> some View {
+        if !apps.isEmpty { BannerRow(title: title, apps: apps) }
     }
     // Before the first answer, the shape of the page instead of a blank one.
     var waiting: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            RowTitle("Apps").padding(.leading, 20)
-            HStack(spacing: Mint.gap) {
-                ForEach(0..<6, id: \.self) { _ in Mint.banner.opacity(0.35).frame(width: Mint.bannerSize.width, height: Mint.bannerSize.height).clipShape(RoundedRectangle(cornerRadius: Mint.radius)) }
-            }.padding(.vertical, 10).padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading).clipped()
+        HStack(spacing: TVLook.gap) {
+            ForEach(0..<6, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).fill(.white.opacity(0.08)).frame(width: TVLook.bannerSize.width, height: TVLook.bannerSize.height)
+            }
         }
+        .padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading).clipped()
     }
     var body: some View {
         if all.isEmpty {
-            ScrollView { VStack(alignment: .leading, spacing: Mint.rowGap) { SendBar().padding(.horizontal, 20); waiting }.padding(.vertical, 12) }
+            ScrollView { VStack(alignment: .leading, spacing: 24) { SendBar().padding(.horizontal, 20); waiting }.padding(.vertical, 12) }
         } else if size == .regular {
             FoldSplit {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: Mint.rowGap) {
+                    VStack(alignment: .leading, spacing: 26) {
                         SendBar().padding(.horizontal, 20)
-                        row("Watch", watch, pad: 20)
-                        row("Listen", listen, pad: 20)
+                        row("Watch", watch)
+                        row("Listen", listen)
                     }.padding(.vertical, 12)
                 }
             } right: {
-                ScrollView { row("Tools and settings", tools, pad: 20).padding(.vertical, 12) }
+                ScrollView { row("Tools and settings", tools).padding(.vertical, 12) }
             }
         } else {
             ScrollView {
-                VStack(alignment: .leading, spacing: Mint.rowGap) {
+                VStack(alignment: .leading, spacing: 26) {
                     SendBar().padding(.horizontal, 20)
-                    row("Watch", watch, pad: 20)
-                    row("Listen", listen, pad: 20)
-                    row("Tools and settings", tools, pad: 20)
+                    row("Watch", watch)
+                    row("Listen", listen)
+                    row("Tools and settings", tools)
                 }.padding(.vertical, 12)
             }
         }
@@ -396,7 +496,7 @@ struct RoutePicker: UIViewRepresentable {
         return true
     }
     func makeUIView(context: Context) -> AVRoutePickerView {
-        let v = AVRoutePickerView(); Self.current = v; v.tintColor = UIColor(Mint.text); v.activeTintColor = UIColor(Mint.progress); v.prioritizesVideoDevices = false
+        let v = AVRoutePickerView(); Self.current = v; v.tintColor = .white; v.activeTintColor = UIColor(TVLook.accent); v.prioritizesVideoDevices = false
         return v
     }
     func updateUIView(_ v: AVRoutePickerView, context: Context) {}
@@ -457,27 +557,28 @@ struct FlickCard: View {
     var body: some View {
         HStack(spacing: 12) {
             ZStack {
-                Mint.band
-                if let art { art.resizable().scaledToFill() } else { Image(systemName: "iphone").font(.title2).opacity(0.7) }
+                Color.white.opacity(0.08)
+                if let art { art.resizable().scaledToFill() } else { Image(systemName: "iphone").font(.title2).foregroundStyle(.secondary) }
             }
-            .frame(width: 80, height: 80).clipShape(RoundedRectangle(cornerRadius: Mint.radius))
+            .frame(width: 60, height: 60).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
-                Text(title.isEmpty ? "On this iPhone" : title).font(Mint.font(15.4)).lineLimit(1)
-                Text(title.isEmpty ? "Flick up to AirPlay" : "\(artist). Flick up to send.").font(Mint.font(11.8)).opacity(0.7).lineLimit(1)
+                Text(title.isEmpty ? "On this iPhone" : title).font(.body.weight(.semibold)).lineLimit(1)
+                Label(title.isEmpty ? "Flick up to AirPlay" : "Flick up to send", systemImage: "chevron.up").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
             #if os(iOS)
             RoutePicker().frame(width: 44, height: 44).accessibilityLabel("AirPlay")
             #endif
         }
-        .padding(10)
-        .background(Mint.plane, in: RoundedRectangle(cornerRadius: Mint.radius))
+        .padding(12)
+        .tvCard()
+        .scaleEffect(offset < -20 ? 0.97 : 1)
         .offset(y: offset)
         .gesture(DragGesture(minimumDistance: 12)
             .onChanged { v in offset = min(0, v.translation.height) * 0.7 }
             .onEnded { v in
                 if v.translation.height < -50 || v.predictedEndTranslation.height < -140 { flick() }
-                withAnimation(Mint.glide) { offset = 0 }
+                withAnimation(.spring(duration: 0.35, bounce: 0.35)) { offset = 0 }
             })
         .onAppear {
             refresh()
@@ -495,48 +596,42 @@ struct FlickCard: View {
         #endif
     }
 }
-// Mint's control band: cover colour, a hairline along the top, times at the ends and a round Play in the middle.
-struct ControlBand: View {
+struct NowControls: View {
     @EnvironmentObject var model: TVModel
     let music: TVStatus.Music
-    @State private var tint = Mint.band
+    @State private var tint = TVLook.accent
     static func clock(_ ms: Double) -> String { let t = Int(max(ms, 0) / 1000); return String(format: "%d:%02d", t / 60, t % 60) }
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            let raw = music.playing ? music.position + ctx.date.timeIntervalSince1970 * 1000 - music.sampledAt : music.position
-            let now = min(max(raw, 0), max(music.duration, 0))
-            VStack(spacing: 0) {
-                GeometryReader { g in
-                    ZStack(alignment: .leading) {
-                        Rectangle().fill(Mint.text.opacity(0.22))
-                        Rectangle().fill(Mint.text).frame(width: g.size.width * (music.duration > 0 ? now / music.duration : 0))
-                    }
-                }.frame(height: 2)
-                HStack(spacing: 0) {
-                    Text(Self.clock(now)).font(Mint.font(12)).monospacedDigit().frame(width: 44, alignment: .leading)
-                    Spacer(minLength: 0)
-                    GlyphKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: 48)
-                    Button { model.key("play") } label: {
-                        Image(systemName: music.playing ? "pause.fill" : "play.fill").font(.system(size: 22)).foregroundStyle(Color.black.opacity(0.85))
-                            .frame(width: 58, height: 58).background(Color.white.opacity(0.62).blendMode(.normal), in: Circle()).background(tint, in: Circle())
-                    }.buttonStyle(.plain).padding(.horizontal, 14).accessibilityLabel(music.playing ? "Pause" : "Play")
-                    GlyphKey(icon: "forward.end.fill", label: "Next", key: "next", size: 48)
-                    Spacer(minLength: 0)
-                    Text("−" + Self.clock(music.duration - now)).font(Mint.font(12)).monospacedDigit().frame(width: 44, alignment: .trailing)
+        VStack(spacing: 14) {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                let raw = music.playing ? music.position + ctx.date.timeIntervalSince1970 * 1000 - music.sampledAt : music.position
+                let now = min(max(raw, 0), max(music.duration, 0))
+                VStack(spacing: 5) {
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.white.opacity(0.18))
+                            Capsule().fill(.white).frame(width: g.size.width * (music.duration > 0 ? now / music.duration : 0))
+                        }
+                    }.frame(height: 5)
+                    HStack {
+                        Text(Self.clock(now))
+                        Spacer()
+                        Text("−" + Self.clock(music.duration - now))
+                    }.font(.caption2.weight(.medium)).monospacedDigit().foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 12).frame(height: 74)
+            }
+            HStack(spacing: 26) {
+                GlassKey(icon: "backward.fill", label: "Previous", key: "previous", size: 54)
+                PlayKey(playing: music.playing, tint: tint, size: 74)
+                GlassKey(icon: "forward.fill", label: "Next", key: "next", size: 54)
             }
         }
-        .background(tint)
-        .clipShape(RoundedRectangle(cornerRadius: Mint.radius))
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
-        .animation(.easeOut(duration: 0.26), value: tint)
+        .animation(.easeOut(duration: 0.3), value: tint)
         .task(id: music.art) {
-            if let u = URL(string: music.art), let i = await ImageStore.shared.load(u) { tint = CoverTint.of(i) } else { tint = Mint.band }
+            if let u = URL(string: music.art), let i = await ImageStore.shared.load(u) { tint = CoverTint.of(i) } else { tint = TVLook.accent }
         }
     }
 }
-
 struct PlayingTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.horizontalSizeClass) private var size
@@ -548,38 +643,50 @@ struct PlayingTab: View {
         return s.playing || music == nil || music?.playing == false
     }
     var now: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             // Another app's video outranks a song left paused in Mint.
             if let m = music, !otherAppIsActive {
-                Art(url: URL(string: m.art)) { i in i.resizable().scaledToFit() } placeholder: { Mint.band }
-                    .aspectRatio(1, contentMode: .fit).frame(maxWidth: size == .regular ? 280 : 190).clipShape(RoundedRectangle(cornerRadius: Mint.radius))
-                Text(m.title).font(Mint.font(26, weight: 300)).lineLimit(2).multilineTextAlignment(.center)
-                Text([m.artist, m.album].filter { !$0.isEmpty }.joined(separator: " · ")).font(Mint.font(14)).opacity(0.7).lineLimit(1)
-                ControlBand(music: m)
-                Button("Show on TV") { model.post("music-now", say: "Showing on TV") }.font(Mint.font(13)).buttonStyle(.plain).opacity(0.8)
+                Art(url: URL(string: m.art)) { i in i.resizable().scaledToFit() } placeholder: { Color.white.opacity(0.08) }
+                    .aspectRatio(1, contentMode: .fit).frame(maxWidth: size == .regular ? 300 : 210)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)
+                VStack(spacing: 3) {
+                    Text(m.title).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
+                    Text([m.artist, m.album].filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                }
+                NowControls(music: m)
+                Button { model.post("music-now", say: "Showing on TV") } label: { Label("Show on TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
             } else if let s = model.status?.session {
-                Image(systemName: s.playing ? "play" : "pause").font(.system(size: 44, weight: .light)).padding(.top, 20)
-                Text(s.description.first ?? "Playing").font(Mint.font(22, weight: 300)).lineLimit(2)
-                Text(model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg).font(Mint.font(14)).opacity(0.7)
+                Image(systemName: s.playing ? "play.tv.fill" : "pause.circle").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
+                Text(s.description.first ?? "Playing").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
+                Text(model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg).font(.subheadline).foregroundStyle(.secondary)
+                PlayKey(playing: s.playing, size: 74).padding(.top, 6)
             } else {
-                Image(systemName: "music.note").font(.system(size: 44, weight: .light)).opacity(0.4).padding(.vertical, 30)
+                ContentUnavailableView("Nothing playing", systemImage: "music.note", description: Text("Search below, or flick something from this iPhone."))
             }
         }
         .frame(maxWidth: .infinity)
     }
+    func play(shuffle: Bool = false) {
+        guard !query.isEmpty else { return }
+        model.post("music", ["query": query, "kind": kind, "shuffle": shuffle], say: shuffle ? "Shuffling on the TV" : "Sent to Mint Music")
+        query = ""
+    }
     var send: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             FlickCard()
-            RowTitle("Play on TV")
-            HStack(spacing: 6) {
-                ForEach([("Song", "song"), ("Album", "album"), ("Playlist", "playlist"), ("Artist", "artist"), ("Station", "station")], id: \.1) { k in
-                    Button(k.0) { kind = k.1 }.font(Mint.font(14, weight: kind == k.1 ? 500 : 400, condensed: true)).buttonStyle(.plain).padding(.horizontal, 10).padding(.vertical, 7)
-                        .background(kind == k.1 ? Mint.band : .clear, in: RoundedRectangle(cornerRadius: Mint.radius))
+            VStack(alignment: .leading, spacing: 10) {
+                RowTitle("Play on TV").padding(.bottom, -4)
+                Picker("Kind", selection: $kind) {
+                    ForEach([("Song", "song"), ("Album", "album"), ("Playlist", "playlist"), ("Artist", "artist"), ("Station", "station")], id: \.1) { Text($0.0).tag($0.1) }
+                }
+                .pickerStyle(.segmented).labelsHidden()
+                HStack(spacing: 10) {
+                    TextField("What should play?", text: $query).autocorrectionDisabled().submitLabel(.go).onSubmit { play() }
+                        .padding(.horizontal, 16).frame(height: 50).glassEffect(.regular, in: Capsule())
+                    Button { play(shuffle: true) } label: { Image(systemName: "shuffle").font(.system(size: 18, weight: .medium)).frame(width: 50, height: 50).contentShape(Circle()) }
+                        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).disabled(query.isEmpty).opacity(query.isEmpty ? 0.45 : 1).accessibilityLabel("Shuffle")
                 }
             }
-            TextField("What should play?", text: $query).font(Mint.font(16, weight: 300)).padding(12).background(Mint.plane, in: RoundedRectangle(cornerRadius: Mint.radius)).autocorrectionDisabled()
-                .onSubmit { if !query.isEmpty { model.post("music", ["query": query, "kind": kind], say: "Sent to Mint Music"); query = "" } }
-            Button("Shuffle") { model.post("music", ["query": query, "kind": kind, "shuffle": true], say: "Shuffling on the TV"); query = "" }.font(Mint.font(14)).buttonStyle(.plain).disabled(query.isEmpty).opacity(query.isEmpty ? 0.4 : 1)
         }
     }
     var body: some View {
@@ -587,7 +694,7 @@ struct PlayingTab: View {
             if size == .regular {
                 FoldSplit { ScrollView { now.padding(20) } } right: { ScrollView { send.padding(20) } }
             } else {
-                ScrollView { VStack(spacing: 24) { now; send }.padding(14) }
+                ScrollView { VStack(spacing: 24) { now; send }.padding(.horizontal, 16).padding(.bottom, 16) }
             }
         }
     }
@@ -599,20 +706,15 @@ struct FilmCard: View {
     let film: Film
     var body: some View {
         Button { model.tick(); model.post("film", ["slug": film.slug], say: "Opening on TV") } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Mint.banner }
-                    .frame(width: 117, height: 176).clipped()
-                HStack(spacing: 4) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(film.title).font(Mint.font(13.4)).lineLimit(1)
-                        if !film.note.isEmpty { Text(film.note).font(Mint.font(10.8)).opacity(0.7).lineLimit(1) }
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "film.fill").font(.system(size: 9)).opacity(0.7)
+            VStack(alignment: .leading, spacing: 6) {
+                Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
+                    .frame(width: 118, height: 177).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(film.title).font(.footnote.weight(.semibold)).lineLimit(1)
+                    if !film.note.isEmpty { Text(film.note).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                 }
-                .padding(.horizontal, 7).frame(width: 117, height: 44).background(Mint.band)
+                .frame(width: 118, alignment: .leading)
             }
-            .clipShape(RoundedRectangle(cornerRadius: Mint.radius))
         }.buttonStyle(.plain).accessibilityLabel(film.title)
     }
 }
@@ -622,7 +724,7 @@ struct FilmRow: View {
         VStack(alignment: .leading, spacing: 0) {
             RowTitle(title).padding(.leading, 20)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 8) { ForEach(films) { FilmCard(film: $0) } }.padding(.horizontal, 20).scrollTargetLayout()
+                LazyHStack(alignment: .top, spacing: 12) { ForEach(films) { FilmCard(film: $0) } }.padding(.horizontal, 20).scrollTargetLayout()
             }
             .scrollTargetBehavior(.viewAligned).clipped()
         }
@@ -635,7 +737,7 @@ struct FilmGrid: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 RowTitle(title)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 117, maximum: 117), spacing: 8, alignment: .top)], alignment: .leading, spacing: 8) { ForEach(films) { FilmCard(film: $0) } }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 118, maximum: 130), spacing: 12, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(films) { FilmCard(film: $0) } }
             }.padding(.horizontal, 20).padding(.vertical, 12)
         }
     }
@@ -646,12 +748,12 @@ struct FilmsTab: View {
     var body: some View {
         Group {
             if model.friends.isEmpty && model.watchlist.isEmpty {
-                ScrollView { Text(model.filmsNote ?? "No films yet.").font(Mint.font(15)).opacity(0.7).frame(maxWidth: .infinity).padding(.top, 120) }
+                ScrollView { ContentUnavailableView(model.filmsNote ?? "No films yet", systemImage: "film").padding(.top, 80) }
             } else if size == .regular {
                 FoldSplit { FilmGrid(title: "Friends", films: model.friends) } right: { FilmGrid(title: "Watchlist", films: model.watchlist) }
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: Mint.rowGap) {
+                    VStack(alignment: .leading, spacing: 26) {
                         if !model.friends.isEmpty { FilmRow(title: "Friends", films: model.friends) }
                         if !model.watchlist.isEmpty { FilmRow(title: "Watchlist", films: model.watchlist) }
                     }.padding(.vertical, 12)

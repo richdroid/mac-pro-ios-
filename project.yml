@@ -98,7 +98,6 @@ targets:
     sources:
       - TVApp/Sources
       - TVApp/Assets.xcassets
-      - TVApp/RobotoVariable.ttf
       - path: Shared/Duo.swift
     dependencies:
       - target: TVShare
@@ -112,7 +111,6 @@ targets:
       properties:
         CFBundleDisplayName: TV
         CADisableMinimumFrameDurationOnPhone: true
-        UIAppFonts: [RobotoVariable.ttf]
         NSAppleMusicUsageDescription: Sees which song is playing on this iPhone, so a flick can send it to the TV.
         UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
@@ -123,7 +121,6 @@ targets:
     platform: iOS
     sources:
       - TVWidget
-      - TVApp/RobotoVariable.ttf
       - path: TVApp/Sources/TVShared.swift
       - path: TVApp/Sources/TVTheme.swift
     settings:
@@ -133,7 +130,6 @@ targets:
       path: TVWidget/Info.plist
       properties:
         CFBundleDisplayName: TV Widgets
-        UIAppFonts: [RobotoVariable.ttf]
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
   TVShare:
@@ -187,7 +183,6 @@ targets:
     platform: iOS
     sources:
       - TVWidget/TVWidgets.swift
-      - TVApp/RobotoVariable.ttf
       - TVApp/Sources/TVShared.swift
       - TVApp/Sources/TVTheme.swift
       - ci/gallery-tv
@@ -196,10 +191,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryTV
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-    info:
-      path: ci/gallery-tv/Info.plist
-      properties:
-        UIAppFonts: [RobotoVariable.ttf]
   HotProbe:
     type: framework
     platform: iOS
