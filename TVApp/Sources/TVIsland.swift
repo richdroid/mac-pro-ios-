@@ -20,6 +20,8 @@ enum TVIsland {
         guard s.online, let session = s.session, let app = apps[session.pkg] else { return nil }
         // A sleeping TV with nothing playing has nothing to offer. Music can carry on with the screen off.
         if s.screen == "asleep" && !session.playing { return nil }
+        // Nor does a paused player you've since left, which Android keeps reporting as active.
+        if !session.playing && s.app != session.pkg { return nil }
         if session.pkg == "com.codex.musicwebtv", let m = s.music {
             return .init(title: m.title, subtitle: m.artist, app: app, playing: session.playing)
         }
