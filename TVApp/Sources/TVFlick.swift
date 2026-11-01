@@ -8,6 +8,10 @@ struct FlickTarget: Identifiable {
     let id = UUID()
     let item: MediaItem
     let source: MediaSource
+    // A song on this phone: its own cover, its own way to the TV, and what to do once it's there.
+    var image: Image?
+    var send: (String, [String: Any])?
+    var sent: (() -> Void)?
 }
 struct StremioEpisode: Decodable, Identifiable, Hashable {
     let id: String, season: Int, episode: Int, name: String, thumb: String
@@ -99,7 +103,9 @@ struct FlickScreen: View {
         VStack(spacing: 5) {
             ZStack {
                 RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color(white: 0.07))
-                if landed {
+                if landed, let image = target.image {
+                    image.resizable().scaledToFill().transition(.scale(scale: 0.4).combined(with: .opacity))
+                } else if landed {
                     Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(white: 0.15) }
                         .transition(.scale(scale: 0.4).combined(with: .opacity))
                 }
@@ -230,7 +236,7 @@ struct FlickScreen: View {
         .padding(.bottom, 16)
     }
     var card: some View {
-        MediaCard(item: shown, source: source, width: cardWidth)
+        MediaCard(item: shown, source: source, width: cardWidth, image: target.image)
             .shadow(color: .black.opacity(0.6), radius: 18, y: 10)
             // Measured before the bob, so it doesn't redraw the screen on every frame.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { if !flown { cardFrame = $0 } }
@@ -275,6 +281,7 @@ struct FlickScreen: View {
         season = episode?.season ?? m.episodes.first?.season ?? 0
     }
     var order: (String, [String: Any]) {
+        if let send = target.send { return send }
         if let stream { return ("play-stream", ["token": stream.token]) }
         if source == .mint { return ("mint-open", ["link": item.id, "title": item.title, "subtitle": item.subtitle, "art": item.art, "kind": item.kind, "play": true]) }
         if let ref = item.stremioRef {
@@ -296,6 +303,7 @@ struct FlickScreen: View {
             withAnimation(.spring(response: 0.42, dampingFraction: 0.52)) { landed = true }
             do {
                 try await TVBridge.post(order.0, order.1)
+                target.sent?()
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 #endif

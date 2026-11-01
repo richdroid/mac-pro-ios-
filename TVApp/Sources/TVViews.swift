@@ -577,8 +577,6 @@ struct FlickCard: View {
     @EnvironmentObject var model: TVModel
     @State private var title = ""
     @State private var artist = ""
-    // Goes back by itself if the system takes the touch away, so the card can't get stuck raised.
-    @GestureState private var offset: CGFloat = 0
     @State private var art: Image?
     @State private var showPicker = false
     func refresh() {
@@ -591,7 +589,7 @@ struct FlickCard: View {
         let player = MPMusicPlayerController.systemMusicPlayer
         let item = player.playbackState == .playing ? player.nowPlayingItem : nil
         title = item?.title ?? ""; artist = item?.artist ?? ""
-        if let i = item?.artwork?.image(at: CGSize(width: 160, height: 160)) { art = Image(uiImage: i) } else { art = nil }
+        if let i = item?.artwork?.image(at: CGSize(width: 500, height: 500)) { art = Image(uiImage: i) } else { art = nil }
         #endif
     }
     #if os(iOS)
@@ -611,15 +609,11 @@ struct FlickCard: View {
         #if os(iOS)
         refresh()
         if !title.isEmpty {
-            let song = title, by = artist
-            Task {
-                // The phone only stops once the TV has it, so a failed send never silences the music.
-                do {
-                    try await TVBridge.post("flick", ["title": song, "artist": by])
-                    MPMusicPlayerController.systemMusicPlayer.pause()
-                    model.say("Sent to the TV")
-                } catch { model.say("The TV didn’t get that") }
-            }
+            // The phone only stops once the TV has it, so a failed send never silences the music.
+            model.flicking = FlickTarget(
+                item: MediaItem(title: title, subtitle: artist, art: "", id: "", kind: "song"), source: .mint, image: art,
+                send: ("flick", ["title": title, "artist": artist]),
+                sent: { MPMusicPlayerController.systemMusicPlayer.pause() })
         } else {
             // Mint comes to the front first, ready to receive.
             model.post("music-now")
@@ -636,7 +630,7 @@ struct FlickCard: View {
             .frame(width: 60, height: 60).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
                 Text(title.isEmpty ? "On this iPhone" : title).font(.body.weight(.semibold)).lineLimit(1)
-                Label(title.isEmpty ? "Flick up to AirPlay" : "Flick up to send", systemImage: "chevron.up").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                Text(title.isEmpty ? "Tap to AirPlay" : "Tap to send to the TV").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
             // The same thing as a flick, for when a flick isn't handy.
@@ -648,15 +642,8 @@ struct FlickCard: View {
         }
         .padding(12)
         .tvCard()
-        .scaleEffect(offset < -20 ? 0.97 : 1)
-        .offset(y: offset)
-        // Ahead of the page's own scrolling, which would otherwise take every upward drag.
-        .highPriorityGesture(DragGesture(minimumDistance: 12)
-            .updating($offset, body: { v, state, t in
-                state = min(0, v.translation.height) * 0.7
-                t.animation = .spring(duration: 0.35, bounce: 0.35)
-            })
-            .onEnded { v in if v.translation.height < -50 || v.predictedEndTranslation.height < -140 { flick() } })
+        .contentShape(Rectangle())
+        .onTapGesture(perform: flick)
         .onAppear {
             refresh()
             #if os(iOS)

@@ -77,10 +77,14 @@ struct MediaCard: View {
     let item: MediaItem
     let source: MediaSource
     var width: CGFloat
+    var image: Image?   // for a song on this phone, whose cover has no address
     @State private var band = Color(hex: 0x37474F)
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(hex: 0x37474F) }
+            Group {
+                if let image { image.resizable().scaledToFill() }
+                else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(hex: 0x37474F) } }
+            }
                 .frame(width: width, height: width / source.coverAspect)
                 .clipped()
                 .overlay(alignment: .bottom) {
