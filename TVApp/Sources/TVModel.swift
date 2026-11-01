@@ -56,7 +56,7 @@ final class TVModel: ObservableObject {
         var r = URLRequest(url: u); r.timeoutInterval = 8; r.cachePolicy = .reloadIgnoringLocalCacheData
         guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
               let s = try? JSONDecoder().decode(TVStatus.self, from: d) else { if !Task.isCancelled { reachable = false }; return }
-        reachable = true
+        if !reachable { reachable = true }
         #if os(iOS)
         await TVIsland.sync(s)
         #endif
@@ -118,17 +118,34 @@ final class TVModel: ObservableObject {
     func key(_ name: String, long: Bool = false, repeating: Bool = false) {
         lastKeyAt = Date(); lastTouch = Date()
         if !repeating { tick() }
-        guard let r = request("key", ["key": name, "long": long, "repeat": repeating]) else { return }
+        // A hold can't get ahead of the connection, so lifting your finger stops the TV promptly.
+        if repeating && repeatPending { return }
+        guard var r = request("key", ["key": name, "long": long, "repeat": repeating]) else { return }
+        r.timeoutInterval = 3
+        if repeating { repeatPending = true }
         let before = keyChain, sent = Date(), power = name == "wake" || name == "sleep"
         keyChain = Task { [weak self] in
             await before?.value
-            // A slow network must not replay old presses at the TV.
-            if !power && Date().timeIntervalSince(sent) > 1.5 { return }
+            defer { if repeating { self?.repeatPending = false } }
+            // A slow network must not replay old repeats at the TV. A deliberate press gets longer.
+            if !power && Date().timeIntervalSince(sent) > (repeating ? 1 : 4) {
+                if !repeating { self?.say("The TV didn’t get that") }
+                return
+            }
             let result = try? await URLSession.shared.data(for: r)
             if (result?.1 as? HTTPURLResponse)?.statusCode != 200, !repeating { self?.say("The TV didn’t get that") }
-            if self?.mirrorLive == true && !repeating { try? await Task.sleep(nanoseconds: 400_000_000); await self?.loadMirror() }
+        }
+        // Outside the chain, so a slow picture never holds up the next press.
+        if mirrorLive && !repeating {
+            mirrorSoon?.cancel()
+            mirrorSoon = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                if !Task.isCancelled { await self?.loadMirror() }
+            }
         }
     }
+    private var repeatPending = false
+    private var mirrorSoon: Task<Void, Never>?
     func post(_ path: String, _ body: [String: Any] = [:], say msg: String? = nil) {
         guard let r = request(path, body) else { return }
         if let msg { say(msg) }

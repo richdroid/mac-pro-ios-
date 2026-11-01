@@ -33,6 +33,7 @@ final class BrowseStore: ObservableObject {
     @Published var query = ""
     @Published var loading = false
     @Published var failed = false
+    @Published var picked: MediaItem?   // kept here so unfolding doesn't close the sheet
     private var loadedFor: String?
     private var searching: Task<Void, Never>?
     init(_ source: MediaSource) { self.source = source }
@@ -102,8 +103,11 @@ struct MediaSheet: View {
     @Environment(\.dismiss) private var dismiss
     let item: MediaItem
     let source: MediaSource
-    @State private var offset: CGFloat = 0
+    @State private var flown: CGFloat = 0
     @State private var sending = false
+    // Goes back by itself if the system takes the touch away, so the cover can't get stuck raised.
+    @GestureState private var dragged: CGFloat = 0
+    var offset: CGFloat { flown + dragged }
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
@@ -113,11 +117,11 @@ struct MediaSheet: View {
                     .opacity(sending ? 0 : 1)
                     // Ahead of the page's own scrolling, which would otherwise take every upward drag.
                     .highPriorityGesture(DragGesture(minimumDistance: 8)
-                        .onChanged { v in offset = min(0, v.translation.height) * 0.8 }
-                        .onEnded { v in
-                            if v.translation.height < -60 || v.predictedEndTranslation.height < -160 { send() }
-                            else { withAnimation(.spring(duration: 0.35, bounce: 0.35)) { offset = 0 } }
+                        .updating($dragged, body: { v, state, t in
+                            state = min(0, v.translation.height) * 0.8
+                            t.animation = .spring(duration: 0.3, bounce: 0.3)
                         })
+                        .onEnded { v in if v.translation.height < -60 || v.predictedEndTranslation.height < -160 { send() } })
                     .accessibilityAddTraits(.isButton)
                     .accessibilityAction(named: "Send to TV") { send() }
                 Label("Flick up to send to the TV", systemImage: "chevron.up").font(.footnote).foregroundStyle(.secondary)
@@ -140,15 +144,16 @@ struct MediaSheet: View {
         #if canImport(UIKit)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         #endif
-        withAnimation(.easeIn(duration: 0.22)) { offset = -700; sending = true }
+        withAnimation(.easeIn(duration: 0.22)) { flown = -700; sending = true }
         let body: (String, [String: Any]) = source == .mint
             ? ("mint-open", ["link": item.id, "title": item.title, "subtitle": item.subtitle, "art": item.art, "kind": item.kind, "play": true])
             : ("stremio-open", ["type": item.kind, "id": item.id])
+        // Gone with the flick; the message reports how it went, however long the TV takes.
+        Task { try? await Task.sleep(nanoseconds: 220_000_000); dismiss() }
         Task {
             // Stremio stops at its list of streams, and which one to play is a choice for the remote.
             do { try await TVBridge.post(body.0, body.1); model.say(source == .mint ? "On the TV" : "On the TV. Pick a stream with the remote.") }
             catch { model.say("The TV didn’t get that") }
-            dismiss()
         }
     }
 }
@@ -183,7 +188,6 @@ struct MediaList: View {
 
 struct BrowseColumn: View {
     @ObservedObject var store: BrowseStore
-    @State private var picked: MediaItem?
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
@@ -212,7 +216,7 @@ struct BrowseColumn: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 10) {
                                 ForEach(row.items) { item in
-                                    Button { picked = item } label: { MediaCard(item: item, source: store.source, width: store.source.cardWidth) }
+                                    Button { store.picked = item } label: { MediaCard(item: item, source: store.source, width: store.source.cardWidth) }
                                         .buttonStyle(.plain).accessibilityLabel("\(item.title), \(item.subtitle)")
                                 }
                             }
@@ -226,7 +230,6 @@ struct BrowseColumn: View {
         }
         .refreshable { await store.load(force: true) }
         .task { await store.load() }
-        .sheet(item: $picked) { MediaSheet(item: $0, source: store.source) }
     }
 }
 
@@ -236,16 +239,20 @@ struct BrowseTab: View {
     @StateObject private var stremio = BrowseStore(.stremio)
     @AppStorage("browseSource") private var source = MediaSource.mint.rawValue
     var body: some View {
-        if panes {
-            FoldSplit { BrowseColumn(store: mint) } right: { BrowseColumn(store: stremio) }
-        } else {
-            VStack(spacing: 8) {
-                Picker("Source", selection: $source) {
-                    ForEach(MediaSource.allCases) { Text($0.name).tag($0.rawValue) }
+        Group {
+            if panes {
+                FoldSplit { BrowseColumn(store: mint) } right: { BrowseColumn(store: stremio) }
+            } else {
+                VStack(spacing: 8) {
+                    Picker("Source", selection: $source) {
+                        ForEach(MediaSource.allCases) { Text($0.name).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
+                    BrowseColumn(store: source == MediaSource.mint.rawValue ? mint : stremio).id(source)
                 }
-                .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
-                BrowseColumn(store: source == MediaSource.mint.rawValue ? mint : stremio).id(source)
             }
         }
+        .sheet(item: $mint.picked) { MediaSheet(item: $0, source: .mint) }
+        .sheet(item: $stremio.picked) { MediaSheet(item: $0, source: .stremio) }
     }
 }

@@ -35,7 +35,7 @@ struct TVIslandWidget: Widget {
         ActivityConfiguration(for: TVIslandAttributes.self) { context in
             HStack(spacing: 12) {
                 Image(systemName: glyph(context.state.app)).font(.title2).foregroundStyle(TVLook.accent)
-                IslandText(state: context.state).frame(maxWidth: .infinity, alignment: .leading)
+                IslandText(state: context.state).frame(maxWidth: .infinity, alignment: .leading).opacity(context.isStale ? 0.55 : 1)
                 IslandButton(playing: context.state.playing)
             }
             .padding(14)
@@ -48,7 +48,7 @@ struct TVIslandWidget: Widget {
                     Image(systemName: glyph(context.state.app)).font(.title2).foregroundStyle(TVLook.accent).padding(.leading, 6)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    IslandText(state: context.state).frame(maxWidth: .infinity, alignment: .leading)
+                    IslandText(state: context.state).frame(maxWidth: .infinity, alignment: .leading).opacity(context.isStale ? 0.55 : 1)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     IslandButton(playing: context.state.playing)

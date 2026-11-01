@@ -147,7 +147,7 @@ struct ManageSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await store.load() }
         .task { await store.load() }
-        .onChange(of: store.state?.volume) { _, v in if let v, !dragging { volume = Double(v) } }
+        .onChange(of: store.state?.volume, initial: true) { _, v in if let v, !dragging { volume = Double(v) } }
         .alert("That didn’t work", isPresented: .init(get: { store.note != nil }, set: { if !$0 { store.note = nil } })) { Button("OK") {} } message: { Text(store.note ?? "") }
     }
 }

@@ -14,7 +14,8 @@ struct PaneReader<C: View>: View {
     var body: some View {
         content()
             .environment(\.paneLayout, size == .regular && landscape)
-            .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { landscape = $0 }
+            // Measured behind the keyboard's reach, or typing in portrait would look like turning sideways.
+            .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { landscape = $0 } }
     }
 }
 
@@ -77,6 +78,15 @@ private func inkBounds(_ image: UIImage) -> (CGImage, CGRect)? {
     guard maxX >= minX else { return nil }
     return (made, CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1))
 }
+// The app redraws its root often and these only need working out once.
+private let iconCache = NSCache<NSString, UIImage>()
+private func cachedIcon(_ key: String, fit: CGFloat, _ make: () -> UIImage?) -> UIImage {
+    let id = "\(key)-\(fit)" as NSString
+    if let hit = iconCache.object(forKey: id) { return hit }
+    let icon = evenIcon(make(), fit: fit)
+    iconCache.setObject(icon, forKey: id)
+    return icon
+}
 private func evenIcon(_ source: UIImage?, fit: CGFloat = 25) -> UIImage {
     let canvas = fit + 2
     guard let source, let (full, ink) = inkBounds(source), let cut = full.cropping(to: ink) else { return UIImage() }
@@ -93,7 +103,7 @@ func tabLabel(_ title: String, _ symbol: String) -> some View {
         Text(title)
     } icon: {
         #if canImport(UIKit)
-        Image(uiImage: evenIcon(UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 60, weight: .regular))))
+        Image(uiImage: cachedIcon(symbol, fit: 25) { UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 60, weight: .regular)) })
         #else
         Image(systemName: symbol)
         #endif
@@ -104,7 +114,7 @@ func tabLabel(_ title: String, asset: String, fit: CGFloat = 25) -> some View {
         Text(title)
     } icon: {
         #if canImport(UIKit)
-        Image(uiImage: evenIcon(UIImage(named: asset), fit: fit))
+        Image(uiImage: cachedIcon(asset, fit: fit) { UIImage(named: asset) })
         #else
         Image(asset)
         #endif

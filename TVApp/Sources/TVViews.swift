@@ -281,23 +281,14 @@ struct DPad: View {
 }
 
 struct GlassKey: View {
-    @EnvironmentObject var model: TVModel
     let icon: String, label: String, key: String
     var size: CGFloat = 54
-    @State private var longPressed = false
     var body: some View {
-        Button {
-            if longPressed { longPressed = false } else { model.key(key) }
-        } label: {
+        PadKey(key: key, longPress: true, label: label) { down in
             Image(systemName: icon).font(.system(size: size * 0.36, weight: .medium)).frame(width: size, height: size).contentShape(Circle())
+                .scaleEffect(down ? 0.92 : 1).animation(TVLook.press, value: down)
         }
-        .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Circle())
-        .simultaneousGesture(LongPressGesture(minimumDuration: 0.6).onEnded { _ in
-            longPressed = true; model.key(key, long: true)
-            Task { try? await Task.sleep(nanoseconds: 2_000_000_000); longPressed = false }
-        })
-        .accessibilityLabel(label)
     }
 }
 struct PlayKey: View {
@@ -335,6 +326,7 @@ struct VolumeBar: View {
 struct RemoteTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.horizontalSizeClass) private var size
+    @Environment(\.paneLayout) private var panes
     @State private var typing = false
     @State private var text = ""
     var state: String {
@@ -379,10 +371,7 @@ struct RemoteTab: View {
             if size == .regular {
                 FoldSplit {
                     // The apps come along when there's room, and step aside when held in portrait.
-                    ViewThatFits(in: .vertical) {
-                        side(apps: true)
-                        side(apps: false)
-                    }
+                    side(apps: panes)
                 } right: {
                     VStack(spacing: 14) { DPad().frame(maxHeight: .infinity); keys }.padding(.horizontal, 20).padding(.bottom, 16)
                 }
@@ -569,7 +558,8 @@ struct FlickCard: View {
     @EnvironmentObject var model: TVModel
     @State private var title = ""
     @State private var artist = ""
-    @State private var offset: CGFloat = 0
+    // Goes back by itself if the system takes the touch away, so the card can't get stuck raised.
+    @GestureState private var offset: CGFloat = 0
     @State private var art: Image?
     @State private var showPicker = false
     func refresh() {
@@ -588,9 +578,13 @@ struct FlickCard: View {
     #if os(iOS)
     // Sent here by the Action Button or Siri, with nothing in Apple Music to send.
     func openAirPlayIfAsked() {
-        guard FlickRequest.wantsAirPlay else { return }
+        // Only once this card is really on screen, so the request isn't used up by a hidden tab.
+        guard FlickRequest.wantsAirPlay, model.tab == 2 else { return }
         FlickRequest.wantsAirPlay = false
-        Task { try? await Task.sleep(nanoseconds: 500_000_000); _ = RoutePicker.open() }
+        Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if !RoutePicker.open() { showPicker = true }
+        }
     }
     #endif
     func flick() {
@@ -639,11 +633,11 @@ struct FlickCard: View {
         .offset(y: offset)
         // Ahead of the page's own scrolling, which would otherwise take every upward drag.
         .highPriorityGesture(DragGesture(minimumDistance: 12)
-            .onChanged { v in offset = min(0, v.translation.height) * 0.7 }
-            .onEnded { v in
-                if v.translation.height < -50 || v.predictedEndTranslation.height < -140 { flick() }
-                withAnimation(.spring(duration: 0.35, bounce: 0.35)) { offset = 0 }
+            .updating($offset, body: { v, state, t in
+                state = min(0, v.translation.height) * 0.7
+                t.animation = .spring(duration: 0.35, bounce: 0.35)
             })
+            .onEnded { v in if v.translation.height < -50 || v.predictedEndTranslation.height < -140 { flick() } })
         .onAppear {
             refresh()
             #if os(iOS)
@@ -653,6 +647,7 @@ struct FlickCard: View {
         }
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in openAirPlayIfAsked() }
+        .onChange(of: model.tab) { _, _ in openAirPlayIfAsked() }
         .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerPlaybackStateDidChange)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerNowPlayingItemDidChange)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refresh() }

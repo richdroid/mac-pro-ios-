@@ -80,9 +80,8 @@ struct TVPower: AppIntent {
     static var title: LocalizedStringResource = "Turn the TV on or off"
     static var description = IntentDescription("Wakes the TV if it’s asleep, and puts it to sleep if it’s on.")
     func perform() async throws -> some IntentResult {
-        // A sleeping box is slow to answer. Guessing wrong would do the opposite of what was asked.
-        guard let s = await TVBridge.status(timeout: 20), s.online, let screen = s.screen else { throw TVIntentError.noAnswer }
-        try await TVBridge.post("key", ["key": screen == "asleep" ? "wake" : "sleep"])
+        // The Mac asks the TV which it is, so this never guesses.
+        try await TVBridge.post("power-toggle")
         return .result()
     }
 }
@@ -158,9 +157,10 @@ struct FlickToTV: AppIntent {
             return .result()
         }
         #endif
-        try? await TVBridge.post("music-now")
+        // The AirPlay list comes first; Mint getting ready can catch up behind it.
         FlickRequest.wantsAirPlay = true
         NotificationCenter.default.post(name: FlickRequest.airPlay, object: nil)
+        Task { try? await TVBridge.post("music-now") }
         return .result()
     }
 }
