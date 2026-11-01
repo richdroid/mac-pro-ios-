@@ -36,10 +36,10 @@ struct RootView: View {
     func poseForShots() {
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
         model.browsing = .stremio
-        guard pose == "flick" else { return }
+        guard pose != "browse" else { return }
         Task {
             await BrowseStore.shared(.stremio).load()
-            if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == "series" }) { model.flicking = FlickTarget(item: item, source: .stremio) }
+            if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == "series" }) { model.flick(FlickTarget(item: item, source: .stremio)) }
         }
     }
     var body: some View {
@@ -610,10 +610,10 @@ struct FlickCard: View {
         refresh()
         if !title.isEmpty {
             // The phone only stops once the TV has it, so a failed send never silences the music.
-            model.flicking = FlickTarget(
+            model.flick(FlickTarget(
                 item: MediaItem(title: title, subtitle: artist, art: "", id: "", kind: "song"), source: .mint, image: art,
                 send: ("flick", ["title": title, "artist": artist]),
-                sent: { MPMusicPlayerController.systemMusicPlayer.pause() })
+                sent: { MPMusicPlayerController.systemMusicPlayer.pause() }))
         } else {
             // Mint comes to the front first, ready to receive.
             model.post("music-now")
@@ -769,7 +769,7 @@ struct FilmCard: View {
     @EnvironmentObject var model: TVModel
     let film: Film
     var body: some View {
-        Button { model.tick(); model.flicking = FlickTarget(item: film.media, source: .stremio) } label: {
+        Button { model.tick(); model.flick(FlickTarget(item: film.media, source: .stremio)) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                     .frame(width: 118, height: 177).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -800,7 +800,7 @@ struct FilmList: View {
     var body: some View {
         RowList(title: title) {
             ForEach(films) { film in
-                Button { model.tick(); model.flicking = FlickTarget(item: film.media, source: .stremio) } label: {
+                Button { model.tick(); model.flick(FlickTarget(item: film.media, source: .stremio)) } label: {
                     HStack(spacing: 12) {
                         Art(url: URL(string: film.poster)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                             .frame(width: 50, height: 75).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))

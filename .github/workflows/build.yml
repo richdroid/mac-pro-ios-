@@ -68,7 +68,7 @@ jobs:
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-history$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "Mac Pro history was not running"
-            for POSE in browse flick; do
+            for POSE in browse flick lift; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab 1 -pose $POSE
               sleep 8
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$POSE$2.png

@@ -123,7 +123,7 @@ struct MediaList: View {
     var body: some View {
         RowList(title: row.title) {
             ForEach(row.items) { item in
-                Button { model.flicking = FlickTarget(item: item, source: source) } label: {
+                Button { model.flick(FlickTarget(item: item, source: source)) } label: {
                     HStack(spacing: 12) {
                         Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                             .frame(width: 50, height: 50 / source.coverAspect).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -179,7 +179,7 @@ struct BrowseColumn: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 10) {
                                 ForEach(row.items) { item in
-                                    Button { model.flicking = FlickTarget(item: item, source: store.source) } label: { MediaCard(item: item, source: store.source, width: store.source.cardWidth) }
+                                    Button { model.flick(FlickTarget(item: item, source: store.source)) } label: { MediaCard(item: item, source: store.source, width: store.source.cardWidth) }
                                         .buttonStyle(.plain).accessibilityLabel("\(item.title), \(item.subtitle)")
                                 }
                             }

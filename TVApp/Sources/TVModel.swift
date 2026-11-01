@@ -17,6 +17,15 @@ final class TVModel: ObservableObject {
     @Published var friends: [Film] = []
     @Published var recommended: [Film] = []
     @Published var flicking: FlickTarget?
+    // The flick screen brings itself in and out, so the system's slide stays out of it.
+    func flick(_ target: FlickTarget) {
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { flicking = target }
+    }
+    func closeFlick() {
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { flicking = nil }
+    }
     @Published var browsing: MediaSource?
     @Published var toast: String?
     @Published var filmsNote: String? = "Loading your films…"

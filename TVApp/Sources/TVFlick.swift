@@ -38,7 +38,6 @@ extension MediaItem {
 
 struct FlickScreen: View {
     @EnvironmentObject var model: TVModel
-    @Environment(\.dismiss) private var dismiss
     let target: FlickTarget
     @State private var meta: StremioMeta?
     @State private var season = 0
@@ -54,13 +53,24 @@ struct FlickScreen: View {
     @State private var landed = false
     @State private var note: String?
     @State private var hop = false
-    // Goes back by itself if the system takes the touch away, so the card can't get stuck raised.
-    @GestureState private var drag = CGSize.zero
+    @State private var exitX: CGFloat = 0
+    // Follows the finger exactly, with nothing in between.
+    @State private var drag = UserDefaults.standard.string(forKey: "pose") == "lift" ? CGSize(width: 18, height: -300) : .zero
+    // Tells a touch the system took away from one that ended, so the card can't get stuck raised.
+    @GestureState private var touching = false
 
     var item: MediaItem { target.item }
     var source: MediaSource { target.source }
     var armed: Bool { drag.height < -90 }
-    var charge: CGFloat { landed ? 1 : min(1, max(0, -drag.height / 200)) }
+    var cardY: CGFloat {
+        if flown { return -(cardFrame.maxY + cardFrame.height * 0.7) }
+        if !arrived { return 420 }
+        if hop { return -26 }
+        return drag.height < 0 ? drag.height : drag.height * 0.22
+    }
+    // How far the card has come towards the top edge: 0 in the hand, 1 with its top at the edge.
+    var nearEdge: CGFloat { arrived ? min(1.3, max(0, -cardY) / max(cardFrame.minY, 1)) : 0 }
+    var charge: CGFloat { landed ? 1 : min(1, nearEdge * 1.3) }
     var cardWidth: CGFloat { source == .mint ? 176 : 148 }
     var shown: MediaItem {
         guard let e = episode else { return item }
@@ -71,30 +81,32 @@ struct FlickScreen: View {
     var body: some View {
         GeometryReader { g in
             ZStack(alignment: .topTrailing) {
-                Color.black.ignoresSafeArea()
+                Color.black.ignoresSafeArea().opacity(arrived ? 1 : 0)
                 if g.size.width > g.size.height {
                     HStack(spacing: 24) {
-                        details.frame(maxWidth: .infinity)
+                        details.frame(maxWidth: .infinity).opacity(calm)
                         VStack(spacing: 0) { tv.padding(.top, 20); Spacer(minLength: 16); hand }.frame(maxWidth: .infinity)
                     }
                 } else {
                     VStack(spacing: 0) {
                         tv.padding(.top, 14)
-                        details.frame(maxHeight: .infinity)
+                        details.frame(maxHeight: .infinity).opacity(calm).zIndex(-1)
                         hand
                     }
                 }
-                Button { dismiss() } label: {
+                Button { leave() } label: {
                     Image(systemName: "xmark").font(.body.weight(.semibold)).frame(width: 40, height: 40).contentShape(Circle())
                 }
-                .buttonStyle(.plain).glassEffect(.regular, in: Circle()).padding(14).accessibilityLabel("Close")
+                .buttonStyle(.plain).glassEffect(.regular, in: Circle()).padding(14).opacity(calm).accessibilityLabel("Close")
             }
             .coordinateSpace(name: "flick")
         }
         .preferredColorScheme(.dark)
+        // Its own way in and out, so nothing slides over the card.
+        .presentationBackground(.clear)
         .sensoryFeedback(.impact(weight: .light), trigger: armed) { _, now in now }
         .task {
-            withAnimation(.spring(response: 0.55, dampingFraction: 0.62)) { arrived = true }
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.66)) { arrived = true }
             await loadMeta()
         }
     }
@@ -132,7 +144,7 @@ struct FlickScreen: View {
                 if !seasons.isEmpty { episodes }
                 if source == .stremio, item.stremioRef != nil { streamPicker }
                 if let slug = item.slug, !slug.isEmpty {
-                    Button { model.tick(); model.post("film", ["slug": slug], say: "Opening in Letterboxd"); dismiss() } label: {
+                    Button { model.tick(); model.post("film", ["slug": slug], say: "Opening in Letterboxd"); leave() } label: {
                         Label("Open in Letterboxd", systemImage: "film")
                     }.font(.subheadline.weight(.medium)).tint(TVLook.accent)
                 }
@@ -231,31 +243,36 @@ struct FlickScreen: View {
             Text(note ?? "Flick up to play on the TV")
                 .font(.footnote.weight(.medium)).foregroundStyle(note == nil ? .secondary : .primary)
                 .contentTransition(.opacity)
+                .opacity(note == nil ? calm : 1)
             card
         }
         .padding(.bottom, 16)
     }
+    // Everything else steps back while the card is in the air.
+    var calm: Double { arrived ? 1 - 0.8 * min(1, nearEdge * 1.4) : 0 }
     var card: some View {
         MediaCard(item: shown, source: source, width: cardWidth, image: target.image)
-            .shadow(color: .black.opacity(0.6), radius: 18, y: 10)
-            // Measured before the bob, so it doesn't redraw the screen on every frame.
+            // Measured before anything moves it, so it doesn't redraw the screen on every frame.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { if !flown { cardFrame = $0 } }
+            .shadow(color: .black.opacity(0.6), radius: 18 + 26 * nearEdge, y: 10 + 22 * nearEdge)
             .phaseAnimator([CGFloat(0), -7]) { c, y in
                 // A small bob while it waits, so it looks like something to pick up.
-                c.offset(y: drag == .zero && !flown && note == nil ? y : 0)
+                c.offset(y: !touching && drag == .zero && !flown && note == nil ? y : 0)
             } animation: { _ in .easeInOut(duration: 1.3) }
-            .rotationEffect(.degrees(flown ? 0 : Double(drag.width) / 16))
-            .scaleEffect(flown ? 0.3 : 1 + 0.07 * charge)
-            .offset(x: flown ? tvFrame.midX - cardFrame.midX : drag.width * 0.55,
-                    y: flown ? tvFrame.midY - cardFrame.midY : !arrived ? 420 : hop ? -26 : (drag.height < 0 ? drag.height * 0.85 : drag.height * 0.22))
-            .opacity(landed ? 0 : 1)
-            .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.58), value: drag)
-            .gesture(DragGesture(minimumDistance: 3, coordinateSpace: .named("flick"))
-                .updating($drag) { v, s, _ in s = v.translation }
+            // It grows and leans as it nears the edge, on its way off the phone and towards the TV.
+            .rotation3DEffect(.degrees(Double(nearEdge) * 16), axis: (x: 1, y: 0, z: 0), anchor: .bottom, perspective: 0.5)
+            .scaleEffect(1 + 0.55 * pow(nearEdge, 1.25))
+            .rotationEffect(.degrees(Double(flown ? exitX : drag.width) / 18))
+            .offset(x: flown ? exitX : drag.width * 0.6, y: cardY)
+            .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("flick"))
+                .updating($touching) { _, on, _ in on = true }
+                .onChanged { drag = $0.translation }
                 .onEnded { v in
-                    if v.translation.height < -80 || v.predictedEndTranslation.height < -170 { send() }
-                    else if v.translation.height > 110 { dismiss() }
+                    if v.translation.height < -80 || v.predictedEndTranslation.height < -170 { send(flicked: v.velocity) }
+                    else if v.translation.height > 110 { leave() }
+                    else { settle() }
                 })
+            .onChange(of: touching) { _, on in if !on && !flown { settle() } }
             .onTapGesture {
                 // A tap shows which way it wants to go.
                 model.tick()
@@ -269,6 +286,17 @@ struct FlickScreen: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityHint("Sends this to the TV")
             .accessibilityAction { send() }
+    }
+    func settle() {
+        guard drag != .zero else { return }
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.56)) { drag = .zero }
+    }
+    func leave() {
+        withAnimation(.easeOut(duration: 0.2)) { arrived = false }
+        Task {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            model.closeFlick()
+        }
     }
 
     func loadMeta() async {
@@ -290,16 +318,21 @@ struct FlickScreen: View {
         }
         return ("film", ["slug": item.slug ?? ""])
     }
-    func send() {
+    func send(flicked velocity: CGSize = .zero) {
         guard !flown else { return }
         #if canImport(UIKit)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         #endif
         note = nil
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.74)) { flown = true }
+        // Leaves at the speed it was thrown, so there's no seam between the finger and the flight.
+        let from = cardY, to = -(cardFrame.maxY + cardFrame.height * 0.7)
+        let speed = min(0, velocity.height) / min(to - from, -1)
+        exitX = max(-90, min(90, drag.width * 0.6 + velocity.width * 0.12))
+        withAnimation(.interpolatingSpring(mass: 1, stiffness: 150, damping: 22, initialVelocity: speed)) { flown = true }
         let order = order
         Task {
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            // The TV lights as the card passes it.
+            try? await Task.sleep(nanoseconds: 190_000_000)
             withAnimation(.spring(response: 0.42, dampingFraction: 0.52)) { landed = true }
             do {
                 try await TVBridge.post(order.0, order.1)
@@ -309,12 +342,13 @@ struct FlickScreen: View {
                 #endif
                 withAnimation { note = source == .mint || stream != nil ? "On the TV" : "On the TV. Pick a stream with the remote." }
                 try? await Task.sleep(nanoseconds: 1_100_000_000)
-                dismiss()
+                leave()
             } catch {
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
                 #endif
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.55)) { landed = false; flown = false; note = stream != nil ? "That stream has gone. Pick again." : "The TV didn’t get that" }
+                drag = .zero
+                withAnimation(.spring(response: 0.55, dampingFraction: 0.6)) { landed = false; flown = false; note = stream != nil ? "That stream has gone. Pick again." : "The TV didn’t get that" }
                 if stream != nil { stream = nil; streams = []; await findStreams() }
             }
         }
