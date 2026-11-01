@@ -150,7 +150,7 @@ struct RootView: View {
             ZStack {
                 // Each tab paints its own sea: the system tab view is opaque behind its content.
                 TabView(selection: $model.tab) {
-                    Tab(value: 0) { NavigationStack { HomeTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } } label: { Label { Text("my chumby") } icon: { Image("OctoTab") } }
+                    Tab(value: 0) { NavigationStack { HomeTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } } label: { tabLabel("my chumby", asset: "OctoTab") }
                     Tab(value: 1) { NavigationStack { ChannelsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } } label: { tabLabel("channels", "tv") }
                     Tab(value: 2) { NavigationStack { AlarmsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } } label: { tabLabel("alarms", "alarm") }
                     Tab(value: 3) { NavigationStack { SoundsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } } label: { tabLabel("sounds", "music.note") }

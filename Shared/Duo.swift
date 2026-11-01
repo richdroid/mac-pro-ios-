@@ -52,15 +52,39 @@ struct FoldSplit<L: View, R: View>: View {
     }
 }
 
-// Side bar icons in outline at one lighter size. Left alone, the system fills wide symbols like the display and film strip.
+// Side bar icons, every one fitted to the same box. Symbols and logos have their own natural proportions, which is
+// what makes a wide display look bigger than a narrow remote.
+#if canImport(UIKit)
+private func evenIcon(_ source: UIImage?) -> UIImage {
+    let canvas: CGFloat = 26, fit: CGFloat = 22
+    guard let source, source.size.width > 0, source.size.height > 0 else { return UIImage() }
+    let k = fit / max(source.size.width, source.size.height)
+    let w = source.size.width * k, h = source.size.height * k
+    let format = UIGraphicsImageRendererFormat(); format.scale = 3; format.opaque = false
+    return UIGraphicsImageRenderer(size: CGSize(width: canvas, height: canvas), format: format).image { _ in
+        source.withTintColor(.black, renderingMode: .alwaysOriginal).draw(in: CGRect(x: (canvas - w) / 2, y: (canvas - h) / 2, width: w, height: h))
+    }.withRenderingMode(.alwaysTemplate)
+}
+#endif
 func tabLabel(_ title: String, _ symbol: String) -> some View {
     Label {
         Text(title)
     } icon: {
         #if canImport(UIKit)
-        Image(uiImage: (UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)) ?? UIImage()).withRenderingMode(.alwaysTemplate))
+        Image(uiImage: evenIcon(UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 60, weight: .regular))))
         #else
         Image(systemName: symbol)
+        #endif
+    }
+}
+func tabLabel(_ title: String, asset: String) -> some View {
+    Label {
+        Text(title)
+    } icon: {
+        #if canImport(UIKit)
+        Image(uiImage: evenIcon(UIImage(named: asset)))
+        #else
+        Image(asset)
         #endif
     }
 }

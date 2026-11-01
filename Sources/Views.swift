@@ -44,7 +44,7 @@ struct RootView: View {
             TabView(selection: $model.tab) {
                 Tab(value: 0) { Screen(title: "Status") { StatusTab($0, side: $1) } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
                 Tab(value: 1) { Screen(title: "Apps") { AppsTab($0, side: $1) } } label: { tabLabel("Apps", "square.grid.2x2") }
-                Tab(value: 2) { Screen(title: "Claude") { ClaudeTab($0, side: $1) } } label: { Label { Text("Claude") } icon: { Image("ClaudeTab") } }
+                Tab(value: 2) { Screen(title: "Claude") { ClaudeTab($0, side: $1) } } label: { tabLabel("Claude", asset: "ClaudeTab") }
                 Tab(value: 3) { Screen(title: "Usage") { UsageTab($0, side: $1) } } label: { tabLabel("Usage", "chart.bar") }
                 Tab(value: 4) { Screen(title: "Updates") { UpgradeTab($0, side: $1) } } label: { tabLabel("Updates", "arrow.up.circle") }
                 Tab(value: 5) { Screen(title: "Control") { ControlTab($0, side: $1) } } label: { tabLabel("Control", "display") }
