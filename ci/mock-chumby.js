@@ -24,7 +24,14 @@ http.createServer((q, s) => {
   s.statusCode = 404; s.end();
 }).listen(9000, '127.0.0.1');
 // And a sample Mac for the Mac Pro app.
-const macStatus = require('fs').readFileSync(__dirname + '/mock-status.json');
+const macMock = JSON.parse(require('fs').readFileSync(__dirname + '/mock-status.json'));
+{ // Times relative to now, so the screenshots show what a real day looks like.
+  const now = Date.now(), plan = macMock.usage.plan;
+  plan.at = now - 120000; plan.fiveHourResets = now + 3 * 3600e3; plan.sevenDayResets = now + 4 * 86400e3;
+  macMock.iosApps.apps.forEach(a => { if (a.expires) { a.expires = now + 6 * 86400e3; a.installedAt = now - 86400e3; } });
+  macMock.usage.hours.forEach((h, i, all) => { h.t = now - (all.length - 1 - i) * 3600e3; });
+}
+const macStatus = JSON.stringify(macMock);
 http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9001, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
 const zlib = require('zlib');

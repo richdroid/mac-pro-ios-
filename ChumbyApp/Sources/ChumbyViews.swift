@@ -112,7 +112,8 @@ struct TwoPane<L: View, R: View>: View {
             FoldSplit {
                 List { Group { left }.listRowBackground(GlassRow()) }
             } right: {
-                List { Color.clear.frame(height: 36).listRowBackground(Color.clear).listRowSeparator(.hidden); Group { right }.listRowBackground(GlassRow()) }
+                // A blank title row, so both panes start level.
+                List { PageTitle(" "); Group { right }.listRowBackground(GlassRow()) }
             }
             .seaList()
         } else {
@@ -121,7 +122,17 @@ struct TwoPane<L: View, R: View>: View {
     }
 }
 
+private struct ConnectionButton: ViewModifier {
+    @EnvironmentObject var model: ChumbyModel
+    @State private var settings = false
+    func body(content: Content) -> some View {
+        content
+            .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Connection") } }
+            .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
+    }
+}
 extension View {
+    func connectionButton() -> some View { modifier(ConnectionButton()) }
     func overSea() -> some View {
         self.background { ZStack { SeaBackground(); GhostOctopus() }.ignoresSafeArea() }
     }
@@ -139,10 +150,10 @@ struct RootView: View {
                 // Each tab paints its own sea: the system tab view is opaque behind its content.
                 TabView(selection: $model.tab) {
                     Tab(value: 0) { NavigationStack { HomeTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } } label: { Label { Text("my chumby") } icon: { Image("OctoTab") } }
-                    Tab("channels", systemImage: "tv", value: 1) { NavigationStack { ChannelsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } }
+                    Tab("channels", systemImage: "tv", value: 1) { NavigationStack { ChannelsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } }
                     Tab("alarms", systemImage: "alarm", value: 2) { NavigationStack { AlarmsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } }
-                    Tab("sounds", systemImage: "music.note", value: 3) { NavigationStack { SoundsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } }
-                    Tab("tinker", systemImage: "wrench.adjustable", value: 4) { NavigationStack { TinkerTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } }
+                    Tab("sounds", systemImage: "music.note", value: 3) { NavigationStack { SoundsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } }
+                    Tab("tinker", systemImage: "wrench.adjustable", value: 4) { NavigationStack { TinkerTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } }
                 }
                 .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab") }
             }
@@ -728,12 +739,7 @@ struct AlarmsTab: View {
     // A one-time alarm from now, using whichever tone is first.
     func nap(_ minutes: Int) {
         guard model.state.alarms.count < 16 else { model.say("The Chumby holds 16 alarms at most"); return }
-        var a = Alarm()
-        a.name = "Nap"; a.when = "once"; a.enabled = "1"
-        a.time = String(Int((Date().timeIntervalSince1970 / 60).rounded(.up)) + minutes)
-        let tone = model.state.tones.first ?? "Beep"
-        a.type = "beep"; a.arg = tone; a.param_description = tone; a.duration = "5"
-        model.state.alarms.append(a)
+        model.state.addNap(minutes: minutes)
         model.tick()
         Task { await model.saveAlarms("Nap alarm in \(minutes) minutes") }
     }
@@ -929,18 +935,20 @@ struct SoundsTab: View {
         TwoPane {
             PageTitle("Sounds")
             Section("Now") {
-                LabeledContent("Volume", value: "\(Int(volume))%")
-                Slider(value: $volume, in: 0...100, step: 1) { e in
-                    dragging = e
-                    if !e { if volume > 0 { lastVolume = Int(volume) }; model.cmd("volume", String(Int(volume))) }
-                }.accessibilityLabel("Volume").tint(ChumbyPalette.orange)
-                HStack {
-                    Button("Mute") { if volume > 0 { lastVolume = Int(volume) }; set(0, "Muted") }
-                    Spacer()
-                    Button("Unmute") { set(lastVolume > 0 ? lastVolume : 4, "Unmuted") }
-                    Spacer()
-                    Button("Stop music") { model.cmd("stopmusic", nil, "Music stopped") }
-                }.buttonStyle(.bordered)
+                VStack(spacing: 10) {
+                    LabeledContent("Volume", value: "\(Int(volume))%")
+                    HStack(spacing: 12) {
+                        Button {
+                            if volume > 0 { lastVolume = Int(volume); set(0, "Muted") } else { set(lastVolume > 0 ? lastVolume : 4, "Unmuted") }
+                        } label: { Image(systemName: volume > 0 ? "speaker.wave.2.fill" : "speaker.slash.fill").frame(width: 24) }
+                        .buttonStyle(.borderless).accessibilityLabel(volume > 0 ? "Mute" : "Unmute")
+                        Slider(value: $volume, in: 0...100, step: 1) { e in
+                            dragging = e
+                            if !e { if volume > 0 { lastVolume = Int(volume) }; model.cmd("volume", String(Int(volume))) }
+                        }.accessibilityLabel("Volume").tint(ChumbyPalette.orange)
+                    }
+                }
+                Button("Stop music") { model.cmd("stopmusic", nil, "Music stopped") }
                 Toggle("AirPlay receiver", isOn: Binding(get: { model.sys.airplayOn }, set: { on in model.sys.airplayOn = on; model.cmd("airplay", on ? "1" : "0", on ? "AirPlay on" : "AirPlay off") }))
             }
             Section {

@@ -11,6 +11,7 @@ final class TVModel: ObservableObject {
     @Published var watchlist: [Film] = []
     @Published var friends: [Film] = []
     @Published var toast: String?
+    @Published var filmsNote: String? = "Loading your films…"
     @Published var tab = UserDefaults.standard.integer(forKey: "tab")
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
     private var loops: [Task<Void, Never>] = []
@@ -66,8 +67,9 @@ final class TVModel: ObservableObject {
     func loadFilms(force: Bool = false) async {
         if filmsLoaded && !force { return }
         guard let u = url("/api/tv/letterboxd"), let (d, _) = try? await URLSession.shared.data(from: u),
-              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { filmsNote = "Can’t reach your films. Pull down to try again."; return }
         filmsLoaded = true
+        filmsNote = j["signedIn"] as? Bool == false ? "Sign in to Letterboxd on the TV." : nil
         func list(_ key: String, _ note: ([String: String]) -> String) -> [Film] {
             // A friend can log the same film twice; show it once.
             var seen = Set<String>()

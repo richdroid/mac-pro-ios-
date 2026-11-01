@@ -31,6 +31,14 @@ final class ChumbyModel: ObservableObject {
     private var failures = 0
     private var sysBytes = Data(), stateBytes = Data(), channelBytes = Data()
     private var sysHold = Date.distantPast, stateHold = Date.distantPast
+    // A save replaces the whole list on the Chumby, so never send one built only from an old copy.
+    private var stateConfirmed = false
+    private func canSave() -> Bool {
+        if stateConfirmed { return true }
+        say("Still reaching the Chumby. Nothing was saved.")
+        stateBytes = Data(); stateHold = .distantPast
+        return false
+    }
 
     private static func makeAPI(_ a: String) -> ChumbyAPI? { URL(string: a).flatMap { $0.host == nil ? nil : ChumbyAPI(base: $0) } }
     private static func cache(_ name: String) -> URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("chumby-" + name) }
@@ -82,8 +90,10 @@ final class ChumbyModel: ObservableObject {
         usingFallback.toggle(); api = next; failures = 0
     }
     func loadState() async {
-        guard let api, !editingAlarm, Date() >= stateHold, let r = try? await api.raw("state"), Date() >= stateHold, !editingAlarm, r.data != stateBytes,
-              let s = try? JSONDecoder().decode(ChumbyState.self, from: r.data) else { return }
+        guard let api, !editingAlarm, Date() >= stateHold, let r = try? await api.raw("state") else { return }
+        if r.data == stateBytes { stateConfirmed = true; return }
+        guard Date() >= stateHold, !editingAlarm, let s = try? JSONDecoder().decode(ChumbyState.self, from: r.data) else { return }
+        stateConfirmed = true
         stateBytes = r.data; state = s
         try? r.data.write(to: Self.cache("state"), options: .atomic)
     }
@@ -120,18 +130,15 @@ final class ChumbyModel: ObservableObject {
         }
     }
     func saveAlarms(_ msg: String) async {
-        var o: [(String, String)] = [("n", "\(state.alarms.count)"), ("v", "\(state.volume)"), ("f", "\(state.fade)")]
-        for (i, a) in state.alarms.enumerated() {
-            o += [("\(i)_name", a.name), ("\(i)_enabled", a.enabled), ("\(i)_time", a.time), ("\(i)_when", a.when), ("\(i)_type", a.type), ("\(i)_arg", a.arg),
-                  ("\(i)_param", a.param), ("\(i)_param_description", a.param_description), ("\(i)_duration", a.duration), ("\(i)_snooze", a.snooze),
-                  ("\(i)_auto_dismiss", a.auto_dismiss), ("\(i)_action", a.action), ("\(i)_action_param", a.action_param), ("\(i)_backup", a.backup), ("\(i)_backupDelay", a.backupDelay)]
-        }
+        guard canSave() else { return }
+        let o = state.alarmForm()
         hold(10)
         state.reindex()
         say(msg)
         do { try await api?.post("save", body: ChumbyAPI.form(o)) } catch { say("Couldn’t save: \(error.localizedDescription)"); stateHold = .distantPast }
     }
     func saveStreams() async {
+        guard canSave() else { return }
         var o: [(String, String)] = [("n", "\(state.streams.count)")]
         for (i, s) in state.streams.enumerated() { o += [("\(i)_name", s.name), ("\(i)_url", s.url), ("\(i)_id", s.id), ("\(i)_mimetype", s.mimetype)] }
         hold(10)
@@ -139,6 +146,7 @@ final class ChumbyModel: ObservableObject {
         do { try await api?.post("streams", body: ChumbyAPI.form(o)) } catch { say("Couldn’t save: \(error.localizedDescription)"); stateHold = .distantPast }
     }
     func saveSchedule() async {
+        guard canSave() else { return }
         var o: [(String, String)] = [("n", "\(state.schedule.count)")]
         for (i, e) in state.schedule.enumerated() { o += [("\(i)_time", e.time), ("\(i)_cmd", e.cmd), ("\(i)_val", e.val)] }
         hold(10)

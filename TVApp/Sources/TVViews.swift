@@ -13,6 +13,7 @@ struct TVApp: App {
         // Long-form audio is what lets the AirPlay list move the whole phone's audio, not only this app's.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio)
         #endif
+        TVShortcuts.updateAppShortcutParameters()
     }
     var body: some Scene {
         WindowGroup {
@@ -98,7 +99,7 @@ struct SendBar: View {
             }
             .buttonStyle(.plain).accessibilityLabel("Send what you copied to the TV")
             TextField("Send a link or search", text: $text)
-                .font(Mint.font(17, weight: 300)).focused($focused).autocorrectionDisabled()
+                .font(Mint.font(17, weight: 300)).italic().focused($focused).autocorrectionDisabled()
                 .onSubmit { if !text.isEmpty { model.send(text); text = "" } }
         }
     }
@@ -231,11 +232,11 @@ struct RemoteTab: View {
     }
     var keys: some View {
         VStack(spacing: 6) {
-            HStack { GlyphKey(icon: "arrow.uturn.backward", label: "Back", key: "back"); Spacer(); GlyphKey(icon: "house", label: "Home", key: "home"); Spacer()
+            HStack { GlyphKey(icon: "arrow.left", label: "Back", key: "back"); Spacer(); GlyphKey(icon: "house.fill", label: "Home", key: "home"); Spacer()
                 Button { typing = true } label: { Image(systemName: "keyboard").font(.system(size: 21)) }.buttonStyle(MintKeyStyle()).accessibilityLabel("Type on TV")
                 Spacer(); GlyphKey(icon: "line.3.horizontal", label: "Menu", key: "menu") }
-            HStack { GlyphKey(icon: "backward.end", label: "Previous", key: "previous"); Spacer(); GlyphKey(icon: "gobackward.10", label: "Rewind", key: "rewind"); Spacer(); GlyphKey(icon: "playpause", label: "Play or pause", key: "play", size: 66); Spacer(); GlyphKey(icon: "goforward.10", label: "Fast forward", key: "forward"); Spacer(); GlyphKey(icon: "forward.end", label: "Next", key: "next") }
-            HStack { GlyphKey(icon: "speaker.minus", label: "Volume down", key: "voldown"); Spacer(); GlyphKey(icon: "speaker.slash", label: "Mute", key: "mute"); Spacer(); GlyphKey(icon: "speaker.plus", label: "Volume up", key: "volup"); Spacer()
+            HStack { GlyphKey(icon: "backward.end.fill", label: "Previous", key: "previous"); Spacer(); GlyphKey(icon: "gobackward.10", label: "Rewind", key: "rewind"); Spacer(); GlyphKey(icon: "playpause.fill", label: "Play or pause", key: "play", size: 66); Spacer(); GlyphKey(icon: "goforward.10", label: "Fast forward", key: "forward"); Spacer(); GlyphKey(icon: "forward.end.fill", label: "Next", key: "next") }
+            HStack { GlyphKey(icon: "speaker.minus.fill", label: "Volume down", key: "voldown"); Spacer(); GlyphKey(icon: "speaker.slash.fill", label: "Mute", key: "mute"); Spacer(); GlyphKey(icon: "speaker.plus.fill", label: "Volume up", key: "volup"); Spacer()
                 GlyphKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep") }
         }
     }
@@ -282,7 +283,11 @@ struct Banner: View {
                 Mint.banner
                 if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)") {
                     Art(url: u) { i in
-                        if app.wide == true { i.resizable().scaledToFill() } else { i.resizable().scaledToFit().padding(14) }
+                        if app.wide == true { i.resizable().scaledToFill() }
+                        else {
+                            // The launcher's fallback for an app with no banner: its icon over its name.
+                            VStack(spacing: 3) { i.resizable().scaledToFit().frame(width: 30, height: 30); Text(app.name).font(Mint.font(15, condensed: true)).lineLimit(1).padding(.horizontal, 8) }
+                        }
                     } placeholder: { name }
                 } else { name }
             }
@@ -326,8 +331,19 @@ struct AppsTab: View {
     @ViewBuilder func row(_ title: String, _ apps: [TVStatus.App], pad: CGFloat) -> some View {
         if !apps.isEmpty { BannerRow(title: title, apps: apps, pad: pad) }
     }
+    // Before the first answer, the shape of the page instead of a blank one.
+    var waiting: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            RowTitle("Apps").padding(.leading, 20)
+            HStack(spacing: Mint.gap) {
+                ForEach(0..<6, id: \.self) { _ in Mint.banner.opacity(0.35).frame(width: Mint.bannerSize.width, height: Mint.bannerSize.height).clipShape(RoundedRectangle(cornerRadius: Mint.radius)) }
+            }.padding(.vertical, 10).padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading).clipped()
+        }
+    }
     var body: some View {
-        if size == .regular {
+        if all.isEmpty {
+            ScrollView { VStack(alignment: .leading, spacing: Mint.rowGap) { SendBar().padding(.horizontal, 20); waiting }.padding(.vertical, 12) }
+        } else if size == .regular {
             FoldSplit {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Mint.rowGap) {
@@ -557,11 +573,15 @@ struct FilmCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Mint.banner }
                     .frame(width: 117, height: 176).clipped()
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(film.title).font(Mint.font(13.4)).lineLimit(1)
-                    if !film.note.isEmpty { Text(film.note).font(Mint.font(10.8)).opacity(0.7).lineLimit(1) }
+                HStack(spacing: 4) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(film.title).font(Mint.font(13.4)).lineLimit(1)
+                        if !film.note.isEmpty { Text(film.note).font(Mint.font(10.8)).opacity(0.7).lineLimit(1) }
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "film.fill").font(.system(size: 9)).opacity(0.7)
                 }
-                .padding(.horizontal, 7).frame(width: 117, height: 44, alignment: .leading).background(Mint.band)
+                .padding(.horizontal, 7).frame(width: 117, height: 44).background(Mint.band)
             }
             .clipShape(RoundedRectangle(cornerRadius: Mint.radius))
         }.buttonStyle(.plain).accessibilityLabel(film.title)
@@ -596,7 +616,9 @@ struct FilmsTab: View {
     @Environment(\.horizontalSizeClass) private var size
     var body: some View {
         Group {
-            if size == .regular {
+            if model.friends.isEmpty && model.watchlist.isEmpty {
+                ScrollView { Text(model.filmsNote ?? "No films yet.").font(Mint.font(15)).opacity(0.7).frame(maxWidth: .infinity).padding(.top, 120) }
+            } else if size == .regular {
                 FoldSplit { FilmGrid(title: "Friends", films: model.friends) } right: { FilmGrid(title: "Watchlist", films: model.watchlist) }
             } else {
                 ScrollView {

@@ -6,9 +6,10 @@ struct TVEntry: TimelineEntry {
     var date = Date()
     var status: TVStatus?
     var cover: TVImage?
-    var tint = Mint.band
+    var wall: TVImage?
     var mirror: TVImage?
     var logos: [String: TVImage] = [:]
+    var chosen: [TVAppEntity] = []
     var reachable: Bool { status != nil }
     var music: TVStatus.Music? { status?.music }
     var asleep: Bool { status?.screen == "asleep" }
@@ -27,7 +28,6 @@ struct TVEntry: TimelineEntry {
 
 struct TVProvider: TimelineProvider {
     var mirror = false
-    var logos = false
     func placeholder(in context: Context) -> TVEntry { Self.sample }
     func getSnapshot(in context: Context, completion: @escaping (TVEntry) -> Void) {
         if context.isPreview { completion(Self.sample); return }
@@ -44,16 +44,20 @@ struct TVProvider: TimelineProvider {
     func load() async -> TVEntry {
         var e = TVEntry()
         e.status = await TVBridge.status()
-        if let art = e.music?.art, let d = await TVBridge.data(URL(string: art)), let i = TVImage(data: d) { e.cover = i; e.tint = CoverTint.of(i) }
+        if let art = e.music?.art, let d = await TVBridge.data(URL(string: art)), let i = TVImage(data: d) { e.cover = Self.shrunk(i, to: 320); e.wall = Self.shrunk(i, to: 16) }
         if mirror, e.status?.online == true, !e.asleep, let d = await TVBridge.data(TVBridge.url("/api/tv/shot")), let i = TVImage(data: d) { e.mirror = i }
-        if logos {
-            for pkg in Self.favourites {
-                if let d = await TVBridge.data(TVBridge.url("/api/tv/icon?pkg=\(pkg)"), timeout: 4), let i = TVImage(data: d) { e.logos[pkg] = i }
-            }
-        }
         return e
     }
-    static let favourites = ["com.codex.musicwebtv", "com.mint.letterboxd", "com.stremio.one", "com.google.android.youtube.tv"]
+    static let favourites = ["com.codex.musicwebtv", "com.mint.letterboxd", "com.stremio.one", "com.google.android.youtube.tv", "com.netflix.ninja", "com.apple.atve.androidtv.appletv"]
+    // Widgets get very little memory, so nothing bigger than it will be drawn is kept.
+    static func shrunk(_ i: TVImage, to side: CGFloat) -> TVImage {
+        #if canImport(UIKit)
+        let f = UIGraphicsImageRendererFormat(); f.scale = 1; f.opaque = true
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: f).image { _ in i.draw(in: CGRect(x: 0, y: 0, width: side, height: side)) }
+        #else
+        return i
+        #endif
+    }
     static var sampleImage: TVImage? {
         #if canImport(UIKit)
         return UIGraphicsImageRenderer(size: CGSize(width: 120, height: 120)).image { c in
@@ -70,18 +74,30 @@ struct TVProvider: TimelineProvider {
                             music: .init(title: "Sample Song", artist: "Sample Artist", album: "Sample Album", art: "", playing: true, position: 60000, duration: 144000, sampledAt: Date().timeIntervalSince1970 * 1000), session: nil,
                             apps: favourites.map { .init(pkg: $0, name: $0.split(separator: ".").last.map(String.init) ?? $0, hasIcon: true, wide: true) })
         e.cover = sampleImage
-        if let c = e.cover { e.tint = CoverTint.of(c); e.mirror = c; e.logos = Dictionary(uniqueKeysWithValues: favourites.map { ($0, c) }) }
+        if let c = e.cover { e.wall = shrunk(c, to: 16); e.mirror = c; e.logos = Dictionary(uniqueKeysWithValues: favourites.map { ($0, c) }) }
         return e
     }
 }
 
-// A flat key from the launcher. Clear Home Screens flatten it along with everything else.
+// The launcher's home screen behind a card: black, with the art as a soft wall of colour.
+struct WidgetWall: View {
+    let image: TVImage?
+    var body: some View {
+        ZStack {
+            Color.black
+            if let image {
+                Color.clear.overlay { Image(tv: image).resizable().interpolation(.high).scaledToFill().opacity(0.42) }.clipped()
+            }
+        }
+    }
+}
+// A flat key from the launcher: a glyph and nothing else.
 struct WidgetKey: View {
     let icon: String, key: String, label: String
     var size: CGFloat = 34
     var body: some View {
         Button(intent: TVPress(key: key)) {
-            Image(systemName: icon).font(.system(size: size * 0.5)).frame(width: size, height: size).contentShape(Rectangle()).widgetAccentable()
+            Image(systemName: icon).font(.system(size: size * 0.46)).frame(width: size, height: size).contentShape(Rectangle()).widgetAccentable()
         }.buttonStyle(.plain).accessibilityLabel(label)
     }
 }
@@ -89,44 +105,54 @@ struct WidgetPower: View {
     var size: CGFloat = 34
     var body: some View {
         Button(intent: TVPower()) {
-            Image(systemName: "power").font(.system(size: size * 0.5)).frame(width: size, height: size).contentShape(Rectangle()).widgetAccentable()
+            Image(systemName: "power").font(.system(size: size * 0.46)).frame(width: size, height: size).contentShape(Rectangle()).widgetAccentable()
         }.buttonStyle(.plain).accessibilityLabel("Turn the TV on or off")
     }
 }
-struct RoundPlay: View {
-    @Environment(\.widgetRenderingMode) private var mode
-    let playing: Bool
-    var size: CGFloat = 42
-    var body: some View {
-        Button(intent: TVPress(key: "play")) {
-            Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: size * 0.42))
-                .foregroundStyle(mode == .fullColor ? Color.black.opacity(0.85) : Color.white)
-                .frame(width: size, height: size)
-                .background(Color.white.opacity(mode == .fullColor ? 0.68 : 0.2), in: Circle())
-                .widgetAccentable()
-        }.buttonStyle(.plain).accessibilityLabel(playing ? "Pause" : "Play")
-    }
-}
-struct Hairline: View {
+// The launcher's progress line: leanback's cyan on grey, sitting where the art meets the band.
+struct CardProgress: View {
     let fraction: Double
     var body: some View {
         GeometryReader { g in
             ZStack(alignment: .leading) {
-                Rectangle().fill(Color.white.opacity(0.25))
-                Rectangle().fill(Color.white).frame(width: g.size.width * fraction).widgetAccentable()
+                Mint.band
+                Rectangle().fill(Mint.progress).frame(width: g.size.width * fraction).widgetAccentable()
             }
         }.frame(height: 2)
     }
 }
-struct CoverView: View {
-    let image: TVImage?
+// Three bars when playing and a pause mark when not, at the corner of the art, as the launcher's now-playing card has them.
+struct StatusMark: View {
+    let playing: Bool
     var body: some View {
-        ZStack {
-            Mint.band
-            if let image { Image(tv: image).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFill() }
-            else { Image(systemName: "music.note").font(.title2).opacity(0.5).widgetAccentable() }
+        Group {
+            if playing {
+                HStack(alignment: .bottom, spacing: 2) {
+                    ForEach([0.55, 1.0, 0.72], id: \.self) { h in Rectangle().fill(Mint.text).frame(width: 3.5, height: 15 * h) }
+                }
+                .frame(height: 15, alignment: .bottom)
+            } else {
+                Image(systemName: "pause.fill").font(.system(size: 13)).foregroundStyle(Mint.text)
+            }
         }
-        .clipShape(RoundedRectangle(cornerRadius: Mint.radius))
+        .widgetAccentable()
+    }
+}
+struct CardArt: View {
+    let image: TVImage?
+    let playing: Bool?
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Mint.plane
+            if let image { Image(tv: image).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFill() }
+            else { Image(systemName: "music.note").font(.system(size: 28)).foregroundStyle(Mint.text.opacity(0.4)).frame(maxWidth: .infinity, maxHeight: .infinity).widgetAccentable() }
+            if let playing {
+                LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .init(x: 0.5, y: 0.6), endPoint: .bottom)
+                StatusMark(playing: playing).padding(.trailing, 8).padding(.bottom, 8)
+            }
+        }
+        .contentShape(Rectangle())
+        .clipped()
     }
 }
 
@@ -135,20 +161,26 @@ struct NowBody: View {
     let family: WidgetFamily
     let entry: TVEntry
     var title: String { entry.music?.title ?? "Nothing playing" }
+    var playing: Bool { entry.music?.playing == true }
     var body: some View {
         switch family {
         case .systemSmall:
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top) {
-                    CoverView(image: entry.cover).frame(width: 64, height: 64)
-                    Spacer(minLength: 0)
-                    RoundPlay(playing: entry.music?.playing == true)
+            // The launcher's card, whole. Tapping it plays or pauses.
+            Button(intent: TVPress(key: "play")) {
+                VStack(spacing: 0) {
+                    CardArt(image: entry.cover, playing: entry.music == nil ? nil : playing)
+                    CardProgress(fraction: entry.fraction)
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(title).font(Mint.font(13.4)).lineLimit(1)
+                            Text(entry.caption).font(Mint.font(10.8)).foregroundStyle(Mint.text.opacity(0.7)).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "music.note").font(.system(size: 11)).foregroundStyle(Mint.text.opacity(0.7)).widgetAccentable()
+                    }
+                    .padding(.horizontal, 11).frame(height: 44).background(Mint.band)
                 }
-                Spacer(minLength: 6)
-                Text(title).font(Mint.font(15.4)).lineLimit(2)
-                Text(entry.caption).font(Mint.font(11.8)).opacity(0.75).lineLimit(1)
-                Hairline(fraction: entry.fraction).padding(.top, 6)
-            }
+            }.buttonStyle(.plain).accessibilityLabel(playing ? "Pause \(title)" : "Play \(title)")
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.headline).lineLimit(1)
@@ -156,21 +188,22 @@ struct NowBody: View {
                 ProgressView(value: entry.fraction).tint(.white)
             }
         default:
-            HStack(spacing: 14) {
-                CoverView(image: entry.cover).aspectRatio(1, contentMode: .fit)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(Mint.font(19, weight: 300)).lineLimit(1)
-                    Text(entry.caption).font(Mint.font(12.5)).opacity(0.75).lineLimit(1)
+            HStack(spacing: 0) {
+                CardArt(image: entry.cover, playing: entry.music == nil ? nil : playing).aspectRatio(1, contentMode: .fit)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title).font(Mint.font(20, weight: 300)).lineLimit(1)
+                    Text(entry.caption).font(Mint.font(12)).foregroundStyle(Mint.text.opacity(0.7)).lineLimit(1).padding(.top, 2)
                     Spacer(minLength: 4)
-                    Hairline(fraction: entry.fraction)
+                    CardProgress(fraction: entry.fraction)
                     HStack {
-                        WidgetKey(icon: "backward.end.fill", key: "previous", label: "Previous")
+                        WidgetKey(icon: "backward.end.fill", key: "previous", label: "Previous", size: 40)
                         Spacer(minLength: 0)
-                        RoundPlay(playing: entry.music?.playing == true)
+                        WidgetKey(icon: playing ? "pause.fill" : "play.fill", key: "play", label: playing ? "Pause" : "Play", size: 44)
                         Spacer(minLength: 0)
-                        WidgetKey(icon: "forward.end.fill", key: "next", label: "Next")
-                    }.padding(.top, 4)
+                        WidgetKey(icon: "forward.end.fill", key: "next", label: "Next", size: 40)
+                    }.padding(.top, 6)
                 }
+                .padding(.horizontal, 14).padding(.vertical, 12)
             }
         }
     }
@@ -179,59 +212,80 @@ struct NowWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let entry: TVEntry
     var body: some View {
-        NowBody(family: family, entry: entry).foregroundStyle(Mint.text).containerBackground(for: .widget) { entry.tint }
+        NowBody(family: family, entry: entry).foregroundStyle(Mint.text).containerBackground(for: .widget) { WidgetWall(image: entry.wall) }
     }
 }
 struct TVNowWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: "TVNow", provider: TVProvider()) { NowWidgetView(entry: $0) }
             .configurationDisplayName("Playing on TV")
-            .description("What’s on, with its colour and controls.")
+            .description("The launcher’s now-playing card. Tap to play or pause.")
             .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
+            .contentMarginsDisabled()
     }
 }
 
 // MARK: - Remote
+// The Android TV remote's ring, flat in the launcher's card colours.
 struct Pad: View {
-    var key: CGFloat = 42
+    var side: CGFloat = 132
     var body: some View {
-        Grid(horizontalSpacing: 0, verticalSpacing: 0) {
-            GridRow { Color.clear.frame(width: key, height: key); WidgetKey(icon: "chevron.up", key: "up", label: "Up", size: key); Color.clear.frame(width: key, height: key) }
-            GridRow {
-                WidgetKey(icon: "chevron.left", key: "left", label: "Left", size: key)
-                Button(intent: TVPress(key: "ok")) { Circle().fill(Mint.text.opacity(0.16)).overlay { Circle().strokeBorder(Mint.text.opacity(0.4)) }.padding(4).frame(width: key, height: key).widgetAccentable() }.buttonStyle(.plain).accessibilityLabel("Select")
-                WidgetKey(icon: "chevron.right", key: "right", label: "Right", size: key)
+        let key = side / 3
+        ZStack {
+            Circle().fill(Mint.band)
+            Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+                GridRow { Color.clear.frame(width: key, height: key); WidgetKey(icon: "chevron.up", key: "up", label: "Up", size: key); Color.clear.frame(width: key, height: key) }
+                GridRow {
+                    WidgetKey(icon: "chevron.left", key: "left", label: "Left", size: key)
+                    Button(intent: TVPress(key: "ok")) { Circle().fill(Mint.banner).padding(3).frame(width: key, height: key).contentShape(Circle()).widgetAccentable() }.buttonStyle(.plain).accessibilityLabel("Select")
+                    WidgetKey(icon: "chevron.right", key: "right", label: "Right", size: key)
+                }
+                GridRow { Color.clear.frame(width: key, height: key); WidgetKey(icon: "chevron.down", key: "down", label: "Down", size: key); Color.clear.frame(width: key, height: key) }
             }
-            GridRow { Color.clear.frame(width: key, height: key); WidgetKey(icon: "chevron.down", key: "down", label: "Down", size: key); Color.clear.frame(width: key, height: key) }
         }
+        .frame(width: side, height: side)
     }
 }
 struct RemoteKeys: View {
+    var key: CGFloat = 44
     var body: some View {
-        Grid(horizontalSpacing: 8, verticalSpacing: 6) {
-            GridRow { WidgetKey(icon: "arrow.uturn.backward", key: "back", label: "Back", size: 40); WidgetKey(icon: "house", key: "home", label: "Home", size: 40); WidgetPower(size: 40) }
-            GridRow { WidgetKey(icon: "speaker.minus", key: "voldown", label: "Volume down", size: 40); WidgetKey(icon: "playpause", key: "play", label: "Play or pause", size: 40); WidgetKey(icon: "speaker.plus", key: "volup", label: "Volume up", size: 40) }
+        Grid(horizontalSpacing: 10, verticalSpacing: 8) {
+            GridRow { WidgetKey(icon: "arrow.left", key: "back", label: "Back", size: key); WidgetKey(icon: "house.fill", key: "home", label: "Home", size: key); WidgetPower(size: key) }
+            GridRow { WidgetKey(icon: "speaker.minus.fill", key: "voldown", label: "Volume down", size: key); WidgetKey(icon: "playpause.fill", key: "play", label: "Play or pause", size: key); WidgetKey(icon: "speaker.plus.fill", key: "volup", label: "Volume up", size: key) }
         }
     }
 }
 struct RemoteBody: View {
     let family: WidgetFamily
     let entry: TVEntry
+    var screenName: String {
+        guard let s = entry.status else { return "Tailscale off?" }
+        if s.screen == "asleep" { return "TV asleep" }
+        return s.apps?.first { $0.pkg == s.app }?.name ?? "Home"
+    }
     var body: some View {
         if family == .systemLarge {
             VStack(spacing: 10) {
-                // Every press refreshes the widget, so the picture is the TV a moment ago.
-                ZStack {
-                    Color.black
-                    if let m = entry.mirror { Image(tv: m).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit() }
-                    else { Text(entry.reachable ? (entry.asleep ? "TV asleep" : "") : "Tailscale off?").font(Mint.font(15)).opacity(0.7) }
+                // A card of the TV's own picture. Every press refreshes it.
+                VStack(spacing: 0) {
+                    ZStack {
+                        Color.black
+                        if let m = entry.mirror { Image(tv: m).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit() }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    HStack {
+                        Text(screenName).font(Mint.font(13.4)).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(systemName: "tv").font(.system(size: 11)).foregroundStyle(Mint.text.opacity(0.7)).widgetAccentable()
+                    }
+                    .padding(.horizontal, 11).frame(height: 32).background(Mint.band)
                 }
-                .aspectRatio(16.0 / 9, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: Mint.radius))
-                HStack { Pad(key: 44); Spacer(minLength: 0); RemoteKeys() }
+                HStack { Pad(side: 123); Spacer(minLength: 0); RemoteKeys() }
             }
+            .padding(14)
         } else {
-            HStack { Pad(key: 42); Spacer(minLength: 0); RemoteKeys() }
+            HStack { Pad(side: 132); Spacer(minLength: 0); RemoteKeys(key: 48) }.padding(.horizontal, 14).padding(.vertical, 12)
         }
     }
 }
@@ -246,6 +300,7 @@ struct TVRemoteWidget: Widget {
             .configurationDisplayName("TV Remote")
             .description("Move and select on the TV without opening the app.")
             .supportedFamilies([.systemMedium])
+            .contentMarginsDisabled()
     }
 }
 struct TVScreenWidget: Widget {
@@ -254,42 +309,85 @@ struct TVScreenWidget: Widget {
             .configurationDisplayName("TV Screen and Remote")
             .description("The TV’s picture above its remote.")
             .supportedFamilies([.systemLarge])
+            .contentMarginsDisabled()
     }
 }
 
 // MARK: - Apps
+struct TVAppsConfig: WidgetConfigurationIntent {
+    static var title: LocalizedStringResource = "TV Apps"
+    static var description = IntentDescription("Choose the six apps.")
+    @Parameter(title: "First app") var first: TVAppEntity?
+    @Parameter(title: "Second app") var second: TVAppEntity?
+    @Parameter(title: "Third app") var third: TVAppEntity?
+    @Parameter(title: "Fourth app") var fourth: TVAppEntity?
+    @Parameter(title: "Fifth app") var fifth: TVAppEntity?
+    @Parameter(title: "Sixth app") var sixth: TVAppEntity?
+    func picks() -> [String] {
+        [first?.id, second?.id, third?.id, fourth?.id, fifth?.id, sixth?.id].enumerated().map { $1 ?? TVProvider.favourites[$0] }
+    }
+}
+struct TVAppsProvider: AppIntentTimelineProvider {
+    func placeholder(in context: Context) -> TVEntry { TVProvider.sample }
+    func snapshot(for c: TVAppsConfig, in context: Context) async -> TVEntry { context.isPreview ? TVProvider.sample : await load(c) }
+    func timeline(for c: TVAppsConfig, in context: Context) async -> Timeline<TVEntry> {
+        Timeline(entries: [await load(c)], policy: .after(Date().addingTimeInterval(6 * 3600)))
+    }
+    func load(_ c: TVAppsConfig) async -> TVEntry {
+        var e = TVEntry()
+        e.status = await TVBridge.status()
+        if let art = e.music?.art, let d = await TVBridge.data(URL(string: art)), let i = TVImage(data: d) { e.wall = TVProvider.shrunk(i, to: 16) }
+        for pkg in c.picks() {
+            e.chosen.append(TVAppEntity(id: pkg, name: e.status?.apps?.first { $0.pkg == pkg }?.name ?? ""))
+            if let d = await TVBridge.data(TVBridge.url("/api/tv/icon?pkg=\(pkg)"), timeout: 4), let i = TVImage(data: d) { e.logos[pkg] = i }
+        }
+        return e
+    }
+}
+// Two rows of banners at the launcher's exact 142:80, so a logo is never cropped differently from the TV.
 struct AppsBody: View {
     let entry: TVEntry
     var body: some View {
-        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
-            GridRow { tile(0); tile(1) }
-            GridRow { tile(2); tile(3) }
+        GeometryReader { g in
+            let gap: CGFloat = 8, w = (g.size.width - gap * 2) / 3, h = w * 80 / 142
+            VStack(spacing: gap) {
+                HStack(spacing: gap) { tile(0, w, h); tile(1, w, h); tile(2, w, h) }
+                HStack(spacing: gap) { tile(3, w, h); tile(4, w, h); tile(5, w, h) }
+            }
+            .frame(width: g.size.width, height: g.size.height)
         }
+        .padding(.horizontal, 14)
     }
-    func tile(_ i: Int) -> some View {
-        let pkg = TVProvider.favourites[i]
+    func tile(_ i: Int, _ w: CGFloat, _ h: CGFloat) -> some View {
+        let pkg = entry.chosen.indices.contains(i) ? entry.chosen[i].id : TVProvider.favourites[i]
         let app = entry.status?.apps?.first { $0.pkg == pkg }
         return Button(intent: TVOpenApp(pkg: pkg)) {
             ZStack {
                 Mint.banner
-                if let logo = entry.logos[pkg] {
-                    if app?.wide == true { Image(tv: logo).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFill() }
-                    else { Image(tv: logo).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().padding(6) }
-                } else { Text(app?.name ?? "").font(Mint.font(14, condensed: true)).widgetAccentable() }
+                if let logo = entry.logos[pkg], app?.wide != false {
+                    Image(tv: logo).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFill()
+                } else {
+                    // The launcher's fallback for an app with no banner: its icon over its name.
+                    VStack(spacing: 2) {
+                        if let logo = entry.logos[pkg] { Image(tv: logo).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().frame(width: h * 0.42, height: h * 0.42) }
+                        Text(app?.name ?? "").font(Mint.font(10.5, condensed: true)).lineLimit(1).padding(.horizontal, 4).widgetAccentable()
+                    }
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: w, height: h)
             .clipShape(RoundedRectangle(cornerRadius: Mint.radius))
         }.buttonStyle(.plain).accessibilityLabel(app?.name ?? "App")
     }
 }
 struct TVAppsWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "TVApps", provider: TVProvider(logos: true)) { e in
-            AppsBody(entry: e).foregroundStyle(Mint.text).containerBackground(for: .widget) { Color.black }
+        AppIntentConfiguration(kind: "TVApps", intent: TVAppsConfig.self, provider: TVAppsProvider()) { e in
+            AppsBody(entry: e).foregroundStyle(Mint.text).containerBackground(for: .widget) { WidgetWall(image: e.wall) }
         }
         .configurationDisplayName("TV Apps")
-        .description("Your four apps, opened on the TV with one tap.")
+        .description("Six apps of your choice, opened on the TV with one tap.")
         .supportedFamilies([.systemMedium])
+        .contentMarginsDisabled()
     }
 }
 
@@ -299,6 +397,27 @@ struct TVPlayControl: ControlWidget {
         StaticControlConfiguration(kind: "TVPlayControl") {
             ControlWidgetButton(action: TVPress(key: "play")) { Label("TV Play or Pause", systemImage: "playpause.fill") }
         }.displayName("TV Play or Pause")
+    }
+}
+struct TVFlickControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: "TVFlickControl") {
+            ControlWidgetButton(action: FlickToTV()) { Label("Flick to TV", systemImage: "airplayaudio") }
+        }.displayName("Flick to TV").description("Sends what’s playing on this iPhone to the TV.")
+    }
+}
+struct TVVolumeUpControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: "TVVolumeUpControl") {
+            ControlWidgetButton(action: TVPress(key: "volup")) { Label("TV Volume Up", systemImage: "speaker.plus.fill") }
+        }.displayName("TV Volume Up")
+    }
+}
+struct TVVolumeDownControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: "TVVolumeDownControl") {
+            ControlWidgetButton(action: TVPress(key: "voldown")) { Label("TV Volume Down", systemImage: "speaker.minus.fill") }
+        }.displayName("TV Volume Down")
     }
 }
 struct TVPowerControl: ControlWidget {
@@ -324,7 +443,10 @@ struct TVWidgets: WidgetBundle {
         TVRemoteWidget()
         TVScreenWidget()
         TVAppsWidget()
+        TVFlickControl()
         TVPlayControl()
+        TVVolumeUpControl()
+        TVVolumeDownControl()
         TVPowerControl()
         TVRemoteControl()
     }

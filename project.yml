@@ -31,7 +31,7 @@ targets:
         CFBundleDisplayName: Mac Pro
         CADisableMinimumFrameDurationOnPhone: true
         NSFaceIDUsageDescription: Unlocks your saved logins before filling them on the Mac.
-        UILaunchScreen: {}
+        UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -41,6 +41,7 @@ targets:
     sources:
       - Widget
       - path: Shared/Gauges.swift
+      - path: Sources/MacIntents.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.MacPro.Widget
@@ -66,7 +67,7 @@ targets:
       properties:
         CFBundleDisplayName: Chumby
         CADisableMinimumFrameDurationOnPhone: true
-        UILaunchScreen: {}
+        UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSLocalNetworkUsageDescription: Chumby connects to your Chumby on your home network.
         NSBonjourServices: [_http._tcp]
@@ -79,6 +80,7 @@ targets:
       - ChumbyWidget
       - path: ChumbyApp/Sources/ChumbyAPI.swift
       - path: ChumbyApp/Sources/ChumbyArt.swift
+      - path: ChumbyApp/Sources/ChumbyIntents.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.Chumby.Widget
@@ -112,7 +114,7 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         UIAppFonts: [RobotoVariable.ttf]
         NSAppleMusicUsageDescription: Sees which song is playing on this iPhone, so a flick can send it to the TV.
-        UILaunchScreen: {}
+        UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
@@ -173,6 +175,7 @@ targets:
       - ChumbyWidget/ChumbyWidgets.swift
       - ChumbyApp/Sources/ChumbyAPI.swift
       - ChumbyApp/Sources/ChumbyArt.swift
+      - ChumbyApp/Sources/ChumbyIntents.swift
       - ci/gallery-chumby
     settings:
       base:

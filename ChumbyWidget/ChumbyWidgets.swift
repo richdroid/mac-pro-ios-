@@ -8,13 +8,6 @@ struct ChumbyWidgetAddress: WidgetConfigurationIntent {
     @Parameter(title: "Different address (optional)") var address: String?
 }
 
-// The Mac's cache first; straight to the Chumby at home if Tailscale is off.
-func chumbyRoutes(_ override: String?) -> [URL] {
-    let o = (override ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    let list = [o, Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "", Bundle.main.object(forInfoDictionaryKey: "ChumbyFallback") as? String ?? ""]
-    return list.compactMap { URL(string: $0) }.filter { $0.host != nil }
-}
-
 struct ChumbyEntry: TimelineEntry {
     let date: Date
     var reachable = false
@@ -53,22 +46,6 @@ struct ChumbyProvider: AppIntentTimelineProvider {
             break
         }
         return e
-    }
-}
-
-// Press a button on the Home Screen and the Chumby does it, without opening the app.
-struct ChumbyPress: AppIntent {
-    static var title: LocalizedStringResource = "Press a Chumby button"
-    static var isDiscoverable = false
-    @Parameter(title: "Command") var command: String
-    @Parameter(title: "Value") var value: String?
-    init() {}
-    init(_ command: String, _ value: String? = nil) { self.command = command; self.value = value }
-    func perform() async throws -> some IntentResult {
-        for base in chumbyRoutes(nil) {
-            if (try? await ChumbyAPI(base: base).cmd(command, value)) != nil { break }
-        }
-        return .result()
     }
 }
 
@@ -283,6 +260,12 @@ struct ChumbyWidgets: WidgetBundle {
         ChumbyBuddyWidget()
         ChumbyRemoteWidget()
         ChumbyRightNowWidget()
+        ChumbyNextControl()
+        ChumbyNightControl()
+        ChumbyMorningControl()
+        ChumbyStopControl()
+        ChumbyNapControl()
+        ChumbyOpenControl()
     }
 }
 #endif

@@ -10,8 +10,12 @@ struct MacProApp: App {
             RootView().environmentObject(model).environmentObject(model.liveStore)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in if p == .active { model.start() } else { model.stop() } }
-                .onAppear { model.start() }
+                .onAppear { model.start(); openScreenIfAsked() }
+                .onReceive(NotificationCenter.default.publisher(for: ScreenRequest.notification)) { _ in openScreenIfAsked() }
         }
+    }
+    private func openScreenIfAsked() {
+        if ScreenRequest.wanted { ScreenRequest.wanted = false; model.screenOpen = true }
     }
 }
 
@@ -37,12 +41,12 @@ struct RootView: View {
     var body: some View {
         ScreenMeasure {
             TabView(selection: $model.tab) {
-                Tab("Status", systemImage: "gauge.with.dots.needle.33percent", value: 0) { Screen { StatusTab($0, side: $1) } }
-                Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Screen { AppsTab($0, side: $1) } }
-                Tab("Claude", systemImage: "sparkle", value: 2) { Screen { ClaudeTab($0, side: $1) } }
-                Tab("Usage", systemImage: "chart.bar", value: 3) { Screen { UsageTab($0, side: $1) } }
-                Tab("Updates", systemImage: "arrow.up.circle", value: 4) { Screen { UpgradeTab($0, side: $1) } }
-                Tab("Control", systemImage: "display", value: 5) { Screen { ControlTab($0, side: $1) } }
+                Tab("Status", systemImage: "gauge.with.dots.needle.33percent", value: 0) { Screen(title: "Status") { StatusTab($0, side: $1) } }
+                Tab("Apps", systemImage: "square.grid.2x2", value: 1) { Screen(title: "Apps") { AppsTab($0, side: $1) } }
+                Tab("Claude", systemImage: "sparkle", value: 2) { Screen(title: "Claude") { ClaudeTab($0, side: $1) } }
+                Tab("Usage", systemImage: "chart.bar", value: 3) { Screen(title: "Usage") { UsageTab($0, side: $1) } }
+                Tab("Updates", systemImage: "arrow.up.circle", value: 4) { Screen(title: "Updates") { UpgradeTab($0, side: $1) } }
+                Tab("Control", systemImage: "display", value: 5) { Screen(title: "Control") { ControlTab($0, side: $1) } }
             }
             .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
         }
@@ -51,6 +55,9 @@ struct RootView: View {
     }
 }
 
+// The Mac reports some states in capitals or lower case; the app says them one way.
+func sentenceCase(_ t: String) -> String { t.prefix(1).uppercased() + t.dropFirst().lowercased() }
+
 let tileColumns = [GridItem(.adaptive(minimum: 170), spacing: 18, alignment: .top)]
 
 // Shared frame for each tab: a large title, the unreachable notice, and pull to refresh.
@@ -58,8 +65,9 @@ struct Screen<Content: View>: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.horizontalSizeClass) private var size
     @State private var settings = false
+    let title: String
     let content: (Status, Side) -> Content
-    init(@ViewBuilder content: @escaping (Status, Side) -> Content) { self.content = content }
+    init(title: String, @ViewBuilder content: @escaping (Status, Side) -> Content) { self.title = title; self.content = content }
     func list(_ side: Side) -> some View {
         List {
             if side != .right, let p = model.problem { Section { Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.red) } }
@@ -76,7 +84,7 @@ struct Screen<Content: View>: View {
                 else { list(.all) }
             }
             .background(groupedBackground.ignoresSafeArea())
-            .navigationTitle("Mac Pro")
+            .navigationTitle(title)
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Connection") } }
             .sheet(isPresented: $settings) { SignInView().environmentObject(model) }
         }
@@ -286,7 +294,6 @@ struct StatusTab: View {
 
 struct AppsTab: View {
     @EnvironmentObject var model: AppModel
-    @State private var picked = ""
     @State private var pending: PendingQuit?
     @State private var alert: String?
     struct PendingQuit: Identifiable { let app: Status.App; let force: Bool; var id: String { "\(app.pid)\(force)" } }
@@ -311,9 +318,10 @@ struct AppsTab: View {
             }
         }
         Section {
-            Picker("App", selection: $picked) { ForEach(s.installed, id: \.self) { Text($0).tag($0) } }
-            Button("Open on Mac") { Task { alert = await model.run("app-open", ["name": picked.isEmpty ? (s.installed.first ?? "") : picked]) } }
-        } header: { Text("Open an app") } footer: { Text("Swipe an open app to quit it.") }
+            Menu {
+                ForEach(s.installed, id: \.self) { name in Button(name) { Task { alert = await model.run("app-open", ["name": name]) } } }
+            } label: { Label("Open an app on the Mac", systemImage: "plus.square.on.square") }
+        } footer: { Text("Swipe an open app to quit it.") }
         .confirmationDialog(pending.map { ($0.force ? "Force quit " : "Quit ") + $0.app.name } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
             if let p = pending {
                 Button(p.force ? "Force Quit" : "Quit", role: .destructive) { Task { alert = await model.run(p.force ? "app-kill" : "app-quit", ["pid": p.app.pid]) } }
@@ -337,7 +345,7 @@ struct ClaudeTab: View {
             StateRow(label: "Auto-restart", good: s.claude.keepAlive, value: s.claude.keepAlive ? "Armed" : "Off")
             StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
             LabeledContent("Claude Code", value: s.claude.version.replacingOccurrences(of: " (Claude Code)", with: ""))
-            LabeledContent("Claude service", value: s.claude.service ?? "Unknown")
+            LabeledContent("Claude service", value: sentenceCase(s.claude.service ?? "Unknown"))
             Link("Open Claude Code", destination: URL(string: "https://claude.ai/code")!)
             Button("Restart remote control") { confirm = true }
         }
@@ -350,7 +358,7 @@ struct ClaudeTab: View {
             if s.claude.sessions.isEmpty { Text("None running").foregroundStyle(.secondary) }
             ForEach(s.claude.sessions) { x in
                 LabeledContent {
-                    Text(x.status)
+                    Text(sentenceCase(x.status))
                 } label: {
                     Text(x.name)
                     Text(x.cwd + (x.remote ? " · remote" : ""))
@@ -400,7 +408,9 @@ struct UsageTab: View {
                     BarMark(x: .value("Hour", Date(timeIntervalSince1970: h.t / 1000), unit: .hour), y: .value("Tokens", h.tokens), width: .ratio(0.7))
                         .foregroundStyle(Color.accentColor).clipShape(RoundedRectangle(cornerRadius: 2))
                 }
-                .chartYAxis(.hidden).frame(height: 90)
+                .chartYAxis(.hidden)
+                .chartXAxis { AxisMarks(values: .stride(by: .hour, count: 6)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.hour()) } }
+                .frame(height: 90)
             }
         }
         }
@@ -413,7 +423,7 @@ struct UsageTab: View {
         } header: { Text("Tokens on this Mac") } footer: { Text("Covers Claude Code and Cowork sessions on this Mac, not claude.ai or other devices.") }
         Section("By model, last 7 days") {
             ForEach(u.week.models.sorted { $0.value.tokens > $1.value.tokens }, id: \.key) { name, v in
-                LabeledContent(name.replacingOccurrences(of: "claude-", with: ""), value: "\(Format.count(v.tokens)) · \(v.messages)")
+                LabeledContent(name.replacingOccurrences(of: "claude-", with: ""), value: "\(Format.count(v.tokens)) tokens · \(v.messages) replies")
             }
         }
         }
@@ -432,7 +442,7 @@ struct UpgradeTab: View {
     var body: some View {
         if side != .right {
         Section("macOS and OCLP") {
-            Text(s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : s.upgrade.status) : onTahoe ? "On Tahoe" : "Waiting for your password to start").font(.headline)
+            Text(s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : sentenceCase(s.upgrade.status)) : onTahoe ? "On Tahoe" : "Waiting for your password to start").font(.headline)
             LabeledContent("Running", value: "\(s.macos) (\(s.build))")
             LabeledContent("OCLP", value: s.upgrade.state["oclp_tag"] ?? s.oclp.version)
             LabeledContent("Root patches for", value: s.oclp.patchedFor.isEmpty ? "None yet" : s.oclp.patchedFor)
@@ -497,11 +507,14 @@ struct ControlTab: View {
         Section {
             Button { signingIn = true } label: { Label("Sign in on the Mac", systemImage: "key.fill") }.disabled(!(s.macLogin || s.typing == "trusted"))
             if s.macLogin || s.typing == "trusted" {
-                SecureField("Or type any text", text: $text)
+                HStack {
+                    SecureField("Or type any text", text: $text)
+                    Button {
+                        Task { model.note = await model.runSealed("type-text", secret: text, extra: ["enter": pressReturn]) ?? "Typed."; text = "" }
+                    } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
+                    .buttonStyle(.plain).foregroundStyle(text.isEmpty ? Color.secondary : macBlue).disabled(text.isEmpty).accessibilityLabel("Type on Mac")
+                }
                 Toggle("Press Return afterward", isOn: $pressReturn)
-                Button("Type on Mac") {
-                    Task { model.note = await model.runSealed("type-text", secret: text, extra: ["enter": pressReturn]) ?? "Typed."; text = "" }
-                }.disabled(text.isEmpty)
             } else {
                 Text("Log in to this Mac above to use this.").foregroundStyle(.secondary)
             }
@@ -663,6 +676,7 @@ struct SeedSection: View {
                 Button("Get") { Task { note = await model.run("ios-fetch", ["url": link]); if note == nil { link = "" } } }
                     .buttonStyle(.bordered).disabled(link.isEmpty || seed.fetch?.state == "working")
             }
+            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
             if let f = seed.fetch, f.state != "idle" { Text(f.message).font(.footnote).foregroundStyle(f.state == "failed" ? .red : .secondary) }
             Button(uploading ? "Sending to the Mac…" : "Add an app (.ipa)") { picking = true }.disabled(uploading)
             if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }

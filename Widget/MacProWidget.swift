@@ -318,6 +318,9 @@ struct MacProWidgets: WidgetBundle {
         MacProWidget()
         MacTempWidget()
         MacClaudeWidget()
+        MacScreenControl()
+        MacDisplayOffControl()
+        MacRenewControl()
         MacAppsWidget()
     }
 }
