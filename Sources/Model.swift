@@ -16,6 +16,7 @@ final class AppModel: ObservableObject {
     @Published var note: String?
     @Published var history: HistoryMetric?  // kept here so unfolding doesn't close it
     @Published var processes: ProcessSort?
+    @Published var sessionScreen: Status.Session?  // a session's own screen, opened from an alert
     @Published var tab = UserDefaults.standard.integer(forKey: "tab")
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
 

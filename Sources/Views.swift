@@ -110,6 +110,9 @@ struct Screen<Content: View>: View {
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
             .sheet(isPresented: $settings) { SignInView().environmentObject(model) }
             .navigationDestination(item: title == "Status" ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
+            .sheet(item: title == "Status" ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) {
+                SessionTerminal(session: $0).environmentObject(model).presentationDetents([.large]).presentationDragIndicator(.visible)
+            }
         }
     }
 }

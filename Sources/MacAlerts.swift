@@ -33,7 +33,9 @@ struct AlertBanner: View {
         Section {
             ForEach(alerts) { a in
                 Button {
-                    if let m = a.metric.flatMap(HistoryMetric.named) { model.history = m } else { model.tab = 5 }
+                    // A session waiting on a question opens straight onto its screen, where it can be answered.
+                    if a.id.hasPrefix("session:"), let s = model.status?.claude.sessions.first(where: { $0.key == String(a.id.dropFirst(8)) }) { model.sessionScreen = s }
+                    else if let m = a.metric.flatMap(HistoryMetric.named) { model.history = m } else { model.tab = 5 }
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: a.symbol).font(.title3).foregroundStyle(a.tint).frame(width: 28)
