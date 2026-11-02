@@ -54,7 +54,8 @@ final class TVModel: ObservableObject {
             Task { [weak self] in
                 while !Task.isCancelled {
                     if let self, Date().timeIntervalSince(self.lastKeyAt) > 1.5 { await self.load() }
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    // What's playing changes under you, so the Playing tab keeps closer watch.
+                    try? await Task.sleep(nanoseconds: self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
                 }
             },
             Task { [weak self] in

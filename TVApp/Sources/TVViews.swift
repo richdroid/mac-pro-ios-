@@ -55,7 +55,11 @@ struct RootView: View {
                 Tab(value: 3) { Page(title: "Films") { FilmsTab() } } label: { tabLabel("Films", "film") }
                 Tab(value: 5) { Page(title: "Status") { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
             }
-            .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
+            .onChange(of: model.tab) { _, t in
+                UserDefaults.standard.set(t, forKey: "tab")
+                // Opening Playing shows what's on now, not what was on at the last look.
+                if t == 2 { Task { await model.load() } }
+            }
         }
         .fullScreenCover(item: $model.flicking) { FlickScreen(target: $0).environmentObject(model) }
         .overlay(alignment: .top) {
