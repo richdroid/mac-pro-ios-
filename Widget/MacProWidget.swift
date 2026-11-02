@@ -249,7 +249,7 @@ struct Ring: View {
                 Circle().trim(from: 0, to: min(value / 100, 1)).stroke(color, style: StrokeStyle(lineWidth: 8, lineCap: .round)).rotationEffect(.degrees(-90))
                 Text("\(Int(value))%").font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit()
             }
-            Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.78))
+            Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.78)).lineLimit(1).minimumScaleFactor(0.8)
         }
     }
 }
