@@ -577,11 +577,18 @@ struct AppsTab: View {
                         if let query { EverywhereSearch(text: query) } else {
                             row("Watch", watch)
                             row("Listen", listen)
+                            row("Tools and settings", tools)
                         }
                     }.padding(.vertical, 12)
                 }
             } right: {
-                ScrollView { row("Tools and settings", tools).padding(.vertical, 12) }
+                // Unfolded, the other side picks up where you left off, ready to flick.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 26) {
+                        Shelf(source: .stremio, title: "Continue watching")
+                        Shelf(source: .mint, title: "Recently played")
+                    }.padding(.vertical, 12)
+                }
             }
         } else {
             ScrollView {
@@ -589,13 +596,44 @@ struct AppsTab: View {
                     SendBar().padding(.horizontal, 20)
                     if let query { EverywhereSearch(text: query) } else {
                         row("Watch", watch)
+                        Shelf(source: .stremio, title: "Continue watching")
                         row("Listen", listen)
+                        Shelf(source: .mint, title: "Recently played")
                         row("Tools and settings", tools)
                     }
                 }.padding(.vertical, 12)
                 .animation(.snappy, value: query == nil)
             }
         }
+    }
+}
+
+// One row from an app's own page, on the Apps tab: where you left off in Stremio, what you last played in Mint.
+struct Shelf: View {
+    @EnvironmentObject var model: TVModel
+    @ObservedObject var store: BrowseStore
+    let title: String
+    init(source: MediaSource, title: String) { store = .shared(source); self.title = title }
+    var row: MediaRow? { store.query.isEmpty ? store.rows.first { $0.title == title } : nil }
+    var body: some View {
+        Group {
+            if let row, !row.items.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    RowHeader(title: title) { MediaList(row: row, source: store.source) }.padding(.leading, 20)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 10) {
+                            ForEach(row.items) { item in
+                                Button { model.flick(FlickTarget(item: item, source: store.source)) } label: { MediaCard(item: item, source: store.source, width: store.source == .mint ? 128 : 112) }
+                                    .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                    }
+                    .clipped()
+                }
+            }
+        }
+        .task { await store.load() }
     }
 }
 
@@ -801,8 +839,12 @@ struct PlayingTab: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
                 .padding(.top, 20)
-                Text(s.description.first ?? appName).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
-                Text(s.description.isEmpty ? (s.playing ? "Playing" : "Paused") : appName).font(.subheadline).foregroundStyle(.secondary)
+                // The series, then the episode under it, then where it's playing and whether it's paused.
+                VStack(spacing: 3) {
+                    Text(s.description.first ?? appName).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
+                    if s.description.count > 1 { Text(s.description[1]).font(.headline).foregroundStyle(.white.opacity(0.85)).lineLimit(2).multilineTextAlignment(.center) }
+                    Text("\(appName) · \(s.playing ? "Playing" : "Paused")").font(.subheadline).foregroundStyle(.secondary).contentTransition(.opacity)
+                }
                 if s.position != nil { VideoProgress(session: s).padding(.horizontal, 4) }
                 HStack(spacing: 18) {
                     if s.pkg == "com.stremio.one" {
