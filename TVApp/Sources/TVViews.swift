@@ -1086,36 +1086,44 @@ struct VideoProgress: View {
 // colour, a picked film or album brings its cover's, and with nothing picked the colour comes from what's playing.
 struct Ambience: View {
     @EnvironmentObject var model: TVModel
-    @State private var small: TVImage?
-    @State private var artTint: Color?
+    // One picture shared by every page, so a page shows it the moment it appears instead of drawing it in.
+    @MainActor private static var memo: [String: (image: TVImage, tint: Color?)] = [:]
+    @State private var loaded = 0
     var art: String? {
         if let s = model.status?.session, s.pkg != "com.codex.musicwebtv" { return model.picture(for: s) }
         return model.status?.music?.art
     }
-    var tint: Color { model.mood ?? artTint ?? Color(hex: 0x4A1A5C) }
+    var current: (image: TVImage, tint: Color?)? { art.flatMap { Ambience.memo[$0] } }
+    var tint: Color { model.mood ?? current?.tint ?? Color(hex: 0x4A1A5C) }
     var body: some View {
         ZStack {
             Color.black
-            if let small {
+            if let small = current?.image {
                 Color.clear
                     .overlay { Image(tv: small).resizable().interpolation(.high).scaledToFill().opacity(0.55) }
                     .clipped().transition(.opacity)
+                    .id(art)
             }
             LinearGradient(colors: [tint.opacity(0.8), tint.opacity(0.45), .black.opacity(0.75)], startPoint: .topLeading, endPoint: .bottom)
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
-        .animation(.easeInOut(duration: 0.7), value: small)
+        // Only a real change fades: what's playing, or the colour of where you are.
+        .animation(.easeInOut(duration: 0.7), value: art)
         .animation(.easeInOut(duration: 0.7), value: tint)
+        .animation(.easeInOut(duration: 0.7), value: loaded)
         .task(id: art) {
-            guard let art, let u = URL(string: art), let i = await ImageStore.shared.load(u) else { small = nil; artTint = nil; return }
-            artTint = await ImageStore.shared.band(u)
+            guard let art, Ambience.memo[art] == nil, let u = URL(string: art), let i = await ImageStore.shared.load(u) else { return }
+            let band = await ImageStore.shared.band(u)
             // Shrunk to a few pixels and stretched back: a heavy blur that costs nothing while scrolling.
             #if canImport(UIKit)
-            small = UIGraphicsImageRenderer(size: CGSize(width: 6, height: 6)).image { _ in i.draw(in: CGRect(x: 0, y: 0, width: 6, height: 6)) }
+            let small = UIGraphicsImageRenderer(size: CGSize(width: 6, height: 6)).image { _ in i.draw(in: CGRect(x: 0, y: 0, width: 6, height: 6)) }
             #else
-            small = i
+            let small = i
             #endif
+            if Ambience.memo.count > 40 { Ambience.memo.removeAll() }
+            Ambience.memo[art] = (small, band)
+            loaded += 1
         }
     }
 }
