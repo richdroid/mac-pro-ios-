@@ -22,9 +22,13 @@ final class TVModel: ObservableObject {
     // The cover of the last thing flicked, for when the TV's player has none of its own to show.
     @Published var lastArt: String?
     @Published var lastArtPkg: String?
-    // A picture for what an app is playing: the cover of what was flicked to it, else the app's own banner.
+    var lastArtTitle: String?
+    // A picture for what an app is playing: its real poster if the Mac found one, else the cover of what was flicked to
+    // it if that's still what's on, else the app's own banner. Never the cover of something that played before.
     func picture(for s: TVStatus.Session) -> String? {
-        if s.pkg == lastArtPkg, let a = lastArt { return a }
+        if let a = s.art, !a.isEmpty { return a }
+        if s.pkg == lastArtPkg, let a = lastArt, let t = lastArtTitle, let now = s.description.first,
+           now.localizedCaseInsensitiveContains(t) || t.localizedCaseInsensitiveContains(now) { return a }
         return url("/api/tv/icon?pkg=\(s.pkg)&v=2")?.absoluteString
     }
     // The flick screen brings itself in and out, so the system's slide stays out of it.
