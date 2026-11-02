@@ -770,6 +770,16 @@ struct PressCard: ButtonStyle {
     }
 }
 
+// A button inside a bar: only the icon gives, so the bar itself stays put.
+struct PressIcon: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.82 : 1)
+            .opacity(configuration.isPressed ? 0.6 : 1)
+            .animation(.spring(response: 0.24, dampingFraction: 0.5), value: configuration.isPressed)
+    }
+}
+
 // An app's own things, reached from its banner.
 struct AppBrowse: View {
     @EnvironmentObject var model: TVModel

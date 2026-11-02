@@ -327,16 +327,18 @@ struct PlayKey: View {
         Button { model.key("play") } label: {
             Image(systemName: playing == nil ? "playpause.fill" : playing == true ? "pause.fill" : "play.fill")
                 .font(.system(size: size * 0.36, weight: .semibold)).foregroundStyle(.black.opacity(0.85))
+                .contentTransition(.symbolEffect(.replace))
                 .frame(width: size, height: size).background(tint, in: Circle())
+                .shadow(color: tint.opacity(0.45), radius: 14, y: 4)
         }
-        .buttonStyle(.plain).accessibilityLabel(playing == true ? "Pause" : playing == false ? "Play" : "Play or pause")
+        .buttonStyle(PressCard()).accessibilityLabel(playing == true ? "Pause" : playing == false ? "Play" : "Play or pause")
     }
 }
 struct VolumeBar: View {
     @EnvironmentObject var model: TVModel
     func segment(_ icon: String, _ key: String, _ label: String) -> some View {
         Button { model.key(key) } label: { Image(systemName: icon).font(.system(size: 18, weight: .medium)).frame(maxWidth: .infinity, minHeight: 50).contentShape(Rectangle()) }
-            .buttonStyle(.plain).accessibilityLabel(label)
+            .buttonStyle(PressIcon()).accessibilityLabel(label)
     }
     var body: some View {
         HStack(spacing: 0) {
