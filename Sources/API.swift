@@ -12,7 +12,7 @@ struct Status: Decodable {
     struct Process: Decodable, Identifiable { let pid: Int; let cpu: Double; let mem: Double; let name: String; var id: Int { pid } }
     struct Peer: Decodable, Identifiable { let name: String; let os: String; let online: Bool; var id: String { name } }
     struct Tailscale: Decodable { let state: String; let name: String?; let peers: [Peer] }
-    struct Session: Decodable, Identifiable {
+    struct Session: Decodable, Identifiable, Hashable {
         let name: String; let status: String; let cwd: String; let remote: Bool
         var updated: Double?; var key: String?; var restartable: Bool?; var stuck: Bool?; var waiting: Bool?
         var id: String { key ?? (name + cwd) }
