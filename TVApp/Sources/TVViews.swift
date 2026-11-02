@@ -609,6 +609,33 @@ struct AppsTab: View {
     }
 }
 
+// Ten seconds back or on in Stremio. It takes the TV a few seconds, so it shows it's working and takes no second tap
+// until the first has landed, which would otherwise jump twice.
+struct SeekButton: View {
+    @EnvironmentObject var model: TVModel
+    let icon: String, label: String, forward: Bool
+    @State private var working = false
+    var body: some View {
+        Button {
+            guard !working else { return }
+            model.tick(); working = true
+            Task {
+                do { try await TVBridge.post("player-seek", ["forward": forward], timeout: 30); await model.load() }
+                catch { model.say("Couldn’t move it") }
+                working = false
+            }
+        } label: {
+            ZStack {
+                Image(systemName: icon).font(.system(size: 22, weight: .medium)).opacity(working ? 0.25 : 1)
+                if working { ProgressView().controlSize(.small) }
+            }
+            .frame(width: 56, height: 56).contentShape(Circle())
+        }
+        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
+        .animation(.easeOut(duration: 0.15), value: working)
+    }
+}
+
 // One row from an app's own page, on the Apps tab: where you left off in Stremio, what you last played in Mint.
 struct Shelf: View {
     @EnvironmentObject var model: TVModel
@@ -874,10 +901,7 @@ struct PlayingTab: View {
         .frame(maxWidth: .infinity)
     }
     func seekButton(_ icon: String, _ label: String, forward: Bool) -> some View {
-        Button { model.tick(); model.post("player-seek", ["forward": forward]) } label: {
-            Image(systemName: icon).font(.system(size: 22, weight: .medium)).frame(width: 56, height: 56).contentShape(Circle())
-        }
-        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
+        SeekButton(icon: icon, label: label, forward: forward)
     }
     func play(shuffle: Bool = false) {
         guard !query.isEmpty else { return }

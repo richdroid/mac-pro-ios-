@@ -430,9 +430,9 @@ struct FlickScreen: View {
                 if let session, !isMusic, session.position != nil { VideoProgress(session: session).frame(maxWidth: w) }
                 HStack(spacing: 22) {
                     if source == .stremio {
-                        controlButton("gobackward.10", "Back 10 seconds") { model.post("player-seek", ["forward": false]) }
+                        SeekButton(icon: "gobackward.10", label: "Back 10 seconds", forward: false)
                         PlayKey(playing: session?.playing, tint: .white, size: 74)
-                        controlButton("goforward.10", "Forward 10 seconds") { model.post("player-seek", ["forward": true]) }
+                        SeekButton(icon: "goforward.10", label: "Forward 10 seconds", forward: true)
                     } else {
                         GlassKey(icon: "backward.fill", label: "Previous", key: "previous", size: 56)
                         PlayKey(playing: isMusic ? music?.playing : session?.playing, tint: .white, size: 74)
