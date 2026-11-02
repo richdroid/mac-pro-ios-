@@ -14,21 +14,20 @@ struct TVIslandAttributes: ActivityAttributes {
 }
 
 enum TVIsland {
-    static let apps = ["com.codex.musicwebtv": "Mint Music", "com.google.android.youtube.tv": "YouTube", "com.google.android.youtube.tvmusic": "YouTube Music", "com.stremio.one": "Stremio"]
+    // Only what plays for a long while. Songs change faster than this can be updated with the app closed, so music, and
+    // anything AirPlayed from this phone, which iOS already shows, is left out.
+    static let apps = ["com.google.android.youtube.tv": "YouTube", "com.stremio.one": "Stremio"]
 
     static var live: Activity<TVIslandAttributes>? { Activity<TVIslandAttributes>.activities.first { $0.activityState == .active } }
     // With no way to push updates, it can only say when its picture may be out of date.
     static let staleAfter: TimeInterval = 300
 
     static func state(_ s: TVStatus) -> TVIslandAttributes.ContentState? {
-        guard s.online, let session = s.session, let app = apps[session.pkg] else { return nil }
-        // A sleeping TV with nothing playing has nothing to offer. Music can carry on with the screen off.
+        guard s.online, s.airplay?.active != true, let session = s.session, let app = apps[session.pkg] else { return nil }
+        // A sleeping TV with nothing playing has nothing to offer.
         if s.screen == "asleep" && !session.playing { return nil }
         // Nor does a paused player you've since left, which Android keeps reporting as active.
         if !session.playing && s.app != session.pkg { return nil }
-        if session.pkg == "com.codex.musicwebtv", let m = s.music {
-            return .init(title: m.title, subtitle: m.artist, app: app, playing: session.playing)
-        }
         return .init(title: session.description.first ?? app, subtitle: session.description.dropFirst().first ?? app, app: app, playing: session.playing)
     }
 
