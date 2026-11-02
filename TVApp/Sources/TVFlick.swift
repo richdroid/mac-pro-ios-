@@ -399,12 +399,22 @@ struct FlickScreen: View {
         let isMusic = source == .mint
         return ScrollView {
             VStack(spacing: 18) {
+                // The whole picture, on a blurred copy of itself, as a poster sits on a TV's screen: never a slice of it.
                 ZStack {
                     RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.black.opacity(0.6))
                     Group {
                         if let image = target.image { image.resizable().scaledToFill() }
                         else { Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(white: 0.15) } }
                     }
+                    .frame(width: w, height: w * 9 / 16).clipped()
+                    .blur(radius: 24).opacity(0.7)
+                    Group {
+                        if let image = target.image { image.resizable().scaledToFit() }
+                        else { Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFit() } placeholder: { Color.clear } }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
+                    .padding(14)
                 }
                 .frame(width: w, height: w * 9 / 16)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
