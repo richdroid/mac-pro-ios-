@@ -72,6 +72,12 @@ struct Graphite: ViewModifier {
         }
     }
 }
+// Rows spread over the space they're given, an equal gap between each.
+struct EvenRows: ViewModifier {
+    func body(content: Content) -> some View {
+        content.frame(maxHeight: .infinity, alignment: .center)
+    }
+}
 func fahrenheit(_ c: Double) -> Int { Int((c * 9 / 5 + 32).rounded()) }
 func heatColor(_ c: Double) -> Color { c >= 90 ? .red : c >= 75 ? .orange : c >= 60 ? .yellow : Color(red: 0.45, green: 0.85, blue: 0.95) }
 func heatLine(_ c: Double) -> String { c >= 90 ? "Fans, please!" : c >= 75 ? "Getting toasty" : c >= 60 ? "Warming up" : "Cool as a trash can" }
@@ -87,19 +93,20 @@ struct Bar: View {
                 Capsule().fill(color).frame(width: max(5, g.size.width * min(max(value, 0), 1))).widgetAccentable()
             }
         }
-        .frame(height: 5)
+        .frame(height: 6)
     }
 }
 struct Meter: View {
     let label: String, value: Double, text: String
+    var tint = Color(red: 0.45, green: 0.75, blue: 1)
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text(label).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.82)).lineLimit(1)
+                Text(label).font(.system(size: 14, weight: .medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
                 Spacer(minLength: 4)
-                Text(text).font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit()
+                Text(text).font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
             }
-            Bar(value: value, color: value > 0.85 ? .red : value > 0.65 ? .orange : Color(red: 0.45, green: 0.75, blue: 1))
+            Bar(value: value, color: value > 0.85 ? .red : value > 0.65 ? .orange : tint)
         }
     }
 }
@@ -141,32 +148,37 @@ struct StatusView: View {
                 } else { Text("Mac Pro unreachable").font(.caption) }
             case .systemSmall:
                 if let n {
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 6) {
-                            Image("MacPro").resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().frame(width: 24, height: 32)
-                            VStack(alignment: .leading, spacing: 0) {
-                                Text("Mac Pro").font(.system(size: 14, weight: .semibold))
-                                Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75))
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(alignment: .center, spacing: 8) {
+                            Image("MacPro").resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().frame(width: 34, height: 46)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Mac Pro").font(.system(size: 16, weight: .semibold))
+                                Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7))
                             }
                         }
-                        Spacer(minLength: 0)
-                        Meter(label: "CPU", value: n.cpu, text: pct(n.cpu))
-                        Meter(label: "Memory", value: n.mem, text: pct(n.mem))
+                        Spacer(minLength: 6)
+                        VStack(spacing: 9) {
+                            Meter(label: "CPU", value: n.cpu, text: pct(n.cpu))
+                            Meter(label: "Memory", value: n.mem, text: pct(n.mem))
+                        }
                     }
                 } else { Problem(text: entry.problem ?? "") }
             default:
                 if let n {
-                    HStack(spacing: 14) {
-                        VStack(spacing: 4) {
-                            Image("MacPro").resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().frame(height: 92)
-                            Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75))
+                    HStack(spacing: 16) {
+                        VStack(spacing: 6) {
+                            Image("MacPro").resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().frame(height: 100)
+                            Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7))
                         }
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 0) {
                             Meter(label: "CPU", value: n.cpu, text: pct(n.cpu))
                             Meter(label: "Memory", value: n.mem, text: pct(n.mem))
                             Meter(label: "Disk", value: n.disk, text: pct(n.disk))
                             if let w = n.week { Meter(label: "Claude", value: w / 100, text: "\(Int(w))%") }
                         }
+                        // The meters share the height evenly rather than bunching at the top.
+                        .frame(maxHeight: .infinity)
+                        .modifier(EvenRows())
                     }
                 } else { Problem(text: entry.problem ?? "") }
             }
@@ -202,21 +214,22 @@ struct TempView: View {
             case .systemSmall:
                 if let h = hottest {
                     VStack(alignment: .leading, spacing: 2) {
-                        HStack { Image(systemName: "thermometer.medium").foregroundStyle(heatColor(h.c)); Spacer(); Text(h.name).font(.caption2).opacity(0.7) }
+                        HStack(spacing: 5) { Image(systemName: "thermometer.medium").foregroundStyle(heatColor(h.c)); Text(h.name).font(.system(size: 13, weight: .semibold)).opacity(0.8) }
                         Spacer(minLength: 0)
-                        Text("\(fahrenheit(h.c))°").font(.system(size: 46, weight: .semibold, design: .rounded)).foregroundStyle(heatColor(h.c)).monospacedDigit()
-                        Text(heatLine(h.c)).font(.caption.weight(.medium)).lineLimit(2).minimumScaleFactor(0.8)
+                        Text("\(fahrenheit(h.c))°").font(.system(size: 50, weight: .semibold, design: .rounded)).foregroundStyle(heatColor(h.c)).monospacedDigit()
+                        Text(heatLine(h.c)).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(2).minimumScaleFactor(0.8)
                     }
                 } else { Problem(text: entry.problem ?? "No sensors yet.") }
             default:
                 if let h = hottest {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack { Text(heatLine(h.c)).font(.subheadline.weight(.semibold)); Spacer(); Image(systemName: "thermometer.medium").foregroundStyle(heatColor(h.c)) }
-                        let shown = Array(entry.temps.prefix(family == .systemLarge ? 8 : 6))
-                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible())], spacing: 7) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack { Text(heatLine(h.c)).font(.system(size: 16, weight: .semibold)); Spacer(); Image(systemName: "thermometer.medium").foregroundStyle(heatColor(h.c)) }
+                        Spacer(minLength: 6)
+                        let shown = Array(entry.temps.prefix(family == .systemLarge ? 8 : 4))
+                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible())], spacing: 12) {
                             ForEach(shown, id: \.name) { t in
                                 VStack(alignment: .leading, spacing: 2) {
-                                    HStack { Text(t.name).lineLimit(1).font(.system(size: 13, weight: .medium)); Spacer(); Text("\(fahrenheit(t.c))°").font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(heatColor(t.c)) }.font(.caption2)
+                                    HStack { Text(t.name).lineLimit(1).font(.system(size: 14, weight: .medium)).foregroundStyle(.white.opacity(0.8)); Spacer(); Text("\(fahrenheit(t.c))°").font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(heatColor(t.c)) }
                                     Bar(value: (t.c - 20) / 80, color: heatColor(t.c))
                                 }
                             }
@@ -239,20 +252,6 @@ struct MacTempWidget: Widget {
 }
 
 // MARK: - Claude usage
-struct Ring: View {
-    let value: Double, label: String
-    var color: Color { value >= 85 ? .red : value >= 65 ? .orange : Color(red: 0.85, green: 0.55, blue: 0.4) }
-    var body: some View {
-        VStack(spacing: 4) {
-            ZStack {
-                Circle().stroke(.white.opacity(0.15), lineWidth: 8)
-                Circle().trim(from: 0, to: min(value / 100, 1)).stroke(color, style: StrokeStyle(lineWidth: 8, lineCap: .round)).rotationEffect(.degrees(-90))
-                Text("\(Int(value))%").font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit()
-            }
-            Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.78)).lineLimit(1).minimumScaleFactor(0.8)
-        }
-    }
-}
 struct ClaudeView: View {
     let entry: MacEntry
     var plan: (Double, Double)? {
@@ -263,9 +262,15 @@ struct ClaudeView: View {
     var body: some View {
         Group {
             if let p = plan {
-                VStack(spacing: 8) {
-                    HStack { Image("ClaudeTab").resizable().scaledToFit().frame(width: 15, height: 15); Text("Claude").font(.caption.weight(.semibold)); Spacer() }
-                    HStack(spacing: 12) { Ring(value: p.0, label: "5 hours"); Ring(value: p.1, label: "This week") }
+                // The same meters as the Mac Pro's own, in Claude's colour.
+                let claude = Color(red: 0.85, green: 0.55, blue: 0.4)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 6) { Image("ClaudeTab").resizable().scaledToFit().frame(width: 18, height: 18); Text("Claude").font(.system(size: 16, weight: .semibold)) }
+                    Spacer(minLength: 6)
+                    VStack(spacing: 9) {
+                        Meter(label: "5 hours", value: p.0 / 100, text: "\(Int(p.0))%", tint: claude)
+                        Meter(label: "This week", value: p.1 / 100, text: "\(Int(p.1))%", tint: claude)
+                    }
                 }
             } else { Problem(text: entry.problem ?? "Waiting for Claude’s usage.") }
         }
