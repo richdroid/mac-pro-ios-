@@ -34,6 +34,9 @@ enum MediaSource: String, CaseIterable, Identifiable {
 @MainActor
 final class BrowseStore: ObservableObject {
     let source: MediaSource
+    // A different list to ask for than the app's own, like films or shows to pick from, and a genre to narrow it.
+    let base: String?
+    @Published var genre = ""
     @Published var rows: [MediaRow] = []
     @Published var query = ""
     @Published var loading = false
@@ -49,9 +52,14 @@ final class BrowseStore: ObservableObject {
         let s = BrowseStore(source); stores[source] = s; return s
     }
     private var searching: Task<Void, Never>?
-    init(_ source: MediaSource) { self.source = source }
+    init(_ source: MediaSource, base: String? = nil) { self.source = source; self.base = base }
+    func endpoint(_ q: String) -> String {
+        guard let base else { return source.endpoint(q) }
+        let enc = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "" }
+        return base + (q.isEmpty ? "" : "&q=" + enc(q)) + (genre.isEmpty ? "" : "&genre=" + enc(genre))
+    }
     func load(force: Bool = false) async {
-        let q = query.trimmingCharacters(in: .whitespaces)
+        let q = query.trimmingCharacters(in: .whitespaces) + (genre.isEmpty ? "" : "\u{1}" + genre)
         // Recent enough to skip, though what's on the TV moves on, so never for long.
         if !force && loadedFor == q && !rows.isEmpty && Date().timeIntervalSince(loadedAt) < 60 { return }
         struct Answer: Decodable { let rows: [MediaRow] }
@@ -64,10 +72,10 @@ final class BrowseStore: ObservableObject {
         // Only the newest request gets to say it has finished.
         defer { if mine == generation { loading = false; inFlight = nil } }
         // Its own task, so unfolding, which replaces the view that asked, doesn't cancel it for the view that's waiting.
-        let address = TVBridge.url(source.endpoint(q))
+        let address = TVBridge.url(endpoint(query.trimmingCharacters(in: .whitespaces)))
         let data = await Task { await TVBridge.data(address, timeout: 20) }.value
         // A slower, older search must not replace a newer one.
-        guard q == query.trimmingCharacters(in: .whitespaces) else { return }
+        guard q == query.trimmingCharacters(in: .whitespaces) + (genre.isEmpty ? "" : "\u{1}" + genre) else { return }
         guard let data, let a = try? JSONDecoder().decode(Answer.self, from: data) else {
             // Results for some other search aren't an answer to this one.
             if loadedFor != q { rows = []; loadedFor = nil }

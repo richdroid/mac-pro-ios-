@@ -55,7 +55,7 @@ struct RootView: View {
                     // The cover of what's on, so the button says what's playing before it's pressed.
                     if let i = PlayingIcon.image(model) { Label { Text("Playing") } icon: { Image(tv: i) } } else { tabLabel("Playing", "play.circle") }
                 }
-                Tab(value: 3) { Page(title: "Films") { FilmsTab() } } label: { tabLabel("Films", "film") }
+                Tab(value: 3) { Page(title: "Watch") { FilmsTab() } } label: { tabLabel("Watch", "film") }
                 Tab(value: 5) { Page(title: "Status") { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
             }
             .onChange(of: model.tab) { _, t in
@@ -466,7 +466,8 @@ struct Banner: View {
             else { open() }
         } label: {
             ZStack {
-                TVLook.bannerTile
+                // Some banners are a white logo on nothing, meant for a dark tile, like YouTube Music's.
+                app.wide == true ? Color.black : TVLook.bannerTile
                 if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
                     Art(url: u) { i in
                         if app.wide == true { i.resizable().scaledToFill() }
@@ -641,7 +642,8 @@ struct FlickCard: View {
         }
         #endif
     }
-    // Nothing to offer when this phone is already AirPlaying to the TV, or the TV is already playing the same song.
+    // Nothing to offer when this phone is already AirPlaying to the TV, the TV is already playing the same song, or the
+    // phone isn't playing anything at all.
     var alreadyThere: Bool {
         if model.status?.airplay?.active == true { return true }
         guard !title.isEmpty, let m = model.status?.music else { return false }
@@ -649,7 +651,14 @@ struct FlickCard: View {
     }
     var body: some View {
         Group {
-            if alreadyThere { Color.clear.frame(height: 0) } else { card }
+            if alreadyThere || title.isEmpty {
+                // Nothing to offer, but the AirPlay picker stays in reach for the Action Button and Siri.
+                #if os(iOS)
+                RoutePicker().frame(width: 1, height: 1).opacity(0.01).accessibilityHidden(true)
+                #else
+                Color.clear.frame(height: 0)
+                #endif
+            } else { card }
         }
         .onAppear {
             refresh()
@@ -753,9 +762,17 @@ struct PlayingTab: View {
                 NowControls(music: m)
                 Button { model.post("music-now", say: "Showing on TV") } label: { Label("Show on TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
             } else if let s = model.status?.session {
-                Image(systemName: s.playing ? "play.tv.fill" : "pause.circle").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
-                Text(s.description.first ?? "Playing").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
-                Text(model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg).font(.subheadline).foregroundStyle(.secondary)
+                let appName = model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg
+                // What was flicked, or the app's own banner when the app says nothing about what it's playing.
+                Art(url: model.picture(for: s).flatMap(URL.init(string:))) { $0.resizable().scaledToFit() } placeholder: {
+                    Image(systemName: "play.tv.fill").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent)
+                }
+                .frame(maxWidth: 300, maxHeight: 190)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
+                .padding(.top, 20)
+                Text(s.description.first ?? appName).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
+                Text(s.description.isEmpty ? (s.playing ? "Playing" : "Paused") : appName).font(.subheadline).foregroundStyle(.secondary)
                 if s.position != nil { VideoProgress(session: s).padding(.horizontal, 4) }
                 HStack(spacing: 18) {
                     if s.pkg == "com.stremio.one" {
@@ -894,36 +911,91 @@ struct FilmGrid: View {
         }
     }
 }
+// Films and shows to pick from: what's on the TV's own Stremio home, Letterboxd's picks and friends, and Stremio's
+// catalogue, popular, top rated, new, by genre and by search. Every card flicks like anywhere else.
 struct FilmsTab: View {
     @EnvironmentObject var model: TVModel
-    @Environment(\.paneLayout) private var panes
+    @State private var kind = "movie"
+    @StateObject private var films = BrowseStore(.stremio, base: "/api/tv/discover?type=movie")
+    @StateObject private var shows = BrowseStore(.stremio, base: "/api/tv/discover?type=series")
+    static let genres = ["Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "History", "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "War", "Western"]
     var body: some View {
-        Group {
-            if model.friends.isEmpty && model.watchlist.isEmpty {
-                ScrollView { ContentUnavailableView(model.filmsNote ?? "No films yet", systemImage: "film").padding(.top, 80) }
-            } else if panes {
-                FoldSplit {
-                    if model.recommended.isEmpty { FilmGrid(title: "Friends", films: model.friends) } else { FilmGrid(title: "Recommended for you", films: model.recommended) }
-                } right: {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 26) {
-                            if !model.recommended.isEmpty, !model.friends.isEmpty { FilmRow(title: "Friends", films: model.friends) }
-                            if !model.watchlist.isEmpty { FilmRow(title: "Watchlist", films: model.watchlist) }
-                        }.padding(.vertical, 12)
+        DiscoverColumn(store: kind == "movie" ? films : shows, kind: $kind)
+            .id(kind)
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.25), value: kind)
+    }
+}
+struct DiscoverColumn: View {
+    @EnvironmentObject var model: TVModel
+    @ObservedObject var store: BrowseStore
+    @Binding var kind: String
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 22) {
+                Picker("Kind", selection: $kind) { Text("Films").tag("movie"); Text("Shows").tag("series") }
+                    .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField(kind == "movie" ? "Search films" : "Search shows", text: $store.query).autocorrectionDisabled().submitLabel(.search)
+                        .onChange(of: store.query) { _, _ in store.searchSoon() }
+                    if !store.query.isEmpty {
+                        Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search")
                     }
                 }
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 26) {
-                        if !model.recommended.isEmpty { FilmRow(title: "Recommended for you", films: model.recommended) }
-                        if !model.friends.isEmpty { FilmRow(title: "Friends", films: model.friends) }
-                        if !model.watchlist.isEmpty { FilmRow(title: "Watchlist", films: model.watchlist) }
-                    }.padding(.vertical, 12)
+                .padding(.horizontal, 16).frame(height: 46)
+                .glassEffect(.regular, in: Capsule())
+                .padding(.horizontal, 20)
+                if store.query.isEmpty {
+                    Chips(options: [("", "All")] + FilmsTab.genres.map { ($0, $0) }, selected: Binding(get: { store.genre }, set: { g in
+                        store.genre = g
+                        Task { await store.load(force: true) }
+                    }))
+                    .padding(.horizontal, 20)
+                }
+                if store.rows.isEmpty {
+                    Group {
+                        if store.loading { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } }
+                        else if store.failed { ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again.")) }
+                        else { ContentUnavailableView.search }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                ForEach(store.rows) { row in
+                    VStack(alignment: .leading, spacing: 0) {
+                        RowHeader(title: row.title) { MediaList(row: row, source: .stremio) }.padding(.leading, 20)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 10) {
+                                ForEach(row.items) { item in
+                                    Button { model.flick(FlickTarget(item: item, source: .stremio)) } label: { MediaCard(item: item, source: .stremio, width: 124) }
+                                        .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
+                                }
+                            }
+                            .padding(.horizontal, 20)
+                        }
+                        .clipped()
+                    }
+                    .transition(.opacity.combined(with: .offset(y: 10)))
                 }
             }
+            .padding(.vertical, 12)
+            .animation(.spring(response: 0.4, dampingFraction: 0.86), value: store.rows.map(\.id))
         }
-        .refreshable { await model.loadFilms(force: true) }
-        .task(id: model.tab) { if model.tab == 3 { await model.loadFilms() } }
+        .refreshable { await store.load(force: true) }
+        .task { await store.load() }
+    }
+}
+// A row still on its way: a title bar and a few card shapes, breathing.
+struct PlaceholderShelf: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Capsule().fill(.white.opacity(0.12)).frame(width: 150, height: 16).padding(.leading, 20)
+            HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(0.08)).frame(width: 124, height: 236) } }
+                .padding(.leading, 20)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).clipped()
+        .phaseAnimator([0.5, 1.0]) { c, o in c.opacity(o) } animation: { _ in .easeInOut(duration: 0.9) }
+        .accessibilityHidden(true)
     }
 }
 
@@ -1012,8 +1084,8 @@ struct Ambience: View {
     @State private var small: TVImage?
     @State private var artTint: Color?
     var art: String? {
-        let video = model.status?.session.map { $0.pkg != "com.codex.musicwebtv" } ?? false
-        return video ? (model.lastArt ?? model.status?.music?.art) : (model.status?.music?.art ?? model.lastArt)
+        if let s = model.status?.session, s.pkg != "com.codex.musicwebtv" { return model.picture(for: s) }
+        return model.status?.music?.art
     }
     var tint: Color { model.mood ?? artTint ?? Color(hex: 0x4A1A5C) }
     var body: some View {
@@ -1049,8 +1121,8 @@ struct PlayingIcon {
     @MainActor private static var made: (String, TVImage)?
     @MainActor static func image(_ model: TVModel) -> TVImage? {
         #if canImport(UIKit)
-        let video = model.status?.session.map { $0.pkg != "com.codex.musicwebtv" } ?? false
-        guard let s = video ? (model.lastArt ?? model.status?.music?.art) : model.status?.music?.art,
+        let session = model.status?.session
+        guard let s = session.map({ $0.pkg != "com.codex.musicwebtv" }) == true ? model.picture(for: session!) : model.status?.music?.art,
               let u = URL(string: s), let i = ImageStore.shared.cached(u) else { return nil }
         if let made, made.0 == s { return made.1 }
         let side: CGFloat = 26

@@ -632,7 +632,7 @@ struct FlickScreen: View {
                 #endif
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.6)) { sending = false; done = true; note = source == .mint || stream != nil || item.stremioRef == nil || target.send != nil ? "Playing on the TV" : "On the TV. Pick a stream with the remote." }
                 successes += 1
-                if !item.art.isEmpty { model.lastArt = item.art }
+                if !item.art.isEmpty { model.lastArt = item.art; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
                 Task { await model.load() }
                 try? await Task.sleep(nanoseconds: 950_000_000)
                 morphing = true

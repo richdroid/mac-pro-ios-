@@ -21,6 +21,12 @@ final class TVModel: ObservableObject {
     @Published var mood: Color?
     // The cover of the last thing flicked, for when the TV's player has none of its own to show.
     @Published var lastArt: String?
+    @Published var lastArtPkg: String?
+    // A picture for what an app is playing: the cover of what was flicked to it, else the app's own banner.
+    func picture(for s: TVStatus.Session) -> String? {
+        if s.pkg == lastArtPkg, let a = lastArt { return a }
+        return url("/api/tv/icon?pkg=\(s.pkg)&v=2")?.absoluteString
+    }
     // The flick screen brings itself in and out, so the system's slide stays out of it.
     func flick(_ target: FlickTarget) {
         var t = Transaction(); t.disablesAnimations = true
