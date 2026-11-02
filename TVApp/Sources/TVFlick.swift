@@ -624,6 +624,8 @@ struct FlickScreen: View {
             episode = m.episodes.first { $0.id == ref.video }
             season = episode?.season ?? m.episodes.first?.season ?? 0
         }
+        // Picked from Continue watching, the episode is already known, so straight on to its streams.
+        if episode != nil, step == .episodes { go(.streams) }
     }
     var order: (String, [String: Any]) {
         if let send = target.send { return send }
