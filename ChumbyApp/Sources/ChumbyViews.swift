@@ -572,6 +572,8 @@ func timeText(_ t: Int) -> String { t < 60 ? "\(t) sec" : "\(t / 60) min" }
 struct ChannelsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @State private var picked = ""
+    // The drag handles only while reordering, so a scroll that starts on one can't pick a widget up.
+    @State private var reordering = false
     @State private var rows: [EditorRow] = []
     @State private var saveTask: Task<Void, Never>?
     @State private var unsent: (rows: [EditorRow], id: String)?
@@ -729,12 +731,19 @@ struct ChannelsTab: View {
                         Button(w[1]) { rows.insert(EditorRow(id: w[0], name: w[1], on: true, secs: 0, own: w.count > 2 ? Int(w[2]) ?? 0 : 0), at: 0); changed() }
                     }
                 }.foregroundStyle(.tint)
-            } header: { Text("Edit a channel") } footer: {
-                Text((model.state.shuffle == 1 ? "Shuffle is on, so your order won’t show until you turn it off. " : "") + "Drag a widget to reorder it. New widgets go to the top.")
+            } header: {
+                HStack {
+                    Text("Edit a channel")
+                    Spacer()
+                    Button(reordering ? "Done" : "Reorder") { withAnimation(.snappy) { reordering.toggle() } }
+                        .font(.subheadline.weight(.semibold)).textCase(nil)
+                }
+            } footer: {
+                Text((model.state.shuffle == 1 ? "Shuffle is on, so your order won’t show until you turn it off. " : "") + "Tap Reorder, then drag a widget by its handle. New widgets go to the top.")
             }
         }
         .seaList()
-        .dragToReorder()
+        .dragToReorder(reordering)
         .task { await model.loadChannels(); if picked.isEmpty { picked = (model.channelData?.cur ?? "").trimmingCharacters(in: .whitespacesAndNewlines); if picked.isEmpty { picked = channels.first?.id ?? "" }; pick() }; await loadCategories() }
         .refreshable { flush(); edited = [:]; await model.loadChannels(); await model.loadState(); pick() }
     }
@@ -1142,9 +1151,9 @@ struct TinkerTab: View {
 }
 
 extension View {
-    @ViewBuilder func dragToReorder() -> some View {
+    @ViewBuilder func dragToReorder(_ on: Bool) -> some View {
         #if os(iOS)
-        self.environment(\.editMode, .constant(.active))
+        self.environment(\.editMode, .constant(on ? .active : .inactive))
         #else
         self
         #endif
