@@ -53,6 +53,20 @@ struct DeviceTab: View {
     @Environment(\.scenePhase) private var phase
     @State private var info: DeviceInfo?
     @State private var failed = false
+    @State private var tidying = false
+    @State private var tidyNote: String?
+    // Closes the heavy apps left idle in the background, which is what fills the box's 2 GB until things stutter.
+    func tidy() {
+        model.tick(); tidying = true; tidyNote = nil
+        Task {
+            struct Answer: Decodable { let stopped: [String]; let availableMB: Int }
+            if let d = try? await TVBridge.post("tidy", timeout: 40), let a = try? JSONDecoder().decode(Answer.self, from: d) {
+                let free = a.availableMB >= 1024 ? String(format: "%.1f GB", Double(a.availableMB) / 1024) : "\(a.availableMB) MB"
+                withAnimation(.snappy) { tidyNote = a.stopped.isEmpty ? "Nothing idle to close. \(free) available." : "Closed \(a.stopped.joined(separator: ", ")). \(free) available." }
+            } else { withAnimation(.snappy) { tidyNote = "The TV didn’t answer." } }
+            tidying = false
+        }
+    }
     var hero: some View {
         VStack(spacing: 4) {
             Art(url: TVBridge.url("/api/tv/device-image")) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
@@ -92,6 +106,21 @@ struct DeviceTab: View {
             HStack { Text("Temperature"); Spacer(); Text("\(Int((i.tempC * 9 / 5 + 32).rounded()))°F").foregroundStyle(.secondary).monospacedDigit() }.padding(14)
             Divider()
             HStack { Text("Resolution"); Spacer(); Text(i.resolution).foregroundStyle(.secondary) }.padding(14)
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Button(action: tidy) {
+                    HStack(spacing: 8) {
+                        if tidying { ProgressView().controlSize(.small) } else { Image(systemName: "sparkles") }
+                        Text(tidying ? "Freeing up memory…" : "Free up memory")
+                        Spacer()
+                    }
+                    .font(.body.weight(.medium)).foregroundStyle(TVLook.accent).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).disabled(tidying)
+                Text(tidyNote ?? "Closes apps left idle in the background. Never what’s on screen, playing or paused, or Mint.")
+                    .font(.footnote).foregroundStyle(.secondary).contentTransition(.opacity)
+            }
+            .padding(14)
         }
         .tvCard()
     }
