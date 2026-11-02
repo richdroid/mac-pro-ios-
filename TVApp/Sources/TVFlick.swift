@@ -384,8 +384,13 @@ struct FlickScreen: View {
     // After the flick: the TV's screen, grown, with what's playing on it and the controls for it.
     func controlStep(_ size: CGSize) -> some View {
         let w = min(size.width - 48, 520)
-        let session = model.status?.session, music = model.status?.music
-        let isMusic = session == nil || session?.pkg == "com.codex.musicwebtv"
+        // Until the TV reports what was just sent, what it reports is what played before, so the flicked thing stands in.
+        let sentTo = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one"
+        let reported = model.status?.session
+        let session = reported?.pkg == sentTo ? reported : nil
+        let rawMusic = model.status?.music
+        let music = source == .mint && (target.send != nil || rawMusic?.title.caseInsensitiveCompare(item.title) == .orderedSame || reported?.pkg == sentTo) ? rawMusic : nil
+        let isMusic = source == .mint
         return ScrollView {
             VStack(spacing: 18) {
                 ZStack {
@@ -409,7 +414,7 @@ struct FlickScreen: View {
                 .contentTransition(.opacity)
                 if let session, !isMusic, session.position != nil { VideoProgress(session: session).frame(maxWidth: w) }
                 HStack(spacing: 22) {
-                    if session?.pkg == "com.stremio.one" {
+                    if source == .stremio {
                         controlButton("gobackward.10", "Back 10 seconds") { model.post("player-seek", ["forward": false]) }
                         PlayKey(playing: session?.playing, tint: .white, size: 74)
                         controlButton("goforward.10", "Forward 10 seconds") { model.post("player-seek", ["forward": true]) }
