@@ -400,7 +400,8 @@ struct ClaudeTab: View {
         restarting = key; defer { restarting = nil }
         do {
             let running = try await model.api.restartSession(key)
-            sessionNote = running ? "\(x.name) restarted." : "It will start when the Mac can reach Claude. It tries every two minutes."
+            // Back running speaks for itself in the row; only a session that couldn't start needs a word.
+            sessionNote = running ? nil : "It will start when the Mac can reach Claude. It tries every two minutes."
         } catch { sessionNote = error.localizedDescription }
         await model.refresh()
     }
@@ -522,7 +523,7 @@ struct UpgradeTab: View {
             Section {
                 SecureField("Mac password", text: $agentPassword)
                 Button("Apply update") {
-                    Task { note = await model.runSealed("agent-update", secret: agentPassword) ?? "Applied."; agentPassword = "" }
+                    Task { note = await model.runSealed("agent-update", secret: agentPassword); agentPassword = "" }
                 }.disabled(agentPassword.isEmpty)
             } header: { Text("Update service improvements") } footer: { Text("A newer version of the update service is ready. Your password is used once.") }
         }
@@ -576,7 +577,7 @@ struct ControlTab: View {
                     Button {
                         // It's encrypted on this iPhone, and that has a size limit. Keep the text so nothing is lost.
                         guard drafts.typed.utf8.count <= 130 else { model.note = "That’s too long to type in one go. Try under 130 characters."; return }
-                        Task { model.note = await model.runSealed("type-text", secret: drafts.typed, extra: ["enter": pressReturn]) ?? "Typed."; drafts.typed = "" }
+                        Task { model.note = await model.runSealed("type-text", secret: drafts.typed, extra: ["enter": pressReturn]); drafts.typed = "" }
                     } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
                     .buttonStyle(.plain).foregroundStyle(drafts.typed.isEmpty ? Color.secondary : macBlue).disabled(drafts.typed.isEmpty).accessibilityLabel("Type on Mac")
                 }
