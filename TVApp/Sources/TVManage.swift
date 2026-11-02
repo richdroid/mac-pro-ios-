@@ -115,12 +115,14 @@ struct ManageAppsView: View {
         .toolbar { if store.state?.canArrange == true { EditButton() } }
         .refreshable { await store.load() }
         .task { await store.load() }
-        .confirmationDialog(removing.map { "Delete \($0.name) from the TV?" } ?? "", isPresented: .init(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
+        // Asked from a swipe, which leaves nothing to point at, so it's a plain question in the middle.
+        .alert(removing.map { "Delete \($0.name) from the TV?" } ?? "", isPresented: .init(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
             if let app = removing {
                 Button("Delete", role: .destructive) {
                     store.state?.apps.removeAll { $0.pkg == app.pkg }
                     store.send("uninstall", ["pkg": app.pkg]) { await store.load() }
                 }
+                Button("Cancel", role: .cancel) {}
             }
         } message: { Text("Its data on the TV goes too. You’d have to install it again to get it back.") }
         .alert("That didn’t work", isPresented: .init(get: { store.note != nil }, set: { if !$0 { store.note = nil } })) { Button("OK") {} } message: { Text(store.note ?? "") }

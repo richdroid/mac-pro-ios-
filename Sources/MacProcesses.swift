@@ -103,8 +103,10 @@ struct ProcessesView: View {
         .background(groupedBackground.ignoresSafeArea())
         .navigationTitle("Processes")
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog(dialogTitle, isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible, presenting: pending) { p in
+        // Asked from a swipe, which leaves nothing to point at, so it's a plain question in the middle.
+        .alert(dialogTitle, isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } }), presenting: pending) { p in
             Button(p.force ? "Force Quit" : "Quit", role: .destructive) { Task { await quit(p) } }
+            Button("Cancel", role: .cancel) {}
         } message: { p in
             Text(p.force ? "Unsaved work is lost." : "It’s asked to close. Unsaved work may be lost.")
         }
@@ -148,6 +150,7 @@ struct SessionRow: View {
     let working: Bool
     let restart: () -> Void
     var open: (() -> Void)?
+    @State private var confirm = false
     var tint: Color {
         if session.stuck == true || session.waiting == true { return .orange }
         switch session.status {
@@ -179,7 +182,13 @@ struct SessionRow: View {
             }
             Spacer(minLength: 8)
             if working { ProgressView() }
-            else if session.restartable == true { Button(session.status == "stopped" ? "Start" : "Restart", action: restart).buttonStyle(.bordered).controlSize(.small) }
+            else if session.restartable == true {
+                Button(session.status == "stopped" ? "Start" : "Restart") { if session.status == "stopped" { restart() } else { confirm = true } }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .confirmationDialog("Restart \(session.name)?", isPresented: $confirm, titleVisibility: .visible) {
+                        Button("Restart", role: .destructive, action: restart)
+                    } message: { Text(session.waiting == true ? "It will come back to the same question. To answer it, tap the session instead." : "It stops what it’s doing, then picks up the same conversation.") }
+            }
             if canOpen { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
         }
         .contentShape(Rectangle())

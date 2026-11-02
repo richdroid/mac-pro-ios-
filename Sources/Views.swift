@@ -374,9 +374,11 @@ struct AppsTab: View {
                 ForEach(s.installed, id: \.self) { name in Button(name) { Task { alert = await model.run("app-open", ["name": name]) } } }
             } label: { Label("Open an app on the Mac", systemImage: "plus.square.on.square") }
         } footer: { Text("Swipe an open app to quit it.") }
-        .confirmationDialog(pending.map { ($0.force ? "Force quit " : "Quit ") + $0.app.name } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
+        // Asked from a swipe, which leaves nothing to point at, so it's a plain question in the middle.
+        .alert(pending.map { ($0.force ? "Force quit " : "Quit ") + $0.app.name + "?" } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
             if let p = pending {
                 Button(p.force ? "Force Quit" : "Quit", role: .destructive) { Task { alert = await model.run(p.force ? "app-kill" : "app-quit", ["pid": p.app.pid]) } }
+                Button("Cancel", role: .cancel) {}
             }
         } message: { if pending?.force == true { Text("Unsaved work is lost.") } }
         .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
@@ -387,7 +389,6 @@ struct AppsTab: View {
 struct ClaudeTab: View {
     @EnvironmentObject var model: AppModel
     @State private var confirm = false
-    @State private var restart: Status.Session?
     @State private var restarting: String?
     @State private var terminal: Status.Session?
     @State private var sessionNote: String?
@@ -412,23 +413,21 @@ struct ClaudeTab: View {
             LabeledContent("Claude Code", value: s.claude.version.replacingOccurrences(of: " (Claude Code)", with: ""))
             LabeledContent("Claude service", value: sentenceCase(s.claude.service ?? "Unknown"))
             Link("Open Claude Code", destination: URL(string: "https://claude.ai/code")!)
+            // Each question hangs off the button that asked it, so it points at what was tapped.
             Button("Restart remote control") { confirm = true }
+                .confirmationDialog("Restart remote control?", isPresented: $confirm, titleVisibility: .visible) {
+                    Button("Restart", role: .destructive) { Task { _ = await model.run("rc-restart") } }
+                } message: { Text("Connected sessions drop briefly, then reconnect.") }
         }
-        .confirmationDialog("Restart remote control?", isPresented: $confirm, titleVisibility: .visible) {
-            Button("Restart", role: .destructive) { Task { _ = await model.run("rc-restart") } }
-        } message: { Text("Connected sessions drop briefly, then reconnect.") }
         }
         if side != .left {
         Section("Sessions on this Mac (\(s.claude.sessions.count))") {
             if s.claude.sessions.isEmpty { Text("None running").foregroundStyle(.secondary) }
             ForEach(s.claude.sessions) { x in
-                SessionRow(session: x, working: restarting != nil && restarting == x.key, restart: { restart = x }, open: { terminal = x })
+                SessionRow(session: x, working: restarting != nil && restarting == x.key, restart: { Task { await doRestart(x) } }, open: { terminal = x })
             }
             if let sessionNote { Text(sessionNote).font(.footnote).foregroundStyle(.secondary) }
         }
-        .confirmationDialog("Restart \(restart?.name ?? "this session")?", isPresented: .init(get: { restart != nil }, set: { if !$0 { restart = nil } }), titleVisibility: .visible, presenting: restart) { x in
-            Button("Restart", role: .destructive) { Task { await doRestart(x) } }
-        } message: { _ in Text("It stops what it’s doing, then picks up the same conversation.") }
         .sheet(item: $terminal) { SessionTerminal(session: $0).environmentObject(model).presentationDetents([.large]).presentationDragIndicator(.visible) }
         }
     }
@@ -512,11 +511,13 @@ struct UpgradeTab: View {
             LabeledContent("OCLP", value: s.upgrade.state["oclp_tag"] ?? s.oclp.version)
             LabeledContent("Root patches for", value: s.oclp.patchedFor.isEmpty ? "None yet" : s.oclp.patchedFor)
             LabeledContent("Patched", value: s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)
-            if s.upgrade.installed { Button("Run update check now") { confirmRun = true } }
+            if s.upgrade.installed {
+                Button("Run update check now") { confirmRun = true }
+                    .confirmationDialog("Run the update service now?", isPresented: $confirmRun, titleVisibility: .visible) {
+                        Button("Run Now") { Task { note = await model.run("upgrade-run") } }
+                    } message: { Text("It may restart the Mac.") }
+            }
         }
-        .confirmationDialog("Run the update service now?", isPresented: $confirmRun, titleVisibility: .visible) {
-            Button("Run Now") { Task { note = await model.run("upgrade-run") } }
-        } message: { Text("It may restart the Mac.") }
         if s.agentStale {
             Section {
                 SecureField("Mac password", text: $agentPassword)
@@ -626,9 +627,9 @@ struct ControlTab: View {
         }
         Section("Power") {
             Button("Restart Mac", role: .destructive) { confirmRestart = true }
-        }
-        .confirmationDialog("Restart the Mac in one minute?", isPresented: $confirmRestart, titleVisibility: .visible) {
-            Button("Restart", role: .destructive) { Task { model.note = await model.run("mac-restart") } }
+                .confirmationDialog("Restart the Mac in one minute?", isPresented: $confirmRestart, titleVisibility: .visible) {
+                    Button("Restart", role: .destructive) { Task { model.note = await model.run("mac-restart") } }
+                }
         }
         }
     }

@@ -902,19 +902,22 @@ struct AlarmEditor: View {
                         Picker("Backup after", selection: $alarm.backupDelay) { ForEach(["1", "2", "5", "10", "15", "30"], id: \.self) { Text("\($0) min").tag($0) } }
                     }
                 }
-                if index >= 0 { Section { Button("Delete Alarm", role: .destructive) { confirmDelete = true }.foregroundStyle(.red) } }
+                if index >= 0 { Section {
+                    // The question hangs off the button that asked it, so it points at what was tapped.
+                    Button("Delete Alarm", role: .destructive) { confirmDelete = true }.foregroundStyle(.red)
+                        .confirmationDialog("Delete this alarm?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                            Button("Delete Alarm", role: .destructive) {
+                                model.state.alarms.remove(at: index); dismiss()
+                                Task { await model.saveAlarms("Alarm deleted") }
+                            }
+                        }
+                } }
             } .listRowBackground(GlassRow()) }
             .seaList().background { SeaBackground().ignoresSafeArea() }
             .navigationTitle(index >= 0 ? "Edit Alarm" : "Add Alarm").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { stopTest(); dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { save() } }
-            }
-            .confirmationDialog("Delete this alarm?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                Button("Delete Alarm", role: .destructive) {
-                    model.state.alarms.remove(at: index); dismiss()
-                    Task { await model.saveAlarms("Alarm deleted") }
-                }
             }
             .onAppear { load(); model.editingAlarm = true }
             .onDisappear { model.editingAlarm = false }
@@ -1064,10 +1067,12 @@ struct SoundsTab: View {
             }
             Button("Cancel", role: .cancel) { streamURL = ""; streamName = "" }
         }
-        .confirmationDialog("Remove \(pendingRemoval?.name ?? "this stream")?", isPresented: .init(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }), titleVisibility: .visible) {
+        // Asked from a swipe, which leaves nothing to point at, so it's a plain question in the middle.
+        .alert("Remove \(pendingRemoval?.name ?? "this stream")?", isPresented: .init(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } })) {
             Button("Remove", role: .destructive) {
                 if let p = pendingRemoval { model.state.streams.removeAll { $0.key == p.key }; Task { await model.saveStreams() } }
             }
+            Button("Cancel", role: .cancel) {}
         }
     }
 }
@@ -1102,20 +1107,20 @@ struct TinkerTab: View {
             }
             } right: {
             Section("The Chumby itself") {
-                Button("Restart channel") { confirm = "restart" }.foregroundStyle(.tint)
-                Button("Reboot", role: .destructive) { confirm = "reboot" }.foregroundStyle(.red)
+                Button("Restart channel") { confirm = "restart" }.foregroundStyle(.tint).confirmationDialog(
+                    "Restart the channel? The screen goes away for about two minutes.", isPresented: .init(get: { confirm == "restart" }, set: { if !$0 { confirm = nil } }), titleVisibility: .visible) {
+                    Button("Restart", role: .destructive) { model.cmd("restart", nil, "Restarting") }
+                }
+                Button("Reboot", role: .destructive) { confirm = "reboot" }.foregroundStyle(.red).confirmationDialog(
+                    "Reboot the Chumby? It takes a few minutes to come back.", isPresented: .init(get: { confirm == "reboot" }, set: { if !$0 { confirm = nil } }), titleVisibility: .visible) {
+                    Button("Reboot", role: .destructive) { model.cmd("reboot", nil, "Rebooting") }
+                }
             }
             Text("Black Chumby photo: Edward Yanquen, Wikimedia Commons, CC BY 2.0, cut out and retouched. Octopus and wordmark: Chumby’s own artwork, from this device.").font(.caption2).foregroundStyle(.secondary).listRowBackground(Color.clear)
         }
         .seaList()
         .task(id: model.sys.tw) { if !edited { accounts = model.sys.tw.joined(separator: ", ") } }
         .refreshable { await model.loadSys(); await model.loadState() }
-        .confirmationDialog(confirm == "reboot" ? "Reboot the Chumby? It takes a few minutes to come back." : "Restart the channel? The screen goes away for about two minutes.", isPresented: .init(get: { confirm != nil }, set: { if !$0 { confirm = nil } }), titleVisibility: .visible) {
-            Button(confirm == "reboot" ? "Reboot" : "Restart", role: .destructive) {
-                let c = confirm ?? ""
-                model.cmd(c, nil, c == "reboot" ? "Rebooting" : "Restarting")
-            }
-        }
     }
 }
 
