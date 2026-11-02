@@ -3,7 +3,6 @@ import SwiftUI
 // A kept session's own screen, to answer whatever it's waiting on from here: keys for its menus, and a box to tell it something.
 struct SessionTerminal: View {
     @EnvironmentObject var model: AppModel
-    @Environment(\.dismiss) private var dismiss
     let session: Status.Session
     @State private var text = ""
     @State private var running = true
@@ -73,7 +72,6 @@ struct SessionTerminal: View {
             Button {
                 let m = message; message = ""
                 send(["text": m])
-                withAnimation { note = "Sent" }
             } label: {
                 Image(systemName: "arrow.up").font(.body.weight(.bold)).frame(width: 40, height: 40)
                     .background(macBlue, in: Circle()).foregroundStyle(.white)
@@ -85,23 +83,22 @@ struct SessionTerminal: View {
         }
     }
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 8) {
-                screen
-                keyRow
-                composer
-            }
-            .padding(.horizontal, 12).padding(.bottom, 8)
-            .navigationTitle(session.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .overlay(alignment: .top) {
-                if let note {
-                    Text(note).font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 8)
-                        .glassEffect(.regular, in: Capsule()).padding(.top, 6)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .task(id: note) { try? await Task.sleep(nanoseconds: 1_600_000_000); withAnimation { self.note = nil } }
-                }
+        // A page of its own, pushed like any other, so Back is where the system puts it, on the side on the Duo.
+        VStack(spacing: 8) {
+            screen
+            keyRow
+            composer
+        }
+        .padding(.horizontal, 12).padding(.bottom, 8)
+        .background(Color.black.ignoresSafeArea())
+        .navigationTitle(session.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .top) {
+            if let note {
+                Text(note).font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 8)
+                    .glassEffect(.regular, in: Capsule()).padding(.top, 6)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .task(id: note) { try? await Task.sleep(nanoseconds: 1_600_000_000); withAnimation { self.note = nil } }
             }
         }
         .preferredColorScheme(.dark)

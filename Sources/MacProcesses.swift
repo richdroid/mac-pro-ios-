@@ -149,7 +149,6 @@ struct SessionRow: View {
     let session: Status.Session
     let working: Bool
     let restart: () -> Void
-    var open: (() -> Void)?
     @State private var confirm = false
     var tint: Color {
         if session.stuck == true || session.waiting == true { return .orange }
@@ -189,11 +188,9 @@ struct SessionRow: View {
                         Button("Restart", role: .destructive, action: restart)
                     } message: { Text(session.waiting == true ? "It will come back to the same question. To answer it, tap the session instead." : "It stops what it’s doing, then picks up the same conversation.") }
             }
-            if canOpen { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
         }
         .contentShape(Rectangle())
-        .onTapGesture { if canOpen { open?() } }
-        .accessibilityAction(named: "Show its screen") { if canOpen { open?() } }
     }
-    var canOpen: Bool { open != nil && session.key != nil && session.status != "stopped" }
+    // Only the sessions this Mac keeps have a screen to show.
+    var canOpen: Bool { session.key != nil && session.status != "stopped" }
 }

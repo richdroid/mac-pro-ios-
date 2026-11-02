@@ -110,9 +110,7 @@ struct Screen<Content: View>: View {
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
             .sheet(isPresented: $settings) { SignInView().environmentObject(model) }
             .navigationDestination(item: title == "Status" ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
-            .sheet(item: title == "Status" ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) {
-                SessionTerminal(session: $0).environmentObject(model).presentationDetents([.large]).presentationDragIndicator(.visible)
-            }
+            .navigationDestination(item: title == "Status" ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0) }
         }
     }
 }
@@ -375,7 +373,6 @@ struct ClaudeTab: View {
     @EnvironmentObject var model: AppModel
     @State private var confirm = false
     @State private var restarting: String?
-    @State private var terminal: Status.Session?
     @State private var sessionNote: String?
     let s: Status
     var side: Side = .all
@@ -410,11 +407,12 @@ struct ClaudeTab: View {
         Section("Sessions on this Mac (\(s.claude.sessions.count))") {
             if s.claude.sessions.isEmpty { Text("None running").foregroundStyle(.secondary) }
             ForEach(s.claude.sessions) { x in
-                SessionRow(session: x, working: restarting != nil && restarting == x.key, restart: { Task { await doRestart(x) } }, open: { terminal = x })
+                let row = SessionRow(session: x, working: restarting != nil && restarting == x.key, restart: { Task { await doRestart(x) } })
+                // The whole row opens its screen as a page, with Back where the system puts it.
+                if row.canOpen { NavigationLink { SessionTerminal(session: x) } label: { row } } else { row }
             }
             if let sessionNote { Text(sessionNote).font(.footnote).foregroundStyle(.secondary) }
         }
-        .sheet(item: $terminal) { SessionTerminal(session: $0).environmentObject(model).presentationDetents([.large]).presentationDragIndicator(.visible) }
         }
     }
 }
