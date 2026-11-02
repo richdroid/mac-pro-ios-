@@ -411,8 +411,6 @@ struct FlickScreen: View {
             }
             .frame(width: 168, height: 94.5)
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            // Where the card aims, measured before anything below moves the TV.
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { tvFrame = $0 }
             .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.3 + 0.5 * charge), lineWidth: 1.5) }
             .shadow(color: TVLook.accent.opacity(0.75 * charge), radius: 10 + 18 * charge)
             .overlay { TVRipple(trigger: impacts) }
@@ -426,6 +424,11 @@ struct FlickScreen: View {
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: charge)
         .animation(.spring(response: 0.4, dampingFraction: 0.7), value: landed)
+        // Where the card aims: the screen, at the top of this, measured outside everything that moves it. Measured
+        // inside, its own glow would move the target, which moves the glow, and so on without end.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { f in
+            tvFrame = CGRect(x: f.midX - 84, y: f.minY, width: 168, height: 94.5)
+        }
         .accessibilityHidden(true)
     }
     func card(_ width: CGFloat) -> some View {
@@ -435,8 +438,6 @@ struct FlickScreen: View {
         let x = flown ? tvFrame.midX - cardFrame.midX : drag.width * 0.85
         let y = flown ? tvFrame.midY - cardFrame.midY : cardY
         return MediaCard(item: shown, source: source, width: width, image: target.image)
-            // Where it rests, whatever is moving it: measured before anything moves it, so it isn't rewritten every frame.
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { cardFrame = $0 }
             .shadow(color: .black.opacity(lifted ? 0.55 : 0.45), radius: lifted ? 30 : 18, y: lifted ? 22 : 10)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: lifted)
             .rotationEffect(.degrees(lean))
@@ -453,6 +454,9 @@ struct FlickScreen: View {
                 CubicKeyframe(0, duration: 0.08)
             }
             .offset(x: x, y: y)
+            // Where it rests, measured outside everything that moves it. Inside, its own movement would change the
+            // measure that drives the movement, and the two would chase each other until the app locked up.
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { cardFrame = $0 }
             .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("flick"))
                 .updating($touching) { _, on, _ in on = true }
                 .onChanged { v in
@@ -612,7 +616,7 @@ private struct TVRipple: View {
                             CubicKeyframe(1.6 + CGFloat(i) * 0.25, duration: 0.75)
                         }
                         KeyframeTrack(\.opacity) {
-                            LinearKeyframe(0, duration: Double(i) * 0.13)
+                            LinearKeyframe(0, duration: 0.01 + Double(i) * 0.13)
                             LinearKeyframe(0.9 - Double(i) * 0.3, duration: 0.02)
                             CubicKeyframe(0, duration: 0.74)
                         }
