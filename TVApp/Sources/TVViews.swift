@@ -216,8 +216,13 @@ struct MirrorView: View {
 }
 
 // One arrow or the centre of the D-pad: a press acts at once, holding repeats until you lift.
+// Set on pages that scroll. There a key waits to see it's a real press, or starting a scroll on one would press it on the TV.
+private struct KeysInScrollKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var keysInScroll: Bool { get { self[KeysInScrollKey.self] } set { self[KeysInScrollKey.self] = newValue } } }
 private struct PadKey<Face: View>: View {
     @EnvironmentObject var model: TVModel
+    @Environment(\.keysInScroll) private var inScroll
+    @State private var pressed = false
     let key: String
     var longPress = false
     let label: String
@@ -246,14 +251,23 @@ private struct PadKey<Face: View>: View {
         if tapped && longPress && !fired { model.key(key) }
     }
     var body: some View {
-        face(touching)
-            .contentShape(Rectangle())
-            // Resets by itself if the system takes the touch away, so a key can't get stuck.
-            .gesture(DragGesture(minimumDistance: 0)
-                .updating($touching) { _, state, _ in state = true }
-                .onChanged { _ in begin() }
-                .onEnded { _ in end(tapped: true) })
-            .onChange(of: touching) { _, now in if !now { end(tapped: false) } }
+        Group {
+            if inScroll {
+                face(pressed)
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.key(key) }
+                    .onLongPressGesture(minimumDuration: 0.6, maximumDistance: 12, perform: { if longPress { model.key(key, long: true) } else { model.key(key) } }, onPressingChanged: { pressed = $0 })
+            } else {
+                face(touching)
+                    .contentShape(Rectangle())
+                    // Resets by itself if the system takes the touch away, so a key can't get stuck.
+                    .gesture(DragGesture(minimumDistance: 0)
+                        .updating($touching) { _, state, _ in state = true }
+                        .onChanged { _ in begin() }
+                        .onEnded { _ in end(tapped: true) })
+                    .onChange(of: touching) { _, now in if !now { end(tapped: false) } }
+            }
+        }
             .onDisappear { end(tapped: false) }
             .accessibilityLabel(label)
             .accessibilityAddTraits(.isButton)
@@ -802,6 +816,7 @@ struct PlayingTab: View {
                 ScrollView { VStack(spacing: 24) { now; send }.padding(.horizontal, 16).padding(.bottom, 16) }
             }
         }
+        .environment(\.keysInScroll, true)
         .sheet(item: $tracks) { TrackSheet(kind: $0).environmentObject(model) }
     }
 }

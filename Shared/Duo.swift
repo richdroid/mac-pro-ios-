@@ -120,3 +120,26 @@ func tabLabel(_ title: String, asset: String, fit: CGFloat = 25) -> some View {
         #endif
     }
 }
+
+// Reading a value off a chart that sits in a scrolling page: rest a finger on it for a moment, then slide. A touch on its
+// way somewhere else, like a scroll, moves off too soon to count, so it scrolls as normal.
+struct HoldToScrub: ViewModifier {
+    var onChange: (CGPoint?) -> Void
+    @GestureState private var holding = false
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .gesture(LongPressGesture(minimumDuration: 0.28, maximumDistance: 8)
+                .sequenced(before: DragGesture(minimumDistance: 0))
+                .updating($holding) { v, state, _ in if case .second = v { state = true } }
+                .onChanged { v in if case .second(true, let drag?) = v { onChange(drag.location) } })
+            // Clears by itself if the touch ends or the system takes it away.
+            .onChange(of: holding) { _, now in
+                #if canImport(UIKit)
+                if now { UISelectionFeedbackGenerator().selectionChanged() }
+                #endif
+                if !now { onChange(nil) }
+            }
+    }
+}
+extension View { func holdToScrub(_ onChange: @escaping (CGPoint?) -> Void) -> some View { modifier(HoldToScrub(onChange: onChange)) } }

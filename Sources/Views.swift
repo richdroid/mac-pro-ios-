@@ -145,10 +145,9 @@ struct WebTile: View {
                     .frame(height: 42).padding(.top, 8)
                     .overlay {
                         GeometryReader { g in
-                            Color.clear.contentShape(Rectangle())
-                                .gesture(DragGesture(minimumDistance: 8)
-                                    .onChanged { v in probe = max(0, min(spark.count - 1, Int(v.location.x / g.size.width * CGFloat(spark.count - 1)))) }
-                                    .onEnded { _ in probe = nil })
+                            Color.clear.holdToScrub { p in
+                                probe = p.map { max(0, min(spark.count - 1, Int($0.x / g.size.width * CGFloat(spark.count - 1)))) }
+                            }
                             if let probe, probe < spark.count {
                                 Rectangle().fill(.white.opacity(0.55)).frame(width: 1).offset(x: CGFloat(probe) / CGFloat(spark.count - 1) * g.size.width)
                             }

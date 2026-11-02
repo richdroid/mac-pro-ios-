@@ -43,11 +43,8 @@ struct RemoteScreenView: View {
             let wide = g.size.width > g.size.height
             Group {
                 if laptop {
-                    // The fold is the middle of the display, so each half keeps clear of it.
-                    VStack(spacing: 18) {
-                        canvas.frame(height: (g.size.height - 18) / 2)
-                        deck
-                    }
+                    // Apple's container for the fold, which knows where the crease is and keeps both halves clear of it.
+                    FoldSplit { canvas } right: { deck }
                 } else if wide {
                     ZStack(alignment: .bottom) {
                         canvas

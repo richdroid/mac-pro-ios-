@@ -115,7 +115,15 @@ struct HistoryView: View {
         }
         .chartXScale(domain: domain)
         .chartYScale(domain: .automatic(includesZero: metric.kind != .temperature))
-        .chartXSelection(value: $picked)
+        // Not the system's chart selection, which takes every touch and stops the page scrolling.
+        .chartOverlay { proxy in
+            GeometryReader { g in
+                Color.clear.holdToScrub { p in
+                    guard let p, let plot = proxy.plotFrame else { picked = nil; return }
+                    picked = proxy.value(atX: p.x - g[plot].minX, as: Date.self)
+                }
+            }
+        }
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { v in
                 AxisGridLine().foregroundStyle(.white.opacity(0.1))
@@ -203,6 +211,7 @@ struct DisplayHoldButton: View {
     let say: (String) -> Void
     @State private var pressing = false
     @State private var wanted: Bool?    // what was asked for, until the Mac agrees
+    @State private var settling: Task<Void, Never>?
     var isOn: Bool { wanted ?? model.status?.displayOn ?? (model.status?.screen != "display off") }
     var body: some View {
         VStack(spacing: 6) {
@@ -220,9 +229,17 @@ struct DisplayHoldButton: View {
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { say("Hold to turn the display \(isOn ? "off" : "on")") }
-        .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 40, perform: toggle, onPressingChanged: { p in
-            pressing = p
-            if p { click(.light) }
+        .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 12, perform: toggle, onPressingChanged: { p in
+            // Only a finger that stays: one passing through on a scroll shouldn't make it react.
+            settling?.cancel()
+            if p {
+                settling = Task {
+                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    if Task.isCancelled { return }
+                    pressing = true
+                    click(.light)
+                }
+            } else { pressing = false }
         })
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Mac display")
