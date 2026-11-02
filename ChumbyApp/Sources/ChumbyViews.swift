@@ -417,10 +417,15 @@ struct HomeTab: View {
     }
     var remote: some View {
         HStack(spacing: 12) {
-            RemoteButton(icon: "moon.fill", label: "Night") { model.cmd("night", "on", "Goodnight") }
+            // Says what it will do next, going by the mode the Chumby is really in.
+            if model.sys.night == 1 {
+                RemoteButton(icon: "sun.max.fill", label: "End night mode") { model.setNight("off", "Good morning") }
+            } else {
+                RemoteButton(icon: "moon.fill", label: "Night mode") { model.setNight("on", "Goodnight") }
+            }
             RemoteButton(icon: "backward.fill", label: "Previous widget", big: true) { model.cmd("prev", nil, "Previous widget") }
             RemoteButton(icon: "forward.fill", label: "Next widget", big: true) { model.cmd("next", nil, "Next widget") }
-            RemoteButton(icon: "sun.max.fill", label: "Wake") { model.cmd("night", "off"); model.cmd("screen", "bright", "Good morning") }
+            RemoteButton(icon: "sun.max", label: "Brighten the screen") { model.cmd("screen", "bright", "Screen bright") }
         }
         .padding(.bottom, 20)
     }
@@ -456,7 +461,7 @@ struct HomeTab: View {
                         HStack { Image(systemName: "tv"); Text(model.state.channel.isEmpty ? "Channel" : model.state.channel).lineLimit(1); Spacer(); Image(systemName: "chevron.up.chevron.down").font(.footnote) }
                     }.foregroundStyle(.tint)
                 }
-                Segments(title: "Night mode", options: [("Off", "off"), ("On", "on"), ("Dim", "dim"), ("Dark", "dark")]) { model.cmd("night", $0, "Night mode \($0)") }
+                NightChooser()
                 Segments(title: "Screen", options: [("Bright", "bright"), ("Dim", "dim"), ("Off", "off")]) { model.cmd("screen", $0, "Screen \($0)") }
             }
             .padding(14).card()
@@ -524,18 +529,36 @@ struct RemoteButton: View {
     }
 }
 
-// A system segmented control that remembers your choice, since the Chumby can't report it.
-// The Chumby can't report these, and other things change them, so they act like buttons rather than remembering a choice.
+// Night mode comes from the Chumby. It can't say which kind of night it's in, so that part is remembered from here.
+struct NightChooser: View {
+    @EnvironmentObject var model: ChumbyModel
+    @AppStorage("nightKind") private var kind = "on"
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Night mode")
+            Picker("Night mode", selection: Binding(get: { model.sys.night == 1 ? kind : "off" }, set: { v in
+                if v != "off" { kind = v }
+                model.setNight(v, v == "off" ? "Night mode off" : "Night mode \(v)")
+            })) {
+                Text("Off").tag("off"); Text("On").tag("on"); Text("Dim").tag("dim"); Text("Dark").tag("dark")
+            }
+            .pickerStyle(.segmented).labelsHidden()
+        }
+    }
+}
+// The Chumby can't report these, and other things change them, so they're plain buttons: a segmented control stays
+// selected, and tapping the selected one again would send nothing.
 struct Segments: View {
     let title: String, options: [(String, String)]
     let action: (String) -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-            Picker(title, selection: Binding(get: { "" }, set: { action($0) })) {
-                ForEach(options, id: \.1) { Text($0.0).tag($0.1) }
+            HStack(spacing: 8) {
+                ForEach(options, id: \.1) { o in
+                    Button { action(o.1) } label: { Text(o.0).frame(maxWidth: .infinity) }.buttonStyle(.bordered)
+                }
             }
-            .pickerStyle(.segmented).labelsHidden()
         }
     }
 }

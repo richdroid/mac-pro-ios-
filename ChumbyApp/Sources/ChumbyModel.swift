@@ -167,6 +167,23 @@ final class ChumbyModel: ObservableObject {
         #endif
     }
     // Respond at once and let the Chumby catch up; only a failure interrupts.
+    // Night mode, as the Chumby reports it, changed at once here so the button answers straight away.
+    func setNight(_ v: String, _ msg: String) {
+        sys.night = v == "off" ? 0 : 1
+        tick()
+        hold(5)
+        say(msg)
+        Task {
+            do {
+                try await api?.cmd("night", v)
+                // Ending night mode also brings the screen back up, one after the other so neither gets lost.
+                if v == "off" { try await api?.cmd("screen", "bright") }
+            } catch {
+                say("The Chumby didn’t get that: \(error.localizedDescription)")
+                sys.night = v == "off" ? 1 : 0
+            }
+        }
+    }
     func cmd(_ c: String, _ v: String? = nil, _ msg: String? = nil) {
         tick()
         hold(5)
