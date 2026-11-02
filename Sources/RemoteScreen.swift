@@ -1,3 +1,4 @@
+import Compression
 import CoreGraphics
 import Foundation
 import SwiftUI
@@ -6,7 +7,7 @@ import UIKit
 #endif
 
 // A native Screen Sharing client. The dashboard's bridge signs in to the Mac, so this side speaks plain RFB over
-// a WebSocket with no login of its own. Raw encoding keeps it simple; only changed areas are sent after the first frame.
+// a WebSocket with no login of its own. It asks for ZRLE, which is far smaller than raw pixels over a slow link.
 // The picture's memory, shared with the image drawn from it, so a new image doesn't copy 15 MB each time.
 final class FrameBuffer {
     let bytes: UnsafeMutableRawPointer
@@ -26,9 +27,12 @@ final class RemoteScreen: ObservableObject {
     @Published var phase = Phase.idle
     @Published var image: CGImage?
     @Published var size = CGSize.zero
+    // Where the Mac's pointer should be, kept here so the picture can follow it.
+    @Published var cursor = CGPoint.zero
 
     private var socket: URLSessionWebSocketTask?
     private var buffer = Data()
+    private var inflater = ZRLEInflater()
     private var frame = FrameBuffer(size: 0)
     private var trailingPublish: Task<Void, Never>?
     // Nothing is drawn while the screen is closed, so nothing is built either.
@@ -114,7 +118,7 @@ final class RemoteScreen: ObservableObject {
         let task = URLSession.shared.webSocketTask(with: request)
         task.maximumMessageSize = 32 << 20
         socket = task
-        buffer = Data(); stage = .version; running = true; phase = image == nil ? .connecting : .reconnecting
+        buffer = Data(); inflater = ZRLEInflater(); stage = .version; running = true; phase = image == nil ? .connecting : .reconnecting
         task.resume()
         Task { await receiveLoop(task, base: base) }
     }
@@ -188,9 +192,10 @@ final class RemoteScreen: ObservableObject {
                 width = be16(head, 0); height = be16(head, 2)
                 frame = FrameBuffer(size: width * height * 4)
                 size = CGSize(width: width, height: height)
-                // 32-bit little-endian BGRA, then raw rectangles only.
+                cursor = CGPoint(x: width / 2, y: height / 2)
+                // 32-bit little-endian BGRA. ZRLE first, moved areas next, raw as the fallback, and being told of a resize.
                 send([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0])
-                send([2, 0, 0, 1, 0, 0, 0, 0])
+                send([2, 0, 0, 4,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33])
                 request(incremental: false)
                 stage = .messages
                 phase = .connected
@@ -216,31 +221,143 @@ final class RemoteScreen: ObservableObject {
     private func readUpdate() throws -> Bool {
         guard buffer.count >= 4 else { return false }
         let count = be16(buffer, 2)
+        // Nothing is touched until the whole update has arrived.
         var at = 4
         for _ in 0..<count {
             guard buffer.count >= at + 12 else { return false }
-            let w = be16(buffer, at + 4), h = be16(buffer, at + 6)
-            guard be32(buffer, at + 8) == 0 else { phase = .failed("Unexpected screen data."); running = false; return false }
-            at += 12 + w * h * 4
+            let w = be16(buffer, at + 4), h = be16(buffer, at + 6), encoding = Int32(truncatingIfNeeded: be32(buffer, at + 8))
+            at += 12
+            switch encoding {
+            case 0: at += w * h * 4
+            case 1: at += 4
+            case 16:
+                guard buffer.count >= at + 4 else { return false }
+                at += 4 + be32(buffer, at)
+            case -223: break
+            default: phase = .failed("Unexpected screen data."); running = false; return false
+            }
             guard buffer.count >= at else { return false }
         }
         var read = 4
         for _ in 0..<count {
             let x = be16(buffer, read), y = be16(buffer, read + 2), w = be16(buffer, read + 4), h = be16(buffer, read + 6)
+            let encoding = Int32(truncatingIfNeeded: be32(buffer, read + 8))
             read += 12
-            let start = buffer.startIndex + read
-            do {
+            switch encoding {
+            case 0:
+                let offset = read
                 buffer.withUnsafeBytes { src in
                     for row in 0..<h where y + row < height && x + w <= width {
-                        memcpy(frame.bytes + ((y + row) * width + x) * 4, src.baseAddress! + (start - buffer.startIndex) + row * w * 4, w * 4)
+                        memcpy(frame.bytes + ((y + row) * width + x) * 4, src.baseAddress! + offset + row * w * 4, w * 4)
                     }
                 }
+                read += w * h * 4
+            case 1:
+                copyRect(fromX: be16(buffer, read), fromY: be16(buffer, read + 2), x: x, y: y, w: w, h: h)
+                read += 4
+            case 16:
+                let length = be32(buffer, read)
+                let offset = read + 4
+                let ok = buffer.withUnsafeBytes { src -> Bool in
+                    guard let pixels = inflater.inflate(src.baseAddress! + offset, count: length) else { return false }
+                    return drawZRLE(pixels, x: x, y: y, w: w, h: h)
+                }
+                guard ok else { phase = .failed("Unexpected screen data."); running = false; return false }
+                read = offset + length
+            default:
+                // The Mac changed resolution: a new picture follows.
+                width = w; height = h
+                frame = FrameBuffer(size: width * height * 4)
+                size = CGSize(width: width, height: height)
             }
-            read += w * h * 4
         }
         buffer = Data(buffer.dropFirst(read))
         publish()
         request(incremental: true)
+        return true
+    }
+    private func copyRect(fromX: Int, fromY: Int, x: Int, y: Int, w: Int, h: Int) {
+        guard fromX + w <= width, fromY + h <= height, x + w <= width, y + h <= height else { return }
+        // Bottom up when moving down, so an overlap isn't overwritten before it's read.
+        let rows = y > fromY ? Array((0..<h).reversed()) : Array(0..<h)
+        for row in rows {
+            memmove(frame.bytes + ((y + row) * width + x) * 4, frame.bytes + ((fromY + row) * width + fromX) * 4, w * 4)
+        }
+    }
+    // ZRLE: 64-pixel tiles in reading order, each solid, raw, palette or run-length, in 3-byte blue, green, red.
+    private func drawZRLE(_ data: UnsafeBufferPointer<UInt8>, x: Int, y: Int, w: Int, h: Int) -> Bool {
+        guard x + w <= width, y + h <= height else { return false }
+        let out = frame.bytes.assumingMemoryBound(to: UInt32.self)
+        var at = 0
+        let end = data.count
+        func pixel() -> UInt32? {
+            guard at + 3 <= end else { return nil }
+            defer { at += 3 }
+            return UInt32(data[at]) | UInt32(data[at + 1]) << 8 | UInt32(data[at + 2]) << 16 | 0xff00_0000
+        }
+        var tileY = 0
+        while tileY < h {
+            let th = min(64, h - tileY)
+            var tileX = 0
+            while tileX < w {
+                let tw = min(64, w - tileX)
+                guard at < end else { return false }
+                let kind = Int(data[at]); at += 1
+                let origin = (y + tileY) * width + x + tileX
+                let total = tw * th
+                func put(_ i: Int, _ c: UInt32) { out[origin + (i / tw) * width + i % tw] = c }
+                switch kind {
+                case 0:
+                    for i in 0..<total { guard let c = pixel() else { return false }; put(i, c) }
+                case 1:
+                    guard let c = pixel() else { return false }
+                    for i in 0..<total { put(i, c) }
+                case 2...16:
+                    var palette = [UInt32](); palette.reserveCapacity(kind)
+                    for _ in 0..<kind { guard let c = pixel() else { return false }; palette.append(c) }
+                    let bits = kind == 2 ? 1 : kind <= 4 ? 2 : 4
+                    for row in 0..<th {
+                        var byte = 0, left = 0
+                        for col in 0..<tw {
+                            if left == 0 { guard at < end else { return false }; byte = Int(data[at]); at += 1; left = 8 }
+                            left -= bits
+                            let index = (byte >> left) & ((1 << bits) - 1)
+                            guard index < kind else { return false }
+                            out[origin + row * width + col] = palette[index]
+                        }
+                    }
+                case 128, 130...255:
+                    var palette = [UInt32]()
+                    if kind != 128 { for _ in 0..<(kind - 128) { guard let c = pixel() else { return false }; palette.append(c) } }
+                    var i = 0
+                    while i < total {
+                        var color: UInt32, run = 1
+                        if kind == 128 {
+                            guard let c = pixel() else { return false }
+                            color = c
+                        } else {
+                            guard at < end else { return false }
+                            let v = Int(data[at]); at += 1
+                            guard v & 127 < palette.count else { return false }
+                            color = palette[v & 127]
+                            if v & 128 == 0 { put(i, color); i += 1; continue }
+                        }
+                        // A run's length is 1 plus every following byte, up to and including the first under 255.
+                        while true {
+                            guard at < end else { return false }
+                            let more = Int(data[at]); at += 1
+                            run += more
+                            if more != 255 { break }
+                        }
+                        guard i + run <= total else { return false }
+                        for _ in 0..<run { put(i, color); i += 1 }
+                    }
+                default: return false
+                }
+                tileX += tw
+            }
+            tileY += th
+        }
         return true
     }
 
@@ -248,10 +365,10 @@ final class RemoteScreen: ObservableObject {
         guard !paused, width > 0 else { return }
         let since = Date().timeIntervalSince(lastPublish)
         // Too soon: come back once, so the last change of a burst is never left undrawn.
-        guard since > 0.08 else {
+        guard since > 0.033 else {
             if trailingPublish == nil {
                 trailingPublish = Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: UInt64((0.085 - since) * 1e9))
+                    try? await Task.sleep(nanoseconds: UInt64((0.036 - since) * 1e9))
                     self?.trailingPublish = nil
                     self?.publish()
                 }
@@ -277,16 +394,41 @@ final class RemoteScreen: ObservableObject {
     }
     func click(x: Int, y: Int, right: Bool = false) {
         let mask: UInt8 = right ? 4 : 1
+        cursor = CGPoint(x: x, y: y)
         pointer(x: x, y: y, buttons: 0); pointer(x: x, y: y, buttons: mask); pointer(x: x, y: y, buttons: 0)
     }
-    func scroll(x: Int, y: Int, up: Bool) {
-        let mask: UInt8 = up ? 8 : 16
-        pointer(x: x, y: y, buttons: mask); pointer(x: x, y: y, buttons: 0)
+    // Moves the pointer, keeping whatever button is held.
+    func move(to p: CGPoint) {
+        cursor = CGPoint(x: max(0, min(size.width - 1, p.x)), y: max(0, min(size.height - 1, p.y)))
+        pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: buttons)
     }
-    func key(_ sym: UInt32) {
-        for down: UInt8 in [1, 0] {
-            send([4, down, 0, 0, UInt8((sym >> 24) & 255), UInt8((sym >> 16) & 255), UInt8((sym >> 8) & 255), UInt8(sym & 255)])
-        }
+    func hold(_ down: Bool) { pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: down ? 1 : 0) }
+    func clickHere(right: Bool = false) { click(x: Int(cursor.x), y: Int(cursor.y), right: right) }
+    private func wheel(_ mask: UInt8) {
+        pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: mask); pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: 0)
+    }
+    func scroll(up: Bool) { wheel(up ? 8 : 16) }
+    func scroll(left: Bool) { wheel(left ? 32 : 64) }
+    func keyEvent(_ sym: UInt32, down: Bool) {
+        send([4, down ? 1 : 0, 0, 0, UInt8((sym >> 24) & 255), UInt8((sym >> 16) & 255), UInt8((sym >> 8) & 255), UInt8(sym & 255)])
+    }
+    func key(_ sym: UInt32) { keyEvent(sym, down: true); keyEvent(sym, down: false) }
+    // A key with modifiers held around it.
+    func key(_ sym: UInt32, with modifiers: [UInt32]) {
+        for m in modifiers { keyEvent(m, down: true) }
+        key(sym)
+        for m in modifiers.reversed() { keyEvent(m, down: false) }
+    }
+    // A stand-in picture, for the build's simulator shots, which have no Mac to connect to.
+    func showSample() {
+        wanted = false
+        let w = 1680, h = 1050
+        guard let c = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else { return }
+        c.setFillColor(CGColor(red: 0.12, green: 0.2, blue: 0.42, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        c.setFillColor(CGColor(red: 0.93, green: 0.93, blue: 0.95, alpha: 1)); c.fill(CGRect(x: 240, y: 200, width: 900, height: 620))
+        c.setFillColor(CGColor(red: 0.78, green: 0.78, blue: 0.82, alpha: 1)); c.fill(CGRect(x: 240, y: 780, width: 900, height: 40))
+        c.setFillColor(CGColor(red: 0.2, green: 0.2, blue: 0.24, alpha: 0.9)); c.fill(CGRect(x: 0, y: 1020, width: w, height: 30))
+        image = c.makeImage(); size = CGSize(width: w, height: h); cursor = CGPoint(x: 700, y: 500); phase = .connected
     }
     func type(_ text: String) {
         for scalar in text.unicodeScalars { key(scalar.value < 256 ? scalar.value : 0x0100_0000 | scalar.value) }
@@ -298,129 +440,41 @@ final class RemoteScreen: ObservableObject {
     }
 }
 
-struct RemoteScreenView: View {
-    let model: AppModel
-    init(model: AppModel) { self.model = model; observed = model.screen }
-    private var screen: RemoteScreen { model.screen }
-    @ObservedObject private var observed: RemoteScreen
-    @Environment(\.scenePhase) private var scene
-    @State private var signingIn = false
-    @State private var zoom: CGFloat = 1
-    @State private var zoomBase: CGFloat = 1
-    @State private var pan = CGSize.zero
-    @State private var panBase = CGSize.zero
-    @State private var rightClick = false
-    @State private var typing = false
-    @State private var text = ""
-
-    var body: some View {
-        VStack(spacing: 0) {
-            GeometryReader { geo in
-                ZStack {
-                    Color.black
-                    if let image = screen.image {
-                        let fit = min(geo.size.width / screen.size.width, geo.size.height / screen.size.height)
-                        let drawn = CGSize(width: screen.size.width * fit, height: screen.size.height * fit)
-                        Image(decorative: image, scale: 1)
-                            .resizable()
-                            .frame(width: drawn.width, height: drawn.height)
-                            .contentShape(Rectangle())
-                            .onTapGesture { p in
-                                screen.click(x: Int(p.x / fit), y: Int(p.y / fit), right: rightClick)
-                                rightClick = false
-                            }
-                            .scaleEffect(zoom)
-                            .offset(pan)
-                            .gesture(MagnificationGesture()
-                                .onChanged { zoom = max(1, min(6, zoomBase * $0)) }
-                                .onEnded { _ in zoomBase = zoom; if zoom == 1 { pan = .zero; panBase = .zero } })
-                            .simultaneousGesture(DragGesture(minimumDistance: 12)
-                                .onChanged { v in
-                                    guard zoom > 1 else { return }
-                                    pan = CGSize(width: panBase.width + v.translation.width, height: panBase.height + v.translation.height)
-                                }
-                                .onEnded { v in
-                                    if zoom > 1 { panBase = pan }
-                                    else if abs(v.translation.height) > 20 {
-                                        screen.scroll(x: Int(v.startLocation.x / fit), y: Int(v.startLocation.y / fit), up: v.translation.height > 0)
-                                    }
-                                })
-                    }
-                    status
-                }
-                .clipped()
+// One zlib stream runs across a whole connection, and each rectangle is the next stretch of it.
+final class ZRLEInflater {
+    private var stream = compression_stream(dst_ptr: UnsafeMutablePointer<UInt8>(bitPattern: 1)!, dst_size: 0, src_ptr: UnsafePointer<UInt8>(bitPattern: 1)!, src_size: 0, state: nil)
+    private var ready = false
+    private var skipHeader = 2       // Apple's decoder takes raw deflate, without zlib's 2-byte header
+    private var output = [UInt8](repeating: 0, count: 1 << 20)
+    deinit { if ready { compression_stream_destroy(&stream) } }
+    // The pixels stay valid until the next call.
+    func inflate(_ source: UnsafeRawPointer, count: Int) -> UnsafeBufferPointer<UInt8>? {
+        if !ready {
+            guard compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else { return nil }
+            ready = true
+        }
+        var src = source.assumingMemoryBound(to: UInt8.self), left = count
+        if skipHeader > 0 {
+            let skip = min(skipHeader, left)
+            src += skip; left -= skip; skipHeader -= skip
+        }
+        stream.src_ptr = src
+        stream.src_size = left
+        var produced = 0
+        while true {
+            if output.count - produced < 1 << 18 { output.append(contentsOf: repeatElement(0, count: output.count)) }
+            let room = output.count - produced
+            let status: compression_status = output.withUnsafeMutableBufferPointer { b in
+                stream.dst_ptr = b.baseAddress! + produced
+                stream.dst_size = room
+                return compression_stream_process(&stream, 0)
             }
-            toolbar
+            guard status != COMPRESSION_STATUS_ERROR else { return nil }
+            let made = room - stream.dst_size
+            produced += made
+            // Input can run out with output still inside the decoder, so it's only done once it has nothing more to give.
+            if status == COMPRESSION_STATUS_END || (stream.src_size == 0 && made == 0) { break }
         }
-        .navigationTitle("Screen")
-        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { model.screenOpen = false } } }
-        .onAppear {
-            screen.open(base: model.api.base)
-            keepAwake(true)
-        }
-        .onDisappear {
-            screen.close()
-            keepAwake(false)
-        }
-        .onChange(of: scene) { _, p in
-            if p == .background { screen.enteredBackground() }
-            if p == .active { screen.enteredForeground() }
-        }
-        .sheet(isPresented: $signingIn) {
-            LoginSheet { u, p in
-                screen.fillLogin(username: u, password: p)
-                return nil
-            }
-        }
-        .alert("Type on Mac", isPresented: $typing) {
-            TextField("Text", text: $text)
-            Button("Send") { screen.type(text); text = "" }
-            Button("Send + Return") { screen.type(text); screen.key(0xff0d); text = "" }
-            Button("Cancel", role: .cancel) { text = "" }
-        }
-    }
-
-    // Watching doesn't count as touching, so keep the iPhone's display on while the Mac's screen is open.
-    private func keepAwake(_ on: Bool) {
-        #if canImport(UIKit)
-        UIApplication.shared.isIdleTimerDisabled = on
-        #endif
-    }
-
-    @ViewBuilder private var status: some View {
-        switch screen.phase {
-        case .connecting: ProgressView("Connecting…").tint(.white).foregroundStyle(.white)
-        case .reconnecting:
-            VStack {
-                Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath").font(.footnote.weight(.medium)).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 6).background(.black.opacity(0.65), in: Capsule()).padding(.top, 10)
-                Spacer()
-            }
-        case .needsLogin: Text("Log in to this Mac on the Control tab first.").foregroundStyle(.white).padding()
-        case .failed(let m):
-            VStack(spacing: 10) {
-                Text(m).foregroundStyle(.white)
-                Button("Try Again") { screen.connect(base: model.api.base) }.buttonStyle(.borderedProminent)
-            }.padding()
-        default: EmptyView()
-        }
-    }
-
-    private var toolbar: some View {
-        HStack {
-            Button { typing = true } label: { Label("Type", systemImage: "keyboard") }
-            Spacer()
-            Button { signingIn = true } label: { Label("Sign in", systemImage: "key.fill") }
-            Spacer()
-            Button { screen.key(0xff0d) } label: { Label("Return", systemImage: "return") }
-            Spacer()
-            Button { screen.key(0xff1b) } label: { Label("Esc", systemImage: "escape") }
-            Spacer()
-            Button { rightClick.toggle() } label: { Label("Right-click", systemImage: rightClick ? "cursorarrow.rays" : "cursorarrow") }
-            Spacer()
-            Button { zoom = 1; zoomBase = 1; pan = .zero; panBase = .zero } label: { Label("Fit", systemImage: "arrow.down.right.and.arrow.up.left") }
-        }
-        .labelStyle(.iconOnly)
-        .font(.title3)
-        .padding(.horizontal, 22).padding(.vertical, 12)
+        return output.withUnsafeBufferPointer { UnsafeBufferPointer(start: $0.baseAddress, count: produced) }
     }
 }

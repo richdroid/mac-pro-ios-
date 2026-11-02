@@ -16,7 +16,7 @@ struct MacProApp: App {
         }
     }
     private func openScreenIfAsked() {
-        if ScreenRequest.wanted { ScreenRequest.wanted = false; model.screenOpen = true }
+        if ScreenRequest.wanted || UserDefaults.standard.bool(forKey: "openScreen") { ScreenRequest.wanted = false; model.screenOpen = true }
     }
 }
 

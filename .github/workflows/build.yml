@@ -68,6 +68,10 @@ jobs:
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-history$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "Mac Pro history was not running"
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose screen -openScreen YES
+            sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-screen$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "Mac Pro screen was not running"
             for POSE in browse flick lift; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab 1 -pose $POSE
               sleep 8
@@ -93,6 +97,10 @@ jobs:
           }
           # One screen per app, for the poses that get less attention.
           pose_shots() { # display, file suffix
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose screen -openScreen YES
+            sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-screen$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             for P in "Chumby 1 9000" "TV 0 9002" "TV 1 9002" "MacPro 3 9001"; do
               read -r APP TAB PORT <<< "$P"
               xcrun simctl launch "$DEVICE" local.macpro.$APP -address http://127.0.0.1:$PORT -tab $TAB
