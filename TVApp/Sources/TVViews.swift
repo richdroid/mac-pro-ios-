@@ -741,6 +741,7 @@ struct PlayingTab: View {
                 Image(systemName: s.playing ? "play.tv.fill" : "pause.circle").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
                 Text(s.description.first ?? "Playing").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                 Text(model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg).font(.subheadline).foregroundStyle(.secondary)
+                if s.position != nil { VideoProgress(session: s).padding(.horizontal, 4) }
                 HStack(spacing: 18) {
                     if s.pkg == "com.stremio.one" {
                         // Its player ignores the skip keys, so the bridge moves its seek bar instead.
@@ -908,5 +909,83 @@ struct FilmsTab: View {
         }
         .refreshable { await model.loadFilms(force: true) }
         .task(id: model.tab) { if model.tab == 3 { await model.loadFilms() } }
+    }
+}
+
+// Where a film or video is, ticking along while it plays. Slide along it, or tap a spot, to jump there on the TV.
+struct VideoProgress: View {
+    @EnvironmentObject var model: TVModel
+    let session: TVStatus.Session
+    @State private var scrub: Double?
+    @State private var across: Bool?
+    @State private var seeking = false
+    var duration: Double { session.duration ?? 0 }
+    var canSeek: Bool { session.canSeek == true && duration > 0 && !seeking }
+    func position(at date: Date) -> Double {
+        let base = session.position ?? 0
+        guard session.playing, let at = session.sampledAt else { return base }
+        let now = base + max(0, date.timeIntervalSince1970 * 1000 - at)
+        return duration > 0 ? min(now, duration) : now
+    }
+    func clock(_ ms: Double) -> String {
+        let t = Int(max(0, ms) / 1000)
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
+    }
+    func seek(to ms: Double) {
+        seeking = true
+        model.tick()
+        Task {
+            do { try await TVBridge.post("player-seek-to", ["ms": Int(ms)], timeout: 60); await model.load() }
+            catch { model.say("Couldn’t move there") }
+            withAnimation(.snappy) { scrub = nil; seeking = false }
+        }
+    }
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let now = position(at: ctx.date), shown = scrub ?? now
+            VStack(spacing: 6) {
+                if duration > 0 {
+                    GeometryReader { g in
+                        let f = min(1, max(0, shown / duration)), thick: CGFloat = scrub == nil ? 6 : 10
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.white.opacity(0.18)).frame(height: thick)
+                            Capsule().fill(seeking ? AnyShapeStyle(.white.opacity(0.6)) : AnyShapeStyle(TVLook.accent)).frame(width: max(thick, g.size.width * f), height: thick)
+                        }
+                        .frame(maxHeight: .infinity)
+                        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: thick)
+                        .contentShape(Rectangle())
+                        // Only a sideways slide moves it, so scrolling the page past it never does.
+                        .gesture(DragGesture(minimumDistance: 6)
+                            .onChanged { v in
+                                guard canSeek else { return }
+                                if across == nil { across = abs(v.translation.width) > abs(v.translation.height) }
+                                if across == true { scrub = duration * min(1, max(0, v.location.x / g.size.width)) }
+                            }
+                            .onEnded { _ in
+                                if across == true, let t = scrub { seek(to: t) } else { scrub = nil }
+                                across = nil
+                            })
+                        .onTapGesture { p in if canSeek { scrub = duration * min(1, max(0, p.x / g.size.width)); seek(to: scrub!) } }
+                    }
+                    .frame(height: 28)
+                    .sensoryFeedback(.selection, trigger: scrub.map { Int($0 / 10000) })
+                }
+                HStack {
+                    Text(clock(shown))
+                    Spacer()
+                    if seeking { Text("Moving there on the TV…").foregroundStyle(TVLook.accent) }
+                    Spacer()
+                    if duration > 0 { Text("-" + clock(duration - shown)) }
+                }
+                .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Position")
+        .accessibilityValue(duration > 0 ? "\(clock(position(at: Date()))) of \(clock(duration))" : clock(position(at: Date())))
+        .accessibilityAdjustableAction { dir in
+            guard canSeek else { return }
+            seek(to: position(at: Date()) + (dir == .increment ? 30000 : -30000))
+        }
     }
 }

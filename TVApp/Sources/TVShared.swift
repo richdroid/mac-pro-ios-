@@ -14,7 +14,11 @@ extension Image { init(tv i: NSImage) { self.init(nsImage: i) } }
 
 struct TVStatus: Decodable, Equatable {
     struct Music: Decodable, Equatable { let title: String; let artist: String; let album: String; let art: String; let playing: Bool; let position: Double; let duration: Double; let sampledAt: Double }
-    struct Session: Decodable, Equatable { let pkg: String; let playing: Bool; let description: [String] }
+    struct Session: Decodable, Equatable {
+        let pkg: String; let playing: Bool; let description: [String]
+        // Where it is when the Mac looked, in ms, and on the Mac's clock; how long it runs if known; whether it can jump.
+        var position: Double?; var sampledAt: Double?; var duration: Double?; var canSeek: Bool?
+    }
     struct App: Decodable, Identifiable, Equatable { let pkg: String; let name: String; let hasIcon: Bool; var wide: Bool?; var id: String { pkg } }
     let online: Bool
     var screen: String?
