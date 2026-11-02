@@ -51,7 +51,10 @@ struct RootView: View {
             TabView(selection: $model.tab) {
                 Tab(value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
                 Tab(value: 1) { Page(title: "Apps") { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
-                Tab(value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() } } label: { tabLabel("Playing", "play.circle") }
+                Tab(value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() } } label: {
+                    // The cover of what's on, so the button says what's playing before it's pressed.
+                    if let i = PlayingIcon.image(model) { Label { Text("Playing") } icon: { Image(tv: i) } } else { tabLabel("Playing", "play.circle") }
+                }
                 Tab(value: 3) { Page(title: "Films") { FilmsTab() } } label: { tabLabel("Films", "film") }
                 Tab(value: 5) { Page(title: "Status") { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
             }
@@ -96,7 +99,7 @@ struct Page<C: View>: View {
     var body: some View {
         NavigationStack {
             content()
-                .background { Wall(art: model.status?.music?.art) }
+                .background { Ambience() }
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(alwaysInline || panes ? .inline : .large)
@@ -190,7 +193,7 @@ struct RowList<Content: View>: View {
         List { content().listRowBackground(Color.clear) }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .background { Wall(art: model.status?.music?.art) }
+            .background { Ambience() }
             .toolbarBackground(.hidden, for: .navigationBar)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
@@ -999,5 +1002,68 @@ struct VideoProgress: View {
             guard canSeek else { return }
             seek(to: position(at: Date()) + (dir == .increment ? 30000 : -30000))
         }
+    }
+}
+
+// Behind every page: what's on the TV, heavily blurred, washed with the colour of wherever you are. An app brings its own
+// colour, a picked film or album brings its cover's, and with nothing picked the colour comes from what's playing.
+struct Ambience: View {
+    @EnvironmentObject var model: TVModel
+    @State private var small: TVImage?
+    @State private var artTint: Color?
+    var art: String? {
+        let video = model.status?.session.map { $0.pkg != "com.codex.musicwebtv" } ?? false
+        return video ? (model.lastArt ?? model.status?.music?.art) : (model.status?.music?.art ?? model.lastArt)
+    }
+    var tint: Color { model.mood ?? artTint ?? Color(hex: 0x4A1A5C) }
+    var body: some View {
+        ZStack {
+            Color.black
+            if let small {
+                Color.clear
+                    .overlay { Image(tv: small).resizable().interpolation(.high).scaledToFill().opacity(0.55) }
+                    .clipped().transition(.opacity)
+            }
+            LinearGradient(colors: [tint.opacity(0.8), tint.opacity(0.45), .black.opacity(0.75)], startPoint: .topLeading, endPoint: .bottom)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .animation(.easeInOut(duration: 0.7), value: small)
+        .animation(.easeInOut(duration: 0.7), value: tint)
+        .task(id: art) {
+            guard let art, let u = URL(string: art), let i = await ImageStore.shared.load(u) else { small = nil; artTint = nil; return }
+            artTint = await ImageStore.shared.band(u)
+            // Shrunk to a few pixels and stretched back: a heavy blur that costs nothing while scrolling.
+            #if canImport(UIKit)
+            small = UIGraphicsImageRenderer(size: CGSize(width: 6, height: 6)).image { _ in i.draw(in: CGRect(x: 0, y: 0, width: 6, height: 6)) }
+            #else
+            small = i
+            #endif
+        }
+    }
+}
+
+// The Playing tab's icon: the cover of what's on, as a small rounded picture, or the plain symbol when nothing is.
+struct PlayingIcon {
+    // Drawn once per cover; the root redraws on every status.
+    @MainActor private static var made: (String, TVImage)?
+    @MainActor static func image(_ model: TVModel) -> TVImage? {
+        #if canImport(UIKit)
+        let video = model.status?.session.map { $0.pkg != "com.codex.musicwebtv" } ?? false
+        guard let s = video ? (model.lastArt ?? model.status?.music?.art) : model.status?.music?.art,
+              let u = URL(string: s), let i = ImageStore.shared.cached(u) else { return nil }
+        if let made, made.0 == s { return made.1 }
+        let side: CGFloat = 26
+        let f = UIGraphicsImageRendererFormat(); f.scale = 3
+        let icon = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: f).image { _ in
+            UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: side, height: side), cornerRadius: 6).addClip()
+            let k = max(side / i.size.width, side / i.size.height)
+            i.draw(in: CGRect(x: (side - i.size.width * k) / 2, y: (side - i.size.height * k) / 2, width: i.size.width * k, height: i.size.height * k))
+        }.withRenderingMode(.alwaysOriginal)
+        made = (s, icon)
+        return icon
+        #else
+        return nil
+        #endif
     }
 }

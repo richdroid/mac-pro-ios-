@@ -17,6 +17,10 @@ final class TVModel: ObservableObject {
     @Published var friends: [Film] = []
     @Published var recommended: [Film] = []
     @Published var flicking: FlickTarget?
+    // The colour of wherever you are: an app's own, or whatever you've picked. Nil lets what's playing set it.
+    @Published var mood: Color?
+    // The cover of the last thing flicked, for when the TV's player has none of its own to show.
+    @Published var lastArt: String?
     // The flick screen brings itself in and out, so the system's slide stays out of it.
     func flick(_ target: FlickTarget) {
         var t = Transaction(); t.disablesAnimations = true

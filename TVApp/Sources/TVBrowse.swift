@@ -22,6 +22,8 @@ enum MediaSource: String, CaseIterable, Identifiable {
     static func of(pkg: String) -> MediaSource? { allCases.first { $0.pkg == pkg } }
     var prompt: String { self == .mint ? "Search music" : "Search films and series" }
     var coverAspect: CGFloat { self == .mint ? 1 : 2.0 / 3 }
+    // Each app's own colour, for the page behind it.
+    var mood: Color { self == .mint ? Color(hex: 0x1F9E78) : Color(hex: 0x6A3FD0) }
     var cardWidth: CGFloat { self == .mint ? 150 : 124 }
     func endpoint(_ q: String) -> String {
         let term = q.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""

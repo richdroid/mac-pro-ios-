@@ -52,7 +52,7 @@ extension MediaItem {
 
 struct FlickScreen: View {
     @EnvironmentObject var model: TVModel
-    enum Step: Int { case episodes, streams, flick }
+    enum Step: Int { case episodes, streams, flick, control }
     let target: FlickTarget
     @State private var step: Step
     @State private var forward = true
@@ -83,6 +83,11 @@ struct FlickScreen: View {
     // Quarter steps of the way to the TV, each felt as a tick.
     @State private var detent = 0
     @State private var demoHeld = false
+    // The TV's answer: a flash and a tick on its screen, then the screen grows into its controls.
+    @State private var successes = 0
+    @State private var morphing = false
+    @State private var priorMood: Color??
+    @Namespace private var screenSpace
     // Follows the finger exactly, with nothing in between.
     @State private var drag = UserDefaults.standard.string(forKey: "pose") == "lift" ? CGSize(width: 18, height: -190) : .zero
     // Tells a touch the system took away from one that ended, so the card can't get stuck raised.
@@ -122,13 +127,14 @@ struct FlickScreen: View {
         case .episodes: return nil
         case .streams: return isSeries ? .episodes : nil
         case .flick: return target.send != nil || source != .stremio || item.stremioRef == nil || flown ? nil : isSeries && episode == nil ? .episodes : .streams
+        case .control: return nil
         }
     }
     var next: Step? {
         switch step {
         case .episodes: return episode == nil ? nil : .streams
         case .streams: return .flick
-        case .flick: return nil
+        case .flick, .control: return nil
         }
     }
     func go(_ to: Step) {
@@ -150,6 +156,7 @@ struct FlickScreen: View {
                         case .episodes: episodesStep.transition(slide)
                         case .streams: streamsStep.transition(slide)
                         case .flick: flickStep(g.size).transition(slide)
+                        case .control: controlStep(g.size).transition(.opacity)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -170,6 +177,10 @@ struct FlickScreen: View {
         .sensoryFeedback(.impact(weight: .heavy, intensity: 1), trigger: impacts)
         .task {
             withAnimation(.spring(response: 0.55, dampingFraction: 0.8)) { arrived = true }
+            // The app behind takes on the picked thing's colour too, and gets its own back after.
+            if priorMood == nil { priorMood = .some(model.mood) }
+            let art = item.art
+            Task { if let u = URL(string: art), let c = await ImageStore.shared.band(u), !flown || step == .control { model.mood = c } }
             if Self.pose == "flickdemo" { Task { await demo() } }
             // Side by side, so a slow description doesn't hold up the streams.
             async let details: Void = loadMeta()
@@ -178,7 +189,9 @@ struct FlickScreen: View {
         }
     }
     var slide: AnyTransition {
-        .asymmetric(insertion: .move(edge: forward ? .trailing : .leading).combined(with: .opacity),
+        // Into the controls the TV itself carries on, so everything else just fades.
+        if morphing { return .opacity }
+        return .asymmetric(insertion: .move(edge: forward ? .trailing : .leading).combined(with: .opacity),
                     removal: .move(edge: forward ? .leading : .trailing).combined(with: .opacity))
     }
 
@@ -213,7 +226,7 @@ struct FlickScreen: View {
         if let next, step != .flick {
             ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right") } }
         }
-        ToolbarItem(placement: .cancellationAction) { Button { leave() } label: { Label("Close", systemImage: "xmark") }.disabled(flown) }
+        ToolbarItem(placement: .cancellationAction) { Button { leave() } label: { Label(step == .control ? "Done" : "Close", systemImage: step == .control ? "checkmark" : "xmark") }.disabled(flown && step != .control) }
     }
 
     var heading: some View {
@@ -368,6 +381,61 @@ struct FlickScreen: View {
             .padding(.bottom, 22)
         }
     }
+    // After the flick: the TV's screen, grown, with what's playing on it and the controls for it.
+    func controlStep(_ size: CGSize) -> some View {
+        let w = min(size.width - 48, 520)
+        let session = model.status?.session, music = model.status?.music
+        let isMusic = session == nil || session?.pkg == "com.codex.musicwebtv"
+        return ScrollView {
+            VStack(spacing: 18) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.black.opacity(0.6))
+                    Group {
+                        if let image = target.image { image.resizable().scaledToFill() }
+                        else { Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(white: 0.15) } }
+                    }
+                }
+                .frame(width: w, height: w * 9 / 16)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .matchedGeometryEffect(id: "screen", in: screenSpace)
+                .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.25), lineWidth: 1) }
+                .shadow(color: TVLook.accent.opacity(0.45), radius: 26)
+                VStack(spacing: 4) {
+                    Text(isMusic ? (music?.title ?? shown.title) : (session?.description.first ?? shown.title)).font(.title2.weight(.bold)).lineLimit(2)
+                    Text(isMusic ? (music.map { "\($0.artist) · \($0.album)" } ?? shown.subtitle) : (session?.description.dropFirst().first ?? shown.subtitle))
+                        .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                }
+                .multilineTextAlignment(.center)
+                .contentTransition(.opacity)
+                if let session, !isMusic, session.position != nil { VideoProgress(session: session).frame(maxWidth: w) }
+                HStack(spacing: 22) {
+                    if session?.pkg == "com.stremio.one" {
+                        controlButton("gobackward.10", "Back 10 seconds") { model.post("player-seek", ["forward": false]) }
+                        PlayKey(playing: session?.playing, tint: .white, size: 74)
+                        controlButton("goforward.10", "Forward 10 seconds") { model.post("player-seek", ["forward": true]) }
+                    } else {
+                        GlassKey(icon: "backward.fill", label: "Previous", key: "previous", size: 56)
+                        PlayKey(playing: isMusic ? music?.playing : session?.playing, tint: .white, size: 74)
+                        GlassKey(icon: "forward.fill", label: "Next", key: "next", size: 56)
+                    }
+                }
+                Button { model.tab = 0; leave() } label: { Label("Remote", systemImage: "av.remote").font(.subheadline.weight(.semibold)).padding(.horizontal, 18).frame(height: 44) }
+                    .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
+            }
+            .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 24)
+            .frame(maxWidth: .infinity)
+        }
+        .environment(\.keysInScroll, true)
+        // Kept current while it's open, so the bar and the buttons follow the TV.
+        .task { while !Task.isCancelled { try? await Task.sleep(nanoseconds: 2_000_000_000); await model.load() } }
+    }
+    func controlButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button { model.tick(); action() } label: {
+            Image(systemName: icon).font(.system(size: 22, weight: .medium)).frame(width: 56, height: 56).contentShape(Circle())
+        }
+        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
+    }
+
     // What the TV is doing with it, under the TV.
     var status: some View {
         HStack(spacing: 7) {
@@ -404,12 +472,16 @@ struct FlickScreen: View {
                     .transition(.scale(scale: 1.3).combined(with: .opacity))
                 }
                 if sending { TVWaiting().transition(.opacity) }
+                if done { TVTick().transition(.scale(scale: 0.5).combined(with: .opacity)) }
+                TVFlash(trigger: successes)
             }
             .frame(width: 168, height: 94.5)
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .matchedGeometryEffect(id: "screen", in: screenSpace)
             .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.3 + 0.5 * charge), lineWidth: 1.5) }
             .shadow(color: TVLook.accent.opacity(0.75 * charge), radius: 10 + 18 * charge)
             .overlay { TVRipple(trigger: impacts) }
+            .overlay { TVRipple(trigger: successes) }
             // It leans in to meet the card, then gives as the card hits.
             .scaleEffect(1 + 0.09 * charge)
             .keyframeAnimator(initialValue: CGFloat(1), trigger: impacts) { c, s in c.scaleEffect(s) } keyframes: { _ in
@@ -506,6 +578,7 @@ struct FlickScreen: View {
         send(flicked: CGSize(width: -60, height: -1900))
     }
     func leave() {
+        if let prior = priorMood { model.mood = prior }
         withAnimation(.easeOut(duration: 0.2)) { arrived = false }
         Task {
             try? await Task.sleep(nanoseconds: 200_000_000)
@@ -557,9 +630,13 @@ struct FlickScreen: View {
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 #endif
-                withAnimation { sending = false; done = true; note = source == .mint || stream != nil || item.stremioRef == nil || target.send != nil ? "Playing on the TV" : "On the TV. Pick a stream with the remote." }
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
-                leave()
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.6)) { sending = false; done = true; note = source == .mint || stream != nil || item.stremioRef == nil || target.send != nil ? "Playing on the TV" : "On the TV. Pick a stream with the remote." }
+                successes += 1
+                if !item.art.isEmpty { model.lastArt = item.art }
+                Task { await model.load() }
+                try? await Task.sleep(nanoseconds: 950_000_000)
+                morphing = true
+                withAnimation(.spring(response: 0.62, dampingFraction: 0.84)) { step = .control }
             } catch {
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -595,6 +672,32 @@ private struct TVWaiting: View {
                     .frame(maxHeight: .infinity, alignment: .bottom)
             }
         }
+    }
+}
+
+// The TV saying yes: a tick on its screen.
+private struct TVTick: View {
+    @State private var on = false
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.4)
+            Image(systemName: "checkmark.circle.fill").font(.system(size: 36, weight: .semibold))
+                .symbolRenderingMode(.palette).foregroundStyle(.black, TVLook.accent)
+                .symbolEffect(.bounce, value: on)
+        }
+        .onAppear { on = true }
+    }
+}
+// A flash across the TV's screen as it takes something on.
+private struct TVFlash: View {
+    let trigger: Int
+    var body: some View {
+        Color.white
+            .keyframeAnimator(initialValue: 0.0, trigger: trigger) { c, o in c.opacity(o) } keyframes: { _ in
+                LinearKeyframe(0.75, duration: 0.07)
+                CubicKeyframe(0, duration: 0.5)
+            }
+            .allowsHitTesting(false)
     }
 }
 
@@ -704,7 +807,9 @@ struct AppBrowse: View {
                 BrowseColumn(store: .shared(source))
             }
         }
-        .background { Wall(art: model.status?.music?.art) }
+        .background { Ambience() }
+        .onAppear { model.mood = source.mood }
+        .onDisappear { if model.mood == source.mood { model.mood = nil } }
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationTitle(source.name)
         .navigationBarTitleDisplayMode(.inline)
