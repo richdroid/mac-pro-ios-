@@ -704,7 +704,8 @@ struct PlayingTab: View {
     var music: TVStatus.Music? { model.status?.music }
     var otherAppIsActive: Bool {
         guard let s = model.status?.session, s.pkg != "com.codex.musicwebtv" else { return false }
-        return s.playing || music == nil || music?.playing == false
+        // A paused player only counts if it's the app in front, or a song would lose out to something long since left.
+        return s.playing || music == nil || s.pkg == model.status?.app
     }
     var now: some View {
         VStack(spacing: 14) {

@@ -339,8 +339,8 @@ struct TVBoxEntry: TimelineEntry {
         let u = Int(info?.uptime ?? 0), d = u / 86400, h = u / 3600 % 24, m = u / 60 % 60
         return d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m"
     }
-    var state: String { !reachable ? "Can’t reach it" : screen == "asleep" ? "Asleep" : screen == "screensaver" ? "Screensaver" : "Awake" }
-    var dot: Color { !reachable ? .orange : screen == "asleep" ? .gray : .green }
+    var state: String { !reachable ? "Can’t reach it" : screen == "asleep" ? "Asleep" : screen == "screensaver" ? "Screensaver" : screen == "on" ? "Awake" : "Online" }
+    var dot: Color { !reachable ? .orange : screen == "on" || screen == "screensaver" ? .green : .gray }
     var memory: Double { (info?.memTotal ?? 0) > 0 ? info!.memUsed / info!.memTotal : 0 }
     var storage: Double { (info?.diskTotal ?? 0) > 0 ? info!.diskUsed / info!.diskTotal : 0 }
     var fahrenheit: Int { Int(((info?.tempC ?? 0) * 9 / 5 + 32).rounded()) }

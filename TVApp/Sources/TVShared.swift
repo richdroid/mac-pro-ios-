@@ -45,7 +45,7 @@ enum TVBridge {
     static func url(_ path: String) -> URL? { URL(string: address.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) }
     struct Gone: Error {}
     @discardableResult
-    static func post(_ path: String, _ body: [String: Any] = [:], timeout: TimeInterval = 12) async throws -> Data {
+    static func post(_ path: String, _ body: [String: Any] = [:], timeout: TimeInterval = 30) async throws -> Data {
         guard let u = url("/api/tv/" + path), let base = URL(string: address) else { throw URLError(.badURL) }
         var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = timeout
         r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")

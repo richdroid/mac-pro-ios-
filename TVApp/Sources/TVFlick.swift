@@ -43,6 +43,8 @@ struct FlickScreen: View {
     @State private var step: Step
     @State private var forward = true
     @State private var meta: StremioMeta?
+    @State private var metaFailed = false
+    @State private var lookups = 0
     @State private var season = 0
     @State private var episode: StremioEpisode?
     @State private var streams: [StremioStream] = []
@@ -91,7 +93,7 @@ struct FlickScreen: View {
         switch step {
         case .episodes: return nil
         case .streams: return isSeries ? .episodes : nil
-        case .flick: return target.send != nil || source != .stremio || item.stremioRef == nil || flown ? nil : .streams
+        case .flick: return target.send != nil || source != .stremio || item.stremioRef == nil || flown ? nil : isSeries && episode == nil ? .episodes : .streams
         }
     }
     var next: Step? {
@@ -104,6 +106,7 @@ struct FlickScreen: View {
     func go(_ to: Step) {
         model.tick()
         forward = to.rawValue > step.rawValue
+        if !flown { note = nil }
         withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { step = to }
         if to == .streams && streams.isEmpty { Task { await findStreams() } }
     }
@@ -131,8 +134,10 @@ struct FlickScreen: View {
         .sensoryFeedback(.impact(weight: .medium, intensity: 0.8), trigger: armed) { _, now in now && touching }
         .task {
             withAnimation(.easeOut(duration: 0.22)) { arrived = true }
-            await loadMeta()
+            // Side by side, so a slow description doesn't hold up the streams.
+            async let details: Void = loadMeta()
             if step == .streams && streams.isEmpty { await findStreams() }
+            await details
         }
     }
     var slide: AnyTransition {
@@ -231,8 +236,16 @@ struct FlickScreen: View {
     var episodesStep: some View {
         page {
             heading
-            if seasons.isEmpty {
+            if seasons.isEmpty && !metaFailed {
                 ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
+            } else if seasons.isEmpty {
+                // No episode list is no reason to be stuck: the TV can still open the series.
+                Text("Couldn’t load the episodes.").font(.subheadline).foregroundStyle(.secondary).padding(.top, 8)
+                Button("Try again") { metaFailed = false; Task { await loadMeta() } }.font(.subheadline.weight(.medium)).tint(TVLook.accent)
+                row(selected: false) { go(.flick) } label: {
+                    Image(systemName: "tv").foregroundStyle(TVLook.accent).frame(width: 28)
+                    Text("Open the series on the TV").font(.subheadline.weight(.semibold))
+                }
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -291,14 +304,17 @@ struct FlickScreen: View {
     func findStreams() async {
         guard let ref = item.stremioRef else { return }
         findingStreams = true; noStreams = false
-        defer { findingStreams = false }
+        lookups += 1
+        let mine = lookups
+        // Only the newest lookup decides when the spinner stops.
+        defer { if mine == lookups { findingStreams = false } }
         let chosen = episode
         let video = chosen?.id ?? ref.imdb
         let term = video.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? video
         struct Answer: Decodable { let streams: [StremioStream] }
         let d = await TVBridge.data(TVBridge.url("/api/tv/streams?type=\(ref.type)&id=\(ref.imdb)&video=\(term)"), timeout: 25)
         // These tokens play the episode they were asked for, so an answer for another one is thrown away.
-        guard episode == chosen else { return }
+        guard episode == chosen, mine == lookups else { return }
         guard let d, let a = try? JSONDecoder().decode(Answer.self, from: d), !a.streams.isEmpty else { noStreams = true; return }
         withAnimation { streams = a.streams }
     }
@@ -397,9 +413,9 @@ struct FlickScreen: View {
     }
 
     func loadMeta() async {
-        guard source == .stremio, target.send == nil, let ref = item.stremioRef,
-              let d = await TVBridge.data(TVBridge.url("/api/tv/stremio-meta?type=\(ref.type)&id=\(ref.imdb)"), timeout: 15),
-              let m = try? JSONDecoder().decode(StremioMeta.self, from: d) else { return }
+        guard source == .stremio, target.send == nil, let ref = item.stremioRef else { return }
+        guard let d = await TVBridge.data(TVBridge.url("/api/tv/stremio-meta?type=\(ref.type)&id=\(ref.imdb)"), timeout: 15),
+              let m = try? JSONDecoder().decode(StremioMeta.self, from: d), !(ref.type == "series" && m.episodes.isEmpty) else { metaFailed = true; return }
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
             meta = m
             // A card that's part way through a series starts on that episode.
@@ -484,9 +500,13 @@ struct TrackSheet: View {
     func load(_ lang: String? = nil) async {
         working = true; failed = false
         defer { working = false }
-        var path = "/api/tv/player-tracks?kind=\(kind.id)"
-        if let lang, let term = lang.addingPercentEncoding(withAllowedCharacters: .alphanumerics) { path += "&lang=\(term)" }
-        guard let d = await TVBridge.data(TVBridge.url(path), timeout: 30), let m = try? JSONDecoder().decode(TrackMenu.self, from: d) else { failed = menu == nil; return }
+        var body: [String: Any] = ["kind": kind.id]
+        if let lang { body["lang"] = lang }
+        guard let d = try? await TVBridge.post("player-tracks", body, timeout: 45), let m = try? JSONDecoder().decode(TrackMenu.self, from: d) else {
+            failed = menu == nil
+            if lang != nil { model.say("Couldn’t switch to that") }
+            return
+        }
         withAnimation(.snappy) { menu = m; if let lang { language = lang } }
     }
     func pick(lang: String?, track: Int?) {

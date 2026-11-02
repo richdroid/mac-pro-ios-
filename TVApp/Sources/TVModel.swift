@@ -130,7 +130,7 @@ final class TVModel: ObservableObject {
     }
     private func request(_ path: String, _ body: [String: Any]) -> URLRequest? {
         guard let u = url("/api/tv/" + path), let base = URL(string: address) else { return nil }
-        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 12
+        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 30
         r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
         r.setValue("1", forHTTPHeaderField: "x-dash"); r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try? JSONSerialization.data(withJSONObject: body)
