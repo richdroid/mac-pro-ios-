@@ -72,6 +72,14 @@ jobs:
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-screen$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "Mac Pro screen was not running"
+            for V in "procs -tab 0 -openHistory cpu -openProcesses cpu" "alerts -tab 0 -pose alerts"; do
+              set -- "$1" "$2" $V
+              xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "${@:4}"
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-$3$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+              set -- "$1" "$2"
+            done
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 2 -pose calendar
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-calendar$2.png

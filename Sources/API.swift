@@ -14,7 +14,8 @@ struct Status: Decodable {
     struct Tailscale: Decodable { let state: String; let name: String?; let peers: [Peer] }
     struct Session: Decodable, Identifiable {
         let name: String; let status: String; let cwd: String; let remote: Bool
-        var id: String { name + cwd }
+        var updated: Double?; var key: String?; var restartable: Bool?; var stuck: Bool?
+        var id: String { key ?? (name + cwd) }
     }
     struct Claude: Decodable {
         let remoteControl: Bool; let desktop: Bool; let version: String; let keepAlive: Bool; let service: String?; let sessions: [Session]
@@ -37,6 +38,7 @@ struct Status: Decodable {
     struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let fetch: Fetch?; let apps: [SeedApp] }
     struct Fetch: Decodable { let state: String; let message: String }
     struct Service: Decodable, Identifiable { let label: String; let name: String; let running: Bool; var id: String { label } }
+    struct Alert: Decodable, Identifiable { let id: String; let level: String; let kind: String; var metric: String?; let title: String; let detail: String; let since: Double }
     struct IOSJob: Decodable { let state: String; let message: String }
     struct IOSStatus: Decodable {
         let hasPhone: Bool; let signedIn: Bool; let ready: Bool; let installedAt: Double; let nextDue: Double
@@ -53,6 +55,7 @@ struct Status: Decodable {
     var temps: [Temp]?
     let services: [Service]?
     let iosApps: SeedStatus?
+    var alerts: [Alert]?
 }
 
 // The numbers that change every second.
@@ -131,7 +134,8 @@ struct API {
         return try JSONDecoder().decode(Status.self, from: data)
     }
 
-    private func post(_ path: String, body: [String: Any]) async throws {
+    @discardableResult
+    private func post(_ path: String, body: [String: Any]) async throws -> Data {
         var r = request(path, method: "POST")
         // The server rejects requests from other sites, so say which site this is, as a browser would.
         r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
@@ -140,7 +144,7 @@ struct API {
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await session.data(for: r)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if code == 200 { return }
+        if code == 200 { return data }
         let err = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
         if code == 401 { throw APIError.signInNeeded }
         throw APIError.message(err ?? "That did not work.")
@@ -168,6 +172,29 @@ struct API {
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: temp, to: dest)
         return dest
+    }
+
+    func processes() async throws -> ProcessReport {
+        let (data, response) = try await session.data(for: request("/api/procs"))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(ProcessReport.self, from: data)
+    }
+    // True once it has gone. The Mac waits a few seconds to find out.
+    func quitProcess(_ p: MacProcess, force: Bool) async throws -> Bool {
+        struct Answer: Decodable { let gone: Bool }
+        return try JSONDecoder().decode(Answer.self, from: try await post("/api/procs/quit", body: ["pid": p.pid, "start": p.start, "force": force])).gone
+    }
+    // True once it's back in tmux.
+    func restartSession(_ key: String) async throws -> Bool {
+        struct Answer: Decodable { let running: Bool }
+        return try JSONDecoder().decode(Answer.self, from: try await post("/api/claude-sessions/restart", body: ["name": key])).running
+    }
+    func alerts() async throws -> [Status.Alert] {
+        struct Answer: Decodable { let alerts: [Status.Alert] }
+        var r = request("/api/alerts"); r.timeoutInterval = 15
+        let (data, response) = try await session.data(for: r)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(Answer.self, from: data).alerts
     }
 
     func login(code: String) async throws { try await post("/login", body: ["code": code]) }

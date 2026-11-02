@@ -30,9 +30,20 @@ const macMock = JSON.parse(require('fs').readFileSync(__dirname + '/mock-status.
   plan.at = now - 120000; plan.fiveHourResets = now + 3 * 3600e3; plan.sevenDayResets = now + 4 * 86400e3;
   macMock.iosApps.apps.forEach(a => { if (a.expires) { a.expires = now + 6 * 86400e3; a.installedAt = now - 86400e3; } });
   macMock.usage.hours.forEach((h, i, all) => { h.t = now - (all.length - 1 - i) * 3600e3; });
+  macMock.claude.sessions = [
+    { name: 'Tahoe upgrade', status: 'busy', cwd: '~/code', remote: true, updated: now - 240000, key: null, restartable: false, stuck: false },
+    { name: 'TV plugin', status: 'busy', cwd: '~/code', remote: true, updated: now - 7200000, key: 'tv', restartable: true, stuck: true },
+    { name: 'Chumby widget', status: 'idle', cwd: '~/code', remote: true, updated: now - 3600000, key: 'chumby', restartable: true, stuck: false },
+    { name: 'build', status: 'stopped', cwd: '~/code', remote: false, updated: null, key: 'build', restartable: true, stuck: false },
+  ];
 }
 const macStatus = JSON.stringify(macMock);
-http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9001, '127.0.0.1');
+const macProc = (pid, name, cpu, mem, locked) => ({ pid, start: 'Fri Oct 30 23:11:35 2026', name, cpu, mem: mem * 1048576, locked });
+const macProcs = JSON.stringify({
+  cpu: [macProc(40, 'Google Chrome Helper', 84, 610, null), macProc(41, 'WindowServer', 22, 240, 'System process'), macProc(42, 'Claude Code', 12, 690, 'Claude session'), macProc(43, 'Music', 6, 380, null), macProc(44, 'node', 3, 310, 'The dashboard'), macProc(45, 'Tailscale', 2, 118, 'Keeps remote access')],
+  mem: [macProc(42, 'Claude Code', 12, 690, 'Claude session'), macProc(40, 'Google Chrome Helper', 84, 610, null), macProc(46, 'mediaanalysisd', 0, 490, 'System process'), macProc(43, 'Music', 6, 380, null), macProc(44, 'node', 3, 310, 'The dashboard'), macProc(47, 'Code Helper', 1, 290, null)],
+});
+http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } s.end(q.url === '/api/status' ? macStatus : q.url === '/api/procs' ? macProcs : '{}'); }).listen(9001, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
 const zlib = require('zlib');
 const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });

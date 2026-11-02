@@ -5,15 +5,29 @@ import SwiftUI
 struct MacProApp: App {
     @StateObject private var model = AppModel()
     @Environment(\.scenePhase) private var phase
+    init() { AlertWatch.shared.install() }
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(model).environmentObject(model.liveStore)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
-                .onChange(of: phase) { _, p in if p == .active { model.start() } else { model.stop() } }
-                .onAppear { model.start(); openScreenIfAsked() }
+                .onChange(of: phase) { _, p in
+                    if p == .active { model.start() } else { model.stop() }
+                    #if os(iOS)
+                    if p == .background { AlertWatch.shared.scheduleRefresh() }
+                    #endif
+                }
+                .onAppear { model.start(); openScreenIfAsked(); AlertWatch.shared.askOnce() }
+                .onReceive(NotificationCenter.default.publisher(for: AlertWatch.openStatus)) { _ in model.tab = 0 }
                 .onReceive(NotificationCenter.default.publisher(for: ScreenRequest.notification)) { _ in openScreenIfAsked() }
                 .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
         }
+        #if os(iOS)
+        // iOS decides when, and may not for hours. The banner on Status is always current.
+        .backgroundTask(.appRefresh(AlertWatch.refreshID)) {
+            await AlertWatch.shared.backgroundCheck()
+            AlertWatch.shared.scheduleRefresh()
+        }
+        #endif
     }
     private func openScreenIfAsked() {
         if ScreenRequest.wanted || UserDefaults.standard.bool(forKey: "openScreen") { ScreenRequest.wanted = false; model.screenOpen = true }
@@ -205,7 +219,7 @@ struct TempDials: View {
 
 struct Hero: View {
     let s: Status
-    var healthy: Bool { s.claude.remoteControl && (s.tailscale.state == "Running" || !s.publicUrl.isEmpty) }
+    var healthy: Bool { s.claude.remoteControl && (s.tailscale.state == "Running" || !s.publicUrl.isEmpty) && (s.alerts ?? []).isEmpty }
     var body: some View {
         VStack(spacing: 2) {
             Image("MacPro").resizable().scaledToFit().frame(height: 148)
@@ -280,6 +294,7 @@ struct StatusTab: View {
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
     var body: some View {
         if side != .right {
+        if let alerts = s.alerts, !alerts.isEmpty { AlertBanner(alerts: alerts) }
         Section { Hero(s: s) }.listRowBackground(Color.clear).listRowSeparator(.hidden)
         Section { QuickActions() }.listRowBackground(Color.clear).listRowSeparator(.hidden)
         Section { LiveTiles(s: s) }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
@@ -304,6 +319,7 @@ struct StatusTab: View {
         }
         }
         if side != .left {
+        AlertSettings(clear: (s.alerts ?? []).isEmpty)
         Section("Remote access") {
             StateRow(label: "Claude remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
             StateRow(label: "Claude desktop (Dispatch)", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
@@ -320,6 +336,7 @@ struct StatusTab: View {
         }
         Section("Top processes") {
             ForEach(s.procs) { p in LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)) }
+            NavigationLink("All processes") { ProcessesView(first: .cpu) }
         }
         }
     }
@@ -368,9 +385,21 @@ struct AppsTab: View {
 struct ClaudeTab: View {
     @EnvironmentObject var model: AppModel
     @State private var confirm = false
+    @State private var restart: Status.Session?
+    @State private var restarting: String?
+    @State private var sessionNote: String?
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
+    func doRestart(_ x: Status.Session) async {
+        guard let key = x.key else { return }
+        restarting = key; defer { restarting = nil }
+        do {
+            let running = try await model.api.restartSession(key)
+            sessionNote = running ? "\(x.name) restarted." : "It will start when the Mac can reach Claude. It tries every two minutes."
+        } catch { sessionNote = error.localizedDescription }
+        await model.refresh()
+    }
     var body: some View {
         if side != .right {
         Section("Claude") {
@@ -390,14 +419,13 @@ struct ClaudeTab: View {
         Section("Sessions on this Mac (\(s.claude.sessions.count))") {
             if s.claude.sessions.isEmpty { Text("None running").foregroundStyle(.secondary) }
             ForEach(s.claude.sessions) { x in
-                LabeledContent {
-                    Text(sentenceCase(x.status))
-                } label: {
-                    Text(x.name)
-                    Text(x.cwd + (x.remote ? " · remote" : ""))
-                }
+                SessionRow(session: x, working: restarting != nil && restarting == x.key) { restart = x }
             }
+            if let sessionNote { Text(sessionNote).font(.footnote).foregroundStyle(.secondary) }
         }
+        .confirmationDialog("Restart \(restart?.name ?? "this session")?", isPresented: .init(get: { restart != nil }, set: { if !$0 { restart = nil } }), titleVisibility: .visible, presenting: restart) { x in
+            Button("Restart", role: .destructive) { Task { await doRestart(x) } }
+        } message: { _ in Text("It stops what it’s doing, then picks up the same conversation.") }
         }
     }
 }

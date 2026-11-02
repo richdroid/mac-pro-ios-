@@ -31,6 +31,8 @@ targets:
         CFBundleDisplayName: Mac Pro
         CFBundleURLTypes: [{ CFBundleURLName: macproapp, CFBundleURLSchemes: [macproapp] }]
         CADisableMinimumFrameDurationOnPhone: true
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [local.macpro.MacPro.alerts]
         NSFaceIDUsageDescription: Unlocks your saved logins before filling them on the Mac.
         UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]

@@ -15,6 +15,7 @@ final class AppModel: ObservableObject {
     @Published var needsSignIn = false
     @Published var note: String?
     @Published var history: HistoryMetric?  // kept here so unfolding doesn't close it
+    @Published var processes: ProcessSort?
     @Published var tab = UserDefaults.standard.integer(forKey: "tab")
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
 
@@ -27,6 +28,7 @@ final class AppModel: ObservableObject {
         address = saved.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : saved
         needsSignIn = address.isEmpty
         history = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
+        processes = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // Show the last known state at once; fresh numbers replace it moments later.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(Status.self, from: d) }
     }
@@ -98,7 +100,10 @@ final class AppModel: ObservableObject {
                 try? data.write(to: file, options: .atomic)
                 return s
             }.value
-            status = decoded
+            var fresh = decoded
+            if UserDefaults.standard.string(forKey: "pose") == "alerts" { fresh.alerts = Status.Alert.samples }
+            status = fresh
+            AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
             problem = nil; needsSignIn = false
         } catch APIError.signInNeeded {
             needsSignIn = true
@@ -121,6 +126,7 @@ final class AppModel: ObservableObject {
 
 enum Format {
     static func bytes(_ b: Double) -> String { String(format: b < 17_179_869_184 ? "%.1f GB" : "%.0f GB", b / 1_073_741_824) }
+    static func memory(_ b: Double) -> String { b < 1_073_741_824 ? "\(Int(b / 1_048_576)) MB" : String(format: "%.1f GB", b / 1_073_741_824) }
     static func rate(_ b: Double) -> String {
         if b < 1024 { return "\(Int(b)) B/s" }
         if b < 1_048_576 { return "\(Int(b / 1024)) KB/s" }

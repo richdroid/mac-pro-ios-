@@ -162,17 +162,20 @@ struct HistoryView: View {
                 .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+    @ViewBuilder var processes: some View {
+        if let sort = ProcessSort(metric: metric) { ProcessesLink(sort: sort) }
+    }
     var body: some View {
         Group {
             if panes {
                 FoldSplit {
                     VStack(spacing: 14) { readout; chart.frame(maxHeight: .infinity) }.padding(20)
                 } right: {
-                    ScrollView { VStack(spacing: 14) { range; stats; coverage }.padding(20) }
+                    ScrollView { VStack(spacing: 14) { range; stats; processes; coverage }.padding(20) }
                 }
             } else {
                 ScrollView {
-                    VStack(spacing: 14) { readout; range; chart.frame(height: 260); stats; coverage }.padding(.horizontal, 16).padding(.vertical, 8)
+                    VStack(spacing: 14) { readout; range; chart.frame(height: 260); stats; processes; coverage }.padding(.horizontal, 16).padding(.vertical, 8)
                 }
             }
         }
@@ -180,6 +183,7 @@ struct HistoryView: View {
         .navigationTitle(metric.title)
         .navigationBarTitleDisplayMode(.inline)
         .animation(.easeOut(duration: 0.25), value: hours)
+        .navigationDestination(item: $model.processes) { ProcessesView(first: $0) }
         .task {
             // A new reading arrives once a minute.
             while !Task.isCancelled {
