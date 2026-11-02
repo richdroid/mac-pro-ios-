@@ -16,7 +16,7 @@ struct MacProApp: App {
                     if p == .background { AlertWatch.shared.scheduleRefresh() }
                     #endif
                 }
-                .onAppear { model.start(); openScreenIfAsked(); AlertWatch.shared.askOnce() }
+                .onAppear { model.start(); openScreenIfAsked(); AlertWatch.shared.askOnce(); TabTour.run([0, 1, 2, 3, 4, 5, 9]) { model.tab = $0 } }
                 .onReceive(NotificationCenter.default.publisher(for: AlertWatch.openStatus)) { _ in model.tab = 0 }
                 .onReceive(NotificationCenter.default.publisher(for: ScreenRequest.notification)) { _ in openScreenIfAsked() }
                 .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }

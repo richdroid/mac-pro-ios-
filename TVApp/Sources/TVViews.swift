@@ -62,6 +62,8 @@ struct RootView: View {
                 }
                 Tab(value: 3) { Page(title: "Watch") { FilmsTab() }.id(resets[3, default: 0]) } label: { tabLabel("Watch", "film") }
                 Tab(value: 5) { Page(title: "Status") { DeviceTab() }.id(resets[5, default: 0]) } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
+                // Last, so it sits at the foot of the side bar, as in the other apps.
+                Tab(value: 9) { TVSettingsTab().id(resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
             }
             .onChange(of: model.tab) { _, t in
                 UserDefaults.standard.set(t, forKey: "tab")
@@ -83,7 +85,7 @@ struct RootView: View {
             }
         }
         .animation(TVLook.press, value: model.toast)
-        .onAppear { followRequest(); poseForShots() }
+        .onAppear { followRequest(); poseForShots(); TabTour.run([0, 1, 2, 3, 5, 9]) { model.tab = $0 } }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
     }
     // Control Center and Siri can ask before this view exists, so the request waits in a flag.
@@ -97,7 +99,6 @@ struct RootView: View {
 struct Page<C: View>: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.paneLayout) private var panes
-    @State private var settings = false
     let title: String
     var alwaysInline = false
     @ViewBuilder let content: () -> C
@@ -108,12 +109,35 @@ struct Page<C: View>: View {
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(alwaysInline || panes ? .inline : .large)
-                .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
-                .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
         }
     }
 }
 
+// The TV's own settings and this app's connection, as a tab at the foot of the side bar.
+struct TVSettingsTab: View {
+    @EnvironmentObject var model: TVModel
+    @State private var address = ""
+    var body: some View {
+        NavigationStack {
+            Form {
+                TVManageSections()
+                Section {
+                    TextField("Address", text: $address).autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
+                        .submitLabel(.done)
+                        .onSubmit { model.address = address.trimmingCharacters(in: .whitespacesAndNewlines); model.start() }
+                } header: { Text("Mac Pro address") } footer: { Text("The TV is reached through your Mac, so this works anywhere with Tailscale on.") }
+                Section {
+                    Button("Refresh the TV’s recommendations") { model.post("refresh", say: "Refreshing") }
+                    Button("Open launcher settings on the TV") { model.post("launcher-settings", say: "Opening") }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background { Ambience() }
+            .navigationTitle("Settings")
+            .onAppear { address = model.address }
+        }
+    }
+}
 struct ConnectionView: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.dismiss) private var dismiss
@@ -360,7 +384,9 @@ struct RemoteTab: View {
     }
     var keys: some View {
         VStack(spacing: 12) {
+            // Power joins the top row like a real remote's, rather than sitting alone under everything.
             HStack {
+                GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep"); Spacer()
                 GlassKey(icon: "chevron.left", label: "Back", key: "back"); Spacer()
                 GlassKey(icon: "house.fill", label: "Home", key: "home"); Spacer()
                 Button { typing = true } label: { Image(systemName: "keyboard").font(.system(size: 19, weight: .medium)).frame(width: 54, height: 54).contentShape(Circle()) }
@@ -376,7 +402,6 @@ struct RemoteTab: View {
                 GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: 50)
             }
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
-            GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep", size: 50)
         }
     }
     func side(apps: Bool) -> some View {

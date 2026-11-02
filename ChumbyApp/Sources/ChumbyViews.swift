@@ -15,7 +15,7 @@ struct ChumbyApp: App {
                     if p == .background { CalendarWake.shared.scheduleRefresh() }
                     #endif
                 }
-                .onAppear { model.start() }
+                .onAppear { model.start(); TabTour.run([0, 1, 2, 3, 4]) { model.tab = $0 } }
                 .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
         }
         #if os(iOS)
@@ -164,10 +164,10 @@ struct RootView: View {
                 // Each tab paints its own sea: the system tab view is opaque behind its content.
                 TabView(selection: TabReset.binding($model.tab) { t in resets[t, default: 0] += 1 }) {
                     Tab(value: 0) { NavigationStack { HomeTab().overSea().toolbarBackground(.hidden, for: .navigationBar) }.id(resets[0, default: 0]) } label: { tabLabel("my chumby", asset: "OctoTab", fit: 34) }
-                    Tab(value: 1) { NavigationStack { ChannelsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() }.id(resets[1, default: 0]) } label: { tabLabel("channels", "tv") }
+                    Tab(value: 1) { NavigationStack { ChannelsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) }.id(resets[1, default: 0]) } label: { tabLabel("channels", "tv") }
                     Tab(value: 2) { NavigationStack { AlarmsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) }.id(resets[2, default: 0]) } label: { tabLabel("alarms", "alarm") }
-                    Tab(value: 3) { NavigationStack { SoundsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() }.id(resets[3, default: 0]) } label: { tabLabel("sounds", "music.note") }
-                    Tab(value: 4) { NavigationStack { TinkerTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() }.id(resets[4, default: 0]) } label: { tabLabel("tinker", "wrench.adjustable") }
+                    Tab(value: 3) { NavigationStack { SoundsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) }.id(resets[3, default: 0]) } label: { tabLabel("sounds", "music.note") }
+                    Tab(value: 4) { NavigationStack { TinkerTab().overSea().toolbarBackground(.hidden, for: .navigationBar) }.id(resets[4, default: 0]) } label: { tabLabel("tinker", "wrench.adjustable") }
                 }
                 .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab") }
             }
@@ -498,8 +498,6 @@ struct HomeTab: View {
                 }
             }
         }
-        .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
-        .sheet(isPresented: $settings) { ConnectionView().environmentObject(model) }
     }
 }
 
@@ -1109,6 +1107,11 @@ struct TinkerTab: View {
     @State private var accounts = ""
     @State private var edited = false
     @State private var confirm: String?
+    @State private var address = ""
+    func connect() {
+        model.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        if model.api != nil { model.needsAddress = false; model.start(); model.say("Connected") }
+    }
 
     func romName(_ f: String) -> String { f.replacingOccurrences(of: ".nes.gz", with: "").replacingOccurrences(of: ".nes", with: "").replacingOccurrences(of: "_", with: " ") }
 
@@ -1142,10 +1145,18 @@ struct TinkerTab: View {
                     Button("Reboot", role: .destructive) { model.cmd("reboot", nil, "Rebooting") }
                 }
             }
+            // The connection lives here, with the rest of the settings, at the foot of the side bar.
+            Section {
+                TextField("http://chumby.local", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .onSubmit { connect() }
+                Button("Connect") { connect() }.disabled(address.isEmpty || address == model.address)
+            } header: { Text("Chumby address") } footer: { Text("Already set to your Chumby. Change it only if its address moves.") }
             Text("Black Chumby photo: Edward Yanquen, Wikimedia Commons, CC BY 2.0, cut out and retouched. Octopus and wordmark: Chumby’s own artwork, from this device.").font(.caption2).foregroundStyle(.secondary).listRowBackground(Color.clear)
         }
         .seaList()
         .task(id: model.sys.tw) { if !edited { accounts = model.sys.tw.joined(separator: ", ") } }
+        .onAppear { address = model.address }
         .refreshable { await model.loadSys(); await model.loadState() }
     }
 }

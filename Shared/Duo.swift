@@ -165,3 +165,15 @@ enum TabReset {
         Binding(get: { tab.wrappedValue }, set: { new in if new == tab.wrappedValue { onRepeat(new) } else { tab.wrappedValue = new } })
     }
 }
+
+// For the build's recording: every tab in turn, twice, so anything that draws in, flashes or jumps between them shows
+// up on film. Only with the "tour" pose; never on the phone.
+enum TabTour {
+    @MainActor static func run(_ tabs: [Int], set: @escaping (Int) -> Void) {
+        guard UserDefaults.standard.string(forKey: "pose") == "tour" else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            for t in tabs + tabs { set(t); try? await Task.sleep(nanoseconds: 1_600_000_000) }
+        }
+    }
+}

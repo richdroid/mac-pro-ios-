@@ -101,6 +101,18 @@ jobs:
             fi
             kill -INT $REC; wait $REC; echo "flick video exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # Each app's tabs in turn, filmed, to catch anything that draws in or jumps between them.
+            if [ -z "$2" ]; then
+              for A in "TV 9002" "MacPro 9001" "Chumby 9000"; do
+                read -r APP PORT <<< "$A"
+                xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tour-$APP.mp4 > /dev/null 2>&1 & REC=$!
+                sleep 5
+                xcrun simctl launch "$DEVICE" local.macpro.$APP -address http://127.0.0.1:$PORT -tab 0 -pose tour
+                sleep 26
+                kill -INT $REC; wait $REC; echo "tour $APP exit $?"
+                xcrun simctl terminate "$DEVICE" local.macpro.$APP || true
+              done
+            fi
             for T in 0 1 2 3 4 5; do
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab $T
               sleep 7
