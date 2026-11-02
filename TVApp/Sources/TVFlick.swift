@@ -496,7 +496,7 @@ struct FlickScreen: View {
     }
     // For the build's recording: the moves a finger makes, pick up, a slow pull with a sway, and a throw.
     func demo() async {
-        try? await Task.sleep(nanoseconds: 2_200_000_000)
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
         demoHeld = true
         try? await Task.sleep(nanoseconds: 400_000_000)
         for i in 1...45 {

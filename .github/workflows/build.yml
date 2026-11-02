@@ -90,17 +90,17 @@ jobs:
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$POSE$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.TV || echo "TV pose $POSE was not running"
             done
-            # The flick as it moves: a scripted pick up, pull and throw, filmed, then the same again as quick stills.
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab 1 -pose flickdemo
+            # The flick as it moves: filming starts before the app opens, since the recorder takes seconds to get going.
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-flickdemo$2.mp4 > dist/tv-flickdemo$2.log 2>&1 & REC=$!
-            sleep 12; kill -INT $REC; wait $REC; echo "flick video exit $?"
-            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            sleep 6
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab 1 -pose flickdemo
             if [ -z "$2" ]; then
-              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab 1 -pose flickdemo
-              sleep 4.2
-              for F in 0 1 2 3 4 5 6 7 8 9 10 11 12 13; do xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-flickdemo-$F.png >/dev/null 2>&1; echo "still $F $(date +%s.%N)"; done
-              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+              for F in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-flickdemo-$F.png >/dev/null 2>&1; echo "still $F $(perl -MTime::HiRes=time -e 'printf "%.2f", time')"; done
+            else
+              sleep 16
             fi
+            kill -INT $REC; wait $REC; echo "flick video exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             for T in 0 1 2 3 4 5; do
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab $T
               sleep 7

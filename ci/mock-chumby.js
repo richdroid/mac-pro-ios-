@@ -78,7 +78,7 @@ http.createServer((q, s) => {
   if (q.url === '/api/tv/shot') { s.setHeader('content-type', 'image/jpeg'); return s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); }
   if (q.url.startsWith('/api/tv/icon')) { s.setHeader('content-type', 'image/png'); const a = tvApps.find(x => q.url.endsWith(x[0])); return s.end(a && a[2] ? pictures.wide : pictures.square); }
   // Sending to the TV takes a moment there, so the waiting can be seen.
-  if (q.method === 'POST' && /play-stream|stremio-open|mint-open/.test(q.url)) { s.setHeader('content-type', 'application/json'); return setTimeout(() => s.end('{"ok":true}'), 1800); }
+  if (q.method === 'POST' && /play-stream|stremio-open|mint-open/.test(q.url)) { s.setHeader('content-type', 'application/json'); return setTimeout(() => s.end('{"ok":true}'), 3000); }
   if (q.url === '/poster.png' || q.url === '/art.png') { s.setHeader('content-type', 'image/png'); return s.end(pictures[q.url.slice(1, -4)]); }
   s.setHeader('content-type', 'application/json');
   s.end(q.url === '/api/tv/status' ? tvStatus : q.url === '/api/tv/letterboxd' ? tvFilms : '{"ok":true}');
