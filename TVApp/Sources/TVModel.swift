@@ -67,7 +67,9 @@ final class TVModel: ObservableObject {
         loops = [
             Task { [weak self] in
                 while !Task.isCancelled {
-                    if let self, Date().timeIntervalSince(self.lastKeyAt) > 1.5 { await self.load() }
+                    // Not while a flick is up: every refresh redraws the pages behind it, which shows as stutter in the flick.
+                    // Its control screen keeps itself current.
+                    if let self, self.flicking == nil, Date().timeIntervalSince(self.lastKeyAt) > 1.5 { await self.load() }
                     // What's playing changes under you, so the Playing tab keeps closer watch.
                     try? await Task.sleep(nanoseconds: self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
                 }

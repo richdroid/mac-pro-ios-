@@ -147,7 +147,8 @@ struct DeviceTab: View {
             guard phase == .active else { return }
             while !Task.isCancelled {
                 if let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 8), let i = try? JSONDecoder().decode(DeviceInfo.self, from: d) {
-                    withAnimation(.easeOut(duration: 0.25)) { info = i }
+                    // The first answer just appears; only later changes ease, so the name never crossfades over a placeholder.
+                    if info == nil { info = i } else { withAnimation(.easeOut(duration: 0.25)) { info = i } }
                     failed = false
                 } else { failed = true }
                 try? await Task.sleep(nanoseconds: 2_000_000_000)

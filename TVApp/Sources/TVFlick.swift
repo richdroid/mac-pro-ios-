@@ -650,12 +650,13 @@ struct FlickScreen: View {
                 #endif
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.6)) { sending = false; done = true; note = source == .mint || stream != nil || item.stremioRef == nil || target.send != nil ? "Playing on the TV" : "On the TV. Pick a stream with the remote." }
                 successes += 1
-                if !item.art.isEmpty { model.lastArt = item.art; model.lastArtTitle = item.title; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
-                Task { await model.load() }
+                // Nothing else redraws while the TV says yes: the whole app catching up at that moment stalled the tick.
                 try? await Task.sleep(nanoseconds: 950_000_000)
+                if !item.art.isEmpty { model.lastArt = item.art; model.lastArtTitle = item.title; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
                 // A plain hand-over: the flick fades away, then the controls settle in from just below.
                 morphing = true
                 withAnimation(.easeOut(duration: 0.22)) { step = .control }
+                Task { try? await Task.sleep(nanoseconds: 500_000_000); await model.load() }
             } catch {
                 // Called off with the X: it's already being stopped and closed.
                 if Task.isCancelled || cancelled { return }
@@ -715,8 +716,8 @@ private struct TVFlash: View {
     var body: some View {
         Color.white
             .keyframeAnimator(initialValue: 0.0, trigger: trigger) { c, o in c.opacity(o) } keyframes: { _ in
-                LinearKeyframe(0.75, duration: 0.07)
-                CubicKeyframe(0, duration: 0.5)
+                LinearKeyframe(0.4, duration: 0.06)
+                CubicKeyframe(0, duration: 0.4)
             }
             .allowsHitTesting(false)
     }

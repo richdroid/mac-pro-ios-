@@ -190,7 +190,7 @@ struct BrowseColumn: View {
                 .padding(.horizontal, 20) }
                 if store.rows.isEmpty && part != .right {
                     Group {
-                        if store.loading { ProgressView() }
+                        if store.loading { VStack(spacing: 22) { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } } }
                         else if store.failed { ContentUnavailableView("Can’t reach \(store.source.name)", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again.")) }
                         else { ContentUnavailableView.search }
                     }

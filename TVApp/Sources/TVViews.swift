@@ -36,6 +36,7 @@ struct RootView: View {
     func poseForShots() {
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
         if pose == "search" { SendDraft.shared.text = "Heat"; return }
+        if pose == "tour" { return }
         model.browsing = .stremio
         guard pose != "browse" else { return }
         Task {
@@ -1047,11 +1048,9 @@ struct DiscoverColumn: View {
                         }
                         .clipped()
                     }
-                    .transition(.opacity.combined(with: .offset(y: 10)))
                 }
             }
             .padding(.vertical, 12)
-            .animation(.spring(response: 0.4, dampingFraction: 0.86), value: store.rows.map(\.id))
         }
         .refreshable { await store.load(force: true) }
         .task { await store.load() }
