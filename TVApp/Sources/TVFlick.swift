@@ -85,6 +85,8 @@ struct FlickScreen: View {
     @State private var demoHeld = false
     // The TV's answer: a flash and a tick on its screen, then the screen grows into its controls.
     @State private var successes = 0
+    @State private var flight: Task<Void, Never>?
+    @State private var cancelled = false
     @State private var morphing = false
     @State private var priorMood: Color??
     @Namespace private var screenSpace
@@ -197,22 +199,25 @@ struct FlickScreen: View {
 
     // See-through, tinted by whatever is chosen, and it comes up clear as the card goes.
     func backdrop(_ size: CGSize) -> some View {
+        // Edge to edge, under the side bar too, and always fully blurred: what's behind never shows through.
         ZStack {
-            Group {
-                if let image = target.image { image.resizable().scaledToFill() }
-                else {
-                    Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.clear }
-                        .id(episode?.id ?? item.art)
-                        .transition(.opacity)
+            Rectangle().fill(.ultraThinMaterial)
+            Color.clear
+                .overlay {
+                    Group {
+                        if let image = target.image { image.resizable().scaledToFill() }
+                        else {
+                            Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.clear }
+                                .id(episode?.id ?? item.art)
+                                .transition(.opacity)
+                        }
+                    }
+                    .blur(radius: landed ? 22 : 40)
+                    .scaleEffect(landed ? 1.18 : 1.1)
                 }
-            }
-            .frame(width: size.width, height: size.height)
-            .clipped()
-            .blur(radius: landed ? 18 : 34)
-            .scaleEffect(landed ? 1.14 : 1.05)
-            .opacity(0.5 + 0.45 * charge)
-            Rectangle().fill(.ultraThinMaterial).opacity(1 - 0.75 * charge)
-            Color.black.opacity(0.38 - 0.2 * charge)
+                .clipped()
+                .opacity(0.55 + 0.4 * charge)
+            Color.black.opacity(0.4 - 0.15 * charge)
         }
         .ignoresSafeArea()
         .opacity(arrived ? 1 : 0)
@@ -226,7 +231,9 @@ struct FlickScreen: View {
         if let next, step != .flick {
             ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right") } }
         }
-        ToolbarItem(placement: .cancellationAction) { Button { leave() } label: { Label(step == .control ? "Done" : "Close", systemImage: step == .control ? "checkmark" : "xmark") }.disabled(flown && step != .control) }
+        ToolbarItem(placement: .cancellationAction) {
+            Button { flown && step != .control ? callOff() : leave() } label: { Label(step == .control ? "Done" : flown ? "Stop" : "Close", systemImage: step == .control ? "checkmark" : "xmark") }
+        }
     }
 
     var heading: some View {
@@ -582,6 +589,15 @@ struct FlickScreen: View {
         demoHeld = false
         send(flicked: CGSize(width: -60, height: -1900))
     }
+    // The X while it's on its way: whatever started on the TV stops, and this closes.
+    func callOff() {
+        cancelled = true
+        flight?.cancel()
+        model.tick()
+        model.post("stop-playing", ["pkg": source == .mint || target.send != nil ? "com.codex.musicwebtv" : "com.stremio.one"], say: "Stopped")
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { sending = false }
+        leave()
+    }
     func leave() {
         if let prior = priorMood { model.mood = prior }
         withAnimation(.easeOut(duration: 0.2)) { arrived = false }
@@ -623,7 +639,7 @@ struct FlickScreen: View {
         let speed = max(0, min(9, velocity.height / min(to - from, -1)))
         withAnimation(.interpolatingSpring(mass: 1, stiffness: 300, damping: 30, initialVelocity: speed)) { flown = true; lean = 0 }
         let order = order
-        Task {
+        flight = Task {
             // The TV takes the card as it arrives.
             try? await Task.sleep(nanoseconds: 230_000_000)
             impacts += 1
@@ -643,6 +659,8 @@ struct FlickScreen: View {
                 morphing = true
                 withAnimation(.spring(response: 0.62, dampingFraction: 0.84)) { step = .control }
             } catch {
+                // Called off with the X: it's already being stopped and closed.
+                if Task.isCancelled || cancelled { return }
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
                 #endif
