@@ -147,6 +147,7 @@ struct SessionRow: View {
     let session: Status.Session
     let working: Bool
     let restart: () -> Void
+    var open: (() -> Void)?
     var tint: Color {
         if session.stuck == true { return .orange }
         switch session.status {
@@ -176,6 +177,9 @@ struct SessionRow: View {
                 Text(state).font(.footnote).foregroundStyle(session.stuck == true ? .orange : .secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
+            if let open, session.key != nil, session.status != "stopped" {
+                Button(action: open) { Image(systemName: "apple.terminal") }.buttonStyle(.bordered).controlSize(.small).accessibilityLabel("Show its screen")
+            }
             if working { ProgressView() }
             else if session.restartable == true { Button(session.status == "stopped" ? "Start" : "Restart", action: restart).buttonStyle(.bordered).controlSize(.small) }
         }

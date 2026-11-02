@@ -386,6 +386,7 @@ struct ClaudeTab: View {
     @State private var confirm = false
     @State private var restart: Status.Session?
     @State private var restarting: String?
+    @State private var terminal: Status.Session?
     @State private var sessionNote: String?
     let s: Status
     var side: Side = .all
@@ -418,13 +419,14 @@ struct ClaudeTab: View {
         Section("Sessions on this Mac (\(s.claude.sessions.count))") {
             if s.claude.sessions.isEmpty { Text("None running").foregroundStyle(.secondary) }
             ForEach(s.claude.sessions) { x in
-                SessionRow(session: x, working: restarting != nil && restarting == x.key) { restart = x }
+                SessionRow(session: x, working: restarting != nil && restarting == x.key, restart: { restart = x }, open: { terminal = x })
             }
             if let sessionNote { Text(sessionNote).font(.footnote).foregroundStyle(.secondary) }
         }
         .confirmationDialog("Restart \(restart?.name ?? "this session")?", isPresented: .init(get: { restart != nil }, set: { if !$0 { restart = nil } }), titleVisibility: .visible, presenting: restart) { x in
             Button("Restart", role: .destructive) { Task { await doRestart(x) } }
         } message: { _ in Text("It stops what it’s doing, then picks up the same conversation.") }
+        .sheet(item: $terminal) { SessionTerminal(session: $0).environmentObject(model) }
         }
     }
 }

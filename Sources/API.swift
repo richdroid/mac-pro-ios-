@@ -189,6 +189,18 @@ struct API {
         struct Answer: Decodable { let running: Bool }
         return try JSONDecoder().decode(Answer.self, from: try await post("/api/claude-sessions/restart", body: ["name": key])).running
     }
+    // A kept session's screen as text, and keys or a message typed into it. Only through Tailscale.
+    struct Term: Decodable { var running: Bool?; var text: String? }
+    func termScreen(_ key: String) async throws -> Term {
+        var r = request("/api/term?name=\(key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? key)"); r.timeoutInterval = 10
+        let (data, response) = try await session.data(for: r)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(Term.self, from: data)
+    }
+    func termSend(_ key: String, _ body: [String: Any]) async throws -> Term {
+        var b = body; b["name"] = key
+        return try JSONDecoder().decode(Term.self, from: try await post("/api/term", body: b))
+    }
     func alerts() async throws -> [Status.Alert] {
         struct Answer: Decodable { let alerts: [Status.Alert] }
         var r = request("/api/alerts"); r.timeoutInterval = 15
