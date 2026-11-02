@@ -27,7 +27,7 @@ final class CalendarWake: ObservableObject {
     }
     private func save() { if let d = try? JSONEncoder().encode(rules) { UserDefaults.standard.set(d, forKey: "wakeRules") } }
     // For the build's simulator shots, which have no calendar.
-    private func showSample() {
+    func showSample() {
         rules.enabled = true; allowed = true
         let cal = Calendar.current, base = cal.startOfDay(for: Date())
         func shift(_ day: Int, _ hour: Int, _ title: String, work: Bool, lead: Int, short: String? = nil) -> PlannedWake {
@@ -193,7 +193,7 @@ struct CalendarWakeSection: View {
             else if wake.rules.enabled, let s = wake.lastSync { Text("Set on the Chumby, so they ring with your phone off. Updated \(s.formatted(.relative(presentation: .named))).") }
             else if !wake.rules.enabled { Text("Sets an alarm before the first thing each day, and moves it if your calendar changes.") }
         }
-        .onAppear { wake.startWatching(); wake.refreshPlan(); if wake.rules.enabled { Task { await wake.sync(); await model.loadState() } } }
+        .onAppear { if UserDefaults.standard.string(forKey: "pose") == "calendar" { wake.showSample(); return }; wake.startWatching(); wake.refreshPlan(); if wake.rules.enabled { Task { await wake.sync(); await model.loadState() } } }
     }
 }
 struct CalendarWakeSettings: View {

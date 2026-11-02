@@ -132,7 +132,7 @@ struct ManageSettingsView: View {
     static let sleep: [(String, Double)] = [("30 minutes", 1800000), ("1 hour", 3600000), ("2 hours", 7200000), ("3 hours", 10800000), ("4 hours", 14400000), ("8 hours", 28800000), ("Never", -1)]
     static let saver: [(String, Double)] = [("5 minutes", 300000), ("10 minutes", 600000), ("15 minutes", 900000), ("30 minutes", 1800000), ("1 hour", 3600000)]
     static let speed: [(String, Double)] = [("Off", 0), ("Fast", 0.5), ("Normal", 1)]
-    static let pages: [(String, String, String)] = [("Display", "display", "tv"), ("Sound", "sound", "speaker.wave.2"), ("Network", "network", "wifi"), ("Bluetooth and remotes", "bluetooth", "dot.radiowaves.left.and.right"), ("Apps", "apps", "square.grid.2x2"), ("All settings", "all", "gearshape")]
+    static let pages: [(String, String, String)] = [("Display and sound", "display", "tv"), ("Network", "network", "wifi"), ("Bluetooth and remotes", "bluetooth", "dot.radiowaves.left.and.right"), ("Apps", "apps", "square.grid.2x2"), ("All settings", "all", "gearshape")]
     func pick(_ title: String, _ key: String, _ options: [(String, Double)]) -> some View {
         Picker(title, selection: Binding(get: { store.state?.settings[key] ?? options[0].1 }, set: { store.set(key, $0) })) {
             ForEach(options, id: \.1) { Text($0.0).tag($0.1) }
