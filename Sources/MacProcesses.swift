@@ -142,14 +142,14 @@ struct ProcessesLink: View {
     }
 }
 
-// One Claude Code session on the Mac: what it's doing, from its status alone, never what's being said in it.
+// One Claude Code session on the Mac: what it's doing, and, for the ones this Mac keeps, its screen a tap away.
 struct SessionRow: View {
     let session: Status.Session
     let working: Bool
     let restart: () -> Void
     var open: (() -> Void)?
     var tint: Color {
-        if session.stuck == true { return .orange }
+        if session.stuck == true || session.waiting == true { return .orange }
         switch session.status {
         case "stopped": return .red
         case "idle": return .green
@@ -158,6 +158,7 @@ struct SessionRow: View {
         }
     }
     var state: String {
+        if session.waiting == true { return "Waiting for you" }
         let name: String
         switch session.status {
         case "shell": name = "Running a command"
@@ -174,14 +175,16 @@ struct SessionRow: View {
             Circle().fill(tint).frame(width: 9, height: 9)
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.name).lineLimit(1)
-                Text(state).font(.footnote).foregroundStyle(session.stuck == true ? .orange : .secondary).lineLimit(1)
+                Text(state).font(.footnote.weight(session.waiting == true ? .semibold : .regular)).foregroundStyle(session.stuck == true || session.waiting == true ? .orange : .secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
-            if let open, session.key != nil, session.status != "stopped" {
-                Button(action: open) { Image(systemName: "apple.terminal") }.buttonStyle(.bordered).controlSize(.small).accessibilityLabel("Show its screen")
-            }
             if working { ProgressView() }
             else if session.restartable == true { Button(session.status == "stopped" ? "Start" : "Restart", action: restart).buttonStyle(.bordered).controlSize(.small) }
+            if canOpen { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
         }
+        .contentShape(Rectangle())
+        .onTapGesture { if canOpen { open?() } }
+        .accessibilityAction(named: "Show its screen") { if canOpen { open?() } }
     }
+    var canOpen: Bool { open != nil && session.key != nil && session.status != "stopped" }
 }

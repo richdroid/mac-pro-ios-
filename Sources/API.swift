@@ -14,7 +14,7 @@ struct Status: Decodable {
     struct Tailscale: Decodable { let state: String; let name: String?; let peers: [Peer] }
     struct Session: Decodable, Identifiable {
         let name: String; let status: String; let cwd: String; let remote: Bool
-        var updated: Double?; var key: String?; var restartable: Bool?; var stuck: Bool?
+        var updated: Double?; var key: String?; var restartable: Bool?; var stuck: Bool?; var waiting: Bool?
         var id: String { key ?? (name + cwd) }
     }
     struct Claude: Decodable {

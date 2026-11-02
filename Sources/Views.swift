@@ -426,7 +426,7 @@ struct ClaudeTab: View {
         .confirmationDialog("Restart \(restart?.name ?? "this session")?", isPresented: .init(get: { restart != nil }, set: { if !$0 { restart = nil } }), titleVisibility: .visible, presenting: restart) { x in
             Button("Restart", role: .destructive) { Task { await doRestart(x) } }
         } message: { _ in Text("It stops what it’s doing, then picks up the same conversation.") }
-        .sheet(item: $terminal) { SessionTerminal(session: $0).environmentObject(model) }
+        .sheet(item: $terminal) { SessionTerminal(session: $0).environmentObject(model).presentationDetents([.large]).presentationDragIndicator(.visible) }
         }
     }
 }
