@@ -111,7 +111,7 @@ struct ChumbyState: Decodable {
     var widgetNames: [String] = []
     var mine: [MineWidget] = []
     // Alarms that came due while it was frozen, off or restarting.
-    struct Missed: Decodable, Identifiable, Hashable { let at: Double; let rang: Bool; let name: String; var id: Double { at } }
+    struct Missed: Decodable, Identifiable, Hashable { let at: Double; let rang: Bool; let name: String; var id: String { "\(at) \(name)" } }
     var missed: [Missed] = []
     init() {}
     init(from d: Decoder) throws {
@@ -174,6 +174,17 @@ actor ChumbyAPI {
         if h.statusCode == 502 { throw ChumbyError.deviceDown }
         guard h.statusCode == 200 else { throw ChumbyError.message("No answer") }
         return (d, Double(h.value(forHTTPHeaderField: "X-Chumby-Age") ?? "") ?? 0)
+    }
+    // The Mac keeps answering with its last copy while the Chumby is frozen, and that copy can be hours old.
+    // It fetches a new one on being asked, so give it a moment; a Chumby that can't supply one is down.
+    func fresh(_ action: String) async throws -> Data {
+        var r = try await raw(action)
+        for _ in 0..<4 where r.age >= 30 {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            r = try await raw(action)
+        }
+        guard r.age < 30 else { throw ChumbyError.deviceDown }
+        return r.data
     }
     // Only the Mac can say this: when the Chumby last answered it. Nil when going straight to the Chumby.
     func lastSeen() async -> Date? {

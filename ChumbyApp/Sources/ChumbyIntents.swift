@@ -68,14 +68,7 @@ struct ChumbyNapIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         // Read the list fresh, since a save replaces all of it.
         try await chumbyTry { api in
-            // The cache's first answer can be hours old, and it fetches a new one on being asked.
-            var r = try await api.raw("state")
-            for _ in 0..<4 where r.age >= 30 {
-                try await Task.sleep(nanoseconds: 2_000_000_000)
-                r = try await api.raw("state")
-            }
-            guard r.age < 30 else { throw ChumbyError.deviceDown }
-            var s = try JSONDecoder().decode(ChumbyState.self, from: r.data)
+            var s = try JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state"))
             s.addNap(minutes: minutes)
             try await api.post("save", body: ChumbyAPI.form(s.alarmForm()))
         }
@@ -87,7 +80,7 @@ struct ChumbyNextAlarmIntent: AppIntent {
     static var title: LocalizedStringResource = "Next Chumby Alarm"
     static var description = IntentDescription("When the Chumby next goes off.")
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
-        let s = try await chumbyTry { try await $0.get("state", as: ChumbyState.self) }
+        let s = try await chumbyTry { try JSONDecoder().decode(ChumbyState.self, from: await $0.fresh("state")) }
         var text = "No alarms set. Sleep in."
         if let next = s.alarms.compactMap({ a in a.nextFire().map { (a, $0) } }).min(by: { $0.1 < $1.1 }) {
             let when = next.1.formatted(.dateTime.weekday(.wide).hour().minute())
@@ -100,7 +93,7 @@ struct ChumbyStatusIntent: AppIntent {
     static var title: LocalizedStringResource = "Chumby Status"
     static var description = IntentDescription("What the Chumby is up to.")
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
-        let s = try await chumbyTry { try await $0.get("sys", as: Sys.self) }
+        let s = try await chumbyTry { try JSONDecoder().decode(Sys.self, from: await $0.fresh("sys")) }
         let h = s.up / 3600, text = "Awake \(h > 47 ? "\(h / 24) days" : "\(h) hours"), on \(s.chan.isEmpty ? "its channel" : s.chan), volume \(s.vol). Still ticking."
         return .result(value: text, dialog: IntentDialog(stringLiteral: text))
     }

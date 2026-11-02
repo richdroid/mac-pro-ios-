@@ -21,7 +21,7 @@ final class ChumbyModel: ObservableObject {
     @Published var toast: String?
     @Published var needsAddress = false
     @Published var tab = UserDefaults.standard.integer(forKey: "tab")
-    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); api = Self.makeAPI(address) } }
+    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); api = Self.makeAPI(address); usingFallback = false; failures = 0 } }
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []
     private var toastTask: Task<Void, Never>?
@@ -69,6 +69,7 @@ final class ChumbyModel: ObservableObject {
     func start() {
         stop()
         running = true
+        stateConfirmed = false      // it may have been hours; the list could have changed from elsewhere
         loops = [
             // Through the Mac's cache these are cheap. Straight to the 64 MB Chumby they are not, so go far slower there.
             Task { [weak self] in while !Task.isCancelled { await self?.loadSys(); try? await Task.sleep(nanoseconds: self?.direct == true ? 30_000_000_000 : 4_000_000_000) } },
@@ -104,6 +105,8 @@ final class ChumbyModel: ObservableObject {
             // The cache stops refreshing when nobody is looking, so one old answer on opening means nothing.
             staleReadings = r.age > 60 ? staleReadings + 1 : 0
             failures = 0; offline = false; dead = staleReadings >= 3
+            // A frozen Chumby mostly shows up here, as an old copy from the Mac, rather than as an error.
+            lastSeen = dead ? (await api.lastSeen() ?? lastSeen) : nil
             guard Date() >= sysHold, r.data != sysBytes else { return }
             sysBytes = r.data
             sys = try JSONDecoder().decode(Sys.self, from: r.data)

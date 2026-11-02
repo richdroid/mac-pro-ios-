@@ -169,7 +169,7 @@ struct RootView: View {
             }
             .overlay(alignment: .top) {
                 if model.offline || model.dead {
-                    Label(model.dead ? model.deadText : "Can’t reach the Chumby. Is Tailscale on?", systemImage: "wifi.exclamationmark").font(.footnote.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8).background(.red.opacity(0.85), in: Capsule()).padding(.top, 4)
+                    Label(model.dead ? model.deadText : "Can’t reach the Chumby. Check Tailscale; it may also be restarting.", systemImage: "wifi.exclamationmark").font(.footnote.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 8).background(.red.opacity(0.85), in: Capsule()).padding(.top, 4)
                 }
             }
             .animation(.spring(duration: 0.3, bounce: 0.35), value: model.toast)
@@ -378,7 +378,7 @@ struct HomeTab: View {
                 spec("Display", "3.5-inch, 320 × 240, touch")
                 if !serial.isEmpty { spec("Serial number", serial) }
                 spec("Software", "1.7.2 (build 1830)")
-                spec("Playing", model.offline ? "Can’t reach the Chumby" : !model.sys.lock.isEmpty ? "Busy: \(model.sys.lock)" : model.sys.chan.isEmpty ? "Awake" : model.sys.chan)
+                spec("Playing", model.offline || model.dead ? "Can’t reach the Chumby" : !model.sys.lock.isEmpty ? "Busy: \(model.sys.lock)" : model.sys.chan.isEmpty ? "Awake" : model.sys.chan)
             }
             if !wide {
                 Button(moreInfo ? "Less Info…" : "More Info…") { withAnimation(.spring(duration: 0.4, bounce: 0.3)) { moreInfo.toggle() } }
