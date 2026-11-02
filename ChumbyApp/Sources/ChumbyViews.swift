@@ -633,7 +633,9 @@ struct ChannelsTab: View {
             for (i, w) in u.rows.enumerated() { o += [("\(i)_id", w.id), ("\(i)_on", w.on ? "1" : "0"), ("\(i)_secs", "\(w.secs)")] }
             do {
                 let j = try await model.api?.post("chedit", extra: "&p=" + ChumbyAPI.enc(u.id), body: ChumbyAPI.form(o))
-                model.say(j?["missing"] != nil ? "Saved, but a widget couldn’t be downloaded" : "Channel saved")
+                // The Chumby always says how many it couldn't fetch, so only a real one is worth a word. A plain save says
+                // nothing: the switch or picker already shows the change.
+                if let n = j?["missing"] as? Int, n > 0 { model.say(n == 1 ? "Saved, but one widget couldn’t be downloaded" : "Saved, but \(n) widgets couldn’t be downloaded") }
             } catch { model.say("Couldn’t: \(error.localizedDescription)"); edited[u.id] = nil }
         }
     }
