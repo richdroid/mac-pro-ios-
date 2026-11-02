@@ -122,51 +122,55 @@ struct RemoteScreenView: View {
         return CGSize(width: max(-overW, min(overW, p.width)), height: max(-overH, min(overH, p.height)))
     }
     var canvas: some View {
-        ZStack {
-            Color.black
-            if let image = screen.image {
-                Image(decorative: image, scale: 1)
-                    .resizable()
-                    .interpolation(zoom > 2 ? .medium : .high)
-                    .frame(width: screen.size.width * fit, height: screen.size.height * fit)
-                    .scaleEffect(zoom)
-                    .offset(pan)
-                    .allowsHitTesting(false)
-                if showCursor {
-                    let at = viewPoint(screen.cursor)
+        // The space sets the size and the picture fits inside it, never the other way round.
+        Color.black
+            .overlay {
+                if let image = screen.image, canvasSize.width > 0 {
+                    Image(decorative: image, scale: 1)
+                        .resizable()
+                        .interpolation(zoom > 2 ? .medium : .high)
+                        .frame(width: screen.size.width * fit, height: screen.size.height * fit)
+                        .scaleEffect(zoom)
+                        .offset(pan)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                if showCursor, screen.image != nil {
                     Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5)
                         .background(Circle().fill(Color.accentColor.opacity(0.3)))
                         .frame(width: 26, height: 26)
                         .shadow(color: .black.opacity(0.5), radius: 3)
-                        .position(at)
+                        .position(viewPoint(screen.cursor))
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
             }
-            TouchSurface(
-                onTap: { p in
-                    bump()
-                    screen.click(x: Int(macPoint(p).x), y: Int(macPoint(p).y))
-                    tick(.light)
-                },
-                onTwoFingerTap: { p in
-                    bump()
-                    screen.click(x: Int(macPoint(p).x), y: Int(macPoint(p).y), right: true)
-                    tick(.medium)
-                },
-                onLongPress: { p in
-                    bump()
-                    screen.click(x: Int(macPoint(p).x), y: Int(macPoint(p).y), right: true)
-                    tick(.medium)
-                },
-                onDrag: { phase, location, delta in directDrag(phase, location, delta) },
-                onScroll: { d in scrollBy(d) },
-                onPinch: { phase, scale, center in pinch(phase, scale, center) }
-            )
-            status
-        }
-        .clipped()
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0; pan = clampedPan(pan) }
+            .overlay {
+                TouchSurface(
+                    onTap: { p in
+                        bump()
+                        screen.click(x: Int(macPoint(p).x), y: Int(macPoint(p).y))
+                        tick(.light)
+                    },
+                    onTwoFingerTap: { p in
+                        bump()
+                        screen.click(x: Int(macPoint(p).x), y: Int(macPoint(p).y), right: true)
+                        tick(.medium)
+                    },
+                    onLongPress: { p in
+                        bump()
+                        screen.click(x: Int(macPoint(p).x), y: Int(macPoint(p).y), right: true)
+                        tick(.medium)
+                    },
+                    onDrag: { phase, location, delta in directDrag(phase, location, delta) },
+                    onScroll: { d in scrollBy(d) },
+                    onPinch: { phase, scale, center in pinch(phase, scale, center) }
+                )
+            }
+            .overlay { status }
+            .clipped()
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0; pan = clampedPan(pan) }
     }
     // A finger on the picture: moves the view when zoomed in, and otherwise holds the mouse down and drags.
     func directDrag(_ phase: TouchPhase, _ location: CGPoint, _ delta: CGSize) {
