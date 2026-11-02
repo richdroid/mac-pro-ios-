@@ -40,7 +40,7 @@ struct RootView: View {
         Task {
             // The page is loading the same list, so wait for it rather than asking again.
             for _ in 0..<40 {
-                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == "series" }) { model.flick(FlickTarget(item: item, source: .stremio)); return }
+                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (pose == "streams" ? "movie" : "series") }) { model.flick(FlickTarget(item: item, source: .stremio)); return }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }

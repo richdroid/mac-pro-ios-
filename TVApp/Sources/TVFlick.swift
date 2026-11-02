@@ -18,7 +18,21 @@ struct StremioEpisode: Decodable, Identifiable, Hashable {
 }
 struct StremioStream: Decodable, Identifiable, Hashable {
     let token: String, addon: String, name: String, description: String
+    var quality: String?
+    var hdr: String?
+    var gb: Double?
+    var instant: Bool?
+    var lang: String?
     var id: String { token }
+    // "2.1 GB · Ready now · Torrentio"
+    var details: String {
+        var parts: [String] = []
+        if let gb, gb > 0 { parts.append(gb < 1 ? "\(Int(gb * 1024)) MB" : String(format: "%.1f GB", gb)) }
+        if instant == true { parts.append("Ready now") }
+        if let lang, !lang.isEmpty { parts.append(lang) }
+        if !addon.isEmpty { parts.append(addon) }
+        return parts.joined(separator: " · ")
+    }
 }
 struct StremioMeta: Decodable {
     let about: String
@@ -50,6 +64,7 @@ struct FlickScreen: View {
     @State private var streams: [StremioStream] = []
     @State private var stream: StremioStream?
     @State private var findingStreams = false
+    @State private var streamFilter = "All"
     @State private var noStreams = false
     @State private var cardFrame = CGRect.zero
     @State private var arrived = false
@@ -261,7 +276,7 @@ struct FlickScreen: View {
                 .padding(.top, 6)
                 ForEach((meta?.episodes ?? []).filter { $0.season == season }) { e in
                     row(selected: episode == e) {
-                        if episode != e { episode = e; stream = nil; streams = []; noStreams = false }
+                        if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All" }
                         go(.streams)
                     } label: {
                         Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
@@ -289,12 +304,34 @@ struct FlickScreen: View {
                 Button("No streams found. Try again") { Task { await findStreams() } }
                     .font(.subheadline.weight(.medium)).tint(TVLook.accent).frame(maxWidth: .infinity).padding(.top, 22)
             }
-            ForEach(streams) { s in
+            let qualities = ["1080p", "4K", "720p", "480p"].filter { q in streams.contains { $0.quality == q } }
+            if qualities.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(["All"] + qualities, id: \.self) { q in
+                            Button { model.tick(); withAnimation(.snappy) { streamFilter = q } } label: {
+                                Text(q).font(.footnote.weight(.semibold)).padding(.horizontal, 13).frame(height: 32)
+                                    .background(streamFilter == q ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.white.opacity(0.1)), in: Capsule())
+                                    .foregroundStyle(streamFilter == q ? .black : .white)
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(.top, 6)
+            }
+            let shown = streams.filter { streamFilter == "All" || $0.quality == streamFilter }
+            ForEach(Array(shown.enumerated()), id: \.element.id) { i, s in
                 row(selected: stream == s) { stream = s; go(.flick) } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(s.name.isEmpty ? s.addon : s.name).font(.subheadline.weight(.semibold)).lineLimit(2)
-                        if !s.description.isEmpty { Text(s.description).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
-                        if !s.name.isEmpty { Text(s.addon).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(s.name.isEmpty ? s.addon : s.name).font(.subheadline.weight(.bold)).lineLimit(1)
+                            // The list comes best first, for this box and what's being watched.
+                            if i == 0, streamFilter == "All" {
+                                Text("Best").font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(TVLook.accent, in: Capsule()).foregroundStyle(.black)
+                            }
+                        }
+                        if !s.details.isEmpty { Text(s.details).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1) }
+                        if !s.description.isEmpty { Text(s.description).font(.caption2).foregroundStyle(.tertiary).lineLimit(2) }
                     }
                     .multilineTextAlignment(.leading)
                 }
@@ -329,7 +366,7 @@ struct FlickScreen: View {
                 Image(systemName: "chevron.up").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
                     .phaseAnimator([CGFloat(0), -5]) { c, y in c.offset(y: y) } animation: { _ in .easeInOut(duration: 0.8) }
                 Text(note ?? "Flick up to play on the TV").font(.footnote.weight(.medium)).foregroundStyle(note == nil ? .secondary : .primary).contentTransition(.opacity)
-                if let stream, note == nil { Text(stream.name.isEmpty ? stream.addon : stream.name).font(.caption2).foregroundStyle(.tertiary).lineLimit(1).padding(.horizontal, 30) }
+                if let stream, note == nil { Text([stream.name, stream.details].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1).padding(.horizontal, 30) }
             }
             .opacity(note == nil ? calm : 1)
             .padding(.bottom, 12)
