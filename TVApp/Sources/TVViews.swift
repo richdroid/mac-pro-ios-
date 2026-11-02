@@ -638,7 +638,34 @@ struct FlickCard: View {
         }
         #endif
     }
+    // Nothing to offer when this phone is already AirPlaying to the TV, or the TV is already playing the same song.
+    var alreadyThere: Bool {
+        if model.status?.airplay?.active == true { return true }
+        guard !title.isEmpty, let m = model.status?.music else { return false }
+        return m.title.caseInsensitiveCompare(title) == .orderedSame
+    }
     var body: some View {
+        Group {
+            if alreadyThere { Color.clear.frame(height: 0) } else { card }
+        }
+        .onAppear {
+            refresh()
+            #if os(iOS)
+            MPMusicPlayerController.systemMusicPlayer.beginGeneratingPlaybackNotifications()
+            openAirPlayIfAsked()
+            #endif
+        }
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in openAirPlayIfAsked() }
+        .onChange(of: model.tab) { _, _ in openAirPlayIfAsked() }
+        .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerPlaybackStateDidChange)) { _ in refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerNowPlayingItemDidChange)) { _ in refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refresh() }
+        .alert("AirPlay to the TV", isPresented: $showPicker) { Button("OK", role: .cancel) {} } message: { Text("Tap the AirPlay button on this card and choose Mint Music. AirPlay only reaches the TV on home Wi-Fi.") }
+        #endif
+        .animation(.snappy, value: alreadyThere)
+    }
+    var card: some View {
         HStack(spacing: 12) {
             ZStack {
                 Color.white.opacity(0.08)
@@ -661,21 +688,6 @@ struct FlickCard: View {
         .tvCard()
         .contentShape(Rectangle())
         .onTapGesture(perform: flick)
-        .onAppear {
-            refresh()
-            #if os(iOS)
-            MPMusicPlayerController.systemMusicPlayer.beginGeneratingPlaybackNotifications()
-            openAirPlayIfAsked()
-            #endif
-        }
-        #if os(iOS)
-        .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in openAirPlayIfAsked() }
-        .onChange(of: model.tab) { _, _ in openAirPlayIfAsked() }
-        .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerPlaybackStateDidChange)) { _ in refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerNowPlayingItemDidChange)) { _ in refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refresh() }
-        .alert("AirPlay to the TV", isPresented: $showPicker) { Button("OK", role: .cancel) {} } message: { Text("Tap the AirPlay button on this card and choose Mint Music. AirPlay only reaches the TV on home Wi-Fi.") }
-        #endif
     }
 }
 struct NowControls: View {
