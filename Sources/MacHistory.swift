@@ -24,7 +24,7 @@ struct HistoryMetric: Identifiable, Hashable {
         case .percent: return "\(Int(v.rounded()))%"
         case .rate: return Format.rate(v)
         case .bytes: return Format.bytes(v)
-        case .temperature: return "\(Heat.f(v))°"
+        case .temperature: return "\(Heat.shown(v))°"
         }
     }
     func now(_ live: LiveStatus?) -> Double? {
@@ -253,7 +253,7 @@ struct DisplayHoldButton: View {
         .accessibilityAction { toggle() }
     }
     #if canImport(UIKit)
-    func click(_ style: UIImpactFeedbackGenerator.FeedbackStyle) { UIImpactFeedbackGenerator(style: style).impactOccurred() }
+    func click(_ style: UIImpactFeedbackGenerator.FeedbackStyle) { if MacPrefs.haptics { UIImpactFeedbackGenerator(style: style).impactOccurred() } }
     #else
     enum Style { case light, heavy }
     func click(_ style: Style) {}

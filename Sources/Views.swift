@@ -53,6 +53,7 @@ let groupedBackground = Color.gray.opacity(0.1)
 // System tabs and navigation get Liquid Glass and move to the Duo's right edge by themselves.
 struct RootView: View {
     @EnvironmentObject var model: AppModel
+    @AppStorage("accent") private var accent = "blue"
     @State private var resets: [Int: Int] = [:]
     var body: some View {
         PaneReader {
@@ -67,7 +68,12 @@ struct RootView: View {
                 Tab(value: 3) { Screen(title: "Usage") { UsageTab($0, side: $1) }.id(resets[3, default: 0]) } label: { tabLabel("Usage", "chart.bar") }
                 Tab(value: 4) { Screen(title: "Updates") { UpgradeTab($0, side: $1) }.id(resets[4, default: 0]) } label: { tabLabel("Updates", "arrow.up.circle") }
                 Tab(value: 5) { Screen(title: "Control") { ControlTab($0, side: $1) }.id(resets[5, default: 0]) } label: { tabLabel("Control", "display") }
+                // Last, so it sits at the foot of the side bar.
+                Tab(value: 9) { MacSettings().id(resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
             }
+            // A new colour is redrawn everywhere at once.
+            .id(accent)
+            .tint(macBlue)
             .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
         }
         .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
@@ -91,7 +97,6 @@ let tileColumns = [GridItem(.adaptive(minimum: 170), spacing: 18, alignment: .to
 struct Screen<Content: View>: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.paneLayout) private var panes
-    @State private var settings = false
     let title: String
     let content: (Status, Side) -> Content
     init(title: String, @ViewBuilder content: @escaping (Status, Side) -> Content) { self.title = title; self.content = content }
@@ -112,8 +117,6 @@ struct Screen<Content: View>: View {
             }
             .background(groupedBackground.ignoresSafeArea())
             .navigationTitle(title)
-            .toolbar { ToolbarItem(placement: .primaryAction) { Button { settings = true } label: { Label("Connection", systemImage: "gearshape") } } }
-            .sheet(isPresented: $settings) { SignInView().environmentObject(model) }
             .navigationDestination(item: title == "Status" ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
             .navigationDestination(item: title == "Status" ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0) }
         }
@@ -194,7 +197,7 @@ struct TempDials: View {
             ForEach(temps) { t in
                 VStack(spacing: 6) {
                     ArcGauge(Heat.level(t.c), heat: true, ticks: 32, length: 7, width: 2.2) {
-                        Text("\(Heat.f(t.c))°").font(.system(.body).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
+                        Text("\(Heat.shown(t.c))°").font(.system(.body).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
                     }
                     Text(t.name).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                 }
@@ -280,6 +283,13 @@ struct QuickActions: View {
 
 struct StatusTab: View {
     @EnvironmentObject var model: AppModel
+    // What the page shows, chosen in Settings.
+    @AppStorage("showQuick") private var showQuick = true
+    @AppStorage("showTemps") private var showTemps = true
+    @AppStorage("showDisk") private var showDisk = true
+    @AppStorage("showAccess") private var showAccess = true
+    @AppStorage("showThisMac") private var showThisMac = true
+    @AppStorage("showProcesses") private var showProcesses = true
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -287,11 +297,12 @@ struct StatusTab: View {
         if side != .right {
         if let alerts = s.alerts, !alerts.isEmpty { AlertBanner(alerts: alerts) }
         Section { Hero(s: s) }.listRowBackground(Color.clear).listRowSeparator(.hidden)
-        Section { QuickActions() }.listRowBackground(Color.clear).listRowSeparator(.hidden)
+        if showQuick { Section { QuickActions() }.listRowBackground(Color.clear).listRowSeparator(.hidden) }
         Section { LiveTiles(s: s) }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
-        if let temps = s.temps, !temps.isEmpty {
+        if showTemps, let temps = s.temps, !temps.isEmpty {
             Section("Temperatures") { TempDials(s: s) }
         }
+        if showDisk {
         Section("Disk") {
             Button { model.history = .disk } label: {
                 VStack(alignment: .leading, spacing: 2) {
@@ -309,8 +320,10 @@ struct StatusTab: View {
             .buttonStyle(.plain)
         }
         }
+        }
         if side != .left {
         AlertSettings(clear: (s.alerts ?? []).isEmpty)
+        if showAccess {
         Section("Remote access") {
             StateRow(label: "Claude remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
             StateRow(label: "Claude desktop (Dispatch)", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
@@ -319,15 +332,20 @@ struct StatusTab: View {
             StateRow(label: "Screen Sharing", good: s.sharing.vnc, value: s.sharing.vnc ? "On" : "Off")
             StateRow(label: "SSH", good: s.sharing.ssh, value: s.sharing.ssh ? "On" : "Off")
         }
+        }
+        if showThisMac {
         Section("This Mac") {
             LabeledContent("Model", value: s.model)
             LabeledContent("Processor", value: s.cpuModel.replacingOccurrences(of: "(R)", with: "").replacingOccurrences(of: "CPU ", with: ""))
             LabeledContent("Tailnet", value: s.tailscale.name ?? "Not signed in")
             Button("Change connection") { model.needsSignIn = true }
         }
+        }
+        if showProcesses {
         Section("Top processes") {
             ForEach(s.procs) { p in LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)) }
             NavigationLink("All processes") { ProcessesView(first: .cpu) }
+        }
         }
         }
     }

@@ -102,7 +102,7 @@ struct SessionTerminal: View {
             }
         }
         .preferredColorScheme(.dark)
-        .sensoryFeedback(.impact(weight: .light), trigger: sends)
+        .sensoryFeedback(trigger: sends) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
         .task {
             while !Task.isCancelled {
                 await load()

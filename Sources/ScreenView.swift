@@ -223,7 +223,7 @@ struct RemoteScreenView: View {
     }
     func tick(_ style: Haptic) {
         #if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: style == .light ? .light : .medium).impactOccurred()
+        if MacPrefs.haptics { UIImpactFeedbackGenerator(style: style == .light ? .light : .medium).impactOccurred() }
         #endif
     }
     enum Haptic { case light, medium }

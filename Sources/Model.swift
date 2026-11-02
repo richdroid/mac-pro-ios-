@@ -17,7 +17,8 @@ final class AppModel: ObservableObject {
     @Published var history: HistoryMetric?  // kept here so unfolding doesn't close it
     @Published var processes: ProcessSort?
     @Published var sessionScreen: Status.Session?  // a session's own screen, opened from an alert
-    @Published var tab = UserDefaults.standard.integer(forKey: "tab")
+    // The tab chosen to open on in Settings, or else the one last used.
+    @Published var tab = { let d = UserDefaults.standard, start = d.object(forKey: "startTab") as? Int ?? -1; return start >= 0 ? start : d.integer(forKey: "tab") }()
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
 
     var api: API { API(base: URL(string: address) ?? URL(string: "https://invalid.invalid")!) }
@@ -48,8 +49,8 @@ final class AppModel: ObservableObject {
         }
         loops = [
             // Everything, every 10 seconds; the live numbers every second in between.
-            Task { [weak self] in while !Task.isCancelled { if self?.screenOpen != true { await self?.refresh() }; try? await Task.sleep(nanoseconds: 10_000_000_000) } },
-            Task { [weak self] in while !Task.isCancelled { if self?.screenOpen != true { await self?.refreshLive() }; try? await Task.sleep(nanoseconds: 1_000_000_000) } },
+            Task { [weak self] in while !Task.isCancelled { if self?.screenOpen != true { await self?.refresh() }; try? await Task.sleep(nanoseconds: UInt64(MacPrefs.fullEvery * 1e9)) } },
+            Task { [weak self] in while !Task.isCancelled { if self?.screenOpen != true { await self?.refreshLive() }; try? await Task.sleep(nanoseconds: UInt64(MacPrefs.liveEvery * 1e9)) } },
         ]
     }
     func stop() { loops.forEach { $0.cancel() }; loops = [] }

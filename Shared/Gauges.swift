@@ -3,6 +3,8 @@ import SwiftUI
 // Dials made of ticks, after the vent slots around the Mac Pro's base. Cheap to redraw, and they hold up on clear Home Screens.
 enum Heat {
     static func f(_ c: Double) -> Int { Int((c * 9 / 5 + 32).rounded()) }
+    // In whichever unit is chosen in Settings, Fahrenheit unless Celsius is.
+    static func shown(_ c: Double) -> Int { MacPrefs.celsius ? Int(c.rounded()) : f(c) }
     static func level(_ c: Double) -> Double { min(max((c - 20) / 80, 0), 1) }
     static func color(_ c: Double) -> Color { c >= 90 ? .red : c >= 75 ? .orange : c >= 60 ? .yellow : .white }
     // Silver when cool, warming only near the top of the dial.
@@ -10,7 +12,33 @@ enum Heat {
         t > 0.875 ? Color(red: 1, green: 0.27, blue: 0.23) : t > 0.69 ? Color(red: 1, green: 0.6, blue: 0.04) : t > 0.5 ? Color(red: 1, green: 0.84, blue: 0.04) : Color(white: 0.93)
     }
 }
-let macBlue = Color(red: 0.04, green: 0.52, blue: 1)
+// The app's colour, chosen in Settings; blue unless another is. Widgets keep their own blue.
+var macBlue: Color { MacPrefs.accent.color }
+enum MacAccent: String, CaseIterable, Identifiable {
+    case blue, teal, purple, pink, orange, green, graphite
+    var id: String { rawValue }
+    var name: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+    var color: Color {
+        switch self {
+        case .blue: return Color(red: 0.04, green: 0.52, blue: 1)
+        case .teal: return Color(red: 0.19, green: 0.78, blue: 0.82)
+        case .purple: return Color(red: 0.62, green: 0.42, blue: 1)
+        case .pink: return Color(red: 1, green: 0.3, blue: 0.55)
+        case .orange: return Color(red: 1, green: 0.58, blue: 0.1)
+        case .green: return Color(red: 0.2, green: 0.8, blue: 0.4)
+        case .graphite: return Color(white: 0.72)
+        }
+    }
+}
+// Every choice in Settings, read where it's used.
+enum MacPrefs {
+    static var d: UserDefaults { .standard }
+    static var accent: MacAccent { MacAccent(rawValue: d.string(forKey: "accent") ?? "") ?? .blue }
+    static var celsius: Bool { d.bool(forKey: "celsius") }
+    static var haptics: Bool { d.object(forKey: "haptics") as? Bool ?? true }
+    static var liveEvery: Double { let v = d.double(forKey: "liveEvery"); return v > 0 ? v : 1 }
+    static var fullEvery: Double { let v = d.double(forKey: "fullEvery"); return v > 0 ? v : 10 }
+}
 
 struct ArcGauge<Center: View>: View {
     let value: Double
