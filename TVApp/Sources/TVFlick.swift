@@ -670,13 +670,14 @@ struct PlaceholderRow: View {
     }
 }
 
-// Cards give under the finger, as anything you can pick up should.
+// Cards give under the finger, as anything you can pick up should. Gently, and easing in, because every scroll starts
+// with a touch on some card, and a sharp squeeze there makes the whole row twitch.
 struct PressCard: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.94 : 1)
-            .brightness(configuration.isPressed ? -0.06 : 0)
-            .animation(.spring(response: 0.26, dampingFraction: 0.55), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.965 : 1)
+            .brightness(configuration.isPressed ? -0.04 : 0)
+            .animation(configuration.isPressed ? .easeOut(duration: 0.18).delay(0.06) : .spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
 

@@ -423,7 +423,7 @@ struct QuickApps: View {
                 ForEach(AppsTab.watching(model.status?.apps ?? []).prefix(8)) { Banner(app: $0) }
             }.scrollTargetLayout()
         }
-        .scrollTargetBehavior(.viewAligned).frame(height: TVLook.bannerSize.height)
+        .frame(height: TVLook.bannerSize.height)
     }
 }
 struct MiniPlayer: View {
@@ -492,7 +492,7 @@ struct BannerRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: TVLook.gap) { ForEach(apps) { Banner(app: $0, browses: true) } }.padding(.horizontal, 20).scrollTargetLayout()
             }
-            .scrollTargetBehavior(.viewAligned).clipped()
+            .clipped()
         }
     }
 }
@@ -847,7 +847,7 @@ struct FilmRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 12) { ForEach(films) { FilmCard(film: $0) } }.padding(.horizontal, 20).scrollTargetLayout()
             }
-            .scrollTargetBehavior(.viewAligned).clipped()
+            .clipped()
         }
     }
 }

@@ -196,7 +196,7 @@ struct BrowseColumn: View {
                             }
                             .padding(.horizontal, 20).scrollTargetLayout()
                         }
-                        .scrollTargetBehavior(.viewAligned).clipped()
+                        .clipped()
                     }
                 }
             }
@@ -233,7 +233,6 @@ struct EverywhereSearch: View {
                             }
                             .padding(.horizontal, 20).scrollTargetLayout()
                         }
-                        .scrollTargetBehavior(.viewAligned)
                     }
                     .transition(.opacity.combined(with: .offset(y: 12)))
                 }
