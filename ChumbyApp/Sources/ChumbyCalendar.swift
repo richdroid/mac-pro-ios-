@@ -56,7 +56,7 @@ final class CalendarWake: ObservableObject {
                      canceled: e.status == .canceled, hasLocation: !(e.location ?? "").isEmpty)
         }
     }
-    func refreshPlan() { if allowed { plan = WakePlanner.plan(events(), rules: rules) } }
+    func refreshPlan() { if allowed && UserDefaults.standard.string(forKey: "pose") != "calendar" { plan = WakePlanner.plan(events(), rules: rules) } }
     func startWatching() {
         guard !watching else { return }
         watching = true
@@ -82,6 +82,8 @@ final class CalendarWake: ObservableObject {
     // the Chumby's panel. Returns what happened, for Shortcuts.
     @discardableResult
     func sync() async -> String {
+        // The simulator shots show the sample, with no calendar or Chumby to ask.
+        if UserDefaults.standard.string(forKey: "pose") == "calendar" { return "" }
         guard !running else { return "Already updating." }
         running = true
         defer { running = false }
