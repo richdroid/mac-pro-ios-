@@ -211,8 +211,9 @@ struct FlickScreen: View {
                                 .transition(.opacity)
                         }
                     }
-                    .blur(radius: landed ? 22 : 40)
-                    .scaleEffect(landed ? 1.18 : 1.1)
+                    // A fixed blur: animating its radius redraws the whole screen's blur every frame of the flight.
+                    .blur(radius: 32)
+                    .scaleEffect(landed ? 1.16 : 1.1)
                 }
                 .clipped()
                 .opacity(0.55 + 0.4 * charge)
