@@ -107,7 +107,9 @@ final class AppModel: ObservableObject {
             if UserDefaults.standard.string(forKey: "pose") == "session", sessionScreen == nil { sessionScreen = fresh.claude.sessions.first { $0.key == "chumby" } }
             status = fresh
             AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
-            problem = nil; needsSignIn = false
+            // Setting a value to what it already is still redraws everything watching it.
+            if problem != nil { problem = nil }
+            if needsSignIn { needsSignIn = false }
         } catch APIError.signInNeeded {
             needsSignIn = true
         } catch is CancellationError {

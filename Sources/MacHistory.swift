@@ -63,7 +63,11 @@ struct HistoryView: View {
         return points.filter { $0.t >= from }
     }
     // Averaged to what the screen can show, and broken wherever the Mac wasn't recording, rather than joined across the gap.
-    var marks: [Mark] {
+    // Worked out once per load or change of period, not on every redraw: the chart redraws as a finger slides along it.
+    @State private var marksCache: (key: Int, marks: [Mark]) = (0, [])
+    var marksKey: Int { hours &* 1_000_003 &+ points.count &+ Int(points.last?.t ?? 0) }
+    var marks: [Mark] { marksCache.key == marksKey && marksKey != 0 ? marksCache.marks : computeMarks() }
+    func computeMarks() -> [Mark] {
         let bucket = Double(hours) * 3600 / 240
         var out: [Mark] = [], run = 0
         let groups = Dictionary(grouping: shown) { floor($0.t / 1000 / bucket) }
@@ -191,6 +195,7 @@ struct HistoryView: View {
         .navigationTitle(metric.title)
         .navigationBarTitleDisplayMode(.inline)
         .animation(.easeOut(duration: 0.25), value: hours)
+        .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }
         .navigationDestination(item: $model.processes) { ProcessesView(first: $0) }
         .task {
             // A new reading arrives once a minute.

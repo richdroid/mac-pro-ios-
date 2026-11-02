@@ -31,9 +31,8 @@ final class RemoteScreen: ObservableObject {
     @Published var cursor = CGPoint.zero
 
     private var socket: URLSessionWebSocketTask?
-    private var buffer = Data()
-    private var inflater = ZRLEInflater()
-    private var frame = FrameBuffer(size: 0)
+    // Reading the stream and painting the picture happen off the main thread, so touches never wait on a frame.
+    private var decoder: ScreenDecoder?
     private var trailingPublish: Task<Void, Never>?
     // Nothing is drawn while the screen is closed, so nothing is built either.
     var paused = false { didSet { if !paused { publish() } } }
@@ -41,8 +40,6 @@ final class RemoteScreen: ObservableObject {
     private var buttons: UInt8 = 0
     private var lastPublish = Date.distantPast
     private var running = false
-    private enum Stage { case version, security, result, serverInit, messages }
-    private var stage = Stage.version
     private var base: URL?
     private var wanted = false          // someone wants the screen, so a drop means reconnect
     private var attempts = 0
@@ -118,9 +115,11 @@ final class RemoteScreen: ObservableObject {
         let task = URLSession.shared.webSocketTask(with: request)
         task.maximumMessageSize = 32 << 20
         socket = task
-        buffer = Data(); inflater = ZRLEInflater(); stage = .version; running = true; phase = image == nil ? .connecting : .reconnecting
+        let decoder = ScreenDecoder(socket: task)
+        self.decoder = decoder
+        running = true; phase = image == nil ? .connecting : .reconnecting
         task.resume()
-        Task { await receiveLoop(task, base: base) }
+        Task { await receiveLoop(task, decoder: decoder) }
     }
 
     func disconnect() {
@@ -130,15 +129,19 @@ final class RemoteScreen: ObservableObject {
         if phase != .needsLogin { phase = .idle }
     }
 
-    private func receiveLoop(_ task: URLSessionWebSocketTask, base: URL) async {
+    private func receiveLoop(_ task: URLSessionWebSocketTask, decoder: ScreenDecoder) async {
         while running, socket === task {
             do {
+                let data: Data
                 switch try await task.receive() {
-                case .data(let d): buffer.append(d)
-                case .string(let s): buffer.append(Data(s.utf8))
-                @unknown default: break
+                case .data(let d): data = d
+                case .string(let s): data = Data(s.utf8)
+                @unknown default: continue
                 }
-                try parse()
+                // One message at a time, in order, on a background thread; only what changed comes back here.
+                let events = await Task.detached(priority: .userInitiated) { decoder.feed(data) }.value
+                guard running, socket === task else { return }
+                for e in events { apply(e) }
             } catch {
                 guard running, socket === task else { return }
                 let code = (task.response as? HTTPURLResponse)?.statusCode ?? 0
@@ -153,12 +156,6 @@ final class RemoteScreen: ObservableObject {
         }
     }
 
-    private func take(_ n: Int) -> Data? {
-        guard buffer.count >= n else { return nil }
-        let out = Data(buffer.prefix(n))
-        buffer = Data(buffer.dropFirst(n))
-        return out
-    }
     private func send(_ bytes: [UInt8]) {
         let task = socket
         task?.send(.data(Data(bytes))) { [weak self] error in
@@ -166,199 +163,20 @@ final class RemoteScreen: ObservableObject {
             if error != nil { Task { @MainActor in if self?.socket === task { self?.dropConnection() } } }
         }
     }
-    private func be16(_ d: Data, _ i: Int) -> Int { Int(d[d.startIndex + i]) << 8 | Int(d[d.startIndex + i + 1]) }
-    private func be32(_ d: Data, _ i: Int) -> Int { be16(d, i) << 16 | be16(d, i + 2) }
-
-    private func parse() throws {
-        while true {
-            switch stage {
-            case .version:
-                guard take(12) != nil else { return }
-                socket?.send(.data(Data("RFB 003.008\n".utf8))) { _ in }
-                stage = .security
-            case .security:
-                guard let head = buffer.first, buffer.count >= 1 + Int(head), take(1 + Int(head)) != nil else { return }
-                send([1])
-                stage = .result
-            case .result:
-                guard let r = take(4) else { return }
-                if be32(r, 0) != 0 { phase = .failed("Screen Sharing refused the connection."); running = false; return }
-                send([1])
-                stage = .serverInit
-            case .serverInit:
-                guard buffer.count >= 24 else { return }
-                let nameLength = be32(buffer, 20)
-                guard let head = take(24 + nameLength) else { return }
-                width = be16(head, 0); height = be16(head, 2)
-                frame = FrameBuffer(size: width * height * 4)
-                size = CGSize(width: width, height: height)
-                cursor = CGPoint(x: width / 2, y: height / 2)
-                // 32-bit little-endian BGRA. ZRLE first, moved areas next, raw as the fallback, and being told of a resize.
-                send([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0])
-                send([2, 0, 0, 4,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33])
-                request(incremental: false)
-                stage = .messages
-                phase = .connected
-                attempts = 0
-            case .messages:
-                guard let type = buffer.first else { return }
-                switch type {
-                case 0: if try !readUpdate() { return }
-                case 1:
-                    guard buffer.count >= 6 else { return }
-                    let n = be16(buffer, 4)
-                    guard take(6 + n * 6) != nil else { return }
-                case 2: _ = take(1)
-                case 3:
-                    guard buffer.count >= 8 else { return }
-                    guard take(8 + be32(buffer, 4)) != nil else { return }
-                default: buffer = Data(); return
-                }
-            }
+    private func apply(_ e: ScreenEvent) {
+        switch e {
+        case .opened(let w, let h):
+            width = w; height = h
+            size = CGSize(width: w, height: h)
+            cursor = CGPoint(x: w / 2, y: h / 2)
+            phase = .connected
+            attempts = 0
+        case .resized(let w, let h):
+            width = w; height = h
+            size = CGSize(width: w, height: h)
+        case .drew: publish()
+        case .failed(let message): phase = .failed(message); running = false
         }
-    }
-
-    private func readUpdate() throws -> Bool {
-        guard buffer.count >= 4 else { return false }
-        let count = be16(buffer, 2)
-        // Nothing is touched until the whole update has arrived.
-        var at = 4
-        for _ in 0..<count {
-            guard buffer.count >= at + 12 else { return false }
-            let w = be16(buffer, at + 4), h = be16(buffer, at + 6), encoding = Int32(truncatingIfNeeded: be32(buffer, at + 8))
-            at += 12
-            switch encoding {
-            case 0: at += w * h * 4
-            case 1: at += 4
-            case 16:
-                guard buffer.count >= at + 4 else { return false }
-                at += 4 + be32(buffer, at)
-            case -223: break
-            default: phase = .failed("Unexpected screen data."); running = false; return false
-            }
-            guard buffer.count >= at else { return false }
-        }
-        var read = 4
-        for _ in 0..<count {
-            let x = be16(buffer, read), y = be16(buffer, read + 2), w = be16(buffer, read + 4), h = be16(buffer, read + 6)
-            let encoding = Int32(truncatingIfNeeded: be32(buffer, read + 8))
-            read += 12
-            switch encoding {
-            case 0:
-                let offset = read
-                buffer.withUnsafeBytes { src in
-                    for row in 0..<h where y + row < height && x + w <= width {
-                        memcpy(frame.bytes + ((y + row) * width + x) * 4, src.baseAddress! + offset + row * w * 4, w * 4)
-                    }
-                }
-                read += w * h * 4
-            case 1:
-                copyRect(fromX: be16(buffer, read), fromY: be16(buffer, read + 2), x: x, y: y, w: w, h: h)
-                read += 4
-            case 16:
-                let length = be32(buffer, read)
-                let offset = read + 4
-                let ok = buffer.withUnsafeBytes { src -> Bool in
-                    guard let pixels = inflater.inflate(src.baseAddress! + offset, count: length) else { return false }
-                    return drawZRLE(pixels, x: x, y: y, w: w, h: h)
-                }
-                guard ok else { phase = .failed("Unexpected screen data."); running = false; return false }
-                read = offset + length
-            default:
-                // The Mac changed resolution: a new picture follows.
-                width = w; height = h
-                frame = FrameBuffer(size: width * height * 4)
-                size = CGSize(width: width, height: height)
-            }
-        }
-        buffer = Data(buffer.dropFirst(read))
-        publish()
-        request(incremental: true)
-        return true
-    }
-    private func copyRect(fromX: Int, fromY: Int, x: Int, y: Int, w: Int, h: Int) {
-        guard fromX + w <= width, fromY + h <= height, x + w <= width, y + h <= height else { return }
-        // Bottom up when moving down, so an overlap isn't overwritten before it's read.
-        let rows = y > fromY ? Array((0..<h).reversed()) : Array(0..<h)
-        for row in rows {
-            memmove(frame.bytes + ((y + row) * width + x) * 4, frame.bytes + ((fromY + row) * width + fromX) * 4, w * 4)
-        }
-    }
-    // ZRLE: 64-pixel tiles in reading order, each solid, raw, palette or run-length, in 3-byte blue, green, red.
-    private func drawZRLE(_ data: UnsafeBufferPointer<UInt8>, x: Int, y: Int, w: Int, h: Int) -> Bool {
-        guard x + w <= width, y + h <= height else { return false }
-        let out = frame.bytes.assumingMemoryBound(to: UInt32.self)
-        var at = 0
-        let end = data.count
-        func pixel() -> UInt32? {
-            guard at + 3 <= end else { return nil }
-            defer { at += 3 }
-            return UInt32(data[at]) | UInt32(data[at + 1]) << 8 | UInt32(data[at + 2]) << 16 | 0xff00_0000
-        }
-        var tileY = 0
-        while tileY < h {
-            let th = min(64, h - tileY)
-            var tileX = 0
-            while tileX < w {
-                let tw = min(64, w - tileX)
-                guard at < end else { return false }
-                let kind = Int(data[at]); at += 1
-                let origin = (y + tileY) * width + x + tileX
-                let total = tw * th
-                func put(_ i: Int, _ c: UInt32) { out[origin + (i / tw) * width + i % tw] = c }
-                switch kind {
-                case 0:
-                    for i in 0..<total { guard let c = pixel() else { return false }; put(i, c) }
-                case 1:
-                    guard let c = pixel() else { return false }
-                    for i in 0..<total { put(i, c) }
-                case 2...16:
-                    var palette = [UInt32](); palette.reserveCapacity(kind)
-                    for _ in 0..<kind { guard let c = pixel() else { return false }; palette.append(c) }
-                    let bits = kind == 2 ? 1 : kind <= 4 ? 2 : 4
-                    for row in 0..<th {
-                        var byte = 0, left = 0
-                        for col in 0..<tw {
-                            if left == 0 { guard at < end else { return false }; byte = Int(data[at]); at += 1; left = 8 }
-                            left -= bits
-                            let index = (byte >> left) & ((1 << bits) - 1)
-                            guard index < kind else { return false }
-                            out[origin + row * width + col] = palette[index]
-                        }
-                    }
-                case 128, 130...255:
-                    var palette = [UInt32]()
-                    if kind != 128 { for _ in 0..<(kind - 128) { guard let c = pixel() else { return false }; palette.append(c) } }
-                    var i = 0
-                    while i < total {
-                        var color: UInt32, run = 1
-                        if kind == 128 {
-                            guard let c = pixel() else { return false }
-                            color = c
-                        } else {
-                            guard at < end else { return false }
-                            let v = Int(data[at]); at += 1
-                            guard v & 127 < palette.count else { return false }
-                            color = palette[v & 127]
-                            if v & 128 == 0 { put(i, color); i += 1; continue }
-                        }
-                        // A run's length is 1 plus every following byte, up to and including the first under 255.
-                        while true {
-                            guard at < end else { return false }
-                            let more = Int(data[at]); at += 1
-                            run += more
-                            if more != 255 { break }
-                        }
-                        guard i + run <= total else { return false }
-                        for _ in 0..<run { put(i, color); i += 1 }
-                    }
-                default: return false
-                }
-                tileX += tw
-            }
-            tileY += th
-        }
-        return true
     }
 
     private func publish() {
@@ -375,7 +193,7 @@ final class RemoteScreen: ObservableObject {
             }
             return
         }
-        guard let provider = frame.provider() else { return }
+        guard let provider = decoder?.frame.provider() else { return }
         lastPublish = Date()
         image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
                         space: CGColorSpaceCreateDeviceRGB(),
@@ -477,4 +295,231 @@ final class ZRLEInflater {
         }
         return output.withUnsafeBufferPointer { UnsafeBufferPointer(start: $0.baseAddress, count: produced) }
     }
+}
+
+enum ScreenEvent { case opened(Int, Int), resized(Int, Int), drew, failed(String) }
+
+// The Mac's side of the connection: reads the RFB stream, inflates ZRLE and paints the picture's memory. Only ever used
+// by one message at a time, in order, from the receive loop, and never from the main thread.
+final class ScreenDecoder: @unchecked Sendable {
+    let socket: URLSessionWebSocketTask
+    private(set) var frame = FrameBuffer(size: 0)
+    private var buffer = Data()
+    private var inflater = ZRLEInflater()
+    private var width = 0, height = 0
+    private enum Stage { case version, security, result, serverInit, messages, stopped }
+    private var stage = Stage.version
+    private var events: [ScreenEvent] = []
+    init(socket: URLSessionWebSocketTask) { self.socket = socket }
+    func feed(_ data: Data) -> [ScreenEvent] {
+        events = []
+        guard stage != .stopped else { return [] }
+        buffer.append(data)
+        parse()
+        return events
+    }
+    private func fail(_ message: String) { stage = .stopped; events.append(.failed(message)) }
+    private func send(_ bytes: [UInt8]) { socket.send(.data(Data(bytes))) { _ in } }
+    private func take(_ n: Int) -> Data? {
+        guard buffer.count >= n else { return nil }
+        let out = Data(buffer.prefix(n))
+        buffer = Data(buffer.dropFirst(n))
+        return out
+    }
+    private func request(incremental: Bool) {
+        send([3, incremental ? 1 : 0, 0, 0, 0, 0, UInt8(width >> 8), UInt8(width & 255), UInt8(height >> 8), UInt8(height & 255)])
+    }
+    private func be16(_ d: Data, _ i: Int) -> Int { Int(d[d.startIndex + i]) << 8 | Int(d[d.startIndex + i + 1]) }
+    private func be32(_ d: Data, _ i: Int) -> Int { be16(d, i) << 16 | be16(d, i + 2) }
+
+    private func parse() {
+        while true {
+            switch stage {
+            case .stopped: return
+            case .version:
+                guard take(12) != nil else { return }
+                socket.send(.data(Data("RFB 003.008\n".utf8))) { _ in }
+                stage = .security
+            case .security:
+                guard let head = buffer.first, buffer.count >= 1 + Int(head), take(1 + Int(head)) != nil else { return }
+                send([1])
+                stage = .result
+            case .result:
+                guard let r = take(4) else { return }
+                if be32(r, 0) != 0 { fail("Screen Sharing refused the connection."); return }
+                send([1])
+                stage = .serverInit
+            case .serverInit:
+                guard buffer.count >= 24 else { return }
+                let nameLength = be32(buffer, 20)
+                guard let head = take(24 + nameLength) else { return }
+                width = be16(head, 0); height = be16(head, 2)
+                frame = FrameBuffer(size: width * height * 4)
+                // 32-bit little-endian BGRA. ZRLE first, moved areas next, raw as the fallback, and being told of a resize.
+                send([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0])
+                send([2, 0, 0, 4,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33])
+                request(incremental: false)
+                stage = .messages
+                events.append(.opened(width, height))
+            case .messages:
+                guard let type = buffer.first else { return }
+                switch type {
+                case 0: if !readUpdate() { return }
+                case 1:
+                    guard buffer.count >= 6 else { return }
+                    let n = be16(buffer, 4)
+                    guard take(6 + n * 6) != nil else { return }
+                case 2: _ = take(1)
+                case 3:
+                    guard buffer.count >= 8 else { return }
+                    guard take(8 + be32(buffer, 4)) != nil else { return }
+                default: buffer = Data(); return
+                }
+            }
+        }
+    }
+
+    private func readUpdate() -> Bool {
+        guard buffer.count >= 4 else { return false }
+        let count = be16(buffer, 2)
+        // Nothing is touched until the whole update has arrived.
+        var at = 4
+        for _ in 0..<count {
+            guard buffer.count >= at + 12 else { return false }
+            let w = be16(buffer, at + 4), h = be16(buffer, at + 6), encoding = Int32(truncatingIfNeeded: be32(buffer, at + 8))
+            at += 12
+            switch encoding {
+            case 0: at += w * h * 4
+            case 1: at += 4
+            case 16:
+                guard buffer.count >= at + 4 else { return false }
+                at += 4 + be32(buffer, at)
+            case -223: break
+            default: fail("Unexpected screen data."); return false
+            }
+            guard buffer.count >= at else { return false }
+        }
+        var read = 4
+        for _ in 0..<count {
+            let x = be16(buffer, read), y = be16(buffer, read + 2), w = be16(buffer, read + 4), h = be16(buffer, read + 6)
+            let encoding = Int32(truncatingIfNeeded: be32(buffer, read + 8))
+            read += 12
+            switch encoding {
+            case 0:
+                let offset = read
+                buffer.withUnsafeBytes { src in
+                    for row in 0..<h where y + row < height && x + w <= width {
+                        memcpy(frame.bytes + ((y + row) * width + x) * 4, src.baseAddress! + offset + row * w * 4, w * 4)
+                    }
+                }
+                read += w * h * 4
+            case 1:
+                copyRect(fromX: be16(buffer, read), fromY: be16(buffer, read + 2), x: x, y: y, w: w, h: h)
+                read += 4
+            case 16:
+                let length = be32(buffer, read)
+                let offset = read + 4
+                let ok = buffer.withUnsafeBytes { src -> Bool in
+                    guard let pixels = inflater.inflate(src.baseAddress! + offset, count: length) else { return false }
+                    return drawZRLE(pixels, x: x, y: y, w: w, h: h)
+                }
+                guard ok else { fail("Unexpected screen data."); return false }
+                read = offset + length
+            default:
+                // The Mac changed resolution: a new picture follows.
+                width = w; height = h
+                frame = FrameBuffer(size: width * height * 4)
+                events.append(.resized(w, h))
+            }
+        }
+        buffer = Data(buffer.dropFirst(read))
+        events.append(.drew)
+        request(incremental: true)
+        return true
+    }
+    private func copyRect(fromX: Int, fromY: Int, x: Int, y: Int, w: Int, h: Int) {
+        guard fromX + w <= width, fromY + h <= height, x + w <= width, y + h <= height else { return }
+        // Bottom up when moving down, so an overlap isn't overwritten before it's read.
+        let rows = y > fromY ? Array((0..<h).reversed()) : Array(0..<h)
+        for row in rows {
+            memmove(frame.bytes + ((y + row) * width + x) * 4, frame.bytes + ((fromY + row) * width + fromX) * 4, w * 4)
+        }
+    }
+    // ZRLE: 64-pixel tiles in reading order, each solid, raw, palette or run-length, in 3-byte blue, green, red.
+    private func drawZRLE(_ data: UnsafeBufferPointer<UInt8>, x: Int, y: Int, w: Int, h: Int) -> Bool {
+        guard x + w <= width, y + h <= height else { return false }
+        let out = frame.bytes.assumingMemoryBound(to: UInt32.self)
+        var at = 0
+        let end = data.count
+        func pixel() -> UInt32? {
+            guard at + 3 <= end else { return nil }
+            defer { at += 3 }
+            return UInt32(data[at]) | UInt32(data[at + 1]) << 8 | UInt32(data[at + 2]) << 16 | 0xff00_0000
+        }
+        var tileY = 0
+        while tileY < h {
+            let th = min(64, h - tileY)
+            var tileX = 0
+            while tileX < w {
+                let tw = min(64, w - tileX)
+                guard at < end else { return false }
+                let kind = Int(data[at]); at += 1
+                let origin = (y + tileY) * width + x + tileX
+                let total = tw * th
+                func put(_ i: Int, _ c: UInt32) { out[origin + (i / tw) * width + i % tw] = c }
+                switch kind {
+                case 0:
+                    for i in 0..<total { guard let c = pixel() else { return false }; put(i, c) }
+                case 1:
+                    guard let c = pixel() else { return false }
+                    for i in 0..<total { put(i, c) }
+                case 2...16:
+                    var palette = [UInt32](); palette.reserveCapacity(kind)
+                    for _ in 0..<kind { guard let c = pixel() else { return false }; palette.append(c) }
+                    let bits = kind == 2 ? 1 : kind <= 4 ? 2 : 4
+                    for row in 0..<th {
+                        var byte = 0, left = 0
+                        for col in 0..<tw {
+                            if left == 0 { guard at < end else { return false }; byte = Int(data[at]); at += 1; left = 8 }
+                            left -= bits
+                            let index = (byte >> left) & ((1 << bits) - 1)
+                            guard index < kind else { return false }
+                            out[origin + row * width + col] = palette[index]
+                        }
+                    }
+                case 128, 130...255:
+                    var palette = [UInt32]()
+                    if kind != 128 { for _ in 0..<(kind - 128) { guard let c = pixel() else { return false }; palette.append(c) } }
+                    var i = 0
+                    while i < total {
+                        var color: UInt32, run = 1
+                        if kind == 128 {
+                            guard let c = pixel() else { return false }
+                            color = c
+                        } else {
+                            guard at < end else { return false }
+                            let v = Int(data[at]); at += 1
+                            guard v & 127 < palette.count else { return false }
+                            color = palette[v & 127]
+                            if v & 128 == 0 { put(i, color); i += 1; continue }
+                        }
+                        // A run's length is 1 plus every following byte, up to and including the first under 255.
+                        while true {
+                            guard at < end else { return false }
+                            let more = Int(data[at]); at += 1
+                            run += more
+                            if more != 255 { break }
+                        }
+                        guard i + run <= total else { return false }
+                        for _ in 0..<run { put(i, color); i += 1 }
+                    }
+                default: return false
+                }
+                tileX += tw
+            }
+            tileY += th
+        }
+        return true
+    }
+
 }

@@ -143,7 +143,9 @@ struct WebTile: View {
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
             }
+            // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
             Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
+                .animation(.easeOut(duration: 0.25), value: value)
             Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             if spark.count > 1 {
                 // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
@@ -178,7 +180,6 @@ struct LiveTiles: View {
                 WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.ip, spark: h.tx, read: Format.rate, open: { model.history = .upload })
             }
         }
-        .animation(.easeOut(duration: 0.25), value: cpu.total)
     }
 }
 
