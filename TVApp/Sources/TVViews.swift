@@ -35,6 +35,7 @@ struct RootView: View {
     // The build's simulator shots ask for screens a launch alone can't reach.
     func poseForShots() {
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
+        if pose == "search" { SendDraft.shared.text = "Heat"; return }
         model.browsing = .stremio
         guard pose != "browse" else { return }
         Task {
@@ -132,7 +133,7 @@ struct SendBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "paperplane").foregroundStyle(.secondary).padding(.leading, 14)
-            TextField("Send a link or search", text: $draft.text)
+            TextField("Search, or send a link", text: $draft.text)
                 .focused($focused).autocorrectionDisabled().submitLabel(.send)
                 .onSubmit { submit() }
             if draft.text.isEmpty {
@@ -513,6 +514,13 @@ struct BannerRow: View {
 struct AppsTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.paneLayout) private var panes
+    @ObservedObject private var draft = SendDraft.shared
+    // Words typed into the bar search Stremio and Mint as you type. A link is only ever sent.
+    var query: String? {
+        let t = draft.text.trimmingCharacters(in: .whitespaces)
+        let link = t.contains("://") || t.lowercased().hasPrefix("www.") || (!t.contains(" ") && t.contains(".") && t.contains("/"))
+        return t.count >= 2 && !link ? t : nil
+    }
     static let listen = ["com.codex.musicwebtv", "com.google.android.youtube.tvmusic"]
     static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.google.android.play.games", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.macropinch.axe"]
     static let watchOrder = ["com.mint.letterboxd", "com.stremio.one", "com.google.android.youtube.tv", "com.google.android.youtube.tvunplugged", "com.netflix.ninja", "com.plexapp.android", "com.apple.atve.androidtv.appletv", "com.amazon.amazonvideo.livingroom", "com.cbs.ott"]
@@ -547,8 +555,10 @@ struct AppsTab: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
                         SendBar().padding(.horizontal, 20)
-                        row("Watch", watch)
-                        row("Listen", listen)
+                        if let query { EverywhereSearch(text: query) } else {
+                            row("Watch", watch)
+                            row("Listen", listen)
+                        }
                     }.padding(.vertical, 12)
                 }
             } right: {
@@ -558,10 +568,13 @@ struct AppsTab: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     SendBar().padding(.horizontal, 20)
-                    row("Watch", watch)
-                    row("Listen", listen)
-                    row("Tools and settings", tools)
+                    if let query { EverywhereSearch(text: query) } else {
+                        row("Watch", watch)
+                        row("Listen", listen)
+                        row("Tools and settings", tools)
+                    }
                 }.padding(.vertical, 12)
+                .animation(.snappy, value: query == nil)
             }
         }
     }

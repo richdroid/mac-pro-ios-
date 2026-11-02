@@ -206,3 +206,49 @@ struct BrowseColumn: View {
         .task { await store.load() }
     }
 }
+
+// Stremio and Mint searched together, from the bar on the Apps page. Every result flicks like a card on its own page.
+struct EverywhereSearch: View {
+    @EnvironmentObject var model: TVModel
+    let text: String
+    @StateObject private var films = BrowseStore(.stremio)
+    @StateObject private var music = BrowseStore(.mint)
+    var stores: [BrowseStore] { [films, music] }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            ForEach(stores, id: \.source) { store in
+                ForEach(store.rows) { row in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Text(row.title).font(.title3.weight(.bold))
+                            Text(store.source.name).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                        }
+                        .padding(.leading, 20)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 10) {
+                                ForEach(row.items) { item in
+                                    Button { model.flick(FlickTarget(item: item, source: store.source)) } label: { MediaCard(item: item, source: store.source, width: store.source.cardWidth) }
+                                        .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
+                                }
+                            }
+                            .padding(.horizontal, 20).scrollTargetLayout()
+                        }
+                        .scrollTargetBehavior(.viewAligned)
+                    }
+                    .transition(.opacity.combined(with: .offset(y: 12)))
+                }
+            }
+            if films.rows.isEmpty && music.rows.isEmpty {
+                Group {
+                    if films.loading || music.loading { ProgressView() }
+                    else { ContentUnavailableView.search(text: text) }
+                }
+                .frame(maxWidth: .infinity).padding(.top, 30)
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: films.rows.map(\.id) + music.rows.map(\.id))
+        .onChange(of: text, initial: true) { _, t in
+            for s in stores { s.query = t; s.searchSoon() }
+        }
+    }
+}
