@@ -141,15 +141,6 @@ struct ManageSettingsView: View {
     var body: some View {
         Form {
             if let s = store.state {
-                // The box itself stays at full and the TV owns the volume, so these step the TV over HDMI. There's no
-                // level to show, because the TV doesn't report one.
-                Section("TV volume") {
-                    HStack {
-                        Button { store.send("key", ["key": "voldown"]) } label: { Label("Down", systemImage: "speaker.minus.fill").frame(maxWidth: .infinity) }
-                        Button { store.send("key", ["key": "volup"]) } label: { Label("Up", systemImage: "speaker.plus.fill").frame(maxWidth: .infinity) }
-                    }
-                    .buttonStyle(.bordered)
-                }
                 Section {
                     pick("TV sleeps after", "sleep_after", Self.sleep)
                     pick("Screensaver starts after", "screensaver_after", Self.saver)

@@ -281,7 +281,7 @@ struct RemoteKeys: View {
     var body: some View {
         Grid(horizontalSpacing: 10, verticalSpacing: 10) {
             GridRow { WidgetKey(icon: "arrow.uturn.backward", key: "back", label: "Back", size: key); WidgetKey(icon: "house.fill", key: "home", label: "Home", size: key); WidgetPower(size: key) }
-            GridRow { WidgetKey(icon: "speaker.minus.fill", key: "voldown", label: "Volume down", size: key); WidgetKey(icon: "playpause.fill", key: "play", label: "Play or pause", size: key); WidgetKey(icon: "speaker.plus.fill", key: "volup", label: "Volume up", size: key) }
+            GridRow { WidgetKey(icon: "gobackward.10", key: "rewind", label: "Rewind", size: key); WidgetKey(icon: "playpause.fill", key: "play", label: "Play or pause", size: key); WidgetKey(icon: "goforward.10", key: "forward", label: "Fast forward", size: key) }
         }
     }
 }
@@ -599,20 +599,6 @@ struct TVFlickControl: ControlWidget {
         }.displayName("Flick to TV").description("Sends what’s playing on this iPhone to the TV.")
     }
 }
-struct TVVolumeUpControl: ControlWidget {
-    var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: "TVVolumeUpControl") {
-            ControlWidgetButton(action: TVPress(key: "volup")) { Label("TV Volume Up", systemImage: "speaker.plus.fill") }
-        }.displayName("TV Volume Up")
-    }
-}
-struct TVVolumeDownControl: ControlWidget {
-    var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: "TVVolumeDownControl") {
-            ControlWidgetButton(action: TVPress(key: "voldown")) { Label("TV Volume Down", systemImage: "speaker.minus.fill") }
-        }.displayName("TV Volume Down")
-    }
-}
 struct TVPowerControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "TVPowerControl") {
@@ -640,8 +626,6 @@ struct TVWidgets: WidgetBundle {
         TVIslandWidget()
         TVFlickControl()
         TVPlayControl()
-        TVVolumeUpControl()
-        TVVolumeDownControl()
         TVPowerControl()
         TVRemoteControl()
     }

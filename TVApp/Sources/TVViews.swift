@@ -335,23 +335,6 @@ struct PlayKey: View {
         .buttonStyle(PressCard()).accessibilityLabel(playing == true ? "Pause" : playing == false ? "Play" : "Play or pause")
     }
 }
-struct VolumeBar: View {
-    @EnvironmentObject var model: TVModel
-    func segment(_ icon: String, _ key: String, _ label: String) -> some View {
-        Button { model.key(key) } label: { Image(systemName: icon).font(.system(size: 18, weight: .medium)).frame(maxWidth: .infinity, minHeight: 50).contentShape(Rectangle()) }
-            .buttonStyle(PressIcon()).accessibilityLabel(label)
-    }
-    var body: some View {
-        HStack(spacing: 0) {
-            segment("speaker.minus.fill", "voldown", "Volume down")
-            Divider().frame(height: 24)
-            segment("speaker.slash.fill", "mute", "Mute")
-            Divider().frame(height: 24)
-            segment("speaker.plus.fill", "volup", "Volume up")
-        }
-        .glassEffect(.regular.interactive(), in: Capsule())
-    }
-}
 
 struct RemoteTab: View {
     @EnvironmentObject var model: TVModel
@@ -380,10 +363,8 @@ struct RemoteTab: View {
                 GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: 50); Spacer()
                 GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: 50)
             }
-            HStack(spacing: 12) {
-                VolumeBar()
-                GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep", size: 50)
-            }
+            // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
+            GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep", size: 50)
         }
     }
     func side(apps: Bool) -> some View {
