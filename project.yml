@@ -71,6 +71,9 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSCalendarsFullAccessUsageDescription: Chumby sets your alarms from what's on your calendar. Nothing leaves your phone but the alarm times and titles sent to your Chumby.
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [local.macpro.Chumby.calendar]
         NSLocalNetworkUsageDescription: Chumby connects to your Chumby on your home network.
         NSBonjourServices: [_http._tcp]
         NSAppTransportSecurity:

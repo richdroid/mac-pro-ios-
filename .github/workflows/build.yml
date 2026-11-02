@@ -72,6 +72,10 @@ jobs:
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-screen$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "Mac Pro screen was not running"
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 2 -pose calendar
+            sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-calendar$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || echo "Chumby calendar was not running"
             for POSE in browse flick lift; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab 1 -pose $POSE
               sleep 8

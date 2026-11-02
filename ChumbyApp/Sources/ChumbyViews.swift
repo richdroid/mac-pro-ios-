@@ -9,10 +9,22 @@ struct ChumbyApp: App {
             RootView().environmentObject(model)
                 .font(.custom("Trebuchet MS", size: 16))
                 .toggleStyle(SwitchToggleStyle(tint: ChumbyPalette.on))
-                .onChange(of: phase) { _, p in if p == .active { model.start() } else { model.stop() } }
+                .onChange(of: phase) { _, p in
+                    if p == .active { model.start(); Task { await CalendarWake.shared.sync() } } else { model.stop() }
+                    #if os(iOS)
+                    if p == .background { CalendarWake.shared.scheduleRefresh() }
+                    #endif
+                }
                 .onAppear { model.start() }
                 .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
         }
+        #if os(iOS)
+        // iOS decides when, so this only helps; the alarms already on the Chumby ring regardless.
+        .backgroundTask(.appRefresh(CalendarWake.refreshID)) {
+            await CalendarWake.shared.sync()
+            await CalendarWake.shared.scheduleRefresh()
+        }
+        #endif
     }
 }
 
@@ -708,6 +720,7 @@ struct AlarmsTab: View {
                     }
                 } footer: { Text("The Chumby was frozen or off when these came due.") }
             }
+            CalendarWakeSection()
             Section("Quick nap") {
                 HStack(spacing: 8) {
                     ForEach([10, 20, 30, 60], id: \.self) { m in
@@ -716,7 +729,7 @@ struct AlarmsTab: View {
                 }
             }
             Section {
-                let shown = model.state.alarms.enumerated().filter { !$0.element.isPlaceholder && $0.element.name != "Catch-up" }.sorted { $0.element.localMinutes < $1.element.localMinutes }
+                let shown = model.state.alarms.enumerated().filter { !$0.element.isPlaceholder && $0.element.name != "Catch-up" && !$0.element.name.hasPrefix(CalendarWake.prefix) }.sorted { $0.element.localMinutes < $1.element.localMinutes }
                 if shown.isEmpty { Text("No alarms yet. Tap + to add one.").foregroundStyle(.secondary) }
                 ForEach(shown, id: \.element.id) { i, a in
                     HStack {
