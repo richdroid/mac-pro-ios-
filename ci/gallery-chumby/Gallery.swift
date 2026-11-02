@@ -11,6 +11,8 @@ func card<C: View>(_ w: CGFloat, _ h: CGFloat, @ViewBuilder _ c: () -> C) -> som
         ScrollView { VStack(spacing: 14) {
             HStack(spacing: 14) { card(158, 158) { AlarmBody(family: .systemSmall, entry: e) }; card(158, 158) { BuddyBody(entry: e) }; }
             card(158, 158) { AlarmBody(family: .systemSmall, entry: off) }
+            card(338, 158) { ChumbyStatusBody(family: .systemMedium, entry: e) }
+            HStack(spacing: 14) { card(158, 158) { ChumbyStatusBody(family: .systemSmall, entry: e) }; card(158, 158) { ChumbyStatusBody(family: .systemSmall, entry: off) } }
             card(338, 158) { RemoteBody(entry: e) }
             card(338, 158) { RemoteBody(entry: off) }
             HStack(spacing: 14) { card(158, 158) { BuddyBody(entry: e) }.environment(\.colorScheme, .dark); card(158, 158) { AlarmBody(family: .systemSmall, entry: e) }.environment(\.colorScheme, .dark) }

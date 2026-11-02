@@ -77,12 +77,29 @@ func heatColor(_ c: Double) -> Color { c >= 90 ? .red : c >= 75 ? .orange : c >=
 func heatLine(_ c: Double) -> String { c >= 90 ? "Fans, please!" : c >= 75 ? "Getting toasty" : c >= 60 ? "Warming up" : "Cool as a trash can" }
 func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
 
+// Thick enough to read at arm's length.
+struct Bar: View {
+    let value: Double, color: Color
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.16))
+                Capsule().fill(color).frame(width: max(5, g.size.width * min(max(value, 0), 1))).widgetAccentable()
+            }
+        }
+        .frame(height: 5)
+    }
+}
 struct Meter: View {
     let label: String, value: Double, text: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack { Text(label); Spacer(); Text(text).monospacedDigit().opacity(0.7) }.font(.caption2)
-            ProgressView(value: min(max(value, 0), 1)).tint(value > 0.85 ? .red : value > 0.65 ? .orange : Color(red: 0.45, green: 0.75, blue: 1))
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.82)).lineLimit(1)
+                Spacer(minLength: 4)
+                Text(text).font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit()
+            }
+            Bar(value: value, color: value > 0.85 ? .red : value > 0.65 ? .orange : Color(red: 0.45, green: 0.75, blue: 1))
         }
     }
 }
@@ -128,8 +145,8 @@ struct StatusView: View {
                         HStack(spacing: 6) {
                             Image("MacPro").resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().frame(width: 24, height: 32)
                             VStack(alignment: .leading, spacing: 0) {
-                                Text("Mac Pro").font(.caption.weight(.semibold))
-                                Text("Up \(entry.uptime)").font(.caption2).opacity(0.7)
+                                Text("Mac Pro").font(.system(size: 14, weight: .semibold))
+                                Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75))
                             }
                         }
                         Spacer(minLength: 0)
@@ -142,13 +159,13 @@ struct StatusView: View {
                     HStack(spacing: 14) {
                         VStack(spacing: 4) {
                             Image("MacPro").resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().frame(height: 92)
-                            Text("Up \(entry.uptime)").font(.caption2).opacity(0.7)
+                            Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75))
                         }
-                        VStack(alignment: .leading, spacing: 5) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Meter(label: "CPU", value: n.cpu, text: pct(n.cpu))
                             Meter(label: "Memory", value: n.mem, text: pct(n.mem))
                             Meter(label: "Disk", value: n.disk, text: pct(n.disk))
-                            if let w = n.week { Meter(label: "Claude this week", value: w / 100, text: "\(Int(w))%") }
+                            if let w = n.week { Meter(label: "Claude", value: w / 100, text: "\(Int(w))%") }
                         }
                     }
                 } else { Problem(text: entry.problem ?? "") }
@@ -199,8 +216,8 @@ struct TempView: View {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible())], spacing: 7) {
                             ForEach(shown, id: \.name) { t in
                                 VStack(alignment: .leading, spacing: 2) {
-                                    HStack { Text(t.name).lineLimit(1); Spacer(); Text("\(fahrenheit(t.c))°").monospacedDigit().fontWeight(.semibold).foregroundStyle(heatColor(t.c)) }.font(.caption2)
-                                    ProgressView(value: min(max((t.c - 20) / 80, 0), 1)).tint(heatColor(t.c))
+                                    HStack { Text(t.name).lineLimit(1).font(.system(size: 13, weight: .medium)); Spacer(); Text("\(fahrenheit(t.c))°").font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(heatColor(t.c)) }.font(.caption2)
+                                    Bar(value: (t.c - 20) / 80, color: heatColor(t.c))
                                 }
                             }
                         }
@@ -230,9 +247,9 @@ struct Ring: View {
             ZStack {
                 Circle().stroke(.white.opacity(0.15), lineWidth: 8)
                 Circle().trim(from: 0, to: min(value / 100, 1)).stroke(color, style: StrokeStyle(lineWidth: 8, lineCap: .round)).rotationEffect(.degrees(-90))
-                Text("\(Int(value))%").font(.caption.weight(.semibold)).monospacedDigit()
+                Text("\(Int(value))%").font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit()
             }
-            Text(label).font(.caption2).opacity(0.7)
+            Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.78))
         }
     }
 }
@@ -282,7 +299,7 @@ struct AppsView: View {
                     }
                     ForEach(Array(s.apps.prefix(4)), id: \.name) { a in
                         let l = left(a)
-                        HStack { Text(a.name).font(.caption).lineLimit(1); Spacer(); Text(l.0).font(.caption2.weight(.medium)).foregroundStyle(l.1) }
+                        HStack { Text(a.name).font(.system(size: 14, weight: .medium)).lineLimit(1); Spacer(); Text(l.0).font(.system(size: 13, weight: .semibold)).foregroundStyle(l.1) }
                     }
                     Spacer(minLength: 0)
                 }

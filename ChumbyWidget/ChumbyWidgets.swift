@@ -51,7 +51,7 @@ struct ChumbyProvider: AppIntentTimelineProvider {
         s.alarms.compactMap { a in a.nextFire(after: d).map { (alarm: a, at: $0) } }.min { $0.at < $1.at }
     }
     static var sample: ChumbyEntry {
-        var s = Sys(); s.chan = "Default"; s.vol = 40; s.wifi = 71; s.up = 291000
+        var s = Sys(); s.chan = "Default"; s.vol = 40; s.wifi = 71; s.up = 291000; s.memFree = 14300; s.memTotal = 61948; s.pspFree = 424
         var a = Alarm(); a.time = "405"; a.name = "Work"
         let cal = Calendar.current
         let at = cal.nextDate(after: Date(), matching: DateComponents(hour: 6, minute: 45), matchingPolicy: .nextTime) ?? Date()
@@ -233,6 +233,88 @@ struct InSea<C: View>: View {
     let content: (WidgetFamily) -> C
     var body: some View { content(family).containerBackground(for: .widget) { SeaFor() }.widgetURL(URL(string: "chumbyapp://tab/\(tab)")) }
 }
+// MARK: - Status
+struct StatusBar: View {
+    let value: Double, color: Color
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.primary.opacity(0.14))
+                Capsule().fill(color).frame(width: max(5, g.size.width * min(max(value, 0), 1))).widgetAccentable()
+            }
+        }
+        .frame(height: 5)
+    }
+}
+struct StatusRow: View {
+    let label: String, text: String
+    var value: Double?
+    var color = Color(red: 0.17, green: 0.35, blue: 0.68)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label).font(.trebuchet(13)).opacity(0.8).lineLimit(1)
+                Spacer(minLength: 4)
+                Text(text).font(.trebuchet(14, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+            }
+            if let value { StatusBar(value: value, color: color) }
+        }
+    }
+}
+struct ChumbyStatusBody: View {
+    let family: WidgetFamily
+    let entry: ChumbyEntry
+    var sys: Sys { entry.sys }
+    var memoryUsed: Double { sys.memTotal > 0 ? 1 - Double(sys.memFree) / Double(sys.memTotal) : 0 }
+    var memoryColor: Color { memoryUsed > 0.92 ? .red : memoryUsed > 0.8 ? .orange : Color(red: 0.17, green: 0.35, blue: 0.68) }
+    var alarmText: String? {
+        guard let a = entry.nextAlarm else { return entry.alarmsKnown ? "None set" : nil }
+        return "\(entry.whenText) \(a.clock) \(a.meridiem)"
+    }
+    var awake: some View {
+        HStack(spacing: 5) {
+            Circle().fill(.green).frame(width: 8, height: 8)
+            Text("Up \(entryDuration(sys.up))").font(.trebuchet(13, .bold)).monospacedDigit().lineLimit(1)
+        }
+    }
+    var body: some View {
+        if !entry.reachable {
+            Lost(text: entry.problem)
+        } else if family == .systemSmall {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top) {
+                    Octo().frame(width: 48, height: 40)
+                    Spacer(minLength: 0)
+                    awake
+                }
+                Spacer(minLength: 0)
+                if sys.wifi >= 0 { StatusRow(label: "Wi-Fi", text: "\(sys.wifi)%", value: Double(sys.wifi) / 100) }
+                StatusRow(label: "Memory", text: "\(Int((memoryUsed * 100).rounded()))%", value: memoryUsed, color: memoryColor)
+            }
+        } else {
+            HStack(spacing: 14) {
+                VStack(spacing: 6) {
+                    Octo().frame(width: 92, height: 76)
+                    awake
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    if sys.wifi >= 0 { StatusRow(label: "Wi-Fi", text: "\(sys.wifi)%", value: Double(sys.wifi) / 100) }
+                    StatusRow(label: "Memory", text: "\(Int((memoryUsed * 100).rounded()))%", value: memoryUsed, color: memoryColor)
+                    if let alarmText { StatusRow(label: "Next alarm", text: alarmText) }
+                    if !sys.chan.isEmpty { StatusRow(label: "Channel", text: sys.chan) }
+                }
+            }
+        }
+    }
+}
+struct ChumbyStatusWidget: Widget {
+    var body: some WidgetConfiguration {
+        AppIntentConfiguration(kind: "ChumbyStatus", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { e in InSea { ChumbyStatusBody(family: $0, entry: e) } }
+            .configurationDisplayName("Chumby Status")
+            .description("Whether your Chumby is up, how long for, and its Wi-Fi, memory and next alarm.")
+            .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
 struct ChumbyAlarmWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: "ChumbyAlarm", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { e in InSea(tab: 2) { AlarmBody(family: $0, entry: e) } }
@@ -264,6 +346,7 @@ struct ChumbyWidgets: WidgetBundle {
         ChumbyAlarmWidget()
         ChumbyBuddyWidget()
         ChumbyRemoteWidget()
+        ChumbyStatusWidget()
         ChumbyNextControl()
         ChumbyNightControl()
         ChumbyMorningControl()

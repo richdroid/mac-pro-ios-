@@ -13,6 +13,8 @@ func card<C: View, B: View>(_ w: CGFloat, _ h: CGFloat, _ bg: B, @ViewBuilder _ 
             card(338, 158, WidgetWall(image: e.wall)) { NowBody(family: .systemMedium, entry: e) }
             card(338, 158, Color(hex: 0x14181C)) { RemoteBody(family: .systemMedium, entry: e) }
             card(338, 158, Color(hex: 0x14181C)) { AppsBody(entry: e) }
+            card(338, 158, Color(hex: 0x14181C)) { TVBoxBody(family: .systemMedium, entry: TVBoxProvider.sample) }
+            HStack(spacing: 14) { card(158, 158, Color(hex: 0x14181C)) { TVBoxBody(family: .systemSmall, entry: TVBoxProvider.sample) }; card(158, 158, Color(hex: 0x14181C)) { TVBoxBody(family: .systemSmall, entry: TVBoxEntry()) } }
             card(338, 354, Color(hex: 0x14181C)) { RemoteBody(family: .systemLarge, entry: e) }
         }.padding(10).scaleEffect(0.6, anchor: .top).frame(height: 680, alignment: .top) }.background(Color(white: 0.8))
     } }

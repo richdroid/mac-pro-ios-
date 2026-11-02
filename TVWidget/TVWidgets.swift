@@ -324,6 +324,154 @@ struct RemoteWidgetView: View {
     let entry: TVEntry
     var body: some View { RemoteBody(family: family, entry: entry).foregroundStyle(.white).containerBackground(for: .widget) { Color(hex: 0x14181C) }.widgetURL(URL(string: "tvremoteapp://tab/0")) }
 }
+// MARK: - Box status
+struct TVBoxInfo: Codable {
+    var model = "", android = ""
+    var uptime = 0.0, cpu = 0.0, memUsed = 0.0, memTotal = 0.0, diskUsed = 0.0, diskTotal = 0.0, tempC = 0.0
+}
+struct TVBoxEntry: TimelineEntry {
+    var date = Date()
+    var info: TVBoxInfo?
+    var photo: TVImage?
+    var screen = ""
+    var reachable = false
+    var uptime: String {
+        let u = Int(info?.uptime ?? 0), d = u / 86400, h = u / 3600 % 24, m = u / 60 % 60
+        return d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m"
+    }
+    var state: String { !reachable ? "Can’t reach it" : screen == "asleep" ? "Asleep" : screen == "screensaver" ? "Screensaver" : "Awake" }
+    var dot: Color { !reachable ? .orange : screen == "asleep" ? .gray : .green }
+    var memory: Double { (info?.memTotal ?? 0) > 0 ? info!.memUsed / info!.memTotal : 0 }
+    var storage: Double { (info?.diskTotal ?? 0) > 0 ? info!.diskUsed / info!.diskTotal : 0 }
+    var fahrenheit: Int { Int(((info?.tempC ?? 0) * 9 / 5 + 32).rounded()) }
+}
+struct TVBoxProvider: TimelineProvider {
+    static var sample: TVBoxEntry {
+        TVBoxEntry(info: TVBoxInfo(model: "onn. 4K Streaming Box", android: "14", uptime: 118800, cpu: 18, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46), screen: "on", reachable: true)
+    }
+    func placeholder(in context: Context) -> TVBoxEntry { Self.sample }
+    func getSnapshot(in context: Context, completion: @escaping (TVBoxEntry) -> Void) {
+        if context.isPreview { completion(Self.sample); return }
+        Task { completion(await load()) }
+    }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<TVBoxEntry>) -> Void) {
+        Task { completion(Timeline(entries: [await load()], policy: .after(Date().addingTimeInterval(15 * 60)))) }
+    }
+    func load() async -> TVBoxEntry {
+        var e = TVBoxEntry()
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let infoFile = caches.appendingPathComponent("widget-box.json"), photoFile = caches.appendingPathComponent("widget-box.png")
+        if let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 12), let i = try? JSONDecoder().decode(TVBoxInfo.self, from: d) {
+            e.info = i; e.reachable = true
+            try? JSONEncoder().encode(i).write(to: infoFile, options: .atomic)
+        } else if let d = try? Data(contentsOf: infoFile) {
+            e.info = try? JSONDecoder().decode(TVBoxInfo.self, from: d)
+        }
+        if let d = await TVBridge.data(TVBridge.url("/api/tv/status"), timeout: 8), let s = try? JSONDecoder().decode(TVStatus.self, from: d) { e.screen = s.screen ?? "" }
+        if !FileManager.default.fileExists(atPath: photoFile.path), let d = await TVBridge.data(TVBridge.url("/api/tv/device-image"), timeout: 12) { try? d.write(to: photoFile, options: .atomic) }
+        if let d = try? Data(contentsOf: photoFile) { e.photo = TVImage(data: d) }
+        return e
+    }
+}
+struct BoxBar: View {
+    let value: Double
+    var color: Color { value > 0.9 ? .red : value > 0.75 ? .orange : TVLook.accent }
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.16))
+                Capsule().fill(color).frame(width: max(5, g.size.width * min(max(value, 0), 1))).widgetAccentable()
+            }
+        }
+        .frame(height: 5)
+    }
+}
+struct BoxRow: View {
+    let label: String, text: String
+    var value: Double?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.82)).lineLimit(1)
+                Spacer(minLength: 4)
+                Text(text).font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit().lineLimit(1)
+            }
+            if let value { BoxBar(value: value) }
+        }
+    }
+}
+struct TVBoxBody: View {
+    let family: WidgetFamily
+    let entry: TVBoxEntry
+    var photo: some View {
+        Group {
+            if let p = entry.photo { Image(tv: p).resizable().scaledToFit() }
+            else { Image(systemName: "av.remote").font(.system(size: 30, weight: .light)).foregroundStyle(.white.opacity(0.7)) }
+        }
+    }
+    var state: some View {
+        HStack(spacing: 5) {
+            Circle().fill(entry.dot).frame(width: 8, height: 8)
+            Text(entry.state).font(.system(size: 12, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+        }
+    }
+    var body: some View {
+        if entry.info == nil {
+            VStack(alignment: .leading, spacing: 6) {
+                photo.frame(height: 44)
+                Text("TV box").font(.system(size: 14, weight: .semibold))
+                Text("Tailscale off?").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75))
+            }
+            .padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else if family == .systemSmall {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    photo.frame(width: 40, height: 40)
+                    VStack(alignment: .leading, spacing: 1) {
+                        state
+                        Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75))
+                    }
+                }
+                Spacer(minLength: 0)
+                BoxRow(label: "Memory", text: "\(Int((entry.memory * 100).rounded()))%", value: entry.memory)
+                BoxRow(label: "Storage", text: "\(Int((entry.storage * 100).rounded()))%", value: entry.storage)
+            }
+            .padding(16)
+        } else {
+            HStack(spacing: 14) {
+                VStack(spacing: 4) {
+                    photo.frame(width: 88, height: 74)
+                    state
+                    Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75))
+                }
+                .frame(width: 96)
+                VStack(alignment: .leading, spacing: 6) {
+                    BoxRow(label: "CPU", text: "\(Int(entry.info?.cpu ?? 0))%", value: (entry.info?.cpu ?? 0) / 100)
+                    BoxRow(label: "Memory", text: "\(Int((entry.memory * 100).rounded()))%", value: entry.memory)
+                    BoxRow(label: "Storage", text: "\(Int((entry.storage * 100).rounded()))%", value: entry.storage)
+                    BoxRow(label: "Temperature", text: "\(entry.fahrenheit)°F")
+                }
+            }
+            .padding(16)
+        }
+    }
+}
+struct TVBoxWidgetView: View {
+    @Environment(\.widgetFamily) private var family
+    let entry: TVBoxEntry
+    var body: some View {
+        TVBoxBody(family: family, entry: entry).foregroundStyle(.white).containerBackground(for: .widget) { Color(hex: 0x14181C) }.widgetURL(URL(string: "tvremoteapp://tab/5"))
+    }
+}
+struct TVBoxWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "TVBoxStatus", provider: TVBoxProvider()) { TVBoxWidgetView(entry: $0) }
+            .configurationDisplayName("TV Box Status")
+            .description("Whether the TV box is awake, how long it's been up, and its CPU, memory, storage and temperature.")
+            .contentMarginsDisabled()
+            .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
 struct TVRemoteWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: "TVRemote", provider: TVProvider(needsStatus: false)) { RemoteWidgetView(entry: $0) }
@@ -488,6 +636,7 @@ struct TVWidgets: WidgetBundle {
         TVRemoteWidget()
         TVScreenWidget()
         TVAppsWidget()
+        TVBoxWidget()
         TVIslandWidget()
         TVFlickControl()
         TVPlayControl()
