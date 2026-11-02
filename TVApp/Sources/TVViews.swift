@@ -1101,17 +1101,15 @@ struct Ambience: View {
             if let small = current?.image {
                 Color.clear
                     .overlay { Image(tv: small).resizable().interpolation(.high).scaledToFill().opacity(0.55) }
-                    .clipped().transition(.opacity)
-                    .id(art)
+                    .clipped()
             }
+            // Only the colour eases, and only the colour: an animation on the whole backdrop would grow it from a corner
+            // as a page lays out.
             LinearGradient(colors: [tint.opacity(0.8), tint.opacity(0.45), .black.opacity(0.75)], startPoint: .topLeading, endPoint: .bottom)
+                .animation(.easeInOut(duration: 0.7), value: tint)
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
-        // Only a real change fades: what's playing, or the colour of where you are.
-        .animation(.easeInOut(duration: 0.7), value: art)
-        .animation(.easeInOut(duration: 0.7), value: tint)
-        .animation(.easeInOut(duration: 0.7), value: loaded)
         .task(id: art) {
             guard let art, Ambience.memo[art] == nil, let u = URL(string: art), let i = await ImageStore.shared.load(u) else { return }
             let band = await ImageStore.shared.band(u)
