@@ -89,7 +89,6 @@ struct FlickScreen: View {
     @State private var cancelled = false
     @State private var morphing = false
     @State private var priorMood: Color??
-    @Namespace private var screenSpace
     // Follows the finger exactly, with nothing in between.
     @State private var drag = UserDefaults.standard.string(forKey: "pose") == "lift" ? CGSize(width: 18, height: -190) : .zero
     // Tells a touch the system took away from one that ended, so the card can't get stuck raised.
@@ -128,8 +127,8 @@ struct FlickScreen: View {
         switch step {
         case .episodes: return nil
         case .streams: return isSeries ? .episodes : nil
-        case .flick: return target.send != nil || source != .stremio || item.stremioRef == nil || flown ? nil : isSeries && episode == nil ? .episodes : .streams
-        case .control: return nil
+        // At the card there's nothing left to go back to: the X is all it needs.
+        case .flick, .control: return nil
         }
     }
     var next: Step? {
@@ -158,7 +157,7 @@ struct FlickScreen: View {
                         case .episodes: episodesStep.transition(slide)
                         case .streams: streamsStep.transition(slide)
                         case .flick: flickStep(g.size).transition(slide)
-                        case .control: controlStep(g.size).transition(.opacity)
+                        case .control: controlStep(g.size).transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 24)).animation(.spring(response: 0.5, dampingFraction: 0.88).delay(0.14)), removal: .opacity))
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -191,8 +190,8 @@ struct FlickScreen: View {
         }
     }
     var slide: AnyTransition {
-        // Into the controls the TV itself carries on, so everything else just fades.
-        if morphing { return .opacity }
+        // Into the controls, the flick just fades away.
+        if morphing { return .asymmetric(insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.18))) }
         return .asymmetric(insertion: .move(edge: forward ? .trailing : .leading).combined(with: .opacity),
                     removal: .move(edge: forward ? .leading : .trailing).combined(with: .opacity))
     }
@@ -409,8 +408,7 @@ struct FlickScreen: View {
                 }
                 .frame(width: w, height: w * 9 / 16)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .matchedGeometryEffect(id: "screen", in: screenSpace)
-                .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.25), lineWidth: 1) }
+                    .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.25), lineWidth: 1) }
                 .shadow(color: TVLook.accent.opacity(0.45), radius: 26)
                 VStack(spacing: 4) {
                     Text(isMusic ? (music?.title ?? shown.title) : (session?.description.first ?? shown.title)).font(.title2.weight(.bold)).lineLimit(2)
@@ -489,7 +487,6 @@ struct FlickScreen: View {
             }
             .frame(width: 168, height: 94.5)
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .matchedGeometryEffect(id: "screen", in: screenSpace)
             .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.3 + 0.5 * charge), lineWidth: 1.5) }
             .shadow(color: TVLook.accent.opacity(0.75 * charge), radius: 10 + 18 * charge)
             .overlay { TVRipple(trigger: impacts) }
@@ -656,8 +653,9 @@ struct FlickScreen: View {
                 if !item.art.isEmpty { model.lastArt = item.art; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
                 Task { await model.load() }
                 try? await Task.sleep(nanoseconds: 950_000_000)
+                // A plain hand-over: the flick fades away, then the controls settle in from just below.
                 morphing = true
-                withAnimation(.spring(response: 0.62, dampingFraction: 0.84)) { step = .control }
+                withAnimation(.easeOut(duration: 0.22)) { step = .control }
             } catch {
                 // Called off with the X: it's already being stopped and closed.
                 if Task.isCancelled || cancelled { return }
