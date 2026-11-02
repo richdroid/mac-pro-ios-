@@ -129,8 +129,6 @@ struct ManageAppsView: View {
 
 struct ManageSettingsView: View {
     @ObservedObject var store: ManageStore
-    @State private var volume = 0.0
-    @State private var dragging = false
     static let sleep: [(String, Double)] = [("30 minutes", 1800000), ("1 hour", 3600000), ("2 hours", 7200000), ("3 hours", 10800000), ("4 hours", 14400000), ("8 hours", 28800000), ("Never", -1)]
     static let saver: [(String, Double)] = [("5 minutes", 300000), ("10 minutes", 600000), ("15 minutes", 900000), ("30 minutes", 1800000), ("1 hour", 3600000)]
     static let speed: [(String, Double)] = [("Off", 0), ("Fast", 0.5), ("Normal", 1)]
@@ -143,14 +141,14 @@ struct ManageSettingsView: View {
     var body: some View {
         Form {
             if let s = store.state {
-                if let top = s.volumeMax, top > 0 {
-                    Section("Volume") {
-                        Slider(value: $volume, in: 0...Double(top), step: 1) { editing in
-                            dragging = editing
-                            if !editing { store.send("setting", ["key": "volume", "value": volume]) }
-                        }
-                        .accessibilityLabel("Volume")
+                // The box itself stays at full and the TV owns the volume, so these step the TV over HDMI. There's no
+                // level to show, because the TV doesn't report one.
+                Section("TV volume") {
+                    HStack {
+                        Button { store.send("key", ["key": "voldown"]) } label: { Label("Down", systemImage: "speaker.minus.fill").frame(maxWidth: .infinity) }
+                        Button { store.send("key", ["key": "volup"]) } label: { Label("Up", systemImage: "speaker.plus.fill").frame(maxWidth: .infinity) }
                     }
+                    .buttonStyle(.bordered)
                 }
                 Section {
                     pick("TV sleeps after", "sleep_after", Self.sleep)
@@ -173,7 +171,6 @@ struct ManageSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await store.load() }
         .task { await store.load() }
-        .onChange(of: store.state?.volume, initial: true) { _, v in if let v, !dragging { volume = Double(v) } }
         .alert("That didn’t work", isPresented: .init(get: { store.note != nil }, set: { if !$0 { store.note = nil } })) { Button("OK") {} } message: { Text(store.note ?? "") }
     }
 }
