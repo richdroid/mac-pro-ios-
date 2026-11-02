@@ -140,20 +140,26 @@ struct FlickScreen: View {
     }
 
     var body: some View {
-        GeometryReader { g in
-            ZStack {
-                backdrop(g.size)
-                Group {
-                    switch step {
-                    case .episodes: episodesStep.transition(slide)
-                    case .streams: streamsStep.transition(slide)
-                    case .flick: flickStep(g.size).transition(slide)
+        // The system's own bar, so on the Duo back, next and close sit on the side like everywhere else.
+        NavigationStack {
+            GeometryReader { g in
+                ZStack {
+                    backdrop(g.size)
+                    Group {
+                        switch step {
+                        case .episodes: episodesStep.transition(slide)
+                        case .streams: streamsStep.transition(slide)
+                        case .flick: flickStep(g.size).transition(slide)
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                bar
+                .coordinateSpace(name: "flick")
             }
-            .coordinateSpace(name: "flick")
+            .toolbar { bar }
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
+            .containerBackground(.clear, for: .navigation)
         }
         .preferredColorScheme(.dark)
         // Its own way in and out, so nothing slides over the card, and the app stays faintly there behind it.
@@ -200,24 +206,14 @@ struct FlickScreen: View {
         .animation(.easeOut(duration: 0.35), value: episode)
     }
 
-    var bar: some View {
-        VStack {
-            HStack(spacing: 8) {
-                if let previous { barButton("chevron.left", "Back") { go(previous) } }
-                if let next, step != .flick { barButton("chevron.right", "Next") { go(next) } }
-                Spacer()
-                barButton("xmark", "Close") { leave() }.disabled(flown)
-            }
-            .padding(14)
-            Spacer()
+    @ToolbarContentBuilder var bar: some ToolbarContent {
+        if let previous {
+            ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
         }
-        .opacity(calm)
-    }
-    func barButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon).font(.body.weight(.semibold)).frame(width: 42, height: 42).contentShape(Circle())
+        if let next, step != .flick {
+            ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right") } }
         }
-        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
+        ToolbarItem(placement: .cancellationAction) { Button { leave() } label: { Label("Close", systemImage: "xmark") }.disabled(flown) }
     }
 
     var heading: some View {
@@ -258,7 +254,7 @@ struct FlickScreen: View {
     func page<C: View>(@ViewBuilder content: () -> C) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) { content() }
-                .padding(.horizontal, 20).padding(.top, 70).padding(.bottom, 24)
+                .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
                 .frame(maxWidth: 620, alignment: .leading)
                 .frame(maxWidth: .infinity)
         }
@@ -364,7 +360,7 @@ struct FlickScreen: View {
     func flickStep(_ size: CGSize) -> some View {
         let tall = min(size.height * 0.5, 420), width = source == .mint ? min(250, tall - 60) : min(210, (tall - 56) / 1.5)
         return VStack(spacing: 0) {
-            tv.padding(.top, 56)
+            tv.padding(.top, 20)
             status.padding(.top, 16).padding(.horizontal, 30)
             Spacer(minLength: 14)
             hint.padding(.bottom, 12)
