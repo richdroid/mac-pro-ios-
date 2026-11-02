@@ -53,15 +53,20 @@ let groupedBackground = Color.gray.opacity(0.1)
 // System tabs and navigation get Liquid Glass and move to the Duo's right edge by themselves.
 struct RootView: View {
     @EnvironmentObject var model: AppModel
+    @State private var resets: [Int: Int] = [:]
     var body: some View {
         PaneReader {
-            TabView(selection: $model.tab) {
-                Tab(value: 0) { Screen(title: "Status") { StatusTab($0, side: $1) } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
-                Tab(value: 1) { Screen(title: "Apps") { AppsTab($0, side: $1) } } label: { tabLabel("Apps", "square.grid.2x2") }
-                Tab(value: 2) { Screen(title: "Claude") { ClaudeTab($0, side: $1) } } label: { tabLabel("Claude", asset: "ClaudeTab") }
-                Tab(value: 3) { Screen(title: "Usage") { UsageTab($0, side: $1) } } label: { tabLabel("Usage", "chart.bar") }
-                Tab(value: 4) { Screen(title: "Updates") { UpgradeTab($0, side: $1) } } label: { tabLabel("Updates", "arrow.up.circle") }
-                Tab(value: 5) { Screen(title: "Control") { ControlTab($0, side: $1) } } label: { tabLabel("Control", "display") }
+            TabView(selection: TabReset.binding($model.tab) { t in
+                // Back to the tab's own start: anything opened on it closes, and it's rebuilt at the top.
+                if t == 0 { model.history = nil; model.processes = nil; model.sessionScreen = nil }
+                resets[t, default: 0] += 1
+            }) {
+                Tab(value: 0) { Screen(title: "Status") { StatusTab($0, side: $1) }.id(resets[0, default: 0]) } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
+                Tab(value: 1) { Screen(title: "Apps") { AppsTab($0, side: $1) }.id(resets[1, default: 0]) } label: { tabLabel("Apps", "square.grid.2x2") }
+                Tab(value: 2) { Screen(title: "Claude") { ClaudeTab($0, side: $1) }.id(resets[2, default: 0]) } label: { tabLabel("Claude", asset: "ClaudeTab") }
+                Tab(value: 3) { Screen(title: "Usage") { UsageTab($0, side: $1) }.id(resets[3, default: 0]) } label: { tabLabel("Usage", "chart.bar") }
+                Tab(value: 4) { Screen(title: "Updates") { UpgradeTab($0, side: $1) }.id(resets[4, default: 0]) } label: { tabLabel("Updates", "arrow.up.circle") }
+                Tab(value: 5) { Screen(title: "Control") { ControlTab($0, side: $1) }.id(resets[5, default: 0]) } label: { tabLabel("Control", "display") }
             }
             .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
         }

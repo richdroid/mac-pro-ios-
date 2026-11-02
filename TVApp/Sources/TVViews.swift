@@ -46,17 +46,22 @@ struct RootView: View {
             }
         }
     }
+    @State private var resets: [Int: Int] = [:]
     var body: some View {
         PaneReader {
-            TabView(selection: $model.tab) {
-                Tab(value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
-                Tab(value: 1) { Page(title: "Apps") { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
-                Tab(value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() } } label: {
+            TabView(selection: TabReset.binding($model.tab) { t in
+                // Back to the tab's own start: anything opened on it closes, and it's rebuilt at the top.
+                if t == 1 { model.browsing = nil; SendDraft.shared.text = "" }
+                resets[t, default: 0] += 1
+            }) {
+                Tab(value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() }.id(resets[0, default: 0]) } label: { tabLabel("Remote", "av.remote") }
+                Tab(value: 1) { Page(title: "Apps") { AppsTab() }.id(resets[1, default: 0]) } label: { tabLabel("Apps", "square.grid.2x2") }
+                Tab(value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() }.id(resets[2, default: 0]) } label: {
                     // The cover of what's on, so the button says what's playing before it's pressed.
                     if let i = PlayingIcon.image(model) { Label { Text("Playing") } icon: { Image(tv: i) } } else { tabLabel("Playing", "play.circle") }
                 }
-                Tab(value: 3) { Page(title: "Watch") { FilmsTab() } } label: { tabLabel("Watch", "film") }
-                Tab(value: 5) { Page(title: "Status") { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
+                Tab(value: 3) { Page(title: "Watch") { FilmsTab() }.id(resets[3, default: 0]) } label: { tabLabel("Watch", "film") }
+                Tab(value: 5) { Page(title: "Status") { DeviceTab() }.id(resets[5, default: 0]) } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
             }
             .onChange(of: model.tab) { _, t in
                 UserDefaults.standard.set(t, forKey: "tab")

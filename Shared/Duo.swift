@@ -157,3 +157,11 @@ struct HoldToScrub: ViewModifier {
 }
 #endif
 extension View { func holdToScrub(_ onChange: @escaping (CGPoint?) -> Void) -> some View { modifier(HoldToScrub(onChange: onChange)) } }
+
+// Tapping the tab you're already on goes back to its start, at the top, as in Apple's own apps. TabView hands the same
+// value back on that tap, which a plain binding would ignore.
+enum TabReset {
+    static func binding(_ tab: Binding<Int>, onRepeat: @escaping (Int) -> Void) -> Binding<Int> {
+        Binding(get: { tab.wrappedValue }, set: { new in if new == tab.wrappedValue { onRepeat(new) } else { tab.wrappedValue = new } })
+    }
+}

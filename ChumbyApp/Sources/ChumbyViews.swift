@@ -157,16 +157,17 @@ struct RootView: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.colorScheme) private var scheme
     @Environment(\.horizontalSizeClass) private var size
+    @State private var resets: [Int: Int] = [:]
     var body: some View {
         PaneReader {
             ZStack {
                 // Each tab paints its own sea: the system tab view is opaque behind its content.
-                TabView(selection: $model.tab) {
-                    Tab(value: 0) { NavigationStack { HomeTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } } label: { tabLabel("my chumby", asset: "OctoTab", fit: 34) }
-                    Tab(value: 1) { NavigationStack { ChannelsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } } label: { tabLabel("channels", "tv") }
-                    Tab(value: 2) { NavigationStack { AlarmsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) } } label: { tabLabel("alarms", "alarm") }
-                    Tab(value: 3) { NavigationStack { SoundsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } } label: { tabLabel("sounds", "music.note") }
-                    Tab(value: 4) { NavigationStack { TinkerTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() } } label: { tabLabel("tinker", "wrench.adjustable") }
+                TabView(selection: TabReset.binding($model.tab) { t in resets[t, default: 0] += 1 }) {
+                    Tab(value: 0) { NavigationStack { HomeTab().overSea().toolbarBackground(.hidden, for: .navigationBar) }.id(resets[0, default: 0]) } label: { tabLabel("my chumby", asset: "OctoTab", fit: 34) }
+                    Tab(value: 1) { NavigationStack { ChannelsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() }.id(resets[1, default: 0]) } label: { tabLabel("channels", "tv") }
+                    Tab(value: 2) { NavigationStack { AlarmsTab().overSea().toolbarBackground(.hidden, for: .navigationBar) }.id(resets[2, default: 0]) } label: { tabLabel("alarms", "alarm") }
+                    Tab(value: 3) { NavigationStack { SoundsTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() }.id(resets[3, default: 0]) } label: { tabLabel("sounds", "music.note") }
+                    Tab(value: 4) { NavigationStack { TinkerTab().overSea().toolbarBackground(.hidden, for: .navigationBar).connectionButton() }.id(resets[4, default: 0]) } label: { tabLabel("tinker", "wrench.adjustable") }
                 }
                 .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab") }
             }

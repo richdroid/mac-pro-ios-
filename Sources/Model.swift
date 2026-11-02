@@ -103,6 +103,8 @@ final class AppModel: ObservableObject {
             }.value
             var fresh = decoded
             if UserDefaults.standard.string(forKey: "pose") == "alerts" { fresh.alerts = Status.Alert.samples }
+            // The build's shot of a session's own page.
+            if UserDefaults.standard.string(forKey: "pose") == "session", sessionScreen == nil { sessionScreen = fresh.claude.sessions.first { $0.key == "chumby" } }
             status = fresh
             AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
             problem = nil; needsSignIn = false
