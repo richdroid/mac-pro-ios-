@@ -99,7 +99,9 @@ struct MediaCard: View {
     let source: MediaSource
     var width: CGFloat
     var image: Image?   // for a song on this phone, whose cover has no address
-    @State private var band = Color(hex: 0x37474F)
+    @State private var band: Color?
+    // A cover seen before has its colour ready, so the card arrives already tinted rather than fading in.
+    var shownBand: Color { band ?? ImageStore.shared.cachedBand(URL(string: item.art)) ?? Color(hex: 0x37474F) }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Group {
@@ -126,11 +128,11 @@ struct MediaCard: View {
             .foregroundStyle(.white)
             .padding(.horizontal, width > 200 ? 14 : 10)
             .frame(width: width, height: width > 200 ? 66 : 50, alignment: .leading)
-            .background(band)
+            .background(shownBand)
         }
         .clipShape(RoundedRectangle(cornerRadius: width > 200 ? 8 : 6, style: .continuous))
         .task(id: item.art) {
-            if let u = URL(string: item.art), let c = await ImageStore.shared.band(u) { band = c }
+            if let u = URL(string: item.art), ImageStore.shared.cachedBand(u) == nil, let c = await ImageStore.shared.band(u) { band = c }
         }
         .animation(.easeOut(duration: 0.25), value: band)
     }

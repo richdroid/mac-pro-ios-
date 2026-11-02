@@ -53,6 +53,7 @@ final class ImageStore {
         return nil
         #endif
     }
+    func cachedBand(_ url: URL?) -> Color? { url.flatMap { bands[$0] } }
     func cached(_ url: URL?) -> TVImage? { url.flatMap { cache.object(forKey: $0 as NSURL) } }
     func load(_ url: URL) async -> TVImage? {
         if let i = cached(url) { return i }
