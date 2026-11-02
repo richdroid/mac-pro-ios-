@@ -121,25 +121,39 @@ func tabLabel(_ title: String, asset: String, fit: CGFloat = 25) -> some View {
     }
 }
 
-// Reading a value off a chart that sits in a scrolling page: rest a finger on it for a moment, then slide. A touch on its
-// way somewhere else, like a scroll, moves off too soon to count, so it scrolls as normal.
-struct HoldToScrub: ViewModifier {
+// Reading a value off a chart that sits in a scrolling page: rest a finger on it for a moment, then slide. It's the
+// system's own long press, which never holds up the page: a finger that moves before the moment is up was scrolling,
+// and the page has it at once. Once it's held, the page stays still while the finger slides.
+#if canImport(UIKit)
+struct ScrubRecognizer: UIGestureRecognizerRepresentable {
     var onChange: (CGPoint?) -> Void
-    @GestureState private var holding = false
-    func body(content: Content) -> some View {
-        content
-            .contentShape(Rectangle())
-            .gesture(LongPressGesture(minimumDuration: 0.28, maximumDistance: 8)
-                .sequenced(before: DragGesture(minimumDistance: 0))
-                .updating($holding) { v, state, _ in if case .second = v { state = true } }
-                .onChanged { v in if case .second(true, let drag?) = v { onChange(drag.location) } })
-            // Clears by itself if the touch ends or the system takes it away.
-            .onChange(of: holding) { _, now in
-                #if canImport(UIKit)
-                if now { UISelectionFeedbackGenerator().selectionChanged() }
-                #endif
-                if !now { onChange(nil) }
-            }
+    func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
+        let g = UILongPressGestureRecognizer()
+        g.minimumPressDuration = 0.4
+        g.allowableMovement = 8
+        g.cancelsTouchesInView = false
+        return g
+    }
+    func handleUIGestureRecognizerAction(_ g: UILongPressGestureRecognizer, context: Context) {
+        switch g.state {
+        case .began:
+            UISelectionFeedbackGenerator().selectionChanged()
+            onChange(context.converter.localLocation)
+        case .changed: onChange(context.converter.localLocation)
+        default: onChange(nil)
+        }
     }
 }
+struct HoldToScrub: ViewModifier {
+    var onChange: (CGPoint?) -> Void
+    func body(content: Content) -> some View {
+        content.contentShape(Rectangle()).gesture(ScrubRecognizer(onChange: onChange))
+    }
+}
+#else
+struct HoldToScrub: ViewModifier {
+    var onChange: (CGPoint?) -> Void
+    func body(content: Content) -> some View { content }
+}
+#endif
 extension View { func holdToScrub(_ onChange: @escaping (CGPoint?) -> Void) -> some View { modifier(HoldToScrub(onChange: onChange)) } }

@@ -133,7 +133,6 @@ struct WebTile: View {
     var top: Double?
     var read: (Double) -> String = { _ in "" }
     var open: () -> Void = {}
-    @State private var probe: Int?
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
@@ -144,28 +143,14 @@ struct WebTile: View {
             Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
             Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             if spark.count > 1 {
+                // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                 SparkLine(values: spark, top: top)
                     .frame(height: 42).padding(.top, 8)
-                    .overlay {
-                        GeometryReader { g in
-                            Color.clear.holdToScrub { p in
-                                probe = p.map { max(0, min(spark.count - 1, Int($0.x / g.size.width * CGFloat(spark.count - 1)))) }
-                            }
-                            if let probe, probe < spark.count {
-                                Rectangle().fill(.white.opacity(0.55)).frame(width: 1).offset(x: CGFloat(probe) / CGFloat(spark.count - 1) * g.size.width)
-                            }
-                        }
-                    }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14).padding(.vertical, 12)
         .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(alignment: .topTrailing) {
-            if let probe, probe < spark.count {
-                Text("\(read(spark[probe])) · \(Format.span(Double(spark.count - 1 - probe))) ago").font(.caption2.weight(.semibold)).monospacedDigit().padding(.horizontal, 7).padding(.vertical, 3).background(.black.opacity(0.75), in: Capsule()).padding(8)
-            }
-        }
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture(perform: open)
         .accessibilityElement(children: .combine)
