@@ -77,6 +77,8 @@ http.createServer((q, s) => {
   if (q.url === '/api/tv/device') { const up = [12, 18, 9, 22, 30, 14, 11, 16, 25, 19]; s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 18, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 2.4e6, txRate: 8e4, hist: { cpu: up, mem: up.map(x => x + 50), rx: up, tx: up } })); }
   if (q.url === '/api/tv/shot') { s.setHeader('content-type', 'image/jpeg'); return s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); }
   if (q.url.startsWith('/api/tv/icon')) { s.setHeader('content-type', 'image/png'); const a = tvApps.find(x => q.url.endsWith(x[0])); return s.end(a && a[2] ? pictures.wide : pictures.square); }
+  // Sending to the TV takes a moment there, so the waiting can be seen.
+  if (q.method === 'POST' && /play-stream|stremio-open|mint-open/.test(q.url)) { s.setHeader('content-type', 'application/json'); return setTimeout(() => s.end('{"ok":true}'), 1800); }
   if (q.url === '/poster.png' || q.url === '/art.png') { s.setHeader('content-type', 'image/png'); return s.end(pictures[q.url.slice(1, -4)]); }
   s.setHeader('content-type', 'application/json');
   s.end(q.url === '/api/tv/status' ? tvStatus : q.url === '/api/tv/letterboxd' ? tvFilms : '{"ok":true}');

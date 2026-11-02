@@ -72,33 +72,46 @@ struct FlickScreen: View {
     @State private var landed = false
     @State private var note: String?
     @State private var hop = false
-    @State private var exitX: CGFloat = 0
+    @State private var sending = false
+    @State private var done = false
+    @State private var tvFrame = CGRect.zero
+    // Each one is a moment: the card hitting the TV, and the card refused.
+    @State private var impacts = 0
+    @State private var shakes = 0
+    // How the card swings in the hand, from how fast it's moving sideways.
+    @State private var lean = 0.0
+    // Quarter steps of the way to the TV, each felt as a tick.
+    @State private var detent = 0
+    @State private var demoHeld = false
     // Follows the finger exactly, with nothing in between.
-    @State private var drag = UserDefaults.standard.string(forKey: "pose") == "lift" ? CGSize(width: 18, height: -300) : .zero
+    @State private var drag = UserDefaults.standard.string(forKey: "pose") == "lift" ? CGSize(width: 18, height: -190) : .zero
     // Tells a touch the system took away from one that ended, so the card can't get stuck raised.
     @GestureState private var touching = false
+    static let pose = UserDefaults.standard.string(forKey: "pose")
 
     init(target: FlickTarget) {
         self.target = target
         let ref = target.source == .stremio && target.send == nil ? target.item.stremioRef : nil
-        let posed = UserDefaults.standard.string(forKey: "pose") == "lift"
+        let posed = ["lift", "flickdemo"].contains(Self.pose)
         _step = State(initialValue: ref == nil || posed ? .flick : ref?.type == "series" ? .episodes : .streams)
     }
     var item: MediaItem { target.item }
     var source: MediaSource { target.source }
     var isSeries: Bool { item.stremioRef?.type == "series" }
-    var armed: Bool { drag.height < -80 }
+    var lifted: Bool { (touching || demoHeld) && !flown }
     var cardY: CGFloat {
-        if flown { return -(cardFrame.maxY + cardFrame.height * 0.7) }
         if !arrived { return 420 }
         if hop { return -22 }
-        return drag.height < 0 ? drag.height : drag.height * 0.22
+        // Up is free; down gives less and less, like pulling against a band.
+        return drag.height < 0 ? drag.height : 90 * (1 - 1 / (drag.height / 150 + 1))
     }
-    // How far the card has come towards the top edge: 0 in the hand, 1 with its top at the edge.
-    var nearEdge: CGFloat { arrived ? min(1.3, max(0, -cardY) / max(cardFrame.minY, 1)) : 0 }
-    var charge: CGFloat { landed ? 1 : min(1, nearEdge * 1.3) }
+    // From the hand to the TV it's going into.
+    var reach: CGFloat { max(cardFrame.midY - tvFrame.midY, 1) }
+    // How far the card has come: 0 in the hand, 1 over the TV.
+    var progress: CGFloat { arrived && !flown ? min(1.2, max(0, -cardY) / reach) : 0 }
+    var charge: CGFloat { flown || landed ? 1 : min(1, progress * 1.25) }
     // Everything else steps back while the card is in the air.
-    var calm: Double { arrived ? 1 - 0.85 * min(1, nearEdge * 1.4) : 0 }
+    var calm: Double { !arrived ? 0 : flown ? 0.15 : 1 - 0.85 * min(1, Double(progress) * 1.6) }
     var shown: MediaItem {
         guard let e = episode else { return item }
         return MediaItem(title: item.title, subtitle: "S\(e.season) E\(e.episode) · \(e.name)", art: item.art, id: item.id, kind: item.kind)
@@ -145,10 +158,13 @@ struct FlickScreen: View {
         .preferredColorScheme(.dark)
         // Its own way in and out, so nothing slides over the card, and the app stays faintly there behind it.
         .presentationBackground(.clear)
-        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.5), trigger: touching) { _, now in now }
-        .sensoryFeedback(.impact(weight: .medium, intensity: 0.8), trigger: armed) { _, now in now && touching }
+        // Picked up, each quarter of the way, the hit on the TV.
+        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.55), trigger: lifted) { _, now in now }
+        .sensoryFeedback(trigger: detent) { old, new in new > old && lifted ? .impact(flexibility: .rigid, intensity: 0.35 + 0.18 * Double(new)) : nil }
+        .sensoryFeedback(.impact(weight: .heavy, intensity: 1), trigger: impacts)
         .task {
-            withAnimation(.easeOut(duration: 0.22)) { arrived = true }
+            withAnimation(.spring(response: 0.55, dampingFraction: 0.8)) { arrived = true }
+            if Self.pose == "flickdemo" { Task { await demo() } }
             // Side by side, so a slow description doesn't hold up the streams.
             async let details: Void = loadMeta()
             if step == .streams && streams.isEmpty { await findStreams() }
@@ -230,6 +246,7 @@ struct FlickScreen: View {
                 Spacer(minLength: 0)
                 Image(systemName: selected ? "checkmark.circle.fill" : "chevron.right")
                     .foregroundStyle(selected ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.tertiary))
+                    .contentTransition(.symbolEffect(.replace))
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
             .background(.white.opacity(selected ? 0.14 : 0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -252,7 +269,7 @@ struct FlickScreen: View {
         page {
             heading
             if seasons.isEmpty && !metaFailed {
-                ProgressView().frame(maxWidth: .infinity).padding(.top, 30)
+                ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12, thumb: true) }.padding(.top, 6)
             } else if seasons.isEmpty {
                 // No episode list is no reason to be stuck: the TV can still open the series.
                 Text("Couldn’t load the episodes.").font(.subheadline).foregroundStyle(.secondary).padding(.top, 8)
@@ -262,18 +279,7 @@ struct FlickScreen: View {
                     Text("Open the series on the TV").font(.subheadline.weight(.semibold))
                 }
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(seasons, id: \.self) { s in
-                            Button { model.tick(); withAnimation(.snappy) { season = s } } label: {
-                                Text("Season \(s)").font(.footnote.weight(.semibold)).padding(.horizontal, 13).frame(height: 32)
-                                    .background(season == s ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.white.opacity(0.1)), in: Capsule())
-                                    .foregroundStyle(season == s ? .black : .white)
-                            }.buttonStyle(.plain)
-                        }
-                    }
-                }
-                .padding(.top, 6)
+                Chips(options: seasons.map { ($0, "Season \($0)") }, selected: $season).padding(.top, 6)
                 ForEach((meta?.episodes ?? []).filter { $0.season == season }) { e in
                     row(selected: episode == e) {
                         if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All" }
@@ -283,6 +289,7 @@ struct FlickScreen: View {
                             .frame(width: 82, height: 46).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                         Text("\(e.episode). \(e.name)").font(.subheadline.weight(.medium)).lineLimit(2).multilineTextAlignment(.leading)
                     }
+                    .transition(.opacity.combined(with: .offset(y: 10)))
                 }
             }
         }
@@ -297,45 +304,42 @@ struct FlickScreen: View {
                 Text("Choose on the TV").font(.subheadline.weight(.semibold))
             }
             .padding(.top, 4)
-            if findingStreams {
-                HStack(spacing: 10) { ProgressView(); Text("Asking your addons…").font(.subheadline).foregroundStyle(.secondary) }
-                    .frame(maxWidth: .infinity).padding(.top, 22)
+            if findingStreams && streams.isEmpty {
+                Text("Asking your addons…").font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
+                ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) }
             } else if noStreams {
                 Button("No streams found. Try again") { Task { await findStreams() } }
                     .font(.subheadline.weight(.medium)).tint(TVLook.accent).frame(maxWidth: .infinity).padding(.top, 22)
             }
             let qualities = ["1080p", "4K", "720p", "480p"].filter { q in streams.contains { $0.quality == q } }
             if qualities.count > 1 {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(["All"] + qualities, id: \.self) { q in
-                            Button { model.tick(); withAnimation(.snappy) { streamFilter = q } } label: {
-                                Text(q).font(.footnote.weight(.semibold)).padding(.horizontal, 13).frame(height: 32)
-                                    .background(streamFilter == q ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.white.opacity(0.1)), in: Capsule())
-                                    .foregroundStyle(streamFilter == q ? .black : .white)
-                            }.buttonStyle(.plain)
-                        }
-                    }
-                }
-                .padding(.top, 6)
+                Chips(options: (["All"] + qualities).map { ($0, $0) }, selected: $streamFilter).padding(.top, 6)
             }
             let shown = streams.filter { streamFilter == "All" || $0.quality == streamFilter }
             ForEach(Array(shown.enumerated()), id: \.element.id) { i, s in
-                row(selected: stream == s) { stream = s; go(.flick) } label: {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text(s.name.isEmpty ? s.addon : s.name).font(.subheadline.weight(.bold)).lineLimit(1)
-                            // The list comes best first, for this box and what's being watched.
-                            if i == 0, streamFilter == "All" {
-                                Text("Best").font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(TVLook.accent, in: Capsule()).foregroundStyle(.black)
-                            }
-                        }
-                        if !s.details.isEmpty { Text(s.details).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1) }
-                        if !s.description.isEmpty { Text(s.description).font(.caption2).foregroundStyle(.tertiary).lineLimit(2) }
-                    }
-                    .multilineTextAlignment(.leading)
-                }
+                streamRow(s, best: i == 0 && streamFilter == "All").transition(arriving(i))
             }
+        }
+    }
+    // Rows come in one after another, a beat apart.
+    func arriving(_ i: Int) -> AnyTransition {
+        let spring = Animation.spring(response: 0.45, dampingFraction: 0.85).delay(Double(min(i, 8)) * 0.035)
+        return .asymmetric(insertion: AnyTransition.opacity.combined(with: .offset(y: 14)).animation(spring), removal: .opacity)
+    }
+    func streamRow(_ s: StremioStream, best: Bool) -> some View {
+        row(selected: stream == s) { stream = s; go(.flick) } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(s.name.isEmpty ? s.addon : s.name).font(.subheadline.weight(.bold)).lineLimit(1)
+                    // The list comes best first, for this box and what's being watched.
+                    if best {
+                        Text("Best").font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(TVLook.accent, in: Capsule()).foregroundStyle(.black)
+                    }
+                }
+                if !s.details.isEmpty { Text(s.details).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1) }
+                if !s.description.isEmpty { Text(s.description).font(.caption2).foregroundStyle(.tertiary).lineLimit(2) }
+            }
+            .multilineTextAlignment(.leading)
         }
     }
     func findStreams() async {
@@ -361,59 +365,103 @@ struct FlickScreen: View {
         let tall = min(size.height * 0.5, 420), width = source == .mint ? min(250, tall - 60) : min(210, (tall - 56) / 1.5)
         return VStack(spacing: 0) {
             tv.padding(.top, 56)
+            status.padding(.top, 16).padding(.horizontal, 30)
             Spacer(minLength: 14)
-            VStack(spacing: 4) {
-                Image(systemName: "chevron.up").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
-                    .phaseAnimator([CGFloat(0), -5]) { c, y in c.offset(y: y) } animation: { _ in .easeInOut(duration: 0.8) }
-                Text(note ?? "Flick up to play on the TV").font(.footnote.weight(.medium)).foregroundStyle(note == nil ? .secondary : .primary).contentTransition(.opacity)
-                if let stream, note == nil { Text([stream.name, stream.details].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1).padding(.horizontal, 30) }
-            }
-            .opacity(note == nil ? calm : 1)
-            .padding(.bottom, 12)
+            hint.padding(.bottom, 12)
             card(width)
             .padding(.bottom, 22)
         }
+    }
+    // What the TV is doing with it, under the TV.
+    var status: some View {
+        HStack(spacing: 7) {
+            if sending { ProgressView().controlSize(.small).tint(.white).transition(.scale.combined(with: .opacity)) }
+            else if done { Image(systemName: "checkmark.circle.fill").foregroundStyle(TVLook.accent).transition(.scale(scale: 0.3).combined(with: .opacity)) }
+            if let line = sending ? "Starting on the TV" : note {
+                Text(line).multilineTextAlignment(.center).lineLimit(2).contentTransition(.opacity).id(line).transition(.opacity)
+            }
+        }
+        .font(.footnote.weight(.semibold))
+        .frame(minHeight: 22)
+        .animation(.spring(response: 0.38, dampingFraction: 0.7), value: sending)
+        .animation(.spring(response: 0.38, dampingFraction: 0.6), value: done)
+        .animation(.easeOut(duration: 0.25), value: note)
+    }
+    var hint: some View {
+        VStack(spacing: 4) {
+            Image(systemName: "chevron.up").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
+                .phaseAnimator([CGFloat(0), -5]) { c, y in c.offset(y: y) } animation: { _ in .easeInOut(duration: 0.8) }
+            Text("Flick up to play on the TV").font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+            if let stream { Text([stream.name, stream.details].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.tertiary).lineLimit(1).padding(.horizontal, 30) }
+        }
+        .opacity(calm)
     }
     var tv: some View {
         VStack(spacing: 5) {
             ZStack {
                 RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.black.opacity(0.55))
-                if landed, let image = target.image {
-                    image.resizable().scaledToFill().transition(.scale(scale: 0.4).combined(with: .opacity))
-                } else if landed {
-                    Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(white: 0.15) }
-                        .transition(.scale(scale: 0.4).combined(with: .opacity))
+                if landed {
+                    Group {
+                        if let image = target.image { image.resizable().scaledToFill() }
+                        else { Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(white: 0.15) } }
+                    }
+                    .transition(.scale(scale: 1.3).combined(with: .opacity))
                 }
+                if sending { TVWaiting().transition(.opacity) }
             }
             .frame(width: 168, height: 94.5)
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            // Where the card aims, measured before anything below moves the TV.
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { tvFrame = $0 }
             .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.3 + 0.5 * charge), lineWidth: 1.5) }
-            .shadow(color: TVLook.accent.opacity(0.7 * charge), radius: 24)
-            // A ring goes out from the screen as the card arrives.
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2)
-                    .scaleEffect(landed ? 1.55 : 1).opacity(landed ? 0 : (flown ? 0.9 : 0))
-                    .animation(.easeOut(duration: 0.65), value: landed)
+            .shadow(color: TVLook.accent.opacity(0.75 * charge), radius: 10 + 18 * charge)
+            .overlay { TVRipple(trigger: impacts) }
+            // It leans in to meet the card, then gives as the card hits.
+            .scaleEffect(1 + 0.09 * charge)
+            .keyframeAnimator(initialValue: CGFloat(1), trigger: impacts) { c, s in c.scaleEffect(s) } keyframes: { _ in
+                CubicKeyframe(0.92, duration: 0.08)
+                SpringKeyframe(1, duration: 0.6, spring: Spring(response: 0.38, dampingRatio: 0.42))
             }
-            .scaleEffect(1 + 0.05 * charge)
             Capsule().fill(.white.opacity(0.3)).frame(width: 50, height: 3)
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: landed)
+        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: charge)
+        .animation(.spring(response: 0.4, dampingFraction: 0.7), value: landed)
         .accessibilityHidden(true)
     }
     func card(_ width: CGFloat) -> some View {
-        MediaCard(item: shown, source: source, width: width, image: target.image)
-            .shadow(color: .black.opacity(0.5), radius: 20, y: 12)
-            // It grows and leans as it nears the edge, on its way off the phone and towards the TV.
-            .rotation3DEffect(.degrees(Double(nearEdge) * 11), axis: (x: 1, y: 0, z: 0), anchor: .bottom, perspective: 0.45)
-            .scaleEffect(1 + 0.55 * pow(nearEdge, 1.25))
-            .rotationEffect(.degrees(Double(flown ? exitX : drag.width) / 22))
-            .offset(x: flown ? exitX : drag.width * 0.6, y: cardY)
-            // Where it rests, whatever is moving it: an offset doesn't change this, so it isn't rewritten every frame.
+        // Closing on the TV it draws in, as anything does going away from you, and in flight it becomes the TV's picture.
+        let near = min(1, progress)
+        let size = flown ? tvFrame.height / max(cardFrame.height, 1) : (lifted ? 1.06 : 1) * (1 - 0.38 * near * near)
+        let x = flown ? tvFrame.midX - cardFrame.midX : drag.width * 0.85
+        let y = flown ? tvFrame.midY - cardFrame.midY : cardY
+        return MediaCard(item: shown, source: source, width: width, image: target.image)
+            // Where it rests, whatever is moving it: measured before anything moves it, so it isn't rewritten every frame.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { cardFrame = $0 }
+            .shadow(color: .black.opacity(lifted ? 0.55 : 0.45), radius: lifted ? 30 : 18, y: lifted ? 22 : 10)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: lifted)
+            .rotationEffect(.degrees(lean))
+            .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.62), value: lean)
+            .rotation3DEffect(.degrees(Double(flown ? 1 : near) * 18), axis: (x: 1, y: 0, z: 0), perspective: 0.5)
+            .scaleEffect(size)
+            .opacity(landed ? 0 : 1)
+            .animation(.easeOut(duration: 0.14), value: landed)
+            .keyframeAnimator(initialValue: CGFloat(0), trigger: shakes) { c, dx in c.offset(x: dx) } keyframes: { _ in
+                CubicKeyframe(-16, duration: 0.06)
+                CubicKeyframe(13, duration: 0.08)
+                CubicKeyframe(-8, duration: 0.08)
+                CubicKeyframe(4, duration: 0.07)
+                CubicKeyframe(0, duration: 0.08)
+            }
+            .offset(x: x, y: y)
             .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("flick"))
                 .updating($touching) { _, on, _ in on = true }
-                .onChanged { v in if !flown { drag = v.translation } }
+                .onChanged { v in
+                    guard !flown else { return }
+                    drag = v.translation
+                    lean = max(-12, min(12, Double(v.velocity.width) / 150 + Double(v.translation.width) / 45))
+                    let d = min(3, Int(max(0, -v.translation.height) / reach * 4))
+                    if d != detent { detent = d }
+                }
                 .onEnded { v in
                     if v.translation.height < -70 || v.predictedEndTranslation.height < -150 { send(flicked: v.velocity) }
                     else if v.translation.height > 110 { leave() }
@@ -435,11 +483,27 @@ struct FlickScreen: View {
             .accessibilityAction { send() }
     }
     func settle() {
-        guard drag != .zero else { return }
+        detent = 0
+        guard drag != .zero || lean != 0 else { return }
         #if canImport(UIKit)
         UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.6)
         #endif
-        withAnimation(.spring(response: 0.42, dampingFraction: 0.58)) { drag = .zero }
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.58)) { drag = .zero; lean = 0 }
+    }
+    // For the build's recording: the moves a finger makes, pick up, a slow pull with a sway, and a throw.
+    func demo() async {
+        try? await Task.sleep(nanoseconds: 2_200_000_000)
+        demoHeld = true
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        for i in 1...45 {
+            let t = CGFloat(i) / 45
+            drag = CGSize(width: 36 * sin(t * .pi), height: -0.55 * reach * t * t)
+            lean = Double(cos(t * .pi)) * 6
+            detent = min(3, Int(t * t * 0.55 * 4))
+            try? await Task.sleep(nanoseconds: 16_000_000)
+        }
+        demoHeld = false
+        send(flicked: CGSize(width: -60, height: -1900))
     }
     func leave() {
         withAnimation(.easeOut(duration: 0.2)) { arrived = false }
@@ -473,19 +537,19 @@ struct FlickScreen: View {
     func send(flicked velocity: CGSize = .zero) {
         guard !flown else { return }
         #if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.9)
         #endif
-        note = nil
+        note = nil; detent = 0
         // Leaves at the speed it was thrown, so there's no seam between the finger and the flight.
-        let from = cardY, to = -(cardFrame.maxY + cardFrame.height * 0.7)
-        let speed = min(0, velocity.height) / min(to - from, -1)
-        exitX = max(-90, min(90, drag.width * 0.6 + velocity.width * 0.12))
-        withAnimation(.interpolatingSpring(mass: 1, stiffness: 170, damping: 24, initialVelocity: speed)) { flown = true }
+        let from = cardY, to = tvFrame.midY - cardFrame.midY
+        let speed = max(0, min(9, velocity.height / min(to - from, -1)))
+        withAnimation(.interpolatingSpring(mass: 1, stiffness: 300, damping: 30, initialVelocity: speed)) { flown = true; lean = 0 }
         let order = order
         Task {
-            // The TV lights as the card passes it.
-            try? await Task.sleep(nanoseconds: 170_000_000)
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.55)) { landed = true }
+            // The TV takes the card as it arrives.
+            try? await Task.sleep(nanoseconds: 230_000_000)
+            impacts += 1
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { landed = true; sending = true }
             do {
                 // Longer than the bridge can take to wake the TV, restart Stremio and see the player start.
                 try await TVBridge.post(order.0, order.1, timeout: 60)
@@ -493,8 +557,8 @@ struct FlickScreen: View {
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 #endif
-                withAnimation { note = source == .mint || stream != nil || item.stremioRef == nil || target.send != nil ? "Playing on the TV" : "On the TV. Pick a stream with the remote." }
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                withAnimation { sending = false; done = true; note = source == .mint || stream != nil || item.stremioRef == nil || target.send != nil ? "Playing on the TV" : "On the TV. Pick a stream with the remote." }
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
                 leave()
             } catch {
                 #if canImport(UIKit)
@@ -502,16 +566,60 @@ struct FlickScreen: View {
                 #endif
                 drag = .zero
                 let gone = error is TVBridge.Gone
-                withAnimation(.spring(response: 0.55, dampingFraction: 0.6)) { landed = false; flown = false; note = gone ? "That stream has gone. Pick again." : "The TV didn’t get that" }
+                // Back out of the TV and into the hand, with a shake for no.
+                withAnimation(.spring(response: 0.55, dampingFraction: 0.66)) { sending = false; landed = false; flown = false; note = gone ? "That stream has gone. Pick again." : "The TV didn’t get that" }
+                try? await Task.sleep(nanoseconds: 380_000_000)
+                shakes += 1
                 // Only a stale stream needs a new list; the choice stands if the TV just didn't answer.
                 if gone {
                     stream = nil; streams = []
-                    try? await Task.sleep(nanoseconds: 900_000_000)
+                    try? await Task.sleep(nanoseconds: 700_000_000)
                     note = nil
                     go(.streams)
                 }
             }
         }
+    }
+}
+
+// The TV's screen while it gets going: a light running along the bottom edge.
+private struct TVWaiting: View {
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.3)
+            GeometryReader { g in
+                Capsule()
+                    .fill(LinearGradient(colors: [.clear, TVLook.accent, .clear], startPoint: .leading, endPoint: .trailing))
+                    .frame(width: g.size.width * 0.5, height: 3)
+                    .phaseAnimator([false, true]) { c, on in c.offset(x: on ? g.size.width * 0.5 : 0) } animation: { _ in .easeInOut(duration: 0.9) }
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+        }
+    }
+}
+
+// Rings going out from the TV each time something lands on it.
+private struct TVRipple: View {
+    let trigger: Int
+    struct Wave { var scale: CGFloat = 1; var opacity: Double = 0 }
+    var body: some View {
+        ZStack {
+            ForEach(0..<2, id: \.self) { i in
+                RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2 - CGFloat(i) * 0.6)
+                    .keyframeAnimator(initialValue: Wave(), trigger: trigger) { c, w in c.scaleEffect(w.scale).opacity(w.opacity) } keyframes: { _ in
+                        KeyframeTrack(\.scale) {
+                            LinearKeyframe(1, duration: 0.01 + Double(i) * 0.13)
+                            CubicKeyframe(1.6 + CGFloat(i) * 0.25, duration: 0.75)
+                        }
+                        KeyframeTrack(\.opacity) {
+                            LinearKeyframe(0, duration: Double(i) * 0.13)
+                            LinearKeyframe(0.9 - Double(i) * 0.3, duration: 0.02)
+                            CubicKeyframe(0, duration: 0.74)
+                        }
+                    }
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -602,6 +710,53 @@ struct TrackSheet: View {
         .presentationDetents([.medium, .large])
         .task { await load() }
         .onDisappear { if !picked { model.post("player-menu-close") } }
+    }
+}
+
+// A row of choices whose highlight slides to the one picked.
+struct Chips<T: Hashable>: View {
+    @EnvironmentObject var model: TVModel
+    let options: [(T, String)]
+    @Binding var selected: T
+    @Namespace private var pill
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(options, id: \.0) { value, label in
+                    Button { model.tick(); withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) { selected = value } } label: {
+                        Text(label).font(.footnote.weight(.semibold)).padding(.horizontal, 13).frame(height: 32)
+                            .foregroundStyle(selected == value ? .black : .white)
+                            .background {
+                                if selected == value { Capsule().fill(TVLook.accent).matchedGeometryEffect(id: "pill", in: pill) }
+                                else { Capsule().fill(.white.opacity(0.1)) }
+                            }
+                    }
+                    .buttonStyle(PressCard())
+                    .accessibilityAddTraits(selected == value ? .isSelected : [])
+                }
+            }
+        }
+    }
+}
+
+// The shape of a row still on its way, breathing until it arrives.
+struct PlaceholderRow: View {
+    var delay = 0.0
+    var thumb = false
+    var body: some View {
+        HStack(spacing: 11) {
+            if thumb { RoundedRectangle(cornerRadius: 6, style: .continuous).frame(width: 82, height: 46) }
+            VStack(alignment: .leading, spacing: 7) {
+                Capsule().frame(width: 120, height: 11)
+                Capsule().frame(width: 190, height: 8)
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.white.opacity(0.12))
+        .padding(.horizontal, 12).frame(height: thumb ? 66 : 64)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .phaseAnimator([0.45, 1.0]) { c, o in c.opacity(o) } animation: { _ in .easeInOut(duration: 0.9).delay(delay) }
+        .accessibilityHidden(true)
     }
 }
 
