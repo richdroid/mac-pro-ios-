@@ -254,10 +254,11 @@ struct MacTempWidget: Widget {
 // MARK: - Claude usage
 struct ClaudeView: View {
     let entry: MacEntry
-    var plan: (Double, Double)? {
-        if entry.isSample { return (6, 47) }
-        guard let p = entry.status?.usage.plan, let f = p.fiveHour, let w = p.sevenDay else { return nil }
-        return (f, w)
+    // The 5-hour figure only when Claude reports one; the week is always there.
+    var plan: (Double?, Double)? {
+        if entry.isSample { return (nil, 47) }
+        guard let p = entry.status?.usage.plan, let w = p.sevenDay else { return nil }
+        return (p.fiveHour, w)
     }
     var body: some View {
         Group {
@@ -267,9 +268,15 @@ struct ClaudeView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 6) { Image("ClaudeTab").resizable().scaledToFit().frame(width: 18, height: 18); Text("Claude").font(.system(size: 16, weight: .semibold)) }
                     Spacer(minLength: 6)
-                    VStack(spacing: 9) {
-                        Meter(label: "5 hours", value: p.0 / 100, text: "\(Int(p.0))%", tint: claude)
-                        Meter(label: "This week", value: p.1 / 100, text: "\(Int(p.1))%", tint: claude)
+                    if let f = p.0 {
+                        VStack(spacing: 9) {
+                            Meter(label: "5 hours", value: f / 100, text: "\(Int(f))%", tint: claude)
+                            Meter(label: "This week", value: p.1 / 100, text: "\(Int(p.1))%", tint: claude)
+                        }
+                    } else {
+                        Text("\(Int(p.1))%").font(.system(size: 40, weight: .semibold, design: .rounded)).monospacedDigit()
+                        Text("of this week’s limit").font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.75)).padding(.bottom, 6)
+                        Bar(value: p.1 / 100, color: p.1 > 85 ? .red : p.1 > 65 ? .orange : claude)
                     }
                 }
             } else { Problem(text: entry.problem ?? "Waiting for Claude’s usage.") }

@@ -445,8 +445,9 @@ struct UsageTab: View {
     var body: some View {
         if side != .right {
         Section {
+            // Only the limits Claude reports. It has stopped sending a 5-hour one for this plan; it shows again if that returns.
             HStack(alignment: .top, spacing: 16) {
-                limit("5 hours", u.plan?.fiveHour, u.plan?.fiveHourResets)
+                if u.plan?.fiveHour != nil { limit("5 hours", u.plan?.fiveHour, u.plan?.fiveHourResets) }
                 limit("This week", u.plan?.sevenDay, u.plan?.sevenDayResets)
             }
             .padding(.vertical, 4)

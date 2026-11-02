@@ -68,7 +68,7 @@ struct MacClaudeUsageIntent: AppIntent {
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         let p = try JSONDecoder().decode(MacBridge.Brief.self, from: try await MacBridge.get("/api/status")).usage.plan
         func pct(_ v: Double?) -> String { v.map { "\(Int($0.rounded()))%" } ?? "unknown" }
-        let s = "5-hour limit \(pct(p?.fiveHour)), weekly limit \(pct(p?.sevenDay))."
+        let s = p?.fiveHour == nil ? "Weekly limit \(pct(p?.sevenDay)) used." : "5-hour limit \(pct(p?.fiveHour)), weekly limit \(pct(p?.sevenDay))."
         return .result(value: s, dialog: IntentDialog(stringLiteral: s))
     }
 }
