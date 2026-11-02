@@ -694,17 +694,33 @@ struct ChannelsTab: View {
                 Picker("Editing", selection: $picked) { ForEach(channels, id: \.id) { Text(title($0)).tag($0.id) } }
                     .onChange(of: picked) { _, _ in pick() }
                 ForEach($rows) { $w in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
+                    // The name and its time on the left, the switch alone on the right, so the two never crowd each other.
+                    HStack(alignment: .center, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 7) {
                             Text(w.name).lineLimit(1).opacity(w.on ? 1 : 0.45)
-                            Spacer()
-                            Toggle("On", isOn: $w.on).labelsHidden().onChange(of: w.on) { _, _ in changed() }
+                            Menu {
+                                Picker("Time on screen", selection: $w.secs) {
+                                    Text(w.own > 0 ? "Auto (\(w.own)s)" : "Auto").tag(0)
+                                    ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
+                                }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "timer")
+                                    Text(w.secs == 0 ? (w.own > 0 ? "Auto · \(w.own)s" : "Auto") : timeText(w.secs))
+                                    Image(systemName: "chevron.up.chevron.down").imageScale(.small)
+                                }
+                                .font(.footnote.weight(.medium))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(.white.opacity(0.12), in: Capsule())
+                            }
+                            .disabled(!w.on).opacity(w.on ? 1 : 0.4)
+                            .accessibilityLabel("Time on screen")
+                            .onChange(of: w.secs) { _, _ in changed() }
                         }
-                        Picker("Time on screen", selection: $w.secs) {
-                            Text(w.own > 0 ? "Auto (\(w.own)s)" : "Auto").tag(0)
-                            ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
-                        }.font(.footnote).onChange(of: w.secs) { _, _ in changed() }
+                        Spacer(minLength: 12)
+                        Toggle("On", isOn: $w.on).labelsHidden().onChange(of: w.on) { _, _ in changed() }
                     }
+                    .padding(.vertical, 4)
                 }
                 .onMove { rows.move(fromOffsets: $0, toOffset: $1); changed() }
                 .deleteDisabled(true)
