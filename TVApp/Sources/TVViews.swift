@@ -36,7 +36,7 @@ struct RootView: View {
     func poseForShots() {
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
         if pose == "search" { SendDraft.shared.text = "Heat"; return }
-        if pose == "tour" { return }
+        if pose == "tour" || pose == "type" { return }
         model.browsing = .stremio
         guard pose != "browse" else { return }
         Task {
@@ -446,7 +446,8 @@ struct RemoteTab: View {
     @Environment(\.horizontalSizeClass) private var size
     @Environment(\.paneLayout) private var panes
     @ObservedObject private var nextUp = NextUp.shared
-    @State private var typing = false
+    // The build's shot of the typing bar opens with it up.
+    @State private var typing = UserDefaults.standard.string(forKey: "pose") == "type"
     var state: String {
         guard !model.staleStatus, let s = model.status, s.online else { return "Connecting…" }
         return s.screen == "asleep" ? "Asleep. Press anything to wake it." : s.screen == "screensaver" ? "Screensaver" : "On " + (s.apps?.first { $0.pkg == s.app }?.name ?? "Home")
@@ -1102,6 +1103,9 @@ struct PlayingTab: View {
             } else if let s = model.status?.session {
                 let appName = model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg
                 let stremio = s.pkg == "com.stremio.one"
+                // Said to be playing but already at the end: an old report, so shown as stopped there, not ticking on.
+                let ended = Self.atEnd(s)
+                let playing = stale ? nil : ended ? false : Optional(s.playing)
                 // What was flicked, or the app's own banner when the app says nothing about what it's playing.
                 Cover(url: model.picture(for: s).flatMap(URL.init(string:))) {
                     Image(systemName: "play.tv.fill").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent)
@@ -1115,7 +1119,7 @@ struct PlayingTab: View {
                 VStack(spacing: 3) {
                     Text(s.description.first ?? appName).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                     if s.description.count > 1 { Text(s.description[1]).font(.headline).foregroundStyle(.white.opacity(0.85)).lineLimit(2).multilineTextAlignment(.center) }
-                    Text(stale ? appName : "\(appName) · \(s.playing ? "Playing" : "Paused")").font(.subheadline).foregroundStyle(.secondary).contentTransition(.opacity)
+                    Text(playing.map { "\(appName) · \($0 ? "Playing" : "Paused")" } ?? appName).font(.subheadline).foregroundStyle(.secondary).contentTransition(.opacity)
                 }
                 // Stremio's runs and can be moved, so its place is kept even before the running time is in.
                 if s.position != nil || stremio { VideoProgress(session: s, live: !stale).padding(.horizontal, 4) }
@@ -1123,11 +1127,11 @@ struct PlayingTab: View {
                     if stremio {
                         // Its player ignores the skip keys, so the bridge moves its seek bar instead.
                         SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1)
-                        PlayKey(playing: stale ? nil : s.playing, tint: .white, size: 74)
+                        PlayKey(playing: playing, tint: .white, size: 74)
                         SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1)
                     } else {
                         GlassKey(icon: "gobackward.10", label: "Back 10 seconds", key: "rewind", size: 56)
-                        PlayKey(playing: stale ? nil : s.playing, tint: .white, size: 74)
+                        PlayKey(playing: playing, tint: .white, size: 74)
                         GlassKey(icon: "goforward.10", label: "Forward 10 seconds", key: "forward", size: 56)
                     }
                 }
@@ -1154,6 +1158,11 @@ struct PlayingTab: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+    static func atEnd(_ s: TVStatus.Session) -> Bool {
+        guard s.playing, let p = s.position, let d = s.duration, d > 0 else { return false }
+        let ran = s.sampledAt.map { max(0, Date().timeIntervalSince1970 * 1000 - $0) } ?? 0
+        return p + ran >= d
     }
     func cover(_ c: some View) -> some View {
         c.aspectRatio(1, contentMode: .fit).frame(maxWidth: panes ? 300 : 180)

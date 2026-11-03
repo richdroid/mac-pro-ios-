@@ -93,6 +93,16 @@ jobs:
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$POSE$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.TV || echo "TV pose $POSE was not running"
             done
+            # With a player open on the TV: the Remote's Stremio keys, Stremio's bar on Playing, YouTube's thin one, and the
+            # typing bar. The mock answers these from a path in front of the address, so the shots above don't change.
+            for V in "stremio-remote stremio 0" "stremio-playing stremio 2" "youtube-playing youtube 2" "type stremio 0 -pose type"; do
+              set -- "$1" "$2" $V
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$4 -tab $5 "${@:6}"
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || echo "TV $3 was not running"
+              set -- "$1" "$2"
+            done
             # The flick as it moves: filming starts before the app opens, since the recorder takes seconds to get going.
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-flickdemo$2.mp4 > dist/tv-flickdemo$2.log 2>&1 & REC=$!
             sleep 6

@@ -67,7 +67,18 @@ const tvFilms = JSON.stringify({ signedIn: true,
   friends: ['Battle Heater', 'Paris, Texas', 'Ran', 'Vertigo', 'Stalker', 'Tampopo', 'Ikiru', 'Paris, Texas'].map(t => film(t, { friend_name: 'a friend', rating: '4.0' })) });
 const tvMint = JSON.stringify({ rows: ['Recently played', 'Made for you', 'New releases'].map(title => ({ title, items: ['Sample Album', 'Another Album', 'Third Album', 'Fourth Album'].map(t => ({ title: t, subtitle: 'Sample Artist', art: tvBase + '/art.png', id: 'https://music.apple.com/us/album/' + title + t, kind: 'album' })) })) });
 const tvStremio = JSON.stringify({ rows: ['Continue watching', 'Popular movies', 'Popular series'].map(title => ({ title, items: ['Heat', 'Alien', 'Chinatown', 'Thief'].map((t, n) => ({ title: t, subtitle: '1995 · ★ 8.3', art: tvBase + '/poster.png', id: (title === 'Popular series' ? 'tt123456' : 'tt765432') + n, kind: title === 'Popular series' ? 'series' : 'movie', progress: t === 'Alien' ? 0.4 : undefined, about: 'A sample description of the film.' })) })) });
+// A TV with a player open, for the shots of what the app shows then. Asked for by putting /stremio or /youtube in front
+// of the address, so every other shot gets the same answers as before.
+const tvScene = scene => {
+  const v = JSON.parse(tvStatus), now = Date.now();
+  if (scene === 'stremio') { v.app = 'com.stremio.one'; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Sample Series', 'S1E2 Episode 2'], position: 1260000, sampledAt: now, duration: 3480000, canSeek: true, art: tvBase + '/poster.png' }; }
+  if (scene === 'youtube') { v.app = 'com.google.android.youtube.tv'; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['A sample video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 600000, canSeek: false }; }
+  return JSON.stringify(v);
+};
 http.createServer((q, s) => {
+  const scene = (q.url.match(/^\/(stremio|youtube)(?=\/)/) || [])[1];
+  if (scene) q.url = q.url.slice(scene.length + 1);
+  if (scene && q.url === '/api/tv/status') { s.setHeader('content-type', 'application/json'); return s.end(tvScene(scene)); }
   if (q.url.startsWith('/api/tv/mint')) { s.setHeader('content-type', 'application/json'); return s.end(tvMint); }
   if (q.url.startsWith('/api/tv/streams')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ streams: [['1080p', '1080p', 3.2, ''], ['1080p', '1080p', 1.4, ''], ['4K HDR', '4K', 18.4, 'HDR'], ['720p', '720p', 0.9, '']].map(([name, quality, gb, hdr], n) => ({ token: 's' + n, addon: 'Sample addon', name, description: 'Sample.Film.2024.' + quality + '.WEB-DL.x264', quality, hdr, gb, instant: n < 3 })) })); }
   if (q.url.startsWith('/api/tv/discover')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }

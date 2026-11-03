@@ -88,14 +88,18 @@ struct DeviceTab: View {
         .frame(maxWidth: .infinity)
     }
     // The tiles before the first answer: their shapes, breathing, so the page doesn't jump when the numbers come.
+    // Stacks rather than a Grid, which sizes each column to a shape's tiny ideal width, so these fill the row as the
+    // real tiles do.
     var waitingTiles: some View {
-        Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+        VStack(spacing: 12) {
             ForEach(0..<2, id: \.self) { _ in
-                // As wide as the real tiles, so the grid has the same shape before and after.
-                GridRow { ForEach(0..<2, id: \.self) { _ in RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.08)).frame(maxWidth: .infinity).frame(height: 128) } }
+                HStack(spacing: 12) {
+                    ForEach(0..<2, id: \.self) { _ in RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.08)).frame(maxWidth: .infinity).frame(height: 128) }
+                }
             }
         }
         .phaseAnimator([0.5, 1.0]) { c, o in c.opacity(o) } animation: { _ in .easeInOut(duration: 0.9) }
+        .frame(maxWidth: .infinity)
         .accessibilityHidden(true)
     }
     @ViewBuilder func tiles(_ i: DeviceInfo) -> some View {

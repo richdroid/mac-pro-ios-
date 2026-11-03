@@ -175,7 +175,15 @@ struct RecentFlick: Codable, Identifiable, Hashable {
     var id: String { imdb }
     var item: MediaItem {
         let link = video.map { NextUp.link(imdb, $0) } ?? imdb
-        return MediaItem(title: title, subtitle: episode ?? at.formatted(.relative(presentation: .named)), art: art, id: link, kind: type)
+        return MediaItem(title: title, subtitle: episode ?? when, art: art, id: link, kind: type)
+    }
+    // A day rather than a count of minutes, which would go stale while the page is open.
+    var when: String {
+        let c = Calendar.current
+        if c.isDateInToday(at) { return "Today" }
+        if c.isDateInYesterday(at) { return "Yesterday" }
+        if let d = c.dateComponents([.day], from: c.startOfDay(for: at), to: c.startOfDay(for: Date())).day, d < 7 { return at.formatted(.dateTime.weekday(.wide)) }
+        return at.formatted(.dateTime.day().month())
     }
 }
 @MainActor

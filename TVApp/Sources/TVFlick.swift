@@ -274,16 +274,17 @@ struct FlickScreen: View {
 
     @ToolbarContentBuilder var bar: some ToolbarContent {
         if let previous {
-            ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
+            ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left").opacity(arrived ? 1 : 0) } }
         }
         // Only back to an episode already chosen. On the streams, "Choose on the TV" is the way on without one.
         if let next, step == .episodes {
-            ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right") } }
+            ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right").opacity(arrived ? 1 : 0) } }
         }
         ToolbarItem(placement: .cancellationAction) {
             // While anything is still on its way to the TV, the X stops it, on the controls too. Once it's there, a tick.
             let stops = flown && (step != .control || sending)
-            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : step == .control ? "Done" : "Close", systemImage: stops || step != .control ? "xmark" : "checkmark") }
+            // Its label follows arrived's spring, so it fades in and out with the backdrop rather than popping on the rail.
+            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : step == .control ? "Done" : "Close", systemImage: stops || step != .control ? "xmark" : "checkmark").opacity(arrived ? 1 : 0) }
         }
     }
 
@@ -705,28 +706,39 @@ struct FlickScreen: View {
     // The TV's screen, small while the card is in the hand, grown on the control step. Its picture crossfades within the
     // one frame: the poster filling the small screen, then the whole poster on a blurred copy of itself.
     var screenLayer: some View {
-        let big = step == .control
-        let slot = big && controlSlot != .zero ? controlSlot : tvFrame
+        // Big only once the control step's place is known: until then, nothing changes on the small TV. Unfolded, the far
+        // pane's place comes a few frames after the step does.
+        let big = step == .control && controlSlot != .zero
+        let slot = big ? controlSlot : tvFrame
         let radius: CGFloat = big ? 16 : 9
         let lean = big ? 0 : charge
         return ZStack {
-            RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.black.opacity(big ? 0.6 : 0.55))
-            if landed && !big {
+            RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.black.opacity(0.55))
+            // The poster filling the screen stays put underneath through the growing, so there's never a frame without it.
+            if landed || big {
                 Color.clear.overlay { artwork(fill: true) }.clipped()
                     .transition(.asymmetric(insertion: .scale(scale: 1.3).combined(with: .opacity), removal: .opacity))
             }
-            if big {
-                Color.clear.overlay { artwork(fill: true) }.clipped().blur(radius: 24).opacity(0.7).transition(.opacity)
-                artwork(fill: false)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
-                    .padding(14)
-                    .transition(.opacity)
+            // The tick fades out as the screen grows, rather than going the moment the step changes.
+            if done { TVTick().opacity(big ? 0 : 1).transition(.scale(scale: 0.5).combined(with: .opacity)) }
+            // On top, the grown screen's picture fades in: the whole poster on a blurred copy of itself. Only from the
+            // control step on, so its blur costs nothing while the card is in flight or the tick plays.
+            if step == .control {
+                ZStack {
+                    Color.black
+                    Color.clear.overlay { artwork(fill: true) }.clipped().blur(radius: 24).opacity(0.7)
+                    artwork(fill: false)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
+                        .padding(14)
+                }
+                .opacity(big ? 1 : 0)
+                .transition(.opacity)
             }
             if sending { TVWaiting().transition(.opacity) }
-            if done && !big { TVTick().transition(.scale(scale: 0.5).combined(with: .opacity)) }
             TVFlash(trigger: successes)
         }
+        .animation(.spring(response: 0.5, dampingFraction: 0.86), value: big)
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .frame(width: slot.width, height: slot.height)
         .overlay { RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(big ? 0.25 : 0.3 + 0.5 * charge), lineWidth: big ? 1 : 1.5) }
