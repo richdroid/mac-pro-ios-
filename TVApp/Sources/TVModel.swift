@@ -40,6 +40,22 @@ final class TVModel: ObservableObject {
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { flicking = nil }
     }
+    // Sound from the phone that isn't music. Mint's last song is still in the status then, but it isn't what's playing.
+    var otherAirPlay: Bool { status?.airplay?.active == true && status?.airplay?.kind != "music" }
+    var nowMusic: TVStatus.Music? { otherAirPlay ? nil : status?.music }
+    // The cover of what's on, for the wall behind every page and the Playing tab's icon. Nothing while the phone plays
+    // something of its own, rather than the cover of whatever played before.
+    var nowArt: String? {
+        if otherAirPlay { return nil }
+        if videoIsCurrent, let s = status?.session { return picture(for: s) }
+        return status?.music?.art
+    }
+    // Whether another app's player, rather than Mint, is what's on. A paused player only counts if it's the app in
+    // front, or a song would lose out to something long since left.
+    var videoIsCurrent: Bool {
+        guard let s = status?.session, s.pkg != "com.codex.musicwebtv" else { return false }
+        return s.playing || nowMusic == nil || s.pkg == status?.app
+    }
     @Published var browsing: MediaSource?
     @Published var toast: String?
     @Published var filmsNote: String? = "Loading your films…"
@@ -185,9 +201,9 @@ final class TVModel: ObservableObject {
     }
     private var repeatPending = false
     private var mirrorSoon: Task<Void, Never>?
-    func post(_ path: String, _ body: [String: Any] = [:], say msg: String? = nil) {
+    // Nothing is said when it works: what changes on the TV, or on the button pressed, says that. Only a failure is told.
+    func post(_ path: String, _ body: [String: Any] = [:]) {
         guard let r = request(path, body) else { return }
-        if let msg { say(msg) }
         lastTouch = Date()
         Task {
             let result = try? await URLSession.shared.data(for: r)
@@ -202,13 +218,8 @@ final class TVModel: ObservableObject {
         Task {
             guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
                   let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { say("The TV didn’t get that"); return }
-            switch j["kind"] as? String {
-            case "apple", "words": say("Sent to Mint Music")
-            case "youtube": say("Opening on YouTube")
-            case "film": say("Opening in Letterboxd")
-            case "imdb": say("Opening in Stremio")
-            default: say("That link can’t open on the TV. Try AirPlay.")
-            }
+            // Only a link the TV can't open needs saying, since then there's something else to do.
+            if !["apple", "words", "youtube", "film", "imdb"].contains(j["kind"] as? String ?? "") { say("That link can’t open on the TV. Try AirPlay.") }
         }
     }
 }

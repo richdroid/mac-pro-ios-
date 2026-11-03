@@ -19,7 +19,6 @@ struct ManageState: Decodable {
 final class ManageStore: ObservableObject {
     @Published var state: ManageState?
     @Published var failed = false
-    @Published var note: String?
     func load() async {
         guard let d = await TVBridge.data(TVBridge.url("/api/tv/manage"), timeout: 15), let s = try? JSONDecoder().decode(ManageState.self, from: d) else { failed = state == nil; return }
         state = s; failed = false
@@ -35,7 +34,13 @@ final class ManageStore: ObservableObject {
         queue = Task {
             await before?.value
             do { try await TVBridge.post(path, body); await then?() }
-            catch { note = "The TV didn’t get that."; await load() }
+            // No alert with only an OK in it: what changed snaps back to what the TV really has, with the buzz for no.
+            catch {
+                #if canImport(UIKit)
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                #endif
+                await load()
+            }
         }
     }
 }
@@ -129,7 +134,6 @@ struct ManageAppsView: View {
                 Button("Cancel", role: .cancel) {}
             }
         } message: { Text("Its data on the TV goes too. You’d have to install it again to get it back.") }
-        .alert("That didn’t work", isPresented: .init(get: { store.note != nil }, set: { if !$0 { store.note = nil } })) { Button("OK") {} } message: { Text(store.note ?? "") }
     }
 }
 
@@ -168,6 +172,5 @@ struct ManageSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await store.load() }
         .task { await store.load() }
-        .alert("That didn’t work", isPresented: .init(get: { store.note != nil }, set: { if !$0 { store.note = nil } })) { Button("OK") {} } message: { Text(store.note ?? "") }
     }
 }

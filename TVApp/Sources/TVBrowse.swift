@@ -208,7 +208,7 @@ struct BrowseColumn: View {
                             }
                             .padding(.horizontal, 20).scrollTargetLayout()
                         }
-                        .clipped()
+                        .rowEdge()
                     }
                 }
             }
@@ -218,6 +218,16 @@ struct BrowseColumn: View {
         .task { await store.load() }
     }
 }
+
+// A row of cards that scrolls sideways. On the outer screen it runs on under the glass side bar to the screen's edge,
+// as every row does there; unfolded, it stops at its own pane, so it never slides under the other one.
+private struct RowEdge: ViewModifier {
+    @Environment(\.paneLayout) private var panes
+    func body(content: Content) -> some View {
+        if panes { content.clipped() } else { content }
+    }
+}
+extension View { func rowEdge() -> some View { modifier(RowEdge()) } }
 
 // Stremio and Mint searched together, from the bar on the Apps page. Every result flicks like a card on its own page.
 struct EverywhereSearch: View {
@@ -245,6 +255,7 @@ struct EverywhereSearch: View {
                             }
                             .padding(.horizontal, 20).scrollTargetLayout()
                         }
+                        .rowEdge()
                     }
                     .transition(.opacity.combined(with: .offset(y: 12)))
                 }

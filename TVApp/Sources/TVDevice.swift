@@ -73,8 +73,11 @@ struct DeviceTab: View {
                 .frame(height: panes ? 260 : 170)
                 .background(RadialGradient(colors: [.white.opacity(0.16), .clear], center: .center, startRadius: 4, endRadius: 110).frame(width: 240, height: 240))
                 .accessibilityLabel("The TV box and its remote")
-            Text(info?.model ?? "Google TV").font(.title.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7).padding(.top, 6)
-            if let i = info { Text("Android \(i.android) · up \(span(i.uptime))").font(.subheadline).foregroundStyle(.secondary) }
+            // Until the box answers, the shape of its name rather than a made-up one, so nothing changes name as it loads.
+            Text(info?.model ?? "onn. 4K Streaming Box").font(.title.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7).padding(.top, 6)
+                .redacted(reason: info == nil ? .placeholder : [])
+            Text(info.map { "Android \($0.android) · up \(span($0.uptime))" } ?? "Android 14 · up 1d 1h").font(.subheadline).foregroundStyle(.secondary)
+                .redacted(reason: info == nil ? .placeholder : [])
             HStack(spacing: 6) {
                 Circle().fill(failed ? Color.orange : Color.green).frame(width: 9, height: 9)
                 Text(failed ? "Can’t reach it" : model.status?.screen == "asleep" ? "Asleep" : "Awake")
@@ -82,6 +85,16 @@ struct DeviceTab: View {
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).tvCard(14).padding(.top, 6)
         }
         .frame(maxWidth: .infinity)
+    }
+    // The tiles before the first answer: their shapes, breathing, so the page doesn't jump when the numbers come.
+    var waitingTiles: some View {
+        Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+            ForEach(0..<2, id: \.self) { _ in
+                GridRow { ForEach(0..<2, id: \.self) { _ in RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.08)).frame(height: 128) } }
+            }
+        }
+        .phaseAnimator([0.5, 1.0]) { c, o in c.opacity(o) } animation: { _ in .easeInOut(duration: 0.9) }
+        .accessibilityHidden(true)
     }
     @ViewBuilder func tiles(_ i: DeviceInfo) -> some View {
         Grid(horizontalSpacing: 12, verticalSpacing: 12) {
@@ -94,6 +107,10 @@ struct DeviceTab: View {
                 Tile(title: "Upload", value: rate(i.txRate), detail: i.ip, spark: i.hist.tx)
             }
         }
+        // Out of touch, the last numbers stay but step back, so they aren't read as live.
+        .opacity(failed ? 0.4 : 1)
+        .saturation(failed ? 0 : 1)
+        .animation(.easeOut(duration: 0.3), value: failed)
     }
     @ViewBuilder func details(_ i: DeviceInfo) -> some View {
         VStack(spacing: 0) {
@@ -130,13 +147,15 @@ struct DeviceTab: View {
                 FoldSplit {
                     hero.padding(20).frame(maxHeight: .infinity)
                 } right: {
-                    ScrollView { if let info { VStack(spacing: 18) { tiles(info); details(info) }.padding(20) } }
+                    ScrollView {
+                        VStack(spacing: 18) { if let info { tiles(info); details(info) } else if !failed { waitingTiles } }.padding(20)
+                    }
                 }
             } else {
                 ScrollView {
                     VStack(spacing: 18) {
                         hero
-                        if let info { tiles(info); details(info) }
+                        if let info { tiles(info); details(info) } else if !failed { waitingTiles }
                     }
                     .padding(.horizontal, 16).padding(.bottom, 16)
                 }

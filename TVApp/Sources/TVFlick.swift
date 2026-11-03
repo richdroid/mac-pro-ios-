@@ -88,6 +88,10 @@ struct FlickScreen: View {
     @State private var flight: Task<Void, Never>?
     @State private var cancelled = false
     @State private var morphing = false
+    // The control screen's buttons settle in just after its screen has grown out of the TV.
+    @State private var controlsIn = false
+    @Namespace private var screenSpace
+    @Environment(\.paneLayout) private var panes
     @State private var priorMood: Color??
     // Follows the finger exactly, with nothing in between.
     @State private var drag = UserDefaults.standard.string(forKey: "pose") == "lift" ? CGSize(width: 18, height: -190) : .zero
@@ -157,10 +161,13 @@ struct FlickScreen: View {
                         case .episodes: episodesStep.transition(slide)
                         case .streams: streamsStep.transition(slide)
                         case .flick: flickStep(g.size).transition(slide)
-                        case .control: controlStep(g.size).transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 24)).animation(.spring(response: 0.5, dampingFraction: 0.88).delay(0.14)), removal: .opacity))
+                        // Its screen grows out of the TV (matched below), so the step itself only fades.
+                        case .control: controlStep(g.size).transition(.opacity)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // In and out with the backdrop: it opens over the app, not as a sheet sliding up.
+                    .opacity(arrived ? 1 : 0)
                 }
                 .coordinateSpace(name: "flick")
             }
@@ -177,8 +184,6 @@ struct FlickScreen: View {
                     .font(.system(size: 11, design: .monospaced)).padding(6).background(.black.opacity(0.7)).foregroundStyle(.yellow)
             }
         }
-        // Its own way in and out, so nothing slides over the card, and the app stays faintly there behind it.
-        .presentationBackground(.clear)
         // Picked up, each quarter of the way, the hit on the TV.
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.55), trigger: lifted) { _, now in now }
         .sensoryFeedback(trigger: detent) { old, new in new > old && lifted ? .impact(flexibility: .rigid, intensity: 0.35 + 0.18 * Double(new)) : nil }
@@ -198,7 +203,7 @@ struct FlickScreen: View {
     }
     var slide: AnyTransition {
         // Into the controls, the flick just fades away.
-        if morphing { return .asymmetric(insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.18))) }
+        if morphing { return .opacity }
         return .asymmetric(insertion: .move(edge: forward ? .trailing : .leading).combined(with: .opacity),
                     removal: .move(edge: forward ? .leading : .trailing).combined(with: .opacity))
     }
@@ -235,7 +240,8 @@ struct FlickScreen: View {
         if let previous {
             ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
         }
-        if let next, step != .flick {
+        // Only back to an episode already chosen. On the streams, "Choose on the TV" is the way on without one.
+        if let next, step == .episodes {
             ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right") } }
         }
         ToolbarItem(placement: .cancellationAction) {
@@ -243,24 +249,37 @@ struct FlickScreen: View {
         }
     }
 
+    var poster: some View {
+        Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
+            .shadow(color: .black.opacity(0.4), radius: 10, y: 5)
+    }
+    func about(_ lines: Int) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(item.title).font(.title3.weight(.bold)).lineLimit(2)
+            if let about = meta?.about ?? item.about, !about.isEmpty {
+                Text(about).font(.footnote).foregroundStyle(.secondary).lineLimit(lines)
+            }
+            if let slug = item.slug, !slug.isEmpty {
+                Button { model.tick(); model.post("film", ["slug": slug]); leave() } label: {
+                    Label("Letterboxd", systemImage: "film")
+                }.font(.footnote.weight(.medium)).tint(TVLook.accent).padding(.top, 2)
+            }
+        }
+    }
     var heading: some View {
         HStack(alignment: .top, spacing: 14) {
-            Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
-                .frame(width: 74, height: 111).clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .shadow(color: .black.opacity(0.4), radius: 10, y: 5)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(item.title).font(.title3.weight(.bold)).lineLimit(2)
-                if let about = meta?.about ?? item.about, !about.isEmpty {
-                    Text(about).font(.footnote).foregroundStyle(.secondary).lineLimit(4)
-                }
-                if let slug = item.slug, !slug.isEmpty {
-                    Button { model.tick(); model.post("film", ["slug": slug], say: "Opening in Letterboxd"); leave() } label: {
-                        Label("Letterboxd", systemImage: "film")
-                    }.font(.footnote.weight(.medium)).tint(TVLook.accent).padding(.top, 2)
-                }
-            }
+            poster.frame(width: 74, height: 111).clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            about(4)
             Spacer(minLength: 0)
         }
+    }
+    // Unfolded, the film has the left side to itself: a real poster, and room for what it's about.
+    var bigHeading: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            poster.frame(width: 180, height: 270).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            about(10)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
     func row<L: View>(selected: Bool, action: @escaping () -> Void, @ViewBuilder label: () -> L) -> some View {
         Button(action: action) {
@@ -278,19 +297,30 @@ struct FlickScreen: View {
         .buttonStyle(PressCard())
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
-    func page<C: View>(@ViewBuilder content: () -> C) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) { content() }
-                .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
-                .frame(maxWidth: 620, alignment: .leading)
-                .frame(maxWidth: .infinity)
+    // The film at the top, then the choices. Unfolded, the film one side of the fold and the choices the other.
+    @ViewBuilder func page<C: View>(@ViewBuilder content: () -> C) -> some View {
+        if panes {
+            FoldSplit {
+                ScrollView { bigHeading.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24) }
+            } right: {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) { content() }
+                        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
+                }
+            }
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) { heading; content() }
+                    .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
+                    .frame(maxWidth: 620, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+            }
         }
     }
 
     // First step of a series: which episode.
     var episodesStep: some View {
         page {
-            heading
             if seasons.isEmpty && !metaFailed {
                 ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12, thumb: true) }.padding(.top, 6)
             } else if seasons.isEmpty {
@@ -320,7 +350,6 @@ struct FlickScreen: View {
     // Next: which stream, or leave that to the TV.
     var streamsStep: some View {
         page {
-            heading
             if let e = episode { Text("Season \(e.season), episode \(e.episode): \(e.name)").font(.subheadline.weight(.semibold)).padding(.top, 4) }
             row(selected: false) { stream = nil; go(.flick) } label: {
                 Image(systemName: "tv").foregroundStyle(TVLook.accent).frame(width: 28)
@@ -360,7 +389,8 @@ struct FlickScreen: View {
                     }
                 }
                 if !s.details.isEmpty { Text(s.details).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1) }
-                if !s.description.isEmpty { Text(s.description).font(.caption2).foregroundStyle(.tertiary).lineLimit(2) }
+                // The file's own name tells versions apart, but one line of it is enough.
+                if !s.description.isEmpty { Text(s.description).font(.caption2).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle) }
             }
             .multilineTextAlignment(.leading)
         }
@@ -384,9 +414,9 @@ struct FlickScreen: View {
     }
 
     // Last: nothing left to decide, just the TV and the card in your hand.
-    func flickStep(_ size: CGSize) -> some View {
+    @ViewBuilder func flickStep(_ size: CGSize) -> some View {
         let tall = min(size.height * 0.5, 420), width = source == .mint ? min(250, tall - 60) : min(210, (tall - 56) / 1.5)
-        return VStack(spacing: 0) {
+        let column = VStack(spacing: 0) {
             tv.padding(.top, 20)
             status.padding(.top, 16).padding(.horizontal, 30)
             Spacer(minLength: 14)
@@ -394,48 +424,48 @@ struct FlickScreen: View {
             card(width)
             .padding(.bottom, 22)
         }
+        // Unfolded, the TV and the card keep to one side, clear of the fold, and the other side is left empty:
+        // this screen is only ever the TV and the card.
+        if panes { FoldSplit { column } right: { Color.clear } } else { column }
+    }
+    // Sent with "Choose on the TV": Stremio is showing its streams, and only the remote can pick one.
+    var choosingOnTV: Bool {
+        source == .stremio && stream == nil && target.send == nil && item.stremioRef != nil && model.status?.session.map { $0.pkg == "com.stremio.one" && $0.position != nil } != true
     }
     // After the flick: the TV's screen, grown, with what's playing on it and the controls for it.
-    func controlStep(_ size: CGSize) -> some View {
-        let w = min(size.width - 48, 520)
+    @ViewBuilder func controlStep(_ size: CGSize) -> some View {
+        let w = panes ? min(size.width / 2 - 48, 420) : min(size.width - 48, 520)
         // Until the TV reports what was just sent, what it reports is what played before, so the flicked thing stands in.
         let sentTo = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one"
         let reported = model.status?.session
         let session = reported?.pkg == sentTo ? reported : nil
-        let rawMusic = model.status?.music
+        let rawMusic = model.nowMusic
         let music = source == .mint && (target.send != nil || rawMusic?.title.caseInsensitiveCompare(item.title) == .orderedSame || reported?.pkg == sentTo) ? rawMusic : nil
         let isMusic = source == .mint
-        return ScrollView {
-            VStack(spacing: 18) {
-                // The whole picture, on a blurred copy of itself, as a poster sits on a TV's screen: never a slice of it.
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.black.opacity(0.6))
-                    Group {
-                        if let image = target.image { image.resizable().scaledToFill() }
-                        else { Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(white: 0.15) } }
-                    }
-                    .frame(width: w, height: w * 9 / 16).clipped()
-                    .blur(radius: 24).opacity(0.7)
-                    Group {
-                        if let image = target.image { image.resizable().scaledToFit() }
-                        else { Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFit() } placeholder: { Color.clear } }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
-                    .padding(14)
-                }
-                .frame(width: w, height: w * 9 / 16)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.25), lineWidth: 1) }
-                .shadow(color: TVLook.accent.opacity(0.45), radius: 26)
-                VStack(spacing: 4) {
-                    Text(isMusic ? (music?.title ?? shown.title) : (session?.description.first ?? shown.title)).font(.title2.weight(.bold)).lineLimit(2)
-                    Text(isMusic ? (music.map { "\($0.artist) · \($0.album)" } ?? shown.subtitle) : (session?.description.dropFirst().first ?? shown.subtitle))
-                        .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                }
-                .multilineTextAlignment(.center)
-                .contentTransition(.opacity)
+        let picture = VStack(spacing: 18) {
+            controlScreen(w)
+            VStack(spacing: 4) {
+                Text(isMusic ? (music?.title ?? shown.title) : (session?.description.first ?? shown.title)).font(.title2.weight(.bold)).lineLimit(2)
+                Text(isMusic ? (music.map { "\($0.artist) · \($0.album)" } ?? shown.subtitle) : (session?.description.dropFirst().first ?? shown.subtitle))
+                    .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .multilineTextAlignment(.center)
+            .contentTransition(.opacity)
+            .opacity(controlsIn ? 1 : 0)
+            // Where it's got to, for a film or a song alike, once the TV says.
+            Group {
                 if let session, !isMusic, session.position != nil { VideoProgress(session: session).frame(maxWidth: w) }
+                else if isMusic, let music, music.duration > 0 { MusicProgress(music: music).frame(maxWidth: w) }
+            }
+            .opacity(controlsIn ? 1 : 0)
+        }
+        let controls = VStack(spacing: 18) {
+            if choosingOnTV {
+                // The TV is on Stremio's list of streams: what's needed now is the pad to pick one with.
+                Text("Pick a stream with the remote").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                DPad().frame(width: 220, height: 220)
+                GlassKey(icon: "chevron.left", label: "Back", key: "back", size: 50)
+            } else {
                 HStack(spacing: 22) {
                     if source == .stremio {
                         SeekButton(icon: "gobackward.10", label: "Back 10 seconds", forward: false)
@@ -447,15 +477,59 @@ struct FlickScreen: View {
                         GlassKey(icon: "forward.fill", label: "Next", key: "next", size: 56)
                     }
                 }
-                Button { model.tab = 0; leave() } label: { Label("Remote", systemImage: "av.remote").font(.subheadline.weight(.semibold)).padding(.horizontal, 18).frame(height: 44) }
-                    .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
             }
-            .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 24)
-            .frame(maxWidth: .infinity)
+            Button { model.tab = 0; leave() } label: { Label("Remote", systemImage: "av.remote").font(.subheadline.weight(.semibold)).padding(.horizontal, 18).frame(height: 44) }
+                .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
+        }
+        .opacity(controlsIn ? 1 : 0)
+        .offset(y: controlsIn ? 0 : 16)
+        Group {
+            // Unfolded, the screen one side of the fold and its controls the other.
+            if panes {
+                FoldSplit {
+                    ScrollView { picture.padding(.horizontal, 24).padding(.vertical, 24).frame(maxWidth: .infinity) }
+                } right: {
+                    ScrollView { controls.padding(.horizontal, 24).padding(.vertical, 24).frame(maxWidth: .infinity) }.defaultScrollAnchor(.center)
+                }
+            } else {
+                ScrollView {
+                    VStack(spacing: 18) { picture; controls }
+                        .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 24)
+                        .frame(maxWidth: .infinity)
+                }
+            }
         }
         .environment(\.keysInScroll, true)
+        // The buttons settle in from just below once the screen has grown into place.
+        .onAppear { withAnimation(.spring(response: 0.5, dampingFraction: 0.88).delay(0.12)) { controlsIn = true } }
         // Kept current while it's open, so the bar and the buttons follow the TV.
         .task { while !Task.isCancelled { try? await Task.sleep(nanoseconds: 2_000_000_000); await model.load() } }
+    }
+    // The TV's screen, grown: the whole picture on a blurred copy of itself, as a poster sits on a TV's screen, never a
+    // slice of it. It is the same screen the card flew into, grown into place.
+    func controlScreen(_ w: CGFloat) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.black.opacity(0.6))
+            Color.clear.overlay {
+                if let image = target.image { image.resizable().scaledToFill() }
+                else { Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(white: 0.15) } }
+            }
+            .clipped()
+            .blur(radius: 24).opacity(0.7)
+            Group {
+                if let image = target.image { image.resizable().scaledToFit() }
+                else { Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFit() } placeholder: { Color.clear } }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
+            .padding(14)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.25), lineWidth: 1) }
+        // Starts as the small TV the card landed in, and grows to here.
+        .matchedGeometryEffect(id: "screen", in: screenSpace)
+        .frame(width: w, height: w * 9 / 16)
+        .shadow(color: TVLook.accent.opacity(0.45), radius: 26)
     }
     func controlButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
         Button { model.tick(); action() } label: {
@@ -486,25 +560,32 @@ struct FlickScreen: View {
             Text("Flick up to play on the TV").font(.footnote.weight(.medium)).foregroundStyle(.secondary)
             if let stream { Text([stream.name, stream.details].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.tertiary).lineLimit(1).padding(.horizontal, 30) }
         }
-        .opacity(calm)
+        // Gone as soon as the card leaves the hand, rather than showing through behind it.
+        .opacity(lifted || progress > 0.02 || flown ? 0 : calm)
+        .animation(.easeOut(duration: 0.15), value: lifted || progress > 0.02 || flown)
     }
     var tv: some View {
         VStack(spacing: 5) {
             ZStack {
                 RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.black.opacity(0.55))
                 if landed {
-                    Group {
+                    // Filling exactly the screen it's given, never more, as that screen grows on the hand-over.
+                    Color.clear.overlay {
                         if let image = target.image { image.resizable().scaledToFill() }
                         else { Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(white: 0.15) } }
                     }
+                    .clipped()
                     .transition(.scale(scale: 1.3).combined(with: .opacity))
                 }
                 if sending { TVWaiting().transition(.opacity) }
                 if done { TVTick().transition(.scale(scale: 0.5).combined(with: .opacity)) }
                 TVFlash(trigger: successes)
             }
-            .frame(width: 168, height: 94.5)
             .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            // The same screen as the control step's, so on the hand-over this one grows into that one. Matched inside
+            // the fixed frame, so the growing never changes this view's layout or the measure of where the card aims.
+            .matchedGeometryEffect(id: "screen", in: screenSpace)
+            .frame(width: 168, height: 94.5)
             .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.3 + 0.5 * charge), lineWidth: 1.5) }
             .shadow(color: TVLook.accent.opacity(0.75 * charge), radius: 10 + 18 * charge)
             .overlay { TVRipple(trigger: impacts) }
@@ -522,6 +603,8 @@ struct FlickScreen: View {
         // Where the card aims: the screen, at the top of this, measured outside everything that moves it. Measured
         // inside, its own glow would move the target, which moves the glow, and so on without end.
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { f in
+            // Once it's handing over to the controls the card has landed, and nothing aims at it any more.
+            guard !morphing else { return }
             tvFrame = CGRect(x: f.midX - 84, y: f.minY, width: 168, height: 94.5)
         }
         .accessibilityHidden(true)
@@ -609,7 +692,7 @@ struct FlickScreen: View {
         cancelled = true
         flight?.cancel()
         model.tick()
-        model.post("stop-playing", ["pkg": source == .mint || target.send != nil ? "com.codex.musicwebtv" : "com.stremio.one"], say: "Stopped")
+        model.post("stop-playing", ["pkg": source == .mint || target.send != nil ? "com.codex.musicwebtv" : "com.stremio.one"])
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { sending = false }
         leave()
     }
@@ -673,9 +756,9 @@ struct FlickScreen: View {
                 // Nothing else redraws while the TV says yes: the whole app catching up at that moment stalled the tick.
                 try? await Task.sleep(nanoseconds: 950_000_000)
                 if !item.art.isEmpty { model.lastArt = item.art; model.lastArtTitle = item.title; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
-                // A plain hand-over: the flick fades away, then the controls settle in from just below.
+                // The hand-over: the TV the card landed in grows into the control screen, and its buttons settle in below.
                 morphing = true
-                withAnimation(.easeOut(duration: 0.22)) { step = .control }
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { step = .control }
                 Task { try? await Task.sleep(nanoseconds: 500_000_000); await model.load() }
             } catch {
                 // Called off with the X: it's already being stopped and closed.
@@ -773,6 +856,8 @@ struct Chips<T: Hashable>: View {
     @EnvironmentObject var model: TVModel
     let options: [(T, String)]
     @Binding var selected: T
+    // Space before the first chip and after the last, inside the row, so a row that runs to the edge scrolls to it.
+    var inset: CGFloat = 0
     @Namespace private var pill
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -790,6 +875,7 @@ struct Chips<T: Hashable>: View {
                     .accessibilityAddTraits(selected == value ? .isSelected : [])
                 }
             }
+            .padding(.horizontal, inset)
         }
     }
 }
@@ -857,7 +943,7 @@ struct AppBrowse: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { model.tick(); model.post("open", ["pkg": source.pkg], say: "Opening \(source.name)") } label: { Label("Open on TV", systemImage: "tv") }
+                Button { model.tick(); model.post("open", ["pkg": source.pkg]) } label: { Label("Open on TV", systemImage: "tv") }
             }
         }
     }

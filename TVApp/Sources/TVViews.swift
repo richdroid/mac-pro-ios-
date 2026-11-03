@@ -48,6 +48,7 @@ struct RootView: View {
         }
     }
     @State private var resets: [Int: Int] = [:]
+    @State private var playingIcon: TVImage?
     var body: some View {
         PaneReader {
             TabView(selection: TabReset.binding($model.tab) { t in
@@ -59,7 +60,8 @@ struct RootView: View {
                 Tab(value: 1) { Page(title: "Apps") { AppsTab() }.id(resets[1, default: 0]) } label: { tabLabel("Apps", "square.grid.2x2") }
                 Tab(value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() }.id(resets[2, default: 0]) } label: {
                     // The cover of what's on, so the button says what's playing before it's pressed.
-                    if let i = PlayingIcon.image(model) { Label { Text("Playing") } icon: { Image(tv: i) } } else { tabLabel("Playing", "play.circle") }
+                    if let i = playingIcon { Label { Text("Playing") } icon: { Image(tv: i) } }
+                    else { tabLabel("Playing", model.otherAirPlay ? "airplayaudio" : "play.circle") }
                 }
                 Tab(value: 3) { Page(title: "Watch") { FilmsTab() }.id(resets[3, default: 0]) } label: { tabLabel("Watch", "film") }
                 Tab(value: 5) { Page(title: "Status") { DeviceTab() }.id(resets[5, default: 0]) } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
@@ -71,8 +73,22 @@ struct RootView: View {
                 // Opening Playing shows what's on now, not what was on at the last look.
                 if t == 2 { Task { await model.load() } }
             }
+            // Over everything, side bar included, and edge to edge. Not a presented screen: the system slides those up
+            // from the bottom, a blurred panel with a hard top edge. The flick fades its own way in and out.
+            .overlay {
+                if let target = model.flicking {
+                    FlickScreen(target: target).environmentObject(model).id(target.id)
+                }
+            }
         }
-        .fullScreenCover(item: $model.flicking) { FlickScreen(target: $0).environmentObject(model) }
+        // Waits for the cover before changing the icon, and changes it again when the cover arrives, so the button
+        // shows the cover for as long as it's playing, not only when it happened to be ready at the last redraw.
+        .task(id: model.nowArt) {
+            guard let art = model.nowArt, let u = URL(string: art) else { playingIcon = nil; return }
+            if let i = ImageStore.shared.cached(u) { playingIcon = PlayingIcon.make(i); return }
+            playingIcon = nil
+            if let i = await ImageStore.shared.load(u), !Task.isCancelled { playingIcon = PlayingIcon.make(i) }
+        }
         .overlay(alignment: .top) {
             if let problem {
                 Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 9)
@@ -117,78 +133,80 @@ struct Page<C: View>: View {
 // The TV's own settings and this app's connection, as a tab at the foot of the side bar.
 struct TVSettingsTab: View {
     @EnvironmentObject var model: TVModel
+    @Environment(\.paneLayout) private var panes
     @State private var address = ""
-    var body: some View {
-        NavigationStack {
-            Form {
-                TVManageSections()
-                Section {
-                    TextField("Address", text: $address).autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
-                        .submitLabel(.done)
-                        .onSubmit { model.address = address.trimmingCharacters(in: .whitespacesAndNewlines); model.start() }
-                } header: { Text("Mac Pro address") } footer: { Text("The TV is reached through your Mac, so this works anywhere with Tailscale on.") }
-                Section {
-                    Button("Refresh the TV’s recommendations") { model.post("refresh", say: "Refreshing") }
-                    Button("Open launcher settings on the TV") { model.post("launcher-settings", say: "Opening") }
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .background { Ambience() }
-            .navigationTitle("Settings")
-            .onAppear { address = model.address }
+    var manage: some View { TVManageSections() }
+    // How the app reaches the TV, and the launcher's own two jobs. The note about Tailscale is under the TV's sections.
+    @ViewBuilder var connection: some View {
+        Section {
+            TextField("Address", text: $address).autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
+                .submitLabel(.done)
+                .onSubmit { model.address = address.trimmingCharacters(in: .whitespacesAndNewlines); model.start() }
+        } header: { Text("Mac Pro address") }
+        Section {
+            Button("Refresh the TV’s recommendations") { model.tick(); model.post("refresh") }
+            Button("Open launcher settings on the TV") { model.tick(); model.post("launcher-settings") }
         }
     }
-}
-struct ConnectionView: View {
-    @EnvironmentObject var model: TVModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var address = ""
     var body: some View {
         NavigationStack {
-            Form {
-                TVManageSections()
-                Section {
-                    TextField("Address", text: $address).autocorrectionDisabled()
-                } header: { Text("Mac Pro address") } footer: { Text("The TV is reached through your Mac, so this works anywhere with Tailscale on.") }
-                Section {
-                    Button("Refresh the TV’s recommendations") { model.post("refresh", say: "Refreshing") }
-                    Button("Open launcher settings on the TV") { model.post("launcher-settings", say: "Opening") }
+            Group {
+                // Unfolded, one list each side of the fold rather than one list across it.
+                if panes {
+                    FoldSplit { Form { manage }.scrollContentBackground(.hidden) } right: { Form { connection }.scrollContentBackground(.hidden) }
+                } else {
+                    Form { manage; connection }.scrollContentBackground(.hidden)
                 }
             }
-            .navigationTitle("TV")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { model.address = address; model.start(); dismiss() } } }
+            .background { Ambience() }
+            .navigationTitle("Settings")
+            // The same title as every other tab: large on the outer screen, in the bar when unfolded.
+            .navigationBarTitleDisplayMode(panes ? .inline : .large)
             .onAppear { address = model.address }
         }
     }
 }
 
-// Type or paste anything: a link opens in the right app, words become a search.
+// Type or paste anything: a link opens in the right app, words become a search right here.
 struct SendBar: View {
     @EnvironmentObject var model: TVModel
     @ObservedObject private var draft = SendDraft.shared
     @FocusState private var focused: Bool
+    static func isLink(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        return t.contains("://") || t.lowercased().hasPrefix("www.") || (!t.contains(" ") && t.contains(".") && t.contains("/"))
+    }
+    var link: Bool { Self.isLink(draft.text) }
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "paperplane").foregroundStyle(.secondary).padding(.leading, 14)
+            Image(systemName: link ? "paperplane" : "magnifyingglass").foregroundStyle(.secondary).padding(.leading, 14)
+                .contentTransition(.symbolEffect(.replace))
             TextField("Search, or send a link", text: $draft.text)
-                .focused($focused).autocorrectionDisabled().submitLabel(.send)
-                .onSubmit { submit() }
+                .focused($focused).autocorrectionDisabled().submitLabel(link ? .send : .search)
+                // Words are already being searched as they're typed, so Return only puts the keyboard away.
+                .onSubmit { if link { submit() } else { focused = false } }
             if draft.text.isEmpty {
                 Button {
                     #if canImport(UIKit)
-                    if let s = UIPasteboard.general.string, !s.isEmpty { model.send(s) } else { focused = true }
+                    // A copied link goes to the TV; copied words are searched here, like typed ones.
+                    if let s = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                        if Self.isLink(s) { model.send(s) } else { draft.text = s }
+                    } else { focused = true }
                     #endif
                 } label: { Image(systemName: "doc.on.clipboard").frame(width: 44, height: 44) }
-                .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Send what you copied to the TV")
-            } else {
+                .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Use what you copied")
+            } else if link {
                 Button(action: submit) { Image(systemName: "arrow.up.circle.fill").font(.title2).frame(width: 44, height: 44) }
                     .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Send to the TV")
+            } else {
+                Button { draft.text = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }
+                    .buttonStyle(.plain).accessibilityLabel("Clear search")
             }
         }
         .frame(height: 50)
         .glassEffect(.regular, in: Capsule())
     }
-    func submit() { if !draft.text.isEmpty { model.send(draft.text); draft.text = "" } }
+    func submit() { if link { model.send(draft.text); draft.text = "" } }
 }
 
 struct RowTitle: View {
@@ -234,11 +252,19 @@ struct RowList<Content: View>: View {
 struct MirrorView: View {
     @EnvironmentObject var model: TVModel
     @ObservedObject var store: MirrorStore
+    // Where it always has its place, it carries its own way to hide it, and the bar has no second one.
+    var closable = false
     var body: some View {
         ZStack {
             Color.black.opacity(0.35)
             if let m = store.image, model.mirrorLive {
                 Image(tv: m).resizable().scaledToFit()
+                    .overlay(alignment: .topTrailing) {
+                        if closable {
+                            Button { model.setMirror(false) } label: { Image(systemName: "eye.slash").font(.system(size: 15, weight: .semibold)).frame(width: 40, height: 40).contentShape(Circle()) }
+                                .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).padding(10).accessibilityLabel("Hide the TV’s screen")
+                        }
+                    }
             } else if !model.mirrorLive {
                 Button { model.setMirror(true) } label: {
                     Label("Show the TV’s screen", systemImage: "eye").font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 11)
@@ -407,8 +433,8 @@ struct RemoteTab: View {
     }
     func side(apps: Bool) -> some View {
         VStack(spacing: 14) {
-            MirrorView(store: model.mirrorStore)
-            if let m = model.status?.music { MiniPlayer(music: m) }
+            MirrorView(store: model.mirrorStore, closable: true)
+            if let m = model.nowMusic { MiniPlayer(music: m) }
             if apps, model.status?.apps?.isEmpty == false { QuickApps() }
             Spacer(minLength: 0)
             SendBar()
@@ -436,8 +462,11 @@ struct RemoteTab: View {
         }
         .navigationSubtitle(state)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { model.setMirror(!model.mirrorLive) } label: { Label(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen", systemImage: model.mirrorLive ? "eye.slash" : "eye") }
+            // Folded, the screen only comes when asked for, so the bar asks. Wider, it has its own place and button.
+            if size != .regular {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { model.setMirror(!model.mirrorLive) } label: { Label(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen", systemImage: model.mirrorLive ? "eye.slash" : "eye") }
+                }
             }
         }
         .onDisappear { model.mirrorLive = false }
@@ -488,7 +517,7 @@ struct Banner: View {
     let app: TVStatus.App
     var browses = false
     var current: Bool { model.status?.app == app.pkg }
-    func open() { model.tick(); model.post("open", ["pkg": app.pkg], say: "Opening \(app.name)") }
+    func open() { model.tick(); model.post("open", ["pkg": app.pkg]) }
     var body: some View {
         Button {
             // An app with something to choose from opens that here; the rest go straight to the TV.
@@ -527,7 +556,7 @@ struct BannerRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: TVLook.gap) { ForEach(apps) { Banner(app: $0, browses: true) } }.padding(.horizontal, 20).scrollTargetLayout()
             }
-            .clipped()
+            .rowEdge()
         }
     }
 }
@@ -538,8 +567,7 @@ struct AppsTab: View {
     // Words typed into the bar search Stremio and Mint as you type. A link is only ever sent.
     var query: String? {
         let t = draft.text.trimmingCharacters(in: .whitespaces)
-        let link = t.contains("://") || t.lowercased().hasPrefix("www.") || (!t.contains(" ") && t.contains(".") && t.contains("/"))
-        return t.count >= 2 && !link ? t : nil
+        return t.count >= 2 && !SendBar.isLink(t) ? t : nil
     }
     static let listen = ["com.codex.musicwebtv", "com.google.android.youtube.tvmusic"]
     static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.google.android.play.games", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.macropinch.axe"]
@@ -658,7 +686,7 @@ struct Shelf: View {
                         }
                         .padding(.horizontal, 20)
                     }
-                    .clipped()
+                    .rowEdge()
                 }
             } else { Color.clear.frame(height: 0) }
         }
@@ -682,7 +710,7 @@ struct RoutePicker: UIViewRepresentable {
         return true
     }
     func makeUIView(context: Context) -> AVRoutePickerView {
-        let v = AVRoutePickerView(); Self.current = v; v.tintColor = .white; v.activeTintColor = UIColor(TVLook.accent); v.prioritizesVideoDevices = false
+        let v = AVRoutePickerView(); Self.current = v; v.clipsToBounds = true; v.tintColor = .white; v.activeTintColor = UIColor(TVLook.accent); v.prioritizesVideoDevices = false
         return v
     }
     func updateUIView(_ v: AVRoutePickerView, context: Context) {}
@@ -751,7 +779,8 @@ struct FlickCard: View {
             if alreadyThere || title.isEmpty {
                 // Nothing to offer, but the AirPlay picker stays in reach for the Action Button and Siri.
                 #if os(iOS)
-                RoutePicker().frame(width: 1, height: 1).opacity(0.01).accessibilityHidden(true)
+                // Clipped to its point: unclipped, the picker draws its whole glyph, a faint AirPlay ring on the page.
+                RoutePicker().frame(width: 1, height: 1).clipped().opacity(0.01).allowsHitTesting(false).accessibilityHidden(true)
                 #else
                 Color.clear.frame(height: 0)
                 #endif
@@ -805,23 +834,7 @@ struct NowControls: View {
     static func clock(_ ms: Double) -> String { let t = Int(max(ms, 0) / 1000); return String(format: "%d:%02d", t / 60, t % 60) }
     var body: some View {
         VStack(spacing: 14) {
-            TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                let raw = music.playing ? music.position + ctx.date.timeIntervalSince1970 * 1000 - music.sampledAt : music.position
-                let now = min(max(raw, 0), max(music.duration, 0))
-                VStack(spacing: 5) {
-                    GeometryReader { g in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(.white.opacity(0.18))
-                            Capsule().fill(.white).frame(width: g.size.width * (music.duration > 0 ? now / music.duration : 0))
-                        }
-                    }.frame(height: 5)
-                    HStack {
-                        Text(Self.clock(now))
-                        Spacer()
-                        Text("−" + Self.clock(music.duration - now))
-                    }.font(.caption2.weight(.medium)).monospacedDigit().foregroundStyle(.secondary)
-                }
-            }
+            if music.duration > 0 { MusicProgress(music: music) }
             HStack(spacing: 26) {
                 GlassKey(icon: "backward.fill", label: "Previous", key: "previous", size: 54)
                 PlayKey(playing: music.playing, tint: .white, size: 74)
@@ -830,24 +843,58 @@ struct NowControls: View {
         }
     }
 }
+// Where a song is, drawn as a film's is, so the two read as one thing. Mint can't be moved from here, so it only shows.
+struct MusicProgress: View {
+    let music: TVStatus.Music
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let raw = music.playing ? music.position + ctx.date.timeIntervalSince1970 * 1000 - music.sampledAt : music.position
+            let now = min(max(raw, 0), max(music.duration, 0))
+            VStack(spacing: 6) {
+                ProgressTrack(fraction: music.duration > 0 ? now / music.duration : 0).frame(height: 28)
+                HStack {
+                    Text(NowControls.clock(now))
+                    Spacer()
+                    Text("-" + NowControls.clock(music.duration - now))
+                }
+                .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Position")
+        .accessibilityValue("\(NowControls.clock(music.position)) of \(NowControls.clock(music.duration))")
+    }
+}
+// The bar itself, for songs and films alike.
+struct ProgressTrack: View {
+    let fraction: Double
+    var thick: CGFloat = 6
+    var fill: AnyShapeStyle = AnyShapeStyle(TVLook.accent)
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.18)).frame(height: thick)
+                Capsule().fill(fill).frame(width: max(thick, g.size.width * min(1, max(0, fraction))), height: thick)
+            }
+            .frame(maxHeight: .infinity)
+        }
+    }
+}
 struct PlayingTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.paneLayout) private var panes
     @State private var query = ""
     @State private var kind = "song"
-    var music: TVStatus.Music? { model.status?.music }
-    var otherAppIsActive: Bool {
-        guard let s = model.status?.session, s.pkg != "com.codex.musicwebtv" else { return false }
-        // A paused player only counts if it's the app in front, or a song would lose out to something long since left.
-        return s.playing || music == nil || s.pkg == model.status?.app
-    }
+    // Never Mint's last song while the phone plays something else of its own.
+    var music: TVStatus.Music? { model.nowMusic }
+    var otherAppIsActive: Bool { model.videoIsCurrent }
     var now: some View {
         VStack(spacing: 14) {
             // Sound from the phone that isn't music: not Mint's, whatever Mint last played.
-            if let a = model.status?.airplay, a.active, a.kind == "unknown", let title = a.title, !title.isEmpty {
+            if model.otherAirPlay, let a = model.status?.airplay {
                 Image(systemName: a.handoff == "youtube" ? "play.rectangle.fill" : "iphone").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
-                Text(title).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
-                Text(a.handoff == "youtube" ? "Opened in YouTube on the TV" : "Playing from this iPhone").font(.subheadline).foregroundStyle(.secondary)
+                Text(a.title?.isEmpty == false ? a.title! : "From this iPhone").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
+                Text(a.handoff == "youtube" ? "Opened in YouTube on the TV" : a.title?.isEmpty == false ? "Playing from this iPhone" : "AirPlay").font(.subheadline).foregroundStyle(.secondary)
             } else if let m = music, !otherAppIsActive {
                 Art(url: URL(string: m.art)) { i in i.resizable().scaledToFit() } placeholder: { Color.white.opacity(0.08) }
                     .aspectRatio(1, contentMode: .fit).frame(maxWidth: panes ? 300 : 180)
@@ -857,7 +904,10 @@ struct PlayingTab: View {
                     Text([m.artist, m.album].filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 }
                 NowControls(music: m)
-                Button { model.post("music-now", say: "Showing on TV") } label: { Label("Show on TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                // Only when Mint isn't already the app on the TV's screen.
+                if model.status?.app != "com.codex.musicwebtv" {
+                    Button { model.tick(); model.post("music-now") } label: { Label("Show on TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                }
             } else if let s = model.status?.session {
                 let appName = model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg
                 // What was flicked, or the app's own banner when the app says nothing about what it's playing.
@@ -906,7 +956,7 @@ struct PlayingTab: View {
     }
     func play(shuffle: Bool = false) {
         guard !query.isEmpty else { return }
-        model.post("music", ["query": query, "kind": kind, "shuffle": shuffle], say: shuffle ? "Shuffling on the TV" : "Sent to Mint Music")
+        model.post("music", ["query": query, "kind": kind, "shuffle": shuffle])
         query = ""
     }
     var send: some View {
@@ -965,7 +1015,7 @@ struct FilmRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 12) { ForEach(films) { FilmCard(film: $0) } }.padding(.horizontal, 20).scrollTargetLayout()
             }
-            .clipped()
+            .rowEdge()
         }
     }
 }
@@ -997,18 +1047,6 @@ struct FilmList: View {
         }
     }
 }
-// Unfolded, a whole pane of posters is worth more than one row and a blank half screen.
-struct FilmGrid: View {
-    let title: String, films: [Film]
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                RowHeader(title: title) { FilmList(title: title, films: films) }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 118, maximum: 118), spacing: 14, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(films) { FilmCard(film: $0) } }
-            }.padding(.horizontal, 20).padding(.vertical, 12)
-        }
-    }
-}
 // Films and shows to pick from: what's on the TV's own Stremio home, Letterboxd's picks and friends, and Stremio's
 // catalogue, popular, top rated, new, by genre and by search. Every card flicks like anywhere else.
 struct FilmsTab: View {
@@ -1017,8 +1055,17 @@ struct FilmsTab: View {
     @StateObject private var films = BrowseStore(.stremio, base: "/api/tv/discover?type=movie")
     @StateObject private var shows = BrowseStore(.stremio, base: "/api/tv/discover?type=series")
     static let genres = ["Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "History", "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "War", "Western"]
+    @Environment(\.paneLayout) private var panes
     var body: some View {
-        DiscoverColumn(store: kind == "movie" ? films : shows, kind: $kind)
+        Group {
+            // Unfolded, the rows take turns on each side of the fold, as on an app's own page, rather than running across it.
+            if panes {
+                FoldSplit { DiscoverColumn(store: kind == "movie" ? films : shows, kind: $kind, part: .left) }
+                    right: { DiscoverColumn(store: kind == "movie" ? films : shows, kind: $kind, part: .right) }
+            } else {
+                DiscoverColumn(store: kind == "movie" ? films : shows, kind: $kind)
+            }
+        }
             .id(kind)
             .transition(.opacity)
             .animation(.easeInOut(duration: 0.25), value: kind)
@@ -1028,38 +1075,46 @@ struct DiscoverColumn: View {
     @EnvironmentObject var model: TVModel
     @ObservedObject var store: BrowseStore
     @Binding var kind: String
+    var part = BrowseColumn.Part.all
+    var shown: [MediaRow] {
+        part == .all ? store.rows : store.rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)
+    }
+    @ViewBuilder var controls: some View {
+        Picker("Kind", selection: $kind) { Text("Films").tag("movie"); Text("Shows").tag("series") }
+            .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField(kind == "movie" ? "Search films" : "Search shows", text: $store.query).autocorrectionDisabled().submitLabel(.search)
+                .onChange(of: store.query) { _, _ in store.searchSoon() }
+            if !store.query.isEmpty {
+                Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 16).frame(height: 46)
+        .glassEffect(.regular, in: Capsule())
+        .padding(.horizontal, 20)
+        if store.query.isEmpty {
+            // Inset inside the row, so the chips scroll on to the screen's edge rather than stopping short of it.
+            Chips(options: [("", "All")] + FilmsTab.genres.map { ($0, $0) }, selected: Binding(get: { store.genre }, set: { g in
+                store.genre = g
+                Task { await store.load(force: true) }
+            }), inset: 20)
+            .rowEdge()
+        }
+        if store.rows.isEmpty {
+            Group {
+                if store.loading { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } }
+                else if store.failed { ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again.")) }
+                else { ContentUnavailableView.search }
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
-                Picker("Kind", selection: $kind) { Text("Films").tag("movie"); Text("Shows").tag("series") }
-                    .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField(kind == "movie" ? "Search films" : "Search shows", text: $store.query).autocorrectionDisabled().submitLabel(.search)
-                        .onChange(of: store.query) { _, _ in store.searchSoon() }
-                    if !store.query.isEmpty {
-                        Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search")
-                    }
-                }
-                .padding(.horizontal, 16).frame(height: 46)
-                .glassEffect(.regular, in: Capsule())
-                .padding(.horizontal, 20)
-                if store.query.isEmpty {
-                    Chips(options: [("", "All")] + FilmsTab.genres.map { ($0, $0) }, selected: Binding(get: { store.genre }, set: { g in
-                        store.genre = g
-                        Task { await store.load(force: true) }
-                    }))
-                    .padding(.horizontal, 20)
-                }
-                if store.rows.isEmpty {
-                    Group {
-                        if store.loading { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } }
-                        else if store.failed { ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again.")) }
-                        else { ContentUnavailableView.search }
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                ForEach(store.rows) { row in
+                if part != .right { controls }
+                ForEach(shown) { row in
                     VStack(alignment: .leading, spacing: 0) {
                         RowHeader(title: row.title) { MediaList(row: row, source: .stremio) }.padding(.leading, 20)
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -1071,7 +1126,7 @@ struct DiscoverColumn: View {
                             }
                             .padding(.horizontal, 20)
                         }
-                        .clipped()
+                        .rowEdge()
                     }
                 }
             }
@@ -1129,12 +1184,8 @@ struct VideoProgress: View {
             VStack(spacing: 6) {
                 if duration > 0 {
                     GeometryReader { g in
-                        let f = min(1, max(0, shown / duration)), thick: CGFloat = scrub == nil ? 6 : 10
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(.white.opacity(0.18)).frame(height: thick)
-                            Capsule().fill(seeking ? AnyShapeStyle(.white.opacity(0.6)) : AnyShapeStyle(TVLook.accent)).frame(width: max(thick, g.size.width * f), height: thick)
-                        }
-                        .frame(maxHeight: .infinity)
+                        let thick: CGFloat = scrub == nil ? 6 : 10
+                        ProgressTrack(fraction: shown / duration, thick: thick, fill: seeking ? AnyShapeStyle(.white.opacity(0.6)) : AnyShapeStyle(TVLook.accent))
                         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: thick)
                         .contentShape(Rectangle())
                         // Only a sideways slide moves it, so scrolling the page past it never does.
@@ -1180,10 +1231,7 @@ struct Ambience: View {
     // One picture shared by every page, so a page shows it the moment it appears instead of drawing it in.
     @MainActor private static var memo: [String: (image: TVImage, tint: Color?)] = [:]
     @State private var loaded = 0
-    var art: String? {
-        if let s = model.status?.session, s.pkg != "com.codex.musicwebtv" { return model.picture(for: s) }
-        return model.status?.music?.art
-    }
+    var art: String? { model.nowArt }
     var current: (image: TVImage, tint: Color?)? { art.flatMap { Ambience.memo[$0] } }
     var tint: Color { model.mood ?? current?.tint ?? Color(hex: 0x4A1A5C) }
     var body: some View {
@@ -1217,25 +1265,18 @@ struct Ambience: View {
     }
 }
 
-// The Playing tab's icon: the cover of what's on, as a small rounded picture, or the plain symbol when nothing is.
-struct PlayingIcon {
-    // Drawn once per cover; the root redraws on every status.
-    @MainActor private static var made: (String, TVImage)?
-    @MainActor static func image(_ model: TVModel) -> TVImage? {
+// The Playing tab's icon: the cover of what's on, as a small rounded picture. The root asks for it once the cover
+// has loaded, and keeps it while that cover is what's on.
+enum PlayingIcon {
+    @MainActor static func make(_ i: TVImage) -> TVImage? {
         #if canImport(UIKit)
-        let session = model.status?.session
-        guard let s = session.map({ $0.pkg != "com.codex.musicwebtv" }) == true ? model.picture(for: session!) : model.status?.music?.art,
-              let u = URL(string: s), let i = ImageStore.shared.cached(u) else { return nil }
-        if let made, made.0 == s { return made.1 }
         let side: CGFloat = 26
         let f = UIGraphicsImageRendererFormat(); f.scale = 3
-        let icon = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: f).image { _ in
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: f).image { _ in
             UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: side, height: side), cornerRadius: 6).addClip()
             let k = max(side / i.size.width, side / i.size.height)
             i.draw(in: CGRect(x: (side - i.size.width * k) / 2, y: (side - i.size.height * k) / 2, width: i.size.width * k, height: i.size.height * k))
         }.withRenderingMode(.alwaysOriginal)
-        made = (s, icon)
-        return icon
         #else
         return nil
         #endif
