@@ -755,6 +755,7 @@ struct ChannelsTab: View {
 struct AlarmsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @State private var editing: EditTarget?
+    @State private var editingCalendar = false
     struct EditTarget: Identifiable { let index: Int; var id: Int { index } }
     static let actions = [("night", "on", "Night mode on"), ("night", "dim", "Night mode dim"), ("night", "dark", "Night mode dark"), ("night", "off", "Night mode off"), ("screen", "bright", "Screen bright"), ("screen", "dim", "Screen dim"), ("screen", "off", "Screen off")]
 
@@ -773,7 +774,7 @@ struct AlarmsTab: View {
                     }
                 } footer: { Text("The Chumby was frozen or off when these came due.") }
             }
-            CalendarWakeSection()
+            CalendarWakeSection(editingSettings: $editingCalendar)
             Section("Quick nap") {
                 HStack(spacing: 8) {
                     ForEach([10, 20, 30, 60], id: \.self) { m in
@@ -828,6 +829,7 @@ struct AlarmsTab: View {
         .seaList()
         .toolbar { ToolbarItem(placement: .primaryAction) { Button { editing = EditTarget(index: -1) } label: { Label("Add alarm", systemImage: "plus") }.accessibilityLabel("Add alarm").disabled(model.state.alarms.count >= 16) } }
         .sheet(item: $editing) { t in AlarmEditor(index: t.index).environmentObject(model) }
+        .sheet(isPresented: $editingCalendar) { AlarmEditor(index: -1, calendarTemplate: true).environmentObject(model) }
         .refreshable { await model.loadState() }
     }
     // A one-time alarm from now, using whichever tone is first.
@@ -851,6 +853,9 @@ struct AlarmEditor: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
     let index: Int
+    // The settings every calendar alarm shares: how it sounds and what it does, never when it rings or what it's called,
+    // which the calendar decides.
+    var calendarTemplate = false
     @State private var alarm = Alarm()
     @State private var time = Date()
     @State private var date = Date()
@@ -882,6 +887,7 @@ struct AlarmEditor: View {
     var body: some View {
         NavigationStack {
             Form { Group {
+                if !calendarTemplate {
                 Section { DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute).datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity) }
                 Section("Repeat") {
                     Picker("Repeat", selection: $repeatMode) {
@@ -892,6 +898,7 @@ struct AlarmEditor: View {
                     }
                     if repeatMode == "once" { DatePicker("Date", selection: $date, displayedComponents: .date) }
                     TextField("Label", text: $alarm.name)
+                }
                 }
                 Section("Sound") {
                     Picker("Plays", selection: $kind) {
@@ -923,14 +930,14 @@ struct AlarmEditor: View {
                     }
                     Toggle("Stop on its own", isOn: Binding(get: { alarm.auto_dismiss == "1" }, set: { alarm.auto_dismiss = $0 ? "1" : "0" }))
                 }
-                Section("Afterwards") {
+                Section {
                     Picker("Then", selection: $after) { ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) } }
                     Toggle("Backup beep", isOn: Binding(get: { alarm.backup == "1" }, set: { alarm.backup = $0 ? "1" : "0" }))
                     if alarm.backup == "1" {
                         Picker("Backup after", selection: $alarm.backupDelay) { ForEach(["1", "2", "5", "10", "15", "30"], id: \.self) { Text("\($0) min").tag($0) } }
                     }
-                }
-                if index >= 0 { Section {
+                } header: { Text("Afterwards") } footer: { if calendarTemplate { Text("Applies to every alarm your calendar sets, now and later.") } }
+                if index >= 0 && !calendarTemplate { Section {
                     // The question hangs off the button that asked it, so it points at what was tapped.
                     Button("Delete Alarm", role: .destructive) { confirmDelete = true }.foregroundStyle(.red)
                         .confirmationDialog("Delete this alarm?", isPresented: $confirmDelete, titleVisibility: .visible) {
@@ -942,7 +949,7 @@ struct AlarmEditor: View {
                 } }
             } .listRowBackground(GlassRow()) }
             .seaList().background { SeaBackground().ignoresSafeArea() }
-            .navigationTitle(index >= 0 ? "Edit Alarm" : "Add Alarm").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(calendarTemplate ? "Calendar Alarm Settings" : index >= 0 ? "Edit Alarm" : "Add Alarm").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { stopTest(); dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { save() } }
@@ -954,7 +961,10 @@ struct AlarmEditor: View {
     func stopTest() { Task { try? await model.api?.post("test", extra: "&stop=1") } }
 
     func load() {
-        if index >= 0, model.state.alarms.indices.contains(index) { alarm = model.state.alarms[index] }
+        if calendarTemplate {
+            // The saved set if there is one, else how the first calendar alarm rings now.
+            if let t = model.state.calTpl ?? CalendarWake.shared.storedSettings ?? model.state.alarms.first(where: { $0.name.hasPrefix(CalendarWake.prefix) }) { alarm = t }
+        } else if index >= 0, model.state.alarms.indices.contains(index) { alarm = model.state.alarms[index] }
         let m = alarm.localMinutes
         time = Calendar.current.date(bySettingHour: m / 60 % 24, minute: m % 60, second: 0, of: Date()) ?? Date()
         if let d = Alarm.dayKeys.firstIndex(of: alarm.when) { day = d; repeatMode = "day" } else { repeatMode = alarm.when }
@@ -968,6 +978,7 @@ struct AlarmEditor: View {
 
     func save() {
         var a = alarm
+        if !calendarTemplate {
         let c = Calendar.current.dateComponents([.hour, .minute], from: time)
         let h = c.hour ?? 7, m = c.minute ?? 0
         if repeatMode == "once" {
@@ -978,6 +989,7 @@ struct AlarmEditor: View {
             a.time = String(h * 60 + m)
         }
         a.name = a.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         switch kind {
         case "beep": a.type = "beep"; a.arg = tone; a.param = ""; a.param_description = tone
         case "none": a.type = "none"; a.arg = ""; a.param = ""; a.param_description = "None"
@@ -996,6 +1008,11 @@ struct AlarmEditor: View {
         if kind == "none" { a.duration = "0" }
         let parts = after.components(separatedBy: "|")
         a.action = parts.first ?? ""; a.action_param = parts.count > 1 ? parts[1] : ""
+        if calendarTemplate {
+            stopTest(); dismiss()
+            Task { await model.saveCalendarTemplate(a) }
+            return
+        }
         a.enabled = "1"
         if index < 0 {
             guard model.state.alarms.count < 16 else { model.say("The Chumby holds 16 alarms at most"); return }

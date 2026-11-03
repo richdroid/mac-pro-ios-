@@ -47,6 +47,12 @@ struct Alarm: Codable, Identifiable, Equatable {
         action = try s(.action, ""); action_param = try s(.action_param, ""); backup = try s(.backup, "1"); backupDelay = try s(.backupDelay, "5")
     }
     var isPlaceholder: Bool { enabled == "0" && time == "0" && name.isEmpty && type == "beep" }
+    // How another alarm sounds and what it does after, leaving this one's name, time, day and on or off alone.
+    mutating func takeSettings(from t: Alarm) {
+        type = t.type; arg = t.arg; param = t.param; param_description = t.param_description
+        duration = t.duration; snooze = t.snooze; auto_dismiss = t.auto_dismiss
+        action = t.action; action_param = t.action_param; backup = t.backup; backupDelay = t.backupDelay
+    }
     var isOn: Bool { enabled == "1" }
     // Minutes after local midnight. A one-off stores absolute minutes since 1970.
     var localMinutes: Int {
@@ -114,6 +120,8 @@ struct ChumbyState: Decodable {
     // Alarms that came due while it was frozen, off or restarting.
     struct Missed: Decodable, Identifiable, Hashable { let at: Double; let rang: Bool; let name: String; var id: String { "\(at) \(name)" } }
     var missed: [Missed] = []
+    // The one set of settings every calendar alarm rings with, once one has been saved as it. Null until then.
+    var calTpl: Alarm?
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: Key.self)
@@ -133,13 +141,14 @@ struct ChumbyState: Decodable {
         widgetNames = try c.decodeIfPresent([String].self, forKey: .widgetNames) ?? []
         mine = try c.decodeIfPresent([MineWidget].self, forKey: .mine) ?? []
         missed = try c.decodeIfPresent([Missed].self, forKey: .missed) ?? []
+        calTpl = (try? c.decodeIfPresent(Alarm.self, forKey: .calTpl)) ?? nil
         reindex()
     }
     mutating func reindex() {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine }
+    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl }
 }
 
 // ?a=chlist: per channel, [id, name, secs] rows (a "#" row names the channel) and saved [id, on, secs] edits.

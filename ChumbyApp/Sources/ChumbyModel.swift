@@ -233,6 +233,45 @@ final class ChumbyModel: ObservableObject {
         say(msg)
         await send("save", o)
     }
+    // The calendar alarms' shared settings: copied onto each of them, leaving its name, time, day and on or off alone, and
+    // sent with the first one's place, so the Chumby keeps them as the set for every calendar alarm it's given later.
+    // Kept on the phone too, so calendar alarms made before the Chumby has a set of its own ring this way.
+    func saveCalendarTemplate(_ t: Alarm) async {
+        CalendarWake.shared.storedSettings = t
+        heldCalendar = t
+        await sendCalendarTemplate()
+    }
+    // Settings waiting for a ringing or imminent alarm to pass. Only the newest is kept.
+    private var heldCalendar: Alarm?
+    private var calendarRetry: Task<Void, Never>?
+    @Published var calendarWaiting = false
+    private func sendCalendarTemplate() async {
+        guard let t = heldCalendar else { return }
+        let calendar = state.alarms.indices.filter { state.alarms[$0].name.hasPrefix(CalendarWake.prefix) }
+        // None on the Chumby yet: the next calendar update makes them with these, and sends them as the set.
+        guard let first = calendar.first else { heldCalendar = nil; calendarWaiting = false; return }
+        // Never under a ringing alarm or one about to ring, since a save restarts the Chumby's alarm panel.
+        let soon = Date().addingTimeInterval(180)
+        var ringing = false
+        if let api, let d = try? await api.fresh("sys"), let r = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["ring"] as? String { ringing = !r.isEmpty }
+        if ringing || state.alarms.compactMap({ $0.nextFire() }).contains(where: { $0 < soon }) {
+            calendarWaiting = true
+            calendarRetry?.cancel()
+            calendarRetry = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                if !Task.isCancelled { await self?.sendCalendarTemplate() }
+            }
+            return
+        }
+        guard canSave(), heldCalendar != nil else { return }
+        heldCalendar = nil; calendarWaiting = false
+        for i in calendar { state.alarms[i].takeSettings(from: t) }
+        state.calTpl = state.alarms[first]
+        let o = state.alarmForm() + [("tpl", "\(first)")]
+        hold(10)
+        state.reindex()
+        await send("save", o)
+    }
     func saveStreams() async {
         guard canSave() else { return }
         var o: [(String, String)] = [("n", "\(state.streams.count)")]

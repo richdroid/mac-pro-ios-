@@ -28,6 +28,11 @@ final class CalendarWake: ObservableObject {
         if UserDefaults.standard.string(forKey: "pose") == "calendar" { showSample() }
     }
     private func save() { if let d = try? JSONEncoder().encode(rules) { UserDefaults.standard.set(d, forKey: "wakeRules") } }
+    // The calendar alarms' settings as last chosen here, for alarms made before the Chumby keeps a set of its own.
+    var storedSettings: Alarm? {
+        get { UserDefaults.standard.data(forKey: "calendarAlarmSettings").flatMap { try? JSONDecoder().decode(Alarm.self, from: $0) } }
+        set { UserDefaults.standard.set(newValue.flatMap { try? JSONEncoder().encode($0) }, forKey: "calendarAlarmSettings") }
+    }
     // For the build's simulator shots, which have no calendar.
     func showSample() {
         rules.enabled = true; allowed = true
@@ -103,12 +108,17 @@ final class CalendarWake: ObservableObject {
             let result: String = try await chumbyTry { api in
                 let sys = try JSONSerialization.jsonObject(with: await api.fresh("sys")) as? [String: Any]
                 var state = try JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state"))
-                guard state.applyCalendar(wanted) else { return "Already up to date." }
+                // The Chumby's own set, else the one chosen here; with neither, it guesses from your other alarms.
+                let stored = await MainActor.run { self.storedSettings }
+                guard state.applyCalendar(wanted, settings: state.calTpl ?? stored) else { return "Already up to date." }
                 // Not while something is ringing or about to: the save would restart the panel under it.
                 if let ring = sys?["ring"] as? String, !ring.isEmpty { return "Waiting: an alarm is ringing." }
                 let soon = Date().addingTimeInterval(180)
                 if state.alarms.compactMap({ $0.nextFire() }).contains(where: { $0 < soon }) { return "Waiting: an alarm is due." }
-                try await api.post("save", body: ChumbyAPI.form(state.alarmForm()))
+                var form = state.alarmForm()
+                // The first time, the settings chosen here become the Chumby's set for every calendar alarm after.
+                if state.calTpl == nil, stored != nil, let first = state.alarms.firstIndex(where: { $0.name.hasPrefix(CalendarWake.prefix) }) { form.append(("tpl", "\(first)")) }
+                try await api.post("save", body: ChumbyAPI.form(form))
                 await MainActor.run { self.saved?(state) }
                 return wanted.isEmpty ? "No calendar alarms needed." : "Updated \(wanted.count) calendar alarm\(wanted.count == 1 ? "" : "s")."
             }
@@ -133,7 +143,7 @@ final class CalendarWake: ObservableObject {
 
 extension ChumbyState {
     // Puts the calendar's alarms in the list, sounding like your own. True if anything changed.
-    mutating func applyCalendar(_ wakes: [PlannedWake]) -> Bool {
+    mutating func applyCalendar(_ wakes: [PlannedWake], settings: Alarm? = nil) -> Bool {
         func minutes(_ d: Date) -> String { String(Int(d.timeIntervalSince1970 / 60)) }
         func named(_ w: PlannedWake) -> String { CalendarWake.prefix + String(w.title.prefix(30)) }
         let mine = alarms.filter { $0.name.hasPrefix(CalendarWake.prefix) }
@@ -148,7 +158,10 @@ extension ChumbyState {
         for w in wakes {
             var a = sound ?? Alarm()
             if sound == nil, let tone = tones.first { a.type = "beep"; a.arg = tone; a.param_description = tone }
-            a.name = named(w); a.enabled = "1"; a.when = "once"; a.time = minutes(w.wake); a.action = ""; a.action_param = ""; a.backup = "1"
+            if let settings { a.takeSettings(from: settings) }
+            a.name = named(w); a.enabled = "1"; a.when = "once"; a.time = minutes(w.wake)
+            // Guessed from your own alarm, it only borrows the sound; chosen settings keep their own after-action and backup.
+            if settings == nil { a.action = ""; a.action_param = ""; a.backup = "1" }
             if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
         }
         return true
@@ -168,6 +181,10 @@ struct ChumbyCalendarIntent: AppIntent {
 struct CalendarWakeSection: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
+    // Set by the row; the sheet hangs off the whole list, so it opens and closes even with this section scrolled away.
+    @Binding var editingSettings: Bool
+    // How the calendar alarms ring: the saved set, else the first one's own.
+    var calendarSound: Alarm? { model.state.calTpl ?? wake.storedSettings ?? model.state.alarms.first { $0.name.hasPrefix(CalendarWake.prefix) } }
     func leadText(_ m: Int) -> String { m % 60 == 0 ? "\(m / 60) h" : m < 60 ? "\(m) min" : "\(m / 60) h \(m % 60) min" }
     var body: some View {
         Section {
@@ -194,6 +211,23 @@ struct CalendarWakeSection: View {
                 NavigationLink("Calendar settings") { CalendarWakeSettings() }
             } else {
                 Button { Task { await wake.enable() } } label: { Label("Wake me from my calendar", systemImage: "calendar.badge.clock") }
+            }
+            // Whenever the calendar sets alarms, even before it has made one.
+            if wake.rules.enabled {
+                Button { editingSettings = true } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Calendar alarm settings").foregroundStyle(.primary)
+                            // Held back while an alarm rings or is about to, since a save restarts the alarm panel.
+                            if model.calendarWaiting { Text("Saves after the alarm").font(.footnote).foregroundStyle(.secondary) }
+                        }
+                        Spacer()
+                        if let a = calendarSound { Text(a.soundText).foregroundStyle(.secondary).lineLimit(1) }
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         } header: {
             Text("From your calendar")
