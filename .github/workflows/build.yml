@@ -8,7 +8,7 @@ permissions:
 jobs:
   build:
     runs-on: xcode-27
-    timeout-minutes: 80
+    timeout-minutes: 85
     steps:
       - uses: actions/checkout@v4
         # The job can write to the repo and its release; no later step, or code it builds, gets the token from disk.
@@ -35,7 +35,7 @@ jobs:
         continue-on-error: true
         # Raised from 40 for the Mac Pro state shots, about 3.5 minutes more across both displays, then to 60 for the TV
         # app's flick, tour and scrolled shots, about 6 minutes more across the three postures.
-        timeout-minutes: 60
+        timeout-minutes: 65
         run: |
           set +x
           exec > >(tee dist/sim.log) 2>&1
@@ -91,7 +91,7 @@ jobs:
             # under it), sign-in needed (9003 answers 401), the Updates log scrolled part way, a pink accent, API usage
             # unset, refused and live, its sheet, the screen when the Mac needs a login, and Status scrolled to the dials.
             # These only add files; the shots above are unchanged.
-            for V in "offline 9009 -tab 0" "signin 9003 -tab 0" "longlog 9001 -tab 4 -pose longlog" "pink 9001 -tab 0 -accent pink" "pink-usage 9001 -tab 3 -accent pink" "api-none 9001 -tab 3 -pose api-none" "api-refused 9001 -tab 3 -pose api-refused" "api-live 9001 -tab 3 -pose api-live" "api-sheet 9001 -tab 3 -pose api-sheet" "screenlogin 9001 -tab 0 -pose screenlogin -openScreen YES" "scrolled 9001 -tab 0 -pose scrolled"; do
+            for V in "offline 9009 -tab 0" "signin 9003 -tab 0" "longlog 9001 -tab 4 -pose longlog" "pink 9001 -tab 0 -accent pink" "pink-usage 9001 -tab 3 -accent pink" "api-none 9001 -tab 3 -pose api-none" "api-refused 9001 -tab 3 -pose api-refused" "api-live 9001 -tab 3 -pose api-live" "api-sheet 9001 -tab 3 -pose api-sheet" "screenlogin 9001 -tab 0 -pose screenlogin -openScreen YES" "scrolled 9001 -tab 0 -pose scrolled" "controlfail 9001 -tab 5 -pose controlfail" "forget 9001 -tab 5 -pose forget" "quickdone 9001 -tab 0 -pose quickdone" "settings-lower 9001 -tab 9 -pose settings-lower" "budget-custom 9001 -tab 9 -pose budget-custom"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$4 "${@:5}"
               sleep 8
@@ -130,6 +130,15 @@ jobs:
             fi
             kill -INT $REC; wait $REC; echo "flick video exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # The Mac Pro app's pushes and its screen cover, filmed at the display's own rate. From launch: Status to History at
+            # 3 s, to Processes at 5 s, back at 7 and 8.5 s; Claude at 10 s, a session at 11 s, back at 13 s; the screen opens
+            # at 15.5 s and closes at 18.5 s.
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/macpro-transitions$2.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 5
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose transitions
+            sleep 22
+            kill -INT $REC; wait $REC; echo "macpro transitions exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             # Each app's tabs in turn, filmed, to catch anything that draws in or jumps between them.
             if [ -z "$2" ]; then
               for A in "TV 9002" "MacPro 9001" "Chumby 9000"; do
@@ -180,7 +189,8 @@ jobs:
           chumby_poses() { # display, file suffix
             for V in "ringing 0 ringing" "ringing-alarms 2 ringing" "snoozed 0 snoozed" "dead 0 dead" "dead-alarms 2 dead" \
                      "firstrun 2 slow -pose firstrun" "firstrun-home 0 slow -pose firstrun" "calsettings 2 - -pose calsettings" \
-                     "calday 2 - -pose calday" "editor 2 - -pose editor" "template 2 - -pose template" "failure 2 fail -pose failure"; do
+                     "calday 2 - -pose calday" "editor 2 - -pose editor" "template 2 - -pose template" "failure 2 fail -pose failure" \
+                     "editornew 2 - -pose editornew"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
@@ -208,6 +218,20 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-pose-ringing-dark$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
             xcrun simctl ui "$DEVICE" appearance light
+            # Films, folded only: an alarm ringing, snoozed, then stopped; and Alarms with Settings in and out and a
+            # 10-minute nap started and cancelled. The mock's live scenes keep what's saved and flip what's ringing.
+            if [ -z "$2" ]; then
+              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 16"; do
+                set -- "$1" "$2" $V
+                xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-$3.mp4 > /dev/null 2>&1 & REC=$!
+                sleep 5
+                xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/$5 -tab $4 -pose $3
+                sleep $6
+                kill -INT $REC; wait $REC; echo "chumby $3 film exit $?"
+                xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+                set -- "$1" "$2"
+              done
+            fi
           }
           # ---- end Chumby app poses ----
           # ---- TV app poses (separate block) ----
@@ -231,7 +255,8 @@ jobs:
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-toremote$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 6
             xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/ending -tab 1 -pose toremote
-            sleep 10
+            # Longer unfolded, where the app takes longer to come up, so the move itself is on film.
+            if [ -n "$2" ]; then sleep 18; else sleep 10; fi
             kill -INT $REC; wait $REC; echo "to remote video$2 exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
           }

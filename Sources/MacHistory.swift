@@ -196,7 +196,7 @@ struct HistoryView: View {
                 FoldSplit {
                     VStack(spacing: 14) { readout; chart.frame(maxHeight: .infinity) }.padding(20)
                 } right: {
-                    ScrollView { VStack(spacing: 14) { range; stats; processes; coverage }.padding(20) }
+                    ScrollView { VStack(spacing: 14) { range; stats; processes; coverage }.padding(20) }.scrollEdgeEffectHidden(true, for: .top)
                 }
             } else {
                 ScrollView {
@@ -305,6 +305,8 @@ struct DisplayHoldButton: View {
                 if wanted == nil { withAnimation(.easeOut(duration: 0.15)) { fill = 0 } }
             }
         })
+        // Nothing to switch while the Mac can't be reached.
+        .allowsHitTesting(!model.stale)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Mac display")
         .accessibilityValue(isOn ? "On" : "Off")

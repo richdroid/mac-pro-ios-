@@ -24,6 +24,9 @@ final class AppModel: ObservableObject {
     // no address at all, so pressing Cancel is respected.
     @Published var needsSignIn = false
     @Published var signInSheet = false
+    @Published var apiSetup = false      // the Admin key sheet, presented from the root so it never depends on a list row
+    @Published var gotFresh = false      // the Mac has answered at least once since launch, not just the cache
+    private var posedSheet = false
     @Published var history: HistoryMetric?  // kept here so unfolding doesn't close it
     @Published var processes: ProcessSort?
     @Published var sessionScreen: Status.Session?  // a session's own screen, on the Claude tab's stack
@@ -145,6 +148,12 @@ final class AppModel: ObservableObject {
             pulse.lastFresh = Date(); pulse.beats &+= 1
             if problem != nil { problem = nil }
             if needsSignIn { needsSignIn = false }
+            if !gotFresh { gotFresh = true }
+            // The build's shot of the Admin key sheet, risen and settled well before the picture is taken.
+            if pose == "api-sheet", !posedSheet {
+                posedSheet = true
+                Task { try? await Task.sleep(nanoseconds: 1_500_000_000); apiSetup = true }
+            }
             // The same answer as last time changes nothing on screen, so nothing is redrawn for it.
             if data == lastData, status != nil { openPending(); return }
             lastData = data

@@ -63,7 +63,7 @@ const tvBase = 'http://127.0.0.1:9002';
 const tvApps = [['com.codex.musicwebtv', 'Mint Music', 1], ['com.mint.letterboxd', 'Letterboxd', 1], ['com.stremio.one', 'Stremio', 1], ['com.google.android.youtube.tv', 'YouTube', 1], ['com.google.android.youtube.tvmusic', 'YouTube Music', 1], ['com.netflix.ninja', 'Netflix', 1], ['com.plexapp.android', 'Plex', 1], ['com.apple.atve.androidtv.appletv', 'Apple TV', 1], ['com.android.tv.settings', 'Settings', 1], ['com.google.android.play.games', 'Google Play Games', 1], ['flar2.homebutton', 'Button Mapper', 1]];
 const tvStatus = JSON.stringify({ online: true, screen: 'on', app: 'com.stremio.one', volume: 12, volumeMax: 25,
   music: { title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', art: tvBase + '/art.png', playing: true, position: 40000, duration: 180000, sampledAt: Date.now() },
-  apps: tvApps.map(([pkg, name, wide]) => ({ pkg, name, hasIcon: pkg !== 'flar2.homebutton', wide: !!wide })) });
+  apps: tvApps.map(([pkg, name, wide]) => ({ pkg, name, hasIcon: true, wide: !!wide })) });
 const film = (t, more) => ({ film_slug: t.toLowerCase().replace(/[ ,]+/g, '-'), film_title: t, film_year: '1971', poster_url: tvBase + '/poster.png', ...more });
 const tvFilms = JSON.stringify({ signedIn: true,
   watchlist: ['Dirty Harry', 'Chinatown', 'Heat', 'Alien', 'Ran', 'Klute', 'Thief', 'Le Samourai'].map(t => film(t, { friends_count: '4', friends_rating_avg: '3.5' })),
@@ -118,21 +118,49 @@ http.createServer((q, s) => {
   }
   data.hist = { ok: true, songs: songs.sort((x, y) => y.t - x.t) };
 }
+// The live scenes keep what's saved and what's ringing, for the films of Snooze, Stop and a nap set and cancelled.
+const chumbyLive = { live: { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)) },
+  liveringing: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) } };
 function chumbyScene(q, s) {
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail)\//);
-  if (!m) return false;
-  const scene = m[1], a = new URL(q.url, 'http://x').searchParams.get('a');
-  const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
-  // A real 320 x 240 capture from the Chumby, so the hero can be judged.
+  const a = new URL(q.url, 'http://x').searchParams.get('a');
+  // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
   const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
+  if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing)\//);
+  if (!m) return false;
+  const scene = m[1];
+  const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
+  if (chumbyLive[scene]) {
+    const live = chumbyLive[scene];
+    if (q.method === 'POST') {
+      let body = '';
+      q.on('data', c => body += c);
+      q.on('end', () => {
+        const qs = new URL(q.url, 'http://x').searchParams, f = new URLSearchParams(body);
+        if (a === 'cmd' && qs.get('c') === 'ringsnooze') live.sys.ring = live.sys.ring.replace(/^r/, 's');
+        if (a === 'cmd' && qs.get('c') === 'ringoff') live.sys.ring = '';
+        if (a === 'save') {
+          const keys = ['name', 'enabled', 'time', 'when', 'type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss', 'action', 'action_param', 'backup', 'backupDelay'];
+          live.state.alarms = Array.from({ length: +f.get('n') || 0 }, (_, i) => Object.fromEntries(keys.map(k => [k, f.get(i + '_' + k) || ''])));
+          live.state.volume = +f.get('v'); live.state.fade = +f.get('f');
+        }
+        json({ ok: true });
+      });
+      return true;
+    }
+    if (a === 'sys') return json(live.sys);
+    if (a === 'state') return json(live.state);
+    return false;
+  }
   if (scene === 'slow') {
     // The first run, before anything has come back: nothing answers for half a minute.
     setTimeout(() => { if (a === 'shot') return shot(); if (data[a]) return json(data[a]); s.statusCode = 404; s.end(); }, 30000);
     return true;
   }
   if (a === 'shot') return shot();
-  if (scene === 'ringing' && a === 'sys') return json({ ...data.sys, ring: 'r\tWork\tJazz Radio' });
-  if (scene === 'snoozed' && a === 'sys') return json({ ...data.sys, ring: 's\tWork\tJazz Radio' });
+  // Work rings with Beep, so that's what the card says.
+  if (scene === 'ringing' && a === 'sys') return json({ ...data.sys, ring: 'r\tWork\tBeep' });
+  if (scene === 'snoozed' && a === 'sys') return json({ ...data.sys, ring: 's\tWork\tBeep' });
   if (scene === 'dead') {
     // The Mac answers, but says the Chumby itself hasn't for 25 minutes.
     if (a === 'health') return json({ up: false, lastSeen: Date.now() / 1000 - 25 * 60 });

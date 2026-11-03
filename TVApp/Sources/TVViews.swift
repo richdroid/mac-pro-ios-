@@ -134,21 +134,11 @@ struct RootView: View {
     }
 }
 
-// The top of every page: no scroll edge band of its own from each scrolling pane, which drew a block of different
-// glass over whichever pane had been scrolled. Instead one soft shade, the width of the whole screen, the same whatever
-// is scrolled, so the title always reads and nothing differs from one pane to the other.
+// The top of every page: the system's soft edge under the bar, the same in every scroll view, so whichever pane is
+// scrolled fades the same way and nothing hard-edged is drawn over just one of them. Nothing laid over the page, which
+// stopped at the side bar and kept the big title from folding away.
 private struct TopShade: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .scrollEdgeEffectHidden(true, for: .top)
-            .overlay(alignment: .top) {
-                LinearGradient(colors: [.black.opacity(0.42), .black.opacity(0.18), .black.opacity(0)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 22)
-                    .ignoresSafeArea(edges: .top)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-    }
+    func body(content: Content) -> some View { content.scrollEdgeEffectStyle(.soft, for: .top) }
 }
 extension View { func topShade() -> some View { modifier(TopShade()) } }
 
@@ -533,6 +523,9 @@ struct RemoteTab: View {
     @ObservedObject private var nextUp = NextUp.shared
     // The build's shot of the typing bar opens with it up.
     @State private var typing = UserDefaults.standard.string(forKey: "pose") == "type"
+    // Arriving from a flick's controls, the pad and keys settle in once the screen has landed on the picture above
+    // them, rather than showing grey through the flick's backdrop as it fades.
+    @State private var keysIn = true
     var state: String {
         guard !model.staleStatus, let s = model.status, s.online else { return "Connecting…" }
         return s.screen == "asleep" ? "Asleep. Press anything to wake it." : s.screen == "screensaver" ? "Screensaver" : "On " + (s.apps?.first { $0.pkg == s.app }?.name ?? "Home")
@@ -607,13 +600,17 @@ struct RemoteTab: View {
                         .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
                 } right: {
                     VStack(spacing: 14) { DPad().frame(maxHeight: .infinity); keysBlock }.padding(.horizontal, 20).padding(.bottom, 16)
+                        .opacity(keysIn ? 1 : 0).offset(y: keysIn ? 0 : 14)
                 }
             } else {
                 // Folded, the pad gets the room until the screen is asked for.
                 VStack(spacing: 14) {
                     if model.mirrorLive { MirrorView(store: model.mirrorStore) }
-                    DPad().frame(minHeight: 150, maxHeight: .infinity)
-                    keysBlock
+                    Group {
+                        DPad().frame(minHeight: 150, maxHeight: .infinity)
+                        keysBlock
+                    }
+                    .opacity(keysIn ? 1 : 0).offset(y: keysIn ? 0 : 14)
                 }
                 .padding(.horizontal, 14).padding(.bottom, 12)
             }
@@ -631,6 +628,13 @@ struct RemoteTab: View {
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
         .onAppear { model.warmMirror() }
+        .task(id: model.remoteArrival) {
+            guard Date().timeIntervalSince(model.remoteArrival) < 1 else { return }
+            var quiet = Transaction(); quiet.disablesAnimations = true
+            withTransaction(quiet) { keysIn = false }
+            try? await Task.sleep(nanoseconds: 760_000_000)
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) { keysIn = true }
+        }
     }
 }
 
@@ -782,6 +786,11 @@ struct BannerFallback: View {
                         Image(systemName: "play.fill").font(.system(size: 8, weight: .bold)).offset(x: 0.6)
                     }
                     .frame(width: 30, height: 30)
+                } else if app.hasIcon, let u = TVBridge.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
+                    // Its own icon beside its name, when it has one with something in it.
+                    Art(url: u) { i in
+                        if !ImageStore.shared.isFlat(u) { i.resizable().scaledToFit().frame(width: 34, height: 34).clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous)) }
+                    } placeholder: { EmptyView() }
                 }
                 Text(app.name).font(.system(size: 15, weight: .semibold)).lineLimit(2).minimumScaleFactor(0.8).multilineTextAlignment(.leading)
             }
@@ -1399,9 +1408,14 @@ struct PlayingTab: View {
             if pending { pendingWait?.cancel(); withAnimation(.easeOut(duration: 0.2)) { pending = false }; query = "" }
         }
     }
-    // With a film or show on, the spare side has what comes after it: the next episode, ready to flick, and what was
-    // flicked lately. The music search is for when Mint is what's on, or there's nothing else to offer.
-    var watching: Bool { otherAppIsActive && model.status?.session?.pkg == "com.stremio.one" && (nextUp.next != nil || !recent.list.isEmpty) }
+    // With a film or show on, the spare side has what comes after it: the next episode, ready to flick, or failing that
+    // where he is in other things, and what was flicked lately. Never a row of one. The music search is for when Mint
+    // is what's on, or there's nothing else to offer.
+    @ObservedObject private var stremio = BrowseStore.shared(.stremio)
+    var continuing: [MediaItem] { Array((stremio.rows.first { $0.title == "Continue watching" }?.items ?? []).prefix(5)) }
+    var watching: Bool {
+        otherAppIsActive && model.status?.session?.pkg == "com.stremio.one" && (nextUp.next != nil || continuing.count > 1 || recent.list.count > 1)
+    }
     var upNext: some View {
         VStack(alignment: .leading, spacing: 24) {
             if let n = nextUp.next {
@@ -1410,6 +1424,15 @@ struct PlayingTab: View {
                     FlickCardButton(item: n, source: .stremio, width: 168, ready: true)
                 }
                 .padding(.horizontal, 20)
+            } else if continuing.count > 1 {
+                VStack(alignment: .leading, spacing: 0) {
+                    RowTitle("Continue watching").padding(.leading, 20)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 10) { ForEach(continuing) { FlickCardButton(item: $0, source: .stremio, width: 124) } }
+                            .padding(.horizontal, 20)
+                    }
+                    .rowEdge()
+                }
             }
             RecentRow()
         }
@@ -1427,6 +1450,8 @@ struct PlayingTab: View {
             }
         }
         .environment(\.keysInScroll, true)
+        // Where he is in Stremio, for the spare side when a show is on.
+        .task { if panes { await stremio.load() } }
     }
 }
 
@@ -1587,7 +1612,8 @@ struct RecentRow: View {
     @EnvironmentObject var model: TVModel
     @ObservedObject private var recent = RecentFlicks.shared
     var body: some View {
-        if !recent.list.isEmpty {
+        // Never a row of one.
+        if recent.list.count > 1 {
             VStack(alignment: .leading, spacing: 0) {
                 RowTitle("Recently flicked").padding(.leading, 20)
                 ScrollView(.horizontal, showsIndicators: false) {

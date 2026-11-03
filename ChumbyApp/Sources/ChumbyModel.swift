@@ -50,6 +50,15 @@ enum AlarmChange {
     private static func add(_ a: Alarm, to s: inout ChumbyState) {
         if let free = s.alarms.firstIndex(where: { $0.isPlaceholder }) { s.alarms[free] = a } else { s.alarms.append(a) }
     }
+    // What a failure says at the control, in the words of what was tried.
+    var failHead: String {
+        switch self {
+        case .toggle(_, let on): return on ? "Couldn’t turn this on" : "Couldn’t turn this off"
+        case .volume: return "Couldn’t change the volume"
+        case .fade: return "Couldn’t change the fade"
+        default: return "Not on the Chumby yet"
+        }
+    }
     // Where its mark shows: the alarm's row, or the control it came from.
     var mark: String {
         switch self {
@@ -65,7 +74,7 @@ enum AlarmChange {
 
 // A control's own failure, shown at that control and nowhere else.
 struct Failure: Equatable { let id: String; let text: String; let at: Date }
-enum AlarmMark: Equatable { case failed(String), landed(Date) }
+enum AlarmMark: Equatable { case failed(head: String, why: String), landed(Date) }
 
 struct Song: Codable, Identifiable, Hashable { let t: Double; let title: String; let artist: String; let album: String; var id: String { "\(t)\(title)" } }
 
@@ -92,6 +101,9 @@ final class ChumbyModel: ObservableObject {
     @Published var snoozedAt: Date?
     @Published var songs: [Song] = []
     @Published var homePoke: Date?
+    // The width of the side bar's column on the Duo (0 when the bars run across), and a tap on + placed in it.
+    @Published var railWidth: CGFloat = 0
+    @Published var addAlarm: Date?
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []
     private var failureClear: Task<Void, Never>?
@@ -247,7 +259,9 @@ final class ChumbyModel: ObservableObject {
     }
     private func relay() {
         var shown = deviceState
-        for p in pending { p.change.apply(&shown) }
+        // Only what's still on its way. A change that didn't get through is never shown as if it had: the control shows
+        // what the Chumby holds, with the mark saying it couldn't be changed.
+        for p in pending where p.failed == nil { p.change.apply(&shown) }
         shown.reindex()
         state = shown
     }
@@ -370,6 +384,7 @@ final class ChumbyModel: ObservableObject {
         tick()
         pending[i].failed = nil
         marks[mark] = nil
+        relay()
         let id = pending[i].id
         Task { await send(id) }
     }
@@ -383,7 +398,8 @@ final class ChumbyModel: ObservableObject {
         } catch {
             guard let i = pending.firstIndex(where: { $0.id == id }) else { return }
             pending[i].failed = AlarmWriter.explain(error)
-            marks[p.change.mark] = .failed(AlarmWriter.explain(error))
+            marks[p.change.mark] = .failed(head: p.change.failHead, why: AlarmWriter.explain(error))
+            relay()
             #if canImport(UIKit)
             UINotificationFeedbackGenerator().notificationOccurred(.error)
             #endif
@@ -537,7 +553,8 @@ final class ChumbyModel: ObservableObject {
         deviceState.schedule = state.schedule
         await send("sched", o, id: "schedule")
     }
-    func nextRing() -> (alarm: Alarm, at: Date)? { state.nextRing() }
+    // What will really ring: always from the Chumby's own list, never from a change that hasn't landed.
+    func nextRing() -> (alarm: Alarm, at: Date)? { deviceState.nextRing() }
 }
 
 actor OneAtATime {

@@ -267,7 +267,8 @@ struct FlickCardButton: View {
     @State private var place = FrameBox()
     var body: some View {
         Button { model.flick(FlickTarget(item: item, source: source, ready: ready, origin: place.rect)) } label: { MediaCard(item: item, source: source, width: width) }
-            .buttonStyle(PressCard(onPress: source == .stremio ? { StreamCache.shared.prefetch(item) } : nil))
+            // A sleeping box takes seconds to bring Stremio up, so it's told the moment a finger lands, not at the throw.
+            .buttonStyle(PressCard(onPress: source == .stremio ? { StreamCache.shared.prefetch(item); Prepare.arm() } : nil))
             // Outside the press's own squeeze, so the measure never moves with what it measures.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")

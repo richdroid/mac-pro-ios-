@@ -75,6 +75,8 @@ struct ProcessesView: View {
             if chooser { Section { rowsBody(by) } } else { Section(by.title) { rowsBody(by) } }
         }
         .contentMargins(.top, 4, for: .scrollContent)
+        // The same top edge in both panes when open.
+        .scrollEdgeEffectHidden(true, for: .top)
         .refreshable { await load() }
     }
     @ViewBuilder func rowsBody(_ by: ProcessSort) -> some View {
@@ -175,7 +177,7 @@ struct SessionRow: View {
         }
         guard let at = session.updated else { return name }
         let line = "\(name) for \(Format.span(Date().timeIntervalSince1970 - at / 1000))"
-        return session.stuck == true ? line + " · may be stuck" : line
+        return session.stuck == true ? line + " · stuck?" : line
     }
     // Rows the Claude app runs, not this Mac, don't open here, and say so.
     var line: String { session.key == nil ? state + " · in the Claude app" : state }

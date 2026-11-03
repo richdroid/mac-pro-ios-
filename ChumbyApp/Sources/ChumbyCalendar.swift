@@ -250,11 +250,7 @@ struct OpenSettingsButton: View {
 struct CalendarSettingsSections: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
-    @State private var editingSound = false
     @State private var showCalendars = false
-    @State private var posed = false
-    // How the calendar alarms ring: the Chumby's own set, else the one chosen here, else the first one's own.
-    var calendarSound: Alarm? { model.state.calTpl ?? wake.storedSettings ?? model.state.alarms.first { $0.isCalendar } }
     // The value on the left under its name, well clear of the − and +.
     func leadRow(_ label: String, _ value: Binding<Int>) -> some View {
         Stepper(value: value, in: 15...360, step: 5) {
@@ -282,23 +278,7 @@ struct CalendarSettingsSections: View {
                 }
             } header: { Text("Awake before it starts") } footer: { Text("A day runs from \(wake.rules.dayStartHour) AM, so a late shift counts as the day it began.") }
             Section {
-                // A sheet, so no chevron: the row says what it holds and opens the settings over the page.
-                Button { editingSound = true } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(calendarSound?.soundText ?? "Choose a sound").foregroundStyle(.primary).lineLimit(1)
-                            // Held back while an alarm rings or is about to, since a save restarts the alarm panel.
-                            if model.calendarWaiting { Text("Saves after the alarm").font(.subheadline).foregroundStyle(.secondary) }
-                            else if let a = calendarSound { Text("Snooze \(a.snooze) min").font(.subheadline).foregroundStyle(.secondary) }
-                        }
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                // Attached to this one row, not the whole group, so there's only ever one of it.
-                .sheet(isPresented: $editingSound) { AlarmEditor(calendarTemplate: true).environmentObject(model) }
-                .onAppear { if ChumbyModel.pose == "template" && !posed { posed = true; editingSound = true } }
+                CalendarSoundRow(autoOpen: ChumbyModel.pose == "template")
             } header: { Text("How they ring") }
             // Only on a Chumby that knows how.
             if let on = model.state.calOverride {
@@ -388,6 +368,7 @@ struct CalendarWakeSettings: View {
             .toolbar(.visible, for: .navigationBar)
             .toolbarBackground(.hidden, for: .navigationBar)
             .navigationTitle("Calendar settings")
+            .toolbar { ToolbarItem(placement: .principal) { Text("Calendar settings").font(.custom("Trebuchet MS", size: 18).weight(.bold)) } }
     }
 }
 
@@ -398,46 +379,96 @@ struct CalendarDaySheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var wake = CalendarWake.shared
     let key: String
-    @State private var editingSound = false
+    // Set when it fills the open Duo's right pane instead of being a sheet.
+    var close: (() -> Void)?
     var item: PlannedWake? { wake.plan.first { $0.key == key } }
-    var body: some View {
-        NavigationStack {
-            List { Group {
-                if let item {
-                    Section {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title).font(.custom("Trebuchet MS", size: 24).weight(.bold))
-                            Text("Starts \(item.start.formatted(.dateTime.weekday(.wide).hour().minute()))").foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    Section {
-                        Stepper(value: Binding(get: { item.lead }, set: { wake.rules.leadOverrides[key] = $0 }), in: 15...360, step: 5) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Wake \(leadText(item.lead)) before")
-                                Text("Rings at \(item.wake.formatted(date: .omitted, time: .shortened))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
-                            }
-                        }
-                        if item.custom { Button("Use the usual time") { wake.rules.leadOverrides[key] = nil }.foregroundStyle(.tint) }
-                        Toggle("Ring that day", isOn: Binding(get: { !item.skipped }, set: { _ in wake.toggleSkip(item) }))
-                    } footer: { Text("For this day only. The usual times are in Calendar settings.") }
-                    Section {
-                        Button { editingSound = true } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text((model.state.calTpl ?? wake.storedSettings ?? model.state.alarms.first { $0.isCalendar })?.soundText ?? "Choose a sound").foregroundStyle(.primary)
-                                Text("For every calendar alarm").font(.subheadline).foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                    } header: { Text("How they ring") }
-                } else {
-                    Text("That day is no longer on your calendar.").foregroundStyle(.secondary)
+    var title: String { item.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
+    @ViewBuilder var sections: some View {
+        if let item {
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.title).font(.custom("Trebuchet MS", size: 24).weight(.bold))
+                    Text("Starts \(item.start.formatted(.dateTime.weekday(.wide).hour().minute()))").foregroundStyle(.secondary)
                 }
-            }.listRowBackground(GlassRow()) }
-            .seaList().background { SeaBackground().ignoresSafeArea() }
-            .navigationTitle(item.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .sheet(isPresented: $editingSound) { AlarmEditor(calendarTemplate: true).environmentObject(model) }
+                .padding(.vertical, 4)
+            }
+            Section {
+                Stepper(value: Binding(get: { item.lead }, set: { wake.rules.leadOverrides[key] = $0 }), in: 15...360, step: 5) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Wake \(leadText(item.lead)) before")
+                        Text("Rings at \(item.wake.formatted(date: .omitted, time: .shortened))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
+                if item.custom { Button("Use the usual time") { wake.rules.leadOverrides[key] = nil }.foregroundStyle(.tint) }
+                Toggle("Ring that day", isOn: Binding(get: { !item.skipped }, set: { _ in wake.toggleSkip(item) }))
+            } footer: { Text("This day only.") }
+            Section { CalendarSoundRow() } header: { Text("How they ring") }
+        } else {
+            Text("That day is no longer on your calendar.").foregroundStyle(.secondary)
         }
+    }
+    var body: some View {
+        if let close {
+            Group {
+                PageTitle(title) { Button("Done") { close() }.fontWeight(.semibold).foregroundStyle(.tint) }
+                sections
+            }
+        } else {
+            NavigationStack {
+                List { sections.listRowBackground(GlassRow()) }
+                .seaList().background { SeaBackground().ignoresSafeArea() }
+                .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .principal) { Text(title).font(.custom("Trebuchet MS", size: 18).weight(.bold)) }
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.fontWeight(.semibold) }
+                }
+            }
+        }
+    }
+}
+
+// Opens the calendar alarms' settings in the open Duo's right pane; unset, they open as a sheet.
+private struct OpenTemplateKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
+extension EnvironmentValues { var openTemplate: (() -> Void)? { get { self[OpenTemplateKey.self] } set { self[OpenTemplateKey.self] = newValue } } }
+
+extension CalendarWake {
+    // The sound calendar alarms really ring with: their own set, else what one on the Chumby has, else the sound the next
+    // update will borrow from your own alarm, and saying whose.
+    func ringsWith(_ s: ChumbyState) -> (sound: String, snooze: String?) {
+        if let t = s.calTpl ?? storedSettings { return (t.soundText, t.snooze) }
+        if let c = s.alarms.first(where: { $0.isCalendar }) { return (c.soundText, c.snooze) }
+        let real = s.alarms.filter { !$0.isCalendar && !$0.isPlaceholder && !$0.isHelper }
+        if let a = real.first(where: { $0.isOn && $0.when != "once" }) ?? real.first(where: { $0.type == "audio" }) ?? real.first {
+            return ("\(a.soundText) · same as \(alarmLabel(a))", a.snooze)
+        }
+        return (s.tones.first ?? "Beep", nil)
+    }
+}
+// How every calendar alarm rings: the real sound, tinted, with a chevron, since it opens their settings.
+struct CalendarSoundRow: View {
+    @EnvironmentObject var model: ChumbyModel
+    @ObservedObject private var wake = CalendarWake.shared
+    @Environment(\.openTemplate) private var openTemplate
+    var autoOpen = false
+    @State private var editing = false
+    @State private var opened = false
+    var body: some View {
+        let r = wake.ringsWith(model.state)
+        Button { if let openTemplate { openTemplate() } else { editing = true } } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(r.sound).foregroundStyle(.tint).lineLimit(1)
+                    // Held back while an alarm rings or is about to, since a save restarts the alarm panel.
+                    if model.calendarWaiting { Text("Saves after the alarm").font(.subheadline).foregroundStyle(.secondary) }
+                    else if let z = r.snooze { Text("Snooze \(z) min").font(.subheadline).foregroundStyle(.secondary) }
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $editing) { AlarmEditor(calendarTemplate: true).environmentObject(model) }
+        .onAppear { if autoOpen && !opened && openTemplate == nil { opened = true; editing = true } }
     }
 }

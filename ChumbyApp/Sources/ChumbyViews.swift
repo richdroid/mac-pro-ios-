@@ -132,11 +132,13 @@ struct PageTitle<Trailing: View>: View {
 // MARK: - iPhone Duo panes
 struct TwoPane<L: View, R: View>: View {
     @Environment(\.paneLayout) private var panes
+    @Environment(\.horizontalSizeClass) private var size
     let left: L, right: R
-    // The right pane's own title, when it shows a page of its own (Calendar settings), with its way back.
-    var rightTitle = " "
+    // The right pane's own title, when it shows a page of its own (Calendar settings), with its way back. Nil when the
+    // page brings its own title row (the alarm editor, a calendar day).
+    var rightTitle: String? = " "
     var rightTrailing: AnyView?
-    init(rightTitle: String = " ", rightTrailing: AnyView? = nil, @ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) {
+    init(rightTitle: String? = " ", rightTrailing: AnyView? = nil, @ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) {
         self.rightTitle = rightTitle; self.rightTrailing = rightTrailing; self.left = left(); self.right = right()
     }
     var body: some View {
@@ -145,11 +147,13 @@ struct TwoPane<L: View, R: View>: View {
                 List { Group { left }.listRowBackground(GlassRow()) }
             } right: {
                 // A title row, blank unless the pane holds a page, so both panes start level.
-                List { PageTitle(rightTitle) { rightTrailing }; Group { right }.listRowBackground(GlassRow()) }
+                List { if let rightTitle { PageTitle(rightTitle) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
             }
             .seaList()
         } else {
+            // Open in portrait the status bar has the top to itself, so the list's own top margin is left off there.
             List { Group { left; right }.listRowBackground(GlassRow()) }
+                .contentMargins(.top, size == .regular ? 0 : nil, for: .scrollContent)
         }
     }
 }
@@ -177,6 +181,8 @@ struct RootView: View {
             ZStack {
                 // The sea's own base colour under everything, so the first frame matches the launch screen.
                 ChumbyPalette.sea(scheme == .dark)[0].ignoresSafeArea()
+                // The Duo's side column (clock, Wi-Fi and the tab bar) is the trailing safe area; + goes in it on Alarms.
+                Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { model.railWidth = $0 }
                 TabView(selection: TabReset.binding($model.tab) { t in
                     resets[t, default: 0] += 1
                     // Home again: the octopus answers, as it does to a tap.
@@ -192,24 +198,32 @@ struct RootView: View {
             }
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
-            // Away from Home, a small chip by the bar says it can't be reached. Home says so on the Chumby itself.
-            .overlay(alignment: size == .regular ? .bottomTrailing : .bottom) {
-                if model.unreachable && model.tab != 0 {
-                    ReachChip().padding(.bottom, size == .regular ? 20 : 92).padding(.horizontal, 20)
-                        .transition(.opacity)
+            // Add alarm, in the side column under the clock, where the system would put a bar button on the Duo.
+            .overlay {
+                if model.tab == 2 && model.railWidth >= 44 {
+                    Button { model.addAlarm = Date() } label: { Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).frame(width: 30, height: 30) }
+                        .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Add alarm")
+                        .frame(width: model.railWidth).padding(.top, 196)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .ignoresSafeArea()
                 }
             }
-            .animation(.easeInOut(duration: 0.25), value: model.unreachable)
         }
         .sheet(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
     }
 }
-// "Offline · last seen 7:12", and a tap for what to do about it.
-struct ReachChip: View {
+// "Offline · last seen 7:12" as a row under a page's title, never floating over the list; a tap says what to do.
+struct ReachRow: View {
     @EnvironmentObject var model: ChumbyModel
     @State private var open = false
     var seen: String { model.seenAt.map { " · last seen " + seenText($0) } ?? "" }
     var body: some View {
+        if model.unreachable {
+            chip
+                .listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 6, trailing: 6))
+        }
+    }
+    var chip: some View {
         Button { withAnimation(.snappy) { open.toggle() } } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
@@ -223,6 +237,7 @@ struct ReachChip: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 9)
             .glass(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.plain)
         .accessibilityHint("Shows what to do")
@@ -247,6 +262,7 @@ struct ConnectionView: View {
             }
             .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) { Text("Connection").font(.custom("Trebuchet MS", size: 18).weight(.bold)) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Connect") {
                         model.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -277,19 +293,20 @@ struct LiveOctopus: View {
     var scale: CGFloat = 1
     var body: some View {
         // Ringing, he wobbles hard; gone quiet, he sinks a little with his eyes shut.
-        let ringing = model.sys.ringing.map { !$0.snoozed } ?? false
         let asleep = model.unreachable
+        let ringing = !asleep && (model.sys.ringing.map { !$0.snoozed } ?? false)
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still || model.tab != 0)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             // The same curves as the web app's CSS: ease-in-out both ways, as a sine.
-            let bob = -7 * scale * (0.5 - 0.5 * cos(2 * .pi * t / (asleep ? 7 : ringing ? 0.9 : 4.2)))
+            // Asleep he bobs less and a little higher, so the tips of his arms stay well clear of the bezel (about 8 pt).
+            let bob = (asleep ? -3 : -7) * scale * (0.5 - 0.5 * cos(2 * .pi * t / (asleep ? 7 : ringing ? 0.9 : 4.2))) - (asleep ? 5 : 0)
             let swing = 0.5 - 0.5 * cos(2 * .pi * t / (ringing ? 0.32 : 3))
             let wave = swing * 2 - 1
             let lift = swing
             let cycle = t.truncatingRemainder(dividingBy: 5.3) / 5.3
             let blink: CGFloat = asleep ? 0.06 : cycle > 0.94 ? (cycle < 0.97 ? 1 - (cycle - 0.94) / 0.03 * 0.94 : 0.06 + (cycle - 0.97) / 0.03 * 0.94) : 1
             let (sx, sy, dy0) = squish(at: ctx.date)
-            let dy = dy0 * scale + (asleep ? 12 * scale : 0)
+            let dy = dy0 * scale
             OctopusMark(color: ChumbyPalette.oct(scheme == .dark), blink: blink)
                 .scaleEffect(x: 1, y: 1 + (ringing ? 0.08 : 0.035) * lift, anchor: UnitPoint(x: 0.5, y: 0.16))
                 .modifier(SkewEffect(skew: CGFloat(wave) * (ringing ? 11 : 4.5) * .pi / 180, anchorY: 0.16))
@@ -313,7 +330,7 @@ struct LiveOctopus: View {
 struct SnoozeRing: View {
     @EnvironmentObject var model: ChumbyModel
     var body: some View {
-        if let r = model.sys.ringing, r.snoozed {
+        if let r = model.sys.ringing, r.snoozed, !model.unreachable {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 let left: Double = model.snoozeEnds.map { end in
                     let total = Double(model.state.alarms.first { $0.name == r.name }?.snooze ?? "") ?? 9
@@ -343,9 +360,10 @@ struct HomeTab: View {
     @State private var ink: (CGPoint, UUID)?
     @State private var bubbles: [Bubble] = []
     @State private var goneAt: Date?
+    @State private var demoed = false
     private static let lines = ["chumbalicious!", "welcome back.", "enjoy tinkering?", "wake up to your internet life", "eight arms, one job", "squeeze me!", "blub.", "i run on 175 MHz and vibes"]
     var dark: Bool { scheme == .dark }
-    var ringing: Bool { model.sys.ringing.map { !$0.snoozed } ?? false }
+    var ringing: Bool { !model.unreachable && (model.sys.ringing.map { !$0.snoozed } ?? false) }
 
     func poke() {
         model.tick()
@@ -368,6 +386,11 @@ struct HomeTab: View {
     // The web app's proportions: the octopus is 92 wide on a 380 stage and sits 58 above its top edge.
     var stageWidth: CGFloat { wide ? 340 : 330 }
     var k: CGFloat { stageWidth / 380 }
+    var ringSize: CGFloat { 92 * k * 1.15 }
+    var ringLift: CGFloat {
+        let octHeight: CGFloat = 92 * k * ChumbyArt.octBox.height / ChumbyArt.octBox.width
+        return -(ringSize - octHeight) / 2 - 2
+    }
     var stage: some View {
         Image("Device").resizable().scaledToFit()
             .shadow(color: Color(red: 0.02, green: 0.09, blue: 0.26).opacity(0.45), radius: 22, y: 24)
@@ -380,8 +403,13 @@ struct HomeTab: View {
             }
             .overlay(alignment: .top) {
                 ZStack {
-                    SnoozeRing().frame(width: 92 * k * 1.45, height: 92 * k * 1.45)
                     LiveOctopus(squishedAt: squishedAt, scale: k).frame(width: 92 * k)
+                        // Hung off the octopus, so it never changes where he sits.
+                        // Its foot level with the tips of his arms, so it stays above the device too.
+                        .overlay {
+                            SnoozeRing().frame(width: ringSize, height: ringSize).offset(y: ringLift)
+                                .allowsHitTesting(false)
+                        }
                         .contentShape(Rectangle())
                         .onTapGesture { poke() }
                         .accessibilityLabel("Octopus").accessibilityAddTraits(.isButton)
@@ -404,6 +432,14 @@ struct HomeTab: View {
             .onAppear {
                 if model.unreachable && goneAt == nil { goneAt = Date().addingTimeInterval(-5) }
                 if let p = model.homePoke, Date().timeIntervalSince(p) < 1.5 { poke() }
+                // For the build's film: the alarm rings, is snoozed, then stopped.
+                if ChumbyModel.pose == "ringdemo" && !demoed {
+                    demoed = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 3_500_000_000); model.ringSnooze()
+                        try? await Task.sleep(nanoseconds: 4_000_000_000); model.ringOff()
+                    }
+                }
             }
             .onChange(of: model.homePoke) { _, _ in poke() }
     }
@@ -551,6 +587,8 @@ struct HomeTab: View {
                         }
                     }.buttonStyle(.plain)
                 }
+                // Not until the Chumby has said how loud it is: a slider at 0 would be a guess.
+                if model.sys.vol >= 0 {
                 HStack(spacing: 10) {
                     Image(systemName: "speaker.wave.2.fill").font(.footnote)
                     Slider(value: $homeVolume, in: 0...100, step: 1) { e in
@@ -559,6 +597,7 @@ struct HomeTab: View {
                     }
                     .tint(ChumbyPalette.orange).accessibilityLabel("Volume")
                     Button { model.cmd("stopmusic", id: "homeVolume") } label: { Image(systemName: "stop.fill") }.buttonStyle(.bordered).buttonBorderShape(.circle).accessibilityLabel("Stop music")
+                }
                 }
                 if let f = model.failed("homeVolume") { FailNote(text: f) }
                 if !model.state.channelNames.isEmpty {
@@ -585,7 +624,7 @@ struct HomeTab: View {
             if wide {
                 // Each side scrolls on its own, so the octopus stays put while you use the controls.
                 FoldSplit {
-                    ScrollView { VStack(spacing: 0) { wordmark.padding(.top, 6); stage; status; about }.padding(.horizontal, 12) }
+                    ScrollView { VStack(spacing: 0) { wordmark.padding(.top, 6).zIndex(1); stage; status; about }.padding(.horizontal, 12) }
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
@@ -599,7 +638,8 @@ struct HomeTab: View {
                 }
             } else {
                 ScrollView {
-                    wordmark.padding(.horizontal, 16).padding(.top, 6)
+                    // Over the bubbles, which rise behind it.
+                    wordmark.padding(.horizontal, 16).padding(.top, 6).zIndex(1)
                     // The remote sits right under the device, within reach of the thumb; a ringing alarm above even that.
                     VStack(spacing: 0) {
                         stage; status
@@ -850,6 +890,7 @@ struct ChannelsTab: View {
     var body: some View {
         TwoPane {
             PageTitle("Channels")
+            ReachRow()
             Section("Now playing") {
                 Picker("Channel", selection: Binding(get: { model.state.channel }, set: { n in model.state.channel = n; model.cmd("channel", n, id: "nowPlaying") })) {
                     ForEach(model.state.channelNames, id: \.self) { Text($0).tag($0) }
@@ -970,6 +1011,7 @@ struct SoundsTab: View {
     var body: some View {
         TwoPane {
             PageTitle("Sounds")
+            ReachRow()
             Section("Now") {
                 VStack(spacing: 10) {
                     LabeledContent("Volume", value: "\(Int(volume))%")
@@ -1000,9 +1042,9 @@ struct SoundsTab: View {
             } header: { Text("Pandora") } footer: { if let scanNote { Text(scanNote) } }
             } right: {
             // How loud the alarms ring: saved the careful way, and marked here if it doesn't reach the Chumby.
-            Section("Alarm volume") {
+            Section("Alarms") {
                 VStack(spacing: 10) {
-                    LabeledContent("Alarm volume", value: "\(Int(alarmVolume))%")
+                    LabeledContent("Volume", value: "\(Int(alarmVolume))%")
                     Slider(value: $alarmVolume, in: 0...100, step: 5) { e in
                         if !e { model.change(.volume(Int(alarmVolume))) }
                     }.accessibilityLabel("Alarm volume").tint(ChumbyPalette.orange)
@@ -1063,6 +1105,7 @@ struct TinkerTab: View {
     var body: some View {
         TwoPane {
             PageTitle("Enjoy tinkering?")
+            ReachRow()
             Section {
                 TextField("NASA, BBCBreaking", text: $accounts).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .onChange(of: accounts) { _, n in edited = n != model.sys.tw.joined(separator: ", ") }
@@ -1073,7 +1116,7 @@ struct TinkerTab: View {
                     }
                 }.disabled(!edited).foregroundStyle(edited ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                 if let f = model.failed("twset") { FailNote(text: f) }
-            } header: { Text("X (Twitter) accounts") } footer: { Text("They show from the widget’s next turn.") }
+            } header: { Text("X (Twitter) accounts") }
             } right: {
             Section("The Chumby itself") {
                 Button("Restart channel") { confirm = "restart" }.foregroundStyle(.tint).confirmationDialog(

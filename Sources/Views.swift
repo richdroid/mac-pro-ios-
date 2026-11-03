@@ -19,6 +19,7 @@ struct MacProApp: App {
                 .onAppear {
                     model.start(); openScreenIfAsked(); AlertWatch.shared.askOnce(); TabTour.run([0, 1, 2, 3, 4, 5, 9]) { model.tab = $0 }
                     if let id = AlertWatch.pending { openAlert(id) }
+                    TransitionTour.run(model)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: AlertWatch.openAlert)) { n in openAlert(n.object as? String ?? "") }
                 .onReceive(NotificationCenter.default.publisher(for: ScreenRequest.notification)) { _ in openScreenIfAsked() }
@@ -39,6 +40,26 @@ struct MacProApp: App {
     }
     private func openScreenIfAsked() {
         if ScreenRequest.wanted || UserDefaults.standard.bool(forKey: "openScreen") { ScreenRequest.wanted = false; model.screenOpen = true }
+    }
+}
+
+// For the build's film of the pushes and the screen cover: Status to History to Processes and back, Claude to a session
+// and back, then the screen opening and closing. Only with the "transitions" pose; never on the phone.
+enum TransitionTour {
+    @MainActor static func run(_ model: AppModel) {
+        guard model.pose == "transitions" else { return }
+        let steps: [(Double, () -> Void)] = [
+            (3.0, { model.history = .cpu }), (5.0, { model.processes = .cpu }), (7.0, { model.processes = nil }), (8.5, { model.history = nil }),
+            (10.0, { model.tab = 2 }), (11.0, { model.openSession(key: "chumby") }), (13.0, { model.sessionScreen = nil }),
+            (14.5, { model.tab = 0 }), (15.5, { model.screenOpen = true }), (18.5, { model.screenOpen = false }),
+        ]
+        Task { @MainActor in
+            var at = 0.0
+            for (t, step) in steps {
+                try? await Task.sleep(nanoseconds: UInt64((t - at) * 1e9)); at = t
+                step()
+            }
+        }
     }
 }
 
@@ -113,6 +134,7 @@ struct RootView: View {
         .onChange(of: celsius) { _, _ in MacPrefs.shareWithWidgets() }
         .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
         .sheet(isPresented: $model.signInSheet) { SignInView().environmentObject(model) }
+        .sheet(isPresented: $model.apiSetup) { APIKeySetup().environmentObject(model) }
         // Up here, so unfolding doesn't close it and lose what's typed.
         .sheet(isPresented: $model.signingIn) {
             LoginSheet { u, p in
@@ -182,6 +204,9 @@ struct Screen<Content: View>: View {
             }
             // One gap between the blocks on Status, where they sit on the page's own background.
             .listSectionSpacing(tab == 0 ? .custom(28) : .default)
+            // One top edge across the whole width: open, each pane would otherwise draw its own band, and only the one
+            // that's scrolled shows it.
+            .scrollEdgeEffectHidden(true, for: .top)
             .refreshable { await model.refresh() }
             .contentMargins(.top, 4, for: .scrollContent)
             .task {
@@ -196,6 +221,7 @@ struct Screen<Content: View>: View {
         VStack(spacing: 12) {
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+                    .padding(.leading, 20)
             }
             if let s = model.status { content(s, side) }
             else if side != .right { connecting.frame(maxHeight: .infinity) }
@@ -420,9 +446,18 @@ struct QuickActions: View {
                 }
             }
         }
+        // They all need the Mac, so they wait, dimmed, while it can't be reached.
+        .opacity(model.stale ? 0.5 : 1)
+        .disabled(model.stale)
         .animation(.easeOut(duration: 0.2), value: fails)
         .animation(.easeOut(duration: 0.2), value: done)
         .sensoryFeedback(trigger: successes) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
+        .task {
+            // The build's shot of a success: the tick, held long enough to be photographed.
+            guard model.pose == "quickdone" else { return }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            done.insert("copy")
+        }
     }
 }
 
@@ -583,7 +618,7 @@ struct ClaudeTab: View {
             }
         }
         if side != .left {
-            Section {
+            Section("Claude Code") {
                 StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
                 StateRow(label: "Auto-restart", good: s.claude.keepAlive, value: s.claude.keepAlive ? "Armed" : "Off")
                 StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
@@ -688,7 +723,6 @@ struct UsageTab: View {
 struct APIUsageSection: View {
     @EnvironmentObject var model: AppModel
     let usage: Status.APIUsage?
-    @State private var setup = false
     // Watched, so a new budget in Settings shows on the dial at once.
     @AppStorage("apiBudget") private var savedBudget = 200.0
     // Whole dollars once it's big enough that cents would crowd the dial.
@@ -726,17 +760,19 @@ struct APIUsageSection: View {
         }
         .padding(.vertical, 4)
     }
-    // Before a key: the same dial, empty and dimmed, so the section keeps its shape, and the whole of it adds the key.
-    var empty: some View {
-        Button { setup = true } label: {
+    // Before a key, or after Anthropic turned one down: the same dial, empty and dimmed, so the section keeps its shape,
+    // and the whole of it opens the place to add the key.
+    func empty(_ centre: String, _ line: String, _ note: String?) -> some View {
+        Button { model.apiSetup = true } label: {
             HStack(alignment: .center, spacing: 16) {
                 VStack(spacing: 6) {
                     ArcGauge(0, ticks: 36, length: 9, width: 2.6) {
-                        Text("Add key").font(.footnote.weight(.semibold)).foregroundStyle(macBlue)
+                        Text(centre).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).multilineTextAlignment(.center).padding(.horizontal, 8)
                     }
                     .frame(maxWidth: 110)
-                    Text("Add your Admin key").font(.footnote.weight(.medium))
-                    Text("of \(Self.money(budget)) a month").font(.caption).foregroundStyle(.secondary)
+                    Text(line).font(.footnote.weight(.medium)).multilineTextAlignment(.center)
+                    if let note { Text(note).font(.caption).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3) }
+                    else { Text("of \(Self.money(budget)) a month").font(.caption).foregroundStyle(.secondary) }
                 }
                 .frame(maxWidth: .infinity)
                 VStack(alignment: .leading, spacing: 14) { figure("Today", nil); figure("This week", nil) }
@@ -747,7 +783,7 @@ struct APIUsageSection: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
-        .accessibilityLabel("Add your Admin key")
+        .accessibilityLabel(line)
     }
     // A key Anthropic turned down needs adding again; anything else is just said.
     static func refused(_ e: String) -> Bool { ["refused", "invalid", "401", "unauthorized"].contains { e.localizedCaseInsensitiveContains($0) } }
@@ -756,39 +792,28 @@ struct APIUsageSection: View {
         let t = e.replacingOccurrences(of: "Couldn’t read API usage: ", with: "").replacingOccurrences(of: "Couldn't read API usage: ", with: "")
         return "Couldn’t read the usage: " + t + "."
     }
+    // A Mac that has answered and still has nothing to say about the API (an older one, or its first read isn't done)
+    // gets no section at all, rather than a grey placeholder that never fills in.
     var body: some View {
+        if usage != nil || !model.gotFresh { section }
+    }
+    var section: some View {
         Section {
             if let u = usage, !u.configured {
-                empty
+                empty("Add key", "Add your Admin key", nil)
             } else if let u = usage, let e = u.error, Self.refused(e) {
-                Button { setup = true } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Anthropic turned the Admin key down.").font(.footnote).foregroundStyle(.red).lineLimit(3)
-                            Text("Add it again").foregroundStyle(macBlue)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                empty("Add again", "Add your Admin key again", "Anthropic turned the last one down.")
             } else if let u = usage, let e = u.error, u.month == nil {
                 Text(Self.plain(e)).font(.footnote).foregroundStyle(.red).lineLimit(3)
             } else if let u = usage {
                 block(u)
                 if let e = u.error { Text(Self.plain(e)).font(.footnote).foregroundStyle(.red).lineLimit(3) }
             } else {
-                // Before the Mac's first read: the dial's shape, so nothing moves when the numbers come.
+                // Before the Mac's first answer this launch: the dial's shape, so nothing moves when the numbers come.
                 block(.placeholder).redacted(reason: .placeholder)
             }
         } header: { Text("API usage") } footer: {
             if let at = usage?.at, usage?.configured == true { Text("Updated \(Format.ago(ms: at))") }
-        }
-        .sheet(isPresented: $setup) { APIKeySetup().environmentObject(model) }
-        .task {
-            // The build's shot of the sheet.
-            if model.pose == "api-sheet" { try? await Task.sleep(nanoseconds: 1_200_000_000); setup = true }
         }
     }
 }
@@ -870,9 +895,7 @@ struct UpgradeTab: View {
         if t.isEmpty || ["install", "download", "patch", "running", "start", "wait", "check"].contains(where: t.contains) { return ("arrow.triangle.2.circlepath", macBlue) }
         return ("checkmark.seal.fill", .green)
     }
-    var patched: String {
-        s.oclp.patchedFor.isEmpty ? "No root patches yet" : "Root patched for \(s.oclp.patchedFor)" + (s.oclp.patchedAt.isEmpty ? "" : " · \(s.oclp.patchedAt)")
-    }
+    var patched: String { s.oclp.patchedFor.isEmpty ? "No root patches yet" : "Root patched for \(s.oclp.patchedFor)" }
     var summary: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
@@ -880,7 +903,9 @@ struct UpgradeTab: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(headline).font(.headline).lineLimit(2)
                     Text("macOS \(s.macos) · OCLP \(oclp)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                    Text(patched).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                    Text(patched).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
+                    // The date on a line of its own, so it never breaks across two.
+                    if !s.oclp.patchedAt.isEmpty { Text(s.oclp.patchedAt).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 Spacer(minLength: 8)
                 if s.upgrade.installed {
@@ -921,6 +946,18 @@ struct UpgradeTab: View {
             .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         }
     }
+    // The facts behind the summary, as rows, where the open Duo has the room for them.
+    var facts: some View {
+        VStack(spacing: 0) {
+            ForEach(Array([("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", s.oclp.patchedFor.isEmpty ? "None yet" : s.oclp.patchedFor), ("Patched", s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)].enumerated()), id: \.offset) { i, row in
+                if i > 0 { Divider().padding(.leading, 16) }
+                LabeledContent(row.0, value: row.1).padding(.horizontal, 16).padding(.vertical, 12)
+            }
+        }
+        .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+    }
+    // The same edges as the system's list cards on every other tab: 20 pt in from the leading side, out to the trailing
+    // edge of the space, and in the right pane open, from its leading edge.
     var body: some View {
         switch side {
         case .all:
@@ -929,16 +966,19 @@ struct UpgradeTab: View {
                 agent
                 UpdateLog(log: s.upgrade.log)
             }
-            .padding(.horizontal, 16).padding(.bottom, 12)
+            .padding(.leading, 20).padding(.bottom, 12)
+            .frame(maxHeight: .infinity, alignment: .top)
         case .left:
-            ScrollView { VStack(spacing: 12) { summary; agent }.padding(.horizontal, 16) }
+            ScrollView { VStack(spacing: 12) { summary; facts; agent }.padding(.leading, 20) }
                 .scrollBounceBehavior(.basedOnSize)
+                .scrollEdgeEffectHidden(true, for: .top)
         case .right:
             VStack(alignment: .leading, spacing: 8) {
                 Text("Log").font(.title3.weight(.semibold)).padding(.leading, 4)
                 UpdateLog(log: s.upgrade.log)
             }
-            .padding(.horizontal, 16).padding(.bottom, 12)
+            .padding(.bottom, 12)
+            .frame(maxHeight: .infinity, alignment: .top)
         }
     }
 }
@@ -947,6 +987,8 @@ struct UpgradeTab: View {
 struct UpdateLog: View {
     @EnvironmentObject var model: AppModel
     let log: String
+    // How tall the lines are, so a short log gets a card its own size rather than an empty slab with one line at its foot.
+    @State private var contentHeight: CGFloat?
     static let bad = try? NSRegularExpression(pattern: #"\b(error|errors|failed|failure|fatal|cannot|couldn[’']t|panic)\b|✗"#, options: .caseInsensitive)
     static let good = try? NSRegularExpression(pattern: #"\b(finished|complete|completed|succeeded|success|healthy|installed|nothing to do|up to date)\b|✓"#, options: .caseInsensitive)
     static func matches(_ r: NSRegularExpression?, _ s: String) -> Bool { r?.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil }
@@ -972,7 +1014,10 @@ struct UpdateLog: View {
                 .textSelection(.enabled)
             }
             .defaultScrollAnchor(.bottom)
-            .frame(maxHeight: .infinity)
+            .scrollEdgeEffectHidden(true, for: .top)
+            .scrollBounceBehavior(.basedOnSize)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, h in contentHeight = h }
+            .frame(maxHeight: contentHeight ?? CGFloat(lines.count) * 21 + 28)
             .background(Color(white: 0.06), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .task {
@@ -1028,6 +1073,12 @@ struct ControlTab: View {
         }
     }
     @ViewBuilder func failLine(_ key: String) -> some View { if let f = fails[key] { FailText(f) } }
+    // The build's shots of a failure under its button, and of the Forget password question.
+    func pose() async {
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        if model.pose == "controlfail" { withAnimation { fails["forget"] = "The Mac didn’t answer. Check Tailscale and try again." } }
+        if model.pose == "forget" { confirmForget = true }
+    }
     var locked: Bool { s.screen == "locked" }
     var displayOn: Bool { s.displayOn ?? (s.screen != "display off") }
     var typingReady: Bool { s.macLogin || s.typing == "trusted" }
@@ -1043,11 +1094,13 @@ struct ControlTab: View {
                         Label(displayOn ? "Display on" : "Display off", systemImage: displayOn ? "sun.max.fill" : "moon.fill")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
+                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                     if locked {
                         Button("Unlock") { act("unlock") { await model.run("mac-unlock") } }
                         failLine("unlock")
                     }
                     Button("Forget password", role: .destructive) { confirmForget = true }
+                        .task { await pose() }
                         .confirmationDialog("Forget the Mac’s password?", isPresented: $confirmForget, titleVisibility: .visible) {
                             Button("Forget Password", role: .destructive) { act("forget") { await model.run("mac-logout") } }
                         } message: { Text("After its next restart, the Mac waits at the login window until you log in again from here.") }

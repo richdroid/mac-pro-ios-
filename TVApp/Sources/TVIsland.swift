@@ -38,7 +38,12 @@ enum TVIsland {
     }
 
     // Starts only for something actually playing, and goes away once the TV has moved on.
+    // The build's sample TV answers on this phone itself: nothing there is really playing, so nothing goes in the island.
+    static var sample: Bool { ["127.0.0.1", "localhost"].contains { TVBridge.address.contains($0) } }
     static func sync(_ status: TVStatus) async {
+        // One gone stale (the app was closed while it played) is ended rather than left showing old news.
+        for old in shown where sample || (old.content.staleDate ?? .distantFuture) < Date() { await old.end(nil, dismissalPolicy: .immediate) }
+        if sample { return }
         let all = shown, current = all.first
         for extra in all.dropFirst() { await extra.end(nil, dismissalPolicy: .immediate) }
         guard let next = state(status) else {

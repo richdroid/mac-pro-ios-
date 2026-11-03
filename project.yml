@@ -34,7 +34,8 @@ targets:
         UIBackgroundModes: [fetch]
         BGTaskSchedulerPermittedIdentifiers: [local.macpro.MacPro.alerts]
         NSFaceIDUsageDescription: Unlocks your saved logins before filling them on the Mac.
-        UILaunchScreen: { UIColorName: LaunchColor }
+        # The Mac Pro's portrait on black from the first frame, rather than black alone while the app starts.
+        UILaunchScreen: { UIColorName: LaunchColor, UIImageName: LaunchMacPro, UIImageRespectsSafeAreaInsets: true }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

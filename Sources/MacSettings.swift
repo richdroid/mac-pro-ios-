@@ -27,6 +27,7 @@ struct MacSettings: View {
     }
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             List {
                 // All seven in view, spread evenly across the row, never scrolled or cut off.
                 Section("Colour") {
@@ -72,6 +73,7 @@ struct MacSettings: View {
                         Button("Save") { if budgetDraft > 0 { apiBudget = budgetDraft } }
                         Button("Cancel", role: .cancel) {}
                     } message: { Text("In dollars, for the dial on the Usage tab.") }
+                    .id("claude")
                 }
                 Section {
                     Picker("Open on", selection: $startTab) {
@@ -85,6 +87,15 @@ struct MacSettings: View {
                     Button("Change connection") { connecting = true }
                 } header: { Text("Connection") }
                 Section { LabeledContent("Version", value: version) }
+            }
+            .task {
+                // The build's shots of the lower half, with the budget picker, and of its Custom alert.
+                let pose = UserDefaults.standard.string(forKey: "pose") ?? ""
+                guard pose == "settings-lower" || pose == "budget-custom" else { return }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                proxy.scrollTo("claude", anchor: .center)
+                if pose == "budget-custom" { try? await Task.sleep(nanoseconds: 600_000_000); budgetDraft = apiBudget; customBudget = true }
+            }
             }
             .navigationTitle("Settings")
             .sheet(isPresented: $connecting) { SignInView().environmentObject(model) }

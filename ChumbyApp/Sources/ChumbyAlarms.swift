@@ -7,32 +7,35 @@ import UIKit
 // MARK: - Small pieces every tab uses
 // A failure, at the control it belongs to.
 struct FailNote: View {
+    @Environment(\.colorScheme) private var scheme
     let text: String
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: "exclamationmark.circle.fill")
             Text(text).fixedSize(horizontal: false, vertical: true)
         }
-        .font(.subheadline.weight(.medium)).foregroundStyle(.red)
+        .font(.subheadline.weight(.medium)).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
         .accessibilityElement(children: .combine)
     }
 }
 // A change that hasn't reached the Chumby, under the row it belongs to, with a way to send it again.
+// The control beside it shows what the Chumby really holds; this says what couldn't be changed, and why.
 struct MarkNote: View {
     @EnvironmentObject var model: ChumbyModel
+    @Environment(\.colorScheme) private var scheme
     let mark: String
     var body: some View {
-        if case .failed(let why) = model.marks[mark] {
+        if case .failed(let head, let why) = model.marks[mark] {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: "exclamationmark.circle.fill")
-                    Text("Not on the Chumby yet")
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(ChumbyPalette.warn(scheme == .dark))
+                    Text(head).fontWeight(.semibold).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
                     Text("·").foregroundStyle(.secondary)
-                    Button("Retry") { model.retry(mark) }.buttonStyle(.borderless).fontWeight(.semibold)
+                    Button("Retry") { model.retry(mark) }.buttonStyle(.borderless).fontWeight(.semibold).foregroundStyle(.tint)
                 }
-                Text(why).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(why).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
             }
-            .font(.subheadline).foregroundStyle(.orange)
+            .font(.subheadline)
         }
     }
 }
@@ -109,14 +112,15 @@ struct AlarmRow<Notes: View>: View {
 }
 // A glyph and a line under an alarm, lined up with the text above it so the row's divider stays straight.
 struct RowNote: View {
+    @Environment(\.colorScheme) private var scheme
     let icon: String, text: String
-    var color: Color = .orange
+    var color: Color?
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Image(systemName: icon).font(.footnote)
             Text(text).font(.subheadline)
         }
-        .foregroundStyle(color)
+        .foregroundStyle(color ?? ChumbyPalette.warn(scheme == .dark))
     }
 }
 
@@ -124,8 +128,16 @@ struct RowNote: View {
 // While an alarm rings or snoozes: its name, and Snooze and Stop large enough to hit half asleep.
 struct RingingCard: View {
     @EnvironmentObject var model: ChumbyModel
+    var name: String { model.sys.ringing.map { r in [r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name, r.sound].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "" }
     var body: some View {
-        if let r = model.sys.ringing {
+        if let r = model.sys.ringing, model.unreachable {
+            // An old reading: what it was doing when last heard from, and no buttons that can't reach it.
+            VStack(spacing: 3) {
+                Text("Was \(r.snoozed ? "snoozing" : "ringing")\(model.seenAt.map { " at " + seenText($0) } ?? "")").font(.custom("Trebuchet MS", size: 22).weight(.bold))
+                Text([name, "can’t reach the Chumby"].filter { !$0.isEmpty }.joined(separator: " · ")).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            .padding(16).frame(maxWidth: .infinity)
+        } else if let r = model.sys.ringing {
             VStack(spacing: 14) {
                 VStack(spacing: 3) {
                     if r.snoozed {
@@ -136,8 +148,7 @@ struct RingingCard: View {
                     } else {
                         Text("Ringing").font(.custom("Trebuchet MS", size: 24).weight(.bold))
                     }
-                    Text([r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name, r.sound].filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(name).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 HStack(spacing: 14) {
                     if !r.snoozed {
@@ -305,9 +316,12 @@ struct WokeUpTo: View {
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill((f?.tint ?? ChumbyPalette.hex(0x2c5bae)).opacity(0.55))
                     if let i = f?.image { Image(platform: i).resizable().scaledToFill() }
-                    else { OctopusMark(color: .white.opacity(0.85), eyes: ChumbyPalette.hex(0x2c5bae)).padding(26) }
+                    else {
+                        // No cover found: the octopus on the Chumby's own blue, never a grey box.
+                        ChumbyPalette.hex(0x2c5bae)
+                        OctopusMark(color: .white.opacity(0.9), eyes: ChumbyPalette.hex(0x2c5bae)).padding(26)
+                    }
                 }
                 .frame(width: 112, height: 112).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(1)
@@ -315,8 +329,6 @@ struct WokeUpTo: View {
                 Text(Date(timeIntervalSince1970: s.t).formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.footnote).foregroundStyle(.secondary)
             }
             .frame(width: 112, alignment: .leading)
-            .padding(8)
-            .background((f?.tint ?? .clear).opacity(0.18), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
         .onAppear { art.look(s) }
@@ -332,8 +344,12 @@ struct AlarmsTab: View {
     @State private var editing: EditTarget?
     @State private var day: DayTarget?
     @State private var settingsPage = false      // folded: Calendar settings as a page
-    @State private var settingsPane = false      // open: Calendar settings in the right pane
+    // Open, the right pane holds whatever would otherwise be a sheet, so nothing sits across the fold.
+    enum Pane: Equatable { case schedule, settings, editor(Alarm?), day(String), template }
+    @State private var pane: Pane = .schedule
+    @State private var paneBack: Pane = .schedule
     @State private var removing: String?
+    @State private var posed = false
     @AppStorage("missedDismissed") private var dismissedRaw = ""
     struct EditTarget: Identifiable { let alarm: Alarm?; var id: String { alarm?.key ?? "new" } }
     struct DayTarget: Identifiable { let id: String }
@@ -347,13 +363,29 @@ struct AlarmsTab: View {
         let fade = f < 0 ? "" : f == 0 ? ", no fade" : ", fades in over " + (f < 60 ? "\(f) s" : "\(f / 60) min")
         return "Rings at \(model.state.volume)%" + fade
     }
+    var paneShown: Pane { wide ? pane : .schedule }
+    // Pages that bring their own title row (editor, day) have none from here.
+    var rightTitle: String? {
+        switch paneShown {
+        case .schedule: return " "
+        case .settings: return "Calendar settings"
+        default: return nil
+        }
+    }
+    func show(_ p: Pane) { withAnimation(.snappy) { pane = p } }
+    func edit(_ a: Alarm?) { if wide { show(.editor(a)) } else { editing = EditTarget(alarm: a) } }
+    func openDay(_ k: String) { if wide { show(.day(k)) } else { day = DayTarget(id: k) } }
+    func openSettings() { if wide { show(.settings) } else { settingsPage = true } }
+    var plus: some View {
+        Button { edit(nil) } label: { Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).frame(width: 30, height: 30) }
+            .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Add alarm")
+    }
 
     var body: some View {
-        TwoPane(rightTitle: wide && settingsPane ? "Calendar settings" : " ", rightTrailing: wide && settingsPane ? AnyView(Button("Done") { withAnimation(.snappy) { settingsPane = false } }.fontWeight(.semibold)) : nil) {
-            PageTitle("Alarms") {
-                Button { editing = EditTarget(alarm: nil) } label: { Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).frame(width: 30, height: 30) }
-                    .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Add alarm")
-            }
+        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
+            // + lives in the side bar's column when there is one (RootView puts it there); only with the bars across is it here.
+            PageTitle("Alarms") { if model.railWidth < 44 { plus } }
+            ReachRow()
             if model.sys.ringing != nil { Section { RingingCard() } }
             Section { glance }
             if !missed.isEmpty {
@@ -370,36 +402,53 @@ struct AlarmsTab: View {
             yours
             calendar
         } right: {
-            if wide && settingsPane {
-                CalendarSettingsSections()
-            } else {
+            switch paneShown {
+            case .schedule:
                 Section("Quick nap") { NapChips() }
                 WokeUpTo()
                 schedule
+            case .settings: CalendarSettingsSections()
+            case .editor(let a): AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new")
+            case .day(let k): CalendarDaySheet(key: k, close: { show(.schedule) }).id(k)
+            case .template: AlarmEditor(calendarTemplate: true, close: { show(paneBack) })
             }
         }
         .seaList()
+        .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
         .navigationDestination(isPresented: $settingsPage) { CalendarWakeSettings() }
         .sheet(item: $editing) { t in AlarmEditor(original: t.alarm).environmentObject(model) }
-        .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model) }
+        .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model).presentationDetents([.medium, .large]) }
         .refreshable { await model.loadState() }
+        .onChange(of: model.addAlarm) { _, _ in edit(nil) }
+        .onChange(of: wide) { _, _ in pane = .schedule }
         .onAppear {
             wake.refreshPlan()
             Task { await model.loadSongs() }
+            guard !posed else { return }
+            posed = true
             switch ChumbyModel.pose {
-            case "calsettings", "template": openSettings()
-            case "calday": if let k = wake.plan.first?.key { day = DayTarget(id: k) }
-            case "editor": editing = EditTarget(alarm: mine.first ?? Alarm())
+            case "calsettings": openSettings()
+            case "template": if wide { show(.template) } else { openSettings() }
+            case "calday": if let k = wake.plan.first?.key { openDay(k) }
+            case "editor": edit(mine.first ?? Alarm())
+            case "editornew": edit(nil)
             case "failure":
                 Task {
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
                     if let a = mine.first { model.change(.toggle(a, !a.isOn)) }
                 }
+            case "alarmsdemo":
+                // For the build's film: Settings in and out, then a 10-minute nap started and called off.
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000); openSettings()
+                    try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { settingsPage = false }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000); await model.nap(10)
+                    try? await Task.sleep(nanoseconds: 3_500_000_000); await model.cancelNap()
+                }
             default: break
             }
         }
     }
-    func openSettings() { if wide { withAnimation(.snappy) { settingsPane = true } } else { settingsPage = true } }
 
     // What rings next, first, so it never has to be worked out from the list.
     @ViewBuilder var glance: some View {
@@ -428,14 +477,12 @@ struct AlarmsTab: View {
 
     var yours: some View {
         Section {
-            if !model.stateKnown {
-                HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) }
-            } else if mine.isEmpty {
+            if model.stateKnown && mine.isEmpty {
                 Text("No alarms yet. Tap + to add one.").foregroundStyle(.secondary)
             }
             ForEach(mine, id: \.key) { a in
                 AlarmRow(clock: (a.clock, a.meridiem), detail: [a.name, a.whenText, a.soundText].filter { !$0.isEmpty }.joined(separator: " · "), on: a.isOn, mark: a.key,
-                         tap: { editing = EditTarget(alarm: a) },
+                         tap: { edit(a) },
                          toggle: Binding(get: { a.isOn }, set: { model.change(.toggle(a, $0)) })) {
                     MarkNote(mark: a.key)
                 }
@@ -462,7 +509,7 @@ struct AlarmsTab: View {
                     let status = model.stateConfirmed && !CalendarWake.sample ? wake.onDevice(item, in: model.deviceState) : .set
                     AlarmRow(clock: clockParts(item.wake), day: item.wake.formatted(.dateTime.weekday(.abbreviated)),
                              detail: "\(item.title) at \(item.start.formatted(date: .omitted, time: .shortened)), \(leadText(item.lead)) before",
-                             on: !item.skipped, tap: { day = DayTarget(id: item.key) },
+                             on: !item.skipped, tap: { openDay(item.key) },
                              toggle: Binding(get: { !item.skipped }, set: { _ in model.tick(); wake.toggleSkip(item) })) {
                         if let short = item.shortNight { RowNote(icon: "moon.zzz", text: "Short night: \(short)") }
                         if !item.skipped, let other = wake.alsoRinging(item, in: model.state) { RowNote(icon: "alarm", text: "Also rings earlier: \(other)") }
@@ -504,11 +551,11 @@ struct AlarmsTab: View {
             if wake.rules.enabled && wake.allowed {
                 // One way in for all of it: wake-up times, how the alarms ring, words and calendars.
                 if wide {
-                    Button { withAnimation(.snappy) { settingsPane.toggle() } } label: {
+                    Button { show(pane == .settings ? .schedule : .settings) } label: {
                         HStack { Text("Settings"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .listRowBackground(settingsPane ? AnyView(Color.accentColor.opacity(0.18)) : AnyView(GlassRow()))
+                    .listRowBackground(pane == .settings ? AnyView(Color.accentColor.opacity(0.18)) : AnyView(GlassRow()))
                 } else {
                     NavigationLink("Settings") { CalendarWakeSettings() }
                 }
@@ -518,7 +565,7 @@ struct AlarmsTab: View {
         } footer: {
             if let n = wake.note { Text(n) }
             else if wake.rules.enabled, let s = wake.lastSync { Text("Set on the Chumby, so they ring with your phone off. Updated \(s.formatted(.relative(presentation: .named))). Tap one to change that day.") }
-            else if !wake.rules.enabled { Text("Sets an alarm before the first thing each day. It follows your calendar whenever this app is open or refreshes in the background.") }
+            else if !wake.rules.enabled { Text("Wakes you before the first thing each day.") }
         }
     }
 
@@ -562,7 +609,10 @@ struct AlarmEditor: View {
     // The settings every calendar alarm shares: how it sounds and what it does, never when it rings or what it's called,
     // which the calendar decides.
     var calendarTemplate = false
-    init(original: Alarm? = nil, calendarTemplate: Bool = false) { self.original = original; self.calendarTemplate = calendarTemplate }
+    // Set when it's shown in the open Duo's right pane rather than as a sheet: how to go back.
+    var close: (() -> Void)?
+    init(original: Alarm? = nil, calendarTemplate: Bool = false, close: (() -> Void)? = nil) { self.original = original; self.calendarTemplate = calendarTemplate; self.close = close }
+    var title: String { calendarTemplate ? "How they ring" : original != nil ? "Edit alarm" : "Add alarm" }
     @State private var alarm = Alarm()
     @State private var time = Date()
     @State private var date = Date()
@@ -646,8 +696,42 @@ struct AlarmEditor: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form { Group {
+        if let close {
+            // In the right pane: its own title row with Cancel and Save, then the same sections, clear of the fold.
+            Group {
+                PageTitle(title) {
+                    HStack(spacing: 16) {
+                        Button("Cancel") { stopTest(); close() }.disabled(saving)
+                        if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
+                    }
+                    .foregroundStyle(.tint)
+                }
+                .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true }
+                .onDisappear { model.editingAlarm = false }
+                sections
+            }
+        } else {
+            NavigationStack {
+                Form { sections.listRowBackground(GlassRow()) }
+                .seaList().background { SeaBackground().ignoresSafeArea() }
+                .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .principal) { Text(title).font(.custom("Trebuchet MS", size: 18).weight(.bold)) }
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { stopTest(); dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .confirmationAction) {
+                        if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
+                    }
+                }
+                .interactiveDismissDisabled(saving)
+                .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true }
+                .onDisappear { model.editingAlarm = false }
+            }
+        }
+    }
+    func finish() { stopTest(); if let close { close() } else { dismiss() } }
+
+    var sections: some View {
+            Group {
                 // Above everything, beside Save: why it couldn't save, or what saving will do that isn't obvious.
                 if saving || problem != nil || !switchesOff.isEmpty || (original.map { !$0.isOn } ?? false) && !calendarTemplate {
                     Section {
@@ -660,7 +744,7 @@ struct AlarmEditor: View {
                 }
                 if !calendarTemplate {
                 Section { DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute).datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity) }
-                Section("Repeat") {
+                Section {
                     Picker("Repeat", selection: $repeatMode) {
                         Text("Once").tag("once"); Text("Daily").tag("daily"); Text("Weekdays").tag("weekday"); Text("Weekends").tag("weekend"); Text("One day").tag("day")
                     }
@@ -671,7 +755,10 @@ struct AlarmEditor: View {
                         DatePicker("Date", selection: $date, displayedComponents: .date)
                         Text("Rings \(onceAt.formatted(.dateTime.weekday(.wide).month(.abbreviated).day().hour().minute()))").font(.subheadline).foregroundStyle(.secondary)
                     }
-                    TextField("Label", text: $alarm.name)
+                    HStack {
+                        Text("Label")
+                        TextField("Optional", text: $alarm.name).multilineTextAlignment(.trailing).foregroundStyle(.secondary)
+                    }
                 }
                 }
                 Section("Sound") {
@@ -681,9 +768,10 @@ struct AlarmEditor: View {
                     }
                     if kind == "beep" {
                         Picker("Tone", selection: $tone) { ForEach(model.state.tones, id: \.self) { Text($0).tag($0) } }
-                        Button("Play on the Chumby") {
+                        Button {
                             Task { do { try await model.api?.post("test", extra: "&tone=" + ChumbyAPI.enc(tone)) } catch { model.fail("test", "Couldn’t play it. \(AlarmWriter.explain(error))") } }
-                        }
+                        } label: { Label("Play on the Chumby", systemImage: "play.fill") }
+                        .foregroundStyle(.tint)
                         if let f = model.failed("test") { FailNote(text: f) }
                     }
                     if kind == "stream" {
@@ -714,24 +802,12 @@ struct AlarmEditor: View {
                 } header: { Text("Afterwards") } footer: { if calendarTemplate { Text("Applies to every alarm your calendar sets, now and later.") } }
                 if let original, !calendarTemplate { Section {
                     // The question hangs off the button that asked it, so it points at what was tapped.
-                    Button("Delete Alarm", role: .destructive) { confirmDelete = true }.foregroundStyle(.red).disabled(saving)
+                    Button("Delete alarm", role: .destructive) { confirmDelete = true }.foregroundStyle(.red).disabled(saving)
                         .confirmationDialog("Delete this alarm?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                            Button("Delete Alarm", role: .destructive) { run(.delete(original)) }
+                            Button("Delete alarm", role: .destructive) { run(.delete(original)) }
                         }
                 } }
-            } .listRowBackground(GlassRow()) }
-            .seaList().background { SeaBackground().ignoresSafeArea() }
-            .navigationTitle(calendarTemplate ? "Calendar Alarm Settings" : original != nil ? "Edit Alarm" : "Add Alarm").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { stopTest(); dismiss() }.disabled(saving) }
-                ToolbarItem(placement: .confirmationAction) {
-                    if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
-                }
             }
-            .interactiveDismissDisabled(saving)
-            .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true }
-            .onDisappear { model.editingAlarm = false }
-        }
     }
     func stopTest() { Task { try? await model.api?.post("test", extra: "&stop=1") } }
 
@@ -740,6 +816,8 @@ struct AlarmEditor: View {
             // The saved set if there is one, else how the first calendar alarm rings now.
             if let t = model.state.calTpl ?? CalendarWake.shared.storedSettings ?? model.state.alarms.first(where: { $0.isCalendar }) { alarm = t }
         } else if let original { alarm = original }
+        // The build's shot of a new alarm being set for a new time, so "Saving turns off …" can be seen.
+        if original == nil && !calendarTemplate && ChumbyModel.pose == "editornew" { alarm.time = "330"; alarm.when = "weekday" }
         let m = alarm.localMinutes
         time = Calendar.current.date(bySettingHour: m / 60 % 24, minute: m % 60, second: 0, of: Date()) ?? Date()
         if let d = Alarm.dayKeys.firstIndex(of: alarm.when) { day = d; repeatMode = "day" } else { repeatMode = alarm.when }
@@ -761,7 +839,7 @@ struct AlarmEditor: View {
                 Task {
                     let why = await model.saveCalendarTemplate(a)
                     saving = false
-                    if let why { problem = why } else { stopTest(); dismiss() }
+                    if let why { problem = why } else { finish() }
                 }
             } else if let change { run(change) }
         }
@@ -771,7 +849,7 @@ struct AlarmEditor: View {
         Task {
             let why = await model.save(c)
             saving = false
-            if let why { problem = why } else { stopTest(); dismiss() }
+            if let why { problem = why } else { finish() }
         }
     }
 }

@@ -27,6 +27,8 @@ final class TVModel: ObservableObject {
     private var standInUntil = Date.distantPast
     var standInNow: String? { standInUntil > Date() ? standInArt : nil }
     func standIn(_ art: String) { standInArt = art; standInUntil = Date().addingTimeInterval(30) }
+    // When a flick's controls last handed over to the Remote, so its keys can settle in after the screen lands.
+    @Published var remoteArrival = Date.distantPast
     // A film's colour kept on the pages behind after the flick closes, until something else is playing.
     var moodArt: String?
     func keepMood(until art: String) { moodArt = art }
@@ -116,8 +118,16 @@ final class TVModel: ObservableObject {
                 while !Task.isCancelled {
                     if let self, self.mirrorLive, self.mirrorViewers > 0 {
                         // The film's poster stands in for it, and a frame from before it started mustn't show after.
-                        if self.filmOnScreen { if self.mirrorStore.image != nil { self.mirrorStore.set(nil) } }
-                        else if !self.liveShowing { await self.loadMirror() }
+                        // Nor does the box record its screen during a film: it's black anyway, and the box is small.
+                        if self.filmOnScreen {
+                            if self.mirrorStore.image != nil { self.mirrorStore.set(nil) }
+                            #if os(iOS)
+                            self.live.stop()
+                            #endif
+                        } else {
+                            self.warmMirror()
+                            if !self.liveShowing { await self.loadMirror() }
+                        }
                     }
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                 }
@@ -141,7 +151,7 @@ final class TVModel: ObservableObject {
     // The live stream started early, as the Remote comes up, so its first picture is there by the time it's looked at.
     func warmMirror() {
         #if os(iOS)
-        if mirrorLive { live.start(url("/api/tv/screen-live")) }
+        if mirrorLive && !filmOnScreen { live.start(url("/api/tv/screen-live")) }
         #endif
     }
     // The Remote's picture of the TV coming on and off the screen.

@@ -14,8 +14,8 @@ enum MacKey {
 //  - Open and turned so the fold runs across: a laptop. Screen above the fold, trackpad and keys below.
 //  - Open flat: the whole screen, touched directly, with a dock under it, or over it when there's no room.
 //  - Closed: the screen across the top and the trackpad under your thumb.
-// Done and the screen's own controls sit on a rail in the column the system keeps on the right for its side bar, where
-// Back is on every other page. Where there's no such column (open in portrait), they sit in a bar above the keys.
+// Done and the screen's own controls sit together on the right, as Back does on every other page: at the trailing end of
+// the glass bar above the keys, or of the dock when it's open flat.
 struct RemoteScreenView: View {
     let model: AppModel
     init(model: AppModel) { self.model = model; observed = model.screen }
@@ -42,27 +42,10 @@ struct RemoteScreenView: View {
     @State private var loggingIn = false
     @State private var loginFail: String?
 
-    // Where the system's Back button sits on the rail, from the top of the display, as measured on the build's shots:
-    // 175 pt closed, 124 pt open. Done goes at the same height.
-    static func railTop(_ width: CGFloat) -> CGFloat { width < 600 ? 175 : 124 }
-
     var body: some View {
+        // The whole display: the cover has no side bar of its own, so the picture gets that room too.
         GeometryReader { full in
-            let ins = full.safeAreaInsets
-            // The side bar's column: wide enough to hold the rail, so the rail goes there and the picture keeps the rest.
-            let column = ins.trailing >= 52
-            let area = CGSize(width: max(0, full.size.width - ins.leading - ins.trailing), height: max(0, full.size.height - ins.top - ins.bottom))
-            ZStack(alignment: .topTrailing) {
-                layout(area, inline: !column)
-                    .frame(width: area.width, height: area.height)
-                    .padding(EdgeInsets(top: ins.top, leading: ins.leading, bottom: ins.bottom, trailing: ins.trailing))
-                    .frame(width: full.size.width, height: full.size.height, alignment: .topLeading)
-                if column {
-                    rail(vertical: true)
-                        .frame(width: ins.trailing)
-                        .padding(.top, Self.railTop(full.size.width))
-                }
-            }
+            layout(full.size)
         }
         .ignoresSafeArea(.container)
         .background(Color.black.ignoresSafeArea())
@@ -71,7 +54,7 @@ struct RemoteScreenView: View {
         .persistentSystemOverlays(.hidden)
         .onAppear {
             switch model.pose {
-            case "screen": screen.showSample()
+            case "screen", "transitions": screen.showSample()
             case "screenlogin": screen.showNeedsLogin()
             default: screen.open(base: model.api.base)
             }
@@ -94,31 +77,31 @@ struct RemoteScreenView: View {
         }
     }
 
-    @ViewBuilder func layout(_ area: CGSize, inline: Bool) -> some View {
+    @ViewBuilder func layout(_ area: CGSize) -> some View {
         let laptop = area.width >= 600 && area.height > area.width
         let wide = area.width > area.height
         if laptop {
             // Apple's container for the fold, which knows where the crease is and keeps both halves clear of it.
-            FoldSplit { canvas } right: { deck(inline: inline) }
+            FoldSplit { canvas } right: { deck }
         } else if wide {
             let picture = min(fittedHeight(area.width), area.height)
             if area.height - picture >= 64 {
                 // Room under the picture: the dock sits in the black there, clear of the Mac's own Dock.
                 VStack(spacing: 8) {
                     canvas.frame(height: picture)
-                    dock(inline: inline)
+                    dock
                 }
                 .frame(maxHeight: .infinity)
             } else {
                 ZStack(alignment: .bottom) {
                     canvas
-                    dock(inline: inline).padding(.bottom, 10)
+                    dock.padding(.bottom, 10)
                 }
             }
         } else {
             VStack(spacing: 10) {
                 canvas.frame(height: fittedHeight(area.width))
-                deck(inline: inline)
+                deck
             }
         }
     }
@@ -129,13 +112,6 @@ struct RemoteScreenView: View {
     }
 
     // MARK: The rail
-    var doneButton: some View {
-        Button { model.screenOpen = false } label: {
-            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).frame(width: 48, height: 48).contentShape(Circle())
-        }
-        .buttonStyle(.plain).foregroundStyle(.white).glassEffect(.regular.interactive(), in: Circle())
-        .accessibilityLabel("Done")
-    }
     func railButton(_ icon: String, _ a11y: String, on: Bool = false, action: @escaping () -> Void) -> some View {
         Button { tick(.light); action() } label: {
             Image(systemName: icon).font(.system(size: 17, weight: .semibold))
@@ -155,19 +131,15 @@ struct RemoteScreenView: View {
         railButton("doc.on.doc", "Copy") { send(0x63, [MacKey.command]) }
         railButton("doc.on.clipboard", "Paste") { send(0x76, [MacKey.command]) }
     }
-    @ViewBuilder func rail(vertical: Bool) -> some View {
-        if vertical {
-            VStack(spacing: 14) {
-                doneButton
-                VStack(spacing: 4) { railItems }.padding(4).glassEffect(.regular, in: Capsule())
-            }
-        } else {
-            HStack(spacing: 10) {
-                doneButton
-                Spacer(minLength: 0)
-                HStack(spacing: 4) { railItems }.padding(4).glassEffect(.regular, in: Capsule())
-            }
+    // The screen's controls in one glass bar, Done last, at its right-hand end.
+    var controlBar: some View {
+        HStack(spacing: 4) {
+            railItems
+            Capsule().fill(.white.opacity(0.18)).frame(width: 1, height: 24).padding(.horizontal, 2)
+            railButton("xmark", "Done", on: true) { model.screenOpen = false }
         }
+        .padding(4)
+        .glassEffect(.regular, in: Capsule())
     }
 
     // MARK: The picture
@@ -196,14 +168,20 @@ struct RemoteScreenView: View {
         // The space sets the size and the picture fits inside it, never the other way round.
         Color.black
             .overlay {
-                if let image = screen.image, canvasSize.width > 0 {
-                    Image(decorative: image, scale: 1)
-                        .resizable()
-                        .interpolation(zoom > 2 ? .medium : .high)
-                        .frame(width: screen.size.width * fit, height: screen.size.height * fit)
-                        .scaleEffect(zoom)
-                        .offset(pan)
-                        .allowsHitTesting(false)
+                // Drawn from the space it's actually given, not from a remembered size, so a new layout (unfolding, the
+                // dock moving) never leaves it blank.
+                GeometryReader { geo in
+                    if let image = screen.image, screen.size.width > 0, geo.size.width > 0 {
+                        let f = min(geo.size.width / screen.size.width, geo.size.height / screen.size.height)
+                        Image(decorative: image, scale: 1)
+                            .resizable()
+                            .interpolation(zoom > 2 ? .medium : .high)
+                            .frame(width: screen.size.width * f, height: screen.size.height * f)
+                            .scaleEffect(zoom)
+                            .offset(pan)
+                            .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
             .overlay {
@@ -303,9 +281,9 @@ struct RemoteScreenView: View {
     enum Haptic { case light, medium }
 
     // MARK: Trackpad and keys
-    func deck(inline: Bool) -> some View {
+    var deck: some View {
         VStack(spacing: 8) {
-            if inline { rail(vertical: false) }
+            HStack { Spacer(minLength: 0); controlBar }
             keyRows
             trackpad
         }
@@ -359,7 +337,7 @@ struct RemoteScreenView: View {
                 if let icon { Image(systemName: icon).font(.system(size: 15, weight: .semibold)) }
                 else { Text(label).font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8) }
             }
-            .frame(minWidth: flexible ? 30 : 40, maxWidth: flexible ? .infinity : nil, minHeight: 40).padding(.horizontal, flexible ? 0 : 3).contentShape(Rectangle())
+            .frame(minWidth: flexible ? 30 : 40, maxWidth: flexible ? .infinity : nil, minHeight: 40).contentShape(Rectangle())
         }
         .buttonStyle(MacKeyStyle()).accessibilityLabel(a11y)
     }
@@ -416,10 +394,9 @@ struct RemoteScreenView: View {
         }
     }
     // Open flat the picture has the room, so the trackpad is a touch away instead of always there.
-    func dock(inline: Bool) -> some View {
-        HStack(spacing: 6) {
-            // Done stays even with the keys tucked away.
-            if inline { doneButton.scaleEffect(0.84).frame(width: 40, height: 40) }
+    // Every key and control in one row that fits the open display: 40 pt keys, 4 pt apart.
+    var dock: some View {
+        HStack(spacing: 4) {
             if dockOpen {
                 modifierKey("⌘", MacKey.command, "Command").frame(width: 44)
                 keyButton("esc", "Escape") { send(MacKey.esc) }
@@ -432,7 +409,7 @@ struct RemoteScreenView: View {
                 keyButton("", icon: "arrow.right", "Right arrow") { send(MacKey.right) }
                 keyButton("", icon: "delete.left", "Delete") { send(MacKey.delete) }
                 keyButton("", icon: "return", "Return") { send(MacKey.returnKey) }
-                if inline { railItems }
+                railItems
             }
             Button {
                 tick(.light)
@@ -442,6 +419,8 @@ struct RemoteScreenView: View {
                     .frame(width: 30, height: 40).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(.white.opacity(0.7)).accessibilityLabel(dockOpen ? "Hide the keys" : "Show the keys")
+            // Done stays, at the right-hand end, even with the keys tucked away.
+            railButton("xmark", "Done", on: true) { model.screenOpen = false }
         }
         .padding(6)
         .glassEffect(.regular, in: Capsule())
@@ -488,7 +467,10 @@ extension RemoteScreenView {
             Button(action: logIn) {
                 Group { if loggingIn { ProgressView() } else { Text("Log in") } }.frame(maxWidth: .infinity, minHeight: 24)
             }
-            .buttonStyle(.borderedProminent).disabled(loginPassword.isEmpty || loggingIn)
+            // Never a black hole while there's nothing typed yet: the same blue, softened, and the tap does nothing.
+            .buttonStyle(.borderedProminent).tint(macBlue)
+            .opacity(loginPassword.isEmpty ? 0.5 : 1)
+            .allowsHitTesting(!loginPassword.isEmpty && !loggingIn)
             if let loginFail { FailText(loginFail) }
         }
         .padding(16)

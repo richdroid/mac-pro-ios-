@@ -18,8 +18,9 @@ struct SessionTerminal: View {
     @State private var starting = false
     // Following the newest line, unless scrolled back to read what came before.
     @State private var following = true
-    static let keys: [(String, String)] = [("esc", "Esc"), ("enter", "Enter"), ("up", "↑"), ("down", "↓"), ("left", "←"), ("right", "→"),
-                                           ("1", "1"), ("2", "2"), ("3", "3"), ("tab", "Tab"), ("shift-tab", "⇧Tab"), ("ctrl-c", "Ctrl-C")]
+    // Glyphs short enough for a sixth of the folded width, each with its full name for VoiceOver.
+    static let keys: [(String, String, String)] = [("esc", "esc", "Escape"), ("enter", "⏎", "Enter"), ("up", "↑", "Up"), ("down", "↓", "Down"), ("left", "←", "Left"), ("right", "→", "Right"),
+                                                   ("1", "1", "1"), ("2", "2", "2"), ("3", "3", "3"), ("tab", "⇥", "Tab"), ("shift-tab", "⇧⇥", "Shift Tab"), ("ctrl-c", "⌃C", "Control C")]
     var key: String { session.key ?? session.name }
     // The latest the Mac has said about this session, rather than what it was when the page opened.
     var current: Status.Session { model.status?.claude.sessions.first { $0.key == session.key } ?? session }
@@ -144,24 +145,24 @@ struct SessionTerminal: View {
         }
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
-    func keyButton(_ k: String, _ label: String) -> some View {
+    func keyButton(_ k: String, _ label: String, _ name: String) -> some View {
         Button { send(["key": k]) } label: {
-            Text(label).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+            Text(label).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
         }
         .font(.subheadline.weight(.semibold))
         .buttonStyle(.bordered)
         .tint(k == "ctrl-c" ? .red : nil)
-        .accessibilityLabel(k == "up" ? "Up" : k == "down" ? "Down" : k == "left" ? "Left" : k == "right" ? "Right" : label)
+        .accessibilityLabel(name)
     }
     // Every key in view at once: one row when there's room, two on the folded screen, so the numbers and Ctrl-C are
     // never cut off when a menu needs them.
     var keyRows: some View {
         VStack(spacing: 6) {
             if width >= 520 {
-                HStack(spacing: 6) { ForEach(Self.keys, id: \.0) { keyButton($0.0, $0.1) } }
+                HStack(spacing: 6) { ForEach(Self.keys, id: \.0) { keyButton($0.0, $0.1, $0.2) } }
             } else {
-                HStack(spacing: 6) { ForEach(Self.keys.prefix(6), id: \.0) { keyButton($0.0, $0.1) } }
-                HStack(spacing: 6) { ForEach(Self.keys.suffix(6), id: \.0) { keyButton($0.0, $0.1) } }
+                HStack(spacing: 6) { ForEach(Self.keys.prefix(6), id: \.0) { keyButton($0.0, $0.1, $0.2) } }
+                HStack(spacing: 6) { ForEach(Self.keys.suffix(6), id: \.0) { keyButton($0.0, $0.1, $0.2) } }
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
@@ -185,15 +186,15 @@ struct SessionTerminal: View {
             .accessibilityLabel("Send")
         }
     }
-    // Under the title: what the session wants, in the app's colour.
+    // Under the title: what the session wants, in the same orange as its row on the Claude tab.
     @ViewBuilder var stateChip: some View {
         if waiting {
             HStack(spacing: 6) {
-                Circle().fill(macBlue).frame(width: 8, height: 8)
-                Text("Waiting for you").font(.footnote.weight(.semibold)).foregroundStyle(macBlue)
+                Circle().fill(Color.orange).frame(width: 8, height: 8)
+                Text("Waiting for you").font(.footnote.weight(.semibold)).foregroundStyle(.orange)
             }
             .padding(.horizontal, 10).padding(.vertical, 4)
-            .background(macBlue.opacity(0.16), in: Capsule())
+            .background(Color.orange.opacity(0.16), in: Capsule())
             .frame(maxWidth: .infinity, alignment: .leading)
             .transition(.opacity)
         }
