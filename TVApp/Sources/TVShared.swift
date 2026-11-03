@@ -50,6 +50,8 @@ enum TVBridge {
     }
     static func url(_ path: String) -> URL? { URL(string: address.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) }
     struct Gone: Error {}
+    // The TV took the stream but the player never got going, even after a second try.
+    struct DidNotStart: Error {}
     @discardableResult
     static func post(_ path: String, _ body: [String: Any] = [:], timeout: TimeInterval = 30) async throws -> Data {
         guard let u = url("/api/tv/" + path), let base = URL(string: address) else { throw URLError(.badURL) }
@@ -58,8 +60,10 @@ enum TVBridge {
         r.setValue("1", forHTTPHeaderField: "x-dash"); r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (d, resp) = try await URLSession.shared.data(for: r)
-        if (resp as? HTTPURLResponse)?.statusCode == 409 { throw Gone() }
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw TVIntentError.noAnswer }
+        let code = (resp as? HTTPURLResponse)?.statusCode
+        if code == 409 { throw Gone() }
+        if code == 422, (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["failed"] as? String == "start" { throw DidNotStart() }
+        guard code == 200 else { throw TVIntentError.noAnswer }
         return d
     }
     static func data(_ url: URL?, timeout: TimeInterval = 8, cached: Bool = false) async -> Data? {
@@ -165,10 +169,9 @@ struct FlickToTV: AppIntent {
             return .result()
         }
         #endif
-        // The AirPlay list comes first; Mint getting ready can catch up behind it.
+        // The AirPlay list comes first. The app brings Mint forward behind it, once it knows AirPlay can reach the TV.
         FlickRequest.wantsAirPlay = true
         NotificationCenter.default.post(name: FlickRequest.airPlay, object: nil)
-        Task { try? await TVBridge.post("music-now") }
         return .result()
     }
 }

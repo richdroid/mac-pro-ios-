@@ -10,7 +10,7 @@ struct MediaItem: Decodable, Identifiable, Hashable {
     var progress: Double?
     var slug: String?
 }
-struct MediaRow: Decodable, Identifiable {
+struct MediaRow: Decodable, Identifiable, Hashable {
     let title: String, items: [MediaItem]
     var id: String { title }
 }
@@ -50,6 +50,12 @@ final class BrowseStore: ObservableObject {
     static func shared(_ source: MediaSource) -> BrowseStore {
         if let s = stores[source] { return s }
         let s = BrowseStore(source); stores[source] = s; return s
+    }
+    // The Watch tab's films and shows, kept for the app's life, so its search and genre are still there when he's back.
+    private static var discovering: [String: BrowseStore] = [:]
+    static func discover(_ type: String) -> BrowseStore {
+        if let s = discovering[type] { return s }
+        let s = BrowseStore(.stremio, base: "/api/tv/discover?type=\(type)"); discovering[type] = s; return s
     }
     private var searching: Task<Void, Never>?
     init(_ source: MediaSource, base: String? = nil) { self.source = source; self.base = base }
@@ -198,7 +204,7 @@ struct BrowseColumn: View {
                 }
                 ForEach(shown) { row in
                     VStack(alignment: .leading, spacing: 0) {
-                        RowHeader(title: row.title) { MediaList(row: row, source: store.source) }.padding(.leading, 20)
+                        RowHeader(title: row.title, route: .media(row, store.source)).padding(.leading, 20)
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 10) {
                                 ForEach(row.items) { item in

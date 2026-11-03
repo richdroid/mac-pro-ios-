@@ -69,7 +69,8 @@ struct DeviceTab: View {
     }
     var hero: some View {
         VStack(spacing: 4) {
-            Art(url: TVBridge.url("/api/tv/device-image")) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
+            // Fades in when it comes, rather than appearing in a frame.
+            Cover(url: TVBridge.url("/api/tv/device-image")) { Color.clear }
                 .frame(height: panes ? 260 : 170)
                 .background(RadialGradient(colors: [.white.opacity(0.16), .clear], center: .center, startRadius: 4, endRadius: 110).frame(width: 240, height: 240))
                 .accessibilityLabel("The TV box and its remote")
@@ -90,7 +91,8 @@ struct DeviceTab: View {
     var waitingTiles: some View {
         Grid(horizontalSpacing: 12, verticalSpacing: 12) {
             ForEach(0..<2, id: \.self) { _ in
-                GridRow { ForEach(0..<2, id: \.self) { _ in RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.08)).frame(height: 128) } }
+                // As wide as the real tiles, so the grid has the same shape before and after.
+                GridRow { ForEach(0..<2, id: \.self) { _ in RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.08)).frame(maxWidth: .infinity).frame(height: 128) } }
             }
         }
         .phaseAnimator([0.5, 1.0]) { c, o in c.opacity(o) } animation: { _ in .easeInOut(duration: 0.9) }
@@ -150,6 +152,7 @@ struct DeviceTab: View {
                     ScrollView {
                         VStack(spacing: 18) { if let info { tiles(info); details(info) } else if !failed { waitingTiles } }.padding(20)
                     }
+                    .backToTop()
                 }
             } else {
                 ScrollView {
@@ -159,6 +162,7 @@ struct DeviceTab: View {
                     }
                     .padding(.horizontal, 16).padding(.bottom, 16)
                 }
+                .backToTop()
             }
         }
         .task(id: phase) {

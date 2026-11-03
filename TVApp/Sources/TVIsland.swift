@@ -21,8 +21,9 @@ enum TVIsland {
     // A stale one still shows, so it counts too; anything past the first is a leftover and is ended.
     static var shown: [Activity<TVIslandAttributes>] { Activity<TVIslandAttributes>.activities.filter { $0.activityState == .active || $0.activityState == .stale } }
     static var live: Activity<TVIslandAttributes>? { shown.first }
-    // With no way to push updates, it can only say when its picture may be out of date.
-    static let staleAfter: TimeInterval = 300
+    // With no way to push updates, it can only say when its picture may be out of date, and soon, as a film can be
+    // paused or stopped from the TV's own remote.
+    static let staleAfter: TimeInterval = 90
 
     static func state(_ s: TVStatus) -> TVIslandAttributes.ContentState? {
         guard s.online, s.airplay?.active != true, let session = s.session, let app = apps[session.pkg] else { return nil }

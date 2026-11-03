@@ -120,7 +120,7 @@ targets:
         CFBundleURLTypes: [{ CFBundleURLName: tvremoteapp, CFBundleURLSchemes: [tvremoteapp] }]
         CADisableMinimumFrameDurationOnPhone: true
         NSSupportsLiveActivities: true
-        NSAppleMusicUsageDescription: Sees which song is playing on this iPhone, so a flick can send it to the TV.
+        NSAppleMusicUsageDescription: Sees the song playing on this iPhone, so you can flick it to the TV and play, pause or skip it from here while it plays there.
         UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:

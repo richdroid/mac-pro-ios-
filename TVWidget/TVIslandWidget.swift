@@ -21,12 +21,14 @@ private struct IslandButton: View {
         .buttonStyle(.plain).foregroundStyle(.white).accessibilityLabel(playing ? "Pause the TV" : "Play the TV")
     }
 }
+// Out of date, only the title is still worth showing: whether it's playing, and which episode, may have changed.
 private struct IslandText: View {
     let state: TVIslandAttributes.ContentState
+    var stale = false
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(state.title).font(.headline).lineLimit(1)
-            Text(state.subtitle == state.title ? state.app : state.subtitle).font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+            if !stale { Text(state.subtitle == state.title ? state.app : state.subtitle).font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1) }
         }
     }
 }
@@ -35,8 +37,8 @@ struct TVIslandWidget: Widget {
         ActivityConfiguration(for: TVIslandAttributes.self) { context in
             HStack(spacing: 12) {
                 Image(systemName: glyph(context.state.app)).font(.title2).foregroundStyle(TVLook.accent)
-                IslandText(state: context.state).frame(maxWidth: .infinity, alignment: .leading).opacity(context.isStale ? 0.55 : 1)
-                IslandButton(playing: context.state.playing)
+                IslandText(state: context.state, stale: context.isStale).frame(maxWidth: .infinity, alignment: .leading).opacity(context.isStale ? 0.55 : 1)
+                if !context.isStale { IslandButton(playing: context.state.playing) }
             }
             .padding(14)
             .foregroundStyle(.white)
@@ -48,17 +50,18 @@ struct TVIslandWidget: Widget {
                     Image(systemName: glyph(context.state.app)).font(.title2).foregroundStyle(TVLook.accent).padding(.leading, 6)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    IslandText(state: context.state).frame(maxWidth: .infinity, alignment: .leading).opacity(context.isStale ? 0.55 : 1)
+                    IslandText(state: context.state, stale: context.isStale).frame(maxWidth: .infinity, alignment: .leading).opacity(context.isStale ? 0.55 : 1)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    IslandButton(playing: context.state.playing)
+                    if !context.isStale { IslandButton(playing: context.state.playing) }
                 }
             } compactLeading: {
                 Image(systemName: glyph(context.state.app)).foregroundStyle(TVLook.accent)
             } compactTrailing: {
-                Image(systemName: context.state.playing ? "pause.fill" : "play.fill").foregroundStyle(.white)
+                // A play state that may be out of date isn't shown.
+                if !context.isStale { Image(systemName: context.state.playing ? "pause.fill" : "play.fill").foregroundStyle(.white) }
             } minimal: {
-                Image(systemName: context.state.playing ? glyph(context.state.app) : "pause.fill").foregroundStyle(TVLook.accent)
+                Image(systemName: context.state.playing || context.isStale ? glyph(context.state.app) : "pause.fill").foregroundStyle(TVLook.accent)
             }
             .widgetURL(URL(string: "tvremoteapp://tab/2"))
         }

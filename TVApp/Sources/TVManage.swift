@@ -45,12 +45,13 @@ final class ManageStore: ObservableObject {
     }
 }
 
+// The pages opened from Settings, as values, so tapping the tab again can close them.
+enum ManagePage: Hashable { case apps, settings }
 struct TVManageSections: View {
-    @StateObject private var store = ManageStore()
     var body: some View {
         Section {
-            NavigationLink { ManageAppsView(store: store) } label: { Label("Apps on the TV", systemImage: "square.grid.2x2") }
-            NavigationLink { ManageSettingsView(store: store) } label: { Label("TV settings", systemImage: "slider.horizontal.3") }
+            NavigationLink(value: ManagePage.apps) { Label("Apps on the TV", systemImage: "square.grid.2x2") }.id(ManagePage.apps)
+            NavigationLink(value: ManagePage.settings) { Label("TV settings", systemImage: "slider.horizontal.3") }
         } footer: { Text("These work anywhere with Tailscale on, as long as the Mac is awake and can reach the TV.") }
     }
 }

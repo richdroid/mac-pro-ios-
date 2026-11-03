@@ -10,6 +10,9 @@ struct Film: Identifiable, Hashable {
 @MainActor
 final class TVModel: ObservableObject {
     @Published var status: TVStatus?
+    // True until the first answer since launch. Until then the status is the one kept from last time: good for laying
+    // out the pages, but not for saying what's playing, where it's got to, or whether it's paused.
+    @Published var staleStatus = true
     let mirrorStore = MirrorStore()
     @Published var mirrorLive = false
     @Published var reachable = true
@@ -56,6 +59,8 @@ final class TVModel: ObservableObject {
         guard let s = status?.session, s.pkg != "com.codex.musicwebtv" else { return false }
         return s.playing || nowMusic == nil || s.pkg == status?.app
     }
+    // A film playing, which the TV's screenshot leaves black: it never captures protected video.
+    var filmOnScreen: Bool { !staleStatus && videoIsCurrent && status?.session?.playing == true }
     @Published var browsing: MediaSource?
     @Published var toast: String?
     @Published var filmsNote: String? = "Loading your films…"
@@ -94,6 +99,8 @@ final class TVModel: ObservableObject {
                 while !Task.isCancelled {
                     if let self, self.mirrorLive {
                         if Date().timeIntervalSince(self.lastTouch) > 60 { self.mirrorLive = false }
+                        // The film's poster stands in for it, and a frame from before it started mustn't show after.
+                        else if self.filmOnScreen { if self.mirrorStore.image != nil { self.mirrorStore.image = nil } }
                         else { await self.loadMirror() }
                     }
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -112,6 +119,9 @@ final class TVModel: ObservableObject {
         await TVIsland.sync(s)
         #endif
         if s != status { status = s; if s.online { try? d.write(to: Self.cacheFile, options: .atomic) } }
+        if staleStatus { staleStatus = false }
+        PhonePlayer.shared.follow(s)
+        NextUp.shared.follow(s)
     }
     func setMirror(_ on: Bool) {
         lastTouch = Date()
@@ -196,6 +206,21 @@ final class TVModel: ObservableObject {
             mirrorSoon = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 if !Task.isCancelled { await self?.loadMirror() }
+            }
+        }
+    }
+    // Typing into the TV: what was deleted, then what was added, in order with the keys around it. Nothing is dropped
+    // for being late, or the box on the TV would end up different from the field on the phone.
+    func type(deleting n: Int, adding text: String) {
+        lastKeyAt = Date(); lastTouch = Date()
+        let sends = Array(repeating: request("key", ["key": "del"]), count: n) + [text.isEmpty ? nil : request("text", ["text": text])]
+        let before = keyChain
+        keyChain = Task { [weak self] in
+            await before?.value
+            for case var r? in sends {
+                r.timeoutInterval = 6
+                let result = try? await URLSession.shared.data(for: r)
+                if (result?.1 as? HTTPURLResponse)?.statusCode != 200 { self?.say("The TV didn’t get that"); return }
             }
         }
     }

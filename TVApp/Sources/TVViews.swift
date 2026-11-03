@@ -52,21 +52,22 @@ struct RootView: View {
     var body: some View {
         PaneReader {
             TabView(selection: TabReset.binding($model.tab) { t in
-                // Back to the tab's own start: anything opened on it closes, and it's rebuilt at the top.
+                // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
+                // rebuilt, so what was loaded, and the choices made on it, stay.
                 if t == 1 { model.browsing = nil; SendDraft.shared.text = "" }
                 resets[t, default: 0] += 1
             }) {
-                Tab(value: 0) { Page(title: "Remote", alwaysInline: true) { RemoteTab() }.id(resets[0, default: 0]) } label: { tabLabel("Remote", "av.remote") }
-                Tab(value: 1) { Page(title: "Apps") { AppsTab() }.id(resets[1, default: 0]) } label: { tabLabel("Apps", "square.grid.2x2") }
-                Tab(value: 2) { Page(title: "Playing", alwaysInline: true) { PlayingTab() }.id(resets[2, default: 0]) } label: {
+                Tab(value: 0) { Page(title: "Remote", alwaysInline: true, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
+                Tab(value: 1) { Page(title: "Apps", retaps: resets[1, default: 0]) { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
+                Tab(value: 2) { Page(title: "Playing", alwaysInline: true, retaps: resets[2, default: 0]) { PlayingTab() } } label: {
                     // The cover of what's on, so the button says what's playing before it's pressed.
                     if let i = playingIcon { Label { Text("Playing") } icon: { Image(tv: i) } }
                     else { tabLabel("Playing", model.otherAirPlay ? "airplayaudio" : "play.circle") }
                 }
-                Tab(value: 3) { Page(title: "Watch") { FilmsTab() }.id(resets[3, default: 0]) } label: { tabLabel("Watch", "film") }
-                Tab(value: 5) { Page(title: "Status") { DeviceTab() }.id(resets[5, default: 0]) } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
+                Tab(value: 3) { Page(title: "Watch", retaps: resets[3, default: 0]) { FilmsTab() } } label: { tabLabel("Watch", "film") }
+                Tab(value: 5) { Page(title: "Status", retaps: resets[5, default: 0]) { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
                 // Last, so it sits at the foot of the side bar, as in the other apps.
-                Tab(value: 9) { TVSettingsTab().id(resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
+                Tab(value: 9) { TVSettingsTab(retaps: resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
             }
             .onChange(of: model.tab) { _, t in
                 UserDefaults.standard.set(t, forKey: "tab")
@@ -118,15 +119,23 @@ struct Page<C: View>: View {
     @Environment(\.paneLayout) private var panes
     let title: String
     var alwaysInline = false
+    // Taps on this tab's button while it's already showing.
+    var retaps = 0
     @ViewBuilder let content: () -> C
+    @State private var path = NavigationPath()
+    @State private var top = 0
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             content()
+                .environment(\.backToTop, top)
+                .navigationDestination(for: RowRoute.self) { $0.page }
                 .background { Ambience() }
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(alwaysInline || panes ? .inline : .large)
         }
+        // A list opened from the tab closes first; once on the tab's own page, it goes to the top.
+        .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
     }
 }
 
@@ -134,7 +143,10 @@ struct Page<C: View>: View {
 struct TVSettingsTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.paneLayout) private var panes
+    var retaps = 0
     @State private var address = ""
+    @State private var path: [ManagePage] = []
+    @StateObject private var store = ManageStore()
     var manage: some View { TVManageSections() }
     // How the app reaches the TV, and the launcher's own two jobs. The note about Tailscale is under the TV's sections.
     @ViewBuilder var connection: some View {
@@ -149,13 +161,25 @@ struct TVSettingsTab: View {
         }
     }
     var body: some View {
-        NavigationStack {
-            Group {
-                // Unfolded, one list each side of the fold rather than one list across it.
-                if panes {
-                    FoldSplit { Form { manage }.scrollContentBackground(.hidden) } right: { Form { connection }.scrollContentBackground(.hidden) }
-                } else {
-                    Form { manage; connection }.scrollContentBackground(.hidden)
+        NavigationStack(path: $path) {
+            ScrollViewReader { proxy in
+                Group {
+                    // Unfolded, one list each side of the fold rather than one list across it.
+                    if panes {
+                        FoldSplit { Form { manage }.scrollContentBackground(.hidden) } right: { Form { connection }.scrollContentBackground(.hidden) }
+                    } else {
+                        Form { manage; connection }.scrollContentBackground(.hidden)
+                    }
+                }
+                // Tapping the tab again: out of a page opened from here, else back to the top.
+                .onChange(of: retaps) { _, _ in
+                    if path.isEmpty { withAnimation(.snappy) { proxy.scrollTo(ManagePage.apps, anchor: .top) } } else { path = [] }
+                }
+            }
+            .navigationDestination(for: ManagePage.self) { page in
+                switch page {
+                case .apps: ManageAppsView(store: store)
+                case .settings: ManageSettingsView(store: store)
                 }
             }
             .background { Ambience() }
@@ -216,11 +240,11 @@ struct RowTitle: View {
 }
 
 // A row's heading: tap it to see everything in that row as one scrolling list.
-struct RowHeader<Destination: View>: View {
+struct RowHeader: View {
     let title: String
-    @ViewBuilder let destination: () -> Destination
+    let route: RowRoute
     var body: some View {
-        NavigationLink { destination() } label: {
+        NavigationLink(value: route) {
             HStack(spacing: 5) {
                 Text(title).font(.title3.weight(.bold))
                 Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
@@ -254,17 +278,26 @@ struct MirrorView: View {
     @ObservedObject var store: MirrorStore
     // Where it always has its place, it carries its own way to hide it, and the bar has no second one.
     var closable = false
+    // The screenshot leaves a playing film black, so its poster stands in, sat on a blurred copy of itself.
+    var film: URL? {
+        guard model.mirrorLive, model.filmOnScreen, let s = model.status?.session else { return nil }
+        return model.picture(for: s).flatMap(URL.init(string:))
+    }
     var body: some View {
         ZStack {
             Color.black.opacity(0.35)
-            if let m = store.image, model.mirrorLive {
+            if let film {
+                ZStack {
+                    Color.clear.overlay { Art(url: film) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
+                        .clipped().blur(radius: 24).opacity(0.7)
+                    Art(url: film) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
+                        .padding(14)
+                }
+                .transition(.opacity)
+            } else if let m = store.image, model.mirrorLive {
                 Image(tv: m).resizable().scaledToFit()
-                    .overlay(alignment: .topTrailing) {
-                        if closable {
-                            Button { model.setMirror(false) } label: { Image(systemName: "eye.slash").font(.system(size: 15, weight: .semibold)).frame(width: 40, height: 40).contentShape(Circle()) }
-                                .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).padding(10).accessibilityLabel("Hide the TV’s screen")
-                        }
-                    }
             } else if !model.mirrorLive {
                 Button { model.setMirror(true) } label: {
                     Label("Show the TV’s screen", systemImage: "eye").font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 11)
@@ -275,7 +308,14 @@ struct MirrorView: View {
             }
         }
         .aspectRatio(16.0 / 9, contentMode: .fit)
+        .overlay(alignment: .topTrailing) {
+            if closable, model.mirrorLive, film != nil || store.image != nil {
+                Button { model.setMirror(false) } label: { Image(systemName: "eye.slash").font(.system(size: 15, weight: .semibold)).frame(width: 40, height: 40).contentShape(Circle()) }
+                    .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).padding(10).accessibilityLabel("Hide the TV’s screen")
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
+        .animation(.easeInOut(duration: 0.25), value: film)
     }
 }
 
@@ -387,8 +427,10 @@ struct PlayKey: View {
     var playing: Bool?
     var tint: Color = TVLook.accent
     var size: CGFloat = 68
+    // For a player on this phone rather than the TV.
+    var action: (() -> Void)?
     var body: some View {
-        Button { model.key("play") } label: {
+        Button { if let action { model.tick(); action() } else { model.key("play") } } label: {
             Image(systemName: playing == nil ? "playpause.fill" : playing == true ? "pause.fill" : "play.fill")
                 .font(.system(size: size * 0.36, weight: .semibold)).foregroundStyle(.black.opacity(0.85))
                 .contentTransition(.symbolEffect(.replace))
@@ -403,10 +445,10 @@ struct RemoteTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.horizontalSizeClass) private var size
     @Environment(\.paneLayout) private var panes
+    @ObservedObject private var nextUp = NextUp.shared
     @State private var typing = false
-    @State private var text = ""
     var state: String {
-        guard let s = model.status, s.online else { return "Connecting…" }
+        guard !model.staleStatus, let s = model.status, s.online else { return "Connecting…" }
         return s.screen == "asleep" ? "Asleep. Press anything to wake it." : s.screen == "screensaver" ? "Screensaver" : "On " + (s.apps?.first { $0.pkg == s.app }?.name ?? "Home")
     }
     var keys: some View {
@@ -416,19 +458,45 @@ struct RemoteTab: View {
                 GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep"); Spacer()
                 GlassKey(icon: "chevron.left", label: "Back", key: "back"); Spacer()
                 GlassKey(icon: "house.fill", label: "Home", key: "home"); Spacer()
-                Button { typing = true } label: { Image(systemName: "keyboard").font(.system(size: 19, weight: .medium)).frame(width: 54, height: 54).contentShape(Circle()) }
-                    .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel("Type on TV")
+                // Lit while the typing bar is up, and closes it again.
+                Button { model.tick(); withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { typing.toggle() } } label: {
+                    Image(systemName: "keyboard").font(.system(size: 19, weight: .medium)).foregroundStyle(typing ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.primary))
+                        .frame(width: 54, height: 54).contentShape(Circle())
+                }
+                .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(typing ? "Stop typing" : "Type on TV")
                 Spacer()
                 GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu")
             }
-            HStack {
-                GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: 50); Spacer()
-                GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: 50); Spacer()
-                PlayKey(); Spacer()
-                GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: 50); Spacer()
-                GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: 50)
-            }
+            transport
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
+        }
+    }
+    // Stremio's player ignores the media keys, so with it open the jumps go through its seek bar, there's no going back a
+    // track, and next is the next episode when there is one. Every key keeps its place, so nothing shifts as it changes.
+    @ViewBuilder var transport: some View {
+        let stremio = model.status?.session?.pkg == "com.stremio.one"
+        HStack {
+            if stremio { Color.clear.frame(width: 50, height: 50) } else { GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: 50) }
+            Spacer()
+            if stremio { SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1, size: 50) } else { GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: 50) }
+            Spacer()
+            PlayKey()
+            Spacer()
+            if stremio { SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1, size: 50) } else { GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: 50) }
+            Spacer()
+            if !stremio { GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: 50) }
+            else if let next = nextUp.next {
+                GlassButton(icon: "forward.end.fill", label: "Next episode, \(next.subtitle)", size: 50) {
+                    model.flick(FlickTarget(item: next, source: .stremio, ready: true, autoplay: true))
+                }
+            } else { Color.clear.frame(width: 50, height: 50) }
+        }
+    }
+    var keysBlock: some View {
+        VStack(spacing: 12) {
+            // Above the keys, and up for as long as it's wanted, so typing and moving between boxes go together.
+            if typing { TypeBar(open: $typing).transition(.move(edge: .bottom).combined(with: .opacity)) }
+            keys
         }
     }
     func side(apps: Bool) -> some View {
@@ -448,14 +516,14 @@ struct RemoteTab: View {
                     // The apps come along when there's room, and step aside when held in portrait.
                     side(apps: panes)
                 } right: {
-                    VStack(spacing: 14) { DPad().frame(maxHeight: .infinity); keys }.padding(.horizontal, 20).padding(.bottom, 16)
+                    VStack(spacing: 14) { DPad().frame(maxHeight: .infinity); keysBlock }.padding(.horizontal, 20).padding(.bottom, 16)
                 }
             } else {
                 // Folded, the pad gets the room until the screen is asked for.
                 VStack(spacing: 14) {
                     if model.mirrorLive { MirrorView(store: model.mirrorStore) }
                     DPad().frame(minHeight: 150, maxHeight: .infinity)
-                    keys
+                    keysBlock
                 }
                 .padding(.horizontal, 14).padding(.bottom, 12)
             }
@@ -470,12 +538,62 @@ struct RemoteTab: View {
             }
         }
         .onDisappear { model.mirrorLive = false }
-        .alert("Type on TV", isPresented: $typing) {
-            TextField("Text", text: $text)
-            Button("Send") { model.post("text", ["text": text]); text = "" }
-            Button("Delete") { model.key("del") }
-            Button("Cancel", role: .cancel) { text = "" }
-        } message: { Text("Goes into the box that’s focused on the TV. Not for passwords.") }
+    }
+}
+
+// Typing into whatever box is focused on the TV. Each change sends only what's different: new letters as text, and as
+// many deletes as letters went. Return is the TV's Enter, and starts afresh for the next box.
+struct TypeBar: View {
+    @EnvironmentObject var model: TVModel
+    @Binding var open: Bool
+    @State private var text = ""
+    // What the TV's box has been sent so far.
+    @State private var sent = ""
+    @State private var soon: Task<Void, Never>?
+    @FocusState private var focused: Bool
+    // Only what the TV can type: the bridge drops anything else, so it mustn't count here either.
+    static func clean(_ s: String) -> String {
+        String(s.replacingOccurrences(of: "‘", with: "'").replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: "“", with: "\"").replacingOccurrences(of: "”", with: "\"")
+            .unicodeScalars.filter { $0.value >= 0x20 && $0.value <= 0x7e }.map(Character.init))
+    }
+    func sync() {
+        soon?.cancel(); soon = nil
+        let now = Self.clean(text)
+        guard now != sent else { return }
+        let same = zip(sent, now).prefix { $0 == $1 }.count
+        model.type(deleting: sent.count - same, adding: String(now.dropFirst(same)))
+        sent = now
+    }
+    var body: some View {
+        HStack(spacing: 4) {
+            TextField("Type on the TV", text: $text)
+                .focused($focused).autocorrectionDisabled().textInputAutocapitalization(.never).submitLabel(.return)
+                .padding(.leading, 18)
+                // A short wait gathers fast typing into one send.
+                .onChange(of: text) { _, _ in
+                    soon?.cancel()
+                    soon = Task { try? await Task.sleep(nanoseconds: 150_000_000); if !Task.isCancelled { sync() } }
+                }
+                .onSubmit {
+                    sync(); model.key("enter")
+                    text = ""; sent = ""
+                    // Return would put the keyboard away; the bar is for one box after another.
+                    Task { focused = true }
+                }
+            // Deletes on the TV even what was typed there before this bar.
+            Button {
+                if text.isEmpty { model.key("del") } else { text.removeLast() }
+            } label: { Image(systemName: "delete.left").font(.system(size: 17, weight: .medium)).frame(width: 44, height: 44).contentShape(Rectangle()) }
+                .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Delete on TV")
+            Button { sync(); withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { open = false } } label: {
+                Image(systemName: "keyboard.chevron.compact.down").font(.system(size: 17, weight: .medium)).frame(width: 44, height: 44).contentShape(Rectangle())
+            }
+                .buttonStyle(.plain).foregroundStyle(.secondary).padding(.trailing, 4).accessibilityLabel("Stop typing")
+        }
+        .frame(height: 50)
+        .glassEffect(.regular, in: Capsule())
+        .onAppear { focused = true }
+        .onDisappear { sync() }
     }
 }
 struct QuickApps: View {
@@ -491,21 +609,25 @@ struct QuickApps: View {
 }
 struct MiniPlayer: View {
     @EnvironmentObject var model: TVModel
+    @ObservedObject private var phone = PhonePlayer.shared
     let music: TVStatus.Music
+    // AirPlayed from this phone, the phone's own player says what it is and takes the press, ahead of the TV.
+    var song: PhonePlayer.Song? { phone.drives ? phone.song : nil }
     var body: some View {
         HStack(spacing: 12) {
             Button { model.tab = 2 } label: {
                 HStack(spacing: 12) {
-                    Art(url: URL(string: music.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
+                    Cover(url: URL(string: music.art), image: song == nil ? nil : phone.art, key: song.map { "phone \($0.id)" }, mode: .fill) { Color.white.opacity(0.1) }
                         .frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(music.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Text(music.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                        Text(song?.title ?? music.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text(song?.artist ?? music.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }.contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("Now playing: \(music.title)")
-            PlayKey(playing: music.playing, size: 44)
+            }.buttonStyle(.plain).accessibilityLabel("Now playing: \(song?.title ?? music.title)")
+            if song != nil { PlayKey(playing: phone.playing, size: 44) { phone.toggle() } }
+            else { PlayKey(playing: model.staleStatus ? nil : music.playing, size: 44) }
         }
         .padding(10).tvCard()
     }
@@ -597,7 +719,7 @@ struct AppsTab: View {
     }
     @ViewBuilder var content: some View {
         if all.isEmpty {
-            ScrollView { VStack(alignment: .leading, spacing: 24) { SendBar().padding(.horizontal, 20); waiting }.padding(.vertical, 12) }
+            ScrollView { VStack(alignment: .leading, spacing: 24) { SendBar().padding(.horizontal, 20); waiting }.padding(.vertical, 12) }.backToTop()
         } else if panes {
             FoldSplit {
                 ScrollView {
@@ -610,6 +732,7 @@ struct AppsTab: View {
                         }
                     }.padding(.vertical, 12)
                 }
+                .backToTop()
             } right: {
                 // Unfolded, the other side picks up where you left off, ready to flick.
                 ScrollView {
@@ -618,6 +741,7 @@ struct AppsTab: View {
                         Shelf(source: .mint, title: "Recently played")
                     }.padding(.vertical, 12)
                 }
+                .backToTop()
             }
         } else {
             ScrollView {
@@ -633,34 +757,36 @@ struct AppsTab: View {
                 }.padding(.vertical, 12)
                 .animation(.snappy, value: query == nil)
             }
+            .backToTop()
         }
     }
 }
 
-// Ten seconds back or on in Stremio. It takes the TV a few seconds, so it shows it's working and takes no second tap
-// until the first has landed, which would otherwise jump twice.
+// Ten seconds back or on in Stremio. Taps add up while the TV catches up: the button in the direction it's going shows
+// how far, in seconds, until the TV's own report has it.
 struct SeekButton: View {
     @EnvironmentObject var model: TVModel
-    let icon: String, label: String, forward: Bool
-    @State private var working = false
+    @ObservedObject private var seeker = SeekQueue.shared
+    let icon: String, label: String, step: Int
+    var size: CGFloat = 56
     var body: some View {
-        Button {
-            guard !working else { return }
-            model.tick(); working = true
-            Task {
-                do { try await TVBridge.post("player-seek", ["forward": forward], timeout: 30); await model.load() }
-                catch { model.say("Couldn’t move it") }
-                working = false
-            }
-        } label: {
+        let net = Int(seeker.offset(for: model.status?.session) / 1000)
+        let mine = step > 0 ? net > 0 : net < 0
+        Button { seeker.add(step, for: model.status?.session, model: model) } label: {
             ZStack {
-                Image(systemName: icon).font(.system(size: 22, weight: .medium)).opacity(working ? 0.25 : 1)
-                if working { ProgressView().controlSize(.small) }
+                if mine {
+                    Text((net > 0 ? "+" : "−") + "\(abs(net))").font(.system(size: size * 0.3, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(TVLook.accent).contentTransition(.numericText(value: Double(net)))
+                        .transition(.opacity)
+                } else {
+                    Image(systemName: icon).font(.system(size: size * 0.39, weight: .medium)).transition(.opacity)
+                }
             }
-            .frame(width: 56, height: 56).contentShape(Circle())
+            .frame(width: size, height: size).contentShape(Circle())
         }
         .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
-        .animation(.easeOut(duration: 0.15), value: working)
+        .accessibilityValue(mine ? "\(abs(net)) seconds" : "")
+        .animation(.snappy(duration: 0.2), value: net)
     }
 }
 
@@ -676,7 +802,7 @@ struct Shelf: View {
         VStack(alignment: .leading, spacing: 0) {
             if let row, !row.items.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
-                    RowHeader(title: title) { MediaList(row: row, source: store.source) }.padding(.leading, 20)
+                    RowHeader(title: title, route: .media(row, store.source)).padding(.leading, 20)
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 10) {
                             ForEach(row.items) { item in
@@ -721,6 +847,8 @@ struct RoutePicker: UIViewRepresentable {
 // Anything else opens the AirPlay list, since iOS lets only the owner of the phone choose a route.
 struct FlickCard: View {
     @EnvironmentObject var model: TVModel
+    // Away from home there's nothing to AirPlay to, so AirPlay isn't offered. Sending a song by name still is.
+    @ObservedObject private var reach = AirPlayReach.shared
     @State private var title = ""
     @State private var artist = ""
     @State private var art: Image?
@@ -746,6 +874,9 @@ struct FlickCard: View {
         FlickRequest.wantsAirPlay = false
         Task {
             try? await Task.sleep(nanoseconds: 500_000_000)
+            guard await AirPlayReach.shared.check() else { model.say("AirPlay can’t see the TV from here. It needs home Wi-Fi."); return }
+            // Mint comes to the front, ready to receive, while the list opens.
+            model.post("music-now")
             if !RoutePicker.open() { showPicker = true }
         }
     }
@@ -760,7 +891,7 @@ struct FlickCard: View {
                 item: MediaItem(title: title, subtitle: artist, art: "", id: "", kind: "song"), source: .mint, image: art,
                 send: ("flick", ["title": title, "artist": artist]),
                 sent: { MPMusicPlayerController.systemMusicPlayer.pause() }))
-        } else {
+        } else if reach.inReach {
             // Mint comes to the front first, ready to receive.
             model.post("music-now")
             if RoutePicker.open() { model.say("Choose Mint Music") } else { showPicker = true }
@@ -788,11 +919,13 @@ struct FlickCard: View {
         }
         .onAppear {
             refresh()
+            reach.begin()
             #if os(iOS)
             MPMusicPlayerController.systemMusicPlayer.beginGeneratingPlaybackNotifications()
             openAirPlayIfAsked()
             #endif
         }
+        .onDisappear { reach.end() }
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in openAirPlayIfAsked() }
         .onChange(of: model.tab) { _, _ in openAirPlayIfAsked() }
@@ -802,6 +935,7 @@ struct FlickCard: View {
         .alert("AirPlay to the TV", isPresented: $showPicker) { Button("OK", role: .cancel) {} } message: { Text("Tap the AirPlay button on this card and choose Mint Music. AirPlay only reaches the TV on home Wi-Fi.") }
         #endif
         .animation(.snappy, value: alreadyThere)
+        .animation(.snappy, value: reach.inReach)
     }
     var card: some View {
         HStack(spacing: 12) {
@@ -819,7 +953,7 @@ struct FlickCard: View {
             Button(action: flick) { Image(systemName: "arrow.up.circle.fill").font(.title2).frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Send to the TV")
             #if os(iOS)
-            RoutePicker().frame(width: 44, height: 44).accessibilityLabel("AirPlay")
+            if reach.inReach { RoutePicker().frame(width: 44, height: 44).accessibilityLabel("AirPlay").transition(.opacity) }
             #endif
         }
         .padding(12)
@@ -834,11 +968,44 @@ struct NowControls: View {
     static func clock(_ ms: Double) -> String { let t = Int(max(ms, 0) / 1000); return String(format: "%d:%02d", t / 60, t % 60) }
     var body: some View {
         VStack(spacing: 14) {
-            if music.duration > 0 { MusicProgress(music: music) }
+            // The bar keeps its place before there's anything true to show on it.
+            if music.duration > 0 && !model.staleStatus { MusicProgress(music: music) } else { ProgressPlaceholder() }
             HStack(spacing: 26) {
                 GlassKey(icon: "backward.fill", label: "Previous", key: "previous", size: 54)
-                PlayKey(playing: music.playing, tint: .white, size: 74)
+                PlayKey(playing: model.staleStatus ? nil : music.playing, tint: .white, size: 74)
                 GlassKey(icon: "forward.fill", label: "Next", key: "next", size: 54)
+            }
+        }
+    }
+}
+// The song this phone is AirPlaying to the TV, driven through the phone's own player: it answers at once, and can be
+// moved, which Mint's report of it can't.
+struct PhoneControls: View {
+    @ObservedObject private var phone = PhonePlayer.shared
+    @State private var scrub: Double?
+    let song: PhonePlayer.Song
+    var body: some View {
+        VStack(spacing: 14) {
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                let now = min(max(scrub ?? phone.position, 0), song.duration)
+                VStack(spacing: 6) {
+                    ScrubBar(value: now, total: song.duration, scrub: $scrub, tickEvery: 10) { phone.seek(to: $0) }
+                    HStack {
+                        Text(NowControls.clock(now * 1000))
+                        Spacer()
+                        Text("-" + NowControls.clock((song.duration - now) * 1000))
+                    }
+                    .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Position")
+                .accessibilityValue("\(NowControls.clock(now * 1000)) of \(NowControls.clock(song.duration * 1000))")
+                .accessibilityAdjustableAction { dir in phone.seek(to: max(0, min(song.duration, now + (dir == .increment ? 15 : -15)))) }
+            }
+            HStack(spacing: 26) {
+                GlassButton(icon: "backward.fill", label: "Previous", size: 54) { phone.previous() }
+                PlayKey(playing: phone.playing, tint: .white, size: 74) { phone.toggle() }
+                GlassButton(icon: "forward.fill", label: "Next", size: 54) { phone.next() }
             }
         }
     }
@@ -865,16 +1032,16 @@ struct MusicProgress: View {
         .accessibilityValue("\(NowControls.clock(music.position)) of \(NowControls.clock(music.duration))")
     }
 }
-// The bar itself, for songs and films alike.
+// The bar itself, for songs and films alike. With nothing to show yet, just the empty track.
 struct ProgressTrack: View {
-    let fraction: Double
+    let fraction: Double?
     var thick: CGFloat = 6
     var fill: AnyShapeStyle = AnyShapeStyle(TVLook.accent)
     var body: some View {
         GeometryReader { g in
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(0.18)).frame(height: thick)
-                Capsule().fill(fill).frame(width: max(thick, g.size.width * min(1, max(0, fraction))), height: thick)
+                if let fraction { Capsule().fill(fill).frame(width: max(thick, g.size.width * min(1, max(0, fraction))), height: thick) }
             }
             .frame(maxHeight: .infinity)
         }
@@ -883,11 +1050,20 @@ struct ProgressTrack: View {
 struct PlayingTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.paneLayout) private var panes
+    @ObservedObject private var phone = PhonePlayer.shared
+    @ObservedObject private var nextUp = NextUp.shared
     @State private var query = ""
     @State private var kind = "song"
+    // What Mint finds as he types, the same search as the Apps page's.
+    @StateObject private var found = BrowseStore(.mint)
+    // A play asked for and not yet showing on the TV.
+    @State private var pending = false
+    @State private var pendingWait: Task<Void, Never>?
     // Never Mint's last song while the phone plays something else of its own.
     var music: TVStatus.Music? { model.nowMusic }
     var otherAppIsActive: Bool { model.videoIsCurrent }
+    // Kept from the last time the app was open, until the TV says what's on now: shown, but not as live.
+    var stale: Bool { model.staleStatus }
     var now: some View {
         VStack(spacing: 14) {
             // Sound from the phone that isn't music: not Mint's, whatever Mint last played.
@@ -895,52 +1071,62 @@ struct PlayingTab: View {
                 Image(systemName: a.handoff == "youtube" ? "play.rectangle.fill" : "iphone").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent).padding(.top, 24)
                 Text(a.title?.isEmpty == false ? a.title! : "From this iPhone").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                 Text(a.handoff == "youtube" ? "Opened in YouTube on the TV" : a.title?.isEmpty == false ? "Playing from this iPhone" : "AirPlay").font(.subheadline).foregroundStyle(.secondary)
+            } else if phone.drives, let song = phone.song, !otherAppIsActive {
+                cover(Cover(url: nil, image: phone.art, key: "phone \(song.id)") { Color.white.opacity(0.08) })
+                titles(song.title, [song.artist, song.album])
+                PhoneControls(song: song)
+                showOnTV
             } else if let m = music, !otherAppIsActive {
-                Art(url: URL(string: m.art)) { i in i.resizable().scaledToFit() } placeholder: { Color.white.opacity(0.08) }
-                    .aspectRatio(1, contentMode: .fit).frame(maxWidth: panes ? 300 : 180)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)
-                VStack(spacing: 3) {
-                    Text(m.title).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
-                    Text([m.artist, m.album].filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                }
+                cover(Cover(url: URL(string: m.art)) { Color.white.opacity(0.08) }.opacity(stale ? 0.45 : 1))
+                titles(m.title, [m.artist, m.album])
                 NowControls(music: m)
-                // Only when Mint isn't already the app on the TV's screen.
-                if model.status?.app != "com.codex.musicwebtv" {
-                    Button { model.tick(); model.post("music-now") } label: { Label("Show on TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-                }
+                showOnTV
             } else if let s = model.status?.session {
                 let appName = model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg
+                let stremio = s.pkg == "com.stremio.one"
                 // What was flicked, or the app's own banner when the app says nothing about what it's playing.
-                Art(url: model.picture(for: s).flatMap(URL.init(string:))) { $0.resizable().scaledToFit() } placeholder: {
+                Cover(url: model.picture(for: s).flatMap(URL.init(string:))) {
                     Image(systemName: "play.tv.fill").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent)
                 }
                 .frame(maxWidth: 300, maxHeight: 190)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
+                .opacity(stale ? 0.45 : 1)
                 .padding(.top, 20)
-                // The series, then the episode under it, then where it's playing and whether it's paused.
+                // The series, then the episode under it, then where it's playing and, once that's known, whether it's paused.
                 VStack(spacing: 3) {
                     Text(s.description.first ?? appName).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                     if s.description.count > 1 { Text(s.description[1]).font(.headline).foregroundStyle(.white.opacity(0.85)).lineLimit(2).multilineTextAlignment(.center) }
-                    Text("\(appName) · \(s.playing ? "Playing" : "Paused")").font(.subheadline).foregroundStyle(.secondary).contentTransition(.opacity)
+                    Text(stale ? appName : "\(appName) · \(s.playing ? "Playing" : "Paused")").font(.subheadline).foregroundStyle(.secondary).contentTransition(.opacity)
                 }
-                if s.position != nil { VideoProgress(session: s).padding(.horizontal, 4) }
+                // Stremio's runs and can be moved, so its place is kept even before the running time is in.
+                if s.position != nil || stremio { VideoProgress(session: s, live: !stale).padding(.horizontal, 4) }
                 HStack(spacing: 18) {
-                    if s.pkg == "com.stremio.one" {
+                    if stremio {
                         // Its player ignores the skip keys, so the bridge moves its seek bar instead.
-                        seekButton("gobackward.10", "Back 10 seconds", forward: false)
-                        PlayKey(playing: s.playing, tint: .white, size: 74)
-                        seekButton("goforward.10", "Forward 10 seconds", forward: true)
+                        SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1)
+                        PlayKey(playing: stale ? nil : s.playing, tint: .white, size: 74)
+                        SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1)
                     } else {
                         GlassKey(icon: "gobackward.10", label: "Back 10 seconds", key: "rewind", size: 56)
-                        PlayKey(playing: s.playing, tint: .white, size: 74)
+                        PlayKey(playing: stale ? nil : s.playing, tint: .white, size: 74)
                         GlassKey(icon: "goforward.10", label: "Forward 10 seconds", key: "forward", size: 56)
                     }
                 }
                 .padding(.top, 6)
-                // Stremio's own menus can't be driven from here without risking a restart, so only other apps get these keys.
-                if s.pkg != "com.stremio.one" {
-                    HStack(spacing: 18) {
+                HStack(spacing: 18) {
+                    // Back closes Stremio's player and it keeps his place; anything else gets the stop key.
+                    GlassButton(icon: "stop.fill", label: "Stop", size: 50) {
+                        model.key(stremio ? "back" : "stop")
+                        Task { try? await Task.sleep(nanoseconds: 1_200_000_000); await model.load() }
+                    }
+                    if stremio, let next = nextUp.next {
+                        GlassButton(icon: "forward.end.fill", label: "Next episode, \(next.subtitle)", size: 50) {
+                            model.flick(FlickTarget(item: next, source: .stremio, ready: true, autoplay: true))
+                        }
+                    }
+                    // Stremio's own menus can't be driven from here without risking a restart, so only other apps get these keys.
+                    if !stremio {
                         GlassKey(icon: "captions.bubble", label: "Subtitles", key: "captions", size: 50)
                         GlassKey(icon: "waveform", label: "Audio track", key: "audiotrack", size: 50)
                     }
@@ -951,13 +1137,48 @@ struct PlayingTab: View {
         }
         .frame(maxWidth: .infinity)
     }
-    func seekButton(_ icon: String, _ label: String, forward: Bool) -> some View {
-        SeekButton(icon: icon, label: label, forward: forward)
+    func cover(_ c: some View) -> some View {
+        c.aspectRatio(1, contentMode: .fit).frame(maxWidth: panes ? 300 : 180)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)
+    }
+    func titles(_ title: String, _ more: [String]) -> some View {
+        VStack(spacing: 3) {
+            Text(title).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
+            Text(more.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .contentTransition(.opacity)
+        .animation(.easeInOut(duration: 0.25), value: title)
+    }
+    // Only when Mint isn't already the app on the TV's screen.
+    @ViewBuilder var showOnTV: some View {
+        if model.status?.app != "com.codex.musicwebtv" {
+            Button { model.tick(); model.post("music-now") } label: { Label("Show on TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+        }
+    }
+    var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
+    // Shuffle only means something for these; a song or an album plays as it is.
+    var shuffles: Bool { ["artist", "playlist", "station"].contains(kind) }
+    // Songs and albums come back from the search; the kind picked leads.
+    var results: [MediaRow] {
+        guard ["song", "album"].contains(kind), trimmed.count >= 2 else { return [] }
+        return (kind == "song" ? ["Songs", "Albums"] : ["Albums", "Songs"]).compactMap { t in found.rows.first { $0.title == t } }
     }
     func play(shuffle: Bool = false) {
-        guard !query.isEmpty else { return }
-        model.post("music", ["query": query, "kind": kind, "shuffle": shuffle])
-        query = ""
+        guard !trimmed.isEmpty else { return }
+        let before = model.nowMusic?.title
+        model.post("music", ["query": trimmed, "kind": kind, "shuffle": shuffle])
+        // The field shows it's on its way until the TV's song changes, or long enough that it isn't coming.
+        pending = true
+        pendingWait?.cancel()
+        pendingWait = Task {
+            for _ in 0..<7 {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if Task.isCancelled { return }
+                await model.load()
+                if model.nowMusic?.title != before { query = ""; break }
+            }
+            withAnimation(.easeOut(duration: 0.2)) { pending = false }
+        }
     }
     var send: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -969,20 +1190,54 @@ struct PlayingTab: View {
                 }
                 .pickerStyle(.segmented).labelsHidden()
                 HStack(spacing: 10) {
-                    TextField("What should play?", text: $query).autocorrectionDisabled().submitLabel(.go).onSubmit { play() }
-                        .padding(.horizontal, 16).frame(height: 50).glassEffect(.regular, in: Capsule())
-                    Button { play(shuffle: true) } label: { Image(systemName: "shuffle").font(.system(size: 18, weight: .medium)).frame(width: 50, height: 50).contentShape(Circle()) }
-                        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).disabled(query.isEmpty).opacity(query.isEmpty ? 0.45 : 1).accessibilityLabel("Shuffle")
+                    HStack(spacing: 8) {
+                        TextField("What should play?", text: $query).autocorrectionDisabled().submitLabel(.go).onSubmit { play() }
+                        if pending { ProgressView().controlSize(.small).transition(.opacity) }
+                    }
+                    .padding(.horizontal, 16).frame(height: 50).glassEffect(.regular, in: Capsule())
+                    if shuffles {
+                        Button { play(shuffle: true) } label: { Image(systemName: "shuffle").font(.system(size: 18, weight: .medium)).frame(width: 50, height: 50).contentShape(Circle()) }
+                            .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).disabled(trimmed.isEmpty).opacity(trimmed.isEmpty ? 0.45 : 1).accessibilityLabel("Shuffle")
+                            .transition(.opacity)
+                    }
                 }
+                .animation(.snappy, value: shuffles)
+                .animation(.easeOut(duration: 0.2), value: pending)
             }
+            ForEach(results) { row in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(row.title).font(.headline)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 10) {
+                            ForEach(row.items) { item in
+                                Button { model.flick(FlickTarget(item: item, source: .mint)) } label: { MediaCard(item: item, source: .mint, width: 112) }
+                                    .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
+                            }
+                        }
+                        .scrollTargetLayout()
+                    }
+                    .rowEdge()
+                }
+                .transition(.opacity.combined(with: .offset(y: 10)))
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: results.map(\.id))
+        .onChange(of: query) { _, _ in
+            if pending { pendingWait?.cancel(); pending = false }
+            guard trimmed.count >= 2 else { return }
+            found.query = trimmed; found.searchSoon()
+        }
+        // The TV's song changing is the answer to a play.
+        .onChange(of: model.nowMusic?.title) { _, _ in
+            if pending { pendingWait?.cancel(); withAnimation(.easeOut(duration: 0.2)) { pending = false }; query = "" }
         }
     }
     var body: some View {
         Group {
             if panes {
-                FoldSplit { ScrollView { now.padding(20) } } right: { ScrollView { send.padding(20) } }
+                FoldSplit { ScrollView { now.padding(20) }.backToTop() } right: { ScrollView { send.padding(20) }.backToTop() }
             } else {
-                ScrollView { VStack(spacing: 24) { now; send }.padding(.horizontal, 16).padding(.bottom, 16) }
+                ScrollView { VStack(spacing: 24) { now; send }.padding(.horizontal, 16).padding(.bottom, 16) }.backToTop()
             }
         }
         .environment(\.keysInScroll, true)
@@ -1011,7 +1266,7 @@ struct FilmRow: View {
     let title: String, films: [Film]
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            RowHeader(title: title) { FilmList(title: title, films: films) }.padding(.leading, 20)
+            RowHeader(title: title, route: .films(title, films)).padding(.leading, 20)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 12) { ForEach(films) { FilmCard(film: $0) } }.padding(.horizontal, 20).scrollTargetLayout()
             }
@@ -1051,9 +1306,10 @@ struct FilmList: View {
 // catalogue, popular, top rated, new, by genre and by search. Every card flicks like anywhere else.
 struct FilmsTab: View {
     @EnvironmentObject var model: TVModel
-    @State private var kind = "movie"
-    @StateObject private var films = BrowseStore(.stremio, base: "/api/tv/discover?type=movie")
-    @StateObject private var shows = BrowseStore(.stremio, base: "/api/tv/discover?type=series")
+    // Films or shows, kept through unfolding, which rebuilds the layout. The lists themselves live for the app's life.
+    @SceneStorage("watchKind") private var kind = "movie"
+    var films: BrowseStore { .discover("movie") }
+    var shows: BrowseStore { .discover("series") }
     static let genres = ["Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "History", "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "War", "Western"]
     @Environment(\.paneLayout) private var panes
     var body: some View {
@@ -1101,6 +1357,7 @@ struct DiscoverColumn: View {
             }), inset: 20)
             .rowEdge()
         }
+        if store.query.isEmpty { RecentRow() }
         if store.rows.isEmpty {
             Group {
                 if store.loading { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } }
@@ -1116,7 +1373,7 @@ struct DiscoverColumn: View {
                 if part != .right { controls }
                 ForEach(shown) { row in
                     VStack(alignment: .leading, spacing: 0) {
-                        RowHeader(title: row.title) { MediaList(row: row, source: .stremio) }.padding(.leading, 20)
+                        RowHeader(title: row.title, route: .media(row, .stremio)).padding(.leading, 20)
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 10) {
                                 ForEach(row.items) { item in
@@ -1132,8 +1389,33 @@ struct DiscoverColumn: View {
             }
             .padding(.vertical, 12)
         }
+        .backToTop()
         .refreshable { await store.load(force: true) }
         .task { await store.load() }
+    }
+}
+// What was last flicked from this phone, newest first. One tap has it in the hand again, episode and best stream
+// already chosen, ready to flick.
+struct RecentRow: View {
+    @EnvironmentObject var model: TVModel
+    @ObservedObject private var recent = RecentFlicks.shared
+    var body: some View {
+        if !recent.list.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                RowTitle("Recently flicked").padding(.leading, 20)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 10) {
+                        ForEach(recent.list) { f in
+                            let item = f.item
+                            Button { model.flick(FlickTarget(item: item, source: .stremio, ready: true)) } label: { MediaCard(item: item, source: .stremio, width: 124) }
+                                .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
+                        }
+                    }
+                    .padding(.horizontal, 20).scrollTargetLayout()
+                }
+                .rowEdge()
+            }
+        }
     }
 }
 // A row still on its way: a title bar and a few card shapes, breathing.
@@ -1150,73 +1432,72 @@ struct PlaceholderShelf: View {
     }
 }
 
-// Where a film or video is, ticking along while it plays. Slide along it, or tap a spot, to jump there on the TV.
+// Where a film or video is, ticking along while it plays. Stremio's can be slid along or tapped to jump there on the TV;
+// anything else only shows, as a thin line with nothing to catch a finger.
 struct VideoProgress: View {
     @EnvironmentObject var model: TVModel
+    @ObservedObject private var seeker = SeekQueue.shared
     let session: TVStatus.Session
+    // False while the picture of the TV is the one kept from last time: then nothing ticks and nothing moves.
+    var live = true
     @State private var scrub: Double?
-    @State private var across: Bool?
+    // The spot asked for, shown until the TV is there. A newer one asked for meanwhile goes as soon as this lands.
+    @State private var target: Double?
     @State private var seeking = false
     var duration: Double { session.duration ?? 0 }
-    var canSeek: Bool { session.canSeek == true && duration > 0 && !seeking }
+    var scrubbable: Bool { session.pkg == "com.stremio.one" }
+    var canSeek: Bool { scrubbable && session.canSeek == true && duration > 0 && live }
     func position(at date: Date) -> Double {
-        let base = session.position ?? 0
-        guard session.playing, let at = session.sampledAt else { return base }
-        let now = base + max(0, date.timeIntervalSince1970 * 1000 - at)
-        return duration > 0 ? min(now, duration) : now
+        // Ahead by any jumps tapped that the TV's report doesn't show yet.
+        var now = (session.position ?? 0) + seeker.offset(for: session)
+        if live, session.playing, let at = session.sampledAt { now += max(0, date.timeIntervalSince1970 * 1000 - at) }
+        return max(0, duration > 0 ? min(now, duration) : now)
     }
     func clock(_ ms: Double) -> String {
         let t = Int(max(0, ms) / 1000)
         return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
     }
     func seek(to ms: Double) {
-        seeking = true
         model.tick()
+        target = ms
+        guard !seeking else { return }
+        seeking = true
         Task {
-            do { try await TVBridge.post("player-seek-to", ["ms": Int(ms)], timeout: 60); await model.load() }
-            catch { model.say("Couldn’t move there") }
-            withAnimation(.snappy) { scrub = nil; seeking = false }
+            var sent = ms
+            while true {
+                do { try await TVBridge.post("player-seek-to", ["ms": Int(sent)], timeout: 60) }
+                catch { model.say("Couldn’t move there"); break }
+                guard let t = target, t != sent else { break }
+                sent = t
+            }
+            await model.load()
+            withAnimation(.snappy) { target = nil; seeking = false }
         }
     }
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            let now = position(at: ctx.date), shown = scrub ?? now
+            let now = position(at: ctx.date), shown = scrub ?? target ?? now
+            let known = live && session.position != nil
             VStack(spacing: 6) {
-                if duration > 0 {
-                    GeometryReader { g in
-                        let thick: CGFloat = scrub == nil ? 6 : 10
-                        ProgressTrack(fraction: shown / duration, thick: thick, fill: seeking ? AnyShapeStyle(.white.opacity(0.6)) : AnyShapeStyle(TVLook.accent))
-                        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: thick)
-                        .contentShape(Rectangle())
-                        // Only a sideways slide moves it, so scrolling the page past it never does.
-                        .gesture(DragGesture(minimumDistance: 6)
-                            .onChanged { v in
-                                guard canSeek else { return }
-                                if across == nil { across = abs(v.translation.width) > abs(v.translation.height) }
-                                if across == true { scrub = duration * min(1, max(0, v.location.x / g.size.width)) }
-                            }
-                            .onEnded { _ in
-                                if across == true, let t = scrub { seek(to: t) } else { scrub = nil }
-                                across = nil
-                            })
-                        .onTapGesture { p in if canSeek { scrub = duration * min(1, max(0, p.x / g.size.width)); seek(to: scrub!) } }
-                    }
-                    .frame(height: 28)
-                    .sensoryFeedback(.selection, trigger: scrub.map { Int($0 / 10000) })
+                if scrubbable {
+                    ScrubBar(value: known && duration > 0 ? shown : nil, total: duration, enabled: canSeek, busy: seeking, scrub: $scrub, tickEvery: 10000) { seek(to: $0) }
+                } else {
+                    ProgressTrack(fraction: known && duration > 0 ? shown / duration : nil, thick: 3).frame(height: 3)
                 }
                 HStack {
-                    Text(clock(shown))
+                    Text(clock(shown)).opacity(known ? 1 : 0)
                     Spacer()
                     if seeking { Text("Moving there on the TV…").foregroundStyle(TVLook.accent) }
                     Spacer()
-                    if duration > 0 { Text("-" + clock(duration - shown)) }
+                    Text("-" + clock(duration - shown)).opacity(known && duration > 0 ? 1 : 0)
                 }
                 .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
             }
+            .animation(.snappy(duration: 0.25), value: seeker.pending)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Position")
-        .accessibilityValue(duration > 0 ? "\(clock(position(at: Date()))) of \(clock(duration))" : clock(position(at: Date())))
+        .accessibilityValue(!live ? "" : duration > 0 ? "\(clock(position(at: Date()))) of \(clock(duration))" : clock(position(at: Date())))
         .accessibilityAdjustableAction { dir in
             guard canSeek else { return }
             seek(to: position(at: Date()) + (dir == .increment ? 30000 : -30000))
