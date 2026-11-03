@@ -170,6 +170,13 @@ struct FlickScreen: View {
             .containerBackground(.clear, for: .navigation)
         }
         .preferredColorScheme(.dark)
+        // The build's recording only: what the flick is doing, so a frame can be read against the code.
+        .overlay(alignment: .bottomLeading) {
+            if Self.pose == "flickdemo" {
+                Text("step \(step.rawValue) flown \(flown ? 1 : 0) landed \(landed ? 1 : 0) sending \(sending ? 1 : 0) done \(done ? 1 : 0) ok \(successes)")
+                    .font(.system(size: 11, design: .monospaced)).padding(6).background(.black.opacity(0.7)).foregroundStyle(.yellow)
+            }
+        }
         // Its own way in and out, so nothing slides over the card, and the app stays faintly there behind it.
         .presentationBackground(.clear)
         // Picked up, each quarter of the way, the hit on the TV.
