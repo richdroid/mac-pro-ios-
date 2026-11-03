@@ -92,12 +92,14 @@ struct RootView: View {
         }
         // Waits for the cover before changing the icon, and changes it again when the cover arrives, so the button
         // shows the cover for as long as it's playing, not only when it happened to be ready at the last redraw.
+        // The old cover stays until the new one is ready, never the plain symbol in between, and through a flick it
+        // only goes if something else is really playing.
         .task(id: model.nowArt) {
-            guard let art = model.nowArt, let u = URL(string: art) else { playingIcon = nil; return }
+            guard let art = model.nowArt, let u = URL(string: art) else { if model.flicking == nil { playingIcon = nil }; return }
             if let i = ImageStore.shared.cached(u) { playingIcon = PlayingIcon.make(i); return }
-            playingIcon = nil
             if let i = await ImageStore.shared.load(u), !Task.isCancelled { playingIcon = PlayingIcon.make(i) }
         }
+        .onChange(of: model.flicking == nil) { _, closed in if closed && model.nowArt == nil { playingIcon = nil } }
         .overlay(alignment: .top) {
             if let problem {
                 Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 9)
@@ -525,6 +527,9 @@ struct RemoteTab: View {
                 FoldSplit {
                     // The apps come along when there's room, and step aside when held in portrait.
                     side(apps: panes)
+                        // While typing on the TV the keyboard is for the other pane, so this one keeps its size under it
+                        // rather than squeezing the screen and cutting its labels. Its own search box still lifts.
+                        .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
                 } right: {
                     VStack(spacing: 14) { DPad().frame(maxHeight: .infinity); keysBlock }.padding(.horizontal, 20).padding(.bottom, 16)
                 }
@@ -794,9 +799,24 @@ struct SeekButton: View {
             }
             .frame(width: size, height: size).contentShape(Circle())
         }
+        // Still on its way after a moment: a ring turning round the key that shows how far, easier to see than anything
+        // on a long film's bar.
+        .overlay { if mine && seeker.spinning { SpinRing().transition(.opacity) } }
         .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
         .accessibilityValue(mine ? "\(abs(net)) seconds" : "")
+        .animation(.easeOut(duration: 0.2), value: mine && seeker.spinning)
         .animation(.snappy(duration: 0.2), value: net)
+    }
+}
+
+private struct SpinRing: View {
+    @State private var turn = false
+    var body: some View {
+        Circle().trim(from: 0, to: 0.28).stroke(TVLook.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            .padding(1.5)
+            .rotationEffect(.degrees(turn ? 360 : 0))
+            .onAppear { withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { turn = true } }
+            .allowsHitTesting(false)
     }
 }
 
@@ -1550,7 +1570,7 @@ struct VideoProgress: View {
             VStack(spacing: 6) {
                 if scrubbable {
                     ScrubBar(value: known && duration > 0 ? shown : nil, total: duration, enabled: canSeek, busy: seeking,
-                             confirmed: ahead && duration > 0 ? confirmed(at: ctx.date) : nil, spinning: ahead && seeker.spinning,
+                             confirmed: ahead && duration > 0 ? confirmed(at: ctx.date) : nil,
                              scrub: $scrub, tickEvery: 10000) { seek(to: $0) }
                         .opacity(locked ? 0.4 : 1).allowsHitTesting(!locked)
                 } else {
