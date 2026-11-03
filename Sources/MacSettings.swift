@@ -17,6 +17,9 @@ struct MacSettings: View {
     @AppStorage("showThisMac") private var showThisMac = true
     @AppStorage("showProcesses") private var showProcesses = true
     @State private var connecting = false
+    @State private var customBudget = false
+    @State private var budgetDraft = 200.0
+    static let budgets: [Double] = [50, 100, 200, 500]
     var version: String {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
@@ -25,21 +28,22 @@ struct MacSettings: View {
     var body: some View {
         NavigationStack {
             List {
+                // All seven in view, spread evenly across the row, never scrolled or cut off.
                 Section("Colour") {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 14) {
-                            ForEach(MacAccent.allCases) { a in
-                                Button { withAnimation(.snappy) { accent = a.rawValue } } label: {
-                                    Circle().fill(a.color).frame(width: 34, height: 34)
-                                        .overlay { if accent == a.rawValue { Image(systemName: "checkmark").font(.footnote.weight(.bold)).foregroundStyle(.black.opacity(0.7)) } }
-                                        .overlay { Circle().strokeBorder(.white.opacity(accent == a.rawValue ? 0.9 : 0), lineWidth: 2).padding(-4) }
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(a.name).accessibilityAddTraits(accent == a.rawValue ? .isSelected : [])
+                    HStack(spacing: 0) {
+                        ForEach(MacAccent.allCases) { a in
+                            Button { withAnimation(.snappy) { accent = a.rawValue } } label: {
+                                Circle().fill(a.color).frame(width: 32, height: 32)
+                                    .overlay { if accent == a.rawValue { Image(systemName: "checkmark").font(.footnote.weight(.bold)).foregroundStyle(.black.opacity(0.7)) } }
+                                    .overlay { Circle().strokeBorder(.white.opacity(accent == a.rawValue ? 0.9 : 0), lineWidth: 2).padding(-4) }
+                                    .frame(maxWidth: .infinity, minHeight: 44)
+                                    .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(a.name).accessibilityAddTraits(accent == a.rawValue ? .isSelected : [])
                         }
-                        .padding(.vertical, 8).padding(.horizontal, 4)
                     }
+                    .padding(.vertical, 4)
                 }
                 Section {
                     Toggle("Quick actions", isOn: $showQuick)
@@ -53,13 +57,21 @@ struct MacSettings: View {
                     Picker("Temperatures", selection: $celsius) { Text("Fahrenheit").tag(false); Text("Celsius").tag(true) }
                     Picker("Live figures", selection: $liveEvery) { Text("Every second").tag(1.0); Text("Every 2 seconds").tag(2.0); Text("Every 5 seconds").tag(5.0) }
                     Picker("Everything else", selection: $fullEvery) { Text("Every 10 seconds").tag(10.0); Text("Every 30 seconds").tag(30.0); Text("Every minute").tag(60.0) }
-                    // The Usage tab's API dial fills against this.
-                    LabeledContent("API budget a month") {
-                        HStack(spacing: 2) {
-                            Text("$").foregroundStyle(.secondary)
-                            TextField("200", value: $apiBudget, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(maxWidth: 80)
-                        }
+                }
+                // The Usage tab's API dial fills against this. Picked, not typed, so there's no keyboard to get stuck with.
+                Section("Claude") {
+                    Picker("Monthly API budget", selection: Binding(get: { apiBudget }, set: { v in
+                        if v < 0 { budgetDraft = apiBudget; customBudget = true } else { apiBudget = v }
+                    })) {
+                        ForEach(Self.budgets, id: \.self) { Text(APIUsageSection.money($0)).tag($0) }
+                        if !Self.budgets.contains(apiBudget) { Text(APIUsageSection.money(apiBudget)).tag(apiBudget) }
+                        Text("Custom…").tag(-1.0)
                     }
+                    .alert("Monthly API budget", isPresented: $customBudget) {
+                        TextField("Dollars", value: $budgetDraft, format: .number).keyboardType(.decimalPad)
+                        Button("Save") { if budgetDraft > 0 { apiBudget = budgetDraft } }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { Text("In dollars, for the dial on the Usage tab.") }
                 }
                 Section {
                     Picker("Open on", selection: $startTab) {

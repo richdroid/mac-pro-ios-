@@ -30,9 +30,12 @@ struct FoldSplit<L: View, R: View>: View {
             GeometryReader { g in
                 let wide = g.size.width > g.size.height
                 let folded = !g.reservedRegions(kind: .division).isEmpty
-                let hinge = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame.midX
+                let crease = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame
+                let hinge = crease?.midX
                 let ratio: CGFloat? = wide && !folded ? hinge.map { min(max($0 / g.size.width, 0.3), 0.7) } : nil
-                let gutter: CGFloat = wide && !folded ? 14 : 0
+                // Each pane stops short of the crease, which is about 40 pt wide: half of it plus a little air, and never
+                // less than 24, so no card sits on the fold.
+                let gutter: CGFloat = wide && !folded ? min(max(24, (crease?.width ?? 0) / 2 + 4), 40) : 0
                 ArrangementView {
                     left.padding(.trailing, gutter).splitArrangementLayoutRatio(ratio)
                 } secondary: {

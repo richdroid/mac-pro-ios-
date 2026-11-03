@@ -3,7 +3,7 @@ const http = require('http');
 const alarm = (o) => ({ name: '', enabled: '1', time: '420', when: 'weekday', type: 'beep', arg: 'Beep', param: '', param_description: 'Beep', duration: '30', snooze: '9', auto_dismiss: '0', action: '', action_param: '', backup: '1', backupDelay: '5', ...o });
 const data = {
   tok: { t: 'test' },
-  sys: { ok: true, up: 291000, memFree: 22000, memTotal: 62000, pspFree: 3100, load: 0.42, wifi: 71, vol: 40, shuffle: 0, airplayOn: true, chan: 'Default', cp: '1.7.3', lock: '', wall: 1, tw: ['NASA', 'BBCBreaking'], roms: ['Tetris.nes.gz', 'Super_Mario_Bros.nes'] },
+  sys: { ok: true, up: 291000, memFree: 22000, memTotal: 62000, pspFree: 3100, load: 0.42, wifi: 71, vol: 40, shuffle: 0, airplayOn: true, chan: 'Default', cp: '1.7.3', lock: '', wall: 1, tw: ['NASA', 'BBCBreaking'] },
   state: {
     ok: true, volume: 80, fade: 30, pending: false, shuffle: 0, channel: 'Default',
     alarms: [alarm({ name: 'Work', time: '405' }), alarm({ name: 'Weekend', time: '570', when: 'weekend', enabled: '0', type: 'audio', arg: 'directurl', param_description: 'Jazz Radio' })],
@@ -16,6 +16,7 @@ const data = {
   chlist: { cur: 'A', names: [['W3', 'Moon Phase']], channels: [{ id: 'A', conf: [['W1', '1', '30'], ['W2', '0', '0']], list: [['#', 'Default'], ['W1', 'Clock', '30'], ['W2', 'Weather', '15']] }, { id: 'B', conf: [], list: [['#', 'News'], ['W4', 'NYT', '45']] }] },
 };
 http.createServer((q, s) => {
+  if (chumbyScene(q, s)) return;   // the Chumby app's poses; see the block at the end
   const a = new URL(q.url, 'http://x').searchParams.get('a');
   if (a === 'shot') { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); return; }
   if (a === 'cat') { s.end('<a href="/guide/AB-1/category"><img alt="Clocks"></a>'); return; }
@@ -44,6 +45,8 @@ const macProcs = JSON.stringify({
   mem: [macProc(42, 'Claude Code', 12, 690, 'Claude session'), macProc(40, 'Google Chrome Helper', 84, 610, null), macProc(46, 'mediaanalysisd', 0, 490, 'System process'), macProc(43, 'Music', 6, 380, null), macProc(44, 'node', 3, 310, 'The dashboard'), macProc(47, 'Code Helper', 1, 290, null)],
 });
 http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); s.end(q.url === '/api/status' ? macStatus : q.url === '/api/procs' ? macProcs : '{}'); }).listen(9001, '127.0.0.1');
+// A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
+http.createServer((q, s) => { s.statusCode = 401; s.setHeader('content-type', 'application/json'); s.end('{"error":"Sign in to the Mac Pro."}'); }).listen(9003, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
 const zlib = require('zlib');
 const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
@@ -57,7 +60,7 @@ const png = (w, h, a, b) => {
 };
 const pictures = { wide: png(284, 160, [200, 40, 60], [240, 150, 40]), square: png(160, 160, [230, 230, 240], [120, 200, 240]), poster: png(234, 352, [40, 70, 120], [220, 120, 70]), art: png(300, 300, [190, 40, 120], [30, 90, 200]) };
 const tvBase = 'http://127.0.0.1:9002';
-const tvApps = [['com.codex.musicwebtv', 'Mint Music', 1], ['com.mint.letterboxd', 'Letterboxd', 1], ['com.stremio.one', 'Stremio', 0], ['com.google.android.youtube.tv', 'YouTube', 1], ['com.google.android.youtube.tvmusic', 'YouTube Music', 0], ['com.netflix.ninja', 'Netflix', 1], ['com.plexapp.android', 'Plex', 1], ['com.apple.atve.androidtv.appletv', 'Apple TV', 1], ['com.android.tv.settings', 'Settings', 1], ['com.google.android.play.games', 'Google Play Games', 1], ['flar2.homebutton', 'Button Mapper', 1]];
+const tvApps = [['com.codex.musicwebtv', 'Mint Music', 1], ['com.mint.letterboxd', 'Letterboxd', 1], ['com.stremio.one', 'Stremio', 1], ['com.google.android.youtube.tv', 'YouTube', 1], ['com.google.android.youtube.tvmusic', 'YouTube Music', 1], ['com.netflix.ninja', 'Netflix', 1], ['com.plexapp.android', 'Plex', 1], ['com.apple.atve.androidtv.appletv', 'Apple TV', 1], ['com.android.tv.settings', 'Settings', 1], ['com.google.android.play.games', 'Google Play Games', 1], ['flar2.homebutton', 'Button Mapper', 1]];
 const tvStatus = JSON.stringify({ online: true, screen: 'on', app: 'com.stremio.one', volume: 12, volumeMax: 25,
   music: { title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', art: tvBase + '/art.png', playing: true, position: 40000, duration: 180000, sampledAt: Date.now() },
   apps: tvApps.map(([pkg, name, wide]) => ({ pkg, name, hasIcon: pkg !== 'flar2.homebutton', wide: !!wide })) });
@@ -78,6 +81,7 @@ const tvScene = scene => {
   return JSON.stringify(v);
 };
 http.createServer((q, s) => {
+  if (tvPose(q, s)) return;
   const scene = (q.url.match(/^\/(stremio|youtube|ending)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   if (scene && q.url === '/api/tv/status') { s.setHeader('content-type', 'application/json'); return s.end(tvScene(scene)); }
@@ -99,3 +103,124 @@ http.createServer((q, s) => {
   s.setHeader('content-type', 'application/json');
   s.end(q.url === '/api/tv/status' ? tvStatus : q.url === '/api/tv/letterboxd' ? tvFilms : '{"ok":true}');
 }).listen(9002, '127.0.0.1');
+
+// ---- Chumby app poses (separate block) -------------------------------------------------------------------------------
+// Asked for by a path in front of the address (http://127.0.0.1:9000/ringing and so on), so every shot above gets the same
+// answers as before. Anything a scene doesn't change falls through to the answers above.
+// Pandora's history, for "Woke up to": songs just after the Weekend alarm (9:30) on the last two weekend mornings.
+{
+  const songs = [], d = new Date();
+  for (let back = 1; songs.length < 4 && back < 14; back++) {
+    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate() - back, 9, 30);
+    if (day.getDay() !== 0 && day.getDay() !== 6) continue;
+    const t = day.getTime() / 1000;
+    songs.push({ t: t + 70, title: 'So What', artist: 'Miles Davis', album: 'Kind of Blue' }, { t: t + 640, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' });
+  }
+  data.hist = { ok: true, songs: songs.sort((x, y) => y.t - x.t) };
+}
+function chumbyScene(q, s) {
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail)\//);
+  if (!m) return false;
+  const scene = m[1], a = new URL(q.url, 'http://x').searchParams.get('a');
+  const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
+  // A real 320 x 240 capture from the Chumby, so the hero can be judged.
+  const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
+  if (scene === 'slow') {
+    // The first run, before anything has come back: nothing answers for half a minute.
+    setTimeout(() => { if (a === 'shot') return shot(); if (data[a]) return json(data[a]); s.statusCode = 404; s.end(); }, 30000);
+    return true;
+  }
+  if (a === 'shot') return shot();
+  if (scene === 'ringing' && a === 'sys') return json({ ...data.sys, ring: 'r\tWork\tJazz Radio' });
+  if (scene === 'snoozed' && a === 'sys') return json({ ...data.sys, ring: 's\tWork\tJazz Radio' });
+  if (scene === 'dead') {
+    // The Mac answers, but says the Chumby itself hasn't for 25 minutes.
+    if (a === 'health') return json({ up: false, lastSeen: Date.now() / 1000 - 25 * 60 });
+    if (a === 'sys' || a === 'state' || a === 'chlist') { s.statusCode = 502; s.end(); return true; }
+  }
+  // Every save turned down, the way a full Chumby turns one down.
+  if (scene === 'fail' && q.method === 'POST') return json({ ok: false, error: 'bad count' });
+  return false;
+}
+
+// ---- TV app poses (separate block) -----------------------------------------------------------------------------------
+// Real assets where the sample pictures hid misses: the TV's own banners (one of them, YouTube Music's, really is a white
+// logo on white, which the app must never show as it is), and the Watch tab's rows as the bridge really sends them, with
+// the personal rows swapped for public titles. Then scenes asked for by a path in front of the address:
+//   /tour         Mint playing, its cover changing every 5 s, so a tab tour shows whether the art behind each page keeps up.
+//   /flickstream  A stream flick end to end: play-stream takes about 6 s and reports each step as a line of NDJSON, while
+//                 the status goes asleep, on, Stremio open, its player paused, then playing.
+//   /blankbanner  YouTube Music's banner as it once came from the Mac, white on white, to show the app's drawn one.
+// And /api/tv/screen-live, a short canned H.264 stream of a drawn home screen, sent at 30 frames a second, looping.
+function tvPose(q, s) {
+  const fs = require('fs');
+  const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner)(?=\/)/) || [])[1];
+  if (scene) q.url = q.url.slice(scene.length + 1);
+  const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
+  if (path === '/api/tv/icon') {
+    const blank = __dirname + '/tv-icons-blank/' + query.get('pkg') + '.png';
+    const file = scene === 'blankbanner' && fs.existsSync(blank) ? blank : __dirname + '/tv-icons/' + query.get('pkg') + '.png';
+    if (fs.existsSync(file)) { s.setHeader('content-type', 'image/png'); s.end(fs.readFileSync(file)); return true; }
+    return false;
+  }
+  if (path === '/api/tv/discover' && !query.get('q') && !query.get('genre')) {
+    tvPose.discover = tvPose.discover || JSON.parse(fs.readFileSync(__dirname + '/tv-discover.json'));
+    return json(tvPose.discover[query.get('type') === 'series' ? 'series' : 'movie']);
+  }
+  // A still taken after a key press: the same picture here, at once.
+  if (path === '/api/tv/shot' && q.url !== '/api/tv/shot') { s.setHeader('content-type', 'image/jpeg'); s.end(fs.readFileSync(__dirname + '/shot.jpg')); return true; }
+  if (/^\/art[0-2]\.png$/.test(path)) {
+    const tones = [[[200, 60, 40], [40, 20, 90]], [[30, 150, 110], [10, 40, 60]], [[230, 190, 60], [120, 30, 120]]][+path[4]];
+    s.setHeader('content-type', 'image/png'); s.end(png(300, 300, tones[0], tones[1])); return true;
+  }
+  if (path === '/api/tv/screen-live') {
+    // Cut into pictures at each slice that starts one, and sent a picture every 33 ms, over and over.
+    if (!tvPose.units) {
+      const d = fs.readFileSync(__dirname + '/tv-screen.h264'), cuts = [];
+      for (let i = 0; i + 3 <= d.length; i++) if (d[i] === 0 && d[i + 1] === 0 && d[i + 2] === 1) cuts.push(i > 0 && d[i - 1] === 0 ? i - 1 : i);
+      const units = []; let pending = [];
+      cuts.forEach((at, k) => {
+        const end = k + 1 < cuts.length ? cuts[k + 1] : d.length, nal = d.subarray(at, end), head = nal[nal[2] === 1 ? 3 : 4];
+        const type = head & 31, first = (nal[(nal[2] === 1 ? 3 : 4) + 1] & 0x80) !== 0;
+        if ((type === 1 || type === 5) && first && pending.some(n => { const t = n[n[2] === 1 ? 3 : 4] & 31; return t === 1 || t === 5; })) { units.push(Buffer.concat(pending)); pending = []; }
+        pending.push(nal);
+      });
+      if (pending.length) units.push(Buffer.concat(pending));
+      tvPose.units = units;
+    }
+    s.writeHead(200, { 'content-type': 'video/h264', 'cache-control': 'no-store' });
+    let n = 0;
+    const timer = setInterval(() => { s.write(tvPose.units[n % tvPose.units.length]); n++; }, 33);
+    q.on('close', () => clearInterval(timer));
+    return true;
+  }
+  if (scene === 'tour' && path === '/api/tv/status') {
+    const v = JSON.parse(tvStatus);
+    v.app = 'com.codex.musicwebtv';
+    v.music = { ...v.music, art: tvBase + '/art' + (Math.floor(Date.now() / 5000) % 3) + '.png', sampledAt: Date.now() };
+    return json(v);
+  }
+  if (scene === 'flickstream') {
+    // How far into the start it is: nothing sent in the last 20 s is a fresh start, asleep.
+    const t = tvPose.sent && Date.now() - tvPose.sent < 20000 ? (Date.now() - tvPose.sent) / 1000 : -1;
+    if (path === '/api/tv/status') {
+      const v = JSON.parse(tvStatus), now = Date.now();
+      delete v.music;
+      if (t < 1.2) { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; }
+      else if (t < 2.4) v.app = 'com.google.android.tvlauncher';
+      else v.app = 'com.stremio.one';
+      if (t >= 3.6) v.session = { pkg: 'com.stremio.one', playing: t >= 5.2, description: ['Heat'], position: t >= 5.2 ? (t - 5.2) * 1000 : 0, sampledAt: now, duration: 10200000, canSeek: true };
+      return json(v);
+    }
+    if (q.method === 'POST' && path === '/api/tv/play-stream') {
+      tvPose.sent = Date.now();
+      if (!/ndjson/.test(q.headers.accept || '')) { setTimeout(() => json({ ok: true }), 6000); return true; }
+      s.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store' });
+      const lines = [[1200, { phase: 'awake' }], [2400, { phase: 'opening' }], [3600, { phase: 'player' }], [5200, { phase: 'playing' }], [6000, { ok: true }]];
+      lines.forEach(([at, v]) => setTimeout(() => { s.write(JSON.stringify(v) + '\n'); if (v.ok) s.end(); }, at));
+      return true;
+    }
+  }
+  return false;
+}

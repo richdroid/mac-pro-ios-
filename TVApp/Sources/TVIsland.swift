@@ -31,7 +31,10 @@ enum TVIsland {
         if s.screen == "asleep" && !session.playing { return nil }
         // Nor does a paused player you've since left, which Android keeps reporting as active.
         if !session.playing && s.app != session.pkg { return nil }
-        return .init(title: session.description.first ?? app, subtitle: session.description.dropFirst().first ?? app, app: app, playing: session.playing)
+        // Under the title, the episode if there is one, and otherwise nothing: never the app doing the playing.
+        let title = session.description.first ?? ""
+        let under = session.description.dropFirst().first.map(Wording.episode) ?? ""
+        return .init(title: title.isEmpty ? app : title, subtitle: under == title ? "" : under, app: app, playing: session.playing)
     }
 
     // Starts only for something actually playing, and goes away once the TV has moved on.

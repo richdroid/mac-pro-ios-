@@ -1,4 +1,5 @@
 import SwiftUI
+import WidgetKit
 
 // Dials made of ticks, after the vent slots around the Mac Pro's base. Cheap to redraw, and they hold up on clear Home Screens.
 enum Heat {
@@ -12,7 +13,7 @@ enum Heat {
         t > 0.875 ? Color(red: 1, green: 0.27, blue: 0.23) : t > 0.69 ? Color(red: 1, green: 0.6, blue: 0.04) : t > 0.5 ? Color(red: 1, green: 0.84, blue: 0.04) : Color(white: 0.93)
     }
 }
-// The app's colour, chosen in Settings; blue unless another is. Widgets keep their own blue.
+// The app's colour, chosen in Settings; blue unless another is.
 var macBlue: Color { MacPrefs.accent.color }
 enum MacAccent: String, CaseIterable, Identifiable {
     case blue, teal, purple, pink, orange, green, graphite
@@ -40,6 +41,21 @@ enum MacPrefs {
     static var fullEvery: Double { let v = d.double(forKey: "fullEvery"); return v > 0 ? v : 10 }
     // What the API may cost in a month, in dollars, for the Usage tab's dial.
     static var apiBudget: Double { let v = d.double(forKey: "apiBudget"); return v > 0 ? v : 200 }
+
+    // The widgets follow the colour and temperature unit through an App Group the app and its widgets share. Until the
+    // build is signed with that group there's no shared container: nothing is shared, and the widgets stay blue and °F.
+    static let groupID = "group.local.macpro.MacPro"
+    static var shared: UserDefaults? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) == nil ? nil : UserDefaults(suiteName: groupID)
+    }
+    static func shareWithWidgets() {
+        guard let g = shared, g.string(forKey: "accent") != accent.rawValue || g.object(forKey: "celsius") as? Bool != celsius else { return }
+        g.set(accent.rawValue, forKey: "accent"); g.set(celsius, forKey: "celsius")
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+    // Read by the widgets: the app's choices when shared, else nil, and the widget keeps its own look.
+    static var widgetAccent: MacAccent? { shared?.string(forKey: "accent").flatMap(MacAccent.init(rawValue:)) }
+    static var widgetCelsius: Bool { shared?.bool(forKey: "celsius") ?? false }
 }
 
 struct ArcGauge<Center: View>: View {

@@ -31,26 +31,35 @@ struct ProcessesView: View {
 
     func rows(_ by: ProcessSort) -> [MacProcess] { by == .cpu ? report?.cpu ?? [] : report?.mem ?? [] }
 
-    func row(_ p: MacProcess, by: ProcessSort) -> some View {
+    // Names stay in full colour, since they're the answer to what's using the Mac; a lock says which can't be quit.
+    func face(_ p: MacProcess, by: ProcessSort) -> some View {
         let cpu = String(format: "%.0f%%", p.cpu), mem = Format.memory(p.mem)
-        return Button {
-            pending = Pending(process: p, force: false)
-        } label: {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(p.name).lineLimit(1)
-                    Text(p.locked ?? (by == .cpu ? mem : "\(cpu) CPU")).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                if working == p.pid { ProgressView() }
-                else if p.locked != nil { Image(systemName: "lock.fill").font(.caption).foregroundStyle(.tertiary) }
-                Text(by == .cpu ? cpu : mem).font(.body.weight(.medium)).monospacedDigit().foregroundStyle(p.locked == nil ? .primary : .secondary)
+        return HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(p.name).lineLimit(1)
+                Text(p.locked ?? (by == .cpu ? mem : "\(cpu) CPU")).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
-            .contentShape(Rectangle())
+            Spacer(minLength: 8)
+            if working == p.pid { ProgressView() }
+            else if p.locked != nil { Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary).accessibilityLabel("Can’t be quit from here") }
+            Text(by == .cpu ? cpu : mem).font(.body.weight(.medium)).monospacedDigit()
         }
-        .buttonStyle(.plain)
-        .disabled(p.locked != nil || working != nil)
-        .accessibilityHint(p.locked == nil ? "Asks before quitting" : "Can’t be quit from here")
+        .contentShape(Rectangle())
+    }
+    @ViewBuilder func row(_ p: MacProcess, by: ProcessSort) -> some View {
+        if p.locked != nil { face(p, by: by) }
+        else {
+            Button { pending = Pending(process: p, force: false) } label: { face(p, by: by) }
+                .buttonStyle(.plain)
+                .disabled(working != nil)
+                .accessibilityHint("Asks before quitting")
+                // The question hangs off the row that was tapped.
+                .confirmationDialog(dialogTitle, isPresented: .init(get: { pending?.process.pid == p.pid }, set: { if !$0 { pending = nil } }), titleVisibility: .visible, presenting: pending) { q in
+                    Button(q.force ? "Force Quit" : "Quit", role: .destructive) { Task { await quit(q) } }
+                } message: { q in
+                    Text(q.force ? "Unsaved work is lost." : "It’s asked to close. Unsaved work may be lost.")
+                }
+        }
     }
 
     func list(_ by: ProcessSort, chooser: Bool, notes: Bool) -> some View {
@@ -62,17 +71,18 @@ struct ProcessesView: View {
                 }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
             }
-            if notes, let note { Section { Text(note).font(.footnote).foregroundStyle(.secondary) } }
-            Section(chooser ? "" : by.title) {
-                if report == nil {
-                    if failed { Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark").foregroundStyle(.secondary) }
-                    else { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) } }
-                }
-                ForEach(rows(by)) { row($0, by: by) }
-            }
+            if notes, let note { Section { FailText(note) } }
+            if chooser { Section { rowsBody(by) } } else { Section(by.title) { rowsBody(by) } }
         }
         .contentMargins(.top, 4, for: .scrollContent)
         .refreshable { await load() }
+    }
+    @ViewBuilder func rowsBody(_ by: ProcessSort) -> some View {
+        if report == nil {
+            if failed { Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark").foregroundStyle(.secondary) }
+            else { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) } }
+        }
+        ForEach(rows(by)) { row($0, by: by) }
     }
 
     func load() async {
@@ -83,9 +93,11 @@ struct ProcessesView: View {
 
     func quit(_ p: Pending) async {
         working = p.process.pid; defer { working = nil }
+        note = nil
         do {
+            // Gone from the list says it quit; only a process that stayed needs a word.
             let gone = try await model.api.quitProcess(p.process, force: p.force)
-            if gone { note = "\(p.process.name) has quit." }
+            if gone { note = nil }
             else if p.force { note = "\(p.process.name) is still running." }
             else { note = nil; pending = Pending(process: p.process, force: true) }
         } catch { note = error.localizedDescription }
@@ -103,13 +115,6 @@ struct ProcessesView: View {
         .background(groupedBackground.ignoresSafeArea())
         .navigationTitle("Processes")
         .navigationBarTitleDisplayMode(.inline)
-        // Asked from a swipe, which leaves nothing to point at, so it's a plain question in the middle.
-        .alert(dialogTitle, isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } }), presenting: pending) { p in
-            Button(p.force ? "Force Quit" : "Quit", role: .destructive) { Task { await quit(p) } }
-            Button("Cancel", role: .cancel) {}
-        } message: { p in
-            Text(p.force ? "Unsaved work is lost." : "It’s asked to close. Unsaved work may be lost.")
-        }
         .task {
             while !Task.isCancelled {
                 // The list stays put while a dialog is asking about one of its rows.
@@ -137,10 +142,10 @@ struct ProcessesLink: View {
                 Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
             }
             .padding(14)
-            .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressStyle())
     }
 }
 
@@ -172,17 +177,22 @@ struct SessionRow: View {
         let line = "\(name) for \(Format.span(Date().timeIntervalSince1970 - at / 1000))"
         return session.stuck == true ? line + " · may be stuck" : line
     }
+    // Rows the Claude app runs, not this Mac, don't open here, and say so.
+    var line: String { session.key == nil ? state + " · in the Claude app" : state }
     var body: some View {
         HStack(spacing: 10) {
             Circle().fill(tint).frame(width: 9, height: 9)
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.name).lineLimit(1)
-                Text(state).font(.footnote.weight(session.waiting == true ? .semibold : .regular)).foregroundStyle(session.stuck == true || session.waiting == true ? .orange : .secondary).lineLimit(1)
+                Text(line).font(.footnote.weight(session.waiting == true ? .semibold : .regular)).foregroundStyle(session.stuck == true || session.waiting == true ? .orange : .secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
             if working { ProgressView() }
-            else if session.restartable == true {
-                Button(session.status == "stopped" ? "Start" : "Restart") { if session.status == "stopped" { restart() } else { confirm = true } }
+            else if session.restartable == true, session.status == "stopped" {
+                Button("Start", action: restart).buttonStyle(.bordered).controlSize(.small)
+            } else if session.restartable == true, session.stuck == true {
+                // Only a session that seems stuck has a reason to be restarted.
+                Button("Restart") { confirm = true }
                     .buttonStyle(.bordered).controlSize(.small)
                     .confirmationDialog("Restart \(session.name)?", isPresented: $confirm, titleVisibility: .visible) {
                         Button("Restart", role: .destructive, action: restart)
@@ -191,6 +201,6 @@ struct SessionRow: View {
         }
         .contentShape(Rectangle())
     }
-    // Only the sessions this Mac keeps have a screen to show.
-    var canOpen: Bool { session.key != nil && session.status != "stopped" }
+    // Every session this Mac keeps has a page, running or not; a stopped one can be started from there too.
+    var canOpen: Bool { session.key != nil }
 }

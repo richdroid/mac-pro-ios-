@@ -50,7 +50,10 @@ struct RootView: View {
         Task {
             // The page is loading the same list, so wait for it rather than asking again.
             for _ in 0..<40 {
-                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "startover"].contains(pose) ? "movie" : "series") }) { model.flick(FlickTarget(item: item, source: .stremio)); return }
+                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream", "startover", "toremote"].contains(pose) ? "movie" : "series") }) {
+                    // The stream flick goes as he does it most: the best stream found for him, in the hand, thrown.
+                    model.flick(FlickTarget(item: item, source: .stremio, ready: pose == "flickdemo-stream")); return
+                }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
@@ -100,6 +103,14 @@ struct RootView: View {
             if let i = await ImageStore.shared.load(u), !Task.isCancelled { playingIcon = PlayingIcon.make(i) }
         }
         .onChange(of: model.flicking == nil) { _, closed in if closed && model.nowArt == nil { playingIcon = nil } }
+        // The one picture behind every page follows what's on.
+        .task(id: model.nowArt) {
+            await AmbienceStore.shared.show(model.nowArt)
+            // A film's colour kept after its flick gives way once something else is what's on.
+            if model.moodArt != nil, !(model.videoIsCurrent && model.status?.session?.pkg == "com.stremio.one") {
+                model.moodArt = nil; model.mood = nil
+            }
+        }
         .overlay(alignment: .top) {
             if let problem {
                 Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 9)
@@ -123,6 +134,24 @@ struct RootView: View {
     }
 }
 
+// The top of every page: no scroll edge band of its own from each scrolling pane, which drew a block of different
+// glass over whichever pane had been scrolled. Instead one soft shade, the width of the whole screen, the same whatever
+// is scrolled, so the title always reads and nothing differs from one pane to the other.
+private struct TopShade: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .scrollEdgeEffectHidden(true, for: .top)
+            .overlay(alignment: .top) {
+                LinearGradient(colors: [.black.opacity(0.42), .black.opacity(0.18), .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 22)
+                    .ignoresSafeArea(edges: .top)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+    }
+}
+extension View { func topShade() -> some View { modifier(TopShade()) } }
+
 // Each tab's frame: the art behind it, its title, and the gear.
 struct Page<C: View>: View {
     @EnvironmentObject var model: TVModel
@@ -138,6 +167,7 @@ struct Page<C: View>: View {
         NavigationStack(path: $path) {
             content()
                 .environment(\.backToTop, top)
+                .topShade()
                 .navigationDestination(for: RowRoute.self) { $0.page }
                 .background { Ambience() }
                 .toolbarBackground(.hidden, for: .navigationBar)
@@ -176,11 +206,12 @@ struct TVSettingsTab: View {
                 Group {
                     // Unfolded, one list each side of the fold rather than one list across it.
                     if panes {
-                        FoldSplit { Form { manage }.scrollContentBackground(.hidden) } right: { Form { connection }.scrollContentBackground(.hidden) }
+                        FoldSplit { Form { manage }.scrollContentBackground(.hidden) } right: { Form { connection }.scrollContentBackground(.hidden).poseScroll() }
                     } else {
-                        Form { manage; connection }.scrollContentBackground(.hidden)
+                        Form { manage; connection }.scrollContentBackground(.hidden).poseScroll()
                     }
                 }
+                .topShade()
                 // Tapping the tab again: out of a page opened from here, else back to the top.
                 .onChange(of: retaps) { _, _ in
                     if path.isEmpty { withAnimation(.snappy) { proxy.scrollTo(ManagePage.apps, anchor: .top) } } else { path = [] }
@@ -275,6 +306,7 @@ struct RowList<Content: View>: View {
         List { content().listRowBackground(Color.clear) }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .topShade()
             .background { Ambience() }
             .toolbarBackground(.hidden, for: .navigationBar)
             .navigationTitle(title)
@@ -288,10 +320,12 @@ struct MirrorView: View {
     @ObservedObject var store: MirrorStore
     // Where it always has its place, it carries its own way to hide it, and the bar has no second one.
     var closable = false
-    // The screenshot leaves a playing film black, so its poster stands in, sat on a blurred copy of itself.
+    // A playing film is black on any capture of the screen, so its poster stands in, sat on a blurred copy of itself.
+    // So does one just flicked, until the TV says it's playing.
     var film: URL? {
-        guard model.mirrorLive, model.filmOnScreen, let s = model.status?.session else { return nil }
-        return model.picture(for: s).flatMap(URL.init(string:))
+        guard model.mirrorLive else { return nil }
+        if model.filmOnScreen, let s = model.status?.session { return model.picture(for: s).flatMap(URL.init(string:)) }
+        return model.standInNow.flatMap(URL.init(string:))
     }
     var body: some View {
         ZStack {
@@ -306,28 +340,69 @@ struct MirrorView: View {
                         .padding(14)
                 }
                 .transition(.opacity)
-            } else if let m = store.image, model.mirrorLive {
-                Image(tv: m).resizable().scaledToFit()
-            } else if !model.mirrorLive {
-                Button { model.setMirror(true) } label: {
-                    Label("Show the TV’s screen", systemImage: "eye").font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 11)
-                }
-                .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
+            } else if model.mirrorLive {
+                #if os(iOS)
+                ScreenPicture(live: model.live, store: store, art: model.nowArt)
+                #else
+                if let m = store.image { Image(tv: m).resizable().scaledToFit() }
+                #endif
             } else {
-                ProgressView()
+                // Turned off: what's playing, blurred, behind the one button, rather than an empty box.
+                ZStack {
+                    Color.clear.overlay { Art(url: model.nowArt.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
+                        .clipped().blur(radius: 26).opacity(0.55)
+                    Button { model.setMirror(true) } label: {
+                        Label("Show the TV’s screen", systemImage: "eye").font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 11)
+                    }
+                    .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
+                }
             }
         }
         .aspectRatio(16.0 / 9, contentMode: .fit)
         .overlay(alignment: .topTrailing) {
-            if closable, model.mirrorLive, film != nil || store.image != nil {
+            if closable, model.mirrorLive {
                 Button { model.setMirror(false) } label: { Image(systemName: "eye.slash").font(.system(size: 15, weight: .semibold)).frame(width: 40, height: 40).contentShape(Circle()) }
                     .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).padding(10).accessibilityLabel("Hide the TV’s screen")
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
         .animation(.easeInOut(duration: 0.25), value: film)
+        // Where it is, for a flick's screen to move onto it. Nothing moves this view, so the measure moves nothing.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.mirrorSlot = $0 }
+        .onAppear { model.mirrorShown(true) }
+        .onDisappear { model.mirrorShown(false) }
     }
 }
+#if os(iOS)
+// The TV's screen itself: the live stream once it has a picture, and until then (or without one) the latest still,
+// shown dimmed with a small spinner once it's more than a few seconds old, so an old picture never passes for now.
+private struct ScreenPicture: View {
+    @ObservedObject var live: LiveMirror
+    @ObservedObject var store: MirrorStore
+    let art: String?
+    var body: some View {
+        ZStack {
+            if !live.showing {
+                if let m = store.image {
+                    TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                        let old = ctx.date.timeIntervalSince(store.at) > 4
+                        Image(tv: m).resizable().scaledToFit().opacity(old ? 0.5 : 1)
+                            .overlay { if old { ProgressView().tint(.white).transition(.opacity) } }
+                            .animation(.easeOut(duration: 0.3), value: old)
+                    }
+                } else {
+                    // Nothing yet: what's playing, blurred, with a spinner, rather than an empty box.
+                    Color.clear.overlay { Art(url: art.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
+                        .clipped().blur(radius: 26).opacity(0.5)
+                        .overlay { ProgressView().tint(.white) }
+                }
+            }
+            LiveMirrorLayer(mirror: live).opacity(live.showing ? 1 : 0)
+        }
+        .animation(.easeOut(duration: 0.2), value: live.showing)
+    }
+}
+#endif
 
 // One arrow or the centre of the D-pad: a press acts at once, holding repeats until you lift.
 // Set on pages that scroll. There a key waits to see it's a real press, or starting a scroll on one would press it on the TV.
@@ -545,14 +620,17 @@ struct RemoteTab: View {
         }
         .navigationSubtitle(state)
         .toolbar {
-            // Folded, the screen only comes when asked for, so the bar asks. Wider, it has its own place and button.
+            // Folded, the screen goes above the pad unless he's hidden it, so the bar has the switch. Wider, it has its
+            // own place and button.
             if size != .regular {
                 ToolbarItem(placement: .primaryAction) {
                     Button { model.setMirror(!model.mirrorLive) } label: { Label(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen", systemImage: model.mirrorLive ? "eye.slash" : "eye") }
                 }
             }
         }
-        .onDisappear { model.mirrorLive = false }
+        // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
+        // he left it, for the next visit.
+        .onAppear { model.warmMirror() }
     }
 }
 
@@ -667,12 +745,14 @@ struct Banner: View {
                 app.wide == true ? Color.black : TVLook.bannerTile
                 if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
                     Art(url: u) { i in
-                        if app.wide == true { i.resizable().scaledToFill() }
+                        // A banner that came out blank, a white logo flattened onto white, is never shown as it is.
+                        if ImageStore.shared.isFlat(u) { BannerFallback(app: app) }
+                        else if app.wide == true { i.resizable().scaledToFill() }
                         else {
                             VStack(spacing: 4) { i.resizable().scaledToFit().frame(width: 30, height: 30); Text(app.name).font(.caption.weight(.medium)).lineLimit(1).padding(.horizontal, 8) }
                         }
-                    } placeholder: { name }
-                } else { name }
+                    } placeholder: { TVLook.bannerTile }
+                } else { BannerFallback(app: app) }
             }
             .frame(width: TVLook.bannerSize.width, height: TVLook.bannerSize.height)
             .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
@@ -683,7 +763,33 @@ struct Banner: View {
         .buttonStyle(PressCard()).accessibilityLabel(app.name).accessibilityAddTraits(current ? .isSelected : [])
         .contextMenu { if browses { Button("Open on TV", systemImage: "tv") { open() } } }
     }
-    var name: some View { Text(app.name).font(.footnote.weight(.medium)).multilineTextAlignment(.center).padding(6) }
+}
+// A banner drawn here, for an app whose own is missing or came out blank: its brand's colour, its mark where it has a
+// simple one, and its name in the launcher's weight. Never a white card, never an icon in a grey box.
+struct BannerFallback: View {
+    let app: TVStatus.App
+    static let brands: [String: UInt32] = ["com.google.android.youtube.tvmusic": 0x0F0F0F, "flar2.homebutton": 0x1E3A5F, "com.netflix.ninja": 0x141414,
+                                           "com.stremio.one": 0x19152C, "com.codex.musicwebtv": 0x1F9E78, "com.mint.letterboxd": 0x202830]
+    var body: some View {
+        ZStack {
+            Self.brands[app.pkg].map { Color(hex: $0) } ?? TVLook.bannerTile
+            HStack(spacing: 9) {
+                if app.pkg == "com.google.android.youtube.tvmusic" {
+                    // YouTube Music's mark: a red disc, a white ring, a play triangle.
+                    ZStack {
+                        Circle().fill(Color(hex: 0xFF0033))
+                        Circle().strokeBorder(.white, lineWidth: 1.8).padding(6)
+                        Image(systemName: "play.fill").font(.system(size: 8, weight: .bold)).offset(x: 0.6)
+                    }
+                    .frame(width: 30, height: 30)
+                }
+                Text(app.name).font(.system(size: 15, weight: .semibold)).lineLimit(2).minimumScaleFactor(0.8).multilineTextAlignment(.leading)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+        }
+        .accessibilityHidden(true)
+    }
 }
 struct BannerRow: View {
     let title: String, apps: [TVStatus.App]
@@ -745,17 +851,21 @@ struct AppsTab: View {
                             row("Listen", listen)
                             row("Tools and settings", tools)
                         }
-                    }.padding(.vertical, 12)
+                    }
+                    .padding(.vertical, 12)
                 }
-                .backToTop()
+                .backToTop(posed: false)
             } right: {
                 // Unfolded, the other side picks up where you left off, ready to flick.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
                         Shelf(source: .stremio, title: "Continue watching")
                         Shelf(source: .mint, title: "Recently played")
-                    }.padding(.vertical, 12)
+                    }
+                    .scrollTargetLayout()
+                    .padding(.vertical, 12)
                 }
+                .restsOnRows()
                 .backToTop()
             }
         } else {
@@ -769,7 +879,8 @@ struct AppsTab: View {
                         Shelf(source: .mint, title: "Recently played")
                         row("Tools and settings", tools)
                     }
-                }.padding(.vertical, 12)
+                }
+                .padding(.vertical, 12)
                 .animation(.snappy, value: query == nil)
             }
             .backToTop()
@@ -835,10 +946,7 @@ struct Shelf: View {
                     RowHeader(title: title, route: .media(row, store.source)).padding(.leading, 20)
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 10) {
-                            ForEach(row.items) { item in
-                                Button { model.flick(FlickTarget(item: item, source: store.source)) } label: { MediaCard(item: item, source: store.source, width: store.source == .mint ? 128 : 112) }
-                                    .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
-                            }
+                            ForEach(row.items) { item in FlickCardButton(item: item, source: store.source, width: store.source == .mint ? 128 : 112) }
                         }
                         .padding(.horizontal, 20)
                     }
@@ -847,7 +955,7 @@ struct Shelf: View {
             } else if store.rows.isEmpty && !store.failed && store.query.isEmpty {
                 // Its place is kept while it comes, so the rows under it don't get pushed down when it does.
                 let w: CGFloat = store.source == .mint ? 128 : 112
-                PlaceholderShelf(cardWidth: w, cardHeight: w / store.source.coverAspect + 50, headed: true)
+                PlaceholderShelf(cardWidth: w, cardHeight: MediaCard.height(w, store.source), headed: true)
             } else { Color.clear.frame(height: 0) }
         }
         .task { await store.load() }
@@ -1104,6 +1212,7 @@ struct PlayingTab: View {
     @Environment(\.paneLayout) private var panes
     @ObservedObject private var phone = PhonePlayer.shared
     @ObservedObject private var nextUp = NextUp.shared
+    @ObservedObject private var recent = RecentFlicks.shared
     @State private var query = ""
     @State private var kind = "song"
     // What Mint finds as he types, the same search as the Apps page's.
@@ -1139,20 +1248,21 @@ struct PlayingTab: View {
                 // Said to be playing but already at the end: an old report, so shown as stopped there, not ticking on.
                 let ended = Self.atEnd(s)
                 let playing = stale ? nil : ended ? false : Optional(s.playing)
-                // What was flicked, or the app's own banner when the app says nothing about what it's playing.
-                Cover(url: model.picture(for: s).flatMap(URL.init(string:))) {
+                // What was flicked, or the app's own banner when the app says nothing about what it's playing. Rounded
+                // at the picture's own corners, whatever its shape.
+                Cover(url: model.picture(for: s).flatMap(URL.init(string:)), radius: 14) {
                     Image(systemName: "play.tv.fill").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent)
                 }
                 .frame(maxWidth: 300, maxHeight: 190)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
                 .opacity(stale ? 0.45 : 1)
                 .padding(.top, 20)
-                // The series, then the episode under it, then where it's playing and, once that's known, whether it's paused.
+                // The series, then the episode under it. Paused only when it is: the play key already says playing, and
+                // which app is doing it is plumbing.
                 VStack(spacing: 3) {
                     Text(s.description.first ?? appName).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
-                    if s.description.count > 1 { Text(s.description[1]).font(.headline).foregroundStyle(.white.opacity(0.85)).lineLimit(2).multilineTextAlignment(.center) }
-                    Text(playing.map { "\(appName) · \($0 ? "Playing" : "Paused")" } ?? appName).font(.subheadline).foregroundStyle(.secondary).contentTransition(.opacity)
+                    if s.description.count > 1 { Text(Wording.episode(s.description[1])).font(.headline).foregroundStyle(.white.opacity(0.85)).lineLimit(2).multilineTextAlignment(.center) }
+                    Text("Paused").font(.subheadline).foregroundStyle(.secondary).opacity(playing == false ? 1 : 0).animation(.easeOut(duration: 0.2), value: playing)
                 }
                 // Stremio's runs and can be moved, so its place is kept even before the running time is in.
                 if s.position != nil || stremio { VideoProgress(session: s, live: !stale).padding(.horizontal, 4) }
@@ -1269,10 +1379,7 @@ struct PlayingTab: View {
                     Text(row.title).font(.headline)
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 10) {
-                            ForEach(row.items) { item in
-                                Button { model.flick(FlickTarget(item: item, source: .mint)) } label: { MediaCard(item: item, source: .mint, width: 112) }
-                                    .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
-                            }
+                            ForEach(row.items) { item in FlickCardButton(item: item, source: .mint, width: 112) }
                         }
                         .scrollTargetLayout()
                     }
@@ -1292,10 +1399,29 @@ struct PlayingTab: View {
             if pending { pendingWait?.cancel(); withAnimation(.easeOut(duration: 0.2)) { pending = false }; query = "" }
         }
     }
+    // With a film or show on, the spare side has what comes after it: the next episode, ready to flick, and what was
+    // flicked lately. The music search is for when Mint is what's on, or there's nothing else to offer.
+    var watching: Bool { otherAppIsActive && model.status?.session?.pkg == "com.stremio.one" && (nextUp.next != nil || !recent.list.isEmpty) }
+    var upNext: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            if let n = nextUp.next {
+                VStack(alignment: .leading, spacing: 0) {
+                    RowTitle("Up next")
+                    FlickCardButton(item: n, source: .stremio, width: 168, ready: true)
+                }
+                .padding(.horizontal, 20)
+            }
+            RecentRow()
+        }
+        .padding(.vertical, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
     var body: some View {
         Group {
             if panes {
-                FoldSplit { ScrollView { now.padding(20) }.backToTop() } right: { ScrollView { send.padding(20) }.backToTop() }
+                FoldSplit { ScrollView { now.padding(20) }.backToTop() } right: {
+                    ScrollView { if watching { upNext } else { send.padding(20) } }.backToTop()
+                }
             } else {
                 ScrollView { VStack(spacing: 24) { now; send }.padding(.horizontal, 16).padding(.bottom, 16) }.backToTop()
             }
@@ -1373,6 +1499,7 @@ struct FilmsTab: View {
     static let genres = ["Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "History", "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "War", "Western"]
     @Environment(\.paneLayout) private var panes
     var body: some View {
+        // Films or shows only swaps the rows: the switch itself, the search and the place on the page stay put.
         Group {
             // Unfolded, the rows take turns on each side of the fold, as on an app's own page, rather than running across it.
             if panes {
@@ -1382,9 +1509,6 @@ struct FilmsTab: View {
                 DiscoverColumn(store: kind == "movie" ? films : shows, kind: $kind)
             }
         }
-            .id(kind)
-            .transition(.opacity)
-            .animation(.easeInOut(duration: 0.25), value: kind)
     }
 }
 struct DiscoverColumn: View {
@@ -1431,27 +1555,30 @@ struct DiscoverColumn: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 if part != .right { controls }
-                ForEach(shown) { row in
+                // Each kind's rows are their own, so switching crossfades the rows alone.
+                ForEach(shown, id: \.title) { row in
                     VStack(alignment: .leading, spacing: 0) {
                         RowHeader(title: row.title, route: .media(row, .stremio)).padding(.leading, 20)
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 10) {
-                                ForEach(row.items) { item in
-                                    Button { model.flick(FlickTarget(item: item, source: .stremio)) } label: { MediaCard(item: item, source: .stremio, width: 124) }
-                                        .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
-                                }
+                                ForEach(row.items) { item in FlickCardButton(item: item, source: .stremio, width: 124) }
                             }
                             .padding(.horizontal, 20)
                         }
                         .rowEdge()
                     }
+                    .id(kind + "/" + row.title)
+                    .transition(.opacity)
                 }
             }
+            .scrollTargetLayout()
             .padding(.vertical, 12)
+            .animation(.easeInOut(duration: 0.25), value: kind)
         }
-        .backToTop()
+        .restsOnRows()
+        .backToTop(posed: part != .left)
         .refreshable { await store.load(force: true) }
-        .task { await store.load() }
+        .task(id: kind) { await store.load() }
     }
 }
 // What was last flicked from this phone, newest first. One tap has it in the hand again, episode and best stream
@@ -1465,13 +1592,9 @@ struct RecentRow: View {
                 RowTitle("Recently flicked").padding(.leading, 20)
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 10) {
-                        ForEach(recent.list) { f in
-                            let item = f.item
-                            Button { model.flick(FlickTarget(item: item, source: .stremio, ready: true)) } label: { MediaCard(item: item, source: .stremio, width: 124) }
-                                .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
-                        }
+                        ForEach(recent.list) { f in FlickCardButton(item: f.item, source: .stremio, width: 124, ready: true) }
                     }
-                    .padding(.horizontal, 20).scrollTargetLayout()
+                    .padding(.horizontal, 20)
                 }
                 .rowEdge()
             }
@@ -1482,7 +1605,7 @@ struct RecentRow: View {
 // The cards are as big as the row's real ones, so nothing moves when it comes.
 struct PlaceholderShelf: View {
     var cardWidth: CGFloat = 124
-    var cardHeight: CGFloat = 236
+    var cardHeight: CGFloat = MediaCard.height(124, .stremio)
     // Where the row's own heading will be: the height of its line, so the cards start where they will.
     var headed = false
     @State private var breathe = false
@@ -1603,29 +1726,53 @@ struct VideoProgress: View {
 // colour, a picked film or album brings its cover's, and with nothing picked the colour comes from what's playing.
 struct Ambience: View {
     @EnvironmentObject var model: TVModel
-    // One picture shared by every page, so a page shows it the moment it appears instead of drawing it in.
-    @MainActor private static var memo: [String: (image: TVImage, tint: Color?)] = [:]
-    @State private var loaded = 0
-    var art: String? { model.nowArt }
-    var current: (image: TVImage, tint: Color?)? { art.flatMap { Ambience.memo[$0] } }
-    var tint: Color { model.mood ?? current?.tint ?? Color(hex: 0x4A1A5C) }
+    // One picture and colour for every page at once, so a page shows the current one the moment it appears, never
+    // whatever it showed last time.
+    @ObservedObject private var store = AmbienceStore.shared
+    @State private var appeared = false
+    var tint: Color { model.mood ?? store.band ?? Color(hex: 0x4A1A5C) }
     var body: some View {
         ZStack {
             Color.black
-            if let small = current?.image {
+            if let small = store.image {
                 Color.clear
                     .overlay { Image(tv: small).resizable().interpolation(.high).scaledToFill().opacity(0.55) }
                     .clipped()
+                    // A new picture crossfades over the last, in place.
+                    .id(store.key)
+                    .transition(.opacity)
             }
             // Only the colour eases, and only the colour: an animation on the whole backdrop would grow it from a corner
             // as a page lays out.
             LinearGradient(colors: [tint.opacity(0.8), tint.opacity(0.45), .black.opacity(0.75)], startPoint: .topLeading, endPoint: .bottom)
-                .animation(.easeInOut(duration: 0.7), value: tint)
+                .animation(appeared ? .easeInOut(duration: 0.7) : nil, value: tint)
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
-        .task(id: art) {
-            guard let art, Ambience.memo[art] == nil, let u = URL(string: art), let i = await ImageStore.shared.load(u) else { return }
+        // Arriving on a page it's simply there, as it was: nothing eases in as the page appears.
+        .transaction { if !appeared { $0.animation = nil } }
+        .onAppear { Task { appeared = true } }
+        .onDisappear { appeared = false }
+    }
+}
+// The picture behind every page, held once for the whole app. It changes only when a new one is ready, never to
+// nothing, so coming back to a tab shows exactly what's behind every other tab right now.
+@MainActor
+final class AmbienceStore: ObservableObject {
+    static let shared = AmbienceStore()
+    @Published private(set) var image: TVImage?
+    @Published private(set) var band: Color?
+    @Published private(set) var key: String?
+    // The last few, so going back to something played lately needs no fetching.
+    private var recent: [(art: String, image: TVImage, band: Color?)] = []
+    private var wanted: String?
+    func show(_ art: String?) async {
+        guard let art, art != key else { return }
+        wanted = art
+        let hit = recent.firstIndex { $0.art == art }.map { recent.remove(at: $0) }
+        var entry = hit
+        if entry == nil {
+            guard let u = URL(string: art), let i = await ImageStore.shared.load(u) else { return }
             let band = await ImageStore.shared.band(u)
             // Shrunk to a few pixels and stretched back: a heavy blur that costs nothing while scrolling.
             #if canImport(UIKit)
@@ -1633,10 +1780,14 @@ struct Ambience: View {
             #else
             let small = i
             #endif
-            if Ambience.memo.count > 40 { Ambience.memo.removeAll() }
-            Ambience.memo[art] = (small, band)
-            loaded += 1
+            entry = (art, small, band)
         }
+        guard let entry else { return }
+        recent.insert(entry, at: 0)
+        if recent.count > 8 { recent.removeLast() }
+        // A newer one asked for meanwhile wins.
+        guard wanted == art else { return }
+        withAnimation(.easeInOut(duration: 0.7)) { image = entry.image; band = entry.band; key = art }
     }
 }
 

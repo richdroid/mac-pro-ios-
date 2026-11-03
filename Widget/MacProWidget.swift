@@ -72,13 +72,16 @@ struct Graphite: ViewModifier {
         }
     }
 }
-// Rows spread over the space they're given, an equal gap between each.
-struct EvenRows: ViewModifier {
-    func body(content: Content) -> some View {
-        content.frame(maxHeight: .infinity, alignment: .center)
-    }
-}
 func fahrenheit(_ c: Double) -> Int { Int((c * 9 / 5 + 32).rounded()) }
+// In the app's unit when it shares its settings with the widgets, Fahrenheit otherwise.
+func shownTemp(_ c: Double) -> Int { MacPrefs.widgetCelsius ? Int(c.rounded()) : fahrenheit(c) }
+var tempUnit: String { MacPrefs.widgetCelsius ? "°C" : "°F" }
+// The meters' blue, or the app's colour when it shares it.
+var meterTint: Color {
+    guard let a = MacPrefs.widgetAccent, a != .blue else { return Color(red: 0.45, green: 0.75, blue: 1) }
+    return a.color
+}
+let claudeTint = Color(red: 0.85, green: 0.55, blue: 0.4)
 func heatColor(_ c: Double) -> Color { c >= 90 ? .red : c >= 75 ? .orange : c >= 60 ? .yellow : Color(red: 0.45, green: 0.85, blue: 0.95) }
 func heatLine(_ c: Double) -> String { c >= 90 ? "Fans, please!" : c >= 75 ? "Getting toasty" : c >= 60 ? "Warming up" : "Cool as a trash can" }
 func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
@@ -96,11 +99,12 @@ struct Bar: View {
         .frame(height: 6)
     }
 }
+// Each bar sits right under its own label, and well apart from the next meter's.
 struct Meter: View {
     let label: String, value: Double, text: String
-    var tint = Color(red: 0.45, green: 0.75, blue: 1)
+    var tint = meterTint
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline) {
                 Text(label).font(.system(size: 14, weight: .medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
                 Spacer(minLength: 4)
@@ -157,7 +161,7 @@ struct StatusView: View {
                             }
                         }
                         Spacer(minLength: 6)
-                        VStack(spacing: 9) {
+                        VStack(spacing: 10) {
                             Meter(label: "CPU", value: n.cpu, text: pct(n.cpu))
                             Meter(label: "Memory", value: n.mem, text: pct(n.mem))
                         }
@@ -170,15 +174,19 @@ struct StatusView: View {
                             Image("MacPro").resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().frame(height: 100)
                             Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7))
                         }
+                        // The meters share the height evenly, the space falling between them rather than inside them.
                         VStack(alignment: .leading, spacing: 0) {
                             Meter(label: "CPU", value: n.cpu, text: pct(n.cpu))
+                            Spacer(minLength: 6)
                             Meter(label: "Memory", value: n.mem, text: pct(n.mem))
+                            Spacer(minLength: 6)
                             Meter(label: "Disk", value: n.disk, text: pct(n.disk))
-                            if let w = n.week { Meter(label: "Claude", value: w / 100, text: "\(Int(w))%") }
+                            if let w = n.week {
+                                Spacer(minLength: 6)
+                                Meter(label: "Claude week", value: w / 100, text: "\(Int(w))%", tint: claudeTint)
+                            }
                         }
-                        // The meters share the height evenly rather than bunching at the top.
                         .frame(maxHeight: .infinity)
-                        .modifier(EvenRows())
                     }
                 } else { Problem(text: entry.problem ?? "") }
             }
@@ -207,16 +215,16 @@ struct TempView: View {
         Group {
             switch family {
             case .accessoryCircular:
-                if let c = cpu { Gauge(value: min(c, 100), in: 20...100) { Text("°F") } currentValueLabel: { Text("\(fahrenheit(c))") }.gaugeStyle(.accessoryCircular) }
+                if let c = cpu { Gauge(value: min(c, 100), in: 20...100) { Text(tempUnit) } currentValueLabel: { Text("\(shownTemp(c))") }.gaugeStyle(.accessoryCircular) }
                 else { Image(systemName: "thermometer.medium") }
             case .accessoryInline:
-                Label(cpu.map { "CPU \(fahrenheit($0))°F" } ?? "Mac Pro unreachable", systemImage: "thermometer.medium")
+                Label(cpu.map { "CPU \(shownTemp($0))\(tempUnit)" } ?? "Mac Pro unreachable", systemImage: "thermometer.medium")
             case .systemSmall:
                 if let h = hottest {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 5) { Image(systemName: "thermometer.medium").foregroundStyle(heatColor(h.c)); Text(h.name).font(.system(size: 13, weight: .semibold)).opacity(0.8) }
                         Spacer(minLength: 0)
-                        Text("\(fahrenheit(h.c))°").font(.system(size: 50, weight: .semibold, design: .rounded)).foregroundStyle(heatColor(h.c)).monospacedDigit()
+                        Text("\(shownTemp(h.c))°").font(.system(size: 50, weight: .semibold, design: .rounded)).foregroundStyle(heatColor(h.c)).monospacedDigit()
                         Text(heatLine(h.c)).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(2).minimumScaleFactor(0.8)
                     }
                 } else { Problem(text: entry.problem ?? "No sensors yet.") }
@@ -229,7 +237,7 @@ struct TempView: View {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible())], spacing: 12) {
                             ForEach(shown, id: \.name) { t in
                                 VStack(alignment: .leading, spacing: 2) {
-                                    HStack { Text(t.name).lineLimit(1).font(.system(size: 14, weight: .medium)).foregroundStyle(.white.opacity(0.8)); Spacer(); Text("\(fahrenheit(t.c))°").font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(heatColor(t.c)) }
+                                    HStack { Text(t.name).lineLimit(1).font(.system(size: 14, weight: .medium)).foregroundStyle(.white.opacity(0.8)); Spacer(); Text("\(shownTemp(t.c))°").font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(heatColor(t.c)) }
                                     Bar(value: (t.c - 20) / 80, color: heatColor(t.c))
                                 }
                             }
@@ -264,12 +272,12 @@ struct ClaudeView: View {
         Group {
             if let p = plan {
                 // The same meters as the Mac Pro's own, in Claude's colour.
-                let claude = Color(red: 0.85, green: 0.55, blue: 0.4)
+                let claude = claudeTint
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 6) { Image("ClaudeTab").resizable().scaledToFit().frame(width: 18, height: 18); Text("Claude").font(.system(size: 16, weight: .semibold)) }
                     Spacer(minLength: 6)
                     if let f = p.0 {
-                        VStack(spacing: 9) {
+                        VStack(spacing: 10) {
                             Meter(label: "5 hours", value: f / 100, text: "\(Int(f))%", tint: claude)
                             Meter(label: "This week", value: p.1 / 100, text: "\(Int(p.1))%", tint: claude)
                         }

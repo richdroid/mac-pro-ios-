@@ -251,6 +251,8 @@ final class RemoteScreen: ObservableObject {
         c.setFillColor(CGColor(red: 0.2, green: 0.2, blue: 0.24, alpha: 0.9)); c.fill(CGRect(x: 0, y: 1020, width: w, height: 30))
         image = c.makeImage(); size = CGSize(width: w, height: h); cursor = CGPoint(x: 700, y: 500); phase = .connected
     }
+    // For the build's shot of the screen when the Mac isn't logged in.
+    func showNeedsLogin() { wanted = false; image = nil; phase = .needsLogin }
     func type(_ text: String) {
         for scalar in text.unicodeScalars { key(scalar.value < 256 ? scalar.value : 0x0100_0000 | scalar.value) }
     }

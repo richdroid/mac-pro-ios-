@@ -28,7 +28,10 @@ private struct IslandText: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(state.title).font(.headline).lineLimit(1)
-            if !stale { Text(state.subtitle == state.title ? state.app : state.subtitle).font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1) }
+            // The episode, or nothing: the app doing the playing is plumbing.
+            if !stale, !state.subtitle.isEmpty, state.subtitle != state.title, state.subtitle != state.app {
+                Text(state.subtitle).font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+            }
         }
     }
 }

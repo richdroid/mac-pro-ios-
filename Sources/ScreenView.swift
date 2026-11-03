@@ -12,8 +12,10 @@ enum MacKey {
 
 // The Mac's screen, shaped by how the Duo is held.
 //  - Open and turned so the fold runs across: a laptop. Screen above the fold, trackpad and keys below.
-//  - Open flat: the whole screen, touched directly, with a dock floating over it.
+//  - Open flat: the whole screen, touched directly, with a dock under it, or over it when there's no room.
 //  - Closed: the screen across the top and the trackpad under your thumb.
+// Done and the screen's own controls sit on a rail in the column the system keeps on the right for its side bar, where
+// Back is on every other page. Where there's no such column (open in portrait), they sit in a bar above the keys.
 struct RemoteScreenView: View {
     let model: AppModel
     init(model: AppModel) { self.model = model; observed = model.screen }
@@ -36,40 +38,49 @@ struct RemoteScreenView: View {
     @State private var lastTap = Date.distantPast
     @State private var lastMove = Date.distantPast
     @State private var dockOpen = true
+    @State private var loginPassword = ""
+    @State private var loggingIn = false
+    @State private var loginFail: String?
+
+    // Where the system's Back button sits on the rail, from the top of the display, as measured on the build's shots:
+    // 175 pt closed, 124 pt open. Done goes at the same height.
+    static func railTop(_ width: CGFloat) -> CGFloat { width < 600 ? 175 : 124 }
 
     var body: some View {
-        GeometryReader { g in
-            let laptop = g.size.width >= 600 && g.size.height > g.size.width
-            let wide = g.size.width > g.size.height
-            Group {
-                if laptop {
-                    // Apple's container for the fold, which knows where the crease is and keeps both halves clear of it.
-                    FoldSplit { canvas } right: { deck }
-                } else if wide {
-                    ZStack(alignment: .bottom) {
-                        canvas
-                        dock.padding(.bottom, 10)
-                    }
-                } else {
-                    VStack(spacing: 10) {
-                        canvas.frame(height: fittedHeight(g.size.width))
-                        deck
-                    }
+        GeometryReader { full in
+            let ins = full.safeAreaInsets
+            // The side bar's column: wide enough to hold the rail, so the rail goes there and the picture keeps the rest.
+            let column = ins.trailing >= 52
+            let area = CGSize(width: max(0, full.size.width - ins.leading - ins.trailing), height: max(0, full.size.height - ins.top - ins.bottom))
+            ZStack(alignment: .topTrailing) {
+                layout(area, inline: !column)
+                    .frame(width: area.width, height: area.height)
+                    .padding(EdgeInsets(top: ins.top, leading: ins.leading, bottom: ins.bottom, trailing: ins.trailing))
+                    .frame(width: full.size.width, height: full.size.height, alignment: .topLeading)
+                if column {
+                    rail(vertical: true)
+                        .frame(width: ins.trailing)
+                        .padding(.top, Self.railTop(full.size.width))
                 }
             }
-            .overlay(alignment: .topLeading) { closeButton(wide: wide) }
         }
+        .ignoresSafeArea(.container)
         .background(Color.black.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onAppear {
-            if UserDefaults.standard.string(forKey: "pose") == "screen" { screen.showSample() } else { screen.open(base: model.api.base) }
+            switch model.pose {
+            case "screen": screen.showSample()
+            case "screenlogin": screen.showNeedsLogin()
+            default: screen.open(base: model.api.base)
+            }
             keepAwake(true)
         }
         .onDisappear {
             screen.close()
             keepAwake(false)
+            loginPassword = ""
         }
         .onChange(of: scene) { _, p in
             if p == .background { screen.enteredBackground() }
@@ -83,17 +94,80 @@ struct RemoteScreenView: View {
         }
     }
 
+    @ViewBuilder func layout(_ area: CGSize, inline: Bool) -> some View {
+        let laptop = area.width >= 600 && area.height > area.width
+        let wide = area.width > area.height
+        if laptop {
+            // Apple's container for the fold, which knows where the crease is and keeps both halves clear of it.
+            FoldSplit { canvas } right: { deck(inline: inline) }
+        } else if wide {
+            let picture = min(fittedHeight(area.width), area.height)
+            if area.height - picture >= 64 {
+                // Room under the picture: the dock sits in the black there, clear of the Mac's own Dock.
+                VStack(spacing: 8) {
+                    canvas.frame(height: picture)
+                    dock(inline: inline)
+                }
+                .frame(maxHeight: .infinity)
+            } else {
+                ZStack(alignment: .bottom) {
+                    canvas
+                    dock(inline: inline).padding(.bottom, 10)
+                }
+            }
+        } else {
+            VStack(spacing: 10) {
+                canvas.frame(height: fittedHeight(area.width))
+                deck(inline: inline)
+            }
+        }
+    }
+
     func fittedHeight(_ width: CGFloat) -> CGFloat {
         guard screen.size.width > 0 else { return width * 0.65 }
         return width * screen.size.height / screen.size.width
     }
 
-    func closeButton(wide: Bool) -> some View {
+    // MARK: The rail
+    var doneButton: some View {
         Button { model.screenOpen = false } label: {
-            Image(systemName: "xmark").font(.footnote.weight(.bold)).frame(width: 34, height: 34).contentShape(Circle())
+            Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).frame(width: 48, height: 48).contentShape(Circle())
         }
         .buttonStyle(.plain).foregroundStyle(.white).glassEffect(.regular.interactive(), in: Circle())
-        .padding(8).accessibilityLabel("Done")
+        .accessibilityLabel("Done")
+    }
+    func railButton(_ icon: String, _ a11y: String, on: Bool = false, action: @escaping () -> Void) -> some View {
+        Button { tick(.light); action() } label: {
+            Image(systemName: icon).font(.system(size: 17, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(.white.opacity(on ? 0.24 : 0)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain).foregroundStyle(.white).accessibilityLabel(a11y).accessibilityAddTraits(on ? .isSelected : [])
+    }
+    @ViewBuilder var railItems: some View {
+        railButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Show keyboard", on: typing) { typing.toggle() }
+            .background { KeyCatcher(active: $typing, onText: typeText, onDelete: { send(MacKey.delete) }).frame(width: 1, height: 1).opacity(0.01) }
+        railButton("arrow.down.right.and.arrow.up.left", "Fit the screen") {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { zoom = 1; pan = .zero }
+        }
+        railButton("key.fill", "Sign in to the Mac") { signingIn = true }
+        railButton("doc.on.doc", "Copy") { send(0x63, [MacKey.command]) }
+        railButton("doc.on.clipboard", "Paste") { send(0x76, [MacKey.command]) }
+    }
+    @ViewBuilder func rail(vertical: Bool) -> some View {
+        if vertical {
+            VStack(spacing: 14) {
+                doneButton
+                VStack(spacing: 4) { railItems }.padding(4).glassEffect(.regular, in: Capsule())
+            }
+        } else {
+            HStack(spacing: 10) {
+                doneButton
+                Spacer(minLength: 0)
+                HStack(spacing: 4) { railItems }.padding(4).glassEffect(.regular, in: Capsule())
+            }
+        }
     }
 
     // MARK: The picture
@@ -135,7 +209,7 @@ struct RemoteScreenView: View {
             .overlay {
                 if showCursor, screen.image != nil {
                     Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5)
-                        .background(Circle().fill(Color.accentColor.opacity(0.3)))
+                        .background(Circle().fill(macBlue.opacity(0.3)))
                         .frame(width: 26, height: 26)
                         .shadow(color: .black.opacity(0.5), radius: 3)
                         .position(viewPoint(screen.cursor))
@@ -229,10 +303,10 @@ struct RemoteScreenView: View {
     enum Haptic { case light, medium }
 
     // MARK: Trackpad and keys
-    var deck: some View {
+    func deck(inline: Bool) -> some View {
         VStack(spacing: 8) {
-            keyStrip
-            modifierRow
+            if inline { rail(vertical: false) }
+            keyRows
             trackpad
         }
         .padding(.horizontal, 10).padding(.bottom, 8)
@@ -279,36 +353,48 @@ struct RemoteScreenView: View {
         tick(.light)
         modifiers = []
     }
-    func keyButton(_ label: String, icon: String? = nil, _ a11y: String, action: @escaping () -> Void) -> some View {
+    func keyButton(_ label: String, icon: String? = nil, _ a11y: String, flexible: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Group {
                 if let icon { Image(systemName: icon).font(.system(size: 15, weight: .semibold)) }
-                else { Text(label).font(.system(size: 13, weight: .semibold)).lineLimit(1) }
+                else { Text(label).font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8) }
             }
-            .frame(minWidth: 40, minHeight: 36).padding(.horizontal, 3).contentShape(Rectangle())
+            .frame(minWidth: flexible ? 30 : 40, maxWidth: flexible ? .infinity : nil, minHeight: 40).padding(.horizontal, flexible ? 0 : 3).contentShape(Rectangle())
         }
         .buttonStyle(MacKeyStyle()).accessibilityLabel(a11y)
     }
-    var keyStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+    var arrows: some View {
+        HStack(spacing: 6) {
+            keyButton("", icon: "arrow.left", "Left arrow", flexible: true) { send(MacKey.left) }
+            keyButton("", icon: "arrow.up", "Up arrow", flexible: true) { send(MacKey.up) }
+            keyButton("", icon: "arrow.down", "Down arrow", flexible: true) { send(MacKey.down) }
+            keyButton("", icon: "arrow.right", "Right arrow", flexible: true) { send(MacKey.right) }
+        }
+    }
+    var modifierRow: some View {
+        HStack(spacing: 6) {
+            modifierKey("⌃", MacKey.control, "Control")
+            modifierKey("⌥", MacKey.option, "Option")
+            modifierKey("⌘", MacKey.command, "Command")
+            modifierKey("⇧", MacKey.shift, "Shift")
+        }
+    }
+    // Every key in view at once and every row the same width: nothing scrolls or is cut off. The arrows stay together,
+    // ← ↑ ↓ →, beside the modifiers when there's room and under them when there isn't.
+    var keyRows: some View {
+        VStack(spacing: 6) {
             HStack(spacing: 6) {
-                keyButton("esc", "Escape") { send(MacKey.esc) }
-                keyButton("tab", "Tab") { send(MacKey.tab) }
-                keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { send(MacKey.tab, [MacKey.command]) }
-                keyButton("", icon: "magnifyingglass", "Spotlight") { send(0x20, [MacKey.command]) }
-                keyButton("", icon: "rectangle.3.group", "Mission Control") { send(MacKey.up, [MacKey.control]) }
-                keyButton("", icon: "arrow.left", "Left arrow") { send(MacKey.left) }
-                keyButton("", icon: "arrow.down", "Down arrow") { send(MacKey.down) }
-                keyButton("", icon: "arrow.up", "Up arrow") { send(MacKey.up) }
-                keyButton("", icon: "arrow.right", "Right arrow") { send(MacKey.right) }
-                keyButton("", icon: "delete.left", "Delete") { send(MacKey.delete) }
-                keyButton("", icon: "return", "Return") { send(MacKey.returnKey) }
-                keyButton("copy", "Copy") { send(0x63, [MacKey.command]) }
-                keyButton("paste", "Paste") { send(0x76, [MacKey.command]) }
-                keyButton("", icon: "key.fill", "Sign in to the Mac") { signingIn = true }
-                keyButton("", icon: "arrow.down.right.and.arrow.up.left", "Fit the screen") {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { zoom = 1; pan = .zero }
-                }
+                keyButton("esc", "Escape", flexible: true) { send(MacKey.esc) }
+                keyButton("tab", "Tab", flexible: true) { send(MacKey.tab) }
+                keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps", flexible: true) { send(MacKey.tab, [MacKey.command]) }
+                keyButton("", icon: "magnifyingglass", "Spotlight", flexible: true) { send(0x20, [MacKey.command]) }
+                keyButton("", icon: "rectangle.3.group", "Mission Control", flexible: true) { send(MacKey.up, [MacKey.control]) }
+                keyButton("", icon: "delete.left", "Delete", flexible: true) { send(MacKey.delete) }
+                keyButton("", icon: "return", "Return", flexible: true) { send(MacKey.returnKey) }
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) { modifierRow; Color.clear.frame(width: 6, height: 1); arrows }
+                VStack(spacing: 6) { arrows; modifierRow }
             }
         }
     }
@@ -318,23 +404,9 @@ struct RemoteScreenView: View {
             tick(.light)
             if on { modifiers.remove(sym) } else { modifiers.insert(sym) }
         } label: {
-            Text(label).font(.system(size: 16, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 36).contentShape(Rectangle())
+            Text(label).font(.system(size: 16, weight: .semibold)).frame(minWidth: 40, maxWidth: .infinity, minHeight: 40).contentShape(Rectangle())
         }
         .buttonStyle(MacKeyStyle(on: on)).accessibilityLabel(a11y).accessibilityAddTraits(on ? .isSelected : [])
-    }
-    var modifierRow: some View {
-        HStack(spacing: 6) {
-            modifierKey("⌃", MacKey.control, "Control")
-            modifierKey("⌥", MacKey.option, "Option")
-            modifierKey("⌘", MacKey.command, "Command")
-            modifierKey("⇧", MacKey.shift, "Shift")
-            Button { tick(.light); typing.toggle() } label: {
-                Image(systemName: typing ? "keyboard.chevron.compact.down" : "keyboard").font(.system(size: 15, weight: .semibold))
-                    .frame(maxWidth: .infinity, minHeight: 36).contentShape(Rectangle())
-            }
-            .buttonStyle(MacKeyStyle(on: typing)).accessibilityLabel(typing ? "Hide keyboard" : "Show keyboard")
-            .background { KeyCatcher(active: $typing, onText: typeText, onDelete: { send(MacKey.delete) }).frame(width: 1, height: 1).opacity(0.01) }
-        }
     }
     func typeText(_ text: String) {
         for scalar in text.unicodeScalars {
@@ -344,33 +416,30 @@ struct RemoteScreenView: View {
         }
     }
     // Open flat the picture has the room, so the trackpad is a touch away instead of always there.
-    var dock: some View {
+    func dock(inline: Bool) -> some View {
         HStack(spacing: 6) {
+            // Done stays even with the keys tucked away.
+            if inline { doneButton.scaleEffect(0.84).frame(width: 40, height: 40) }
             if dockOpen {
                 modifierKey("⌘", MacKey.command, "Command").frame(width: 44)
                 keyButton("esc", "Escape") { send(MacKey.esc) }
                 keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { send(MacKey.tab, [MacKey.command]) }
                 keyButton("", icon: "magnifyingglass", "Spotlight") { send(0x20, [MacKey.command]) }
                 keyButton("", icon: "rectangle.3.group", "Mission Control") { send(MacKey.up, [MacKey.control]) }
+                keyButton("", icon: "arrow.left", "Left arrow") { send(MacKey.left) }
+                keyButton("", icon: "arrow.up", "Up arrow") { send(MacKey.up) }
+                keyButton("", icon: "arrow.down", "Down arrow") { send(MacKey.down) }
+                keyButton("", icon: "arrow.right", "Right arrow") { send(MacKey.right) }
                 keyButton("", icon: "delete.left", "Delete") { send(MacKey.delete) }
                 keyButton("", icon: "return", "Return") { send(MacKey.returnKey) }
-                keyButton("", icon: "key.fill", "Sign in to the Mac") { signingIn = true }
-                keyButton("", icon: "arrow.down.right.and.arrow.up.left", "Fit the screen") {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { zoom = 1; pan = .zero }
-                }
-                Button { tick(.light); typing.toggle() } label: {
-                    Image(systemName: typing ? "keyboard.chevron.compact.down" : "keyboard").font(.system(size: 15, weight: .semibold))
-                        .frame(minWidth: 44, minHeight: 36).contentShape(Rectangle())
-                }
-                .buttonStyle(MacKeyStyle(on: typing)).accessibilityLabel(typing ? "Hide keyboard" : "Show keyboard")
-                .background { KeyCatcher(active: $typing, onText: typeText, onDelete: { send(MacKey.delete) }).frame(width: 1, height: 1).opacity(0.01) }
+                if inline { railItems }
             }
             Button {
                 tick(.light)
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { dockOpen.toggle() }
             } label: {
                 Image(systemName: dockOpen ? "chevron.down" : "chevron.up").font(.system(size: 13, weight: .bold))
-                    .frame(width: 30, height: 36).contentShape(Rectangle())
+                    .frame(width: 30, height: 40).contentShape(Rectangle())
             }
             .buttonStyle(.plain).foregroundStyle(.white.opacity(0.7)).accessibilityLabel(dockOpen ? "Hide the keys" : "Show the keys")
         }
@@ -394,13 +463,47 @@ struct RemoteScreenView: View {
                 Spacer()
             }
             .allowsHitTesting(false)
-        case .needsLogin: Text("Log in to this Mac on the Control tab first.").foregroundStyle(.white).padding()
+        case .needsLogin: loginCard
         case .failed(let m):
             VStack(spacing: 10) {
                 Text(m).foregroundStyle(.white)
                 Button("Try Again") { screen.connect(base: model.api.base) }.buttonStyle(.borderedProminent)
             }.padding()
         default: EmptyView()
+        }
+    }
+}
+
+extension RemoteScreenView {
+    // The screen can't be shown until the Mac is logged in, so logging in happens right here, then it connects.
+    var loginCard: some View {
+        // Compact, so it fits the picture's space on the closed Duo without being cut off.
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Log in to see the Mac’s screen", systemImage: "lock.fill").font(.headline).foregroundStyle(.white).lineLimit(2)
+            SecureField("Mac password", text: $loginPassword)
+                .textContentType(.password)
+                .submitLabel(.go).onSubmit(logIn)
+                .padding(.horizontal, 12).padding(.vertical, 9)
+                .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Button(action: logIn) {
+                Group { if loggingIn { ProgressView() } else { Text("Log in") } }.frame(maxWidth: .infinity, minHeight: 24)
+            }
+            .buttonStyle(.borderedProminent).disabled(loginPassword.isEmpty || loggingIn)
+            if let loginFail { FailText(loginFail) }
+        }
+        .padding(16)
+        .frame(maxWidth: 340)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+        .padding(8)
+    }
+    func logIn() {
+        guard !loginPassword.isEmpty, !loggingIn else { return }
+        let p = loginPassword; loginPassword = ""
+        loggingIn = true; loginFail = nil
+        Task {
+            let e = await model.runSealed("mac-login", secret: p)
+            loggingIn = false
+            if let e { loginFail = e } else { screen.connect(base: model.api.base) }
         }
     }
 }

@@ -66,12 +66,10 @@ struct ChumbyNapIntent: AppIntent {
     init() {}
     init(minutes: Int) { self.minutes = minutes }
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        // Read the list fresh, since a save replaces all of it.
-        try await chumbyTry { api in
-            var s = try JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state"))
-            s.addNap(minutes: minutes)
-            try await api.post("save", body: ChumbyAPI.form(s.alarmForm()))
-        }
+        // A real alarm on the Chumby, so its backup and catch-up cover it, saved the one careful way.
+        let minutes = minutes
+        do { _ = try await chumbyTry { try await AlarmWriter.shared.edit($0) { $0.addNap(minutes: minutes) } } }
+        catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
         WidgetCenter.shared.reloadAllTimelines()
         return .result(dialog: IntentDialog(stringLiteral: "Blub. Waking you in \(minutes) minutes."))
     }
@@ -82,7 +80,7 @@ struct ChumbyNextAlarmIntent: AppIntent {
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         let s = try await chumbyTry { try JSONDecoder().decode(ChumbyState.self, from: await $0.fresh("state")) }
         var text = "No alarms set. Sleep in."
-        if let next = s.alarms.compactMap({ a in a.nextFire().map { (a, $0) } }).min(by: { $0.1 < $1.1 }) {
+        if let next = s.nextRing() {
             let when = next.1.formatted(.dateTime.weekday(.wide).hour().minute())
             text = next.0.name.isEmpty ? "\(when)." : "\(when): \(next.0.name)."
         }
@@ -98,6 +96,17 @@ struct ChumbyStatusIntent: AppIntent {
         return .result(value: text, dialog: IntentDialog(stringLiteral: text))
     }
 }
+// The ringing alarm's own Stop, from Control Center or Siri: the same as pressing it on the Chumby.
+struct ChumbyStopAlarmIntent: AppIntent {
+    static var title: LocalizedStringResource = "Stop Chumby Alarm"
+    static var description = IntentDescription("Stops the alarm that's ringing or snoozing.")
+    func perform() async throws -> some IntentResult {
+        do { try await chumbyTry { try await $0.cmd("ringoff") } }
+        catch ChumbyError.message("not delivered") { throw ChumbyError.message("No Chumby alarm is ringing.") }
+        catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
+        return .result()
+    }
+}
 struct ChumbyOpenIntent: AppIntent {
     static var title: LocalizedStringResource = "Open Chumby"
     static var openAppWhenRun = true
@@ -105,10 +114,12 @@ struct ChumbyOpenIntent: AppIntent {
 }
 
 extension ChumbyState {
-    mutating func addNap(minutes: Int) {
+    mutating func addNap(minutes: Int) { addNap(at: Int((Date().timeIntervalSince1970 / 60).rounded(.up)) + minutes) }
+    // A one-off beep named Nap, due at `at` (minutes since 1970), in the first free place.
+    mutating func addNap(at: Int) {
         var a = Alarm()
         a.name = "Nap"; a.when = "once"; a.enabled = "1"
-        a.time = String(Int((Date().timeIntervalSince1970 / 60).rounded(.up)) + minutes)
+        a.time = String(at)
         let tone = tones.first ?? "Beep"
         a.type = "beep"; a.arg = tone; a.param_description = tone; a.duration = "5"
         if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }

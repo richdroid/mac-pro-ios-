@@ -88,7 +88,27 @@ final class BrowseStore: ObservableObject {
             failed = rows.isEmpty
             return
         }
-        rows = a.rows; loadedFor = q; loadedAt = Date()
+        rows = base == nil ? a.rows : Self.fold(a.rows); loadedFor = q; loadedAt = Date()
+    }
+    // A shelf of only a few is never shown on its own: its cards go to the front of the full row before it (else the
+    // one after), with nothing twice. Continue watching is his own, however short.
+    static func fold(_ rows: [MediaRow]) -> [MediaRow] {
+        func full(_ r: MediaRow) -> Bool { r.items.count >= 8 }
+        func key(_ i: MediaItem) -> String { i.stremioRef?.imdb ?? i.id }
+        var out: [MediaRow] = [], waiting: [MediaItem] = []
+        func merge(_ few: [MediaItem], into r: MediaRow) -> MediaRow {
+            var seen = Set<String>()
+            return MediaRow(title: r.title, items: (few + r.items).filter { seen.insert(key($0)).inserted })
+        }
+        for r in rows {
+            if r.title == "Continue watching" || full(r) {
+                out.append(waiting.isEmpty || r.title == "Continue watching" ? r : merge(waiting, into: r))
+                if r.title != "Continue watching" { waiting = [] }
+            } else if let i = out.lastIndex(where: { $0.title != "Continue watching" && full($0) }) {
+                out[i] = merge(r.items, into: out[i])
+            } else { waiting += r.items }
+        }
+        return out
     }
     func searchSoon() {
         searching?.cancel()
@@ -99,12 +119,20 @@ final class BrowseStore: ObservableObject {
     }
 }
 
+extension MediaItem {
+    // What's worth reading under the title: no service, no kind, no "Continue".
+    var shownSubtitle: String { Wording.subtitle(subtitle) }
+}
+
 // The item as Mint draws it: a cover over a solid band tinted from that cover.
 struct MediaCard: View {
     let item: MediaItem
     let source: MediaSource
     var width: CGFloat
     var image: Image?   // for a song on this phone, whose cover has no address
+    // Room for a title on two lines and the line under it, the same on every card, so a row's cards stay even.
+    static func band(_ width: CGFloat) -> CGFloat { width > 200 ? 82 : 62 }
+    static func height(_ width: CGFloat, _ source: MediaSource) -> CGFloat { width / source.coverAspect + band(width) }
     @State private var band: Color?
     // A cover seen before has its colour ready, so the card arrives already tinted rather than fading in.
     var shownBand: Color { band ?? ImageStore.shared.cachedBand(URL(string: item.art)) ?? Color(hex: 0x37474F) }
@@ -127,13 +155,16 @@ struct MediaCard: View {
                         }.frame(height: 3)
                     }
                 }
+            // The whole title, on two lines if it needs them, rather than cut short.
             VStack(alignment: .leading, spacing: 1) {
-                Text(item.title).font(.system(size: width > 200 ? 18 : 14)).lineLimit(1)
-                Text(item.subtitle).font(.system(size: width > 200 ? 14 : 11.5)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
+                Text(item.title).font(.system(size: width > 200 ? 18 : 14)).lineLimit(2).multilineTextAlignment(.leading)
+                let under = item.shownSubtitle
+                if !under.isEmpty { Text(under).font(.system(size: width > 200 ? 14 : 11.5)).foregroundStyle(.white.opacity(0.72)).lineLimit(1) }
             }
             .foregroundStyle(.white)
             .padding(.horizontal, width > 200 ? 14 : 10)
-            .frame(width: width, height: width > 200 ? 66 : 50, alignment: .leading)
+            .padding(.top, width > 200 ? 10 : 7)
+            .frame(width: width, height: Self.band(width), alignment: .topLeading)
             .background(shownBand)
         }
         .clipShape(RoundedRectangle(cornerRadius: width > 200 ? 8 : 6, style: .continuous))
@@ -158,14 +189,14 @@ struct MediaList: View {
                             .frame(width: 50, height: 50 / source.coverAspect).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title).font(.body.weight(.semibold)).lineLimit(2)
-                            Text(item.subtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                            if !item.shownSubtitle.isEmpty { Text(item.shownSubtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
                         }
                         Spacer(minLength: 0)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("\(item.title), \(item.subtitle)")
+                .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
             }
         }
     }
@@ -207,33 +238,75 @@ struct BrowseColumn: View {
                         RowHeader(title: row.title, route: .media(row, store.source)).padding(.leading, 20)
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 10) {
-                                ForEach(row.items) { item in
-                                    Button { model.flick(FlickTarget(item: item, source: store.source)) } label: { MediaCard(item: item, source: store.source, width: store.source.cardWidth) }
-                                        .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
-                                }
+                                ForEach(row.items) { item in FlickCardButton(item: item, source: store.source, width: store.source.cardWidth) }
                             }
-                            .padding(.horizontal, 20).scrollTargetLayout()
+                            .padding(.horizontal, 20)
                         }
                         .rowEdge()
                     }
                 }
             }
+            .scrollTargetLayout()
             .padding(.vertical, 12)
         }
+        .restsOnRows()
         .refreshable { await store.load(force: true) }
         .task { await store.load() }
     }
 }
 
+// Every card in a row, wherever it is: a press already asks for its streams, and the flick knows the tile it came
+// from, so a card put back lands on it.
+struct FlickCardButton: View {
+    @EnvironmentObject var model: TVModel
+    let item: MediaItem
+    let source: MediaSource
+    let width: CGFloat
+    var ready = false
+    // Where the tile is, kept without redrawing anything while the row scrolls.
+    @State private var place = FrameBox()
+    var body: some View {
+        Button { model.flick(FlickTarget(item: item, source: source, ready: ready, origin: place.rect)) } label: { MediaCard(item: item, source: source, width: width) }
+            .buttonStyle(PressCard(onPress: source == .stremio ? { StreamCache.shared.prefetch(item) } : nil))
+            // Outside the press's own squeeze, so the measure never moves with what it measures.
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
+            .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
+    }
+}
+final class FrameBox { var rect: CGRect? }
+
 // A row of cards that scrolls sideways. On the outer screen it runs on under the glass side bar to the screen's edge,
-// as every row does there; unfolded, it stops at its own pane, so it never slides under the other one.
+// as every row does there; unfolded, it stops at its own pane, fading out at the pane's edge rather than cut square,
+// and fading in at the start too once it's been scrolled.
 private struct RowEdge: ViewModifier {
     @Environment(\.paneLayout) private var panes
+    @State private var scrolled = false
     func body(content: Content) -> some View {
-        if panes { content.clipped() } else { content }
+        if panes {
+            content
+                .scrollTargetBehavior(FreeScroll())
+                .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 4 } action: { _, s in scrolled = s }
+                .mask {
+                    HStack(spacing: 0) {
+                        LinearGradient(colors: [.black.opacity(scrolled ? 0 : 1), .black], startPoint: .leading, endPoint: .trailing).frame(width: 28)
+                        Color.black
+                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
+                    }
+                    // Only the fade eases, so nothing in the row animates with it.
+                    .animation(.easeOut(duration: 0.2), value: scrolled)
+                }
+        } else { content.scrollTargetBehavior(FreeScroll()) }
     }
 }
 extension View { func rowEdge() -> some View { modifier(RowEdge()) } }
+// Sideways rows glide and stop where the finger leaves them, whatever the page around them snaps to.
+struct FreeScroll: ScrollTargetBehavior {
+    func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {}
+}
+// Up and down, a page of rows comes to rest with a row's heading at the top, never half under the bar.
+extension View {
+    func restsOnRows() -> some View { scrollTargetBehavior(.viewAligned(limitBehavior: .never)) }
+}
 
 // Stremio and Mint searched together, from the bar on the Apps page. Every result flicks like a card on its own page.
 struct EverywhereSearch: View {
@@ -254,12 +327,9 @@ struct EverywhereSearch: View {
                         .padding(.leading, 20)
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 10) {
-                                ForEach(row.items) { item in
-                                    Button { model.flick(FlickTarget(item: item, source: store.source)) } label: { MediaCard(item: item, source: store.source, width: store.source.cardWidth) }
-                                        .buttonStyle(PressCard()).accessibilityLabel("\(item.title), \(item.subtitle)")
-                                }
+                                ForEach(row.items) { item in FlickCardButton(item: item, source: store.source, width: store.source.cardWidth) }
                             }
-                            .padding(.horizontal, 20).scrollTargetLayout()
+                            .padding(.horizontal, 20)
                         }
                         .rowEdge()
                     }

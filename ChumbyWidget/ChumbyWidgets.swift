@@ -17,7 +17,15 @@ struct ChumbyEntry: TimelineEntry {
     var nextAt: Date?
     var channel: String { sys.chan.isEmpty ? "Awake" : sys.chan }
     var deviceDown = false
-    var problem: String { deviceDown ? "Chumby not answering" : "Tailscale off?" }
+    // When the Chumby was last heard from, for saying how long it's been gone rather than guessing why.
+    var lastSeen: Date?
+    var problem: String {
+        if deviceDown { return "Chumby not answering" }
+        guard let lastSeen else { return "Can’t reach it" }
+        let cal = Calendar.current
+        let at = cal.isDateInToday(lastSeen) ? lastSeen.formatted(date: .omitted, time: .shortened) : lastSeen.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        return "Can’t reach · \(at)"
+    }
     var whenText: String {
         guard let at = nextAt else { return "" }
         let cal = Calendar.current
@@ -40,7 +48,7 @@ struct ChumbyProvider: AppIntentTimelineProvider {
             for _ in 0..<3 { guard let n = Self.next(state, after: cursor) else { break }; marks.insert(n.at.addingTimeInterval(1)); cursor = n.at.addingTimeInterval(1) }
             if let midnight = Calendar.current.nextDate(after: first.date, matching: DateComponents(hour: 0), matchingPolicy: .nextTime) { marks.insert(midnight) }
             for m in marks.sorted() {
-                var e = ChumbyEntry(date: m, reachable: first.reachable, sys: first.sys, alarmsKnown: true, deviceDown: first.deviceDown)
+                var e = ChumbyEntry(date: m, reachable: first.reachable, sys: first.sys, alarmsKnown: true, deviceDown: first.deviceDown, lastSeen: first.lastSeen)
                 if let n = Self.next(state, after: m) { e.nextAlarm = n.alarm; e.nextAt = n.at }
                 entries.append(e)
             }
@@ -48,7 +56,7 @@ struct ChumbyProvider: AppIntentTimelineProvider {
         return Timeline(entries: entries, policy: .after(Date().addingTimeInterval(30 * 60)))
     }
     static func next(_ s: ChumbyState, after d: Date) -> (alarm: Alarm, at: Date)? {
-        s.alarms.compactMap { a in a.nextFire(after: d).map { (alarm: a, at: $0) } }.min { $0.at < $1.at }
+        s.nextRing(after: d)
     }
     static var sample: ChumbyEntry {
         var s = Sys(); s.chan = "Default"; s.vol = 40; s.wifi = 71; s.up = 291000; s.memFree = 14300; s.memTotal = 61948; s.pspFree = 424
@@ -58,6 +66,7 @@ struct ChumbyProvider: AppIntentTimelineProvider {
         return ChumbyEntry(date: Date(), reachable: true, sys: s, alarmsKnown: true, nextAlarm: a, nextAt: at)
     }
     private static var cacheFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("widget-state.json") }
+    private static var seenFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("widget-seen") }
     func load(_ c: ChumbyWidgetAddress) async -> (ChumbyEntry, ChumbyState?) {
         var e = ChumbyEntry(date: Date())
         var state: ChumbyState?
@@ -69,6 +78,7 @@ struct ChumbyProvider: AppIntentTimelineProvider {
                 if r.age > 60 { try await Task.sleep(nanoseconds: 3_000_000_000); r = try await api.raw("sys") }
                 guard let s = try? JSONDecoder().decode(Sys.self, from: r.data) else { continue }
                 e.sys = s; e.deviceDown = r.age > 60; e.reachable = !e.deviceDown
+                if e.reachable { try? Data().write(to: Self.seenFile) }
             } catch ChumbyError.deviceDown { e.deviceDown = true; continue } catch { continue }
             if e.reachable, let r = try? await api.raw("state"),
                (try? JSONSerialization.jsonObject(with: r.data) as? [String: Any])?["ok"] as? Bool == true,
@@ -78,6 +88,7 @@ struct ChumbyProvider: AppIntentTimelineProvider {
             }
             break
         }
+        if !e.reachable { e.lastSeen = (try? FileManager.default.attributesOfItem(atPath: Self.seenFile.path))?[.modificationDate] as? Date }
         // Alarms are rules, so the last list read still answers "when's the next one" with no connection.
         if state == nil, let d = try? Data(contentsOf: Self.cacheFile) { state = try? JSONDecoder().decode(ChumbyState.self, from: d) }
         if let state {
@@ -109,7 +120,7 @@ func entryDuration(_ s: Int) -> String {
 
 // A sad octopus when the Chumby can't be reached.
 struct Lost: View {
-    var text = "Tailscale off?"
+    var text = "Can’t reach it"
     var body: some View {
         VStack(spacing: 4) {
             Octo(faded: true).frame(maxHeight: 62)
@@ -211,8 +222,8 @@ struct RemoteBody: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Grid(horizontalSpacing: 8, verticalSpacing: 8) {
                 GridRow {
-                    Button(intent: ChumbyPress("prev")) { face("chevron.backward") }.buttonStyle(.plain).accessibilityLabel("Previous widget")
-                    Button(intent: ChumbyPress("next")) { face("chevron.forward") }.buttonStyle(.plain).accessibilityLabel("Next widget")
+                    Button(intent: ChumbyPress("prev")) { face("backward.fill") }.buttonStyle(.plain).accessibilityLabel("Previous widget")
+                    Button(intent: ChumbyPress("next")) { face("forward.fill") }.buttonStyle(.plain).accessibilityLabel("Next widget")
                     Button(intent: ChumbyStopMusicIntent()) { face("stop.fill") }.buttonStyle(.plain).accessibilityLabel("Stop music")
                 }
                 GridRow {
@@ -351,6 +362,7 @@ struct ChumbyWidgets: WidgetBundle {
         ChumbyNightControl()
         ChumbyMorningControl()
         ChumbyStopControl()
+        ChumbyStopAlarmControl()
         ChumbyNapControl()
         ChumbyOpenControl()
     }

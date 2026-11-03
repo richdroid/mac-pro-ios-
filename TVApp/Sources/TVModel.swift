@@ -14,7 +14,22 @@ final class TVModel: ObservableObject {
     // out the pages, but not for saying what's playing, where it's got to, or whether it's paused.
     @Published var staleStatus = true
     let mirrorStore = MirrorStore()
-    @Published var mirrorLive = false
+    // The TV's screen on the Remote: on unless he's turned it off, and kept that way.
+    @Published var mirrorLive = UserDefaults.standard.object(forKey: "mirrorLive") as? Bool ?? true
+    #if os(iOS)
+    let live = LiveMirror()
+    #endif
+    // Where the Remote's picture of the TV is on the display, while it's there. Not published: only read, never drawn.
+    var mirrorSlot: CGRect?
+    private var mirrorViewers = 0
+    // The poster standing in on the Remote's picture for a film just flicked, until the TV's own word catches up.
+    @Published private(set) var standInArt: String?
+    private var standInUntil = Date.distantPast
+    var standInNow: String? { standInUntil > Date() ? standInArt : nil }
+    func standIn(_ art: String) { standInArt = art; standInUntil = Date().addingTimeInterval(30) }
+    // A film's colour kept on the pages behind after the flick closes, until something else is playing.
+    var moodArt: String?
+    func keepMood(until art: String) { moodArt = art }
     @Published var reachable = true
     @Published var watchlist: [Film] = []
     @Published var friends: [Film] = []
@@ -95,20 +110,53 @@ final class TVModel: ObservableObject {
                     try? await Task.sleep(nanoseconds: self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
                 }
             },
+            // Still pictures, only while the screen is on show and the live stream isn't. Never switched off by itself
+            // while he's looking at it.
             Task { [weak self] in
                 while !Task.isCancelled {
-                    if let self, self.mirrorLive {
-                        if Date().timeIntervalSince(self.lastTouch) > 60 { self.mirrorLive = false }
+                    if let self, self.mirrorLive, self.mirrorViewers > 0 {
                         // The film's poster stands in for it, and a frame from before it started mustn't show after.
-                        else if self.filmOnScreen { if self.mirrorStore.image != nil { self.mirrorStore.image = nil } }
-                        else { await self.loadMirror() }
+                        if self.filmOnScreen { if self.mirrorStore.image != nil { self.mirrorStore.set(nil) } }
+                        else if !self.liveShowing { await self.loadMirror() }
                     }
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                 }
             },
         ]
+        if mirrorLive && mirrorViewers > 0 { warmMirror() }
     }
-    func stop() { loops.forEach { $0.cancel() }; loops = [] }
+    func stop() {
+        loops.forEach { $0.cancel() }; loops = []
+        #if os(iOS)
+        live.stop()
+        #endif
+    }
+    var liveShowing: Bool {
+        #if os(iOS)
+        live.showing
+        #else
+        false
+        #endif
+    }
+    // The live stream started early, as the Remote comes up, so its first picture is there by the time it's looked at.
+    func warmMirror() {
+        #if os(iOS)
+        if mirrorLive { live.start(url("/api/tv/screen-live")) }
+        #endif
+    }
+    // The Remote's picture of the TV coming on and off the screen.
+    func mirrorShown(_ on: Bool) {
+        mirrorViewers = max(0, mirrorViewers + (on ? 1 : -1))
+        if on {
+            warmMirror()
+            if mirrorLive && !liveShowing { Task { await loadMirror() } }
+        } else if mirrorViewers == 0 {
+            mirrorSlot = nil
+            #if os(iOS)
+            live.stop(after: 5)
+            #endif
+        }
+    }
     func load() async {
         guard let u = url("/api/tv/status") else { return }
         var r = URLRequest(url: u); r.timeoutInterval = 8; r.cachePolicy = .reloadIgnoringLocalCacheData
@@ -123,15 +171,26 @@ final class TVModel: ObservableObject {
         PhonePlayer.shared.follow(s)
         NextUp.shared.follow(s)
     }
+    // His choice, kept from one visit and one launch to the next.
     func setMirror(_ on: Bool) {
         lastTouch = Date()
         mirrorLive = on
-        if on { Task { await loadMirror() } }
+        UserDefaults.standard.set(on, forKey: "mirrorLive")
+        if on {
+            warmMirror()
+            Task { await loadMirror() }
+        } else {
+            #if os(iOS)
+            live.stop()
+            #endif
+        }
     }
-    func loadMirror() async {
-        guard let u = url("/api/tv/shot") else { return }
+    // A still of the TV's screen. After a key, the first one taken after it, so the press shows rather than the frame
+    // from before it.
+    func loadMirror(after: Date? = nil) async {
+        guard let u = url("/api/tv/shot" + (after.map { "?after=\(Int($0.timeIntervalSince1970 * 1000))" } ?? "")) else { return }
         var r = URLRequest(url: u); r.timeoutInterval = 10; r.cachePolicy = .reloadIgnoringLocalCacheData
-        if let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) { mirrorStore.image = i }
+        if let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) { mirrorStore.set(i) }
     }
     func loadFilms(force: Bool = false) async {
         if filmsLoaded && !force { return }
@@ -200,13 +259,12 @@ final class TVModel: ObservableObject {
             let result = try? await URLSession.shared.data(for: r)
             if (result?.1 as? HTTPURLResponse)?.statusCode != 200, !repeating { self?.say("The TV didn’t get that") }
         }
-        // Outside the chain, so a slow picture never holds up the next press.
-        if mirrorLive && !repeating {
+        // Outside the chain, so a slow picture never holds up the next press. The live stream shows the press by
+        // itself; without it, the first still taken after the press is asked for straight away.
+        if mirrorLive && !repeating && mirrorViewers > 0 && !liveShowing {
             mirrorSoon?.cancel()
-            mirrorSoon = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 400_000_000)
-                if !Task.isCancelled { await self?.loadMirror() }
-            }
+            let pressed = Date()
+            mirrorSoon = Task { [weak self] in await self?.loadMirror(after: pressed) }
         }
     }
     // Typing into the TV: what was deleted, then what was added, in order with the keys around it. Nothing is dropped
@@ -249,9 +307,14 @@ final class TVModel: ObservableObject {
     }
 }
 
-// The mirror changes every 1.5 s. Only the mirror should redraw when it does.
+// The still mirror changes every 1.5 s. Only the mirror should redraw when it does. When the picture was taken, so an
+// old one can be shown as old.
 @MainActor
-final class MirrorStore: ObservableObject { @Published var image: TVImage? }
+final class MirrorStore: ObservableObject {
+    @Published private(set) var image: TVImage?
+    @Published private(set) var at = Date.distantPast
+    func set(_ i: TVImage?) { image = i; if i != nil { at = Date() } }
+}
 
 // A half-typed link outlives unfolding, which rebuilds the layout.
 @MainActor

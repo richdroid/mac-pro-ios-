@@ -4,22 +4,34 @@ import SwiftUI
 @MainActor
 final class LiveStore: ObservableObject { @Published var live: LiveStatus? }
 
+// When the Mac last answered. Kept apart from the model so the beat on each refresh redraws only the chip that shows it.
+@MainActor
+final class Pulse: ObservableObject {
+    @Published var lastFresh: Date?
+    @Published var beats = 0
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     let liveStore = LiveStore()
+    let pulse = Pulse()
     let screen = RemoteScreen()
     @Published var screenOpen = false { didSet { screen.paused = !screenOpen } }
     @Published var signingIn = false
     @Published var status: Status?
     @Published var problem: String?
+    // The Mac wants its access code. Shown as a row at the top of each tab; the sheet only opens by itself when there's
+    // no address at all, so pressing Cancel is respected.
     @Published var needsSignIn = false
-    @Published var note: String?
+    @Published var signInSheet = false
     @Published var history: HistoryMetric?  // kept here so unfolding doesn't close it
     @Published var processes: ProcessSort?
-    @Published var sessionScreen: Status.Session?  // a session's own screen, opened from an alert
+    @Published var sessionScreen: Status.Session?  // a session's own screen, on the Claude tab's stack
+    private var pendingSession: String?
+    private var lastData: Data?
     // The tab chosen to open on in Settings, or else the one last used.
     @Published var tab = { let d = UserDefaults.standard, start = d.object(forKey: "startTab") as? Int ?? -1; return start >= 0 ? start : d.integer(forKey: "tab") }()
-    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); liveStore.live = nil } }
+    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); liveStore.live = nil; lastData = nil } }
 
     var api: API { API(base: URL(string: address) ?? URL(string: "https://invalid.invalid")!) }
     private var loops: [Task<Void, Never>] = []
@@ -29,10 +41,38 @@ final class AppModel: ObservableObject {
         let saved = UserDefaults.standard.string(forKey: "address") ?? ""
         address = saved.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : saved
         needsSignIn = address.isEmpty
+        signInSheet = address.isEmpty
         history = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         processes = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // Show the last known state at once; fresh numbers replace it moments later.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(Status.self, from: d) }
+        // How old those numbers are, so being offline never passes them off as live.
+        pulse.lastFresh = (try? FileManager.default.attributesOfItem(atPath: Self.cacheFile.path)[.modificationDate]) as? Date
+    }
+
+    // What's on screen is only the last the Mac sent: it can't be reached, or won't answer without its code.
+    var stale: Bool { problem != nil || needsSignIn }
+
+    var pose: String { UserDefaults.standard.string(forKey: "pose") ?? "" }
+
+    // How this phone is reaching the Mac, for the chip under its picture.
+    var route: String {
+        guard let host = URL(string: address)?.host?.lowercased() else { return "not set" }
+        if host.hasSuffix(".ts.net") || host.hasPrefix("100.") { return "Tailscale" }
+        if let p = status.flatMap({ URL(string: $0.publicUrl)?.host?.lowercased() }), p == host { return "public link" }
+        if host.hasSuffix("trycloudflare.com") { return "public link" }
+        return "local network"
+    }
+
+    // A session's own page lives on the Claude tab, wherever it was asked for from.
+    func openSession(key: String) {
+        tab = 2
+        if let s = status?.claude.sessions.first(where: { $0.key == key }) { sessionScreen = s; pendingSession = nil }
+        else { pendingSession = key }
+    }
+
+    private func openPending() {
+        if let key = pendingSession, let s = status?.claude.sessions.first(where: { $0.key == key }) { pendingSession = nil; sessionScreen = s }
     }
 
     private static var cacheFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("status.json") }
@@ -99,9 +139,15 @@ final class AppModel: ObservableObject {
     }
 
     func refresh() async {
-        if address.isEmpty { needsSignIn = true; return }
+        if address.isEmpty { if !needsSignIn { needsSignIn = true }; return }
         do {
             let data = try await api.statusData()
+            pulse.lastFresh = Date(); pulse.beats &+= 1
+            if problem != nil { problem = nil }
+            if needsSignIn { needsSignIn = false }
+            // The same answer as last time changes nothing on screen, so nothing is redrawn for it.
+            if data == lastData, status != nil { openPending(); return }
+            lastData = data
             let file = Self.cacheFile
             let decoded = try await Task.detached(priority: .userInitiated) {
                 let s = try JSONDecoder().decode(Status.self, from: data)
@@ -109,21 +155,33 @@ final class AppModel: ObservableObject {
                 return s
             }.value
             var fresh = decoded
-            if UserDefaults.standard.string(forKey: "pose") == "alerts" { fresh.alerts = Status.Alert.samples }
-            // The build's shot of a session's own page.
-            if UserDefaults.standard.string(forKey: "pose") == "session", sessionScreen == nil { sessionScreen = fresh.claude.sessions.first { $0.key == "chumby" } }
+            Self.applyPose(pose, to: &fresh)
+            // The build's shot of a session's own page, opened as from the Claude tab.
+            if pose == "session", sessionScreen == nil { pendingSession = "chumby"; tab = 2 }
             status = fresh
+            openPending()
             AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
-            // Setting a value to what it already is still redraws everything watching it.
-            if problem != nil { problem = nil }
-            if needsSignIn { needsSignIn = false }
         } catch APIError.signInNeeded {
-            needsSignIn = true
+            if !needsSignIn { needsSignIn = true }
+            lastData = nil
         } catch is CancellationError {
         } catch let e as URLError where e.code == .cancelled {
         } catch {
-            problem = "Mac Pro is unreachable. It may be restarting, or Tailscale may be off."
+            if problem == nil { problem = "Mac Pro is unreachable. It may be restarting, or Tailscale may be off." }
+            lastData = nil
             liveStore.live = nil
+        }
+    }
+
+    // States the build's screenshots need that the sample Mac doesn't have. Only with a pose; never on the phone.
+    static func applyPose(_ pose: String, to s: inout Status) {
+        switch pose {
+        case "alerts": s.alerts = Status.Alert.samples
+        case "api-none": s.apiUsage = Status.APIUsage(configured: false)
+        case "api-refused": s.apiUsage = Status.APIUsage(configured: true, error: "Couldn’t read API usage: the Admin key was refused")
+        case "api-live", "api-sheet": s.apiUsage = .sample
+        case "longlog": s.upgrade = Status.Upgrade.longSample
+        default: break
         }
     }
 

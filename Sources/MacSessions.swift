@@ -1,6 +1,10 @@
 import SwiftUI
 
-// A kept session's own screen, to answer whatever it's waiting on from here: keys for its menus, and a box to tell it something.
+// One numbered choice in a menu the session is showing, such as "❯ 1. Yes".
+struct TermOption: Identifiable, Equatable { let number: Int; let text: String; let current: Bool; var id: Int { number } }
+
+// A kept session's own screen, to answer whatever it's waiting on from here: its menu's choices as buttons, keys for
+// anything else, and a box to tell it something.
 struct SessionTerminal: View {
     @EnvironmentObject var model: AppModel
     let session: Status.Session
@@ -10,9 +14,41 @@ struct SessionTerminal: View {
     @State private var message = ""
     @State private var note: String?
     @State private var sends = 0
+    @State private var width: CGFloat = 0
+    @State private var starting = false
+    // Following the newest line, unless scrolled back to read what came before.
+    @State private var following = true
     static let keys: [(String, String)] = [("esc", "Esc"), ("enter", "Enter"), ("up", "↑"), ("down", "↓"), ("left", "←"), ("right", "→"),
                                            ("1", "1"), ("2", "2"), ("3", "3"), ("tab", "Tab"), ("shift-tab", "⇧Tab"), ("ctrl-c", "Ctrl-C")]
     var key: String { session.key ?? session.name }
+    // The latest the Mac has said about this session, rather than what it was when the page opened.
+    var current: Status.Session { model.status?.claude.sessions.first { $0.key == session.key } ?? session }
+
+    // A numbered menu at the foot of the screen, with the ❯ marking the highlighted choice. Only the last few lines are
+    // read, so a list from earlier in the conversation never turns into buttons.
+    static let optionLine = try? NSRegularExpression(pattern: #"^\s*(❯|>)?\s*(\d{1,2})[.)]\s+(.+?)\s*$"#)
+    static func options(in text: String) -> [TermOption] {
+        guard let r = optionLine else { return [] }
+        let tail = text.split(separator: "\n", omittingEmptySubsequences: false).suffix(14).map(String.init)
+        var group: [TermOption] = [], best: [TermOption] = []
+        for line in tail {
+            guard let m = r.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+                  let numR = Range(m.range(at: 2), in: line), let textR = Range(m.range(at: 3), in: line), let n = Int(line[numR]) else {
+                // Description lines under a choice are indented; anything else that isn't blank ends the menu.
+                if !line.trimmingCharacters(in: .whitespaces).isEmpty, !line.hasPrefix("     ") { if group.count >= 2 { best = group }; group = [] }
+                continue
+            }
+            let marked = m.range(at: 1).location != NSNotFound
+            if n == 1 { if group.count >= 2 { best = group }; group = [] }
+            if n == (group.last?.number ?? 0) + 1 { group.append(TermOption(number: n, text: String(line[textR]), current: marked)) } else { group = [] }
+        }
+        if group.count >= 2 { best = group }
+        // Claude Code marks its highlighted choice; a numbered list without one is just text.
+        return best.contains { $0.current } ? best : []
+    }
+    var options: [TermOption] { Self.options(in: text) }
+    var waiting: Bool { current.waiting == true || !options.isEmpty }
+
     func show(_ t: API.Term) {
         running = t.running ?? true
         if let s = t.text, s != text { text = s }
@@ -33,6 +69,16 @@ struct SessionTerminal: View {
             catch { withAnimation { note = error.localizedDescription } }
         }
     }
+    func start() {
+        guard let k = session.key else { return }
+        starting = true
+        Task {
+            do { if !(try await model.api.restartSession(k)) { withAnimation { note = "It will start when the Mac can reach Claude." } } }
+            catch { withAnimation { note = error.localizedDescription } }
+            starting = false
+            await load()
+        }
+    }
     var screen: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -45,27 +91,80 @@ struct SessionTerminal: View {
                 Color.clear.frame(height: 1).id("end")
             }
             .defaultScrollAnchor(.bottom)
-            .background(Color(white: 0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.08)) }
+            .onScrollGeometryChange(for: Bool.self) { g in g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 60 } action: { _, atEnd in following = atEnd }
+            .background(Color(white: 0.05), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: cardRadius, style: .continuous).strokeBorder(.white.opacity(0.08)) }
+            .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .overlay {
                 if !loaded { ProgressView() }
-                else if !running { ContentUnavailableView("Not running", systemImage: "moon.zzz", description: Text("The Mac starts it again within two minutes.")) }
-            }
-            .onChange(of: text) { _, _ in withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("end", anchor: .bottom) } }
-        }
-    }
-    var keyRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(Self.keys, id: \.0) { k, label in
-                    Button(label) { send(["key": k]) }
-                        .font(.subheadline.weight(.semibold))
-                        .buttonStyle(.bordered)
-                        .tint(k == "ctrl-c" ? .red : nil)
-                        .accessibilityLabel(k == "up" ? "Up" : k == "down" ? "Down" : k == "left" ? "Left" : k == "right" ? "Right" : label)
+                else if !running {
+                    ContentUnavailableView {
+                        Label("Not running", systemImage: "moon.zzz")
+                    } description: {
+                        Text("The Mac starts it again within two minutes.")
+                    } actions: {
+                        Button(action: start) { if starting { ProgressView() } else { Text("Start now") } }
+                            .buttonStyle(.borderedProminent).disabled(starting)
+                    }
                 }
             }
+            // A failure shows at the foot of the screen, right above the keys and the box that caused it.
+            .overlay(alignment: .bottom) {
+                if let note {
+                    Text(note).font(.footnote.weight(.semibold)).foregroundStyle(.white).multilineTextAlignment(.center)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .glassEffect(.regular.tint(.red.opacity(0.35)), in: Capsule())
+                        .padding(.bottom, 10).padding(.horizontal, 12)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .task(id: note) { try? await Task.sleep(nanoseconds: 3_000_000_000); withAnimation { self.note = nil } }
+                }
+            }
+            .onChange(of: text) { _, _ in if following { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("end", anchor: .bottom) } } }
         }
+    }
+    // The menu's own choices, big enough to hit without reading the screen. A tap types the number, which picks it.
+    var choices: some View {
+        VStack(spacing: 6) {
+            ForEach(options) { o in
+                Button { send(["text": "\(o.number)", "enter": false]) } label: {
+                    HStack(spacing: 12) {
+                        Text("\(o.number)").font(.subheadline.weight(.bold)).monospacedDigit()
+                            .frame(width: 26, height: 26).background(.white.opacity(o.current ? 0.22 : 0.1), in: Circle())
+                        Text(o.text).font(.body.weight(o.current ? .semibold : .regular)).lineLimit(2).multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.leading, 10).padding(.trailing, 16).frame(minHeight: 46)
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(o.current ? .regular.tint(macBlue.opacity(0.45)).interactive() : .regular.interactive(), in: Capsule())
+                .accessibilityLabel("Choose \(o.number), \(o.text)")
+            }
+        }
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+    func keyButton(_ k: String, _ label: String) -> some View {
+        Button { send(["key": k]) } label: {
+            Text(label).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+        }
+        .font(.subheadline.weight(.semibold))
+        .buttonStyle(.bordered)
+        .tint(k == "ctrl-c" ? .red : nil)
+        .accessibilityLabel(k == "up" ? "Up" : k == "down" ? "Down" : k == "left" ? "Left" : k == "right" ? "Right" : label)
+    }
+    // Every key in view at once: one row when there's room, two on the folded screen, so the numbers and Ctrl-C are
+    // never cut off when a menu needs them.
+    var keyRows: some View {
+        VStack(spacing: 6) {
+            if width >= 520 {
+                HStack(spacing: 6) { ForEach(Self.keys, id: \.0) { keyButton($0.0, $0.1) } }
+            } else {
+                HStack(spacing: 6) { ForEach(Self.keys.prefix(6), id: \.0) { keyButton($0.0, $0.1) } }
+                HStack(spacing: 6) { ForEach(Self.keys.suffix(6), id: \.0) { keyButton($0.0, $0.1) } }
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
     var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -86,25 +185,34 @@ struct SessionTerminal: View {
             .accessibilityLabel("Send")
         }
     }
+    // Under the title: what the session wants, in the app's colour.
+    @ViewBuilder var stateChip: some View {
+        if waiting {
+            HStack(spacing: 6) {
+                Circle().fill(macBlue).frame(width: 8, height: 8)
+                Text("Waiting for you").font(.footnote.weight(.semibold)).foregroundStyle(macBlue)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(macBlue.opacity(0.16), in: Capsule())
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .transition(.opacity)
+        }
+    }
     var body: some View {
         // A page of its own, pushed like any other, so Back is where the system puts it, on the side on the Duo.
         VStack(spacing: 8) {
+            stateChip
             screen
-            keyRow
+            if !options.isEmpty { choices }
+            keyRows
             composer
         }
         .padding(.horizontal, 12).padding(.bottom, 8)
+        .animation(.easeOut(duration: 0.2), value: options)
+        .animation(.easeOut(duration: 0.2), value: waiting)
         .background(Color.black.ignoresSafeArea())
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)
-        .overlay(alignment: .top) {
-            if let note {
-                Text(note).font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 8)
-                    .glassEffect(.regular, in: Capsule()).padding(.top, 6)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .task(id: note) { try? await Task.sleep(nanoseconds: 1_600_000_000); withAnimation { self.note = nil } }
-            }
-        }
         .preferredColorScheme(.dark)
         .sensoryFeedback(trigger: sends) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
         .task {

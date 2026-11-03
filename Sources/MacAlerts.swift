@@ -19,8 +19,15 @@ extension Status.Alert {
     }
     // Getting worse counts as news; the same problem still being there doesn't.
     var ledgerKey: String { id + "|" + level }
+    // Temperatures in the unit chosen in Settings, when the Mac sends the reading itself.
+    var shownDetail: String {
+        if kind == "temp", let c { return "\(Heat.shown(c))°\(MacPrefs.celsius ? "C" : "F")" }
+        return detail
+    }
+    // The service behind a "down" alert, when it's one the Mac can restart.
+    var serviceLabel: String? { kind == "service" && id.hasPrefix("service:local.") ? String(id.dropFirst(8)) : nil }
     static let samples = [
-        Status.Alert(id: "temp:CPU", level: "critical", kind: "temp", metric: "temp:CPU", title: "CPU is hot", detail: "205°F", since: 0),
+        Status.Alert(id: "temp:CPU", level: "critical", kind: "temp", metric: "temp:CPU", title: "CPU is hot", detail: "205°F", since: 0, c: 96),
         Status.Alert(id: "disk", level: "warning", kind: "disk", metric: "disk", title: "Disk nearly full", detail: "21 GB free", since: 0),
         Status.Alert(id: "service:local.mac-dash-tunnel", level: "warning", kind: "service", metric: nil, title: "Public link is down", detail: "Restart it in Control", since: 0),
     ]
@@ -29,26 +36,53 @@ extension Status.Alert {
 struct AlertBanner: View {
     @EnvironmentObject var model: AppModel
     let alerts: [Status.Alert]
+    @State private var restarting: String?
+    @State private var fails: [String: String] = [:]
+    // A service that's down is restarted right here, rather than hunted for on another tab.
+    func restart(_ a: Status.Alert, _ label: String) {
+        restarting = a.id; fails[a.id] = nil
+        Task {
+            let e = await model.run("service-restart", ["label": label])
+            restarting = nil
+            fails[a.id] = e
+        }
+    }
+    func detail(_ a: Status.Alert) -> String {
+        guard a.serviceLabel != nil else { return a.shownDetail }
+        return a.since > 0 ? "Down since \(Date(timeIntervalSince1970: a.since / 1000).formatted(date: .omitted, time: .shortened))" : "Not running"
+    }
+    func row(_ a: Status.Alert) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: a.symbol).font(.title3).foregroundStyle(a.tint).frame(width: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(a.title).font(.body.weight(.semibold))
+                Text(detail(a)).font(.footnote).foregroundStyle(.secondary)
+                if let f = fails[a.id] { Text(f).font(.footnote).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+            }
+            Spacer(minLength: 0)
+            if let label = a.serviceLabel {
+                if restarting == a.id { ProgressView() }
+                else { Button("Restart") { restart(a, label) }.buttonStyle(.bordered).controlSize(.small).tint(a.tint) }
+            } else {
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+        }
+        .contentShape(Rectangle())
+    }
     var body: some View {
         Section {
             ForEach(alerts) { a in
-                Button {
-                    // A session waiting on a question opens straight onto its screen, where it can be answered.
-                    if a.id.hasPrefix("session:"), let s = model.status?.claude.sessions.first(where: { $0.key == String(a.id.dropFirst(8)) }) { model.sessionScreen = s }
-                    else if let m = a.metric.flatMap(HistoryMetric.named) { model.history = m } else { model.tab = 5 }
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: a.symbol).font(.title3).foregroundStyle(a.tint).frame(width: 28)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(a.title).font(.body.weight(.semibold))
-                            Text(a.detail).font(.footnote).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                Group {
+                    if a.serviceLabel != nil { row(a) }
+                    else {
+                        Button {
+                            // A session waiting on a question opens straight onto its page, on the Claude tab.
+                            if a.id.hasPrefix("session:") { model.openSession(key: String(a.id.dropFirst(8))) }
+                            else if let m = a.metric.flatMap(HistoryMetric.named) { model.history = m } else { model.tab = 5 }
+                        } label: { row(a) }
+                        .buttonStyle(.plain)
                     }
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
                 .listRowBackground(a.tint.opacity(0.22))
             }
         }
@@ -58,10 +92,8 @@ struct AlertBanner: View {
 struct AlertSettings: View {
     @AppStorage(AlertWatch.enabledKey) private var enabled = true
     @State private var denied = false
-    let clear: Bool
     var body: some View {
         Section {
-            StateRow(label: "Mac Pro", good: clear, value: clear ? "All clear" : "Needs attention")
             Toggle("Notify this iPhone", isOn: $enabled)
                 .onChange(of: enabled) { _, on in if on { Task { denied = !(await AlertWatch.shared.ask()) } } }
             #if canImport(UIKit)
@@ -80,7 +112,9 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
     static let shared = AlertWatch()
     static let refreshID = "local.macpro.MacPro.alerts"
     static let enabledKey = "alertNotifications"
-    static let openStatus = Notification.Name("macproOpenStatus")
+    // Carries the tapped notification's identifier, so the app can open where it points.
+    static let openAlert = Notification.Name("macproOpenAlert")
+    static var pending: String?
     private static let ledgerKey = "alertLedger", askedKey = "alertsAsked"
     private static let quietFor: TimeInterval = 12 * 3600
     private let center = UNUserNotificationCenter.current()
@@ -141,7 +175,7 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
         // Several things going wrong together is one piece of news.
         if fresh.count == 1 {
             content.title = fresh[0].title
-            content.body = fresh[0].detail
+            content.body = fresh[0].shownDetail
         } else {
             content.title = "Mac Pro needs attention"
             content.body = fresh.map(\.title).joined(separator: ", ")
@@ -158,10 +192,14 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
     }
     #endif
 
-    // Tapping a notification opens Status, where the banner is.
+    // Tapping a notification opens where it can be acted on: a waiting session on its own page, anything else on Status,
+    // where the banner is.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
-        UserDefaults.standard.set(0, forKey: "tab")
-        NotificationCenter.default.post(name: Self.openStatus, object: nil)
+        let id = response.notification.request.identifier
+        UserDefaults.standard.set(id.hasPrefix("session:") ? 2 : 0, forKey: "tab")
+        // Kept too, in case the tap launched the app and nothing is listening yet.
+        Self.pending = id
+        DispatchQueue.main.async { NotificationCenter.default.post(name: Self.openAlert, object: id) }
         done()
     }
 }

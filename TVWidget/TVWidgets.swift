@@ -525,7 +525,8 @@ struct TVAppsProvider: AppIntentTimelineProvider {
             for pkg in c.picks() {
                 group.addTask {
                     let d = await TVBridge.data(TVBridge.url("/api/tv/icon?pkg=\(pkg)&v=2"), timeout: 6, cached: true)
-                    return (pkg, d.flatMap { TVProvider.thumbnail($0, 320) })
+                    // A banner that came out blank shows its name instead, never the white card.
+                    return (pkg, d.flatMap { TVProvider.thumbnail($0, 320) }.flatMap { flatPicture($0) ? nil : $0 })
                 }
             }
             var out: [String: TVImage] = [:]

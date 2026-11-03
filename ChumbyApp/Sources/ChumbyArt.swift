@@ -71,7 +71,8 @@ enum ChumbyPalette {
     static func sub(_ dark: Bool) -> Color { dark ? hex(0xa4b7d6) : hex(0x54688c) }
     static func acc(_ dark: Bool) -> Color { dark ? hex(0x79bbff) : hex(0x0051bd) }
     static func oct(_ dark: Bool) -> Color { dark ? hex(0x79bbff) : hex(0x2c5bae) }
-    static func word(_ dark: Bool) -> Color { dark ? hex(0xeaf3ff) : hex(0x0a57b4) }
+    // The website's blue; in the dark only as much lighter as it needs to read against the deep sea (3.8:1).
+    static func word(_ dark: Bool) -> Color { dark ? hex(0x3b78c3) : hex(0x0a57b4) }
 }
 
 // A still version of the web app's sea: soft colour blobs.

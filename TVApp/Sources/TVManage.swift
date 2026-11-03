@@ -120,6 +120,7 @@ struct ManageAppsView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }
             }
         }
+        .topShade()
         .navigationTitle("Apps on the TV")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { if store.state?.canArrange == true { EditButton() } }
@@ -169,6 +170,7 @@ struct ManageSettingsView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }
             }
         }
+        .topShade()
         .navigationTitle("TV settings")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await store.load() }

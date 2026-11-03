@@ -55,6 +55,10 @@ final class ImageStore {
     }
     func cachedBand(_ url: URL?) -> Color? { url.flatMap { bands[$0] } }
     func cached(_ url: URL?) -> TVImage? { url.flatMap { cache.object(forKey: $0 as NSURL) } }
+    // Pictures with nothing in them, like a white logo flattened onto white: known as soon as the picture is, so a
+    // banner never draws the blank first.
+    private var flats: Set<URL> = []
+    func isFlat(_ url: URL?) -> Bool { url.map { flats.contains($0) } ?? false }
     func load(_ url: URL) async -> TVImage? {
         if let i = cached(url) { return i }
         if let t = fetching[url] { return await t.value }
@@ -69,9 +73,40 @@ final class ImageStore {
         fetching[url] = t
         let i = await t.value
         fetching[url] = nil
-        if let i { cache.setObject(i, forKey: url as NSURL, cost: Int(i.size.width * i.size.height) * 4) }
+        if let i {
+            // Only the apps' banners are ever blank like that, and checking every poster would cost scrolling.
+            if url.path.hasSuffix("/icon"), flatPicture(i) { flats.insert(url) }
+            cache.setObject(i, forKey: url as NSURL, cost: Int(i.size.width * i.size.height) * 4)
+        }
         return i
     }
+}
+
+// Whether a picture shows nothing: its brightness hardly varies across a 16 by 16 grid. See-through parts count as the
+// black a wide banner sits on. A real logo, however plain, varies by far more than 4 %.
+func flatPicture(_ image: TVImage) -> Bool {
+    #if canImport(UIKit)
+    guard let cg = image.cgImage else { return false }
+    let side = 16
+    var px = [UInt8](repeating: 0, count: side * side * 4)
+    let drawn: Bool = px.withUnsafeMutableBytes { raw in
+        guard let c = CGContext(data: raw.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        c.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        c.interpolationQuality = .medium
+        c.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
+        return true
+    }
+    guard drawn else { return false }
+    var sum = 0.0, squares = 0.0
+    for i in stride(from: 0, to: px.count, by: 4) {
+        let l = (0.2126 * Double(px[i]) + 0.7152 * Double(px[i + 1]) + 0.0722 * Double(px[i + 2])) / 255
+        sum += l; squares += l * l
+    }
+    let n = Double(side * side), mean = sum / n
+    return (squares / n - mean * mean).squareRoot() < 0.04
+    #else
+    return false
+    #endif
 }
 struct Art<Content: View, Placeholder: View>: View {
     let url: URL?

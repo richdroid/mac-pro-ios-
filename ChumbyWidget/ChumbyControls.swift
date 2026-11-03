@@ -37,6 +37,14 @@ struct ChumbyNapControl: ControlWidget {
         }.displayName("Chumby 20-Minute Nap").description("Sets a one-off alarm in 20 minutes.")
     }
 }
+// The ringing alarm's Stop, for the moment it goes off and the phone is nearer than the Chumby.
+struct ChumbyStopAlarmControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: "ChumbyStopAlarmControl") {
+            ControlWidgetButton(action: ChumbyStopAlarmIntent()) { Label("Stop Alarm", systemImage: "alarm.waves.left.and.right.fill") }
+        }.displayName("Chumby Stop Alarm").description("Stops the alarm that’s ringing or snoozing.")
+    }
+}
 struct ChumbyOpenControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "ChumbyOpenControl") {

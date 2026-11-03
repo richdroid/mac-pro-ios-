@@ -47,12 +47,20 @@ private struct Tile: View {
         .tvCard(16)
     }
 }
+// The box's numbers, kept for the app's life, so coming back to Status shows the last ones at once while new ones come.
+@MainActor
+final class DeviceStore: ObservableObject {
+    static let shared = DeviceStore()
+    @Published var info: DeviceInfo?
+    @Published var failed = false
+}
 struct DeviceTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.paneLayout) private var panes
     @Environment(\.scenePhase) private var phase
-    @State private var info: DeviceInfo?
-    @State private var failed = false
+    @ObservedObject private var store = DeviceStore.shared
+    var info: DeviceInfo? { store.info }
+    var failed: Bool { store.failed }
     @State private var tidying = false
     @State private var tidyNote: String?
     @State private var breathe = false
@@ -144,7 +152,7 @@ struct DeviceTab: View {
                     .font(.body.weight(.medium)).foregroundStyle(TVLook.accent).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).disabled(tidying)
-                Text(tidyNote ?? "Closes apps left idle in the background. Never what’s on screen, playing or paused, or Mint.")
+                Text(tidyNote ?? "Closes idle apps. Never what’s playing.")
                     .font(.footnote).foregroundStyle(.secondary).contentTransition(.opacity)
             }
             .padding(14)
@@ -155,7 +163,11 @@ struct DeviceTab: View {
         Group {
             if panes {
                 FoldSplit {
-                    hero.padding(20).frame(maxHeight: .infinity)
+                    // A scrolling page like the other side, so the two sides sit under the bar the same way.
+                    ScrollView {
+                        hero.padding(20).containerRelativeFrame(.vertical, alignment: .center)
+                    }
+                    .backToTop(posed: false)
                 } right: {
                     ScrollView {
                         VStack(spacing: 18) { if let info { tiles(info); details(info) } else if !failed { waitingTiles } }.padding(20)
@@ -179,9 +191,9 @@ struct DeviceTab: View {
             while !Task.isCancelled {
                 if let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 8), let i = try? JSONDecoder().decode(DeviceInfo.self, from: d) {
                     // The first answer just appears; only later changes ease, so the name never crossfades over a placeholder.
-                    if info == nil { info = i } else { withAnimation(.easeOut(duration: 0.25)) { info = i } }
-                    failed = false
-                } else { failed = true }
+                    if store.info == nil { store.info = i } else { withAnimation(.easeOut(duration: 0.25)) { store.info = i } }
+                    if store.failed { store.failed = false }
+                } else { store.failed = true }
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }

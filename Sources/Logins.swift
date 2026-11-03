@@ -89,7 +89,7 @@ struct LoginSheet: View {
                 }
                 if let note { Section { Text(note).foregroundStyle(.red) } }
             }
-            .navigationTitle("Sign In on Mac")
+            .navigationTitle("Fill a login")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
         .task { saved = LoginVault.all() }

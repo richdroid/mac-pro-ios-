@@ -102,14 +102,14 @@ struct HistoryView: View {
         let list = marks, domain = Date().addingTimeInterval(-Double(hours) * 3600)...Date()
         return Chart {
             ForEach(list) { m in
-                AreaMark(x: .value("Time", m.date), y: .value(metric.title, m.value), series: .value("Run", "\(m.run)"))
+                AreaMark(x: .value("Time", m.date), y: .value(metric.title, m.value), series: .value("Run", "\(m.run)"), stacking: .unstacked)
                     .foregroundStyle(LinearGradient(colors: [macBlue.opacity(0.32), macBlue.opacity(0.02)], startPoint: .top, endPoint: .bottom))
                 LineMark(x: .value("Time", m.date), y: .value(metric.title, m.value), series: .value("Run", "\(m.run)"))
                     .foregroundStyle(macBlue).lineStyle(StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
-                // Each minute's short spikes, so the highest figure below can be seen on the chart too.
+                // Each minute's short spikes, as a soft band above the line, so the highest figure below shows on the chart too.
                 if let peak = m.peak {
-                    LineMark(x: .value("Time", m.date), y: .value(metric.title, peak), series: .value("Run", "peak \(m.run)"))
-                        .foregroundStyle(macBlue.opacity(0.3)).lineStyle(StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round))
+                    AreaMark(x: .value("Time", m.date), yStart: .value(metric.title, m.value), yEnd: .value(metric.title, peak), series: .value("Run", "peak \(m.run)"))
+                        .foregroundStyle(macBlue.opacity(0.15))
                 }
             }
             if let p = pickedMark {
@@ -122,9 +122,16 @@ struct HistoryView: View {
         // Not the system's chart selection, which takes every touch and stops the page scrolling.
         .chartOverlay { proxy in
             GeometryReader { g in
-                Color.clear.holdToScrub { p in
-                    guard let p, let plot = proxy.plotFrame else { picked = nil; return }
-                    picked = proxy.value(atX: p.x - g[plot].minX, as: Date.self)
+                ZStack(alignment: .topLeading) {
+                    Color.clear.holdToScrub { p in
+                        guard let p, let plot = proxy.plotFrame else { picked = nil; return }
+                        picked = proxy.value(atX: p.x - g[plot].minX, as: Date.self)
+                    }
+                    // Where the line is now, beating softly, while nothing is being read off it.
+                    if pickedMark == nil, let last = list.last, Date().timeIntervalSince(last.date) < 600, let plot = proxy.plotFrame,
+                       let at = proxy.position(for: (x: last.date, y: last.value)) {
+                        NowDot().position(x: g[plot].minX + at.x, y: g[plot].minY + at.y).allowsHitTesting(false)
+                    }
                 }
             }
         }
@@ -142,7 +149,13 @@ struct HistoryView: View {
         }
         .overlay {
             if points.isEmpty {
-                if failed { ContentUnavailableView("Can’t reach the Mac", systemImage: "wifi.exclamationmark") }
+                if failed {
+                    ContentUnavailableView {
+                        Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark")
+                    } actions: {
+                        Button("Try again") { Task { await load() } }.buttonStyle(.bordered)
+                    }
+                }
                 else if loaded { ContentUnavailableView("Collecting", systemImage: "chart.xyaxis.line", description: Text("The first reading arrives within a minute.")) }
                 else { ProgressView() }
             }
@@ -165,7 +178,7 @@ struct HistoryView: View {
             Divider()
             stat("Lowest", low?.v, at: low?.date).padding(14)
         }
-        .background(Color(white: 0.11), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
     }
     // Said plainly until there's a whole day to show.
     @ViewBuilder var coverage: some View {
@@ -198,26 +211,46 @@ struct HistoryView: View {
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }
         .navigationDestination(item: $model.processes) { ProcessesView(first: $0) }
         .task {
-            // A new reading arrives once a minute.
+            // A new reading arrives once a minute. Until the first one gets through, it keeps trying every few seconds.
             while !Task.isCancelled {
-                do { points = try await model.api.trend(metric.key); failed = false }
-                catch is CancellationError { return }
-                catch { failed = points.isEmpty }
-                loaded = true
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                await load()
+                try? await Task.sleep(nanoseconds: points.isEmpty ? 5_000_000_000 : 60_000_000_000)
             }
         }
     }
+    func load() async {
+        do { points = try await model.api.trend(metric.key); failed = false }
+        catch is CancellationError { return }
+        catch { failed = points.isEmpty }
+        loaded = true
+    }
 }
 
-// Held down like the lock screen's flashlight: it swells under the finger, clicks and switches.
+// The newest reading's dot, with a ring that swells and fades from it.
+struct NowDot: View {
+    var body: some View {
+        ZStack {
+            Circle().fill(macBlue.opacity(0.35)).frame(width: 8, height: 8)
+                .phaseAnimator([0.0, 1.0]) { ring, t in ring.scaleEffect(1 + 1.6 * t).opacity(1 - t) } animation: { t in t == 1 ? .easeOut(duration: 1.4) : .linear(duration: 0) }
+            Circle().fill(macBlue).frame(width: 7, height: 7).overlay { Circle().strokeBorder(.black.opacity(0.5), lineWidth: 1) }
+        }
+        .frame(width: 24, height: 24)
+    }
+}
+
+// Held down like the lock screen's flashlight: a ring fills around it under the finger, it clicks and switches. The
+// glyph and its fill say which way it is; a tap on its own only wiggles it and says "Hold" in place.
 struct DisplayHoldButton: View {
     @EnvironmentObject var model: AppModel
-    let say: (String) -> Void
     @State private var pressing = false
+    @State private var fill: CGFloat = 0
     @State private var wanted: Bool?    // what was asked for, until the Mac agrees
     @State private var settling: Task<Void, Never>?
+    @State private var hint = false
+    @State private var wiggles = 0
+    @State private var failure: String?
     var isOn: Bool { wanted ?? model.status?.displayOn ?? (model.status?.screen != "display off") }
+    static let hold = 0.4, settle = 0.12
     var body: some View {
         VStack(spacing: 6) {
             Image(systemName: isOn ? "sun.max.fill" : "moon.fill")
@@ -226,29 +259,56 @@ struct DisplayHoldButton: View {
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 52, height: 52)
                 .background(isOn ? Color.white : Color(white: 0.16), in: Circle())
-                .scaleEffect(pressing ? 1.22 : 1)
+                .overlay {
+                    Circle().trim(from: 0, to: fill)
+                        .stroke(macBlue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .padding(-5)
+                }
+                .scaleEffect(pressing ? 1.12 : 1)
                 .animation(.spring(duration: 0.3, bounce: 0.4), value: pressing)
                 .animation(.easeOut(duration: 0.18), value: isOn)
-            Text(isOn ? "Display on" : "Display off").font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                .keyframeAnimator(initialValue: 0.0, trigger: wiggles) { v, x in v.offset(x: x) } keyframes: { _ in
+                    KeyframeTrack {
+                        LinearKeyframe(-4, duration: 0.05)
+                        LinearKeyframe(4, duration: 0.08)
+                        LinearKeyframe(-3, duration: 0.08)
+                        LinearKeyframe(0, duration: 0.06)
+                    }
+                }
+            Text(hint ? "Hold" : "Display").font(.caption2).foregroundStyle(hint ? macBlue : .secondary).lineLimit(1).minimumScaleFactor(0.8)
+                .contentTransition(.opacity)
+            if let failure {
+                Text(failure).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
-        .onTapGesture { say("Hold to turn the display \(isOn ? "off" : "on")") }
-        .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 12, perform: toggle, onPressingChanged: { p in
+        .onTapGesture {
+            wiggles += 1
+            withAnimation(.easeOut(duration: 0.15)) { hint = true }
+            Task { try? await Task.sleep(nanoseconds: 1_200_000_000); withAnimation(.easeOut(duration: 0.2)) { hint = false } }
+        }
+        .onLongPressGesture(minimumDuration: Self.hold, maximumDistance: 12, perform: toggle, onPressingChanged: { p in
             // Only a finger that stays: one passing through on a scroll shouldn't make it react.
             settling?.cancel()
             if p {
                 settling = Task {
-                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    try? await Task.sleep(nanoseconds: UInt64(Self.settle * 1e9))
                     if Task.isCancelled { return }
                     pressing = true
                     click(.light)
+                    withAnimation(.linear(duration: Self.hold - Self.settle)) { fill = 1 }
                 }
-            } else { pressing = false }
+            } else {
+                pressing = false
+                if wanted == nil { withAnimation(.easeOut(duration: 0.15)) { fill = 0 } }
+            }
         })
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Mac display")
         .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityHint("Hold to switch")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { toggle() }
     }
@@ -263,10 +323,19 @@ struct DisplayHoldButton: View {
         let next = !isOn
         click(.heavy)
         wanted = next
+        failure = nil
+        fill = 1
+        Task {
+            // The ring lets go once it has clicked.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            withAnimation(.easeOut(duration: 0.3)) { fill = 0 }
+        }
         Task {
             if let problem = await model.run(next ? "display-on" : "display-off") {
                 wanted = nil
-                say(problem)
+                withAnimation { failure = problem }
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if failure == problem { withAnimation { failure = nil } }
                 return
             }
             // The Mac takes a moment to change and to report it.

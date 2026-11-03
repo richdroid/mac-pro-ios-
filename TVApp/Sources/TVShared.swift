@@ -42,6 +42,33 @@ struct TVStatus: Decodable, Equatable {
     }
 }
 
+// The words under a title: only what helps. Never the service a rec came from, what kind of thing it is, or the app
+// doing the playing, which are plumbing once he's chosen. Episodes read one way everywhere: "S1 E2 · Name".
+enum Wording {
+    static let services: Set<String> = ["peacock", "prime video", "amazon prime video", "amazon", "paramount+", "paramount plus", "netflix", "hulu", "disney+",
+        "max", "hbo max", "apple tv", "apple tv+", "tubi", "pluto tv", "stremio", "youtube", "crunchyroll", "mgm+", "starz", "showtime", "amc+", "fubo",
+        "plex", "the roku channel", "kanopy", "mubi", "shudder", "britbox", "fandango at home", "vudu", "criterion channel"]
+    static let kinds: Set<String> = ["film", "films", "movie", "series", "show", "tv show", "continue"]
+    static func subtitle(_ s: String) -> String {
+        s.components(separatedBy: " · ").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !services.contains($0.lowercased()) && !kinds.contains($0.lowercased()) }
+            .map(tidy).joined(separator: " · ")
+    }
+    // "85m left" reads "85 min left"; "S2E2" reads "S2 E2".
+    static func tidy(_ part: String) -> String {
+        if part.range(of: #"^\d+m left$"#, options: .regularExpression) != nil { return String(part.dropLast(6)) + " min left" }
+        return episode(part)
+    }
+    // "S1E2 Episode 2", "S1 E2: Episode 2" and the like, as "S1 E2 · Episode 2".
+    static func episode(_ s: String) -> String {
+        guard let r = s.range(of: #"^[Ss](\d+)\s*[Ee](\d+)"#, options: .regularExpression) else { return s }
+        let head = s[r], digits = head.split(whereSeparator: { !$0.isNumber })
+        guard digits.count == 2 else { return s }
+        let rest = s[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " ·:-–—"))
+        return "S\(digits[0]) E\(digits[1])" + (rest.isEmpty ? "" : " · " + rest)
+    }
+}
+
 // What widgets, Control Center and Shortcuts use to reach the TV. They run outside the app, so they carry their own address.
 enum TVBridge {
     static var address: String {

@@ -315,6 +315,8 @@ struct Cover<Placeholder: View>: View {
     var image: TVImage? = nil
     var key: String? = nil
     var mode: ContentMode = .fit
+    // Rounded at the picture's own edges, which for a fitted picture aren't the frame's.
+    var radius: CGFloat = 0
     @ViewBuilder let placeholder: () -> Placeholder
     @State private var shown: (id: String, image: TVImage)?
     var wanted: String { key ?? url?.absoluteString ?? "" }
@@ -322,7 +324,11 @@ struct Cover<Placeholder: View>: View {
         // The first time, whatever's already to hand, with no fade.
         let now = shown ?? (image ?? ImageStore.shared.cached(url)).map { (wanted, $0) }
         ZStack {
-            if let now { Image(tv: now.image).resizable().aspectRatio(contentMode: mode).id(now.id).transition(.opacity) }
+            if let now {
+                Image(tv: now.image).resizable().aspectRatio(contentMode: mode)
+                    .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                    .id(now.id).transition(.opacity)
+            }
             else { placeholder().transition(.opacity) }
         }
         .task(id: wanted) {
@@ -409,14 +415,31 @@ private struct BackToTopKey: EnvironmentKey { static let defaultValue = 0 }
 extension EnvironmentValues { var backToTop: Int { get { self[BackToTopKey.self] } set { self[BackToTopKey.self] = newValue } } }
 private struct BackToTop: ViewModifier {
     @Environment(\.backToTop) private var top
+    var posed = true
     @State private var position = ScrollPosition(edge: .top)
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
             .onChange(of: top) { _, _ in withAnimation(.snappy) { position.scrollTo(edge: .top) } }
+            .task { if posed, let y = PoseScroll.offset { try? await Task.sleep(nanoseconds: 900_000_000); position.scrollTo(y: y) } }
     }
 }
-extension View { func backToTop() -> some View { modifier(BackToTop()) } }
+// Unfolded, the side that isn't the page's list (Status's picture of the box) passes false, so the build's scrolled
+// shot has one pane scrolled and the other not, which is when a band under the bar would differ between them.
+extension View { func backToTop(posed: Bool = true) -> some View { modifier(BackToTop(posed: posed)) } }
+// The build's shots of a page scrolled a little way ("-scroll 40"), to show what sits under the bar then.
+enum PoseScroll {
+    static let offset: CGFloat? = { let v = UserDefaults.standard.double(forKey: "scroll"); return v > 0 ? v : nil }()
+}
+private struct PoseScrolled: ViewModifier {
+    @State private var position = ScrollPosition(edge: .top)
+    func body(content: Content) -> some View {
+        if let y = PoseScroll.offset {
+            content.scrollPosition($position).task { try? await Task.sleep(nanoseconds: 900_000_000); position.scrollTo(y: y) }
+        } else { content }
+    }
+}
+extension View { func poseScroll() -> some View { modifier(PoseScrolled()) } }
 
 // A whole row as its own page, opened from its heading. As a value, so tapping the tab again can close it.
 enum RowRoute: Hashable {

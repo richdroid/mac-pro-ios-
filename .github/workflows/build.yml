@@ -8,7 +8,7 @@ permissions:
 jobs:
   build:
     runs-on: xcode-27
-    timeout-minutes: 60
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
         # The job can write to the repo and its release; no later step, or code it builds, gets the token from disk.
@@ -33,7 +33,9 @@ jobs:
           ls build/Build/Products/Release-iphoneos/MacPro.app/PlugIns
       - name: Screenshot in the simulator
         continue-on-error: true
-        timeout-minutes: 40
+        # Raised from 40 for the Mac Pro state shots, about 3.5 minutes more across both displays, then to 60 for the TV
+        # app's flick, tour and scrolled shots, about 6 minutes more across the three postures.
+        timeout-minutes: 60
         run: |
           set +x
           exec > >(tee dist/sim.log) 2>&1
@@ -54,6 +56,8 @@ jobs:
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryTV.app
           xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
           node ci/mock-chumby.js &
+          # What the TV app is given: a blank banner, or a Watch shelf of a handful, is logged as a warning, never a failure.
+          sleep 2; node ci/tv-checks.js || true
           shots() { # display, file suffix
             for T in 0 1 2 3 4; do
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
@@ -75,9 +79,21 @@ jobs:
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-screen$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || echo "Mac Pro screen was not running"
-            for V in "procs -tab 0 -openHistory cpu -openProcesses cpu" "alerts -tab 0 -pose alerts" "session -tab 0 -pose session"; do
+            for V in "procs -tab 0 -openHistory cpu -openProcesses cpu" "alerts -tab 0 -pose alerts" "session -tab 2 -pose session"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "${@:4}"
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-$3$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+              set -- "$1" "$2"
+            done
+            # States checked in pixels: offline (nothing answers on 9009, so the cached numbers from the shots above show
+            # under it), sign-in needed (9003 answers 401), the Updates log scrolled part way, a pink accent, API usage
+            # unset, refused and live, its sheet, the screen when the Mac needs a login, and Status scrolled to the dials.
+            # These only add files; the shots above are unchanged.
+            for V in "offline 9009 -tab 0" "signin 9003 -tab 0" "longlog 9001 -tab 4 -pose longlog" "pink 9001 -tab 0 -accent pink" "pink-usage 9001 -tab 3 -accent pink" "api-none 9001 -tab 3 -pose api-none" "api-refused 9001 -tab 3 -pose api-refused" "api-live 9001 -tab 3 -pose api-live" "api-sheet 9001 -tab 3 -pose api-sheet" "screenlogin 9001 -tab 0 -pose screenlogin -openScreen YES" "scrolled 9001 -tab 0 -pose scrolled"; do
+              set -- "$1" "$2" $V
+              xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$4 "${@:5}"
               sleep 8
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-$3$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
@@ -157,7 +173,97 @@ jobs:
               xcrun simctl terminate "$DEVICE" local.macpro.$APP || true
             done
           }
+          # ---- Chumby app poses (separate block) ----
+          # The states the Chumby app's designer checks: ringing, snoozed, dead, offline, a first run with nothing kept, the
+          # calendar settings, the editor sheets, a save turned down at its control, and every tab dark. The mock answers
+          # these from a path in front of the address, so the shots above get the same answers as before.
+          chumby_poses() { # display, file suffix
+            for V in "ringing 0 ringing" "ringing-alarms 2 ringing" "snoozed 0 snoozed" "dead 0 dead" "dead-alarms 2 dead" \
+                     "firstrun 2 slow -pose firstrun" "firstrun-home 0 slow -pose firstrun" "calsettings 2 - -pose calsettings" \
+                     "calday 2 - -pose calday" "editor 2 - -pose editor" "template 2 - -pose template" "failure 2 fail -pose failure"; do
+              set -- "$1" "$2" $V
+              ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
+              sleep 9
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-pose-$3$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+              set -- "$1" "$2"
+            done
+            # Offline: nothing answers at this address, so the app gives up on it after two tries.
+            for T in 0 2; do
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9009 -tab $T
+              sleep 12
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-pose-offline-$T$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
+            xcrun simctl ui "$DEVICE" appearance dark
+            for T in 0 1 2 3 4; do
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
+              sleep 7
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$T-dark$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/ringing -tab 0
+            sleep 9
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-pose-ringing-dark$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            xcrun simctl ui "$DEVICE" appearance light
+          }
+          # ---- end Chumby app poses ----
+          # ---- TV app poses (separate block) ----
+          # What Richard found on his phone on 2026-11-03, filmed or shot so it can't pass unseen again: pages scrolled 40 pt
+          # (one pane scrolled and the other not, so a band under the bar would differ between them), YouTube Music's old
+          # blank banner (the app must draw its own), a stream flick end to end as he does it (the mock takes about 6 s and
+          # reports each step, and the status goes asleep, on, Stremio open, paused, playing), a still while it's on its way,
+          # and Now playing into the Remote. simctl records at the display's own rate, up to 60 frames a second.
+          tv_poses() { # display, file suffix
+            for T in 1 3 5 9; do
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab $T -scroll 40
+              sleep 9
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-scroll-$T$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            done
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/blankbanner -tab 1
+            sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-blankbanner$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            tv_flick "$1" "$2"
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-toremote$2.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 6
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/ending -tab 1 -pose toremote
+            sleep 10
+            kill -INT $REC; wait $REC; echo "to remote video$2 exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          tv_flick() { # display, file suffix
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-flickdemo-stream$2.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 6
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/flickstream -tab 1 -pose flickdemo-stream
+            sleep 22
+            kill -INT $REC; wait $REC; echo "stream flick video$2 exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # About 3 s into the TV's 6, with the card in the TV and the dots filling.
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/flickstream -tab 1 -pose flickdemo-stream
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-sending$2.png
+            sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-sending-late$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # Every tab twice, unfolded and partly folded, with Mint's cover changing every 5 s underneath, so the art behind
+          # each page can be seen keeping up, or not, as he comes back to it.
+          tv_tour() { # display, file suffix
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tour-TV$2.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 5
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/tour -tab 0 -pose tour
+            sleep 26
+            kill -INT $REC; wait $REC; echo "TV tour$2 exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # ---- end TV app poses ----
           shots 1 ""
+          chumby_poses 1 "" || echo "Chumby poses closed incomplete"
+          tv_poses 1 "" || echo "TV poses closed incomplete"
           reference 1 "-closed"
           for G in Mac Chumby TV; do
             xcrun simctl launch "$DEVICE" local.macpro.Gallery$G
@@ -172,9 +278,14 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
           sleep 5
           shots 3 "-open"
+          chumby_poses 3 "-open" || echo "Chumby poses open incomplete"
+          tv_poses 3 "-open" || echo "TV poses open incomplete"
+          tv_tour 3 "-open" || echo "TV tour open incomplete"
           reference 3 "-open"
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
           pose_shots 3 "-partial" || echo "partial shots incomplete"
+          tv_flick 3 "-partial" || echo "TV flick partial incomplete"
+          tv_tour 3 "-partial" || echo "TV tour partial incomplete"
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; sleep 3
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
           pose_shots 3 "-portrait" || echo "portrait shots incomplete"

@@ -20,6 +20,27 @@ struct WakeRules: Codable, Equatable {
     var daysAhead = 3
     // A day runs from here to here, so a shift that ends at 2 AM belongs to the day it started.
     var dayStartHour = 5
+    // One day's own wake-up lead, set from that day's sheet, by PlannedWake key.
+    var leadOverrides: [String: Int] = [:]
+    init() {}
+    // Every field optional, so settings saved by an older build still load rather than resetting to the defaults.
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        let f = WakeRules()
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? f.enabled
+        workLead = try c.decodeIfPresent(Int.self, forKey: .workLead) ?? f.workLead
+        otherLead = try c.decodeIfPresent(Int.self, forKey: .otherLead) ?? f.otherLead
+        travelExtra = try c.decodeIfPresent(Int.self, forKey: .travelExtra) ?? f.travelExtra
+        workWords = try c.decodeIfPresent([String].self, forKey: .workWords) ?? f.workWords
+        ignoreWords = try c.decodeIfPresent([String].self, forKey: .ignoreWords) ?? f.ignoreWords
+        offWords = try c.decodeIfPresent([String].self, forKey: .offWords) ?? f.offWords
+        workCalendars = try c.decodeIfPresent(Set<String>.self, forKey: .workCalendars) ?? f.workCalendars
+        excludedCalendars = try c.decodeIfPresent(Set<String>.self, forKey: .excludedCalendars) ?? f.excludedCalendars
+        skipped = try c.decodeIfPresent(Set<String>.self, forKey: .skipped) ?? f.skipped
+        daysAhead = try c.decodeIfPresent(Int.self, forKey: .daysAhead) ?? f.daysAhead
+        dayStartHour = try c.decodeIfPresent(Int.self, forKey: .dayStartHour) ?? f.dayStartHour
+        leadOverrides = try c.decodeIfPresent([String: Int].self, forKey: .leadOverrides) ?? f.leadOverrides
+    }
 }
 struct PlannedWake: Identifiable, Equatable {
     var key: String
@@ -30,6 +51,7 @@ struct PlannedWake: Identifiable, Equatable {
     var isWork: Bool
     var skipped = false
     var shortNight: String?
+    var custom = false          // its lead was set for this day alone
     var id: String { key }
 }
 
@@ -73,12 +95,13 @@ enum WakePlanner {
             let list = byDay[day]!.filter { !(off.contains(day) && isWork($0, r)) }
             guard let first = list.first else { continue }
             let work = isWork(first, r)
-            let lead = work ? r.workLead : r.otherLead + (first.hasLocation ? r.travelExtra : 0)
+            let lead = r.leadOverrides[key(first)] ?? (work ? r.workLead : r.otherLead + (first.hasLocation ? r.travelExtra : 0))
             let wake = first.start.addingTimeInterval(TimeInterval(-lead * 60))
             // Already past: you're either up already or it's too late for an alarm to help.
             guard wake > now else { continue }
             var item = PlannedWake(key: key(first), title: first.title, start: first.start, wake: wake, lead: lead, isWork: work)
             item.skipped = r.skipped.contains(item.key)
+            item.custom = r.leadOverrides[item.key] != nil
             // Worth saying if the night before leaves little sleep.
             if let i = usable.indices.last(where: { usable[$0].end <= wake && days[$0] < day }) {
                 let before = usable[i]

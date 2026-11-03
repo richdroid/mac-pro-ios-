@@ -38,7 +38,8 @@ struct Status: Decodable {
     struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let fetch: Fetch?; let apps: [SeedApp] }
     struct Fetch: Decodable { let state: String; let message: String }
     struct Service: Decodable, Identifiable { let label: String; let name: String; let running: Bool; var id: String { label } }
-    struct Alert: Decodable, Identifiable { let id: String; let level: String; let kind: String; var metric: String?; let title: String; let detail: String; let since: Double }
+    // A temperature alert also carries its reading in °C, so it's shown in the unit chosen in Settings.
+    struct Alert: Decodable, Identifiable { let id: String; let level: String; let kind: String; var metric: String?; let title: String; let detail: String; let since: Double; var c: Double? }
     // What the Anthropic API has cost, read on the Mac with its Admin key. Read leniently: a field it can't make sense of
     // is simply missing, rather than losing the whole status.
     struct APIUsage: Decodable {
@@ -47,7 +48,9 @@ struct Status: Decodable {
         var error: String?
         var at: Double?
         var today: Spend?, week: Spend?, month: Spend?
-        enum K: String, CodingKey { case configured, error, at, today, week, month }
+        // The billing period, in ms: his credit renews on the 19th, not the 1st.
+        var periodStart: Double?, renewsAt: Double?
+        enum K: String, CodingKey { case configured, error, at, today, week, month, periodStart, renewsAt }
         init(from d: Decoder) throws {
             guard let c = try? d.container(keyedBy: K.self) else { return }
             configured = (try? c.decodeIfPresent(Bool.self, forKey: .configured)) ?? false
@@ -56,7 +59,10 @@ struct Status: Decodable {
             today = (try? c.decodeIfPresent(Spend.self, forKey: .today)) ?? nil
             week = (try? c.decodeIfPresent(Spend.self, forKey: .week)) ?? nil
             month = (try? c.decodeIfPresent(Spend.self, forKey: .month)) ?? nil
+            periodStart = (try? c.decodeIfPresent(Double.self, forKey: .periodStart)) ?? nil
+            renewsAt = (try? c.decodeIfPresent(Double.self, forKey: .renewsAt)) ?? nil
         }
+        init(configured: Bool, error: String? = nil) { self.configured = configured; self.error = error }
     }
     struct IOSJob: Decodable { let state: String; let message: String }
     struct IOSStatus: Decodable {
@@ -67,7 +73,7 @@ struct Status: Decodable {
     let model: String; let macos: String; let build: String; var uptime: Double; var load: [Double]; let cpuModel: String
     var cpu: CPU; var mem: Memory; let disk: Disk; var net: Network; var hist: History
     let apps: [App]; let installed: [String]; let procs: [Process]; let tailscale: Tailscale
-    let claude: Claude; let usage: Usage; let upgrade: Upgrade; let oclp: OCLP; let sharing: Sharing
+    let claude: Claude; let usage: Usage; var upgrade: Upgrade; let oclp: OCLP; let sharing: Sharing
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
     let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
     var displayOn: Bool?
@@ -77,6 +83,10 @@ struct Status: Decodable {
     var alerts: [Alert]?
     // Null until the Mac's first read.
     var apiUsage: APIUsage?
+    // Whether the tunnel behind the public link is actually running. Older Macs don't say, and then the link's address
+    // existing is all there is to go on.
+    var publicUp: Bool?
+    var publicLinkActive: Bool { !publicUrl.isEmpty && (publicUp ?? true) }
 }
 
 // The numbers that change every second.

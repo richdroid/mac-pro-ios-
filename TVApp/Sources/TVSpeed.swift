@@ -1,0 +1,116 @@
+import Foundation
+import SwiftUI
+
+// Everything that makes a flick quicker than the TV would be on its own: streams asked for before they're needed, the
+// TV made ready while the card is still in the hand, and the start followed as it happens rather than polled for.
+
+// Stream lists, kept for ten minutes. A card's press asks for its list, so by the time the flick screen opens it's
+// usually here. Only answers with streams in them are kept, and only one question is ever in flight for a title.
+@MainActor
+final class StreamCache {
+    static let shared = StreamCache()
+    private struct Entry { let at: Date; let task: Task<[StremioStream]?, Never> }
+    private var entries: [String: Entry] = [:]
+    private static let fresh: TimeInterval = 600
+    static func key(_ type: String, _ imdb: String, _ video: String) -> String { "\(type)/\(imdb)/\(video)" }
+    func streams(type: String, imdb: String, video: String, again: Bool = false) async -> [StremioStream]? {
+        let k = Self.key(type, imdb, video)
+        if !again, let e = entries[k], Date().timeIntervalSince(e.at) < Self.fresh {
+            if let s = await e.task.value, !s.isEmpty { return s }
+        }
+        let term = video.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? video
+        let address = TVBridge.url("/api/tv/streams?type=\(type)&id=\(imdb)&video=\(term)")
+        let task = Task<[StremioStream]?, Never> {
+            struct Answer: Decodable { let streams: [StremioStream] }
+            guard let d = await TVBridge.data(address, timeout: 25) else { return nil }
+            return (try? JSONDecoder().decode(Answer.self, from: d))?.streams
+        }
+        entries[k] = Entry(at: Date(), task: task)
+        let s = await task.value
+        // Nothing found is worth asking again for next time.
+        if s?.isEmpty != false, entries[k]?.task == task { entries[k] = nil }
+        return s
+    }
+    // A list that turned out stale: the next look asks afresh.
+    func forget(type: String, imdb: String, video: String) { entries[Self.key(type, imdb, video)] = nil }
+    // Pressed on a card: a film, or an episode already named, has a list worth fetching now. A series still to have
+    // its episode picked doesn't.
+    func prefetch(_ item: MediaItem) {
+        guard let ref = item.stremioRef, ref.type == "movie" || ref.video != nil else { return }
+        let k = Self.key(ref.type, ref.imdb, ref.video ?? ref.imdb)
+        if let e = entries[k], Date().timeIntervalSince(e.at) < Self.fresh { return }
+        Task { _ = await streams(type: ref.type, imdb: ref.imdb, video: ref.video ?? ref.imdb) }
+    }
+}
+
+// The TV made ready for a stream while the card is still in the hand: woken if it's asleep, and Stremio cleared if it
+// has no player open. Harmless if he puts the card down, and the Mac skips both in the start itself if this ran lately.
+enum Prepare {
+    @MainActor private static var last = Date.distantPast
+    @MainActor static func arm() {
+        guard Date().timeIntervalSince(last) > 20 else { return }
+        last = Date()
+        Task { _ = try? await TVBridge.post("prepare", [:], timeout: 20) }
+    }
+}
+
+// How long each part of a flick took, on this phone's clock, for the Mac's log. Never in the way: a failure is dropped.
+struct FlickTiming {
+    private(set) var events: [(String, Double)] = []
+    mutating func mark(_ name: String) { events.append((name, Date().timeIntervalSince1970 * 1000)) }
+    func send() {
+        guard !events.isEmpty else { return }
+        let body: [String: Any] = ["events": events.map { ["name": $0.0, "at": $0.1] }]
+        Task { _ = try? await TVBridge.post("timing", body, timeout: 10) }
+    }
+}
+
+extension TVBridge {
+    // The start of a stream, followed as the Mac reports it: a line as the TV wakes, as Stremio opens, as its player
+    // comes up and as the film plays, then the answer. A Mac from before this answers once, at the end, in the old way,
+    // and that's taken as it always was. Each line goes to `phase` as it comes; `opened` says which kind of answer it is.
+    static func playStream(_ body: [String: Any], timeout: TimeInterval = 60,
+                           opened: @escaping @MainActor (Bool) -> Void,
+                           phase: @escaping @MainActor (String) -> Void) async throws -> Data {
+        guard let u = url("/api/tv/play-stream"), let base = URL(string: address) else { throw URLError(.badURL) }
+        var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = timeout
+        r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
+        r.setValue("1", forHTTPHeaderField: "x-dash"); r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
+        r.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (bytes, resp) = try await URLSession.shared.bytes(for: r)
+        let http = resp as? HTTPURLResponse
+        let streamed = http?.statusCode == 200 && (http?.value(forHTTPHeaderField: "Content-Type") ?? "").contains("ndjson")
+        await opened(streamed)
+        if !streamed {
+            // The old way: one answer, its meaning in the status.
+            var d = Data()
+            for try await b in bytes { d.append(b) }
+            return try answer(d, code: http?.statusCode)
+        }
+        for try await line in bytes.lines {
+            let text = line.trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty, let d = text.data(using: .utf8), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            if let p = j["phase"] as? String { await phase(p); continue }
+            if j["ok"] as? Bool == true { return d }
+            if j["error"] != nil || j["failed"] != nil {
+                if j["failed"] as? String == "start" { throw DidNotStart() }
+                if j["retry"] as? Bool == true { throw Slow() }
+                if j["failed"] as? String == "gone" || j["gone"] as? Bool == true { throw Gone() }
+                throw TVIntentError.noAnswer
+            }
+        }
+        // Cut off before the answer.
+        throw TVIntentError.noAnswer
+    }
+    // What a whole answer means, as `post` reads it.
+    private static func answer(_ d: Data, code: Int?) throws -> Data {
+        if code == 409 {
+            let retry = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["retry"] as? Bool == true
+            throw retry ? Slow() as Error : Gone()
+        }
+        if code == 422, (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["failed"] as? String == "start" { throw DidNotStart() }
+        guard code == 200 else { throw TVIntentError.noAnswer }
+        return d
+    }
+}
