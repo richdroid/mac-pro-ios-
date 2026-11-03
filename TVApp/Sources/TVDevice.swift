@@ -55,6 +55,7 @@ struct DeviceTab: View {
     @State private var failed = false
     @State private var tidying = false
     @State private var tidyNote: String?
+    @State private var breathe = false
     // Closes the heavy apps left idle in the background, which is what fills the box's 2 GB until things stutter.
     func tidy() {
         model.tick(); tidying = true; tidyNote = nil
@@ -98,8 +99,11 @@ struct DeviceTab: View {
                 }
             }
         }
-        .phaseAnimator([0.5, 1.0]) { c, o in c.opacity(o) } animation: { _ in .easeInOut(duration: 0.9) }
+        // Breathing by a plain repeating animation: a phase animator lays its content out at its natural size, and a
+        // shape's natural width is next to nothing.
         .frame(maxWidth: .infinity)
+        .opacity(breathe ? 1 : 0.5)
+        .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true } }
         .accessibilityHidden(true)
     }
     @ViewBuilder func tiles(_ i: DeviceInfo) -> some View {

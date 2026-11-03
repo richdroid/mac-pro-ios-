@@ -72,6 +72,8 @@ struct FlickScreen: View {
     @State private var noStreams = false
     @State private var cardFrame = CGRect.zero
     @State private var arrived = false
+    // The bar's buttons come a beat after the backdrop starts in, as the bar itself can't fade.
+    @State private var barShown = false
     @State private var flown = false
     @State private var landed = false
     @State private var note: String?
@@ -133,6 +135,11 @@ struct FlickScreen: View {
         // A card that already names its episode, from Continue watching or a re-flick, needs no episode picked.
         let ready = target.ready && (ref?.type == "movie" || ref?.video != nil)
         _step = State(initialValue: ref == nil || posed || ready ? .flick : ref?.type == "series" && ref?.video == nil ? .episodes : .streams)
+        // The build's shot of the controls after a flick, on a film near its end: already there, the card landed.
+        if Self.pose == "startover" {
+            _step = State(initialValue: .control); _flown = State(initialValue: true); _landed = State(initialValue: true); _done = State(initialValue: true)
+            _handedOver = State(initialValue: true); _stream = State(initialValue: StremioStream(token: "s0", addon: "Sample addon", name: "1080p", description: ""))
+        }
         _autoplay = State(initialValue: target.autoplay)
     }
     var item: MediaItem { target.item }
@@ -206,7 +213,7 @@ struct FlickScreen: View {
                 .coordinateSpace(name: "flick")
             }
             // In with the backdrop, and out with it, rather than on the rail before anything else is there.
-            .toolbar { if arrived { bar } }
+            .toolbar { if barShown { bar } }
             .toolbarBackground(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
             .containerBackground(.clear, for: .navigation)
@@ -225,6 +232,7 @@ struct FlickScreen: View {
         .sensoryFeedback(.impact(weight: .heavy, intensity: 1), trigger: impacts)
         .task {
             withAnimation(.spring(response: 0.55, dampingFraction: 0.8)) { arrived = true }
+            Task { try? await Task.sleep(nanoseconds: 250_000_000); withAnimation(.easeOut(duration: 0.2)) { barShown = true } }
             // The app behind takes on the picked thing's colour too, and gets its own back after.
             if priorMood == nil { priorMood = .some(model.mood) }
             let art = item.art
@@ -274,17 +282,16 @@ struct FlickScreen: View {
 
     @ToolbarContentBuilder var bar: some ToolbarContent {
         if let previous {
-            ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left").opacity(arrived ? 1 : 0) } }
+            ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
         }
         // Only back to an episode already chosen. On the streams, "Choose on the TV" is the way on without one.
         if let next, step == .episodes {
-            ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right").opacity(arrived ? 1 : 0) } }
+            ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right") } }
         }
         ToolbarItem(placement: .cancellationAction) {
             // While anything is still on its way to the TV, the X stops it, on the controls too. Once it's there, a tick.
             let stops = flown && (step != .control || sending)
-            // Its label follows arrived's spring, so it fades in and out with the backdrop rather than popping on the rail.
-            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : step == .control ? "Done" : "Close", systemImage: stops || step != .control ? "xmark" : "checkmark").opacity(arrived ? 1 : 0) }
+            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : step == .control ? "Done" : "Close", systemImage: stops || step != .control ? "xmark" : "checkmark") }
         }
     }
 
@@ -886,7 +893,7 @@ struct FlickScreen: View {
     }
     func leave() {
         if let prior = priorMood { model.mood = prior }
-        withAnimation(.easeOut(duration: 0.2)) { arrived = false }
+        withAnimation(.easeOut(duration: 0.2)) { arrived = false; barShown = false }
         Task {
             try? await Task.sleep(nanoseconds: 200_000_000)
             model.closeFlick()
@@ -1017,8 +1024,10 @@ struct FlickScreen: View {
                     // The Mac restarts Stremio first, so a player seen after none was is this one; before that, only by its title.
                     if player == nil { cleared = true }
                     guard early, !handedOver, let player, cleared || isThisFilm(player) else { continue }
-                    // Long enough to read where it's got to, then on to the controls.
+                    // Long enough to read where it's got to, then on to the controls. The card's step fades from here on,
+                    // so its line under the TV goes with the growing rather than sliding off ahead of it.
                     if phase == nil { phase = "Loading the stream" }
+                    morphing = true
                     try? await Task.sleep(nanoseconds: 700_000_000)
                     if !Task.isCancelled, sending, step == .flick { handOver() }
                 }
@@ -1035,6 +1044,8 @@ struct FlickScreen: View {
                 if (try? JSONSerialization.jsonObject(with: answer) as? [String: Any])?["restarted"] as? Bool == false { offerStartOver = true }
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.6)) { sending = false; phase = nil; done = true; note = source == .mint || stream != nil || item.stremioRef == nil || target.send != nil ? "Playing on the TV" : "On the TV. Pick a stream with the remote." }
                 successes += 1
+                // From now the card's step leaves by fading, set well before the hand-over so its last frames have it.
+                morphing = true
                 remember()
                 // Already on the controls: the flash on the big screen is the yes.
                 if handedOver { Task { try? await Task.sleep(nanoseconds: 400_000_000); await model.load() }; return }
@@ -1081,6 +1092,8 @@ struct FlickScreen: View {
     }
     // The TV said no: back out of it and into the hand, with a shake.
     func failed(_ error: Error) async {
+        // Back to sliding between steps, for the way back to the streams.
+        morphing = false
         #if canImport(UIKit)
         UINotificationFeedbackGenerator().notificationOccurred(.error)
         #endif

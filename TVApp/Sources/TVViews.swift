@@ -37,12 +37,20 @@ struct RootView: View {
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
         if pose == "search" { SendDraft.shared.text = "Heat"; return }
         if pose == "tour" || pose == "type" { return }
+        // Three quick skips on a film near its end, caught before the TV has confirmed them.
+        if pose == "skip" {
+            Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                for _ in 0..<3 { SeekQueue.shared.add(1, for: model.status?.session, model: model) }
+            }
+            return
+        }
         model.browsing = .stremio
         guard pose != "browse" else { return }
         Task {
             // The page is loading the same list, so wait for it rather than asking again.
             for _ in 0..<40 {
-                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo"].contains(pose) ? "movie" : "series") }) { model.flick(FlickTarget(item: item, source: .stremio)); return }
+                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "startover"].contains(pose) ? "movie" : "series") }) { model.flick(FlickTarget(item: item, source: .stremio)); return }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
@@ -481,7 +489,8 @@ struct RemoteTab: View {
             Spacer()
             if stremio { SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1, size: 50) } else { GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: 50) }
             Spacer()
-            PlayKey()
+            // Says which it'll do, as on the Playing tab, once the TV's word is fresh.
+            PlayKey(playing: model.staleStatus ? nil : model.status?.session?.playing)
             Spacer()
             if stremio { SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1, size: 50) } else { GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: 50) }
             Spacer()
@@ -815,6 +824,10 @@ struct Shelf: View {
                     }
                     .rowEdge()
                 }
+            } else if store.rows.isEmpty && !store.failed && store.query.isEmpty {
+                // Its place is kept while it comes, so the rows under it don't get pushed down when it does.
+                let w: CGFloat = store.source == .mint ? 128 : 112
+                PlaceholderShelf(cardWidth: w, cardHeight: w / store.source.coverAspect + 50, headed: true)
             } else { Color.clear.frame(height: 0) }
         }
         .task { await store.load() }
@@ -1446,15 +1459,24 @@ struct RecentRow: View {
     }
 }
 // A row still on its way: a title bar and a few card shapes, breathing.
+// The cards are as big as the row's real ones, so nothing moves when it comes.
 struct PlaceholderShelf: View {
+    var cardWidth: CGFloat = 124
+    var cardHeight: CGFloat = 236
+    // Where the row's own heading will be: the height of its line, so the cards start where they will.
+    var headed = false
+    @State private var breathe = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Capsule().fill(.white.opacity(0.12)).frame(width: 150, height: 16).padding(.leading, 20)
-            HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(0.08)).frame(width: 124, height: 236) } }
+        VStack(alignment: .leading, spacing: headed ? 8 : 10) {
+            Capsule().fill(.white.opacity(0.12)).frame(width: 150, height: 16)
+                .frame(height: headed ? 25 : 16, alignment: .leading).padding(.leading, 20)
+            HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(0.08)).frame(width: cardWidth, height: cardHeight) } }
                 .padding(.leading, 20)
         }
         .frame(maxWidth: .infinity, alignment: .leading).clipped()
-        .phaseAnimator([0.5, 1.0]) { c, o in c.opacity(o) } animation: { _ in .easeInOut(duration: 0.9) }
+        // A plain repeating fade rather than a phase animator, which would lay this out at its natural size.
+        .opacity(breathe ? 1 : 0.5)
+        .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true } }
         .accessibilityHidden(true)
     }
 }

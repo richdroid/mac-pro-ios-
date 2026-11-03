@@ -72,13 +72,17 @@ const tvStremio = JSON.stringify({ rows: ['Continue watching', 'Popular movies',
 const tvScene = scene => {
   const v = JSON.parse(tvStatus), now = Date.now();
   if (scene === 'stremio') { v.app = 'com.stremio.one'; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Sample Series', 'S1E2 Episode 2'], position: 1260000, sampledAt: now, duration: 3480000, canSeek: true, art: tvBase + '/poster.png' }; }
+  // A film nearly over, for Start over and for skips still on their way.
+  if (scene === 'ending') { v.app = 'com.stremio.one'; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Heat'], position: 7600000, sampledAt: now, duration: 8000000, canSeek: true, art: tvBase + '/poster.png' }; }
   if (scene === 'youtube') { v.app = 'com.google.android.youtube.tv'; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['A sample video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 600000, canSeek: false }; }
   return JSON.stringify(v);
 };
 http.createServer((q, s) => {
-  const scene = (q.url.match(/^\/(stremio|youtube)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(stremio|youtube|ending)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   if (scene && q.url === '/api/tv/status') { s.setHeader('content-type', 'application/json'); return s.end(tvScene(scene)); }
+  // Skips take the real player a few seconds, so the shot catches them still on their way.
+  if (scene && q.method === 'POST' && q.url === '/api/tv/player-seek') { s.setHeader('content-type', 'application/json'); return setTimeout(() => s.end(JSON.stringify({ ok: true, position: 7630000, duration: 8000000 })), 6000); }
   if (q.url.startsWith('/api/tv/mint')) { s.setHeader('content-type', 'application/json'); return s.end(tvMint); }
   if (q.url.startsWith('/api/tv/streams')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ streams: [['1080p', '1080p', 3.2, ''], ['1080p', '1080p', 1.4, ''], ['4K HDR', '4K', 18.4, 'HDR'], ['720p', '720p', 0.9, '']].map(([name, quality, gb, hdr], n) => ({ token: 's' + n, addon: 'Sample addon', name, description: 'Sample.Film.2024.' + quality + '.WEB-DL.x264', quality, hdr, gb, instant: n < 3 })) })); }
   if (q.url.startsWith('/api/tv/discover')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }
