@@ -215,6 +215,34 @@ final class ChumbyModel: ObservableObject {
         saveTail = task
         await task.value
     }
+    // The same queue as the saves, for a command whose value goes in the address. Returns why it failed, if it did.
+    private func sendInOrder(_ action: String, extra: String) async -> String? {
+        let number = (newestSave[action] ?? 0) + 1
+        newestSave[action] = number
+        let before = saveTail
+        var failure: String?
+        let task = Task { [weak self] in
+            await before?.value
+            guard let self, self.newestSave[action] == number else { return }
+            do { try await self.api?.post(action, extra: extra) } catch { failure = error.localizedDescription }
+        }
+        saveTail = task
+        await task.value
+        return failure
+    }
+    // Calendar days keep the repeating alarms quiet. Changes at once here; goes back if the Chumby says no.
+    func setCalendarOverride(_ on: Bool) async {
+        let before = state.calOverride
+        state.calOverride = on ? 1 : 0
+        tick()
+        hold(10)
+        guard let why = await sendInOrder("calover", extra: "&v=\(on ? 1 : 0)") else { return }
+        state.calOverride = before
+        #if canImport(UIKit)
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        #endif
+        say("Couldn’t change that: \(why)")
+    }
     // A time wheel changes on every notch, so wait for it to settle.
     private var scheduleSoon: Task<Void, Never>?
     func saveScheduleSoon() {

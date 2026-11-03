@@ -122,6 +122,8 @@ struct ChumbyState: Decodable {
     var missed: [Missed] = []
     // The one set of settings every calendar alarm rings with, once one has been saved as it. Null until then.
     var calTpl: Alarm?
+    // Whether a day the calendar wakes you keeps your repeating alarms quiet: 1 or 0. Missing on a Chumby too old for it.
+    var calOverride: Int?
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: Key.self)
@@ -142,13 +144,14 @@ struct ChumbyState: Decodable {
         mine = try c.decodeIfPresent([MineWidget].self, forKey: .mine) ?? []
         missed = try c.decodeIfPresent([Missed].self, forKey: .missed) ?? []
         calTpl = (try? c.decodeIfPresent(Alarm.self, forKey: .calTpl)) ?? nil
+        calOverride = (try? c.decodeIfPresent(Int.self, forKey: .calOverride)) ?? nil
         reindex()
     }
     mutating func reindex() {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl }
+    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride }
 }
 
 // ?a=chlist: per channel, [id, name, secs] rows (a "#" row names the channel) and saved [id, on, secs] edits.

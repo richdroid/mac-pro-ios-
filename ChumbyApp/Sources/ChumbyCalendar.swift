@@ -76,11 +76,13 @@ final class CalendarWake: ObservableObject {
         Task { await sync() }
     }
     func offTheCalendar(_ s: ChumbyState) -> [Alarm] { s.alarms.filter { !$0.name.hasPrefix(Self.prefix) && !$0.isPlaceholder } }
-    // Other alarms that will ring before this one that day, since nothing here switches off an alarm of yours.
+    // Other alarms that will ring before this one that day. With calendar days skipping the repeating ones, only a
+    // one-off still rings, so only those are worth a word.
     func alsoRinging(_ item: PlannedWake, in s: ChumbyState) -> String? {
         let cal = Calendar.current
+        let skipping = s.calOverride == 1
         let names = offTheCalendar(s).compactMap { a -> String? in
-            guard a.name != "Catch-up", let d = a.nextFire(after: item.wake.addingTimeInterval(-8 * 3600)), d < item.wake, cal.isDate(d, inSameDayAs: item.wake) else { return nil }
+            guard a.name != "Catch-up", !(skipping && a.when != "once"), let d = a.nextFire(after: item.wake.addingTimeInterval(-8 * 3600)), d < item.wake, cal.isDate(d, inSameDayAs: item.wake) else { return nil }
             return (a.name.isEmpty ? "Another alarm" : a.name) + " at " + d.formatted(date: .omitted, time: .shortened)
         }
         return names.first
@@ -249,8 +251,7 @@ struct CalendarWakeSettings: View {
                 leadRow("Extra for a location", $wake.rules.travelExtra)
                 Stepper("Look ahead \(wake.rules.daysAhead) day\(wake.rules.daysAhead == 1 ? "" : "s")", value: $wake.rules.daysAhead, in: 1...7)
             } header: { Text("Awake before it starts") } footer: { Text("A day runs from \(wake.rules.dayStartHour) AM, so a late shift counts as the day it began.") }
-            // The place for "Calendar days skip my other alarms", once the Chumby can do it.
-            Section("Alarm sound") {
+            Section {
                 Button { editingSound = true } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
@@ -265,6 +266,12 @@ struct CalendarWakeSettings: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                // Only on a Chumby that knows how.
+                if let on = model.state.calOverride {
+                    Toggle("Calendar days skip my other alarms", isOn: Binding(get: { on == 1 }, set: { v in Task { await model.setCalendarOverride(v) } }))
+                }
+            } header: { Text("Alarm sound") } footer: {
+                if model.state.calOverride != nil { Text("Your repeating alarms stay quiet on days the calendar wakes you.") }
             }
             Section {
                 wordsRow("Counts as work", $wake.rules.workWords)
