@@ -221,7 +221,8 @@ jobs:
             # Films, folded only: an alarm ringing, snoozed, then stopped; and Alarms with Settings in and out and a
             # 10-minute nap started and cancelled. The mock's live scenes keep what's saved and flip what's ringing.
             if [ -z "$2" ]; then
-              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 16"; do
+              # alarmsdemo runs 20 s so the nap's countdown and its cancel stay on film after the scroll down to Quick nap.
+              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 20"; do
                 set -- "$1" "$2" $V
                 xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-$3.mp4 > /dev/null 2>&1 & REC=$!
                 sleep 5

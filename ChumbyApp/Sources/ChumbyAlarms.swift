@@ -128,35 +128,45 @@ struct RowNote: View {
 // While an alarm rings or snoozes: its name, and Snooze and Stop large enough to hit half asleep.
 struct RingingCard: View {
     @EnvironmentObject var model: ChumbyModel
-    var name: String { model.sys.ringing.map { r in [r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name, r.sound].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "" }
+    @Namespace private var buttons
+    // The last ring seen, so the card keeps its words and buttons while it fades out after Stop.
+    @State private var last: Sys.Ringing?
+    var ring: Sys.Ringing? { model.sys.ringing ?? last }
+    var name: String { ring.map { r in [r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name, r.sound].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "" }
     var body: some View {
-        if let r = model.sys.ringing, model.unreachable {
+        content
+            .onAppear { last = model.sys.ringing }
+            .onChange(of: model.sys.ringing) { _, r in if let r { last = r } }
+    }
+    @ViewBuilder var content: some View {
+        if let r = ring, model.unreachable {
             // An old reading: what it was doing when last heard from, and no buttons that can't reach it.
             VStack(spacing: 3) {
                 Text("Was \(r.snoozed ? "snoozing" : "ringing")\(model.seenAt.map { " at " + seenText($0) } ?? "")").font(.custom("Trebuchet MS", size: 22).weight(.bold))
                 Text([name, "can’t reach the Chumby"].filter { !$0.isEmpty }.joined(separator: " · ")).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(16).frame(maxWidth: .infinity)
-        } else if let r = model.sys.ringing {
+        } else if let r = ring {
             VStack(spacing: 14) {
                 VStack(spacing: 3) {
-                    if r.snoozed {
-                        TimelineView(.periodic(from: .now, by: 1)) { _ in
-                            Text(model.snoozeEnds.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed")
-                        }
-                        .font(.custom("Trebuchet MS", size: 24).weight(.bold))
-                    } else {
-                        Text("Ringing").font(.custom("Trebuchet MS", size: 24).weight(.bold))
+                    // One title that crossfades from Ringing to Snoozed, in the same spring as the buttons.
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(r.snoozed ? model.snoozeEnds.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing")
+                            .contentTransition(.opacity)
                     }
+                    .font(.custom("Trebuchet MS", size: 24).weight(.bold))
                     Text(name).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
                 }
+                // Snooze folds away into the side Stop grows from, so Stop widens in place rather than jumping.
                 HStack(spacing: 14) {
                     if !r.snoozed {
                         Button { model.ringSnooze() } label: { Label("Snooze", systemImage: "water.waves").frame(maxWidth: .infinity, minHeight: 56) }
                             .buttonStyle(.glass)
+                            .transition(.scale(scale: 0.4, anchor: .trailing).combined(with: .opacity))
                     }
                     Button { model.ringOff() } label: { Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity, minHeight: 56) }
                         .buttonStyle(.glassProminent).tint(ChumbyPalette.orange)
+                        .matchedGeometryEffect(id: "stop", in: buttons)
                 }
                 .font(.custom("Trebuchet MS", size: 20).weight(.bold))
                 if let f = model.failed("ring") { FailNote(text: f) }
@@ -165,6 +175,11 @@ struct RingingCard: View {
             .frame(maxWidth: .infinity)
         }
     }
+}
+
+extension AnyTransition {
+    // Stopped: the card fades and settles back a little while what's under it slides up in the same spring.
+    static var ringCard: AnyTransition { .opacity.combined(with: .scale(scale: 0.95, anchor: .top)) }
 }
 
 // MARK: - Naps
@@ -199,6 +214,8 @@ struct NapChips: View {
             }
             if let f = model.failed("nap") { FailNote(text: f) }
         }
+        // The chip turning into its countdown and back, never a swap in one frame.
+        .animation(.snappy, value: due)
     }
     func countdown(_ due: Date, total: Int) -> some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
@@ -206,6 +223,7 @@ struct NapChips: View {
             let k = min(left / Double(total * 60), 1)
             HStack(spacing: 4) {
                 Text(String(format: "%d:%02d", Int(left) / 60, Int(left) % 60)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+                    .contentTransition(.numericText(countsDown: true)).animation(.snappy, value: Int(left))
                 Button { Task { await model.cancelNap() } } label: { Image(systemName: "xmark").font(.footnote.weight(.bold)) }
                     .buttonStyle(.borderless).accessibilityLabel("Cancel nap")
             }
@@ -343,7 +361,6 @@ struct AlarmsTab: View {
     @Environment(\.paneLayout) private var wide
     @State private var editing: EditTarget?
     @State private var day: DayTarget?
-    @State private var settingsPage = false      // folded: Calendar settings as a page
     // Open, the right pane holds whatever would otherwise be a sheet, so nothing sits across the fold.
     enum Pane: Equatable { case schedule, settings, editor(Alarm?), day(String), template }
     @State private var pane: Pane = .schedule
@@ -375,13 +392,20 @@ struct AlarmsTab: View {
     func show(_ p: Pane) { withAnimation(.snappy) { pane = p } }
     func edit(_ a: Alarm?) { if wide { show(.editor(a)) } else { editing = EditTarget(alarm: a) } }
     func openDay(_ k: String) { if wide { show(.day(k)) } else { day = DayTarget(id: k) } }
-    func openSettings() { if wide { show(.settings) } else { settingsPage = true } }
+    func openSettings() { if wide { show(.settings) } else { model.alarmsPage = true } }
     var plus: some View {
         Button { edit(nil) } label: { Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).frame(width: 30, height: 30) }
             .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Add alarm")
     }
 
+    // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
+    @State private var scrollTo: String?
     var body: some View {
+        ScrollViewReader { proxy in
+            page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
+        }
+    }
+    var page: some View {
         TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
             // + lives in the side bar's column when there is one (RootView puts it there); only with the bars across is it here.
             PageTitle("Alarms") { if model.railWidth < 44 { plus } }
@@ -404,7 +428,7 @@ struct AlarmsTab: View {
         } right: {
             switch paneShown {
             case .schedule:
-                Section("Quick nap") { NapChips() }
+                Section("Quick nap") { NapChips().id("nap") }
                 WokeUpTo()
                 schedule
             case .settings: CalendarSettingsSections()
@@ -415,9 +439,9 @@ struct AlarmsTab: View {
         }
         .seaList()
         .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
-        .navigationDestination(isPresented: $settingsPage) { CalendarWakeSettings() }
+        .navigationDestination(isPresented: $model.alarmsPage) { CalendarWakeSettings() }
         .sheet(item: $editing) { t in AlarmEditor(original: t.alarm).environmentObject(model) }
-        .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model).presentationDetents([.medium, .large]) }
+        .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model) }
         .refreshable { await model.loadState() }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
         .onChange(of: wide) { _, _ in pane = .schedule }
@@ -438,12 +462,14 @@ struct AlarmsTab: View {
                     if let a = mine.first { model.change(.toggle(a, !a.isOn)) }
                 }
             case "alarmsdemo":
-                // For the build's film: Settings in and out, then a 10-minute nap started and called off.
+                // For the build's film: Settings in and out, then down to Quick nap, where a 10-minute nap is started,
+                // counts down for a while and is called off, all on screen.
                 Task {
                     try? await Task.sleep(nanoseconds: 2_000_000_000); openSettings()
-                    try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { settingsPage = false }
-                    try? await Task.sleep(nanoseconds: 2_000_000_000); await model.nap(10)
-                    try? await Task.sleep(nanoseconds: 3_500_000_000); await model.cancelNap()
+                    try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { model.alarmsPage = false }
+                    try? await Task.sleep(nanoseconds: 1_200_000_000); scrollTo = "nap"
+                    try? await Task.sleep(nanoseconds: 1_200_000_000); await model.nap(10)
+                    try? await Task.sleep(nanoseconds: 4_500_000_000); await model.cancelNap()
                 }
             default: break
             }
@@ -459,14 +485,16 @@ struct AlarmsTab: View {
                 Text("Next alarm").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     let c = clockParts(n.at)
-                    Text(c.0).font(.custom("Trebuchet MS", size: 52).weight(.bold)).monospacedDigit()
-                    Text(c.1).font(.custom("Trebuchet MS", size: 22).weight(.bold))
+                    Text(c.0).font(.custom("Trebuchet MS", size: 52).weight(.bold)).monospacedDigit().contentTransition(.numericText())
+                    Text(c.1).font(.custom("Trebuchet MS", size: 22).weight(.bold)).contentTransition(.numericText())
                     Spacer(minLength: 8)
-                    Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit()
+                    Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
                 }
-                Text("\(dayWord(n.at)) · \(alarmLabel(n.alarm).capitalizedFirst)").foregroundStyle(.secondary).lineLimit(1)
+                Text("\(dayWord(n.at)) · \(alarmLabel(n.alarm).capitalizedFirst)").foregroundStyle(.secondary).lineLimit(1).contentTransition(.numericText())
             }
             .padding(.vertical, 2)
+            // A nap starting or called off rolls the time over rather than swapping it.
+            .animation(.snappy, value: n.at)
         } else {
             HStack(spacing: 10) {
                 OctopusMark(color: ChumbyPalette.hex(0x2c5bae).opacity(0.7), blink: 0.08).frame(width: 34)
@@ -557,7 +585,11 @@ struct AlarmsTab: View {
                     .buttonStyle(.plain)
                     .listRowBackground(pane == .settings ? AnyView(Color.accentColor.opacity(0.18)) : AnyView(GlassRow()))
                 } else {
-                    NavigationLink("Settings") { CalendarWakeSettings() }
+                    // Pushed through the model, so the rail knows to swap + for Back.
+                    Button { model.alarmsPage = true } label: {
+                        HStack { Text("Settings"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         } header: {

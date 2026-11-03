@@ -82,6 +82,35 @@ let groupedBackground = Color.gray.opacity(0.1)
 let cardRadius: CGFloat = 26
 let cardFill = Color(white: 0.11)
 
+// One top edge for every page, Settings included: no band or hairline from the system on any pane, and one black fade
+// across the whole width, under the side bar too, from the top of the display to just below the title. The title is in
+// the bar, which draws above it, so scrolled content passes under the title rather than through it.
+struct TopEdge: ViewModifier {
+    func body(content: Content) -> some View {
+        bar(content.scrollEdgeEffectHidden(true, for: .top))
+            .overlay(alignment: .top) {
+                VStack(spacing: 0) {
+                    // Grows up through the bar and the status bar to the top of the display.
+                    Color.black.frame(height: 1).ignoresSafeArea(edges: [.top, .horizontal])
+                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 14).ignoresSafeArea(edges: .horizontal)
+                }
+                // The fade ends where the bar does, so nothing at rest under it is dimmed.
+                .offset(y: -15)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+    }
+    @ViewBuilder func bar<V: View>(_ v: V) -> some View {
+        #if os(iOS)
+        v.toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+        #else
+        v
+        #endif
+    }
+}
+extension View { func topEdge() -> some View { modifier(TopEdge()) } }
+
 // A card that gives under the finger, as system rows highlight.
 struct PressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -239,6 +268,8 @@ struct Screen<Content: View>: View {
                 }
             }
             .background(groupedBackground.ignoresSafeArea())
+            // Laid over both panes at once, so open there's one edge, not one per pane.
+            .topEdge()
             .navigationTitle(title)
             .navigationDestination(item: tab == 0 ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
             .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0) }
@@ -403,7 +434,9 @@ struct QuickActions: View {
         Task { try? await Task.sleep(nanoseconds: 4_000_000_000); if fails[id] == text { fails[id] = nil } }
     }
     func button(_ id: String, _ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+        // They all need the Mac, so they wait, dimmed, while it can't be reached.
         Button(action: action) { face(id, icon, title) }.buttonStyle(.plain)
+            .opacity(model.stale ? 0.5 : 1).disabled(model.stale)
     }
     func face(_ id: String, _ icon: String, _ title: String) -> some View {
         VStack(spacing: 6) {
@@ -421,7 +454,8 @@ struct QuickActions: View {
     var body: some View {
         HStack(alignment: .top, spacing: 4) {
             button("screen", "macwindow", "Screen") { model.screenOpen = true }
-            DisplayHoldButton()
+            // Dimmed on its own like the other three: the row's dimming didn't reach its drawn glyph and label.
+            DisplayHoldButton().opacity(model.stale ? 0.5 : 1).disabled(model.stale)
             button("copy", "square.and.arrow.down", "Copy from Mac") {
                 fails["copy"] = nil
                 Task {
@@ -446,9 +480,6 @@ struct QuickActions: View {
                 }
             }
         }
-        // They all need the Mac, so they wait, dimmed, while it can't be reached.
-        .opacity(model.stale ? 0.5 : 1)
-        .disabled(model.stale)
         .animation(.easeOut(duration: 0.2), value: fails)
         .animation(.easeOut(duration: 0.2), value: done)
         .sensoryFeedback(trigger: successes) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
@@ -616,6 +647,8 @@ struct ClaudeTab: View {
                 }
                 if let sessionNote { FailText(sessionNote) }
             }
+            // Each session's screen read ahead, so a tap pushes a page that's already drawn.
+            .task(id: s.claude.sessions.compactMap(\.key)) { await TermCache.warm(model.api, s.claude.sessions.compactMap(\.key)) }
         }
         if side != .left {
             Section("Claude Code") {
@@ -868,7 +901,8 @@ struct APIKeySetup: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        // Just the field and its note: a taller sheet sat short of the foot with one corner squared off.
+        .presentationDetents([.height(260)])
     }
 }
 
@@ -969,7 +1003,14 @@ struct UpgradeTab: View {
             .padding(.leading, 20).padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
         case .left:
-            ScrollView { VStack(spacing: 12) { summary; facts; agent }.padding(.leading, 20) }
+            // A header of its own, like the log's beside it, so both panes' first cards start on one line.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("This Mac").font(.title3.weight(.semibold)).padding(.leading, 4)
+                    VStack(spacing: 12) { summary; facts; agent }
+                }
+                .padding(.leading, 20)
+            }
                 .scrollBounceBehavior(.basedOnSize)
                 .scrollEdgeEffectHidden(true, for: .top)
         case .right:
@@ -1102,7 +1143,7 @@ struct ControlTab: View {
                     Button("Forget password", role: .destructive) { confirmForget = true }
                         .task { await pose() }
                         .confirmationDialog("Forget the Mac’s password?", isPresented: $confirmForget, titleVisibility: .visible) {
-                            Button("Forget Password", role: .destructive) { act("forget") { await model.run("mac-logout") } }
+                            Button("Forget password", role: .destructive) { act("forget") { await model.run("mac-logout") } }
                         } message: { Text("After its next restart, the Mac waits at the login window until you log in again from here.") }
                     failLine("forget")
                 } else {

@@ -421,7 +421,8 @@ private struct BackToTop: ViewModifier {
         content
             .scrollPosition($position)
             .onChange(of: top) { _, _ in withAnimation(.snappy) { position.scrollTo(edge: .top) } }
-            .task { if posed, let y = PoseScroll.offset { try? await Task.sleep(nanoseconds: 900_000_000); position.scrollTo(y: y) } }
+            // Animated, like a drag, so the bar follows it and folds the title as a real scroll would.
+            .task { if posed, let y = PoseScroll.offset { try? await Task.sleep(nanoseconds: 900_000_000); withAnimation { position.scrollTo(y: y) } } }
     }
 }
 // Unfolded, the side that isn't the page's list (Status's picture of the box) passes false, so the build's scrolled
@@ -435,7 +436,7 @@ private struct PoseScrolled: ViewModifier {
     @State private var position = ScrollPosition(edge: .top)
     func body(content: Content) -> some View {
         if let y = PoseScroll.offset {
-            content.scrollPosition($position).task { try? await Task.sleep(nanoseconds: 900_000_000); position.scrollTo(y: y) }
+            content.scrollPosition($position).task { try? await Task.sleep(nanoseconds: 900_000_000); withAnimation { position.scrollTo(y: y) } }
         } else { content }
     }
 }

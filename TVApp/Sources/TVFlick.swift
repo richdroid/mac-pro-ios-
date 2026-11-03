@@ -630,11 +630,12 @@ struct FlickScreen: View {
         let centre = CGPoint(x: look.midX, y: look.midY)
         // The card is held, not laid down: small, its lower third past the bottom edge like a card in the hand, and
         // well clear of the TV's stand, so a throw has a real way to travel.
-        let width: CGFloat = wide ? 110 : 92
+        // Open, a little smaller and nearer the stand, so about two thirds of it, title and all, shows over the edge.
+        let width: CGFloat = wide ? 104 : 92
         let height = MediaCard.height(width, source)
         let stand = centre.y + tv.height / 2 + 12
         let held = hand.maxY - height * 2 / 3
-        let top = hand == look ? max(held, stand + (wide ? 140 : 110)) : max(held, hand.minY + 12)
+        let top = hand == look ? max(held, stand + 110) : max(held, hand.minY + 12)
         return Stage(centre: centre, tv: tv, cardX: hand.midX, cardTop: top, cardWidth: width, floor: hand.maxY - 4, wide: wide)
     }
     // Last: nothing left to decide, just the TV and the card in your hand.
@@ -704,7 +705,8 @@ struct FlickScreen: View {
             .opacity(controlsIn ? 1 : 0)
             // Where it's got to, for a film or a song alike. Its place is kept until the TV says, so nothing below jumps.
             // Handed over before the film is going: what the TV is doing goes in the middle of the bar.
-            let waiting = sending ? Self.word(for: phase) : nil
+            // The same word as above the TV: "Waking" only when the TV really is asleep.
+            let waiting = sending ? Self.word(for: phase, asleep: model.status.map { $0.screen == "asleep" || $0.screen == "screensaver" } ?? true) : nil
             Group {
                 if onTV { EmptyView() }
                 else if let session, !isMusic { VideoProgress(session: session, note: waiting, locked: locked).frame(maxWidth: w) }
@@ -726,7 +728,9 @@ struct FlickScreen: View {
                     if source == .stremio {
                         Group {
                             SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1)
-                            PlayKey(playing: playedAt.map { Date().timeIntervalSince($0) < 4 } == true ? true : session?.playing, tint: .white, size: 74)
+                            // Pause from the hand-over on, dimmed while it's starting, so the key never flickers
+                            // through play on the way.
+                            PlayKey(playing: locked || playedAt.map({ Date().timeIntervalSince($0) < 4 }) == true ? true : session?.playing, tint: .white, size: 74)
                             SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1)
                         }
                         .opacity(locked ? 0.4 : 1).allowsHitTesting(!locked)
@@ -830,15 +834,20 @@ struct FlickScreen: View {
     }
     // The TV's screen, small while the card is in the hand, grown on the control step. Its picture crossfades within the
     // one frame: the poster filling the small screen, then the whole poster on a blurred copy of itself.
-    var screenLayer: some View {
+    // Going to the Remote, one number runs from the controls' place to the Remote's picture, so every frame of the move
+    // is drawn in between, wherever that picture has settled by then, and the glow goes with it rather than at once.
+    var screenLayer: some View { Moving(t: toRemote ? 1 : 0) { screenLayer(move: $0) } }
+    func screenLayer(move t: CGFloat) -> some View {
         // Big only once the control step's place is known: until then, nothing changes on the small TV. Unfolded, the far
         // pane's place comes a few frames after the step does. Going to the Remote, it moves onto the Remote's own
         // picture of the TV, which shows the same thing, so the one picture carries on there.
         let big = (step == .control && controlSlot != .zero) || toRemote
-        let slot = toRemote ? remoteSlot : big ? controlSlot : tvFrame
+        let start = controlSlot == .zero ? tvFrame : controlSlot
+        let slot = toRemote || t > 0 ? between(start, remoteSlot, t) : big ? controlSlot : tvFrame
         // The grown screen has the Remote's picture's own corners, so moving onto it changes nothing but place and size.
         let radius: CGFloat = big ? TVLook.card : 9
         let lean = big ? 0 : charge
+        let glow = Double(1 - t)
         return ZStack {
             RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.black.opacity(0.55))
             // The TV answering the card on its way: the poster rising dimly from the bottom of its screen, like a
@@ -862,7 +871,7 @@ struct FlickScreen: View {
                 ZStack {
                     // As the Remote draws its own picture of the TV, so the move into it ends on the same thing.
                     // Never solid black before the poster's in: its own colour, which the blurred poster then covers.
-                    (tint ?? Color(white: 0.12)).opacity(toRemote ? 0.35 : 1)
+                    (tint ?? Color(white: 0.12)).opacity(1 - 0.65 * Double(t))
                     Color.clear.overlay { artwork(fill: true) }.clipped().blur(radius: 24).opacity(0.7)
                     artwork(fill: false)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -873,14 +882,15 @@ struct FlickScreen: View {
                 .transition(.opacity)
             }
             if sending { TVWaiting().transition(.opacity) }
-            TVFlash(trigger: successes)
+            // Grown over the poster, only a breath of the flash: the ripple round it says it landed, without a white frame.
+            TVFlash(trigger: successes).opacity(big ? 0.2 : 1)
         }
         .animation(.spring(response: 0.5, dampingFraction: 0.86), value: big)
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .frame(width: slot.width, height: slot.height)
-        .overlay { RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(toRemote ? 0 : big ? 0.25 : 0.3 + 0.5 * charge), lineWidth: big ? 1 : 1.5) }
+        .overlay { RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(glow * (big ? 0.25 : 0.3 + 0.5 * charge)), lineWidth: big ? 1 : 1.5) }
         // It brightens as the card comes, and glows hard once the card is charged.
-        .shadow(color: TVLook.accent.opacity(toRemote ? 0 : big ? 0.45 : charged ? 0.95 : 0.7 * charge), radius: big ? 26 : charged ? 34 : 10 + 18 * charge)
+        .shadow(color: TVLook.accent.opacity(glow * (big ? 0.45 : charged ? 0.95 : 0.7 * charge)), radius: big ? 26 : charged ? 34 : 10 + 18 * charge)
         .overlay { TVRipple(trigger: impacts, big: big) }
         .overlay { TVRipple(trigger: successes, big: big) }
         // It leans in to meet the card, then gives as the card hits: squashed, over, and settled.
@@ -1117,11 +1127,18 @@ struct FlickScreen: View {
             }
             guard let s = slot else { leave(restoreMood: false); return }
             remoteSlot = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
+            // The move and the Remote coming up through the backdrop start together, so there's never a lone screen on
+            // an empty backdrop.
             withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { toRemote = true }
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            // Landed on it: the backdrop goes, and the screen with it, onto the same picture underneath.
-            withAnimation(.easeOut(duration: 0.22)) { arrived = false; barShown = false; screenOut = true }
-            try? await Task.sleep(nanoseconds: 230_000_000)
+            withAnimation(.easeInOut(duration: 0.45)) { arrived = false; barShown = false }
+            // The Remote's picture can still settle as its page lays out, so the move keeps aiming at where it is now.
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                if let s = model.mirrorSlot, s.width > 20 { remoteSlot = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y) }
+            }
+            // Landed on it: the screen gives way to the same picture underneath.
+            withAnimation(.easeOut(duration: 0.15)) { screenOut = true }
+            try? await Task.sleep(nanoseconds: 160_000_000)
             model.closeFlick()
         }
     }
@@ -1467,6 +1484,18 @@ private struct TVFlash: View {
             }
             .allowsHitTesting(false)
     }
+}
+
+// Hands its content how far along a move it is, every frame, so what's drawn can be worked out from that one number.
+private struct Moving<C: View>: View, Animatable {
+    var t: CGFloat
+    @ViewBuilder let content: (CGFloat) -> C
+    var animatableData: CGFloat { get { t } set { t = newValue } }
+    var body: some View { content(t) }
+}
+private func between(_ a: CGRect, _ b: CGRect, _ t: CGFloat) -> CGRect {
+    CGRect(x: a.minX + (b.minX - a.minX) * t, y: a.minY + (b.minY - a.minY) * t,
+           width: a.width + (b.width - a.width) * t, height: a.height + (b.height - a.height) * t)
 }
 
 // Rings going out from the TV each time something lands on it.

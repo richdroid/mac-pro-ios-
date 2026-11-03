@@ -3,14 +3,45 @@ import SwiftUI
 // One numbered choice in a menu the session is showing, such as "❯ 1. Yes".
 struct TermOption: Identifiable, Equatable { let number: Int; let text: String; let current: Bool; var id: Int { number } }
 
+// The last screen each session showed, so its page slides in with the text already there rather than a spinner.
+// Filled while the Claude tab is open and by each page as it reads.
+@MainActor
+enum TermCache {
+    static var screens: [String: API.Term] = [:]
+    static func warm(_ api: API, _ keys: [String]) async {
+        for k in keys where !Task.isCancelled {
+            if let t = try? await api.termScreen(k) { screens[k] = t }
+        }
+    }
+    // Before a push asked for from elsewhere: a short wait for the text, then the page goes regardless.
+    static func warm(_ api: API, _ key: String, within seconds: Double) async {
+        guard screens[key] == nil else { return }
+        // Not cancelled when the wait runs out: the text still lands in the cache for the page to pick up.
+        let fetch = Task { await warm(api, [key]) }
+        await withTaskGroup(of: Void.self) { g in
+            g.addTask { await fetch.value }
+            g.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9)) }
+            await g.next()
+            g.cancelAll()
+        }
+    }
+}
+
 // A kept session's own screen, to answer whatever it's waiting on from here: its menu's choices as buttons, keys for
 // anything else, and a box to tell it something.
 struct SessionTerminal: View {
     @EnvironmentObject var model: AppModel
     let session: Status.Session
-    @State private var text = ""
-    @State private var running = true
-    @State private var loaded = false
+    @State private var text: String
+    @State private var running: Bool
+    @State private var loaded: Bool
+    init(session: Status.Session) {
+        self.session = session
+        let kept = TermCache.screens[session.key ?? session.name]
+        _text = State(initialValue: kept?.text ?? "")
+        _running = State(initialValue: kept?.running ?? true)
+        _loaded = State(initialValue: kept != nil)
+    }
     @State private var message = ""
     @State private var note: String?
     @State private var sends = 0
@@ -51,9 +82,14 @@ struct SessionTerminal: View {
     var waiting: Bool { current.waiting == true || !options.isEmpty }
 
     func show(_ t: API.Term) {
-        running = t.running ?? true
-        if let s = t.text, s != text { text = s }
-        loaded = true
+        TermCache.screens[key] = t
+        // The first text lands already in place, at the foot, with nothing rising into it.
+        var first = Transaction(); first.disablesAnimations = !loaded
+        withTransaction(first) {
+            running = t.running ?? true
+            if let s = t.text, s != text { text = s }
+            loaded = true
+        }
     }
     func load() async {
         do { show(try await model.api.termScreen(key)); if note == "Can’t reach the Mac" { note = nil } }
@@ -120,7 +156,8 @@ struct SessionTerminal: View {
                         .task(id: note) { try? await Task.sleep(nanoseconds: 3_000_000_000); withAnimation { self.note = nil } }
                 }
             }
-            .onChange(of: text) { _, _ in if following { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("end", anchor: .bottom) } } }
+            // Only new lines glide; the first text is laid out at the foot by the anchor alone.
+            .onChange(of: text) { old, _ in if following, !old.isEmpty { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("end", anchor: .bottom) } } }
         }
     }
     // The menu's own choices, big enough to hit without reading the screen. A tap types the number, which picks it.
@@ -147,9 +184,10 @@ struct SessionTerminal: View {
     }
     func keyButton(_ k: String, _ label: String, _ name: String) -> some View {
         Button { send(["key": k]) } label: {
-            Text(label).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
+            // One fixed size for every glyph: shrinking to fit drew ⇥ smaller than ⇧⇥ beside it.
+            Text(label).lineLimit(1).fixedSize().frame(maxWidth: .infinity)
         }
-        .font(.subheadline.weight(.semibold))
+        .font(.system(size: 15, weight: .semibold))
         .buttonStyle(.bordered)
         .tint(k == "ctrl-c" ? .red : nil)
         .accessibilityLabel(name)

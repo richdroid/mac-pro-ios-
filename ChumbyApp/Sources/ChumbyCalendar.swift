@@ -359,16 +359,22 @@ struct WordsGroup: View {
         .onChange(of: open) { _, o in if !o { add() } }
     }
 }
-// Folded, its own page, pushed so Back is where the system puts it, the same as the Mac Pro app's pages.
+// Folded, its own page, pushed. With the Duo's side column, the page has no bar of its own: Back sits in the rail where +
+// was (RootView), so only this column slides and the rail stays put. With the bars across, the system's Back is used.
 struct CalendarWakeSettings: View {
+    @EnvironmentObject var model: ChumbyModel
+    var rail: Bool { model.railWidth >= 44 }
     var body: some View {
-        List { CalendarSettingsSections().listRowBackground(GlassRow()) }
-            .seaList()
-            .overSea()
-            .toolbar(.visible, for: .navigationBar)
-            .toolbarBackground(.hidden, for: .navigationBar)
-            .navigationTitle("Calendar settings")
-            .toolbar { ToolbarItem(placement: .principal) { Text("Calendar settings").font(.custom("Trebuchet MS", size: 18).weight(.bold)) } }
+        List {
+            if rail { PageTitle("Calendar settings") }
+            CalendarSettingsSections().listRowBackground(GlassRow())
+        }
+        .seaList()
+        .overSea()
+        .toolbar(rail ? .hidden : .visible, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .navigationTitle("Calendar settings")
+        .toolbar { ToolbarItem(placement: .principal) { Text("Calendar settings").font(.custom("Trebuchet MS", size: 18).weight(.bold)) } }
     }
 }
 
@@ -378,6 +384,10 @@ struct CalendarDaySheet: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var wake = CalendarWake.shared
+    @Environment(\.colorScheme) private var scheme
+    // Folded: measured on first layout, a first guess until then.
+    @State private var fit: CGFloat = 520
+    @State private var detent: PresentationDetent = .height(520)
     let key: String
     // Set when it fills the open Duo's right pane instead of being a sheet.
     var close: (() -> Void)?
@@ -417,12 +427,22 @@ struct CalendarDaySheet: View {
             NavigationStack {
                 List { sections.listRowBackground(GlassRow()) }
                 .seaList().background { SeaBackground().ignoresSafeArea() }
+                // The folded sheet is as tall as what's in it, so no row is ever cut by its bottom edge.
+                .onScrollGeometryChange(for: CGFloat.self) { ($0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom).rounded() } action: { _, h in
+                    guard h > 200, abs(h - fit) > 1 else { return }
+                    let onFit = detent == .height(fit)
+                    fit = h
+                    if onFit { detent = .height(h) }
+                }
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .principal) { Text(title).font(.custom("Trebuchet MS", size: 18).weight(.bold)) }
-                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.fontWeight(.semibold) }
+                    // Tinted, the same as Done in the open pane.
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.fontWeight(.semibold).foregroundStyle(.tint) }
                 }
             }
+            .tint(ChumbyPalette.acc(scheme == .dark))
+            .presentationDetents([.height(fit), .large], selection: $detent)
         }
     }
 }

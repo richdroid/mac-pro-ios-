@@ -37,6 +37,17 @@ struct HistoryMetric: Identifiable, Hashable {
         default: return live.temps?.first { "temp:\($0.name)" == key }?.c
         }
     }
+    func now(_ s: Status?) -> Double? {
+        guard let s else { return nil }
+        switch key {
+        case "cpu": return Double(s.cpu.total)
+        case "mem": return 100 * s.mem.used / max(s.mem.total, 1)
+        case "rx": return s.net.rxRate
+        case "tx": return s.net.txRate
+        case "disk": return s.disk.free
+        default: return s.temps?.first { "temp:\($0.name)" == key }?.c
+        }
+    }
 }
 
 struct TrendPoint: Decodable, Hashable {
@@ -45,14 +56,37 @@ struct TrendPoint: Decodable, Hashable {
     var date: Date { Date(timeIntervalSince1970: t / 1000) }
 }
 
+// Each figure's last day, read ahead while Status is up, so its page slides in already drawn. A spinner only shows
+// when nothing has been read yet this launch.
+@MainActor
+enum TrendCache {
+    static var points: [String: [TrendPoint]] = [:]
+    private static var readAt = Date.distantPast
+    // Every figure Status opens a history for. At most once every few minutes; each page tops up its own as it reads.
+    static func prefetch(_ api: API, _ s: Status) async {
+        guard Date().timeIntervalSince(readAt) > 300 else { return }
+        readAt = Date()
+        let keys = [HistoryMetric.cpu, .memory, .download, .upload, .disk].map(\.key) + (s.temps ?? []).map { HistoryMetric.temperature($0.name).key }
+        for k in keys where !Task.isCancelled {
+            if let p = try? await api.trend(k), !p.isEmpty { points[k] = p }
+        }
+    }
+}
+
 struct HistoryView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: LiveStore
     @Environment(\.paneLayout) private var panes
     let metric: HistoryMetric
-    @State private var points: [TrendPoint] = []
-    @State private var loaded = false
+    @State private var points: [TrendPoint]
+    @State private var loaded: Bool
     @State private var failed = false
+    init(metric: HistoryMetric) {
+        self.metric = metric
+        let kept = TrendCache.points[metric.key] ?? []
+        _points = State(initialValue: kept)
+        _loaded = State(initialValue: !kept.isEmpty)
+    }
     @State private var hours = 24
     @State private var picked: Date?
 
@@ -82,7 +116,8 @@ struct HistoryView: View {
         guard let picked else { return nil }
         return marks.min { abs($0.date.timeIntervalSince(picked)) < abs($1.date.timeIntervalSince(picked)) }
     }
-    var current: Double? { metric.now(store.live) ?? points.last?.v }
+    // Never a dash while a figure is known: the live reading, the day's last point, or what Status last showed.
+    var current: Double? { metric.now(store.live) ?? points.last?.v ?? metric.now(model.status) }
 
     var readout: some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -205,6 +240,7 @@ struct HistoryView: View {
             }
         }
         .background(groupedBackground.ignoresSafeArea())
+        .topEdge()
         .navigationTitle(metric.title)
         .navigationBarTitleDisplayMode(.inline)
         .animation(.easeOut(duration: 0.25), value: hours)
@@ -219,7 +255,7 @@ struct HistoryView: View {
         }
     }
     func load() async {
-        do { points = try await model.api.trend(metric.key); failed = false }
+        do { points = try await model.api.trend(metric.key); failed = false; TrendCache.points[metric.key] = points }
         catch is CancellationError { return }
         catch { failed = points.isEmpty }
         loaded = true

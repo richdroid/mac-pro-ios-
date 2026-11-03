@@ -185,6 +185,7 @@ struct RootView: View {
                 Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { model.railWidth = $0 }
                 TabView(selection: TabReset.binding($model.tab) { t in
                     resets[t, default: 0] += 1
+                    if t == 2 { model.alarmsPage = false }
                     // Home again: the octopus answers, as it does to a tap.
                     if t == 0 { model.homePoke = Date() }
                 }) {
@@ -198,18 +199,34 @@ struct RootView: View {
             }
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
-            // Add alarm, in the side column under the clock, where the system would put a bar button on the Duo.
+            // Add alarm, in the side column under the clock, where the system would put a bar button on the Duo. On a page
+            // pushed inside Alarms, Back takes the same slot alone. It sits out here, over the tabs, so it never slides with the page.
             .overlay {
                 if model.tab == 2 && model.railWidth >= 44 {
-                    Button { model.addAlarm = Date() } label: { Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).frame(width: 30, height: 30) }
-                        .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Add alarm")
-                        .frame(width: model.railWidth).padding(.top, 196)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .ignoresSafeArea()
+                    ZStack {
+                        if model.alarmsPage {
+                            railButton("chevron.left", "Back") { model.alarmsPage = false }
+                                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                        } else {
+                            railButton("plus", "Add alarm") { model.addAlarm = Date() }
+                                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                        }
+                    }
+                    .animation(.snappy(duration: 0.25), value: model.alarmsPage)
+                    .frame(width: model.railWidth).padding(.top, 196)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .ignoresSafeArea()
                 }
             }
         }
         .sheet(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
+    }
+    // The rail's own glass circle, in the page's ink, the same for + and Back.
+    func railButton(_ symbol: String, _ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol).font(.system(size: 20, weight: .semibold)).frame(width: 30, height: 30) }
+            .buttonStyle(.glass).buttonBorderShape(.circle)
+            .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
+            .accessibilityLabel(label)
     }
 }
 // "Offline · last seen 7:12" as a row under a page's title, never floating over the list; a tap says what to do.
@@ -291,6 +308,15 @@ struct LiveOctopus: View {
     @EnvironmentObject var model: ChumbyModel
     let squishedAt: Date?
     var scale: CGFloat = 1
+    // How far his top edge may ever rise above where he rests, whatever bob, wobble or hop is playing: the wordmark sits just past it.
+    var headroom: CGFloat = .infinity
+    static let knee: CGFloat = 6
+    // His top edge's lift, eased into the headroom past the knee so a hop slows to a stop instead of hitting a flat ceiling.
+    func clamped(_ rise: CGFloat) -> CGFloat {
+        let k = min(Self.knee, headroom)
+        guard rise > k, headroom.isFinite, headroom > k else { return min(rise, headroom) }
+        return k + (headroom - k) * (1 - exp(-(rise - k) / (headroom - k)))
+    }
     var body: some View {
         // Ringing, he wobbles hard; gone quiet, he sinks a little with his eyes shut.
         let asleep = model.unreachable
@@ -307,11 +333,17 @@ struct LiveOctopus: View {
             let blink: CGFloat = asleep ? 0.06 : cycle > 0.94 ? (cycle < 0.97 ? 1 - (cycle - 0.94) / 0.03 * 0.94 : 0.06 + (cycle - 0.97) / 0.03 * 0.94) : 1
             let (sx, sy, dy0) = squish(at: ctx.date)
             let dy = dy0 * scale
+            let stretch = 1 + (ringing ? 0.08 : 0.035) * lift
+            // Where his top edge lands after the stretch (anchored 16% down), the squish (anchored 90% down) and the bob;
+            // the skew only leans him sideways. Any lift past the headroom is taken back off the offset.
+            let h = 92 * scale * ChumbyArt.octBox.height / ChumbyArt.octBox.width
+            let top = 0.9 * h + (0.16 * h * (1 - stretch) - 0.9 * h) * sy + bob + dy
+            let rise = max(0, -top)
             OctopusMark(color: ChumbyPalette.oct(scheme == .dark), blink: blink)
-                .scaleEffect(x: 1, y: 1 + (ringing ? 0.08 : 0.035) * lift, anchor: UnitPoint(x: 0.5, y: 0.16))
+                .scaleEffect(x: 1, y: stretch, anchor: UnitPoint(x: 0.5, y: 0.16))
                 .modifier(SkewEffect(skew: CGFloat(wave) * (ringing ? 11 : 4.5) * .pi / 180, anchorY: 0.16))
                 .scaleEffect(x: sx, y: sy, anchor: UnitPoint(x: 0.5, y: 0.9))
-                .offset(y: bob + dy)
+                .offset(y: bob + dy + (rise - clamped(rise)))
                 .opacity(asleep ? 0.75 : 1)
         }
     }
@@ -387,9 +419,26 @@ struct HomeTab: View {
     var stageWidth: CGFloat { wide ? 340 : 330 }
     var k: CGFloat { stageWidth / 380 }
     var ringSize: CGFloat { 92 * k * 1.15 }
-    var ringLift: CGFloat {
-        let octHeight: CGFloat = 92 * k * ChumbyArt.octBox.height / ChumbyArt.octBox.width
-        return -(ringSize - octHeight) / 2 - 2
+    var octHeight: CGFloat { 92 * k * ChumbyArt.octBox.height / ChumbyArt.octBox.width }
+    var ringLift: CGFloat { -(ringSize - octHeight) / 2 - 2 }
+    var snoozing: Bool { !model.unreachable && model.sys.ringing?.snoozed == true }
+    // Top to bottom, all hung off the device so nothing outside can shift one against another:
+    // 6 pt margin, the 30 pt wordmark, 14 pt of clear air, the octopus (top 58k + 15 above the device), the device.
+    // Of those 14 pt the octopus may rise 8 at most (bob, wobble, hop, clamped in LiveOctopus), so 6 always stay clear.
+    static let wordTop: CGFloat = 6, wordHeight: CGFloat = 30, headroom: CGFloat = 8, clearance: CGFloat = 6
+    var restGap: CGFloat { Self.headroom + Self.clearance }
+    var octLift: CGFloat { 58 * k + 15 }
+    // The snooze ring stands this far above the octopus's top: its extra size, its 2 pt lift and half its 5 pt stroke.
+    var ringRise: CGFloat { ringSize - octHeight + 2 + 2.5 }
+    // Snoozed, the octopus and device drop just enough that the ring's top keeps the same 6 pt clear of the wordmark.
+    var snoozeRoom: CGFloat { snoozing ? max(0, ringRise + Self.clearance - restGap) : 0 }
+    // From the octopus's top up to the wordmark's foot.
+    var wordGap: CGFloat { restGap + snoozeRoom }
+    // How high a bubble may rise, from the octopus's centre: faded out by the wordmark's top, passing behind its letters.
+    var bubbleCeiling: CGFloat { -(octHeight / 2 + wordGap + Self.wordHeight) }
+    // A box the octopus's size, where he rests, for hanging things off his centre.
+    func atOctopus<V: View>(@ViewBuilder _ content: () -> V) -> some View {
+        Color.clear.frame(width: 92 * k, height: octHeight).overlay { content() }.offset(y: -octLift)
     }
     var stage: some View {
         Image("Device").resizable().scaledToFit()
@@ -401,9 +450,11 @@ struct HomeTab: View {
                         .position(x: g.size.width * (0.1833 + 0.6065 / 2), y: g.size.height * (0.234 + 0.517 / 2))
                 }
             }
+            // Layers, back to front: octopus, bubbles, wordmark, his speech bubble. The wordmark and octopus never share a
+            // point (see wordGap and headroom), so the order only decides that rising bubbles pass behind the letters.
             .overlay(alignment: .top) {
                 ZStack {
-                    LiveOctopus(squishedAt: squishedAt, scale: k).frame(width: 92 * k)
+                    LiveOctopus(squishedAt: squishedAt, scale: k, headroom: Self.headroom).frame(width: 92 * k)
                         // Hung off the octopus, so it never changes where he sits.
                         // Its foot level with the tips of his arms, so it stays above the device too.
                         .overlay {
@@ -413,17 +464,25 @@ struct HomeTab: View {
                         .contentShape(Rectangle())
                         .onTapGesture { poke() }
                         .accessibilityLabel("Octopus").accessibilityAddTraits(.isButton)
+                    bubbleLayer
+                }
+                // The octopus sits clear above the device, not on it.
+                .offset(y: -octLift)
+            }
+            .overlay(alignment: .top) {
+                wordmark.offset(y: -(octLift + wordGap + Self.wordHeight)).allowsHitTesting(false)
+            }
+            .overlay(alignment: .top) {
+                atOctopus {
                     if let say {
                         Text(say).font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1).fixedSize().padding(.horizontal, 15).padding(.vertical, 7).glass(18)
                             .offset(y: -46 * k - 8).transition(.scale(scale: 0.3).combined(with: .opacity))
                     }
-                    bubbleLayer
                 }
-                // The octopus sits clear above the device, not on it.
-                .offset(y: -58 * k - 15)
+                .allowsHitTesting(false)
             }
             .frame(maxWidth: stageWidth)
-            .padding(.top, 64 * k + 15)
+            .padding(.top, Self.wordTop + Self.wordHeight + wordGap + octLift)
             // While it rings, bubbles keep coming.
             .task(id: ringing) {
                 while ringing && !Task.isCancelled { puff(2); try? await Task.sleep(nanoseconds: 450_000_000) }
@@ -457,17 +516,21 @@ struct HomeTab: View {
         if let f = model.failed("screen") { FailNote(text: f).padding(.top, 8) }
     }
     var bubbleLayer: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: bubbles.isEmpty)) { ctx in
+        let ceiling = bubbleCeiling
+        return TimelineView(.animation(minimumInterval: 1.0 / 30, paused: bubbles.isEmpty)) { ctx in
             ZStack {
                 ForEach(bubbles) { b in
                     let p = (ctx.date.timeIntervalSince(b.born) - b.delay) / 1.7
-                    if p >= 0, p < 1 {
+                    let y = 10 - 190 * p * p
+                    // Its top edge against the ceiling: gone over the last 14 pt, so none ever reaches the wordmark or the screen's edge.
+                    let room = (y - b.size * (1 + 0.3 * p) / 2 - ceiling) / 14
+                    if p >= 0, p < 1, room > 0 {
                         Circle().fill(RadialGradient(colors: [.white.opacity(0.95), .white.opacity(0.14), ChumbyPalette.hex(0x79bbff).opacity(0.28)], center: UnitPoint(x: 0.32, y: 0.28), startRadius: 0, endRadius: b.size * 0.7))
                             .overlay(Circle().stroke(.white.opacity(0.6), lineWidth: 1))
                             .frame(width: b.size, height: b.size)
                             .scaleEffect(1 + 0.3 * p)
-                            .offset(x: (b.x - 0.5) * 92 + b.dx * p, y: 10 - 190 * p * p)
-                            .opacity(1 - p * p)
+                            .offset(x: (b.x - 0.5) * 92 + b.dx * p, y: y)
+                            .opacity((1 - p * p) * min(room, 1))
                     }
                 }
             }
@@ -573,7 +636,14 @@ struct HomeTab: View {
     }
     @State private var homeVolume = 0.0
     @State private var dragging = false
-    var rightNow: some View {
+    // Nothing to show until the Chumby has said something: an empty card is a meaningless glass dot.
+    var rightNowEmpty: Bool {
+        !(model.stateKnown && model.nextRing() != nil) && model.sys.vol < 0 && model.failed("homeVolume") == nil && model.state.channelNames.isEmpty
+    }
+    @ViewBuilder var rightNow: some View {
+        if !rightNowEmpty { rightNowCard }
+    }
+    var rightNowCard: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Right now").font(.custom("Trebuchet MS", size: 16).weight(.semibold)).foregroundStyle(ChumbyPalette.sub(dark)).padding(.leading, 18)
             VStack(alignment: .leading, spacing: 14) {
@@ -609,9 +679,12 @@ struct HomeTab: View {
                     if let f = model.failed("homeChannel") { FailNote(text: f) }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14).card()
             .disabled(model.unreachable)
         }
+        // Left-aligned however little the card holds, as on every other Home.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, 20)
         .task(id: model.sys.vol) { if !dragging && model.sys.vol >= 0 { homeVolume = Double(model.sys.vol) } }
     }
@@ -624,12 +697,13 @@ struct HomeTab: View {
             if wide {
                 // Each side scrolls on its own, so the octopus stays put while you use the controls.
                 FoldSplit {
-                    ScrollView { VStack(spacing: 0) { wordmark.padding(.top, 6).zIndex(1); stage; status; about }.padding(.horizontal, 12) }
+                    // The wordmark is part of the stage, so it is spaced off the octopus the same way in both layouts.
+                    ScrollView { VStack(spacing: 0) { stage; status; about }.padding(.horizontal, 12) }
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
                             Color.clear.frame(height: 40)
-                            if model.sys.ringing != nil { RingingCard().card().padding(.bottom, 20) }
+                            if model.sys.ringing != nil { RingingCard().card().padding(.bottom, 20).transition(.ringCard) }
                             remote
                             rightNow
                             more
@@ -638,18 +712,16 @@ struct HomeTab: View {
                 }
             } else {
                 ScrollView {
-                    // Over the bubbles, which rise behind it.
-                    wordmark.padding(.horizontal, 16).padding(.top, 6).zIndex(1)
-                    // The remote sits right under the device, within reach of the thumb; a ringing alarm above even that.
+                    // The wordmark is drawn by the stage itself. The remote sits right under the device, within reach of the thumb; a ringing alarm above even that.
                     VStack(spacing: 0) {
                         stage; status
-                        if model.sys.ringing != nil { RingingCard().card().padding(.top, 20) }
+                        if model.sys.ringing != nil { RingingCard().card().padding(.top, 20).transition(.ringCard) }
                         remote.padding(.top, 20); rightNow; about; if moreInfo { more }
                     }.padding(.horizontal, 16)
                 }
             }
         }
-        .animation(.spring(duration: 0.35, bounce: 0.2), value: model.sys.ringing)
+        .animation(ChumbyModel.ringSpring, value: model.sys.ringing)
     }
 }
 

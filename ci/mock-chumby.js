@@ -177,7 +177,7 @@ function chumbyScene(q, s) {
 // the personal rows swapped for public titles. Then scenes asked for by a path in front of the address:
 //   /tour         Mint playing, its cover changing every 5 s, so a tab tour shows whether the art behind each page keeps up.
 //   /flickstream  A stream flick end to end: play-stream takes about 6 s and reports each step as a line of NDJSON, while
-//                 the status goes asleep, on, Stremio open, its player paused, then playing.
+//                 the status goes from the home screen to Stremio open, its player paused, then playing.
 //   /blankbanner  YouTube Music's banner as it once came from the Mac, white on white, to show the app's drawn one.
 // And /api/tv/screen-live, a short canned H.264 stream of a drawn home screen, sent at 30 frames a second, looping.
 function tvPose(q, s) {
@@ -230,13 +230,13 @@ function tvPose(q, s) {
     return json(v);
   }
   if (scene === 'flickstream') {
-    // How far into the start it is: nothing sent in the last 20 s is a fresh start, asleep.
+    // How far into the start it is: nothing sent in the last 20 s is a fresh start.
     const t = tvPose.sent && Date.now() - tvPose.sent < 20000 ? (Date.now() - tvPose.sent) / 1000 : -1;
     if (path === '/api/tv/status') {
       const v = JSON.parse(tvStatus), now = Date.now();
       delete v.music;
-      if (t < 1.2) { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; }
-      else if (t < 2.4) v.app = 'com.google.android.tvlauncher';
+      // Awake on the home screen first, as in every other shot of the sample TV, so nothing says it's waking.
+      if (t < 2.4) v.app = 'com.google.android.tvlauncher';
       else v.app = 'com.stremio.one';
       if (t >= 3.6) v.session = { pkg: 'com.stremio.one', playing: t >= 5.2, description: ['Heat'], position: t >= 5.2 ? (t - 5.2) * 1000 : 0, sampledAt: now, duration: 10200000, canSeek: true };
       return json(v);

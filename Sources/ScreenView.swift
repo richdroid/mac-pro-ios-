@@ -45,7 +45,7 @@ struct RemoteScreenView: View {
     var body: some View {
         // The whole display: the cover has no side bar of its own, so the picture gets that room too.
         GeometryReader { full in
-            layout(full.size)
+            layout(full.size, crease: crease(full))
         }
         .ignoresSafeArea(.container)
         .background(Color.black.ignoresSafeArea())
@@ -77,7 +77,15 @@ struct RemoteScreenView: View {
         }
     }
 
-    @ViewBuilder func layout(_ area: CGSize) -> some View {
+    // Where the hinge runs, in this view's own space, open flat or partly folded. Nil where the system can't say.
+    func crease(_ g: GeometryProxy) -> CGRect? {
+        #if os(iOS)
+        if #available(iOS 27.1, *) { return g.reservedRegions(kind: .division, options: .includeInactive).first?.frame }
+        #endif
+        return nil
+    }
+
+    @ViewBuilder func layout(_ area: CGSize, crease: CGRect?) -> some View {
         let laptop = area.width >= 600 && area.height > area.width
         let wide = area.width > area.height
         if laptop {
@@ -89,13 +97,13 @@ struct RemoteScreenView: View {
                 // Room under the picture: the dock sits in the black there, clear of the Mac's own Dock.
                 VStack(spacing: 8) {
                     canvas.frame(height: picture)
-                    dock
+                    dock(area.width, crease: crease)
                 }
                 .frame(maxHeight: .infinity)
             } else {
                 ZStack(alignment: .bottom) {
                     canvas
-                    dock.padding(.bottom, 10)
+                    dock(area.width, crease: crease).padding(.bottom, 10)
                 }
             }
         } else {
@@ -394,36 +402,58 @@ struct RemoteScreenView: View {
         }
     }
     // Open flat the picture has the room, so the trackpad is a touch away instead of always there.
-    // Every key and control in one row that fits the open display: 40 pt keys, 4 pt apart.
-    var dock: some View {
-        HStack(spacing: 4) {
-            if dockOpen {
-                modifierKey("⌘", MacKey.command, "Command").frame(width: 44)
-                keyButton("esc", "Escape") { send(MacKey.esc) }
-                keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { send(MacKey.tab, [MacKey.command]) }
-                keyButton("", icon: "magnifyingglass", "Spotlight") { send(0x20, [MacKey.command]) }
-                keyButton("", icon: "rectangle.3.group", "Mission Control") { send(MacKey.up, [MacKey.control]) }
-                keyButton("", icon: "arrow.left", "Left arrow") { send(MacKey.left) }
-                keyButton("", icon: "arrow.up", "Up arrow") { send(MacKey.up) }
-                keyButton("", icon: "arrow.down", "Down arrow") { send(MacKey.down) }
-                keyButton("", icon: "arrow.right", "Right arrow") { send(MacKey.right) }
-                keyButton("", icon: "delete.left", "Delete") { send(MacKey.delete) }
-                keyButton("", icon: "return", "Return") { send(MacKey.returnKey) }
-                railItems
+    // Every key and control in one row that fits the open display: 40 pt keys, 4 pt apart. Where the hinge crosses the
+    // row it splits in two, one capsule each side of the fold, so no key sits on the crease.
+    @ViewBuilder func dock(_ width: CGFloat, crease: CGRect?) -> some View {
+        if let crease, crease.minX > 0, crease.maxX < width {
+            // Half the fold, never under 20 pt, plus a little air.
+            let half = max(20, crease.width / 2) + 6
+            HStack(spacing: 0) {
+                Group { if dockOpen { capsule { dockKeys } } }
+                    .frame(width: max(0, crease.midX - half), alignment: .trailing)
+                Color.clear.frame(width: half * 2, height: 1)
+                capsule { dockTools }
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Button {
-                tick(.light)
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { dockOpen.toggle() }
-            } label: {
-                Image(systemName: dockOpen ? "chevron.down" : "chevron.up").font(.system(size: 13, weight: .bold))
-                    .frame(width: 30, height: 40).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).foregroundStyle(.white.opacity(0.7)).accessibilityLabel(dockOpen ? "Hide the keys" : "Show the keys")
-            // Done stays, at the right-hand end, even with the keys tucked away.
-            railButton("xmark", "Done", on: true) { model.screenOpen = false }
+            .frame(width: width)
+        } else {
+            capsule { if dockOpen { dockKeys }; dockTools }
         }
-        .padding(6)
-        .glassEffect(.regular, in: Capsule())
+    }
+    func capsule<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 4) { content() }
+            .padding(6)
+            .glassEffect(.regular, in: Capsule())
+    }
+    // Left of the fold: ⌘ through →.
+    @ViewBuilder var dockKeys: some View {
+        modifierKey("⌘", MacKey.command, "Command").frame(width: 44)
+        keyButton("esc", "Escape") { send(MacKey.esc) }
+        keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { send(MacKey.tab, [MacKey.command]) }
+        keyButton("", icon: "magnifyingglass", "Spotlight") { send(0x20, [MacKey.command]) }
+        keyButton("", icon: "rectangle.3.group", "Mission Control") { send(MacKey.up, [MacKey.control]) }
+        keyButton("", icon: "arrow.left", "Left arrow") { send(MacKey.left) }
+        keyButton("", icon: "arrow.up", "Up arrow") { send(MacKey.up) }
+        keyButton("", icon: "arrow.down", "Down arrow") { send(MacKey.down) }
+        keyButton("", icon: "arrow.right", "Right arrow") { send(MacKey.right) }
+    }
+    // Right of the fold: ⌫ ⏎, the tools and Done.
+    @ViewBuilder var dockTools: some View {
+        if dockOpen {
+            keyButton("", icon: "delete.left", "Delete") { send(MacKey.delete) }
+            keyButton("", icon: "return", "Return") { send(MacKey.returnKey) }
+            railItems
+        }
+        Button {
+            tick(.light)
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { dockOpen.toggle() }
+        } label: {
+            Image(systemName: dockOpen ? "chevron.down" : "chevron.up").font(.system(size: 13, weight: .bold))
+                .frame(width: 30, height: 40).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).foregroundStyle(.white.opacity(0.7)).accessibilityLabel(dockOpen ? "Hide the keys" : "Show the keys")
+        // Done stays, at the right-hand end, even with the keys tucked away.
+        railButton("xmark", "Done", on: true) { model.screenOpen = false }
     }
 
     // Watching doesn't count as touching, so keep the iPhone's display on while the Mac's screen is open.

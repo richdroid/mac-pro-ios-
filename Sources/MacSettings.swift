@@ -97,6 +97,8 @@ struct MacSettings: View {
                 if pose == "budget-custom" { try? await Task.sleep(nanoseconds: 600_000_000); budgetDraft = apiBudget; customBudget = true }
             }
             }
+            // The same top edge as every other tab, rather than the system's band and hairline.
+            .topEdge()
             .navigationTitle("Settings")
             .sheet(isPresented: $connecting) { SignInView().environmentObject(model) }
             // New intervals take hold straight away rather than after the current wait.

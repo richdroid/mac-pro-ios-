@@ -68,14 +68,19 @@ final class AppModel: ObservableObject {
     }
 
     // A session's own page lives on the Claude tab, wherever it was asked for from.
+    // Its text is asked for first, for a moment at most, so the page arrives drawn.
     func openSession(key: String) {
         tab = 2
-        if let s = status?.claude.sessions.first(where: { $0.key == key }) { sessionScreen = s; pendingSession = nil }
-        else { pendingSession = key }
+        guard let s = status?.claude.sessions.first(where: { $0.key == key }) else { pendingSession = key; return }
+        pendingSession = nil
+        Task { await TermCache.warm(api, key, within: 0.15); sessionScreen = s }
     }
 
     private func openPending() {
-        if let key = pendingSession, let s = status?.claude.sessions.first(where: { $0.key == key }) { pendingSession = nil; sessionScreen = s }
+        if let key = pendingSession, let s = status?.claude.sessions.first(where: { $0.key == key }) {
+            pendingSession = nil
+            Task { await TermCache.warm(api, key, within: 0.15); sessionScreen = s }
+        }
     }
 
     private static var cacheFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("status.json") }
@@ -169,6 +174,8 @@ final class AppModel: ObservableObject {
             if pose == "session", sessionScreen == nil { pendingSession = "chumby"; tab = 2 }
             status = fresh
             openPending()
+            // Status's histories read ahead, so a tile opens onto a drawn chart.
+            if tab == 0 { let api = api; Task { await TrendCache.prefetch(api, fresh) } }
             AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
         } catch APIError.signInNeeded {
             if !needsSignIn { needsSignIn = true }

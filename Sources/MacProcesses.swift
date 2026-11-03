@@ -115,6 +115,7 @@ struct ProcessesView: View {
             }
         }
         .background(groupedBackground.ignoresSafeArea())
+        .topEdge()
         .navigationTitle("Processes")
         .navigationBarTitleDisplayMode(.inline)
         .task {

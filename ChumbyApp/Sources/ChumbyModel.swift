@@ -104,6 +104,8 @@ final class ChumbyModel: ObservableObject {
     // The width of the side bar's column on the Duo (0 when the bars run across), and a tap on + placed in it.
     @Published var railWidth: CGFloat = 0
     @Published var addAlarm: Date?
+    // Folded, Calendar settings pushed inside Alarms. Kept here so its Back can sit in the rail, outside the page that slides.
+    @Published var alarmsPage = false
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []
     private var failureClear: Task<Void, Never>?
@@ -208,7 +210,8 @@ final class ChumbyModel: ObservableObject {
             if s.ringing?.snoozed == true, sys.ringing?.snoozed != true { snoozedAt = sys.ringing == nil ? nil : Date() }
             if s.ringing == nil { snoozedAt = nil }
             if sys.up > s.up, busy != nil { busy = nil }     // back from its restart
-            sys = s
+            // A ring starting, snoozing or ending on the Chumby moves the page as one, never in a single frame.
+            if s.ringing != sys.ringing { withAnimation(Self.ringSpring) { sys = s } } else { sys = s }
             try? r.data.write(to: Self.cache("sys"), options: .atomic)
         } catch is CancellationError {
         } catch ChumbyError.deviceDown {
@@ -342,21 +345,23 @@ final class ChumbyModel: ObservableObject {
     }
 
     // MARK: Ringing
+    // The one spring every ring change uses, so Snooze and Stop never cut, the most-used moment of the morning.
+    static let ringSpring = Animation.spring(duration: 0.35, bounce: 0.15)
     func ringOff() {
         #if canImport(UIKit)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         #endif
         let was = sys.ring
-        sys.ring = ""; snoozedAt = nil
+        withAnimation(Self.ringSpring) { sys.ring = ""; snoozedAt = nil }
         hold(5)
-        Task { do { try await api?.cmd("ringoff") } catch { sys.ring = was; fail("ring", "The Chumby didn’t stop. \(AlarmWriter.explain(error))") } }
+        Task { do { try await api?.cmd("ringoff") } catch { withAnimation(Self.ringSpring) { sys.ring = was }; fail("ring", "The Chumby didn’t stop. \(AlarmWriter.explain(error))") } }
     }
     func ringSnooze() {
         tick()
         let was = sys.ring
-        if let r = sys.ringing { sys.ring = "s\t\(r.name)\t\(r.sound)"; snoozedAt = Date() }
+        if let r = sys.ringing { withAnimation(Self.ringSpring) { sys.ring = "s\t\(r.name)\t\(r.sound)"; snoozedAt = Date() } }
         hold(5)
-        Task { do { try await api?.cmd("ringsnooze") } catch { sys.ring = was; snoozedAt = nil; fail("ring", "The Chumby didn’t snooze. \(AlarmWriter.explain(error))") } }
+        Task { do { try await api?.cmd("ringsnooze") } catch { withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "The Chumby didn’t snooze. \(AlarmWriter.explain(error))") } }
     }
     // When a snooze ends, if it's known: from when it began and that alarm's own snooze length.
     var snoozeEnds: Date? {

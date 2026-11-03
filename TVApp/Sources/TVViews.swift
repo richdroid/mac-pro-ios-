@@ -154,16 +154,19 @@ struct Page<C: View>: View {
     @State private var path = NavigationPath()
     @State private var top = 0
     var body: some View {
+        // The art and the soft edge sit on the stack, not the page, so the page's scroll view stays the stack's root
+        // and the large title can track it and fold away.
         NavigationStack(path: $path) {
             content()
                 .environment(\.backToTop, top)
-                .topShade()
                 .navigationDestination(for: RowRoute.self) { $0.page }
-                .background { Ambience() }
+                .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(alwaysInline || panes ? .inline : .large)
         }
+        .topShade()
+        .background { Ambience() }
         // A list opened from the tab closes first; once on the tab's own page, it goes to the top.
         .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
     }
@@ -523,12 +526,15 @@ struct RemoteTab: View {
     @ObservedObject private var nextUp = NextUp.shared
     // The build's shot of the typing bar opens with it up.
     @State private var typing = UserDefaults.standard.string(forKey: "pose") == "type"
-    // Arriving from a flick's controls, the pad and keys settle in once the screen has landed on the picture above
-    // them, rather than showing grey through the flick's backdrop as it fades.
+    // Arriving from a flick's controls, the pad and keys come in during the screen's move onto the picture above them.
     @State private var keysIn = true
     var state: String {
         guard !model.staleStatus, let s = model.status, s.online else { return "Connecting…" }
-        return s.screen == "asleep" ? "Asleep. Press anything to wake it." : s.screen == "screensaver" ? "Screensaver" : "On " + (s.apps?.first { $0.pkg == s.app }?.name ?? "Home")
+        if s.screen == "asleep" { return "Asleep. Press anything to wake it." }
+        if s.screen == "screensaver" { return "Screensaver" }
+        // What's playing, by name, rather than the app it's playing in. Only while it's what's on, never one left behind.
+        if model.videoIsCurrent, let title = s.session?.description.first, !title.isEmpty { return title }
+        return "On " + (s.apps?.first { $0.pkg == s.app }?.name ?? "Home")
     }
     var keys: some View {
         VStack(spacing: 12) {
@@ -600,7 +606,7 @@ struct RemoteTab: View {
                         .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
                 } right: {
                     VStack(spacing: 14) { DPad().frame(maxHeight: .infinity); keysBlock }.padding(.horizontal, 20).padding(.bottom, 16)
-                        .opacity(keysIn ? 1 : 0).offset(y: keysIn ? 0 : 14)
+                        .modifier(KeysArrive(shown: keysIn))
                 }
             } else {
                 // Folded, the pad gets the room until the screen is asked for.
@@ -610,7 +616,7 @@ struct RemoteTab: View {
                         DPad().frame(minHeight: 150, maxHeight: .infinity)
                         keysBlock
                     }
-                    .opacity(keysIn ? 1 : 0).offset(y: keysIn ? 0 : 14)
+                    .modifier(KeysArrive(shown: keysIn))
                 }
                 .padding(.horizontal, 14).padding(.bottom, 12)
             }
@@ -632,9 +638,23 @@ struct RemoteTab: View {
             guard Date().timeIntervalSince(model.remoteArrival) < 1 else { return }
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { keysIn = false }
-            try? await Task.sleep(nanoseconds: 760_000_000)
+            // Partway through the screen's move, as the flick's backdrop thins, rather than after it.
+            try? await Task.sleep(nanoseconds: 300_000_000)
             withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) { keysIn = true }
         }
+    }
+}
+
+// The Remote's keys coming in: a slight grow out of a blur on the move's own spring, and a fade so short the pad's white
+// centre never sits grey on the way. Nothing in the keys is measured, so the scale moves nothing that's read.
+private struct KeysArrive: ViewModifier {
+    let shown: Bool
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .animation(.linear(duration: 0.08), value: shown)
+            .blur(radius: shown ? 0 : 6)
+            .scaleEffect(shown ? 1 : 0.96)
     }
 }
 

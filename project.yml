@@ -23,7 +23,7 @@ targets:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Mac Pro
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UILaunchStoryboardName: LaunchScreen
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     info:
       path: MacProInfo.plist
@@ -34,8 +34,8 @@ targets:
         UIBackgroundModes: [fetch]
         BGTaskSchedulerPermittedIdentifiers: [local.macpro.MacPro.alerts]
         NSFaceIDUsageDescription: Unlocks your saved logins before filling them on the Mac.
-        # The Mac Pro's portrait on black from the first frame, rather than black alone while the app starts.
-        UILaunchScreen: { UIColorName: LaunchColor, UIImageName: LaunchMacPro, UIImageRespectsSafeAreaInsets: true }
+        # The Mac Pro's portrait on its glow from the first frame, pinned where Status draws it, so nothing jumps.
+        UILaunchStoryboardName: LaunchScreen
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
