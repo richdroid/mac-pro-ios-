@@ -39,6 +39,25 @@ struct Status: Decodable {
     struct Fetch: Decodable { let state: String; let message: String }
     struct Service: Decodable, Identifiable { let label: String; let name: String; let running: Bool; var id: String { label } }
     struct Alert: Decodable, Identifiable { let id: String; let level: String; let kind: String; var metric: String?; let title: String; let detail: String; let since: Double }
+    // What the Anthropic API has cost, read on the Mac with its Admin key. Read leniently: a field it can't make sense of
+    // is simply missing, rather than losing the whole status.
+    struct APIUsage: Decodable {
+        struct Spend: Decodable { let cost: Double; let tokens: Int }
+        var configured = false
+        var error: String?
+        var at: Double?
+        var today: Spend?, week: Spend?, month: Spend?
+        enum K: String, CodingKey { case configured, error, at, today, week, month }
+        init(from d: Decoder) throws {
+            guard let c = try? d.container(keyedBy: K.self) else { return }
+            configured = (try? c.decodeIfPresent(Bool.self, forKey: .configured)) ?? false
+            error = (try? c.decodeIfPresent(String.self, forKey: .error)) ?? nil
+            at = (try? c.decodeIfPresent(Double.self, forKey: .at)) ?? nil
+            today = (try? c.decodeIfPresent(Spend.self, forKey: .today)) ?? nil
+            week = (try? c.decodeIfPresent(Spend.self, forKey: .week)) ?? nil
+            month = (try? c.decodeIfPresent(Spend.self, forKey: .month)) ?? nil
+        }
+    }
     struct IOSJob: Decodable { let state: String; let message: String }
     struct IOSStatus: Decodable {
         let hasPhone: Bool; let signedIn: Bool; let ready: Bool; let installedAt: Double; let nextDue: Double
@@ -56,6 +75,8 @@ struct Status: Decodable {
     let services: [Service]?
     let iosApps: SeedStatus?
     var alerts: [Alert]?
+    // Null until the Mac's first read.
+    var apiUsage: APIUsage?
 }
 
 // The numbers that change every second.

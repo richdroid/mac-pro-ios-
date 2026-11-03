@@ -181,10 +181,6 @@ struct ChumbyCalendarIntent: AppIntent {
 struct CalendarWakeSection: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
-    // Set by the row; the sheet hangs off the whole list, so it opens and closes even with this section scrolled away.
-    @Binding var editingSettings: Bool
-    // How the calendar alarms ring: the saved set, else the first one's own.
-    var calendarSound: Alarm? { model.state.calTpl ?? wake.storedSettings ?? model.state.alarms.first { $0.name.hasPrefix(CalendarWake.prefix) } }
     func leadText(_ m: Int) -> String { m % 60 == 0 ? "\(m / 60) h" : m < 60 ? "\(m) min" : "\(m / 60) h \(m % 60) min" }
     var body: some View {
         Section {
@@ -208,26 +204,10 @@ struct CalendarWakeSection: View {
                         Toggle("Ring", isOn: Binding(get: { !item.skipped }, set: { _ in wake.toggleSkip(item) })).labelsHidden()
                     }
                 }
-                NavigationLink("Calendar settings") { CalendarWakeSettings() }
+                // One way in for all of it: wake-up times, how the alarms ring, words and calendars.
+                NavigationLink("Settings") { CalendarWakeSettings() }
             } else {
                 Button { Task { await wake.enable() } } label: { Label("Wake me from my calendar", systemImage: "calendar.badge.clock") }
-            }
-            // Whenever the calendar sets alarms, even before it has made one.
-            if wake.rules.enabled {
-                Button { editingSettings = true } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Calendar alarm settings").foregroundStyle(.primary)
-                            // Held back while an alarm rings or is about to, since a save restarts the alarm panel.
-                            if model.calendarWaiting { Text("Saves after the alarm").font(.footnote).foregroundStyle(.secondary) }
-                        }
-                        Spacer()
-                        if let a = calendarSound { Text(a.soundText).foregroundStyle(.secondary).lineLimit(1) }
-                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
             }
         } header: {
             Text("From your calendar")
@@ -240,51 +220,99 @@ struct CalendarWakeSection: View {
     }
 }
 struct CalendarWakeSettings: View {
+    @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
-    func words(_ list: Binding<[String]>) -> Binding<String> {
-        Binding(get: { list.wrappedValue.joined(separator: ", ") }, set: { list.wrappedValue = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } })
-    }
+    @State private var editingSound = false
+    @State private var showCalendars = false
+    // How the calendar alarms ring: the Chumby's own set, else the one chosen here, else the first one's own.
+    var calendarSound: Alarm? { model.state.calTpl ?? wake.storedSettings ?? model.state.alarms.first { $0.name.hasPrefix(CalendarWake.prefix) } }
+    static func span(_ m: Int) -> String { m % 60 == 0 ? "\(m / 60) h" : m < 60 ? "\(m) min" : "\(m / 60) h \(m % 60) min" }
     func leadRow(_ label: String, _ value: Binding<Int>) -> some View {
         Stepper(value: value, in: 15...360, step: 5) {
-            HStack { Text(label); Spacer(); Text(value.wrappedValue % 60 == 0 ? "\(value.wrappedValue / 60) h" : "\(value.wrappedValue / 60) h \(value.wrappedValue % 60) min").foregroundStyle(.secondary).monospacedDigit() }
+            HStack { Text(label); Spacer(); Text(Self.span(value.wrappedValue)).foregroundStyle(.secondary).monospacedDigit() }
         }
     }
+    func wordsRow(_ title: String, _ list: Binding<[String]>) -> some View {
+        NavigationLink { WordsEditor(title: title, words: list) } label: {
+            HStack { Text(title); Spacer(); Text(list.wrappedValue.isEmpty ? "None" : list.wrappedValue.joined(separator: ", ")).foregroundStyle(.secondary).lineLimit(1) }
+        }
+    }
+    var included: Int { wake.calendars.filter { !wake.rules.excludedCalendars.contains($0.title) }.count }
     var body: some View {
         Form {
             Section {
                 Toggle("Wake me from my calendar", isOn: $wake.rules.enabled)
             }
             Section {
-                leadRow("Before work", $wake.rules.workLead)
-                leadRow("Before anything else", $wake.rules.otherLead)
-                leadRow("Extra if it has a location", $wake.rules.travelExtra)
+                leadRow("Work", $wake.rules.workLead)
+                leadRow("Anything else", $wake.rules.otherLead)
+                leadRow("Extra for a location", $wake.rules.travelExtra)
                 Stepper("Look ahead \(wake.rules.daysAhead) day\(wake.rules.daysAhead == 1 ? "" : "s")", value: $wake.rules.daysAhead, in: 1...7)
-            } header: { Text("How long you need") } footer: { Text("It wakes you for the first thing each day. A day runs from \(wake.rules.dayStartHour) AM, so a shift ending at 2 AM still counts as the day it started.") }
+            } header: { Text("Awake before it starts") } footer: { Text("A day runs from \(wake.rules.dayStartHour) AM, so a late shift counts as the day it began.") }
+            // The place for "Calendar days skip my other alarms", once the Chumby can do it.
+            Section("Alarm sound") {
+                Button { editingSound = true } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(calendarSound?.soundText ?? "Choose a sound").foregroundStyle(.primary).lineLimit(1)
+                            // Held back while an alarm rings or is about to, since a save restarts the alarm panel.
+                            if model.calendarWaiting { Text("Saves after the alarm").font(.footnote).foregroundStyle(.secondary) }
+                        }
+                        Spacer()
+                        if let a = calendarSound { Text("Snooze \(a.snooze) min").foregroundStyle(.secondary) }
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
             Section {
-                TextField("Words", text: words($wake.rules.workWords)).autocorrectionDisabled()
-            } header: { Text("Counts as work") } footer: { Text("Whole words in the title, so “work” doesn’t match “workout”.") }
+                wordsRow("Counts as work", $wake.rules.workWords)
+                wordsRow("Never wake for", $wake.rules.ignoreWords)
+                wordsRow("Days off", $wake.rules.offWords)
+            } header: { Text("Words in titles") } footer: { Text("Whole words, so “work” won’t match “workout”.") }
             Section {
-                TextField("Words", text: words($wake.rules.ignoreWords)).autocorrectionDisabled()
-            } header: { Text("Never wake for") }
-            Section {
-                TextField("Words", text: words($wake.rules.offWords)).autocorrectionDisabled()
-            } header: { Text("All-day events that mean no work") }
-            Section("Calendars") {
-                ForEach(wake.calendars, id: \.calendarIdentifier) { c in
-                    VStack(alignment: .leading) {
-                        Toggle(c.title, isOn: Binding(get: { !wake.rules.excludedCalendars.contains(c.title) }, set: { on in
-                            if on { wake.rules.excludedCalendars.remove(c.title) } else { wake.rules.excludedCalendars.insert(c.title) }
-                        }))
-                        if !wake.rules.excludedCalendars.contains(c.title) {
-                            Toggle("Everything here is work", isOn: Binding(get: { wake.rules.workCalendars.contains(c.title) }, set: { on in
-                                if on { wake.rules.workCalendars.insert(c.title) } else { wake.rules.workCalendars.remove(c.title) }
-                            })).font(.footnote).foregroundStyle(.secondary)
+                // Closed to begin with: it's set once and rarely looked at again.
+                DisclosureGroup("Calendars · \(included) of \(wake.calendars.count)", isExpanded: $showCalendars) {
+                    ForEach(wake.calendars, id: \.calendarIdentifier) { c in
+                        VStack(alignment: .leading) {
+                            Toggle(c.title, isOn: Binding(get: { !wake.rules.excludedCalendars.contains(c.title) }, set: { on in
+                                if on { wake.rules.excludedCalendars.remove(c.title) } else { wake.rules.excludedCalendars.insert(c.title) }
+                            }))
+                            if !wake.rules.excludedCalendars.contains(c.title) {
+                                Toggle("Everything here is work", isOn: Binding(get: { wake.rules.workCalendars.contains(c.title) }, set: { on in
+                                    if on { wake.rules.workCalendars.insert(c.title) } else { wake.rules.workCalendars.remove(c.title) }
+                                })).font(.footnote).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
             }
         }
         .navigationTitle("Calendar")
+        .sheet(isPresented: $editingSound) { AlarmEditor(index: -1, calendarTemplate: true).environmentObject(model) }
         .onDisappear { Task { await wake.sync() } }
+    }
+}
+// One list of words: each its own row, swiped away to remove, and a box at the foot to add one.
+struct WordsEditor: View {
+    let title: String
+    @Binding var words: [String]
+    @State private var adding = ""
+    func add() {
+        let w = adding.trimmingCharacters(in: .whitespaces)
+        if !w.isEmpty && !words.contains(where: { $0.caseInsensitiveCompare(w) == .orderedSame }) { words.append(w) }
+        adding = ""
+    }
+    var body: some View {
+        Form {
+            Section {
+                ForEach(words, id: \.self) { Text($0) }
+                    .onDelete { words.remove(atOffsets: $0) }
+                TextField("Add a word", text: $adding).autocorrectionDisabled().textInputAutocapitalization(.never).submitLabel(.done).onSubmit(add)
+            }
+        }
+        .navigationTitle(title)
+        .onDisappear(perform: add)
     }
 }

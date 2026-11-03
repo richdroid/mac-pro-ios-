@@ -8,6 +8,7 @@ struct MacSettings: View {
     @AppStorage("haptics") private var haptics = true
     @AppStorage("liveEvery") private var liveEvery = 1.0
     @AppStorage("fullEvery") private var fullEvery = 10.0
+    @AppStorage("apiBudget") private var apiBudget = 200.0
     @AppStorage("startTab") private var startTab = -1
     @AppStorage("showQuick") private var showQuick = true
     @AppStorage("showTemps") private var showTemps = true
@@ -52,6 +53,13 @@ struct MacSettings: View {
                     Picker("Temperatures", selection: $celsius) { Text("Fahrenheit").tag(false); Text("Celsius").tag(true) }
                     Picker("Live figures", selection: $liveEvery) { Text("Every second").tag(1.0); Text("Every 2 seconds").tag(2.0); Text("Every 5 seconds").tag(5.0) }
                     Picker("Everything else", selection: $fullEvery) { Text("Every 10 seconds").tag(10.0); Text("Every 30 seconds").tag(30.0); Text("Every minute").tag(60.0) }
+                    // The Usage tab's API dial fills against this.
+                    LabeledContent("API budget a month") {
+                        HStack(spacing: 2) {
+                            Text("$").foregroundStyle(.secondary)
+                            TextField("200", value: $apiBudget, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(maxWidth: 80)
+                        }
+                    }
                 }
                 Section {
                     Picker("Open on", selection: $startTab) {

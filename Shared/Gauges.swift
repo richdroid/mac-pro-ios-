@@ -38,6 +38,8 @@ enum MacPrefs {
     static var haptics: Bool { d.object(forKey: "haptics") as? Bool ?? true }
     static var liveEvery: Double { let v = d.double(forKey: "liveEvery"); return v > 0 ? v : 1 }
     static var fullEvery: Double { let v = d.double(forKey: "fullEvery"); return v > 0 ? v : 10 }
+    // What the API may cost in a month, in dollars, for the Usage tab's dial.
+    static var apiBudget: Double { let v = d.double(forKey: "apiBudget"); return v > 0 ? v : 200 }
 }
 
 struct ArcGauge<Center: View>: View {

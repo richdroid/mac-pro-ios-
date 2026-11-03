@@ -473,6 +473,7 @@ struct UsageTab: View {
         } header: { Text("Plan limits") } footer: {
             if let p = u.plan { Text("Reading \(Format.ago(ms: p.at)) from \(p.source). It updates with each response in a terminal Claude session.") }
         }
+        APIUsageSection(usage: s.apiUsage)
         Section("Tokens per hour, last 24 hours") {
             VStack(alignment: .leading) {
                 Text(Format.count(u.day.tokens)).font(.title2.weight(.semibold)).monospacedDigit()
@@ -500,6 +501,134 @@ struct UsageTab: View {
             }
         }
         }
+    }
+}
+
+// What the API key has cost this month, as a dial against a monthly budget drawn like the plan limits above it, with
+// today and the week beside it.
+struct APIUsageSection: View {
+    @EnvironmentObject var model: AppModel
+    let usage: Status.APIUsage?
+    @State private var setup = false
+    // Watched, so a new budget in Settings shows on the dial at once.
+    @AppStorage("apiBudget") private var savedBudget = 200.0
+    // Whole dollars once it's big enough that cents would crowd the dial.
+    static func money(_ v: Double) -> String { v.formatted(.currency(code: "USD").precision(.fractionLength(v >= 100 ? 0 : 2))) }
+    func figure(_ title: String, _ s: Status.APIUsage.Spend?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+            Text(s.map { Self.money($0.cost) } ?? "–").font(.title2.weight(.semibold)).monospacedDigit()
+            Text("\(Format.count(s?.tokens ?? 0)) tokens").font(.caption).foregroundStyle(.tertiary).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    // Days until the month turns over, when the spend starts again.
+    var resets: String {
+        let cal = Calendar.current, now = Date()
+        guard let start = cal.dateInterval(of: .month, for: now)?.end else { return "" }
+        let left = start.timeIntervalSince(now)
+        return "Resets in " + (left >= 86400 ? "\(Int((left / 86400).rounded(.up)))d" : Format.span(left))
+    }
+    func block(_ u: Status.APIUsage) -> some View {
+        let budget = savedBudget > 0 ? savedBudget : MacPrefs.apiBudget, spent = u.month?.cost ?? 0, v = spent / budget
+        return HStack(alignment: .center, spacing: 16) {
+            VStack(spacing: 6) {
+                ArcGauge(min(v, 1), tint: v > 0.9 ? .red : v > 0.75 ? .orange : macBlue, ticks: 36, length: 9, width: 2.6) {
+                    Text(u.month.map { Self.money($0.cost) } ?? "–").font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit()
+                        .minimumScaleFactor(0.7).lineLimit(1).padding(.horizontal, 10)
+                }
+                .frame(maxWidth: 110)
+                Text("of \(Self.money(budget))").font(.footnote.weight(.medium))
+                Text(resets).font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            VStack(alignment: .leading, spacing: 14) { figure("Today", u.today); figure("This week", u.week) }
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 4)
+    }
+    func chevronRow<L: View>(@ViewBuilder _ label: () -> L) -> some View {
+        Button { setup = true } label: {
+            HStack {
+                label()
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+    // A key Anthropic turned down needs setting up again; anything else is just said.
+    static func refused(_ e: String) -> Bool { ["refused", "invalid", "401", "unauthorized"].contains { e.localizedCaseInsensitiveContains($0) } }
+    var body: some View {
+        Section {
+            if let u = usage, !u.configured {
+                chevronRow { Text("Set up on the Mac") }
+            } else if let u = usage, let e = u.error, Self.refused(e) {
+                chevronRow {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(e).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                        Text("Set up again")
+                    }
+                }
+            } else if let u = usage, let e = u.error, u.month == nil {
+                Text(e).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+            } else if let u = usage {
+                block(u)
+                if let e = u.error { Text(e).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
+            } else {
+                // Before the Mac's first read: the dial's shape, so nothing moves when the numbers come.
+                block(.placeholder).redacted(reason: .placeholder)
+            }
+        } header: { Text("API usage") } footer: {
+            if let at = usage?.at, usage?.configured == true { Text("Reading \(Format.ago(ms: at)) from your Admin key.") }
+        }
+        .sheet(isPresented: $setup) { APIKeySetup().environmentObject(model) }
+    }
+}
+extension Status.APIUsage {
+    static var placeholder: Status.APIUsage {
+        // swiftlint:disable:next force_try
+        try! JSONDecoder().decode(Status.APIUsage.self, from: Data(#"{"configured":true,"month":{"cost":12.4,"tokens":1200000},"week":{"cost":4.1,"tokens":400000},"today":{"cost":0.8,"tokens":90000}}"#.utf8))
+    }
+}
+// Giving the Mac the Admin key that reads the API's costs. It goes straight to the Mac, sealed, and the phone forgets it.
+struct APIKeySetup: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var key = ""
+    @State private var saving = false
+    @State private var failure: String?
+    func save() {
+        let k = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !k.isEmpty, !saving else { return }
+        key = ""
+        saving = true; failure = nil
+        Task {
+            // The Mac checks it, keeps it in its keychain and reads the usage at once, or says in a line why not.
+            let err = await model.runSealed("api-admin-key", secret: k)
+            saving = false
+            if let err { failure = err } else { dismiss() }
+        }
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    SecureField("Admin key", text: $key).textContentType(.password).autocorrectionDisabled().submitLabel(.done).onSubmit(save)
+                    if let failure { Text(failure).font(.footnote).foregroundStyle(.red).lineLimit(2) }
+                } footer: { Text("Made in the Claude Console under an organization. It goes to the Mac’s keychain and isn’t kept on this phone.") }
+            }
+            .navigationTitle("API Usage")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { key = ""; dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    if saving { ProgressView() } else { Button("Save", action: save).disabled(key.trimmingCharacters(in: .whitespaces).isEmpty) }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 

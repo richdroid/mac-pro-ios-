@@ -755,7 +755,6 @@ struct ChannelsTab: View {
 struct AlarmsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @State private var editing: EditTarget?
-    @State private var editingCalendar = false
     struct EditTarget: Identifiable { let index: Int; var id: Int { index } }
     static let actions = [("night", "on", "Night mode on"), ("night", "dim", "Night mode dim"), ("night", "dark", "Night mode dark"), ("night", "off", "Night mode off"), ("screen", "bright", "Screen bright"), ("screen", "dim", "Screen dim"), ("screen", "off", "Screen off")]
 
@@ -774,7 +773,7 @@ struct AlarmsTab: View {
                     }
                 } footer: { Text("The Chumby was frozen or off when these came due.") }
             }
-            CalendarWakeSection(editingSettings: $editingCalendar)
+            CalendarWakeSection()
             Section("Quick nap") {
                 HStack(spacing: 8) {
                     ForEach([10, 20, 30, 60], id: \.self) { m in
@@ -829,7 +828,6 @@ struct AlarmsTab: View {
         .seaList()
         .toolbar { ToolbarItem(placement: .primaryAction) { Button { editing = EditTarget(index: -1) } label: { Label("Add alarm", systemImage: "plus") }.accessibilityLabel("Add alarm").disabled(model.state.alarms.count >= 16) } }
         .sheet(item: $editing) { t in AlarmEditor(index: t.index).environmentObject(model) }
-        .sheet(isPresented: $editingCalendar) { AlarmEditor(index: -1, calendarTemplate: true).environmentObject(model) }
         .refreshable { await model.loadState() }
     }
     // A one-time alarm from now, using whichever tone is first.
