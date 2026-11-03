@@ -644,7 +644,8 @@ struct Shelf: View {
     init(source: MediaSource, title: String) { store = .shared(source); self.title = title }
     var row: MediaRow? { store.query.isEmpty ? store.rows.first { $0.title == title } : nil }
     var body: some View {
-        Group {
+        // Always something on screen, even before the row has come, or nothing would ever ask for it.
+        VStack(alignment: .leading, spacing: 0) {
             if let row, !row.items.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     RowHeader(title: title) { MediaList(row: row, source: store.source) }.padding(.leading, 20)
@@ -659,7 +660,7 @@ struct Shelf: View {
                     }
                     .clipped()
                 }
-            }
+            } else { Color.clear.frame(height: 0) }
         }
         .task { await store.load() }
     }
