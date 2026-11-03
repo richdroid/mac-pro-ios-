@@ -107,6 +107,17 @@ struct FlickScreen: View {
     // The episode Stremio's Continue watching is on, and how far into it.
     @State private var upNext: String?
     @State private var upNextProgress: Double?
+    // Handed to the controls while the TV is still getting the film going, once its player is up.
+    @State private var handedOver = false
+    // Near the end of something, whether to start it over rather than resume at the credits, and how long it runs.
+    @State private var startOver = true
+    @State private var runtime: Double?
+    @State private var choseOnTV = false
+    // On the control screen, a way back to the start, for when it's still near the end.
+    @State private var offerStartOver = false
+    @State private var checkedEnd = false
+    @State private var restarting = false
+    @State private var askedRestart = false
     @Environment(\.paneLayout) private var panes
     @State private var priorMood: Color??
     // Follows the finger exactly, with nothing in between.
@@ -270,7 +281,9 @@ struct FlickScreen: View {
             ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right") } }
         }
         ToolbarItem(placement: .cancellationAction) {
-            Button { flown && step != .control ? callOff() : leave() } label: { Label(step == .control ? "Done" : flown ? "Stop" : "Close", systemImage: step == .control ? "checkmark" : "xmark") }
+            // While anything is still on its way to the TV, the X stops it, on the controls too. Once it's there, a tick.
+            let stops = flown && (step != .control || sending)
+            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : step == .control ? "Done" : "Close", systemImage: stops || step != .control ? "xmark" : "checkmark") }
         }
     }
 
@@ -373,7 +386,7 @@ struct FlickScreen: View {
     }
     func episodeRow(_ e: StremioEpisode) -> some View {
         row(selected: episode == e) {
-            if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All"; picked = false }
+            if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All"; picked = false; runtime = nil; startOver = true; choseOnTV = false }
             go(.streams)
         } label: {
             Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
@@ -400,11 +413,16 @@ struct FlickScreen: View {
     var streamsStep: some View {
         page {
             if let e = episode { Text("Season \(e.season), episode \(e.episode): \(e.name)").font(.subheadline.weight(.semibold)).padding(.top, 4) }
-            row(selected: false) { stream = nil; picked = false; go(.flick) } label: {
+            row(selected: choseOnTV) { stream = nil; picked = false; choseOnTV = true; go(.flick) } label: {
                 Image(systemName: "tv").foregroundStyle(TVLook.accent).frame(width: 28)
                 Text("Choose on the TV").font(.subheadline.weight(.semibold))
             }
             .padding(.top, 4)
+            // Nearly finished: resuming would land on the credits, so starting over is offered, and chosen to begin with.
+            // Not for Choose on the TV, where Stremio's own screen asks.
+            if nearEnd && !choseOnTV {
+                Chips(options: [(false, resumeLabel), (true, "Start over")], selected: $startOver).padding(.top, 6)
+            }
             if findingStreams && streams.isEmpty {
                 Text("Asking your addons…").font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
                 ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) }
@@ -423,14 +441,50 @@ struct FlickScreen: View {
                 streamRow(s, best: s == best, failed: failedTokens.contains(s.token)).transition(arriving(i))
             }
         }
+        .task(id: episode?.id) { await loadRuntime() }
     }
     // Rows come in one after another, a beat apart.
     func arriving(_ i: Int) -> AnyTransition {
         let spring = Animation.spring(response: 0.45, dampingFraction: 0.85).delay(Double(min(i, 8)) * 0.035)
         return .asymmetric(insertion: AnyTransition.opacity.combined(with: .offset(y: 14)).animation(spring), removal: .opacity)
     }
+    // How far into it the card says he is, for the episode it's about.
+    var savedProgress: Double? {
+        guard let ref = item.stremioRef else { return nil }
+        if ref.type == "series", let e = episode {
+            if e.id == ref.video { return item.progress }
+            return e.id == upNext ? upNextProgress : nil
+        }
+        return item.progress
+    }
+    var nearEnd: Bool { (savedProgress ?? 0) > 0.9 }
+    var resumeLabel: String {
+        guard let runtime, let p = savedProgress else { return "Resume" }
+        // Running time times progress is only an estimate, so to the minute.
+        let m = Int(runtime * p / 60000)
+        return "Resume at " + (m >= 60 ? String(format: "%d:%02d", m / 60, m % 60) : "\(m) min")
+    }
+    // The running time, for the Resume chip's time: from Stremio's own catalogue, the episode's if it has one.
+    func loadRuntime() async {
+        guard runtime == nil, nearEnd, let ref = item.stremioRef,
+              let d = await TVBridge.data(URL(string: "https://v3-cinemeta.strem.io/meta/\(ref.type)/\(ref.imdb).json"), timeout: 10, cached: true),
+              let meta = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["meta"] as? [String: Any] else { return }
+        let video = episode?.id ?? ref.video
+        let ep = (meta["videos"] as? [[String: Any]])?.first { ($0["id"] as? String) == video }
+        func minutes(_ t: Any?) -> Double? {
+            guard let t = t as? String else { return nil }
+            // "2h 3min", "123 min" and the like: the number before each unit.
+            func number(before unit: String) -> Double {
+                guard let r = t.range(of: "\\d+\\s*" + unit, options: .regularExpression) else { return 0 }
+                return Double(t[r].prefix { $0.isNumber }) ?? 0
+            }
+            let h = number(before: "h"), m = number(before: "min")
+            return h + m > 0 ? (h * 60 + m) * 60000 : nil
+        }
+        if let ms = minutes(ep?["runtime"]) ?? minutes(meta["runtime"]) { withAnimation(.easeOut(duration: 0.2)) { runtime = ms } }
+    }
     func streamRow(_ s: StremioStream, best: Bool, failed: Bool) -> some View {
-        row(selected: stream == s) { stream = s; picked = false; go(.flick) } label: {
+        row(selected: stream == s) { stream = s; picked = false; choseOnTV = false; go(.flick) } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(s.name.isEmpty ? s.addon : s.name).font(.subheadline.weight(.bold)).lineLimit(1)
@@ -504,6 +558,9 @@ struct FlickScreen: View {
         let music = source == .mint && (target.send != nil || rawMusic?.title.caseInsensitiveCompare(item.title) == .orderedSame || reported?.pkg == sentTo) ? rawMusic : nil
         let isMusic = source == .mint
         let onTV = choosingOnTV
+        // Until the TV says it's playing, a pause would be undone by its own start check and a jump would hit a player
+        // that isn't ready, so those wait, dimmed, and come in once it answers.
+        let locked = sending && handedOver
         let picture = VStack(spacing: 18) {
             // The screen's place. The screen itself is drawn over it, grown out of the TV the card landed in.
             Color.clear.frame(width: w, height: w * 9 / 16)
@@ -520,11 +577,13 @@ struct FlickScreen: View {
             .contentTransition(.opacity)
             .opacity(controlsIn ? 1 : 0)
             // Where it's got to, for a film or a song alike. Its place is kept until the TV says, so nothing below jumps.
+            // Handed over before the film is going: what the TV is doing goes in the middle of the bar.
+            let waiting = sending ? (phase ?? "Loading the stream") : nil
             Group {
                 if onTV { EmptyView() }
-                else if let session, !isMusic { VideoProgress(session: session).frame(maxWidth: w) }
+                else if let session, !isMusic { VideoProgress(session: session, note: waiting, locked: locked).frame(maxWidth: w) }
                 else if isMusic, let music, music.duration > 0 { MusicProgress(music: music).frame(maxWidth: w) }
-                else { ProgressPlaceholder().frame(maxWidth: w) }
+                else { ProgressPlaceholder(note: waiting).frame(maxWidth: w) }
             }
             .opacity(controlsIn ? 1 : 0)
         }
@@ -539,9 +598,12 @@ struct FlickScreen: View {
             } else {
                 HStack(spacing: 22) {
                     if source == .stremio {
-                        SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1)
-                        PlayKey(playing: session?.playing, tint: .white, size: 74)
-                        SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1)
+                        Group {
+                            SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1)
+                            PlayKey(playing: session?.playing, tint: .white, size: 74)
+                            SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1)
+                        }
+                        .opacity(locked ? 0.4 : 1).allowsHitTesting(!locked)
                     } else {
                         GlassKey(icon: "backward.fill", label: "Previous", key: "previous", size: 56)
                         PlayKey(playing: isMusic ? music?.playing : session?.playing, tint: .white, size: 74)
@@ -551,14 +613,32 @@ struct FlickScreen: View {
                 if source == .stremio {
                     // Stop only while the player is open; the row keeps its place either way.
                     HStack(spacing: 18) {
-                        if session != nil { GlassButton(icon: "stop.fill", label: "Stop", size: 50) { stop() } }
-                        if let n = nextEpisode { GlassButton(icon: "forward.end.fill", label: "Next episode, \(n.episode). \(n.name)", size: 50) { playNext(n) } }
+                        // While it's still starting, Stop calls the whole start off, as the X does.
+                        if session != nil { GlassButton(icon: "stop.fill", label: "Stop", size: 50) { if sending { callOff() } else { stop() } } }
+                        if !locked, let n = nextEpisode { GlassButton(icon: "forward.end.fill", label: "Next episode, \(n.episode). \(n.name)", size: 50) { playNext(n) }.transition(.opacity) }
                     }
                     .frame(height: 50)
                 }
-                remote
+                HStack(spacing: 12) {
+                    remote
+                    // Still near the end, or the TV couldn't go back to the start by itself: one quiet way back to it.
+                    if offerStartOver && source == .stremio && !locked {
+                        Button(action: startOverNow) {
+                            HStack(spacing: 7) {
+                                if restarting { ProgressView().controlSize(.small) } else { Image(systemName: "backward.end") }
+                                Text("Start over")
+                            }
+                            .font(.subheadline.weight(.medium)).foregroundStyle(.secondary).padding(.horizontal, 18).frame(height: 44)
+                        }
+                        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule()).disabled(restarting)
+                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                    }
+                }
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: offerStartOver)
             }
         }
+        // In the way the buttons first settle in, once the TV says it's playing.
+        .animation(.spring(response: 0.5, dampingFraction: 0.88), value: locked)
         .opacity(controlsIn ? 1 : 0)
         .offset(y: controlsIn ? 0 : 16)
         Group {
@@ -580,6 +660,42 @@ struct FlickScreen: View {
         .onAppear { withAnimation(.spring(response: 0.5, dampingFraction: 0.88).delay(0.12)) { controlsIn = true } }
         // Kept current while it's open, so the bar and the buttons follow the TV.
         .task { while !Task.isCancelled { try? await Task.sleep(nanoseconds: 2_000_000_000); await model.load() } }
+        // Opened in the last tenth, Start over is offered; it goes once the film is back in its first tenth. Not while a
+        // start-over asked for is still being done, when the player is briefly where he left off.
+        .onChange(of: Self.through(session), initial: true) { _, f in
+            guard let f, source == .stremio else { return }
+            if !checkedEnd && !(askedRestart && sending) { checkedEnd = true; if f > 0.9 { offerStartOver = true } }
+            if offerStartOver && f < 0.1 { offerStartOver = false }
+        }
+    }
+    // How far through the film the TV says it is.
+    static func through(_ s: TVStatus.Session?) -> Double? {
+        guard let s, let p = s.position, let d = s.duration, d > 0 else { return nil }
+        let ran = s.playing ? max(0, Date().timeIntervalSince1970 * 1000 - (s.sampledAt ?? Date().timeIntervalSince1970 * 1000)) : 0
+        return min(1, (p + ran) / d)
+    }
+    func startOverNow() {
+        model.tick()
+        restarting = true
+        let session = model.status?.session
+        Task {
+            do {
+                // Played and moved by Android's own seek, which reaches the start from the credits; the seek bar's keys
+                // run out about an hour back.
+                let d = try await TVBridge.post("player-seek-to", ["ms": 0, "play": true], timeout: 60)
+                if let ms = ((try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["position"] as? NSNumber)?.doubleValue {
+                    SeekQueue.shared.adopt(ms, for: session)
+                    if let dur = session?.duration, dur > 0, ms / dur < 0.1 { offerStartOver = false }
+                }
+                await model.load()
+            } catch {
+                #if canImport(UIKit)
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                #endif
+                model.say("Couldn’t go back to the start")
+            }
+            restarting = false
+        }
     }
     var screenURL: URL? { URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art) }
     @ViewBuilder func artwork(fill: Bool) -> some View {
@@ -615,8 +731,8 @@ struct FlickScreen: View {
         .frame(width: slot.width, height: slot.height)
         .overlay { RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(big ? 0.25 : 0.3 + 0.5 * charge), lineWidth: big ? 1 : 1.5) }
         .shadow(color: TVLook.accent.opacity(big ? 0.45 : 0.75 * charge), radius: big ? 26 : 10 + 18 * charge)
-        .overlay { TVRipple(trigger: impacts) }
-        .overlay { TVRipple(trigger: successes) }
+        .overlay { TVRipple(trigger: impacts, big: slot.width > 200) }
+        .overlay { TVRipple(trigger: successes, big: slot.width > 200) }
         // It leans in to meet the card, then gives as the card hits.
         .scaleEffect(1 + 0.09 * lean)
         .keyframeAnimator(initialValue: CGFloat(1), trigger: impacts) { c, s in c.scaleEffect(s) } keyframes: { _ in
@@ -814,6 +930,7 @@ struct FlickScreen: View {
             step = .flick
         }
         autoplay = true
+        handedOver = false; offerStartOver = false; checkedEnd = false; askedRestart = false
         Task {
             try? await Task.sleep(nanoseconds: 550_000_000)
             morphing = false
@@ -840,6 +957,7 @@ struct FlickScreen: View {
             // What it is, so the Mac can fetch its running time and poster while it starts.
             var body: [String: Any] = ["token": stream.token, "imdb": ref.imdb]
             if ref.type == "series", let video = episode?.id ?? ref.video { body["video"] = video }
+            if nearEnd && startOver { body["restart"] = true }
             return ("play-stream", body)
         }
         if let stream { return ("play-stream", ["token": stream.token]) }
@@ -871,69 +989,109 @@ struct FlickScreen: View {
             while pickingBest && !Task.isCancelled { try? await Task.sleep(nanoseconds: 150_000_000) }
             let order = order
             // No silent wait: the line under the TV follows what it's doing. Asked of the Mac directly, not through the
-            // app's model, so the pages behind don't redraw under the flick each time.
+            // app's model, so the pages behind don't redraw under the flick each time. A stream takes the TV about ten
+            // seconds, so once Stremio's player is up with this film, playing or not, the controls take over, and the
+            // rest of the wait shows on the big screen.
+            let early = order.0 == "play-stream"
+            askedRestart = order.1["restart"] as? Bool == true
             let watch = Task {
+                var cleared = false
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     guard !Task.isCancelled, let s = await TVBridge.status(timeout: 5), !Task.isCancelled else { continue }
                     let next = Self.phase(of: s, video: video)
                     if next != phase { phase = next }
+                    let player = s.session.flatMap { $0.pkg == "com.stremio.one" ? $0 : nil }
+                    // The Mac restarts Stremio first, so a player seen after none was is this one; before that, only by its title.
+                    if player == nil { cleared = true }
+                    guard early, !handedOver, let player, cleared || isThisFilm(player) else { continue }
+                    // Long enough to read where it's got to, then on to the controls.
+                    if phase == nil { phase = "Loading the stream" }
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    if !Task.isCancelled, sending, step == .flick { handOver() }
                 }
             }
             do {
                 // Longer than the bridge can take to wake the TV, restart Stremio and see the player start.
-                try await TVBridge.post(order.0, order.1, timeout: 60)
+                let answer = try await TVBridge.post(order.0, order.1, timeout: 60)
                 watch.cancel()
                 target.sent?()
                 #if canImport(UIKit)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 #endif
+                // Asked to start over and it couldn't: the control screen offers it.
+                if (try? JSONSerialization.jsonObject(with: answer) as? [String: Any])?["restarted"] as? Bool == false { offerStartOver = true }
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.6)) { sending = false; phase = nil; done = true; note = source == .mint || stream != nil || item.stremioRef == nil || target.send != nil ? "Playing on the TV" : "On the TV. Pick a stream with the remote." }
                 successes += 1
+                remember()
+                // Already on the controls: the flash on the big screen is the yes.
+                if handedOver { Task { try? await Task.sleep(nanoseconds: 400_000_000); await model.load() }; return }
                 // Nothing else redraws while the TV says yes: the whole app catching up at that moment stalled the tick.
                 try? await Task.sleep(nanoseconds: 950_000_000)
-                if !item.art.isEmpty { model.lastArt = item.art; model.lastArtTitle = item.title; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
-                // Kept on the phone for the Watch tab's Recently flicked, and for knowing the next episode.
-                if video, let ref = item.stremioRef {
-                    RecentFlicks.shared.add(RecentFlick(title: item.title, art: item.art, imdb: ref.imdb, type: ref.type, video: ref.type == "series" ? episode?.id ?? ref.video : nil,
-                                                        episode: episode.map { "S\($0.season) E\($0.episode)" }, at: Date()))
-                    NextUp.shared.forget()
-                }
-                // The hand-over: the TV the card landed in grows into the control screen, and its buttons settle in below.
-                morphing = true
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { step = .control }
-                Task { try? await Task.sleep(nanoseconds: 500_000_000); await model.load() }
+                handOver()
             } catch {
                 watch.cancel()
                 // Called off with the X: it's already being stopped and closed.
                 if Task.isCancelled || cancelled { return }
-                #if canImport(UIKit)
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
-                #endif
-                drag = .zero
-                let gone = error is TVBridge.Gone, stuck = error is TVBridge.DidNotStart
-                // Back out of the TV and into the hand, with a shake for no.
-                withAnimation(.spring(response: 0.55, dampingFraction: 0.66)) {
-                    sending = false; phase = nil; landed = false; flown = false
-                    note = gone ? "That stream has gone. Pick again." : stuck ? "That stream didn’t start" : "The TV didn’t get that"
+                // Handed over too soon: back down into the small TV, then the no as usual.
+                if handedOver {
+                    controlsIn = false
+                    withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { step = .flick; done = false }
+                    try? await Task.sleep(nanoseconds: 550_000_000)
+                    morphing = false; handedOver = false
                 }
-                try? await Task.sleep(nanoseconds: 380_000_000)
-                shakes += 1
-                // A stale stream needs a new list. One that didn't start is set aside, with the next best ready to try.
-                // The choice stands if the TV just didn't answer.
-                if gone || stuck {
-                    if gone { stream = nil; streams = [] }
-                    else {
-                        if let s = stream { failedTokens.insert(s.token) }
-                        stream = streams.first { !failedTokens.contains($0.token) }
-                    }
-                    picked = false
-                    try? await Task.sleep(nanoseconds: 700_000_000)
-                    note = nil
-                    go(.streams)
-                }
+                await failed(error)
             }
         }
+    }
+    // Whether a Stremio player is the film just sent, by its title.
+    func isThisFilm(_ p: TVStatus.Session) -> Bool {
+        guard let now = p.description.first, !now.isEmpty else { return false }
+        return now.localizedCaseInsensitiveContains(item.title) || item.title.localizedCaseInsensitiveContains(now)
+    }
+    // The hand-over: the TV the card landed in grows into the control screen, and its buttons settle in below.
+    func handOver() {
+        guard step == .flick, !handedOver else { return }
+        handedOver = true
+        if !item.art.isEmpty { model.lastArt = item.art; model.lastArtTitle = item.title; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
+        morphing = true
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { step = .control }
+        Task { try? await Task.sleep(nanoseconds: 500_000_000); await model.load() }
+    }
+    func remember() {
+        let video = source == .stremio && target.send == nil
+        // Kept on the phone for the Watch tab's Recently flicked, and for knowing the next episode.
+        if video, let ref = item.stremioRef {
+            RecentFlicks.shared.add(RecentFlick(title: item.title, art: item.art, imdb: ref.imdb, type: ref.type, video: ref.type == "series" ? episode?.id ?? ref.video : nil,
+                                                episode: episode.map { "S\($0.season) E\($0.episode)" }, at: Date()))
+            NextUp.shared.forget()
+        }
+    }
+    // The TV said no: back out of it and into the hand, with a shake.
+    func failed(_ error: Error) async {
+        #if canImport(UIKit)
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        #endif
+        drag = .zero
+        let gone = error is TVBridge.Gone, stuck = error is TVBridge.DidNotStart
+        withAnimation(.spring(response: 0.55, dampingFraction: 0.66)) {
+            sending = false; phase = nil; landed = false; flown = false
+            note = gone ? "That stream has gone. Pick again." : stuck ? "That stream didn’t start" : "The TV didn’t get that"
+        }
+        try? await Task.sleep(nanoseconds: 380_000_000)
+        shakes += 1
+        // A stale stream needs a new list. One that didn't start is set aside, with the next best ready to try.
+        // The choice stands if the TV just didn't answer.
+        guard gone || stuck else { return }
+        if gone { stream = nil; streams = [] }
+        else {
+            if let s = stream { failedTokens.insert(s.token) }
+            stream = streams.first { !failedTokens.contains($0.token) }
+        }
+        picked = false
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        note = nil
+        go(.streams)
     }
 }
 
@@ -982,6 +1140,8 @@ private struct TVFlash: View {
 // Rings going out from the TV each time something lands on it.
 private struct TVRipple: View {
     let trigger: Int
+    // On the grown screen the same rings would reach far past it, so they stay close.
+    var big = false
     struct Wave { var scale: CGFloat = 1; var opacity: Double = 0 }
     var body: some View {
         ZStack {
@@ -990,7 +1150,7 @@ private struct TVRipple: View {
                     .keyframeAnimator(initialValue: Wave(), trigger: trigger) { c, w in c.scaleEffect(w.scale).opacity(w.opacity) } keyframes: { _ in
                         KeyframeTrack(\.scale) {
                             LinearKeyframe(1, duration: 0.01 + Double(i) * 0.13)
-                            CubicKeyframe(1.6 + CGFloat(i) * 0.25, duration: 0.75)
+                            CubicKeyframe(big ? 1.08 + CGFloat(i) * 0.04 : 1.6 + CGFloat(i) * 0.25, duration: 0.75)
                         }
                         KeyframeTrack(\.opacity) {
                             LinearKeyframe(0, duration: 0.01 + Double(i) * 0.13)

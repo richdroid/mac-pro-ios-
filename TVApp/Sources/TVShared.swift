@@ -52,6 +52,8 @@ enum TVBridge {
     struct Gone: Error {}
     // The TV took the stream but the player never got going, even after a second try.
     struct DidNotStart: Error {}
+    // Too busy to answer in time. Asking again usually works.
+    struct Slow: Error {}
     @discardableResult
     static func post(_ path: String, _ body: [String: Any] = [:], timeout: TimeInterval = 30) async throws -> Data {
         guard let u = url("/api/tv/" + path), let base = URL(string: address) else { throw URLError(.badURL) }
@@ -61,7 +63,11 @@ enum TVBridge {
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (d, resp) = try await URLSession.shared.data(for: r)
         let code = (resp as? HTTPURLResponse)?.statusCode
-        if code == 409 { throw Gone() }
+        if code == 409 {
+            // The TV being slow is worth another go, and the Mac says so; anything else refused here has gone for good.
+            let retry = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["retry"] as? Bool == true
+            throw retry ? Slow() as Error : Gone()
+        }
         if code == 422, (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["failed"] as? String == "start" { throw DidNotStart() }
         guard code == 200 else { throw TVIntentError.noAnswer }
         return d

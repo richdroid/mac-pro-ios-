@@ -1,46 +1,110 @@
 import AVFoundation
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 #if os(iOS)
 import MediaPlayer
 #endif
 
-// Ten-second jumps in Stremio, added up. Its player takes a few seconds to move, so taps made meanwhile are counted, the
-// bar moves by them at once, and they go to the TV together once the tapping stops.
+// Ten-second jumps in Stremio, added up. Its player takes seconds to move, so taps made meanwhile are counted, the bar
+// moves by them at once, and they go to the TV together once the tapping stops. The TV answers with where the player
+// really is, which the bar takes on in the same moment it lets go of that send's taps, so it never counts them twice.
 @MainActor
 final class SeekQueue: ObservableObject {
     static let shared = SeekQueue()
-    // Taps the TV's own report doesn't show yet, and which film they're for.
+    // Taps the TV hasn't confirmed yet, sent or not, and which film they're for.
     @Published private(set) var pending = 0
+    // Up once a jump has gone unconfirmed for longer than a glance, so a quick one never flickers a spinner.
+    @Published private(set) var spinning = false
+    // Where the player said it was after the last jump, and when. Trusted over the status for a moment, since a status
+    // asked just after can still have the old spot.
+    @Published private(set) var adopted: (ms: Double, at: Date)?
     private var film = ""
     private var unsent = 0
     private var generation = 0
     private var wait: Task<Void, Never>?
     private var chain: Task<Void, Never>?
+    private var spin: Task<Void, Never>?
+    private static let hold: TimeInterval = 3
     private static func key(_ s: TVStatus.Session?) -> String { s?.description.joined(separator: "\n") ?? "" }
-    // How far the bar is ahead of the TV's report, in ms.
+    // How far the bar is ahead of where the TV is known to be, in ms.
     func offset(for s: TVStatus.Session?) -> Double { Self.key(s) == film ? Double(pending) * 10000 : 0 }
+    // The player's own answer, carried on while it plays, for as long as it's held.
+    func held(for s: TVStatus.Session?, at date: Date) -> Double? {
+        guard Self.key(s) == film, let a = adopted, date.timeIntervalSince(a.at) < Self.hold else { return nil }
+        return a.ms + (s?.playing == true ? date.timeIntervalSince(a.at) * 1000 : 0)
+    }
+    // A jump to a spot, answered by the TV with where it landed.
+    func adopt(_ ms: Double, for s: TVStatus.Session?) {
+        let k = Self.key(s)
+        if k != film { reset(k) }
+        adopted = (ms, Date())
+    }
+    private func reset(_ k: String) {
+        film = k; pending = 0; unsent = 0; generation += 1; adopted = nil
+        spin?.cancel(); spinning = false
+    }
     func add(_ step: Int, for s: TVStatus.Session?, model: TVModel) {
         let k = Self.key(s)
-        if k != film { film = k; pending = 0; unsent = 0; generation += 1 }
+        if k != film { reset(k) }
         model.tick()
         pending += step; unsent += step
+        settled()
         wait?.cancel()
         wait = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 350_000_000)
             if !Task.isCancelled { self?.flush(model) }
         }
     }
+    // The spinner waits a beat after the first unconfirmed tap, and goes as soon as nothing is left unconfirmed.
+    private func settled() {
+        if pending == 0 { spin?.cancel(); spin = nil; if spinning { spinning = false }; return }
+        guard spin == nil, !spinning else { return }
+        spin = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.spin = nil
+            if self.pending != 0 { self.spinning = true }
+        }
+    }
     // One send for the lot, after the one before it has landed. The bridge takes up to a minute's worth at a time.
     private func flush(_ model: TVModel) {
         while unsent != 0 {
-            let n = max(-60, min(60, unsent)), gen = generation, before = chain
+            let n = max(-60, min(60, unsent)), gen = generation, before = chain, session = model.status?.session
             unsent -= n
             chain = Task { [weak self] in
                 await before?.value
-                do { try await TVBridge.post("player-seek", ["steps": n], timeout: 30); await model.load() }
-                catch { model.say("Couldn’t move it") }
-                // In the TV's own report now, or never sent: either way the bar stops carrying it.
-                if let self, self.generation == gen { self.pending -= n }
+                var answer: [String: Any]?
+                var failed = false
+                // A slow TV gets two more goes before it counts as a failure.
+                for attempt in 0..<3 {
+                    do {
+                        let d = try await TVBridge.post("player-seek", ["steps": n], timeout: 30)
+                        answer = (try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:]
+                        break
+                    } catch is TVBridge.Slow where attempt < 2 {
+                        try? await Task.sleep(nanoseconds: 800_000_000)
+                    } catch { failed = true; break }
+                }
+                guard let self, self.generation == gen else { return }
+                if failed {
+                    // Back to where the TV really is, at once, with the feel of a no.
+                    #if canImport(UIKit)
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                    #endif
+                    self.pending -= n
+                    model.say("Couldn’t move it")
+                } else if let ms = (answer?["position"] as? NSNumber)?.doubleValue {
+                    // Where it landed, and this send's taps let go, together. Later taps stay on top of it.
+                    self.adopted = (ms, Date())
+                    self.pending -= n
+                    Task { await model.load() }
+                } else {
+                    await model.load()
+                    if self.generation == gen { self.pending -= n }
+                }
+                self.settled()
             }
         }
     }
@@ -269,6 +333,9 @@ struct ScrubBar: View {
     let total: Double
     var enabled = true
     var busy = false
+    // Where the TV is known to be, when the bar is ahead of it by jumps on their way, and whether to show they're slow.
+    var confirmed: Double? = nil
+    var spinning = false
     // Where the finger is, while it's on the bar.
     @Binding var scrub: Double?
     // A tick under the finger every this much.
@@ -279,7 +346,8 @@ struct ScrubBar: View {
         GeometryReader { g in
             let thick: CGFloat = scrub == nil ? 6 : 10
             let at = { (x: CGFloat) in total * min(1, max(0, Double(x / max(g.size.width, 1)))) }
-            ProgressTrack(fraction: total > 0 ? (scrub ?? value).map { $0 / total } : nil, thick: thick, fill: busy ? AnyShapeStyle(.white.opacity(0.6)) : AnyShapeStyle(TVLook.accent))
+            ProgressTrack(fraction: total > 0 ? (scrub ?? value).map { $0 / total } : nil, thick: thick, fill: busy ? AnyShapeStyle(.white.opacity(0.6)) : AnyShapeStyle(TVLook.accent),
+                          confirmed: total > 0 && scrub == nil ? confirmed.map { $0 / total } : nil, spinning: spinning && scrub == nil)
                 .animation(.spring(response: 0.25, dampingFraction: 0.8), value: thick)
                 .contentShape(Rectangle())
                 // Only a sideways slide moves it, so scrolling the page past it never does.
@@ -300,14 +368,17 @@ struct ScrubBar: View {
     }
 }
 
-// Where the bar will be, before there's anything to show on it: the same height, an empty track, no numbers.
+// Where the bar will be, before there's anything to show on it: the same height, an empty track, no numbers. A note
+// can say what the TV is doing meanwhile.
 struct ProgressPlaceholder: View {
+    var note: String? = nil
     var body: some View {
         VStack(spacing: 6) {
             ProgressTrack(fraction: nil).frame(height: 28)
-            Text("0:00").font(.caption.monospacedDigit().weight(.medium)).hidden()
+            Text(note ?? "0:00").font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(TVLook.accent).opacity(note == nil ? 0 : 1)
+                .contentTransition(.opacity)
         }
-        .accessibilityHidden(true)
+        .accessibilityHidden(note == nil)
     }
 }
 

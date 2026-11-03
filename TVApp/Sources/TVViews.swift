@@ -1032,18 +1032,36 @@ struct MusicProgress: View {
         .accessibilityValue("\(NowControls.clock(music.position)) of \(NowControls.clock(music.duration))")
     }
 }
-// The bar itself, for songs and films alike. With nothing to show yet, just the empty track.
+// The bar itself, for songs and films alike. With nothing to show yet, just the empty track. When jumps are on their
+// way, the part the TV hasn't confirmed is drawn at half strength, from where it is to where it's going, and once
+// that's taken a while a small spinner sits at the head.
 struct ProgressTrack: View {
     let fraction: Double?
     var thick: CGFloat = 6
     var fill: AnyShapeStyle = AnyShapeStyle(TVLook.accent)
+    var confirmed: Double? = nil
+    var spinning = false
     var body: some View {
         GeometryReader { g in
+            let w = g.size.width, at = { (f: Double) in w * min(1, max(0, f)) }
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(0.18)).frame(height: thick)
-                if let fraction { Capsule().fill(fill).frame(width: max(thick, g.size.width * min(1, max(0, fraction))), height: thick) }
+                if let fraction {
+                    if let confirmed, abs(confirmed - fraction) > 0.0005 {
+                        Capsule().fill(TVLook.accent.opacity(0.5)).frame(width: max(thick, at(max(confirmed, fraction))), height: thick)
+                        Capsule().fill(fill).frame(width: max(thick, at(min(confirmed, fraction))), height: thick)
+                    } else {
+                        Capsule().fill(fill).frame(width: max(thick, at(fraction)), height: thick)
+                    }
+                    if spinning {
+                        ProgressView().controlSize(.small).tint(.white).scaleEffect(0.7).frame(width: 14, height: 14)
+                            .offset(x: min(max(at(fraction) - 7, 0), max(w - 14, 0)))
+                            .transition(.opacity)
+                    }
+                }
             }
             .frame(maxHeight: .infinity)
+            .animation(.easeOut(duration: 0.2), value: spinning)
         }
     }
 }
@@ -1440,6 +1458,10 @@ struct VideoProgress: View {
     let session: TVStatus.Session
     // False while the picture of the TV is the one kept from last time: then nothing ticks and nothing moves.
     var live = true
+    // What the TV is doing, in the middle of the times, while it's still getting the film going.
+    var note: String? = nil
+    // Dimmed and out of reach until the film is really going; the note stays clear.
+    var locked = false
     @State private var scrub: Double?
     // The spot asked for, shown until the TV is there. A newer one asked for meanwhile goes as soon as this lands.
     @State private var target: Double?
@@ -1447,10 +1469,15 @@ struct VideoProgress: View {
     var duration: Double { session.duration ?? 0 }
     var scrubbable: Bool { session.pkg == "com.stremio.one" }
     var canSeek: Bool { scrubbable && session.canSeek == true && duration > 0 && live }
+    // Where the TV is known to be: the player's own answer to a jump for a moment after it, else the status.
+    func confirmed(at date: Date) -> Double {
+        var now = seeker.held(for: session, at: date) ?? (session.position ?? 0)
+        if seeker.held(for: session, at: date) == nil, live, session.playing, let at = session.sampledAt { now += max(0, date.timeIntervalSince1970 * 1000 - at) }
+        return max(0, duration > 0 ? min(now, duration) : now)
+    }
+    // Ahead of that by any jumps tapped that the TV hasn't confirmed yet.
     func position(at date: Date) -> Double {
-        // Ahead by any jumps tapped that the TV's report doesn't show yet.
-        var now = (session.position ?? 0) + seeker.offset(for: session)
-        if live, session.playing, let at = session.sampledAt { now += max(0, date.timeIntervalSince1970 * 1000 - at) }
+        let now = confirmed(at: date) + seeker.offset(for: session)
         return max(0, duration > 0 ? min(now, duration) : now)
     }
     func clock(_ ms: Double) -> String {
@@ -1464,36 +1491,52 @@ struct VideoProgress: View {
         seeking = true
         Task {
             var sent = ms
+            var landed: Double?
             while true {
-                do { try await TVBridge.post("player-seek-to", ["ms": Int(sent)], timeout: 60) }
-                catch { model.say("Couldn’t move there"); break }
+                do {
+                    let d = try await TVBridge.post("player-seek-to", ["ms": Int(sent)], timeout: 60)
+                    landed = ((try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["position"] as? NSNumber)?.doubleValue
+                } catch {
+                    #if canImport(UIKit)
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                    #endif
+                    model.say("Couldn’t move there"); landed = nil; break
+                }
                 guard let t = target, t != sent else { break }
                 sent = t
             }
-            await model.load()
+            // Where the player says it landed, taken on as the asked-for spot is let go, so the bar doesn't step back.
+            if let landed { seeker.adopt(landed, for: session) } else { await model.load() }
             withAnimation(.snappy) { target = nil; seeking = false }
+            if landed != nil { Task { await model.load() } }
         }
     }
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             let now = position(at: ctx.date), shown = scrub ?? target ?? now
             let known = live && session.position != nil
+            let ahead = scrub == nil && target == nil && seeker.offset(for: session) != 0
             VStack(spacing: 6) {
                 if scrubbable {
-                    ScrubBar(value: known && duration > 0 ? shown : nil, total: duration, enabled: canSeek, busy: seeking, scrub: $scrub, tickEvery: 10000) { seek(to: $0) }
+                    ScrubBar(value: known && duration > 0 ? shown : nil, total: duration, enabled: canSeek, busy: seeking,
+                             confirmed: ahead && duration > 0 ? confirmed(at: ctx.date) : nil, spinning: ahead && seeker.spinning,
+                             scrub: $scrub, tickEvery: 10000) { seek(to: $0) }
+                        .opacity(locked ? 0.4 : 1).allowsHitTesting(!locked)
                 } else {
                     ProgressTrack(fraction: known && duration > 0 ? shown / duration : nil, thick: 3).frame(height: 3)
                 }
                 HStack {
-                    Text(clock(shown)).opacity(known ? 1 : 0)
+                    Text(clock(shown)).opacity(known ? (locked ? 0.4 : 1) : 0)
                     Spacer()
                     if seeking { Text("Moving there on the TV…").foregroundStyle(TVLook.accent) }
+                    else if let note { Text(note).foregroundStyle(TVLook.accent).contentTransition(.opacity) }
                     Spacer()
-                    Text("-" + clock(duration - shown)).opacity(known && duration > 0 ? 1 : 0)
+                    Text("-" + clock(duration - shown)).opacity(known && duration > 0 ? (locked ? 0.4 : 1) : 0)
                 }
                 .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
             }
             .animation(.snappy(duration: 0.25), value: seeker.pending)
+            .animation(.spring(response: 0.5, dampingFraction: 0.88), value: locked)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Position")
