@@ -19,7 +19,7 @@ final class AppModel: ObservableObject {
     @Published var sessionScreen: Status.Session?  // a session's own screen, opened from an alert
     // The tab chosen to open on in Settings, or else the one last used.
     @Published var tab = { let d = UserDefaults.standard, start = d.object(forKey: "startTab") as? Int ?? -1; return start >= 0 ? start : d.integer(forKey: "tab") }()
-    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
+    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); liveStore.live = nil } }
 
     var api: API { API(base: URL(string: address) ?? URL(string: "https://invalid.invalid")!) }
     private var loops: [Task<Void, Never>] = []
@@ -88,7 +88,13 @@ final class AppModel: ObservableObject {
 
     func refreshLive() async {
         // Only the live views watch this, so the other tabs and lists stay still.
-        guard tab == 0, problem == nil, !address.isEmpty, let l = try? await api.live() else { return }
+        guard tab == 0, problem == nil, !address.isEmpty else { return }
+        // A reading that failed to come back drops the last one, so the tiles fall back to the full status
+        // rather than holding an old number over newer ones.
+        guard let l = try? await api.live() else {
+            if liveStore.live != nil, !Task.isCancelled { liveStore.live = nil }
+            return
+        }
         liveStore.live = l
     }
 
@@ -117,6 +123,7 @@ final class AppModel: ObservableObject {
         } catch let e as URLError where e.code == .cancelled {
         } catch {
             problem = "Mac Pro is unreachable. It may be restarting, or Tailscale may be off."
+            liveStore.live = nil
         }
     }
 

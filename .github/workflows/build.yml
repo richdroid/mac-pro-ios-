@@ -11,6 +11,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        # The job can write to the repo and its release; no later step, or code it builds, gets the token from disk.
+        with:
+          persist-credentials: false
       - name: Generate Xcode project
         run: |
           brew install xcodegen
@@ -153,7 +156,8 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.Gallery$G
           done
           # Unfold the Duo through Device Hub; display 3 is then live.
-          git clone -q --depth 1 https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && swift build -c release 2>&1 | tail -1)
+          # Someone else's code, built and run here, so a known version only: never whatever its latest commit is.
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
           sleep 5

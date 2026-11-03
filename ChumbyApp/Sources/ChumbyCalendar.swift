@@ -17,8 +17,10 @@ final class CalendarWake: ObservableObject {
     @Published var allowed = EKEventStore.authorizationStatus(for: .event) == .fullAccess
     @Published var note: String?
     @Published var lastSync: Date?
-    private var running = false
+    private var running = false, again = false
     private var watching = false
+    // The app's own copy of the list, which a save here replaces, so the Alarms tab shows it at once.
+    var saved: ((ChumbyState) -> Void)?
 
     init() {
         if let d = UserDefaults.standard.data(forKey: "wakeRules"), let r = try? JSONDecoder().decode(WakeRules.self, from: d) { rules = r } else { rules = WakeRules() }
@@ -84,9 +86,15 @@ final class CalendarWake: ObservableObject {
     func sync() async -> String {
         // The simulator shots show the sample, with no calendar or Chumby to ask.
         if UserDefaults.standard.string(forKey: "pose") == "calendar" { return "" }
-        guard !running else { return "Already updating." }
+        // A change made while one is going (two skips in a row, say) runs straight after it rather than being lost.
+        guard !running else { again = true; return "Updating after the one in progress." }
         running = true
         defer { running = false }
+        var result = await syncOnce()
+        while again { again = false; result = await syncOnce() }
+        return result
+    }
+    private func syncOnce() async -> String {
         allowed = EKEventStore.authorizationStatus(for: .event) == .fullAccess
         guard allowed else { return "Chumby can't see your calendar." }
         refreshPlan()
@@ -101,6 +109,7 @@ final class CalendarWake: ObservableObject {
                 let soon = Date().addingTimeInterval(180)
                 if state.alarms.compactMap({ $0.nextFire() }).contains(where: { $0 < soon }) { return "Waiting: an alarm is due." }
                 try await api.post("save", body: ChumbyAPI.form(state.alarmForm()))
+                await MainActor.run { self.saved?(state) }
                 return wanted.isEmpty ? "No calendar alarms needed." : "Updated \(wanted.count) calendar alarm\(wanted.count == 1 ? "" : "s")."
             }
             lastSync = Date()

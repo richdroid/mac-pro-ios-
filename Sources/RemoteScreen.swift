@@ -9,10 +9,12 @@ import UIKit
 // A native Screen Sharing client. The dashboard's bridge signs in to the Mac, so this side speaks plain RFB over
 // a WebSocket with no login of its own. It asks for ZRLE, which is far smaller than raw pixels over a slow link.
 // The picture's memory, shared with the image drawn from it, so a new image doesn't copy 15 MB each time.
+// It carries its own dimensions, so a picture is always drawn at the size its memory was made for.
 final class FrameBuffer {
     let bytes: UnsafeMutableRawPointer
-    let size: Int
-    init(size: Int) { self.size = size; bytes = calloc(max(size, 1), 1) }
+    let width: Int, height: Int
+    var size: Int { width * height * 4 }
+    init(width: Int, height: Int) { self.width = max(width, 0); self.height = max(height, 0); bytes = calloc(max(self.width * self.height * 4, 1), 1) }
     deinit { free(bytes) }
     func provider() -> CGDataProvider? {
         CGDataProvider(dataInfo: Unmanaged.passRetained(self).toOpaque(), data: bytes, size: size) { info, _, _ in
@@ -193,9 +195,10 @@ final class RemoteScreen: ObservableObject {
             }
             return
         }
-        guard let provider = decoder?.frame.provider() else { return }
+        // The memory and its size together, from one moment, even if a resize or reconnect lands meanwhile.
+        guard let frame = decoder?.current, frame.width > 0, frame.height > 0, let provider = frame.provider() else { return }
         lastPublish = Date()
-        image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+        image = CGImage(width: frame.width, height: frame.height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: frame.width * 4,
                         space: CGColorSpaceCreateDeviceRGB(),
                         bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
                         provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
@@ -303,7 +306,11 @@ enum ScreenEvent { case opened(Int, Int), resized(Int, Int), drew, failed(String
 // by one message at a time, in order, from the receive loop, and never from the main thread.
 final class ScreenDecoder: @unchecked Sendable {
     let socket: URLSessionWebSocketTask
-    private(set) var frame = FrameBuffer(size: 0)
+    private(set) var frame = FrameBuffer(width: 0, height: 0) { didSet { lock.lock(); shared = frame; lock.unlock() } }
+    // What the main thread reads: only ever swapped whole, under the lock.
+    private let lock = NSLock()
+    private var shared = FrameBuffer(width: 0, height: 0)
+    var current: FrameBuffer { lock.lock(); defer { lock.unlock() }; return shared }
     private var buffer = Data()
     private var inflater = ZRLEInflater()
     private var width = 0, height = 0
@@ -354,7 +361,7 @@ final class ScreenDecoder: @unchecked Sendable {
                 let nameLength = be32(buffer, 20)
                 guard let head = take(24 + nameLength) else { return }
                 width = be16(head, 0); height = be16(head, 2)
-                frame = FrameBuffer(size: width * height * 4)
+                frame = FrameBuffer(width: width, height: height)
                 // 32-bit little-endian BGRA. ZRLE first, moved areas next, raw as the fallback, and being told of a resize.
                 send([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0])
                 send([2, 0, 0, 4,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33])
@@ -428,7 +435,7 @@ final class ScreenDecoder: @unchecked Sendable {
             default:
                 // The Mac changed resolution: a new picture follows.
                 width = w; height = h
-                frame = FrameBuffer(size: width * height * 4)
+                frame = FrameBuffer(width: width, height: height)
                 events.append(.resized(w, h))
             }
         }

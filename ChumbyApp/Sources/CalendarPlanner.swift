@@ -48,9 +48,14 @@ enum WakePlanner {
         !e.allDay && !e.free && !e.declined && !e.canceled && !r.excludedCalendars.contains(e.calendar) && !mentions(e.title, r.ignoreWords)
     }
     static func key(_ e: CalEvent) -> String { "\(e.id)@\(Int(e.start.timeIntervalSince1970))" }
-    // The calendar day something belongs to, which starts at dayStartHour rather than midnight.
-    static func dayOf(_ d: Date, _ r: WakeRules, _ cal: Calendar) -> Date {
-        cal.startOfDay(for: cal.date(byAdding: .hour, value: -r.dayStartHour, to: d) ?? d)
+    // The day an event belongs to. Something in the small hours (before dayStartHour) only counts as the night before
+    // when you'd be up for it anyway, because something else runs into it or ended in the last few hours. Otherwise, as
+    // with a 4 AM shift after an evening dinner, it starts a day of its own and gets its own alarm.
+    static func dayOf(_ e: CalEvent, among events: [CalEvent], _ r: WakeRules, _ cal: Calendar) -> Date {
+        let own = cal.startOfDay(for: e.start)
+        guard cal.component(.hour, from: e.start) < r.dayStartHour else { return own }
+        let up = events.contains { $0.start < e.start && $0.end > e.start.addingTimeInterval(-4 * 3600) }
+        return up ? (cal.date(byAdding: .day, value: -1, to: own) ?? own) : own
     }
     static func plan(_ events: [CalEvent], rules r: WakeRules, now: Date = Date(), calendar cal: Calendar = .current) -> [PlannedWake] {
         var off = Set<Date>()
@@ -60,7 +65,8 @@ enum WakePlanner {
         }
         let usable = events.filter { counts($0, r) }.sorted { $0.start < $1.start }
         var byDay: [Date: [CalEvent]] = [:]
-        for e in usable { byDay[dayOf(e.start, r, cal), default: []].append(e) }
+        let days = usable.map { dayOf($0, among: usable, r, cal) }
+        for (e, d) in zip(usable, days) { byDay[d, default: []].append(e) }
         var out: [PlannedWake] = []
         for day in byDay.keys.sorted() {
             // A day off cancels work, but the dentist still happens.
@@ -74,7 +80,8 @@ enum WakePlanner {
             var item = PlannedWake(key: key(first), title: first.title, start: first.start, wake: wake, lead: lead, isWork: work)
             item.skipped = r.skipped.contains(item.key)
             // Worth saying if the night before leaves little sleep.
-            if let before = usable.last(where: { $0.end <= wake && dayOf($0.start, r, cal) < day }) {
+            if let i = usable.indices.last(where: { usable[$0].end <= wake && days[$0] < day }) {
+                let before = usable[i]
                 let hours = wake.timeIntervalSince(before.end) / 3600
                 if hours < 7 { item.shortNight = String(format: "%.1f h after %@", hours, before.title) }
             }

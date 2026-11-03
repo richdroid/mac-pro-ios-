@@ -5,7 +5,7 @@ const data = {
   tok: { t: 'test' },
   sys: { ok: true, up: 291000, memFree: 22000, memTotal: 62000, pspFree: 3100, load: 0.42, wifi: 71, vol: 40, shuffle: 0, airplayOn: true, chan: 'Default', cp: '1.7.3', lock: '', wall: 1, tw: ['NASA', 'BBCBreaking'], roms: ['Tetris.nes.gz', 'Super_Mario_Bros.nes'] },
   state: {
-    volume: 80, fade: 30, pending: false, shuffle: 0, channel: 'Default',
+    ok: true, volume: 80, fade: 30, pending: false, shuffle: 0, channel: 'Default',
     alarms: [alarm({ name: 'Work', time: '405' }), alarm({ name: 'Weekend', time: '570', when: 'weekend', enabled: '0', type: 'audio', arg: 'directurl', param_description: 'Jazz Radio' })],
     streams: [{ id: 's1', name: 'Jazz Radio', url: 'http://example.com/jazz.mp3', mimetype: 'audio/mpeg' }],
     tones: ['Beep', 'Bells', 'Chime'], channels: [{ id: 'A', name: 'Default' }, { id: 'B', name: 'News' }],

@@ -64,6 +64,13 @@ final class ChumbyModel: ObservableObject {
         if let d = try? Data(contentsOf: Self.cache("state")), let v = try? JSONDecoder().decode(ChumbyState.self, from: d) { state = v; stateBytes = d }
         if let d = try? Data(contentsOf: Self.cache("chlist")), let v = try? JSONDecoder().decode(ChannelList.self, from: d) { channelData = v; channelBytes = d }
         if let d = try? Data(contentsOf: Self.cache("shot")) { shot = PlatformImage(data: d) }
+        CalendarWake.shared.saved = { [weak self] s in self?.adopt(s) }
+    }
+    // A list just saved from elsewhere in the app. Shown at once; the Chumby's own copy replaces it on the next read.
+    func adopt(_ s: ChumbyState) {
+        state = s; stateBytes = Data()
+        stateHold = Date().addingTimeInterval(6)
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     func start() {

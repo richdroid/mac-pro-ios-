@@ -18,7 +18,9 @@ enum TVIsland {
     // anything AirPlayed from this phone, which iOS already shows, is left out.
     static let apps = ["com.google.android.youtube.tv": "YouTube", "com.stremio.one": "Stremio"]
 
-    static var live: Activity<TVIslandAttributes>? { Activity<TVIslandAttributes>.activities.first { $0.activityState == .active } }
+    // A stale one still shows, so it counts too; anything past the first is a leftover and is ended.
+    static var shown: [Activity<TVIslandAttributes>] { Activity<TVIslandAttributes>.activities.filter { $0.activityState == .active || $0.activityState == .stale } }
+    static var live: Activity<TVIslandAttributes>? { shown.first }
     // With no way to push updates, it can only say when its picture may be out of date.
     static let staleAfter: TimeInterval = 300
 
@@ -33,7 +35,8 @@ enum TVIsland {
 
     // Starts only for something actually playing, and goes away once the TV has moved on.
     static func sync(_ status: TVStatus) async {
-        let current = live
+        let all = shown, current = all.first
+        for extra in all.dropFirst() { await extra.end(nil, dismissalPolicy: .immediate) }
         guard let next = state(status) else {
             if status.online { await current?.end(nil, dismissalPolicy: .immediate) }
             return

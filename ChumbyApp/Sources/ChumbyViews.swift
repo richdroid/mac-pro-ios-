@@ -570,6 +570,7 @@ func timeText(_ t: Int) -> String { t < 60 ? "\(t) sec" : "\(t / 60) min" }
 struct ChannelsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @State private var picked = ""
+    @State private var saveQueue: Task<Void, Never>?
     // The drag handles only while reordering, so a scroll that starts on one can't pick a widget up.
     @State private var reordering = false
     @State private var rows: [EditorRow] = []
@@ -629,7 +630,10 @@ struct ChannelsTab: View {
         guard let u = unsent else { return }
         saveTask?.cancel()
         unsent = nil
-        Task {
+        // Saves go one after another, so an older list can never land on the Chumby after a newer one.
+        let before = saveQueue
+        saveQueue = Task {
+            await before?.value
             var o: [(String, String)] = [("n", "\(u.rows.count)")]
             for (i, w) in u.rows.enumerated() { o += [("\(i)_id", w.id), ("\(i)_on", w.on ? "1" : "0"), ("\(i)_secs", "\(w.secs)")] }
             do {

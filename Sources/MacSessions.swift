@@ -22,9 +22,13 @@ struct SessionTerminal: View {
         do { show(try await model.api.termScreen(key)); if note == "Can’t reach the Mac" { note = nil } }
         catch { if !loaded { note = "Can’t reach the Mac" } }
     }
+    // One after another, in the order pressed: ↓ then Enter must never reach the Mac as Enter then ↓.
+    @State private var queue: Task<Void, Never>?
     func send(_ body: [String: Any]) {
         sends += 1
-        Task {
+        let before = queue
+        queue = Task {
+            await before?.value
             do { show(try await model.api.termSend(key, body)) }
             catch { withAnimation { note = error.localizedDescription } }
         }

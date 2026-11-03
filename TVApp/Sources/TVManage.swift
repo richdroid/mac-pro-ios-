@@ -28,8 +28,12 @@ final class ManageStore: ObservableObject {
         state?.settings[key] = value
         send("setting", ["key": key, "value": value])
     }
+    // One change at a time, in the order made, so an older one can never land after a newer one.
+    private var queue: Task<Void, Never>?
     func send(_ path: String, _ body: [String: Any], then: (() async -> Void)? = nil) {
-        Task {
+        let before = queue
+        queue = Task {
+            await before?.value
             do { try await TVBridge.post(path, body); await then?() }
             catch { note = "The TV didn’t get that."; await load() }
         }
