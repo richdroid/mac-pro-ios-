@@ -359,8 +359,8 @@ struct WordsGroup: View {
         .onChange(of: open) { _, o in if !o { add() } }
     }
 }
-// Folded, its own page, pushed. With the Duo's side column, the page has no bar of its own: Back sits in the rail where +
-// was (RootView), so only this column slides and the rail stays put. With the bars across, the system's Back is used.
+// Folded, its own page. With the Duo's side column it slides in inside the Alarms tab (AlarmsTab), with no bar of its own:
+// Back sits in the rail where + was (RootView), so the rail never moves. With the bars across it's pushed, with the system's Back.
 struct CalendarWakeSettings: View {
     @EnvironmentObject var model: ChumbyModel
     var rail: Bool { model.railWidth >= 44 }
@@ -388,6 +388,7 @@ struct CalendarDaySheet: View {
     // Folded: measured on first layout, a first guess until then.
     @State private var fit: CGFloat = 520
     @State private var detent: PresentationDetent = .height(520)
+    @State private var openedAt = Date()
     let key: String
     // Set when it fills the open Duo's right pane instead of being a sheet.
     var close: (() -> Void)?
@@ -412,10 +413,28 @@ struct CalendarDaySheet: View {
                 if item.custom { Button("Use the usual time") { wake.rules.leadOverrides[key] = nil }.foregroundStyle(.tint) }
                 Toggle("Ring that day", isOn: Binding(get: { !item.skipped }, set: { _ in wake.toggleSkip(item) }))
             } footer: { Text("This day only.") }
-            Section { CalendarSoundRow() } header: { Text("How they ring") }
+            Section { CalendarSoundRow().background { foot } } header: { Text("How they ring") }
         } else {
-            Text("That day is no longer on your calendar.").foregroundStyle(.secondary)
+            Text("That day is no longer on your calendar.").foregroundStyle(.secondary).background { foot }
         }
+    }
+    // Folded, where the last row ends, so the sheet can stop just under it. onGeometryChange reports the first layout too,
+    // which onScrollGeometryChange never did, so the sheet used to stay at its first guess.
+    @ViewBuilder var foot: some View {
+        if close == nil {
+            Color.clear.onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("daySheet")).maxY } action: { fitTo($0) }
+        }
+    }
+    func fitTo(_ rowBottom: CGFloat) {
+        // Only as it opens: later the row moves because the list is being scrolled, not because the sheet is the wrong size.
+        guard Date().timeIntervalSince(openedAt) < 1.5 else { return }
+        // The row's own bottom padding and a little air under the last card.
+        let h = (rowBottom + 11 + 24).rounded()
+        guard h > 200, abs(h - fit) > 1 else { return }
+        let onFit = detent == .height(fit)
+        fit = h
+        // The new height is in the detents before it's chosen.
+        if onFit { Task { @MainActor in detent = .height(h) } }
     }
     var body: some View {
         if let close {
@@ -425,15 +444,12 @@ struct CalendarDaySheet: View {
             }
         } else {
             NavigationStack {
+                // The folded sheet is as tall as what's in it (see foot), so no row is cut by its bottom edge, no empty sheet
+                // hangs under the last one, and its top stays clear of the rail's clock.
                 List { sections.listRowBackground(GlassRow()) }
+                .coordinateSpace(.named("daySheet"))
                 .seaList().background { SeaBackground().ignoresSafeArea() }
-                // The folded sheet is as tall as what's in it, so no row is ever cut by its bottom edge.
-                .onScrollGeometryChange(for: CGFloat.self) { ($0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom).rounded() } action: { _, h in
-                    guard h > 200, abs(h - fit) > 1 else { return }
-                    let onFit = detent == .height(fit)
-                    fit = h
-                    if onFit { detent = .height(h) }
-                }
+                .onAppear { openedAt = Date() }
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .principal) { Text(title).font(.custom("Trebuchet MS", size: 18).weight(.bold)) }

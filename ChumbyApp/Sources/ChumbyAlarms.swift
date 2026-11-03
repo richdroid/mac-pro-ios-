@@ -128,45 +128,56 @@ struct RowNote: View {
 // While an alarm rings or snoozes: its name, and Snooze and Stop large enough to hit half asleep.
 struct RingingCard: View {
     @EnvironmentObject var model: ChumbyModel
-    @Namespace private var buttons
-    // The last ring seen, so the card keeps its words and buttons while it fades out after Stop.
-    @State private var last: Sys.Ringing?
-    var ring: Sys.Ringing? { model.sys.ringing ?? last }
-    var name: String { ring.map { r in [r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name, r.sound].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "" }
+    // Everything the card says, taken while the alarm is still there. Once Stop is tapped the card draws only this, so
+    // its words never change while it fades.
+    struct Shown: Equatable { var ring: Sys.Ringing; var until: Date?; var away: Bool; var seen: Date? }
+    @State private var frozen: Shown?
+    var live: Shown? { model.sys.ringing.map { Shown(ring: $0, until: model.snoozeEnds, away: model.unreachable, seen: model.seenAt) } }
+    var shown: Shown? { live ?? frozen }
     var body: some View {
         content
-            .onAppear { last = model.sys.ringing }
-            .onChange(of: model.sys.ringing) { _, r in if let r { last = r } }
+            .onAppear { frozen = live }
+            .onChange(of: live) { _, s in if let s { frozen = s } }
+    }
+    func name(_ r: Sys.Ringing) -> String {
+        [r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name, r.sound].filter { !$0.isEmpty }.joined(separator: " · ")
     }
     @ViewBuilder var content: some View {
-        if let r = ring, model.unreachable {
+        if let s = shown, s.away {
             // An old reading: what it was doing when last heard from, and no buttons that can't reach it.
             VStack(spacing: 3) {
-                Text("Was \(r.snoozed ? "snoozing" : "ringing")\(model.seenAt.map { " at " + seenText($0) } ?? "")").font(.custom("Trebuchet MS", size: 22).weight(.bold))
-                Text([name, "can’t reach the Chumby"].filter { !$0.isEmpty }.joined(separator: " · ")).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Text("Was \(s.ring.snoozed ? "snoozing" : "ringing")\(s.seen.map { " at " + seenText($0) } ?? "")").font(.custom("Trebuchet MS", size: 22).weight(.bold))
+                Text([name(s.ring), "can’t reach the Chumby"].filter { !$0.isEmpty }.joined(separator: " · ")).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(16).frame(maxWidth: .infinity)
-        } else if let r = ring {
+        } else if let s = shown {
+            let snoozed = s.ring.snoozed
             VStack(spacing: 14) {
                 VStack(spacing: 3) {
-                    // One title that crossfades from Ringing to Snoozed, in the same spring as the buttons.
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        Text(r.snoozed ? model.snoozeEnds.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing")
-                            .contentTransition(.opacity)
+                    // Ringing hands over to Snoozed one at a time: the old title is gone before the new one fades in.
+                    ZStack {
+                        Text(snoozed ? s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing")
+                            .id(snoozed)
+                            .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.1))))
                     }
                     .font(.custom("Trebuchet MS", size: 24).weight(.bold))
-                    Text(name).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(name(s.ring)).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
                 }
-                // Snooze folds away into the side Stop grows from, so Stop widens in place rather than jumping.
-                HStack(spacing: 14) {
-                    if !r.snoozed {
-                        Button { model.ringSnooze() } label: { Label("Snooze", systemImage: "water.waves").frame(maxWidth: .infinity, minHeight: 56) }
-                            .buttonStyle(.glass)
-                            .transition(.scale(scale: 0.4, anchor: .trailing).combined(with: .opacity))
+                // Snooze narrows to nothing inside its own frame, clipped there, while Stop widens into the room it leaves,
+                // so Stop never passes over its label.
+                HStack(spacing: 0) {
+                    Button { model.ringSnooze() } label: {
+                        Label("Snooze", systemImage: "water.waves").lineLimit(1).fixedSize()
+                            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 56)
                     }
+                    .buttonStyle(.glass)
+                    .frame(maxWidth: snoozed ? 0 : .infinity)
+                    .clipped()
+                    .opacity(snoozed ? 0 : 1)
+                    .padding(.trailing, snoozed ? 0 : 14)
+                    .disabled(snoozed).accessibilityHidden(snoozed)
                     Button { model.ringOff() } label: { Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity, minHeight: 56) }
                         .buttonStyle(.glassProminent).tint(ChumbyPalette.orange)
-                        .matchedGeometryEffect(id: "stop", in: buttons)
                 }
                 .font(.custom("Trebuchet MS", size: 20).weight(.bold))
                 if let f = model.failed("ring") { FailNote(text: f) }
@@ -178,22 +189,33 @@ struct RingingCard: View {
 }
 
 extension AnyTransition {
-    // Stopped: the card fades and settles back a little while what's under it slides up in the same spring.
-    static var ringCard: AnyTransition { .opacity.combined(with: .scale(scale: 0.95, anchor: .top)) }
+    // Stopped: the card is gone by opacity alone within 0.12 s, before the controls under it start up (ChumbyModel.stopSpring).
+    static var ringCard: AnyTransition {
+        .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.95, anchor: .top)), removal: .opacity.animation(.easeOut(duration: 0.12)))
+    }
 }
 
 // MARK: - Naps
-// Four lengths. The one running becomes its own countdown, draining like water, with × to call it off.
+// Four lengths. The one running becomes its own countdown, filled with the accent and draining like water, with × to
+// call it off. A nap set elsewhere shows in the chip that holds it, so there's never a row to come and go under the chips.
 struct NapChips: View {
     @EnvironmentObject var model: ChumbyModel
     @AppStorage("napLength") private var napLength = 0
     @State private var sending: Int?
+    static let lengths = [10, 20, 30, 60]
+    // The chip tapped, while the time left still fits it; otherwise the shortest one the time left fits in.
+    func chip(for due: Date) -> Int {
+        let left = due.timeIntervalSinceNow / 60
+        if Self.lengths.contains(napLength), left <= Double(napLength) + 1 { return napLength }
+        return Self.lengths.first { Double($0) >= left } ?? 60
+    }
     var body: some View {
         let due = model.napDue
+        let running = due.map(chip(for:))
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                ForEach([10, 20, 30, 60], id: \.self) { m in
-                    if let due, m == napLength { countdown(due, total: m) } else {
+                ForEach(Self.lengths, id: \.self) { m in
+                    if let due, m == running { countdown(due, total: m) } else {
                         Button {
                             napLength = m; sending = m
                             Task { await model.nap(m); sending = nil }
@@ -202,14 +224,6 @@ struct NapChips: View {
                         }
                         .buttonStyle(.bordered).disabled(sending != nil)
                     }
-                }
-            }
-            // A nap set somewhere else, of a length these don't have.
-            if let due, ![10, 20, 30, 60].contains(napLength) || napLength == 0 {
-                HStack {
-                    Text("Nap until \(due.formatted(date: .omitted, time: .shortened))")
-                    Spacer()
-                    Button("Cancel") { Task { await model.cancelNap() } }.buttonStyle(.borderless)
                 }
             }
             if let f = model.failed("nap") { FailNote(text: f) }
@@ -225,18 +239,22 @@ struct NapChips: View {
                 Text(String(format: "%d:%02d", Int(left) / 60, Int(left) % 60)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
                     .contentTransition(.numericText(countsDown: true)).animation(.snappy, value: Int(left))
                 Button { Task { await model.cancelNap() } } label: { Image(systemName: "xmark").font(.footnote.weight(.bold)) }
-                    .buttonStyle(.borderless).accessibilityLabel("Cancel nap")
+                    .buttonStyle(.borderless).foregroundStyle(.white).accessibilityLabel("Cancel nap")
             }
             .font(.callout.weight(.semibold))
+            .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 34)
-            .background(alignment: .bottom) {
-                GeometryReader { g in
-                    Capsule().fill(ChumbyPalette.hex(0x79bbff).opacity(0.45))
-                        .frame(height: g.size.height * k).frame(maxHeight: .infinity, alignment: .bottom)
+            // The accent, with the time left as a lighter tide that falls as the nap runs down.
+            .background {
+                ZStack(alignment: .bottom) {
+                    Rectangle().fill(.tint)
+                    GeometryReader { g in
+                        Rectangle().fill(.white.opacity(0.22))
+                            .frame(height: g.size.height * k).frame(maxHeight: .infinity, alignment: .bottom)
+                    }
                 }
                 .clipShape(Capsule())
             }
-            .overlay(Capsule().stroke(.tint.opacity(0.6), lineWidth: 1))
             .accessibilityLabel("Nap, \(Int(left) / 60) minutes left")
         }
     }
@@ -250,9 +268,18 @@ final class SongArt: ObservableObject {
     struct Found { var image: PlatformImage?; var link: URL?; var tint: Color? }
     @Published var found: [String: Found] = [:]
     private var asked = Set<String>()
-    private static func file(_ k: String) -> URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("chumby-art-" + String(k.hashValue & 0x7fffffff)) }
+    // Named by a hash that's the same every launch (Swift's own hashValue changes each time, so nothing kept was ever found).
+    private static func file(_ k: String) -> URL {
+        var h: UInt64 = 0xcbf29ce484222325
+        for b in k.utf8 { h = (h ^ UInt64(b)) &* 0x100000001b3 }
+        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("chumby-art-" + String(h, radix: 16))
+    }
     private var links: [String: String] { get { UserDefaults.standard.dictionary(forKey: "songLinks") as? [String: String] ?? [:] } set { UserDefaults.standard.set(newValue, forKey: "songLinks") } }
     static func key(_ s: Song) -> String { s.artist + " – " + s.title }
+    // At launch and on opening Alarms, so the covers are in hand before the row ever scrolls into view.
+    func prefetch(_ songs: [Song], _ alarms: [Alarm]) {
+        for w in WokeUpTo.wakings(songs, alarms) { look(w.song) }
+    }
     func look(_ s: Song) {
         let k = Self.key(s)
         guard !asked.contains(k) else { return }
@@ -265,14 +292,19 @@ final class SongArt: ObservableObject {
             var c = URLComponents(string: "https://itunes.apple.com/search")!
             c.queryItems = [.init(name: "term", value: s.artist + " " + s.title), .init(name: "entity", value: "song"), .init(name: "limit", value: "1")]
             struct R: Decodable { struct T: Decodable { let artworkUrl100: String?; let trackViewUrl: String? }; let results: [T] }
-            guard let u = c.url, let d = try? await URLSession.shared.data(from: u).0, let t = (try? JSONDecoder().decode(R.self, from: d))?.results.first else { return }
-            if let link = t.trackViewUrl { links[k] = link }
-            var f = Found(image: nil, link: t.trackViewUrl.flatMap(URL.init(string:)), tint: nil)
-            if let a = t.artworkUrl100.map({ $0.replacingOccurrences(of: "100x100", with: "300x300") }), let au = URL(string: a), let img = try? await URLSession.shared.data(from: au).0 {
-                try? img.write(to: Self.file(k), options: .atomic)
-                f.image = PlatformImage(data: img); f.tint = Self.tint(img)
+            // Not reached: asked again next time rather than settling on no cover.
+            guard let u = c.url, let d = try? await URLSession.shared.data(from: u).0, let r = try? JSONDecoder().decode(R.self, from: d) else { asked.remove(k); return }
+            var f = Found(image: nil, link: nil, tint: nil)
+            if let t = r.results.first {
+                if let link = t.trackViewUrl { links[k] = link }
+                f.link = t.trackViewUrl.flatMap(URL.init(string:))
+                if let a = t.artworkUrl100.map({ $0.replacingOccurrences(of: "100x100", with: "300x300") }), let au = URL(string: a), let img = try? await URLSession.shared.data(from: au).0 {
+                    try? img.write(to: Self.file(k), options: .atomic)
+                    f.image = PlatformImage(data: img); f.tint = Self.tint(img)
+                }
             }
-            found[k] = f
+            // Arriving late, the cover crossfades in rather than cutting.
+            withAnimation(.easeOut(duration: 0.2)) { found[k] = f }
         }
     }
     // The cover's average colour, for the tile behind it.
@@ -334,11 +366,17 @@ struct WokeUpTo: View {
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 ZStack {
-                    if let i = f?.image { Image(platform: i).resizable().scaledToFill() }
-                    else {
-                        // No cover found: the octopus on the Chumby's own blue, never a grey box.
-                        ChumbyPalette.hex(0x2c5bae)
-                        OctopusMark(color: .white.opacity(0.9), eyes: ChumbyPalette.hex(0x2c5bae)).padding(26)
+                    if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
+                    else if f != nil {
+                        // Looked for and none found: the octopus on the Chumby's own blue, never a grey box.
+                        ZStack {
+                            ChumbyPalette.hex(0x2c5bae)
+                            OctopusMark(color: .white.opacity(0.9), eyes: ChumbyPalette.hex(0x2c5bae)).padding(26)
+                        }
+                        .transition(.opacity)
+                    } else {
+                        // Still on its way (rare, as covers are fetched at launch and kept): a plain tile, no stand-in art.
+                        GlassRow().transition(.opacity)
                     }
                 }
                 .frame(width: 112, height: 112).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -355,6 +393,11 @@ struct WokeUpTo: View {
 }
 
 // MARK: - Alarms
+// Everything left of a view's trailing edge, reaching far past its other three.
+struct TrailingEdge: Shape {
+    func path(in r: CGRect) -> Path { Path(CGRect(x: r.minX - 4000, y: r.minY - 4000, width: r.width + 4000, height: r.height + 8000)) }
+}
+
 struct AlarmsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
@@ -400,10 +443,30 @@ struct AlarmsTab: View {
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
     @State private var scrollTo: String?
+    // With the Duo's side column, Calendar settings is a page swapped in inside this tab, never a navigation push: a push
+    // carried the rail off with the page. The list fades under it, kept as it was, so coming back finds it where it was left.
+    var rail: Bool { model.railWidth >= 44 }
     var body: some View {
-        ScrollViewReader { proxy in
-            page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
+        let swapped = rail && model.alarmsPage
+        ZStack {
+            ScrollViewReader { proxy in
+                page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
+            }
+            .opacity(swapped ? 0 : 1)
+            .allowsHitTesting(!swapped).accessibilityHidden(swapped)
+            if swapped {
+                CalendarWakeSettings()
+                    // A swipe in from the left edge goes back, as it would from a pushed page.
+                    .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { g in
+                        if g.startLocation.x < 40 && g.translation.width > 80 && abs(g.translation.height) < g.translation.width { model.alarmsPage = false }
+                    })
+                    .transition(.move(edge: .trailing))
+                    .zIndex(1)
+            }
         }
+        // Nothing slides under the rail: cut at the trailing edge only, so the pages still run under the top and bottom bars.
+        .clipShape(TrailingEdge())
+        .animation(.snappy(duration: 0.35), value: swapped)
     }
     var page: some View {
         TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
@@ -438,8 +501,11 @@ struct AlarmsTab: View {
             }
         }
         .seaList()
+        // A nap set or called off moves anything it touches (the next alarm, the chip) in one spring, never in one frame.
+        .animation(.snappy, value: model.napDue)
         .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
-        .navigationDestination(isPresented: $model.alarmsPage) { CalendarWakeSettings() }
+        // Pushed only with the bars across, where the system's own Back is used.
+        .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !rail }, set: { model.alarmsPage = $0 })) { CalendarWakeSettings() }
         .sheet(item: $editing) { t in AlarmEditor(original: t.alarm).environmentObject(model) }
         .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model) }
         .refreshable { await model.loadState() }
@@ -447,7 +513,8 @@ struct AlarmsTab: View {
         .onChange(of: wide) { _, _ in pane = .schedule }
         .onAppear {
             wake.refreshPlan()
-            Task { await model.loadSongs() }
+            SongArt.shared.prefetch(model.songs, model.state.alarms)
+            Task { await model.loadSongs(); SongArt.shared.prefetch(model.songs, model.state.alarms) }
             guard !posed else { return }
             posed = true
             switch ChumbyModel.pose {
@@ -585,7 +652,7 @@ struct AlarmsTab: View {
                     .buttonStyle(.plain)
                     .listRowBackground(pane == .settings ? AnyView(Color.accentColor.opacity(0.18)) : AnyView(GlassRow()))
                 } else {
-                    // Pushed through the model, so the rail knows to swap + for Back.
+                    // Opened through the model, so the rail knows to swap + for Back.
                     Button { model.alarmsPage = true } label: {
                         HStack { Text("Settings"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle())
                     }

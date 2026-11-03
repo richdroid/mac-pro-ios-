@@ -44,7 +44,7 @@ const macProcs = JSON.stringify({
   cpu: [macProc(40, 'Google Chrome Helper', 84, 610, null), macProc(41, 'WindowServer', 22, 240, 'System process'), macProc(42, 'Claude Code', 12, 690, 'Claude session'), macProc(43, 'Music', 6, 380, null), macProc(44, 'node', 3, 310, 'The dashboard'), macProc(45, 'Tailscale', 2, 118, 'Keeps remote access')],
   mem: [macProc(42, 'Claude Code', 12, 690, 'Claude session'), macProc(40, 'Google Chrome Helper', 84, 610, null), macProc(46, 'mediaanalysisd', 0, 490, 'System process'), macProc(43, 'Music', 6, 380, null), macProc(44, 'node', 3, 310, 'The dashboard'), macProc(47, 'Code Helper', 1, 290, null)],
 });
-http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); s.end(q.url === '/api/status' ? macStatus : q.url === '/api/procs' ? macProcs : '{}'); }).listen(9001, '127.0.0.1');
+http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); s.end(q.url === '/api/status' ? macStatus : q.url === '/api/procs' ? macProcs : '{}'); }).listen(9001, '127.0.0.1').on('upgrade', mockScreen);
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
 http.createServer((q, s) => { s.statusCode = 401; s.setHeader('content-type', 'application/json'); s.end('{"error":"Sign in to the Mac Pro."}'); }).listen(9003, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
@@ -251,4 +251,99 @@ function tvPose(q, s) {
     }
   }
   return false;
+}
+
+// A stand-in for the Mac's Screen Sharing behind the dashboard's bridge, for the Mac Pro app's measuring shots of the
+// remote screen: the bridge's handshake, then a page of lyrics that scrolls a little every 16 ms, sent as raw pixels.
+// Every answer is held back 45 ms, about a trip over Tailscale, so asking for one picture at a time shows what it costs.
+// It logs how many pictures a second it sends.
+function mockScreen(req, sock) {
+  const key = req.headers['sec-websocket-key'];
+  if (!key || !req.url.startsWith('/novnc/ws/vnc')) return sock.destroy();
+  const accept = require('crypto').createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  sock.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\nSec-WebSocket-Protocol: binary\r\n\r\n`);
+  sock.setNoDelay(true);
+  const W = 1280, H = 800, LAG = 45;
+  const frame = data => {
+    const n = data.length;
+    const head = n < 126 ? Buffer.from([0x82, n]) : n < 65536 ? Buffer.from([0x82, 126, n >> 8, n & 255])
+      : Buffer.concat([Buffer.from([0x82, 127, 0, 0, 0, 0]), (b => (b.writeUInt32BE(n), b))(Buffer.alloc(4))]);
+    if (!sock.destroyed) { sock.write(head); sock.write(data); }
+  };
+  const later = data => setTimeout(() => frame(data), LAG);
+  // BGRX, as the app asks for: 32 bits, little-endian, red at 16.
+  const px = (r, g, b) => { const p = Buffer.alloc(4); p.writeUInt32LE((r << 16) | (g << 8) | b); return p; };
+  const bg = px(28, 22, 44), bright = px(235, 235, 245), dim = px(120, 110, 150), side = px(18, 18, 22);
+  const band = { x: 240, y: 120, w: 800, h: 560 };
+  const paint = (x0, y0, w, h, scroll) => {
+    const out = Buffer.alloc(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      const Y = y0 + y, row = y * w * 4;
+      if (Y < band.y || Y >= band.y + band.h) { out.fill(side, row, row + w * 4); continue; }
+      out.fill(bg, row, row + w * 4);
+      // A line every 56 px, 22 px tall and of varying length; the one in the middle bright, the rest dim.
+      const v = Y - band.y + scroll, k = Math.floor(v / 56);
+      if (v % 56 >= 22) continue;
+      const len = 260 + ((k * 137) % 420), mid = Math.abs(Y - (band.y + band.h / 2)) < 30;
+      const from = Math.max(x0, band.x + 40), to = Math.min(x0 + w, band.x + 40 + len);
+      if (to > from) out.fill(mid ? bright : dim, row + (from - x0) * 4, row + (to - x0) * 4);
+    }
+    return out;
+  };
+  const update = (x, y, w, h, scroll) => {
+    const head = Buffer.alloc(16);
+    head.writeUInt16BE(1, 2);
+    head.writeUInt16BE(x, 4); head.writeUInt16BE(y, 6); head.writeUInt16BE(w, 8); head.writeUInt16BE(h, 10); head.writeInt32BE(0, 12);
+    return Buffer.concat([head, paint(x, y, w, h, scroll)]);
+  };
+  let stage = 0, pending = 0, scroll = 0, sent = -1, count = 0, buf = Buffer.alloc(0), msgs = Buffer.alloc(0);
+  // Like a real server: an answer goes out when there's a request waiting and the page has moved since the last one.
+  const answer = () => { if (pending > 0 && sent !== scroll) { pending--; sent = scroll; count++; later(update(band.x, band.y, band.w, band.h, scroll)); } };
+  const tick = setInterval(() => { scroll += 3; answer(); }, 16);
+  const report = setInterval(() => { if (count) console.log(`mock screen: ${Math.round(count / 2)} pictures a second`); count = 0; }, 2000);
+  const stop = () => { clearInterval(tick); clearInterval(report); sock.destroy(); };
+  sock.on('close', stop); sock.on('error', stop);
+  later(Buffer.from('RFB 003.008\n'));
+  const fromApp = d => {
+    msgs = Buffer.concat([msgs, d]);
+    for (;;) {
+      if (stage === 0) { if (msgs.length < 12) return; msgs = msgs.subarray(12); stage = 1; later(Buffer.from([1, 1])); continue; }
+      if (stage === 1) { if (msgs.length < 1) return; msgs = msgs.subarray(1); stage = 2; later(Buffer.alloc(4)); continue; }
+      if (stage === 2) {
+        if (msgs.length < 1) return;
+        msgs = msgs.subarray(1); stage = 3;
+        const init = Buffer.alloc(28);
+        init.writeUInt16BE(W, 0); init.writeUInt16BE(H, 2);
+        Buffer.from([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]).copy(init, 4);
+        init.writeUInt32BE(4, 20); init.write('Mock', 24);
+        later(init);
+        continue;
+      }
+      if (!msgs.length) return;
+      const t = msgs[0];
+      const need = t === 0 ? 20 : t === 2 ? (msgs.length >= 4 ? 4 + 4 * msgs.readUInt16BE(2) : 4) : t === 3 ? 10 : t === 4 ? 8 : t === 5 ? 6
+        : t === 6 ? (msgs.length >= 8 ? 8 + msgs.readUInt32BE(4) : 8) : 1;
+      if (msgs.length < need) return;
+      const m = msgs.subarray(0, need); msgs = msgs.subarray(need);
+      if (t === 3) {
+        if (m[1] === 0) { count++; sent = scroll; later(update(0, 0, W, H, scroll)); }
+        else { pending++; answer(); }
+      }
+    }
+  };
+  sock.on('data', d => {
+    buf = Buffer.concat([buf, d]);
+    for (;;) {
+      if (buf.length < 2) return;
+      let n = buf[1] & 127, at = 2;
+      if (n === 126) { if (buf.length < 4) return; n = buf.readUInt16BE(2); at = 4; }
+      else if (n === 127) { if (buf.length < 10) return; n = Number(buf.readBigUInt64BE(2)); at = 10; }
+      if (buf.length < at + 4 + n) return;
+      const op = buf[0] & 15, mask = buf.subarray(at, at + 4), data = Buffer.from(buf.subarray(at + 4, at + 4 + n));
+      for (let i = 0; i < n; i++) data[i] ^= mask[i & 3];
+      buf = buf.subarray(at + 4 + n);
+      if (op === 8) return stop();
+      if (op === 2 || op === 0) fromApp(data);
+    }
+  });
 }

@@ -72,7 +72,8 @@ targets:
         CFBundleDisplayName: Chumby
         CFBundleURLTypes: [{ CFBundleURLName: chumbyapp, CFBundleURLSchemes: [chumbyapp] }]
         CADisableMinimumFrameDurationOnPhone: true
-        UILaunchScreen: { UIColorName: LaunchColor }
+        # The sea and the wordmark from the first frame, the wordmark pinned where Home draws it (ChumbyLaunch.storyboard).
+        UILaunchStoryboardName: ChumbyLaunch
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSCalendarsFullAccessUsageDescription: Chumby sets your alarms from what's on your calendar. Nothing leaves your phone but the alarm times and titles sent to your Chumby.
         UIBackgroundModes: [fetch]

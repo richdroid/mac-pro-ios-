@@ -20,6 +20,9 @@ struct ChumbyApp: App {
                     // Calendar alarms follow the calendar from the start, not only once the Alarms tab has been opened.
                     if CalendarWake.shared.rules.enabled { CalendarWake.shared.startWatching() }
                     CalendarWake.shared.syncIfDue()
+                    // "Woke up to" covers, from the kept list and then the fresh one, long before Alarms is opened.
+                    SongArt.shared.prefetch(model.songs, model.state.alarms)
+                    Task { await model.loadSongs(); SongArt.shared.prefetch(model.songs, model.state.alarms) }
                     TabTour.run([0, 1, 2, 3, 4]) { model.tab = $0 }
                 }
                 .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
@@ -200,7 +203,7 @@ struct RootView: View {
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
             // Add alarm, in the side column under the clock, where the system would put a bar button on the Duo. On a page
-            // pushed inside Alarms, Back takes the same slot alone. It sits out here, over the tabs, so it never slides with the page.
+            // inside Alarms, Back takes the same slot alone. It sits out here, over the tabs, so it never slides with the page.
             .overlay {
                 if model.tab == 2 && model.railWidth >= 44 {
                     ZStack {
@@ -359,22 +362,38 @@ struct LiveOctopus: View {
     }
 }
 // Snoozing: a ring of water round the octopus that drains as the snooze runs out.
+// Always there, faded and grown in by `shown`, which HomeTab moves in the same spring as the device's drop, so the ring
+// never pops in on one frame. While it fades out it keeps the water level it had.
 struct SnoozeRing: View {
     @EnvironmentObject var model: ChumbyModel
+    var shown: CGFloat
+    @State private var kept: Double = 1
+    func left(_ now: Date) -> Double {
+        guard let r = model.sys.ringing, r.snoozed, !model.unreachable else { return kept }
+        return model.snoozeEnds.map { end in
+            let total = Double(model.state.alarms.first { $0.name == r.name }?.snooze ?? "") ?? 9
+            return min(max(end.timeIntervalSince(now) / (total * 60), 0), 1)
+        } ?? 1
+    }
     var body: some View {
-        if let r = model.sys.ringing, r.snoozed, !model.unreachable {
-            TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                let left: Double = model.snoozeEnds.map { end in
-                    let total = Double(model.state.alarms.first { $0.name == r.name }?.snooze ?? "") ?? 9
-                    return min(max(end.timeIntervalSince(ctx.date) / (total * 60), 0), 1)
-                } ?? 1
-                ZStack {
-                    Circle().stroke(ChumbyPalette.hex(0x79bbff).opacity(0.18), lineWidth: 5)
-                    Circle().trim(from: 0, to: left).stroke(ChumbyPalette.hex(0x79bbff).opacity(0.75), style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                }
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let l = left(ctx.date)
+            ZStack {
+                Circle().stroke(ChumbyPalette.hex(0x79bbff).opacity(0.18), lineWidth: 5)
+                Circle().trim(from: 0, to: l).stroke(ChumbyPalette.hex(0x79bbff).opacity(0.75), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
             }
-            .allowsHitTesting(false)
+        }
+        .scaleEffect(0.85 + 0.15 * shown)
+        .opacity(shown)
+        .allowsHitTesting(false)
+        .accessibilityHidden(shown < 0.5)
+        // Noted each second while snoozed, so once stopped it fades out at the level it was showing.
+        .task(id: model.sys.ringing?.snoozed == true) {
+            while model.sys.ringing?.snoozed == true && !Task.isCancelled {
+                kept = left(Date())
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
         }
     }
 }
@@ -431,11 +450,15 @@ struct HomeTab: View {
     // The snooze ring stands this far above the octopus's top: its extra size, its 2 pt lift and half its 5 pt stroke.
     var ringRise: CGFloat { ringSize - octHeight + 2 + 2.5 }
     // Snoozed, the octopus and device drop just enough that the ring's top keeps the same 6 pt clear of the wordmark.
-    var snoozeRoom: CGFloat { snoozing ? max(0, ringRise + Self.clearance - restGap) : 0 }
+    // Moved by `snoozeK` in the ring spring (see onChange below), so the drop and the ring's arrival are one movement.
+    @State private var snoozeK: CGFloat = 0
+    var snoozeRoom: CGFloat { max(0, ringRise + Self.clearance - restGap) * snoozeK }
     // From the octopus's top up to the wordmark's foot.
     var wordGap: CGFloat { restGap + snoozeRoom }
-    // How high a bubble may rise, from the octopus's centre: faded out by the wordmark's top, passing behind its letters.
-    var bubbleCeiling: CGFloat { -(octHeight / 2 + wordGap + Self.wordHeight) }
+    // How high a bubble may rise, from the octopus's centre: fully gone 8 pt below the wordmark's foot (the y's tail
+    // included), so none ever crosses a letter.
+    static let bubbleAir: CGFloat = 8
+    var bubbleCeiling: CGFloat { -(octHeight / 2 + wordGap - Self.bubbleAir) }
     // A box the octopus's size, where he rests, for hanging things off his centre.
     func atOctopus<V: View>(@ViewBuilder _ content: () -> V) -> some View {
         Color.clear.frame(width: 92 * k, height: octHeight).overlay { content() }.offset(y: -octLift)
@@ -451,14 +474,14 @@ struct HomeTab: View {
                 }
             }
             // Layers, back to front: octopus, bubbles, wordmark, his speech bubble. The wordmark and octopus never share a
-            // point (see wordGap and headroom), so the order only decides that rising bubbles pass behind the letters.
+            // point (see wordGap and headroom), and bubbles are gone 8 pt below its foot (bubbleCeiling).
             .overlay(alignment: .top) {
                 ZStack {
                     LiveOctopus(squishedAt: squishedAt, scale: k, headroom: Self.headroom).frame(width: 92 * k)
                         // Hung off the octopus, so it never changes where he sits.
                         // Its foot level with the tips of his arms, so it stays above the device too.
                         .overlay {
-                            SnoozeRing().frame(width: ringSize, height: ringSize).offset(y: ringLift)
+                            SnoozeRing(shown: snoozeK).frame(width: ringSize, height: ringSize).offset(y: ringLift)
                                 .allowsHitTesting(false)
                         }
                         .contentShape(Rectangle())
@@ -488,7 +511,9 @@ struct HomeTab: View {
                 while ringing && !Task.isCancelled { puff(2); try? await Task.sleep(nanoseconds: 450_000_000) }
             }
             .onChange(of: model.unreachable) { _, gone in goneAt = gone ? Date() : nil }
+            .onChange(of: snoozing) { _, s in withAnimation(ChumbyModel.ringSpring) { snoozeK = s ? 1 : 0 } }
             .onAppear {
+                snoozeK = snoozing ? 1 : 0
                 if model.unreachable && goneAt == nil { goneAt = Date().addingTimeInterval(-5) }
                 if let p = model.homePoke, Date().timeIntervalSince(p) < 1.5 { poke() }
                 // For the build's film: the alarm rings, is snoozed, then stopped.
@@ -522,7 +547,7 @@ struct HomeTab: View {
                 ForEach(bubbles) { b in
                     let p = (ctx.date.timeIntervalSince(b.born) - b.delay) / 1.7
                     let y = 10 - 190 * p * p
-                    // Its top edge against the ceiling: gone over the last 14 pt, so none ever reaches the wordmark or the screen's edge.
+                    // Its top edge against the ceiling: gone over the last 14 pt, so none ever comes near the wordmark.
                     let room = (y - b.size * (1 + 0.3 * p) / 2 - ceiling) / 14
                     if p >= 0, p < 1, room > 0 {
                         Circle().fill(RadialGradient(colors: [.white.opacity(0.95), .white.opacity(0.14), ChumbyPalette.hex(0x79bbff).opacity(0.28)], center: UnitPoint(x: 0.32, y: 0.28), startRadius: 0, endRadius: b.size * 0.7))
@@ -535,6 +560,8 @@ struct HomeTab: View {
                 }
             }
         }
+        // Cut off at the ceiling too, so not even a bubble's soft edge gets above it.
+        .mask { Rectangle().frame(width: 2000, height: 2000).offset(y: 1000 + ceiling) }
         .allowsHitTesting(false)
     }
     var liveScreen: some View {
@@ -721,7 +748,7 @@ struct HomeTab: View {
                 }
             }
         }
-        .animation(ChumbyModel.ringSpring, value: model.sys.ringing)
+        .animation(ChumbyModel.ringChange(to: model.sys.ringing), value: model.sys.ringing)
     }
 }
 
@@ -866,6 +893,8 @@ struct ChannelsTab: View {
     @State private var page = 1
     @State private var more = false
     @State private var busy = false
+    @State private var justAdded: String?
+    @Environment(\.colorScheme) private var scheme
 
     var channels: [ChannelList.Channel] { model.channelData?.channels ?? [] }
     func title(_ c: ChannelList.Channel) -> String { c.list.first.flatMap { $0.count > 1 ? $0[1] : nil } ?? "Channel" }
@@ -874,6 +903,25 @@ struct ChannelsTab: View {
         for n in model.channelData?.names ?? [] where n.count > 1 { m[n[0]] = [n[0], n[1], "0"] }
         for c in channels { for l in c.list where l.first != "#" && l.count > 1 { m[l[0]] = l } }
         return m.values.sorted { $0[1].localizedCaseInsensitiveCompare($1[1]) == .orderedAscending }
+    }
+
+    // Every widget the Chumby knows by id that this channel doesn't hold, so it can be added in one tap.
+    var notHere: [[String]] { allWidgets.filter { w in !rows.contains { $0.id == w[0] } } }
+    // Joins the channel at the end, on, at the default time, and shows at once: the list scrolls to it and it glows a moment.
+    func add(id: String, name: String, own: Int, scroll: ScrollViewProxy) {
+        guard !rows.contains(where: { $0.id == id }) else { return }
+        withAnimation(.snappy) { rows.append(EditorRow(id: id, name: name, on: true, secs: 0, own: own)); justAdded = id }
+        changed()
+        Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            withAnimation(.snappy) { scroll.scrollTo(id, anchor: .center) }
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            if justAdded == id { withAnimation(.easeOut(duration: 0.6)) { justAdded = nil } }
+        }
+    }
+    func remove(_ id: String) {
+        withAnimation(.snappy) { rows.removeAll { $0.id == id } }
+        changed()
     }
 
     func pick() {
@@ -951,6 +999,13 @@ struct ChannelsTab: View {
         catalog += matches(#"/guide/([0-9A-F-]+)/widget">([^<]+)</a>"#, t).filter { seen.insert($0.0).inserted }
         more = t.contains("category?page=\(page + 1)")
     }
+    // Choosing what plays also selects it on the editing side. Changing `picked` runs pick(), which sends any waiting edit
+    // first. The reverse never happens: picking a channel to edit doesn't touch what plays.
+    func followPlaying(_ name: String) {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let c = channels.first(where: { title($0).trimmingCharacters(in: .whitespacesAndNewlines) == n }), c.id != picked else { return }
+        picked = c.id
+    }
     // From what was kept last time, so the editor is whole from the first frame.
     func startFromCache() {
         guard picked.isEmpty else { return }
@@ -960,11 +1015,12 @@ struct ChannelsTab: View {
     }
 
     var body: some View {
+        ScrollViewReader { scroll in
         TwoPane {
             PageTitle("Channels")
             ReachRow()
             Section("Now playing") {
-                Picker("Channel", selection: Binding(get: { model.state.channel }, set: { n in model.state.channel = n; model.cmd("channel", n, id: "nowPlaying") })) {
+                Picker("Channel", selection: Binding(get: { model.state.channel }, set: { n in model.state.channel = n; model.cmd("channel", n, id: "nowPlaying"); followPlaying(n) })) {
                     ForEach(model.state.channelNames, id: \.self) { Text($0).tag($0) }
                     if !model.state.channelNames.contains(model.state.channel) { Text(model.state.channel).tag(model.state.channel) }
                 }
@@ -982,7 +1038,7 @@ struct ChannelsTab: View {
                 .onChange(of: category) { _, _ in catalog = []; page = 1; Task { await loadCatalog() } }
                 if busy { ProgressView() }
                 ForEach(catalog.filter { c in !rows.contains { $0.id == c.0 } }, id: \.0) { c in
-                    Button(c.1) { rows.insert(EditorRow(id: c.0, name: c.1, on: true, secs: 0, own: 0), at: 0); changed() }
+                    Button(c.1) { add(id: c.0, name: c.1, own: 0, scroll: scroll) }
                 }
                 if more { Button("Load more") { page += 1; Task { await loadCatalog() } } }
                 if let f = model.failed("catalog") { FailNote(text: f) }
@@ -1017,14 +1073,13 @@ struct ChannelsTab: View {
                         Toggle("On", isOn: $w.on).labelsHidden().onChange(of: w.on) { _, _ in changed() }
                     }
                     .padding(.vertical, 4)
+                    .swipeActions(edge: .trailing) {
+                        Button("Remove", role: .destructive) { remove(w.id) }
+                    }
+                    .listRowBackground(GlassRow().overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
                 }
                 .onMove { rows.move(fromOffsets: $0, toOffset: $1); changed() }
                 .deleteDisabled(true)
-                Menu("Add a widget") {
-                    ForEach(allWidgets.filter { w in !rows.contains { $0.id == w[0] } }, id: \.self) { w in
-                        Button(w[1]) { rows.insert(EditorRow(id: w[0], name: w[1], on: true, secs: 0, own: w.count > 2 ? Int(w[2]) ?? 0 : 0), at: 0); changed() }
-                    }
-                }.foregroundStyle(.tint)
                 if let f = model.failed("chedit") { FailNote(text: f) }
             } header: {
                 // The channel being edited is the header itself, so there's one "Default" here, not two.
@@ -1044,14 +1099,35 @@ struct ChannelsTab: View {
                         .font(.body.weight(.semibold)).foregroundStyle(.tint)
                 }
                 .textCase(nil)
-                .onChange(of: picked) { _, _ in pick() }
             } footer: {
-                Text((model.state.shuffle == 1 ? "Shuffle is on, so your order won’t show until you turn it off. " : "") + "Tap Reorder, then drag a widget by its handle. New widgets go to the top.")
+                Text((model.state.shuffle == 1 ? "Shuffle is on, so your order won’t show until you turn it off. " : "") + "Tap Reorder, then drag a widget by its handle. Swipe one left to take it out.")
             }
+            if !picked.isEmpty && !notHere.isEmpty {
+                Section {
+                    ForEach(notHere, id: \.self) { w in
+                        HStack(spacing: 14) {
+                            Text(w[1]).font(.custom("Trebuchet MS", size: 17)).lineLimit(1)
+                            Spacer(minLength: 12)
+                            Button { add(id: w[0], name: w[1], own: w.count > 2 ? Int(w[2]) ?? 0 : 0, scroll: scroll) } label: {
+                                Image(systemName: "plus").font(.system(size: 16, weight: .bold)).frame(width: 30, height: 30)
+                            }
+                            .buttonStyle(.glass).buttonBorderShape(.circle)
+                            .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
+                            .accessibilityLabel("Add \(w[1]) to this channel")
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .deleteDisabled(true).moveDisabled(true)
+                } header: {
+                    Text("Not in this channel").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
+                }
+            }
+        }
         }
         .seaList()
         .dragToReorder(reordering)
         .onAppear(perform: startFromCache)
+        .onChange(of: picked) { _, _ in pick() }
         .task { await model.loadChannels(); if rows.isEmpty { startFromCache(); if rows.isEmpty { pick() } }; await loadCategories() }
         .onDisappear { flush() }
         .refreshable { flush(); edited = [:]; await model.loadChannels(); await model.loadState(); pick() }

@@ -50,9 +50,13 @@ struct Status: Decodable {
         var today: Spend?, week: Spend?, month: Spend?
         // The billing period, in ms: his credit renews on the 19th, not the 1st.
         var periodStart: Double?, renewsAt: Double?
-        enum K: String, CodingKey { case configured, error, at, today, week, month, periodStart, renewsAt }
+        // "estimate" when the Mac counted it from its own sessions, without an Admin key; nil for the Admin API's figures.
+        var source: String?
+        var estimated: Bool { source == "estimate" }
+        enum K: String, CodingKey { case configured, error, at, today, week, month, periodStart, renewsAt, source }
         init(from d: Decoder) throws {
             guard let c = try? d.container(keyedBy: K.self) else { return }
+            source = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? nil
             configured = (try? c.decodeIfPresent(Bool.self, forKey: .configured)) ?? false
             error = (try? c.decodeIfPresent(String.self, forKey: .error)) ?? nil
             at = (try? c.decodeIfPresent(Double.self, forKey: .at)) ?? nil
@@ -120,7 +124,9 @@ struct API {
 
     func clipboard() async throws -> String {
         struct Clip: Decodable { let text: String }
-        let (d, _) = try await session.data(for: request("/api/clipboard"))
+        var r = request("/api/clipboard"); r.timeoutInterval = 8
+        let (d, resp) = try await session.data(for: r)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
         return try JSONDecoder().decode(Clip.self, from: d).text
     }
     func setClipboard(_ text: String) async throws {

@@ -158,6 +158,9 @@ struct Page<C: View>: View {
         // and the large title can track it and fold away.
         NavigationStack(path: $path) {
             content()
+                // Again on the page itself, nearest its scroll views: on the stack alone, scrolled content was still
+                // cut hard at the top edge.
+                .topShade()
                 .environment(\.backToTop, top)
                 .navigationDestination(for: RowRoute.self) { $0.page }
                 .containerBackground(.clear, for: .navigation)

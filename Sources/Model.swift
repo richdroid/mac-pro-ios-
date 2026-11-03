@@ -196,6 +196,7 @@ final class AppModel: ObservableObject {
         case "api-none": s.apiUsage = Status.APIUsage(configured: false)
         case "api-refused": s.apiUsage = Status.APIUsage(configured: true, error: "Couldn’t read API usage: the Admin key was refused")
         case "api-live", "api-sheet": s.apiUsage = .sample
+        case "api-estimate": s.apiUsage = .estimateSample
         case "longlog": s.upgrade = Status.Upgrade.longSample
         default: break
         }

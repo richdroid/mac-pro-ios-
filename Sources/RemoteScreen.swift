@@ -27,7 +27,9 @@ final class FrameBuffer {
 final class RemoteScreen: ObservableObject {
     enum Phase: Equatable { case idle, connecting, reconnecting, connected, needsLogin, failed(String) }
     @Published var phase = Phase.idle
-    @Published var image: CGImage?
+    // Whether there's a picture to show. The pictures themselves never pass through SwiftUI: the screen's own layer
+    // takes the newest one on each display refresh (see ScreenLayer).
+    @Published private(set) var hasPicture = false
     @Published var size = CGSize.zero
     // Where the Mac's pointer should be, kept here so the picture can follow it.
     @Published var cursor = CGPoint.zero
@@ -35,13 +37,19 @@ final class RemoteScreen: ObservableObject {
     private var socket: URLSessionWebSocketTask?
     // Reading the stream and painting the picture happen off the main thread, so touches never wait on a frame.
     private var decoder: ScreenDecoder?
-    private var trailingPublish: Task<Void, Never>?
-    // Nothing is drawn while the screen is closed, so nothing is built either.
-    var paused = false { didSet { if !paused { publish() } } }
+    // The build's stand-in picture, when there's no Mac to connect to.
+    private var sample: CGImage?
+    // Nothing is drawn while the screen is closed: the layer that draws it is gone, and with it its display link.
+    var paused = false
     private var width = 0, height = 0
     private var buttons: UInt8 = 0
-    private var lastPublish = Date.distantPast
     private var running = false
+    // How many picture requests are kept in flight. One at a time waits a whole round trip for every picture, which over
+    // Tailscale caps it near 1 / RTT; a few ahead let the Mac send each change as soon as it happens. The build's
+    // measuring shot sets "screenPipeline" to 1 to film the old way beside the new.
+    static var pipeline: Int { let v = UserDefaults.standard.integer(forKey: "screenPipeline"); return v > 0 ? min(v, 8) : 4 }
+    // Pictures the Mac has sent on this connection, for the measuring overlay.
+    var updates: Int { decoder?.snapshot().1 ?? 0 }
     private var base: URL?
     private var wanted = false          // someone wants the screen, so a drop means reconnect
     private var attempts = 0
@@ -117,11 +125,11 @@ final class RemoteScreen: ObservableObject {
         let task = URLSession.shared.webSocketTask(with: request)
         task.maximumMessageSize = 32 << 20
         socket = task
-        let decoder = ScreenDecoder(socket: task)
+        let decoder = ScreenDecoder(socket: task, pipeline: Self.pipeline)
         self.decoder = decoder
-        running = true; phase = image == nil ? .connecting : .reconnecting
+        running = true; phase = hasPicture ? .reconnecting : .connecting
         task.resume()
-        Task { await receiveLoop(task, decoder: decoder) }
+        Task.detached(priority: .userInitiated) { [weak self] in await Self.receiveLoop(task, decoder: decoder, owner: self) }
     }
 
     func disconnect() {
@@ -131,31 +139,66 @@ final class RemoteScreen: ObservableObject {
         if phase != .needsLogin { phase = .idle }
     }
 
-    private func receiveLoop(_ task: URLSessionWebSocketTask, decoder: ScreenDecoder) async {
-        while running, socket === task {
+    // Reads and paints entirely off the main thread, one message at a time, in order. A new picture only bumps the
+    // decoder's count, which the display link picks up; the main thread hears only of a change of state.
+    nonisolated private static func receiveLoop(_ task: URLSessionWebSocketTask, decoder: ScreenDecoder, owner screen: RemoteScreen?) async {
+        weak var owner = screen
+        var told = false
+        while true {
+            let data: Data
             do {
-                let data: Data
                 switch try await task.receive() {
                 case .data(let d): data = d
                 case .string(let s): data = Data(s.utf8)
                 @unknown default: continue
                 }
-                // One message at a time, in order, on a background thread; only what changed comes back here.
-                let events = await Task.detached(priority: .userInitiated) { decoder.feed(data) }.value
-                guard running, socket === task else { return }
-                for e in events { apply(e) }
             } catch {
-                guard running, socket === task else { return }
                 let code = (task.response as? HTTPURLResponse)?.statusCode ?? 0
-                running = false
-                socket = nil
-                if code == 409 { phase = .needsLogin; return }
-                // Dropped: try again quietly. Only say so if it keeps failing.
-                if attempts >= 8 && image == nil { phase = .failed("Can’t reach the Mac’s screen."); return }
-                scheduleRetry()
+                await owner?.dropped(task, code: code)
                 return
             }
+            let events = decoder.feed(data)
+            let state = events.filter { !$0.isDrawing }
+            let firstPicture = !told && events.contains { $0.isDrawing }
+            if !state.isEmpty || firstPicture {
+                if firstPicture { told = true }
+                guard let owner, await owner.handle(task, events: state, drew: told) else { return }
+            }
+            if decoder.stopped { return }
         }
+    }
+    // False once this socket is no longer the one wanted.
+    private func handle(_ task: URLSessionWebSocketTask, events: [ScreenEvent], drew: Bool) -> Bool {
+        guard running, socket === task else { return false }
+        for e in events { apply(e) }
+        if drew, !hasPicture { hasPicture = true }
+        return running && socket === task
+    }
+    private func dropped(_ task: URLSessionWebSocketTask, code: Int) {
+        guard running, socket === task else { return }
+        running = false
+        socket = nil
+        if code == 409 { phase = .needsLogin; return }
+        // Dropped: try again quietly. Only say so if it keeps failing.
+        if attempts >= 8 && !hasPicture { phase = .failed("Can’t reach the Mac’s screen."); return }
+        scheduleRetry()
+    }
+
+    // The newest picture, if it's newer than the one on screen; asked on every display refresh. A new connection's
+    // picture only takes over once it has drawn something, so a reconnect never flashes black.
+    func newerPicture(than shown: inout ScreenLayerMark) -> CGImage? {
+        if let d = decoder {
+            let (frame, gen) = d.snapshot()
+            let id = ObjectIdentifier(d)
+            guard gen > 0, shown.source != id || shown.generation != gen, frame.width > 0, frame.height > 0, let provider = frame.provider() else { return nil }
+            shown = ScreenLayerMark(source: id, generation: gen)
+            return CGImage(width: frame.width, height: frame.height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: frame.width * 4,
+                           space: CGColorSpaceCreateDeviceRGB(),
+                           bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+                           provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        }
+        if let sample, shown.generation != -1 { shown = ScreenLayerMark(source: nil, generation: -1); return sample }
+        return nil
     }
 
     private func send(_ bytes: [UInt8]) {
@@ -176,32 +219,9 @@ final class RemoteScreen: ObservableObject {
         case .resized(let w, let h):
             width = w; height = h
             size = CGSize(width: w, height: h)
-        case .drew: publish()
+        case .drew: break
         case .failed(let message): phase = .failed(message); running = false
         }
-    }
-
-    private func publish() {
-        guard !paused, width > 0 else { return }
-        let since = Date().timeIntervalSince(lastPublish)
-        // Too soon: come back once, so the last change of a burst is never left undrawn.
-        guard since > 0.033 else {
-            if trailingPublish == nil {
-                trailingPublish = Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: UInt64((0.036 - since) * 1e9))
-                    self?.trailingPublish = nil
-                    self?.publish()
-                }
-            }
-            return
-        }
-        // The memory and its size together, from one moment, even if a resize or reconnect lands meanwhile.
-        guard let frame = decoder?.current, frame.width > 0, frame.height > 0, let provider = frame.provider() else { return }
-        lastPublish = Date()
-        image = CGImage(width: frame.width, height: frame.height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: frame.width * 4,
-                        space: CGColorSpaceCreateDeviceRGB(),
-                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
-                        provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 
     private func request(incremental: Bool) {
@@ -225,11 +245,17 @@ final class RemoteScreen: ObservableObject {
     }
     func hold(_ down: Bool) { pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: down ? 1 : 0) }
     func clickHere(right: Bool = false) { click(x: Int(cursor.x), y: Int(cursor.y), right: right) }
-    private func wheel(_ mask: UInt8) {
-        pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: mask); pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: 0)
+    // Wheel steps, as many as the fingers have earned, in one message. Positive is up (or left): the content comes
+    // down (or right). A held button stays held throughout, so scrolling mid-drag doesn't drop what's being dragged.
+    func scroll(lines: Int, columns: Int) {
+        let x = Int(cursor.x), y = Int(cursor.y)
+        func event(_ mask: UInt8) -> [UInt8] { [5, mask, UInt8((x >> 8) & 255), UInt8(x & 255), UInt8((y >> 8) & 255), UInt8(y & 255)] }
+        var bytes: [UInt8] = []
+        let up = lines > 0, left = columns > 0
+        for _ in 0..<min(abs(lines), 40) { bytes += event(buttons | (up ? 8 : 16)) + event(buttons) }
+        for _ in 0..<min(abs(columns), 40) { bytes += event(buttons | (left ? 32 : 64)) + event(buttons) }
+        if !bytes.isEmpty { send(bytes) }
     }
-    func scroll(up: Bool) { wheel(up ? 8 : 16) }
-    func scroll(left: Bool) { wheel(left ? 32 : 64) }
     func keyEvent(_ sym: UInt32, down: Bool) {
         send([4, down ? 1 : 0, 0, 0, UInt8((sym >> 24) & 255), UInt8((sym >> 16) & 255), UInt8((sym >> 8) & 255), UInt8(sym & 255)])
     }
@@ -249,10 +275,10 @@ final class RemoteScreen: ObservableObject {
         c.setFillColor(CGColor(red: 0.93, green: 0.93, blue: 0.95, alpha: 1)); c.fill(CGRect(x: 240, y: 200, width: 900, height: 620))
         c.setFillColor(CGColor(red: 0.78, green: 0.78, blue: 0.82, alpha: 1)); c.fill(CGRect(x: 240, y: 780, width: 900, height: 40))
         c.setFillColor(CGColor(red: 0.2, green: 0.2, blue: 0.24, alpha: 0.9)); c.fill(CGRect(x: 0, y: 1020, width: w, height: 30))
-        image = c.makeImage(); size = CGSize(width: w, height: h); cursor = CGPoint(x: 700, y: 500); phase = .connected
+        sample = c.makeImage(); hasPicture = true; size = CGSize(width: w, height: h); cursor = CGPoint(x: 700, y: 500); phase = .connected
     }
     // For the build's shot of the screen when the Mac isn't logged in.
-    func showNeedsLogin() { wanted = false; image = nil; phase = .needsLogin }
+    func showNeedsLogin() { wanted = false; sample = nil; hasPicture = false; phase = .needsLogin }
     func type(_ text: String) {
         for scalar in text.unicodeScalars { key(scalar.value < 256 ? scalar.value : 0x0100_0000 | scalar.value) }
     }
@@ -302,24 +328,32 @@ final class ZRLEInflater {
     }
 }
 
-enum ScreenEvent { case opened(Int, Int), resized(Int, Int), drew, failed(String) }
+enum ScreenEvent {
+    case opened(Int, Int), resized(Int, Int), drew, failed(String)
+    var isDrawing: Bool { if case .drew = self { return true }; return false }
+}
+// Which picture the layer is showing: the connection it came from and its number on that connection.
+struct ScreenLayerMark { var source: ObjectIdentifier?; var generation = 0 }
 
 // The Mac's side of the connection: reads the RFB stream, inflates ZRLE and paints the picture's memory. Only ever used
 // by one message at a time, in order, from the receive loop, and never from the main thread.
 final class ScreenDecoder: @unchecked Sendable {
     let socket: URLSessionWebSocketTask
+    private let pipeline: Int
     private(set) var frame = FrameBuffer(width: 0, height: 0) { didSet { lock.lock(); shared = frame; lock.unlock() } }
-    // What the main thread reads: only ever swapped whole, under the lock.
+    // What the main thread reads: the memory and how many pictures it has held, only ever swapped together, under the lock.
     private let lock = NSLock()
     private var shared = FrameBuffer(width: 0, height: 0)
-    var current: FrameBuffer { lock.lock(); defer { lock.unlock() }; return shared }
+    private var generation = 0
+    func snapshot() -> (FrameBuffer, Int) { lock.lock(); defer { lock.unlock() }; return (shared, generation) }
+    var stopped: Bool { stage == .stopped }
     private var buffer = Data()
     private var inflater = ZRLEInflater()
     private var width = 0, height = 0
     private enum Stage { case version, security, result, serverInit, messages, stopped }
     private var stage = Stage.version
     private var events: [ScreenEvent] = []
-    init(socket: URLSessionWebSocketTask) { self.socket = socket }
+    init(socket: URLSessionWebSocketTask, pipeline: Int = 4) { self.socket = socket; self.pipeline = max(1, pipeline) }
     func feed(_ data: Data) -> [ScreenEvent] {
         events = []
         guard stage != .stopped else { return [] }
@@ -367,7 +401,10 @@ final class ScreenDecoder: @unchecked Sendable {
                 // 32-bit little-endian BGRA. ZRLE first, moved areas next, raw as the fallback, and being told of a resize.
                 send([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0])
                 send([2, 0, 0, 4,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33])
+                // The whole picture first, then a few requests already waiting, so each change on the Mac is sent as
+                // it happens instead of a round trip after the last one arrived.
                 request(incremental: false)
+                for _ in 1..<pipeline { request(incremental: true) }
                 stage = .messages
                 events.append(.opened(width, height))
             case .messages:
@@ -409,6 +446,7 @@ final class ScreenDecoder: @unchecked Sendable {
             guard buffer.count >= at else { return false }
         }
         var read = 4
+        var resized = false
         for _ in 0..<count {
             let x = be16(buffer, read), y = be16(buffer, read + 2), w = be16(buffer, read + 4), h = be16(buffer, read + 6)
             let encoding = Int32(truncatingIfNeeded: be32(buffer, read + 8))
@@ -439,11 +477,14 @@ final class ScreenDecoder: @unchecked Sendable {
                 width = w; height = h
                 frame = FrameBuffer(width: width, height: height)
                 events.append(.resized(w, h))
+                resized = true
             }
         }
         buffer = Data(buffer.dropFirst(read))
+        lock.lock(); generation += 1; lock.unlock()
         events.append(.drew)
-        request(incremental: true)
+        // One answered, one more asked for, so the same number always wait. After a resize the whole new picture.
+        request(incremental: !resized)
         return true
     }
     private func copyRect(fromX: Int, fromY: Int, x: Int, y: Int, w: Int, h: Int) {
@@ -478,10 +519,18 @@ final class ScreenDecoder: @unchecked Sendable {
                 func put(_ i: Int, _ c: UInt32) { out[origin + (i / tw) * width + i % tw] = c }
                 switch kind {
                 case 0:
-                    for i in 0..<total { guard let c = pixel() else { return false }; put(i, c) }
+                    // Row by row, without a division per pixel: these are most of a picture that's moving.
+                    guard at + total * 3 <= end else { return false }
+                    for row in 0..<th {
+                        let line = out + origin + row * width
+                        for col in 0..<tw {
+                            line[col] = UInt32(data[at]) | UInt32(data[at + 1]) << 8 | UInt32(data[at + 2]) << 16 | 0xff00_0000
+                            at += 3
+                        }
+                    }
                 case 1:
                     guard let c = pixel() else { return false }
-                    for i in 0..<total { put(i, c) }
+                    for row in 0..<th { (out + origin + row * width).update(repeating: c, count: tw) }
                 case 2...16:
                     var palette = [UInt32](); palette.reserveCapacity(kind)
                     for _ in 0..<kind { guard let c = pixel() else { return false }; palette.append(c) }

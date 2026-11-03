@@ -231,19 +231,20 @@ struct HistoryView: View {
                 FoldSplit {
                     VStack(spacing: 14) { readout; chart.frame(maxHeight: .infinity) }.padding(20)
                 } right: {
-                    ScrollView { VStack(spacing: 14) { range; stats; processes; coverage }.padding(20) }.scrollEdgeEffectHidden(true, for: .top)
+                    ScrollView { VStack(spacing: 14) { range; stats; processes; coverage }.padding(20) }.scrollEdgeEffectHidden(true, for: .top).scrollsUnder()
                 }
             } else {
                 ScrollView {
                     VStack(spacing: 14) { readout; range; chart.frame(height: 260); stats; processes; coverage }.padding(.horizontal, 16).padding(.vertical, 8)
                 }
+                .scrollsUnder()
             }
         }
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
         .navigationTitle(metric.title)
         .navigationBarTitleDisplayMode(.inline)
-        .animation(.easeOut(duration: 0.25), value: hours)
+        .animation(.easeOut(duration: 0.2), value: hours)
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }
         .navigationDestination(item: $model.processes) { ProcessesView(first: $0) }
         .task {
@@ -288,13 +289,16 @@ struct DisplayHoldButton: View {
     var isOn: Bool { wanted ?? model.status?.displayOn ?? (model.status?.screen != "display off") }
     static let hold = 0.4, settle = 0.12
     var body: some View {
+        // Dimmed in its own colours while the Mac can't be reached: an opacity laid over it from outside didn't reach
+        // the glyph, which draws in its own layer for the symbol swap.
+        let dim = model.stale ? 0.5 : 1
         VStack(spacing: 6) {
             Image(systemName: isOn ? "sun.max.fill" : "moon.fill")
                 .font(.system(size: 20))
-                .foregroundStyle(isOn ? Color.black : Color.white)
+                .foregroundStyle((isOn ? Color.black : Color.white).opacity(isOn ? 1 : dim))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 52, height: 52)
-                .background(isOn ? Color.white : Color(white: 0.16), in: Circle())
+                .background((isOn ? Color.white : Color(white: 0.16)).opacity(dim), in: Circle())
                 .overlay {
                     Circle().trim(from: 0, to: fill)
                         .stroke(macBlue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
@@ -302,8 +306,8 @@ struct DisplayHoldButton: View {
                         .padding(-5)
                 }
                 .scaleEffect(pressing ? 1.12 : 1)
-                .animation(.spring(duration: 0.3, bounce: 0.4), value: pressing)
-                .animation(.easeOut(duration: 0.18), value: isOn)
+                .animation(.spring(duration: 0.24, bounce: 0.35), value: pressing)
+                .animation(.easeOut(duration: 0.14), value: isOn)
                 .keyframeAnimator(initialValue: 0.0, trigger: wiggles) { v, x in v.offset(x: x) } keyframes: { _ in
                     KeyframeTrack {
                         LinearKeyframe(-4, duration: 0.05)
@@ -312,7 +316,7 @@ struct DisplayHoldButton: View {
                         LinearKeyframe(0, duration: 0.06)
                     }
                 }
-            Text(hint ? "Hold" : "Display").font(.caption2).foregroundStyle(hint ? macBlue : .secondary).lineLimit(1).minimumScaleFactor(0.8)
+            Text(hint ? "Hold" : "Display").font(.caption2).foregroundStyle(hint ? AnyShapeStyle(macBlue) : AnyShapeStyle(.secondary.opacity(dim))).lineLimit(1).minimumScaleFactor(0.8)
                 .contentTransition(.opacity)
             if let failure {
                 Text(failure).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal: false, vertical: true)
@@ -322,8 +326,8 @@ struct DisplayHoldButton: View {
         .contentShape(Rectangle())
         .onTapGesture {
             wiggles += 1
-            withAnimation(.easeOut(duration: 0.15)) { hint = true }
-            Task { try? await Task.sleep(nanoseconds: 1_200_000_000); withAnimation(.easeOut(duration: 0.2)) { hint = false } }
+            withAnimation(Motion.fade) { hint = true }
+            Task { try? await Task.sleep(nanoseconds: 1_200_000_000); withAnimation(Motion.fade) { hint = false } }
         }
         .onLongPressGesture(minimumDuration: Self.hold, maximumDistance: 12, perform: toggle, onPressingChanged: { p in
             // Only a finger that stays: one passing through on a scroll shouldn't make it react.
@@ -338,7 +342,7 @@ struct DisplayHoldButton: View {
                 }
             } else {
                 pressing = false
-                if wanted == nil { withAnimation(.easeOut(duration: 0.15)) { fill = 0 } }
+                if wanted == nil { withAnimation(.easeOut(duration: 0.12)) { fill = 0 } }
             }
         })
         // Nothing to switch while the Mac can't be reached.
@@ -366,14 +370,14 @@ struct DisplayHoldButton: View {
         Task {
             // The ring lets go once it has clicked.
             try? await Task.sleep(nanoseconds: 250_000_000)
-            withAnimation(.easeOut(duration: 0.3)) { fill = 0 }
+            withAnimation(.easeOut(duration: 0.22)) { fill = 0 }
         }
         Task {
             if let problem = await model.run(next ? "display-on" : "display-off") {
                 wanted = nil
-                withAnimation { failure = problem }
+                withAnimation(Motion.quick) { failure = problem }
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
-                if failure == problem { withAnimation { failure = nil } }
+                if failure == problem { withAnimation(Motion.quick) { failure = nil } }
                 return
             }
             // The Mac takes a moment to change and to report it.

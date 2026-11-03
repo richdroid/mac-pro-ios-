@@ -6,6 +6,7 @@ struct MacSettings: View {
     @AppStorage("accent") private var accent = "blue"
     @AppStorage("celsius") private var celsius = false
     @AppStorage("haptics") private var haptics = true
+    @AppStorage("naturalScroll") private var naturalScroll = true
     @AppStorage("liveEvery") private var liveEvery = 1.0
     @AppStorage("fullEvery") private var fullEvery = 10.0
     @AppStorage("apiBudget") private var apiBudget = 200.0
@@ -81,6 +82,7 @@ struct MacSettings: View {
                         Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("Usage").tag(3); Text("Updates").tag(4); Text("Control").tag(5)
                     }
                     Toggle("Haptics", isOn: $haptics)
+                    Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
                 } header: { Text("Behaviour") }
                 Section {
                     LabeledContent("Address", value: URL(string: model.address)?.host ?? "Not set")
@@ -88,6 +90,7 @@ struct MacSettings: View {
                 } header: { Text("Connection") }
                 Section { LabeledContent("Version", value: version) }
             }
+            .scrollsUnder()
             .task {
                 // The build's shots of the lower half, with the budget picker, and of its Custom alert.
                 let pose = UserDefaults.standard.string(forKey: "pose") ?? ""

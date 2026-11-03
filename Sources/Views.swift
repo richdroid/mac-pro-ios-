@@ -82,21 +82,32 @@ let groupedBackground = Color.gray.opacity(0.1)
 let cardRadius: CGFloat = 26
 let cardFill = Color(white: 0.11)
 
-// One top edge for every page, Settings included: no band or hairline from the system on any pane, and one black fade
-// across the whole width, under the side bar too, from the top of the display to just below the title. The title is in
-// the bar, which draws above it, so scrolled content passes under the title rather than through it.
+// One top edge for every page, Settings included: no band or hairline from the system on any pane. Instead, solid black
+// from the top of the display to the foot of the bar, large title or inline, so no scrolled content ever shows behind a
+// title glyph, then a 24 pt fade below it while something is scrolled under. The bar draws above all of it.
 struct TopEdge: ViewModifier {
+    // The scroll views on the page that have content under the bar; open, each pane reports its own.
+    @State private var under: Set<Int> = []
     func body(content: Content) -> some View {
         bar(content.scrollEdgeEffectHidden(true, for: .top))
-            .overlay(alignment: .top) {
-                VStack(spacing: 0) {
-                    // Grows up through the bar and the status bar to the top of the display.
-                    Color.black.frame(height: 1).ignoresSafeArea(edges: [.top, .horizontal])
-                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 14).ignoresSafeArea(edges: .horizontal)
+            .environment(\.topEdgeUnder) { id, on in
+                if on { under.insert(id) } else { under.remove(id) }
+            }
+            .overlay {
+                // Read where the bar ends whether the content's frame starts under the bar or below it.
+                GeometryReader { g in
+                    let y = g.frame(in: .global).minY, bar = y + g.safeAreaInsets.top
+                    let lead = g.safeAreaInsets.leading, width = g.size.width + lead + g.safeAreaInsets.trailing
+                    VStack(spacing: 0) {
+                        Color.black.frame(height: max(bar, 0))
+                        // Only while scrolled, so nothing at rest just under the bar is dimmed.
+                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 24).opacity(under.isEmpty ? 0 : 1)
+                    }
+                    .frame(width: width)
+                    .offset(x: -lead, y: -y)
+                    .animation(Motion.fade, value: under.isEmpty)
                 }
-                // The fade ends where the bar does, so nothing at rest under it is dimmed.
-                .offset(y: -15)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             }
@@ -109,14 +120,40 @@ struct TopEdge: ViewModifier {
         #endif
     }
 }
-extension View { func topEdge() -> some View { modifier(TopEdge()) } }
+private struct TopEdgeUnderKey: EnvironmentKey { static let defaultValue: (Int, Bool) -> Void = { _, _ in } }
+extension EnvironmentValues {
+    var topEdgeUnder: (Int, Bool) -> Void { get { self[TopEdgeUnderKey.self] } set { self[TopEdgeUnderKey.self] = newValue } }
+}
+// Put on each scroll view inside a top edge, so its fade shows only while that view has content under the bar.
+struct ScrollsUnder: ViewModifier {
+    @Environment(\.topEdgeUnder) private var report
+    let id: Int
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 1 } action: { _, on in report(id, on) }
+    }
+}
+extension View {
+    func topEdge() -> some View { modifier(TopEdge()) }
+    func scrollsUnder(_ id: Int = 0) -> some View { modifier(ScrollsUnder(id: id)) }
+}
+
+// One set of timings for the whole app: quick enough to feel instant, long enough to read as motion, and critically
+// damped or close to it, so nothing wobbles into place.
+enum Motion {
+    // Things appearing, notes, state swaps, zoom resets.
+    static let quick = Animation.spring(response: 0.24, dampingFraction: 0.86)
+    // A key or card giving under the finger.
+    static let press = Animation.spring(response: 0.18, dampingFraction: 0.72)
+    // Fades: the pointer, a value changing.
+    static let fade = Animation.easeOut(duration: 0.16)
+}
 
 // A card that gives under the finger, as system rows highlight.
 struct PressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+            .animation(Motion.press, value: configuration.isPressed)
     }
 }
 
@@ -236,6 +273,7 @@ struct Screen<Content: View>: View {
             // One top edge across the whole width: open, each pane would otherwise draw its own band, and only the one
             // that's scrolled shows it.
             .scrollEdgeEffectHidden(true, for: .top)
+            .scrollsUnder(side == .right ? 1 : 0)
             .refreshable { await model.refresh() }
             .contentMargins(.top, 4, for: .scrollContent)
             .task {
@@ -303,7 +341,7 @@ struct WebTile: View {
                 }
                 // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
                 Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
-                    .animation(.easeOut(duration: 0.25), value: value)
+                    .animation(.easeOut(duration: 0.2), value: value)
                 Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                 if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
@@ -409,8 +447,8 @@ struct HeroChips: View {
                     Circle().fill(Color.green).frame(width: 9, height: 9)
                         .keyframeAnimator(initialValue: 1.0, trigger: pulse.beats) { dot, k in dot.scaleEffect(k).opacity(2 - k) } keyframes: { _ in
                             KeyframeTrack {
-                                CubicKeyframe(1.45, duration: 0.18)
-                                CubicKeyframe(1.0, duration: 0.42)
+                                CubicKeyframe(1.45, duration: 0.15)
+                                CubicKeyframe(1.0, duration: 0.34)
                             }
                         }
                 }, "Live · \(route)")
@@ -454,8 +492,8 @@ struct QuickActions: View {
     var body: some View {
         HStack(alignment: .top, spacing: 4) {
             button("screen", "macwindow", "Screen") { model.screenOpen = true }
-            // Dimmed on its own like the other three: the row's dimming didn't reach its drawn glyph and label.
-            DisplayHoldButton().opacity(model.stale ? 0.5 : 1).disabled(model.stale)
+            // Dims itself, in its own colours, to match the other three.
+            DisplayHoldButton().disabled(model.stale)
             button("copy", "square.and.arrow.down", "Copy from Mac") {
                 fails["copy"] = nil
                 Task {
@@ -480,8 +518,8 @@ struct QuickActions: View {
                 }
             }
         }
-        .animation(.easeOut(duration: 0.2), value: fails)
-        .animation(.easeOut(duration: 0.2), value: done)
+        .animation(Motion.fade, value: fails)
+        .animation(Motion.fade, value: done)
         .sensoryFeedback(trigger: successes) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
         .task {
             // The build's shot of a success: the tick, held long enough to be photographed.
@@ -795,8 +833,8 @@ struct APIUsageSection: View {
     }
     // Before a key, or after Anthropic turned one down: the same dial, empty and dimmed, so the section keeps its shape,
     // and the whole of it opens the place to add the key.
-    func empty(_ centre: String, _ line: String, _ note: String?) -> some View {
-        Button { model.apiSetup = true } label: {
+    func empty(_ centre: String, _ line: String, _ note: String?, opensSetup: Bool = true) -> some View {
+        Button { if opensSetup { model.apiSetup = true } } label: {
             HStack(alignment: .center, spacing: 16) {
                 VStack(spacing: 6) {
                     ArcGauge(0, ticks: 36, length: 9, width: 2.6) {
@@ -816,6 +854,7 @@ struct APIUsageSection: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
+        .allowsHitTesting(opensSetup)
         .accessibilityLabel(line)
     }
     // A key Anthropic turned down needs adding again; anything else is just said.
@@ -833,7 +872,8 @@ struct APIUsageSection: View {
     var section: some View {
         Section {
             if let u = usage, !u.configured {
-                empty("Add key", "Add your Admin key", nil)
+                // A Mac that hasn't counted anything yet (an older dashboard): the dial's shape, waiting, not a chore.
+                empty("–", "Not counted yet", nil, opensSetup: false)
             } else if let u = usage, let e = u.error, Self.refused(e) {
                 empty("Add again", "Add your Admin key again", "Anthropic turned the last one down.")
             } else if let u = usage, let e = u.error, u.month == nil {
@@ -846,7 +886,14 @@ struct APIUsageSection: View {
                 block(.placeholder).redacted(reason: .placeholder)
             }
         } header: { Text("API usage") } footer: {
-            if let at = usage?.at, usage?.configured == true { Text("Updated \(Format.ago(ms: at))") }
+            if let u = usage, u.estimated || !u.configured {
+                // Counted from the Mac's own sessions on the key. The Admin key is only an offer, for exact figures.
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(u.at.map { "Counted on the Mac, updated \(Format.ago(ms: $0))" } ?? "Counted on the Mac")
+                    Button("For exact numbers, add an Admin key") { model.apiSetup = true }
+                        .buttonStyle(.plain).foregroundStyle(macBlue)
+                }
+            } else if let at = usage?.at, usage?.configured == true { Text("Updated \(Format.ago(ms: at))") }
         }
     }
 }
@@ -861,6 +908,12 @@ extension Status.APIUsage {
         let now = Date().timeIntervalSince1970 * 1000
         u.month = .init(cost: 41.2, tokens: 3_900_000); u.week = .init(cost: 9.8, tokens: 920_000); u.today = .init(cost: 1.6, tokens: 140_000)
         u.at = now - 180_000; u.renewsAt = now + 15.5 * 86_400_000; u.periodStart = now - 15 * 86_400_000
+        return u
+    }
+    // The same, counted on the Mac without an Admin key.
+    static var estimateSample: Status.APIUsage {
+        var u = sample
+        u.source = "estimate"; u.at = Date().timeIntervalSince1970 * 1000 - 40_000
         return u
     }
 }
@@ -901,7 +954,10 @@ struct APIKeySetup: View {
                 }
             }
         }
-        // Just the field and its note: a taller sheet sat short of the foot with one corner squared off.
+        // Just the field and its note: a taller sheet sat short of the foot with one corner squared off. Wide, the Duo
+        // presents it as a form sheet, which ignores detents, so it's sized to this height there instead.
+        .frame(idealHeight: 260)
+        .presentationSizing(.form.fitted(horizontal: false, vertical: true))
         .presentationDetents([.height(260)])
     }
 }
@@ -1108,16 +1164,16 @@ struct ControlTab: View {
         fails = [:]
         Task {
             guard let e = await work() else { return }
-            withAnimation { fails[key] = e }
+            withAnimation(Motion.quick) { fails[key] = e }
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            if fails[key] == e { withAnimation { fails[key] = nil } }
+            if fails[key] == e { withAnimation(Motion.quick) { fails[key] = nil } }
         }
     }
     @ViewBuilder func failLine(_ key: String) -> some View { if let f = fails[key] { FailText(f) } }
     // The build's shots of a failure under its button, and of the Forget password question.
     func pose() async {
         try? await Task.sleep(nanoseconds: 1_500_000_000)
-        if model.pose == "controlfail" { withAnimation { fails["forget"] = "The Mac didn’t answer. Check Tailscale and try again." } }
+        if model.pose == "controlfail" { withAnimation(Motion.quick) { fails["forget"] = "The Mac didn’t answer. Check Tailscale and try again." } }
         if model.pose == "forget" { confirmForget = true }
     }
     var locked: Bool { s.screen == "locked" }

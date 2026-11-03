@@ -159,43 +159,45 @@ struct DeviceTab: View {
         }
         .tvCard()
     }
+    // Asked for only while this tab is on screen.
+    func poll() async {
+        guard phase == .active else { return }
+        while !Task.isCancelled {
+            if let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 8), let i = try? JSONDecoder().decode(DeviceInfo.self, from: d) {
+                // The first answer just appears; only later changes ease, so the name never crossfades over a placeholder.
+                if store.info == nil { store.info = i } else { withAnimation(.easeOut(duration: 0.25)) { store.info = i } }
+                if store.failed { store.failed = false }
+            } else { store.failed = true }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+    }
+    // The scroll views are the body itself, with nothing wrapped round them, so the bar sees them and folds the title
+    // away as the page scrolls, as on Apps and Watch.
     var body: some View {
-        Group {
-            if panes {
-                FoldSplit {
-                    // A scrolling page like the other side, so the two sides sit under the bar the same way.
-                    ScrollView {
-                        hero.padding(20).containerRelativeFrame(.vertical, alignment: .center)
-                    }
-                    .backToTop(posed: false)
-                } right: {
-                    ScrollView {
-                        VStack(spacing: 18) { if let info { tiles(info); details(info) } else if !failed { waitingTiles } }.padding(20)
-                    }
-                    .backToTop()
-                }
-            } else {
+        if panes {
+            FoldSplit {
+                // A scrolling page like the other side, so the two sides sit under the bar the same way.
                 ScrollView {
-                    VStack(spacing: 18) {
-                        hero
-                        if let info { tiles(info); details(info) } else if !failed { waitingTiles }
-                    }
-                    .padding(.horizontal, 16).padding(.bottom, 16)
+                    hero.padding(20).containerRelativeFrame(.vertical, alignment: .center)
+                }
+                .backToTop(posed: false)
+            } right: {
+                ScrollView {
+                    VStack(spacing: 18) { if let info { tiles(info); details(info) } else if !failed { waitingTiles } }.padding(20)
+                        .task(id: phase) { await poll() }
                 }
                 .backToTop()
             }
-        }
-        .task(id: phase) {
-            // Asked for only while this tab is on screen.
-            guard phase == .active else { return }
-            while !Task.isCancelled {
-                if let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 8), let i = try? JSONDecoder().decode(DeviceInfo.self, from: d) {
-                    // The first answer just appears; only later changes ease, so the name never crossfades over a placeholder.
-                    if store.info == nil { store.info = i } else { withAnimation(.easeOut(duration: 0.25)) { store.info = i } }
-                    if store.failed { store.failed = false }
-                } else { store.failed = true }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+        } else {
+            ScrollView {
+                VStack(spacing: 18) {
+                    hero
+                    if let info { tiles(info); details(info) } else if !failed { waitingTiles }
+                }
+                .padding(.horizontal, 16).padding(.bottom, 16)
+                .task(id: phase) { await poll() }
             }
+            .backToTop()
         }
     }
 }

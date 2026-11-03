@@ -37,6 +37,8 @@ enum MacPrefs {
     static var accent: MacAccent { MacAccent(rawValue: d.string(forKey: "accent") ?? "") ?? .blue }
     static var celsius: Bool { d.bool(forKey: "celsius") }
     static var haptics: Bool { d.object(forKey: "haptics") as? Bool ?? true }
+    // Two fingers on the Mac's screen move the page with them, as on a Mac trackpad; off reverses it.
+    static var naturalScroll: Bool { d.object(forKey: "naturalScroll") as? Bool ?? true }
     static var liveEvery: Double { let v = d.double(forKey: "liveEvery"); return v > 0 ? v : 1 }
     static var fullEvery: Double { let v = d.double(forKey: "fullEvery"); return v > 0 ? v : 10 }
     // What the API may cost in a month, in dollars, for the Usage tab's dial.

@@ -635,7 +635,7 @@ struct FlickScreen: View {
         let height = MediaCard.height(width, source)
         let stand = centre.y + tv.height / 2 + 12
         let held = hand.maxY - height * 2 / 3
-        let top = hand == look ? max(held, stand + 110) : max(held, hand.minY + 12)
+        let top = hand == look ? max(held, stand + (wide ? 80 : 110)) : max(held, hand.minY + 12)
         return Stage(centre: centre, tv: tv, cardX: hand.midX, cardTop: top, cardWidth: width, floor: hand.maxY - 4, wide: wide)
     }
     // Last: nothing left to decide, just the TV and the card in your hand.
@@ -1114,23 +1114,26 @@ struct FlickScreen: View {
         model.keepMood(until: item.art)
         if let art = screenURL?.absoluteString { model.standIn(art) }
         if !model.mirrorLive { model.setMirror(true) }
-        withAnimation(.easeOut(duration: 0.2)) { controlsIn = false }
         // Under the screen, so the Remote is laid out, and its picture's place known, by the time the screen moves.
+        // No animation starts in this tick: laying the Remote out hitches the main thread, and swallowed the fades.
         model.remoteArrival = Date()
         model.tab = 0
-        Task { await model.load() }
         Task {
             var slot: CGRect?
             for _ in 0..<30 {
                 if let s = model.mirrorSlot, s.width > 20 { slot = s; break }
                 try? await Task.sleep(nanoseconds: 25_000_000)
             }
-            guard let s = slot else { leave(restoreMood: false); return }
+            guard let s = slot else { leave(restoreMood: false); Task { await model.load() }; return }
             remoteSlot = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
-            // The move and the Remote coming up through the backdrop start together, so there's never a lone screen on
-            // an empty backdrop.
+            // Two more frames, so the Remote's first layout is done before anything moves.
+            try? await Task.sleep(nanoseconds: 33_000_000)
+            // The fade, the move and the Remote coming up through the backdrop start together, so there's never a lone
+            // screen on an empty backdrop. The backdrop is gone quickly, before the keys arrive, so they never read grey
+            // through it.
+            withAnimation(.easeOut(duration: 0.2)) { controlsIn = false }
             withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { toRemote = true }
-            withAnimation(.easeInOut(duration: 0.45)) { arrived = false; barShown = false }
+            withAnimation(.easeOut(duration: 0.15)) { arrived = false; barShown = false }
             // The Remote's picture can still settle as its page lays out, so the move keeps aiming at where it is now.
             for _ in 0..<30 {
                 try? await Task.sleep(nanoseconds: 16_000_000)
@@ -1140,6 +1143,8 @@ struct FlickScreen: View {
             withAnimation(.easeOut(duration: 0.15)) { screenOut = true }
             try? await Task.sleep(nanoseconds: 160_000_000)
             model.closeFlick()
+            // Only once the move is over, so its fetch and redraw can't hitch it.
+            await model.load()
         }
     }
 

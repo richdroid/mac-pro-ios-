@@ -103,15 +103,15 @@ struct SessionTerminal: View {
         queue = Task {
             await before?.value
             do { show(try await model.api.termSend(key, body)) }
-            catch { withAnimation { note = error.localizedDescription } }
+            catch { withAnimation(Motion.quick) { note = error.localizedDescription } }
         }
     }
     func start() {
         guard let k = session.key else { return }
         starting = true
         Task {
-            do { if !(try await model.api.restartSession(k)) { withAnimation { note = "It will start when the Mac can reach Claude." } } }
-            catch { withAnimation { note = error.localizedDescription } }
+            do { if !(try await model.api.restartSession(k)) { withAnimation(Motion.quick) { note = "It will start when the Mac can reach Claude." } } }
+            catch { withAnimation(Motion.quick) { note = error.localizedDescription } }
             starting = false
             await load()
         }
@@ -153,11 +153,11 @@ struct SessionTerminal: View {
                         .glassEffect(.regular.tint(.red.opacity(0.35)), in: Capsule())
                         .padding(.bottom, 10).padding(.horizontal, 12)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .task(id: note) { try? await Task.sleep(nanoseconds: 3_000_000_000); withAnimation { self.note = nil } }
+                        .task(id: note) { try? await Task.sleep(nanoseconds: 3_000_000_000); withAnimation(Motion.quick) { self.note = nil } }
                 }
             }
             // Only new lines glide; the first text is laid out at the foot by the anchor alone.
-            .onChange(of: text) { old, _ in if following, !old.isEmpty { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("end", anchor: .bottom) } } }
+            .onChange(of: text) { old, _ in if following, !old.isEmpty { withAnimation(Motion.fade) { proxy.scrollTo("end", anchor: .bottom) } } }
         }
     }
     // The menu's own choices, big enough to hit without reading the screen. A tap types the number, which picks it.
@@ -184,8 +184,8 @@ struct SessionTerminal: View {
     }
     func keyButton(_ k: String, _ label: String, _ name: String) -> some View {
         Button { send(["key": k]) } label: {
-            // One fixed size for every glyph: shrinking to fit drew ⇥ smaller than ⇧⇥ beside it.
-            Text(label).lineLimit(1).fixedSize().frame(maxWidth: .infinity)
+            // One fixed size for every glyph. The font's own ⇥ is drawn small, so Tab is the symbol, the size of ⇧ beside it.
+            (k == "tab" ? Text(Image(systemName: "arrow.right.to.line")) : Text(label)).lineLimit(1).fixedSize().frame(maxWidth: .infinity)
         }
         .font(.system(size: 15, weight: .semibold))
         .buttonStyle(.bordered)
@@ -247,8 +247,8 @@ struct SessionTerminal: View {
             composer
         }
         .padding(.horizontal, 12).padding(.bottom, 8)
-        .animation(.easeOut(duration: 0.2), value: options)
-        .animation(.easeOut(duration: 0.2), value: waiting)
+        .animation(Motion.fade, value: options)
+        .animation(Motion.fade, value: waiting)
         .background(Color.black.ignoresSafeArea())
         .navigationTitle(session.name)
         .navigationBarTitleDisplayMode(.inline)

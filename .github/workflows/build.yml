@@ -14,6 +14,8 @@ jobs:
         # The job can write to the repo and its release; no later step, or code it builds, gets the token from disk.
         with:
           persist-credentials: false
+      - name: Draw the Mac Pro launch glow
+        run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
       - name: Generate Xcode project
         run: |
           brew install xcodegen
@@ -90,8 +92,11 @@ jobs:
             # States checked in pixels: offline (nothing answers on 9009, so the cached numbers from the shots above show
             # under it), sign-in needed (9003 answers 401), the Updates log scrolled part way, a pink accent, API usage
             # unset, refused and live, its sheet, the screen when the Mac needs a login, and Status scrolled to the dials.
+            # Then the API dial counted on the Mac (no Admin key), the remote screen's first-use gesture card, its Copy
+            # done and Paste failed at their buttons, and its frame rate against the mock Screen Sharing (45 ms each way
+            # behind it, like Tailscale) asking one picture at a time (before) and four ahead (after), with the rate on screen.
             # These only add files; the shots above are unchanged.
-            for V in "offline 9009 -tab 0" "signin 9003 -tab 0" "longlog 9001 -tab 4 -pose longlog" "pink 9001 -tab 0 -accent pink" "pink-usage 9001 -tab 3 -accent pink" "api-none 9001 -tab 3 -pose api-none" "api-refused 9001 -tab 3 -pose api-refused" "api-live 9001 -tab 3 -pose api-live" "api-sheet 9001 -tab 3 -pose api-sheet" "screenlogin 9001 -tab 0 -pose screenlogin -openScreen YES" "scrolled 9001 -tab 0 -pose scrolled" "controlfail 9001 -tab 5 -pose controlfail" "forget 9001 -tab 5 -pose forget" "quickdone 9001 -tab 0 -pose quickdone" "settings-lower 9001 -tab 9 -pose settings-lower" "budget-custom 9001 -tab 9 -pose budget-custom"; do
+            for V in "api-estimate 9001 -tab 3 -pose api-estimate" "screenhint 9001 -tab 0 -pose screenhint -openScreen YES" "screenclip 9001 -tab 0 -pose screenclip -openScreen YES" "screenfps-before 9001 -tab 0 -pose screenfps -screenPipeline 1 -openScreen YES" "screenfps-after 9001 -tab 0 -pose screenfps -openScreen YES" "offline 9009 -tab 0""signin 9003 -tab 0" "longlog 9001 -tab 4 -pose longlog" "pink 9001 -tab 0 -accent pink" "pink-usage 9001 -tab 3 -accent pink" "api-none 9001 -tab 3 -pose api-none" "api-refused 9001 -tab 3 -pose api-refused" "api-live 9001 -tab 3 -pose api-live" "api-sheet 9001 -tab 3 -pose api-sheet" "screenlogin 9001 -tab 0 -pose screenlogin -openScreen YES" "scrolled 9001 -tab 0 -pose scrolled" "controlfail 9001 -tab 5 -pose controlfail" "forget 9001 -tab 5 -pose forget" "quickdone 9001 -tab 0 -pose quickdone" "settings-lower 9001 -tab 9 -pose settings-lower" "budget-custom 9001 -tab 9 -pose budget-custom"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$4 "${@:5}"
               sleep 8
@@ -174,6 +179,13 @@ jobs:
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-screen$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            # The screen's gesture card and clipboard buttons in this posture too.
+            for S in screenhint screenclip; do
+              xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose $S -openScreen YES
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/macpro-$S$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            done
             for P in "Chumby 1 9000" "TV 0 9002" "TV 1 9002" "MacPro 3 9001"; do
               read -r APP TAB PORT <<< "$P"
               xcrun simctl launch "$DEVICE" local.macpro.$APP -address http://127.0.0.1:$PORT -tab $TAB

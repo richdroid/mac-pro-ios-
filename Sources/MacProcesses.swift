@@ -77,6 +77,7 @@ struct ProcessesView: View {
         .contentMargins(.top, 4, for: .scrollContent)
         // The same top edge in both panes when open.
         .scrollEdgeEffectHidden(true, for: .top)
+        .scrollsUnder(by == .memory && !chooser ? 1 : 0)
         .refreshable { await load() }
     }
     @ViewBuilder func rowsBody(_ by: ProcessSort) -> some View {
