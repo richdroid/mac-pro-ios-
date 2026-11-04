@@ -50,6 +50,18 @@ enum AlarmChange {
     private static func add(_ a: Alarm, to s: inout ChumbyState) {
         if let free = s.alarms.firstIndex(where: { $0.isPlaceholder }) { s.alarms[free] = a } else { s.alarms.append(a) }
     }
+    // The alarms this change deletes, turns off or edits by the user's own hand, for AlarmWriter's safety net. Anything
+    // else lost in the same save (the Chumby's newest_wins, say) is only allowed when the editor showed it first (`alsoOff`).
+    func permit(in s: ChumbyState, alsoOff: Set<String> = []) -> SavePermit {
+        var p = SavePermit(userOff: alsoOff)
+        switch self {
+        case .toggle(let a, let on): if !on { p.userOff.insert(a.key) }
+        case .replace(let old, _), .delete(let old): p.userOff.insert(old.key)
+        case .nap, .cancelNap: for a in s.alarms where a.name == "Nap" && a.when == "once" { p.userOff.insert(a.key) }
+        case .add, .volume, .fade: break
+        }
+        return p
+    }
     // What a failure says at the control, in the words of what was tried.
     var failHead: String {
         switch self {
@@ -146,7 +158,8 @@ final class ChumbyModel: ObservableObject {
         needsAddress = api == nil
         // Open with what we last knew. The app is always faster than the device. (The first-run shot starts with nothing.)
         if Self.pose != "firstrun" {
-            if let d = try? Data(contentsOf: Self.cache("sys")), let v = try? JSONDecoder().decode(Sys.self, from: d) { sys = v; sysBytes = d }
+            // Never a ring from what was kept: only a fresh reading may say his alarm is going off.
+            if let d = try? Data(contentsOf: Self.cache("sys")), var v = try? JSONDecoder().decode(Sys.self, from: d) { v.ring = ""; sys = v }
             if let d = try? Data(contentsOf: Self.cache("state")), let v = try? JSONDecoder().decode(ChumbyState.self, from: d) { deviceState = v; state = v; stateBytes = d; stateKnown = true }
             if let d = try? Data(contentsOf: Self.cache("chlist")), let v = try? JSONDecoder().decode(ChannelList.self, from: d) { channelData = v; channelBytes = d }
             if let d = try? Data(contentsOf: Self.cache("shot")) { shot = PlatformImage(data: d) }
@@ -205,8 +218,11 @@ final class ChumbyModel: ObservableObject {
             // A frozen Chumby mostly shows up here, as an old copy from the Mac, rather than as an error.
             lastSeen = dead ? (await api.lastSeen() ?? lastSeen) : nil
             guard Date() >= sysHold, r.data != sysBytes else { return }
-            sysBytes = r.data
-            let s = try JSONDecoder().decode(Sys.self, from: r.data)
+            // An old copy from the Mac never starts, snoozes or ends a ring; it's read again until a fresh one says so.
+            let fresh = r.age <= 10
+            sysBytes = fresh ? r.data : Data()
+            var s = try JSONDecoder().decode(Sys.self, from: r.data)
+            if !fresh { s.ring = sys.ring }
             if s.ringing?.snoozed == true, sys.ringing?.snoozed != true { snoozedAt = sys.ringing == nil ? nil : Date() }
             if s.ringing == nil { snoozedAt = nil }
             if sys.up > s.up, busy != nil { busy = nil }     // back from its restart
@@ -338,6 +354,15 @@ final class ChumbyModel: ObservableObject {
             do { try await api?.cmd(c, v) } catch { fail(id, "The Chumby didn’t get that. \(AlarmWriter.explain(error))") }
         }
     }
+    // A channel chosen to play, from Home or Channels. Kept here, so the channel editor moves to it whichever screen it came
+    // from, even one opened later.
+    struct ChannelChoice: Equatable { let name: String; let at: Date }
+    @Published var chosenChannel: ChannelChoice?
+    func playChannel(_ name: String, id: String) {
+        state.channel = name
+        chosenChannel = ChannelChoice(name: name, at: Date())
+        cmd("channel", name, id: id)
+    }
     // Restarting and rebooting take minutes, so the device itself says so until it's back.
     func restart(_ reboot: Bool) {
         busy = (reboot ? "Rebooting… back in a few minutes" : "Restarting… back in about 2 minutes", Date().addingTimeInterval(reboot ? 300 : 180))
@@ -347,8 +372,10 @@ final class ChumbyModel: ObservableObject {
     // MARK: Ringing
     // The one spring every ring change uses, so Snooze and Stop never cut, the most-used moment of the morning.
     static let ringSpring = Animation.spring(duration: 0.35, bounce: 0.15)
-    // Stopped: the card is gone by opacity in its first 0.12 s, then what was under it moves up, so nothing slides over its words.
-    static let stopSpring = ringSpring.delay(0.1)
+    // Stopped: the card is gone by opacity in its first 0.12 s, and only then does what was under it move up (a frame later,
+    // for a slow one), so no control ever passes under its fading words.
+    static let stopFade = 0.12
+    static let stopSpring = ringSpring.delay(stopFade + 1.0 / 60)
     static func ringChange(to r: Sys.Ringing?) -> Animation { r == nil ? stopSpring : ringSpring }
     func ringOff() {
         #if canImport(UIKit)
@@ -400,7 +427,8 @@ final class ChumbyModel: ObservableObject {
         guard let p = pending.first(where: { $0.id == id }) else { return }
         do {
             guard let api else { throw ChumbyError.message("No Chumby address set.") }
-            let r = try await AlarmWriter.shared.edit(api) { p.change.apply(&$0) }
+            let change = p.change
+            let r = try await AlarmWriter.shared.edit(api, planned: { s in let permit = change.permit(in: s); change.apply(&s); return permit })
             pending.removeAll { $0.id == id }
             landed(r, mark: p.change.mark)
         } catch {
@@ -428,11 +456,12 @@ final class ChumbyModel: ObservableObject {
         }
         WidgetCenter.shared.reloadAllTimelines()
     }
-    // From the editor, which waits for it: nil once the Chumby has it, else why not.
-    func save(_ c: AlarmChange) async -> String? {
+    // From the editor, which waits for it: nil once the Chumby has it, else why not. `alsoOff`: the alarms the editor said
+    // saving turns off (keys), which the user saw before tapping Save.
+    func save(_ c: AlarmChange, alsoOff: Set<String> = []) async -> String? {
         guard let api else { return "No Chumby address set." }
         do {
-            let r = try await AlarmWriter.shared.edit(api) { c.apply(&$0) }
+            let r = try await AlarmWriter.shared.edit(api, planned: { s in let permit = c.permit(in: s, alsoOff: alsoOff); c.apply(&s); return permit })
             pending.removeAll { $0.change.mark == c.mark }
             landed(r, mark: c.mark)
             return nil

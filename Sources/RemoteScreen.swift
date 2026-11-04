@@ -188,9 +188,9 @@ final class RemoteScreen: ObservableObject {
     // picture only takes over once it has drawn something, so a reconnect never flashes black.
     func newerPicture(than shown: inout ScreenLayerMark) -> CGImage? {
         if let d = decoder {
-            let (frame, gen) = d.snapshot()
             let id = ObjectIdentifier(d)
-            guard gen > 0, shown.source != id || shown.generation != gen, frame.width > 0, frame.height > 0, let provider = frame.provider() else { return nil }
+            guard let (frame, gen) = d.next(after: shown.generation, fresh: shown.source != id),
+                  frame.width > 0, frame.height > 0, let provider = frame.provider() else { return nil }
             shown = ScreenLayerMark(source: id, generation: gen)
             return CGImage(width: frame.width, height: frame.height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: frame.width * 4,
                            space: CGColorSpaceCreateDeviceRGB(),
@@ -345,7 +345,29 @@ final class ScreenDecoder: @unchecked Sendable {
     private let lock = NSLock()
     private var shared = FrameBuffer(width: 0, height: 0)
     private var generation = 0
+    // Each finished picture, copied, waiting for a display refresh of its own. Pipelined answers often land two in one
+    // refresh, and showing only the newest lost one in five; a short queue shows them all, one per refresh.
+    private var ready: [(FrameBuffer, Int)] = []
+    private var latest: (FrameBuffer, Int)?
+    static let queued = 3
     func snapshot() -> (FrameBuffer, Int) { lock.lock(); defer { lock.unlock() }; return (shared, generation) }
+    // The oldest picture not yet shown, or, for a layer that has shown nothing of this connection yet, the newest.
+    func next(after shown: Int, fresh: Bool) -> (FrameBuffer, Int)? {
+        lock.lock(); defer { lock.unlock() }
+        if !ready.isEmpty { return ready.removeFirst() }
+        if let latest, fresh || latest.1 != shown { return latest }
+        return nil
+    }
+    private func finished() {
+        // Copied here, off the main thread, so the layer gets a picture nothing writes into while it's on screen.
+        let copy = FrameBuffer(width: frame.width, height: frame.height)
+        memcpy(copy.bytes, frame.bytes, frame.size)
+        lock.lock()
+        generation += 1
+        ready.append((copy, generation)); latest = (copy, generation)
+        if ready.count > Self.queued { ready.removeFirst(ready.count - Self.queued) }
+        lock.unlock()
+    }
     var stopped: Bool { stage == .stopped }
     private var buffer = Data()
     private var inflater = ZRLEInflater()
@@ -481,7 +503,7 @@ final class ScreenDecoder: @unchecked Sendable {
             }
         }
         buffer = Data(buffer.dropFirst(read))
-        lock.lock(); generation += 1; lock.unlock()
+        finished()
         events.append(.drew)
         // One answered, one more asked for, so the same number always wait. After a resize the whole new picture.
         request(incremental: !resized)

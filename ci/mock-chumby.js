@@ -69,7 +69,7 @@ const tvFilms = JSON.stringify({ signedIn: true,
   watchlist: ['Dirty Harry', 'Chinatown', 'Heat', 'Alien', 'Ran', 'Klute', 'Thief', 'Le Samourai'].map(t => film(t, { friends_count: '4', friends_rating_avg: '3.5' })),
   friends: ['Battle Heater', 'Paris, Texas', 'Ran', 'Vertigo', 'Stalker', 'Tampopo', 'Ikiru', 'Paris, Texas'].map(t => film(t, { friend_name: 'a friend', rating: '4.0' })) });
 const tvMint = JSON.stringify({ rows: ['Recently played', 'Made for you', 'New releases'].map(title => ({ title, items: ['Sample Album', 'Another Album', 'Third Album', 'Fourth Album'].map(t => ({ title: t, subtitle: 'Sample Artist', art: tvBase + '/art.png', id: 'https://music.apple.com/us/album/' + title + t, kind: 'album' })) })) });
-const tvStremio = JSON.stringify({ rows: ['Continue watching', 'Popular movies', 'Popular series'].map(title => ({ title, items: ['Heat', 'Alien', 'Chinatown', 'Thief'].map((t, n) => ({ title: t, subtitle: '1995 · ★ 8.3', art: tvBase + '/poster.png', id: (title === 'Popular series' ? 'tt123456' : 'tt765432') + n, kind: title === 'Popular series' ? 'series' : 'movie', progress: t === 'Alien' ? 0.4 : undefined, about: 'A sample description of the film.' })) })) });
+const tvStremio = JSON.stringify({ rows: ['Continue watching', 'Popular movies', 'Popular series'].map(title => ({ title, items: ['Heat', 'Alien', 'Chinatown', 'Thief'].map((t, n) => ({ title: t, subtitle: title === 'Continue watching' ? `Continue · ${85 - 11 * n}m left` : '1995 · ★ 8.3', art: tvBase + '/poster.png', id: (title === 'Popular series' ? 'tt123456' : 'tt765432') + n, kind: title === 'Popular series' ? 'series' : 'movie', progress: t === 'Alien' ? 0.4 : undefined, about: 'A sample description of the film.' })) })) });
 // A TV with a player open, for the shots of what the app shows then. Asked for by putting /stremio or /youtube in front
 // of the address, so every other shot gets the same answers as before.
 const tvScene = scene => {
@@ -139,6 +139,8 @@ function chumbyScene(q, s) {
         const qs = new URL(q.url, 'http://x').searchParams, f = new URLSearchParams(body);
         if (a === 'cmd' && qs.get('c') === 'ringsnooze') live.sys.ring = live.sys.ring.replace(/^r/, 's');
         if (a === 'cmd' && qs.get('c') === 'ringoff') live.sys.ring = '';
+        // A channel chosen in the app stays chosen, so Now playing doesn't snap back on the next reading.
+        if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
         if (a === 'save') {
           const keys = ['name', 'enabled', 'time', 'when', 'type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss', 'action', 'action_param', 'backup', 'backupDelay'];
           live.state.alarms = Array.from({ length: +f.get('n') || 0 }, (_, i) => Object.fromEntries(keys.map(k => [k, f.get(i + '_' + k) || ''])));
@@ -179,13 +181,17 @@ function chumbyScene(q, s) {
 //   /flickstream  A stream flick end to end: play-stream takes about 6 s and reports each step as a line of NDJSON, while
 //                 the status goes from the home screen to Stremio open, its player paused, then playing.
 //   /blankbanner  YouTube Music's banner as it once came from the Mac, white on white, to show the app's drawn one.
+//   /cold         Status as the real box first answers after a quiet spell: no CPU reading, nothing moving, no history.
 // And /api/tv/screen-live, a short canned H.264 stream of a drawn home screen, sent at 30 frames a second, looping.
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
+  if (scene === 'cold' && path === '/api/tv/device') {
+    return json({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 0, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 0, txRate: 0, hist: { cpu: [], mem: [], rx: [], tx: [] } });
+  }
   if (path === '/api/tv/icon') {
     const blank = __dirname + '/tv-icons-blank/' + query.get('pkg') + '.png';
     const file = scene === 'blankbanner' && fs.existsSync(blank) ? blank : __dirname + '/tv-icons/' + query.get('pkg') + '.png';

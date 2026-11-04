@@ -122,7 +122,8 @@ final class CalendarWake: ObservableObject {
         return names.first
     }
     nonisolated static func minutes(_ d: Date) -> String { String(Int(d.timeIntervalSince1970 / 60)) }
-    nonisolated static func alarmName(_ w: PlannedWake) -> String { prefix + String(w.title.prefix(30)) }
+    nonisolated static func alarmName(_ w: PlannedWake) -> String { alarmName(title: w.title) }
+    nonisolated static func alarmName(title: String) -> String { prefix + String(title.prefix(30)) }
     // Whether the Chumby really holds what the plan says, so the list never shows the phone's plan as if it were set.
     enum OnDevice { case set, missing, stillOn }
     func onDevice(_ item: PlannedWake, in s: ChumbyState) -> OnDevice {
@@ -154,16 +155,19 @@ final class CalendarWake: ObservableObject {
         retry?.cancel()
         allowed = EKEventStore.authorizationStatus(for: .event) == .fullAccess
         guard allowed else { return "Chumby can't see your calendar." }
-        refreshPlan()
+        // One reading of the calendar for both the plan and the check on what's already set, so they can't disagree.
+        let evs = events()
+        plan = WakePlanner.plan(evs, rules: rules)
         let wanted = rules.enabled ? plan.filter { !$0.skipped } : []
+        let keep = CalendarKeep(plan: plan, events: evs)
         let stored = storedSettings
         do {
             // The same careful save as everything else: read fresh, change only the calendar's alarms, never under a
             // ringing alarm. The first time, the settings chosen here become the Chumby's set for every calendar alarm after.
             let r = try await chumbyTry { api in
-                try await AlarmWriter.shared.edit(api, quiet: true, template: { s in s.calTpl == nil && stored != nil && s.alarms.contains { $0.isCalendar } }) { s in
-                    _ = s.applyCalendar(wanted, settings: s.calTpl ?? stored)
-                }
+                try await AlarmWriter.shared.edit(api, quiet: true, template: { s in s.calTpl == nil && stored != nil && s.alarms.contains { $0.isCalendar } }, planned: { s in
+                    s.applyCalendar(wanted, settings: s.calTpl ?? stored, keep: keep)
+                })
             }
             if r.saved { saved?(r.state) }
             lastSync = Date()
@@ -174,6 +178,10 @@ final class CalendarWake: ObservableObject {
             note = "Holding the update: \(why). Trying again in 30 seconds."
             tryAgain(after: 30)
             return "Waiting: \(why)."
+        } catch ChumbyError.refused(let why) {
+            // The safety net kept an alarm that's about to ring. Nothing was sent; the next calendar change or visit tries again.
+            note = why
+            return why
         } catch {
             let why = AlarmWriter.explain(error)
             note = "\(why) Trying again in a minute."
@@ -197,18 +205,65 @@ final class CalendarWake: ObservableObject {
     #endif
 }
 
+// What the calendar said when a sync began, so it can tell a calendar alarm whose event is really gone from one the plan has
+// merely stopped choosing. The plan picks the first thing each day and drops a day whose wake-up is already behind it, so
+// an earlier event turning up that day, a longer lead or a different first event all leave the plan without a wake the
+// Chumby still holds, sometimes minutes before it rings (11-04: the 14:40 shift wake, removed at 14:00).
+struct CalendarKeep {
+    var plan: [PlannedWake]            // every planned wake, skipped ones too
+    var events: [CalEvent]             // everything read, declined and canceled ones too
+    enum Verdict { case keep, userChose, gone }
+    // For a calendar alarm that's on, due within 24 h, which the plan no longer wants.
+    func verdict(_ a: Alarm, due: Date) -> Verdict {
+        // Its event: same title, starting after the alarm and no more than 18 hours after it (any lead there is).
+        func near(_ start: Date) -> Bool { start >= due && start.timeIntervalSince(due) <= 18 * 3600 }
+        if let item = plan.first(where: { CalendarWake.alarmName($0) == a.name && near($0.start) }) {
+            // Turned off for that day, or given that day's own lead, by hand: the user's call, and the new time replaces it.
+            if item.skipped || item.custom { return .userChose }
+            // Moved some other way (the event's time, a rule): the old time still rings, beside the new one.
+            return .keep
+        }
+        let matching = events.filter { CalendarWake.alarmName(title: $0.title) == a.name && near($0.start) }
+        if matching.contains(where: { !$0.declined && !$0.canceled }) { return .keep }
+        if !matching.isEmpty { return .gone }               // declined or canceled
+        // Nothing by that name: deleted, as long as the calendar was really read. An empty read (locked phone, no access
+        // yet) proves nothing, so the alarm stays.
+        return events.isEmpty ? .keep : .gone
+    }
+}
+
 extension ChumbyState {
-    // Puts the calendar's alarms in the list, sounding like your own. True if anything changed.
-    mutating func applyCalendar(_ wakes: [PlannedWake], settings: Alarm? = nil) -> Bool {
+    // Puts the calendar's alarms in the list, sounding like your own, and says what that may cost (see SavePermit).
+    // Only calendar alarms are touched. One that's on and due within 24 hours is never dropped just because the plan stopped
+    // choosing it; it goes only when its event is deleted, declined or canceled, or the user skipped or re-timed that day.
+    // Without `keep`, every such alarm stays.
+    mutating func applyCalendar(_ wakes: [PlannedWake], settings: Alarm? = nil, keep: CalendarKeep? = nil) -> SavePermit {
+        var permit = SavePermit(calendarOnly: true)
         let mine = alarms.filter { $0.isCalendar }
         let have = Set(mine.filter { $0.isOn }.map { $0.time + $0.name })
         let want = Set(wakes.map { CalendarWake.minutes($0.wake) + CalendarWake.alarmName($0) })
-        if have == want && mine.filter({ !$0.isOn }).isEmpty { return false }
+        if have == want && mine.filter({ !$0.isOn }).isEmpty { return permit }
+        // By the Chumby's clock, since that's the one it rings by.
+        let clock = chumbyNow ?? Date()
+        var held: [Alarm] = []
+        for a in mine where a.isOn && !want.contains(a.time + a.name) {
+            // Past, or more than a day off: the plan decides.
+            guard let due = a.nextFire(after: clock), due.timeIntervalSince(clock) <= 86400 else { continue }
+            switch keep?.verdict(a, due: due) ?? .keep {
+            case .keep: held.append(a)
+            case .userChose: permit.userOff.insert(a.key)
+            case .gone: permit.deliberate.insert(a.key)
+            }
+        }
         let others = alarms.filter { !$0.isCalendar }
         // The sound of your repeating alarm, or failing that any alarm with a real sound.
         let real = others.filter { !$0.isPlaceholder && !$0.isHelper }
         let sound = real.first { $0.isOn && $0.when != "once" } ?? real.first { $0.type == "audio" } ?? real.first
         alarms = others
+        // Kept exactly as the Chumby holds it.
+        for a in held {
+            if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
+        }
         for w in wakes {
             var a = sound ?? Alarm()
             if sound == nil, let tone = tones.first { a.type = "beep"; a.arg = tone; a.param_description = tone }
@@ -218,7 +273,7 @@ extension ChumbyState {
             if settings == nil { a.action = ""; a.action_param = ""; a.backup = "1" }
             if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
         }
-        return true
+        return permit
     }
 }
 
@@ -363,6 +418,8 @@ struct WordsGroup: View {
 // Back sits in the rail where + was (RootView), so the rail never moves. With the bars across it's pushed, with the system's Back.
 struct CalendarWakeSettings: View {
     @EnvironmentObject var model: ChumbyModel
+    // Pushed, it brings its own sea. Slid in inside Alarms it brings none, so the tab's sea never moves or changes.
+    var ownSea = true
     var rail: Bool { model.railWidth >= 44 }
     var body: some View {
         List {
@@ -370,7 +427,7 @@ struct CalendarWakeSettings: View {
             CalendarSettingsSections().listRowBackground(GlassRow())
         }
         .seaList()
-        .overSea()
+        .overSea(shown: ownSea)
         .toolbar(rail ? .hidden : .visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
         .navigationTitle("Calendar settings")
@@ -390,8 +447,10 @@ struct CalendarDaySheet: View {
     @State private var detent: PresentationDetent = .height(520)
     @State private var openedAt = Date()
     let key: String
-    // Set when it fills the open Duo's right pane instead of being a sheet.
+    // Set when it fills the open Duo's right pane, or the folded content column, instead of being a sheet.
     var close: (() -> Void)?
+    // Folded with the side column, Back in the rail closes it, so it has no Done of its own.
+    var done = true
     var item: PlannedWake? { wake.plan.first { $0.key == key } }
     var title: String { item.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
     @ViewBuilder var sections: some View {
@@ -439,7 +498,7 @@ struct CalendarDaySheet: View {
     var body: some View {
         if let close {
             Group {
-                PageTitle(title) { Button("Done") { close() }.fontWeight(.semibold).foregroundStyle(.tint) }
+                PageTitle(title) { if done { Button("Done") { close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
                 sections
             }
         } else {

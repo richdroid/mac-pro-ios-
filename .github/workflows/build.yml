@@ -16,6 +16,8 @@ jobs:
           persist-credentials: false
       - name: Draw the Mac Pro launch glow
         run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
       - name: Generate Xcode project
         run: |
           brew install xcodegen
@@ -96,7 +98,7 @@ jobs:
             # done and Paste failed at their buttons, and its frame rate against the mock Screen Sharing (45 ms each way
             # behind it, like Tailscale) asking one picture at a time (before) and four ahead (after), with the rate on screen.
             # These only add files; the shots above are unchanged.
-            for V in "api-estimate 9001 -tab 3 -pose api-estimate" "screenhint 9001 -tab 0 -pose screenhint -openScreen YES" "screenclip 9001 -tab 0 -pose screenclip -openScreen YES" "screenfps-before 9001 -tab 0 -pose screenfps -screenPipeline 1 -openScreen YES" "screenfps-after 9001 -tab 0 -pose screenfps -openScreen YES" "offline 9009 -tab 0""signin 9003 -tab 0" "longlog 9001 -tab 4 -pose longlog" "pink 9001 -tab 0 -accent pink" "pink-usage 9001 -tab 3 -accent pink" "api-none 9001 -tab 3 -pose api-none" "api-refused 9001 -tab 3 -pose api-refused" "api-live 9001 -tab 3 -pose api-live" "api-sheet 9001 -tab 3 -pose api-sheet" "screenlogin 9001 -tab 0 -pose screenlogin -openScreen YES" "scrolled 9001 -tab 0 -pose scrolled" "controlfail 9001 -tab 5 -pose controlfail" "forget 9001 -tab 5 -pose forget" "quickdone 9001 -tab 0 -pose quickdone" "settings-lower 9001 -tab 9 -pose settings-lower" "budget-custom 9001 -tab 9 -pose budget-custom"; do
+            for V in "api-estimate 9001 -tab 3 -pose api-estimate" "screenhint 9001 -tab 0 -pose screenhint -openScreen YES" "screenclip 9001 -tab 0 -pose screenclip -openScreen YES" "screenfps-before 9001 -tab 0 -pose screenfps -screenPipeline 1 -openScreen YES" "screenfps-after 9001 -tab 0 -pose screenfps -openScreen YES" "offline 9009 -tab 0" "signin 9003 -tab 0" "longlog 9001 -tab 4 -pose longlog" "pink 9001 -tab 0 -accent pink" "pink-usage 9001 -tab 3 -accent pink" "api-none 9001 -tab 3 -pose api-none" "api-refused 9001 -tab 3 -pose api-refused" "api-live 9001 -tab 3 -pose api-live" "api-sheet 9001 -tab 3 -pose api-sheet" "screenlogin 9001 -tab 0 -pose screenlogin -openScreen YES" "scrolled 9001 -tab 0 -pose scrolled" "controlfail 9001 -tab 5 -pose controlfail" "forget 9001 -tab 5 -pose forget" "quickdone 9001 -tab 0 -pose quickdone" "settings-lower 9001 -tab 9 -pose settings-lower" "budget-custom 9001 -tab 9 -pose budget-custom"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$4 "${@:5}"
               sleep 8
@@ -138,6 +140,9 @@ jobs:
             # The Mac Pro app's pushes and its screen cover, filmed at the display's own rate. From launch: Status to History at
             # 3 s, to Processes at 5 s, back at 7 and 8.5 s; Claude at 10 s, a session at 11 s, back at 13 s; the screen opens
             # at 15.5 s and closes at 18.5 s.
+            # The simulator keeps a snapshot of the last launch screen; without it, the film shows the storyboard drawn fresh.
+            MACDATA=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null)
+            [ -n "$MACDATA" ] && rm -rf "$MACDATA/Library/SplashBoard" "$MACDATA/Library/Caches/Snapshots"
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/macpro-transitions$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 5
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose transitions
@@ -202,7 +207,7 @@ jobs:
             for V in "ringing 0 ringing" "ringing-alarms 2 ringing" "snoozed 0 snoozed" "dead 0 dead" "dead-alarms 2 dead" \
                      "firstrun 2 slow -pose firstrun" "firstrun-home 0 slow -pose firstrun" "calsettings 2 - -pose calsettings" \
                      "calday 2 - -pose calday" "editor 2 - -pose editor" "template 2 - -pose template" "failure 2 fail -pose failure" \
-                     "editornew 2 - -pose editornew"; do
+                     "editornew 2 - -pose editornew" "chsync 1 live -pose chsync"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
@@ -234,7 +239,8 @@ jobs:
             # 10-minute nap started and cancelled. The mock's live scenes keep what's saved and flip what's ringing.
             if [ -z "$2" ]; then
               # alarmsdemo runs 20 s so the nap's countdown and its cancel stay on film after the scroll down to Quick nap.
-              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 20"; do
+              # chdemo: a channel chosen in Now playing moves the editor to it, then + adds a widget, which scrolls to it and glows.
+              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 20" "chdemo 1 live 12"; do
                 set -- "$1" "$2" $V
                 xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-$3.mp4 > /dev/null 2>&1 & REC=$!
                 sleep 5
@@ -263,6 +269,11 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/blankbanner -tab 1
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-blankbanner$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # Status as the real box first answers after a quiet spell, which the full sample history never showed.
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/cold -tab 5
+            sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-cold-status$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             tv_flick "$1" "$2"
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-toremote$2.mp4 > /dev/null 2>&1 & REC=$!

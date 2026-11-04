@@ -81,10 +81,16 @@ let groupedBackground = Color.gray.opacity(0.1)
 // One corner for every card the app draws itself, the same as the system's own list cards beside them.
 let cardRadius: CGFloat = 26
 let cardFill = Color(white: 0.11)
+// How far the quick actions on Status fade while the Mac can't be reached, applied to each colour, all four alike.
+let offlineDim = 0.25
+// A button that draws its label as it is, so a disabled one shows only the dimming its own colours give it.
+struct FlatStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { configuration.label.contentShape(Rectangle()) }
+}
 
-// One top edge for every page, Settings included: no band or hairline from the system on any pane. Instead, solid black
-// from the top of the display to the foot of the bar, large title or inline, so no scrolled content ever shows behind a
-// title glyph, then a 24 pt fade below it while something is scrolled under. The bar draws above all of it.
+// One top edge for every page, Settings included: no band or hairline from the system on any pane. Only while something
+// is scrolled under, solid black from the top of the display to the inline bar's foot, so no scrolled content shows behind
+// a title glyph, then a 24 pt fade. At rest nothing is drawn, so the portrait and first cards show whole.
 struct TopEdge: ViewModifier {
     // The scroll views on the page that have content under the bar; open, each pane reports its own.
     @State private var under: Set<Int> = []
@@ -96,21 +102,30 @@ struct TopEdge: ViewModifier {
             .overlay {
                 // Read where the bar ends whether the content's frame starts under the bar or below it.
                 GeometryReader { g in
-                    let y = g.frame(in: .global).minY, bar = y + g.safeAreaInsets.top
+                    // The safe area can still hold the large title's height; the black never reaches past an inline bar.
+                    let y = g.frame(in: .global).minY, bar = min(y + g.safeAreaInsets.top, TopEdge.statusBar + 44)
                     let lead = g.safeAreaInsets.leading, width = g.size.width + lead + g.safeAreaInsets.trailing
                     VStack(spacing: 0) {
                         Color.black.frame(height: max(bar, 0))
-                        // Only while scrolled, so nothing at rest just under the bar is dimmed.
-                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
-                            .frame(height: 24).opacity(under.isEmpty ? 0 : 1)
+                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 24)
                     }
                     .frame(width: width)
                     .offset(x: -lead, y: -y)
+                    .opacity(under.isEmpty ? 0 : 1)
                     .animation(Motion.fade, value: under.isEmpty)
                 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             }
+    }
+    // The window's own top inset: the status bar, without the navigation bar a view's safe area adds.
+    @MainActor static var statusBar: CGFloat {
+        #if os(iOS)
+        let w = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        return w?.safeAreaInsets.top ?? 59
+        #else
+        return 0
+        #endif
     }
     @ViewBuilder func bar<V: View>(_ v: V) -> some View {
         #if os(iOS)
@@ -200,7 +215,6 @@ struct RootView: View {
         .onChange(of: celsius) { _, _ in MacPrefs.shareWithWidgets() }
         .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
         .sheet(isPresented: $model.signInSheet) { SignInView().environmentObject(model) }
-        .sheet(isPresented: $model.apiSetup) { APIKeySetup().environmentObject(model) }
         // Up here, so unfolding doesn't close it and lose what's typed.
         .sheet(isPresented: $model.signingIn) {
             LoginSheet { u, p in
@@ -472,16 +486,17 @@ struct QuickActions: View {
         Task { try? await Task.sleep(nanoseconds: 4_000_000_000); if fails[id] == text { fails[id] = nil } }
     }
     func button(_ id: String, _ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
-        // They all need the Mac, so they wait, dimmed, while it can't be reached.
-        Button(action: action) { face(id, icon, title) }.buttonStyle(.plain)
-            .opacity(model.stale ? 0.5 : 1).disabled(model.stale)
+        // They all need the Mac, so they wait, dimmed, while it can't be reached. The dim is in the face's own colours,
+        // the same values Display uses, so the system's disabled dimming isn't stacked on top.
+        Button(action: action) { face(id, icon, title) }.buttonStyle(FlatStyle()).disabled(model.stale)
     }
     func face(_ id: String, _ icon: String, _ title: String) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: done.contains(id) ? "checkmark" : icon).font(.system(size: 20))
+        let dim = model.stale ? offlineDim : 1
+        return VStack(spacing: 6) {
+            Image(systemName: done.contains(id) ? "checkmark" : icon).font(.system(size: 20)).foregroundStyle(.white.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))
-                .frame(width: 52, height: 52).background(Color(white: 0.16), in: Circle())
-            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                .frame(width: 52, height: 52).background(Color(white: 0.16).opacity(dim), in: Circle())
+            Text(title).font(.caption2).foregroundStyle(.secondary.opacity(dim)).lineLimit(1).minimumScaleFactor(0.8)
             if let f = fails[id] {
                 Text(f).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                     .transition(.opacity)
@@ -834,7 +849,7 @@ struct APIUsageSection: View {
     // Before a key, or after Anthropic turned one down: the same dial, empty and dimmed, so the section keeps its shape,
     // and the whole of it opens the place to add the key.
     func empty(_ centre: String, _ line: String, _ note: String?, opensSetup: Bool = true) -> some View {
-        Button { if opensSetup { model.apiSetup = true } } label: {
+        Button { if opensSetup { withAnimation(Motion.quick) { model.apiSetup = true } } } label: {
             HStack(alignment: .center, spacing: 16) {
                 VStack(spacing: 6) {
                     ArcGauge(0, ticks: 36, length: 9, width: 2.6) {
@@ -885,12 +900,15 @@ struct APIUsageSection: View {
                 // Before the Mac's first answer this launch: the dial's shape, so nothing moves when the numbers come.
                 block(.placeholder).redacted(reason: .placeholder)
             }
+            if model.apiSetup { APIKeyRow().transition(.opacity) }
         } header: { Text("API usage") } footer: {
-            if let u = usage, u.estimated || !u.configured {
+            if model.apiSetup {
+                Text("Made in the Claude Console under an organization. It goes to the Mac’s keychain and isn’t kept on this phone.")
+            } else if let u = usage, u.estimated || !u.configured {
                 // Counted from the Mac's own sessions on the key. The Admin key is only an offer, for exact figures.
                 VStack(alignment: .leading, spacing: 6) {
                     Text(u.at.map { "Counted on the Mac, updated \(Format.ago(ms: $0))" } ?? "Counted on the Mac")
-                    Button("For exact numbers, add an Admin key") { model.apiSetup = true }
+                    Button("For exact numbers, add an Admin key") { withAnimation(Motion.quick) { model.apiSetup = true } }
                         .buttonStyle(.plain).foregroundStyle(macBlue)
                 }
             } else if let at = usage?.at, usage?.configured == true { Text("Updated \(Format.ago(ms: at))") }
@@ -917,13 +935,15 @@ extension Status.APIUsage {
         return u
     }
 }
-// Giving the Mac the Admin key that reads the API's costs. It goes straight to the Mac, sealed, and the phone forgets it.
-struct APIKeySetup: View {
+// Giving the Mac the Admin key that reads the API's costs, in one row of the Usage card: a sheet never sized itself to
+// the field on the Duo. It goes straight to the Mac, sealed, and the phone forgets it.
+struct APIKeyRow: View {
     @EnvironmentObject var model: AppModel
-    @Environment(\.dismiss) private var dismiss
     @State private var key = ""
     @State private var saving = false
     @State private var failure: String?
+    @FocusState private var focused: Bool
+    var blank: Bool { key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     func save() {
         let k = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !k.isEmpty, !saving else { return }
@@ -933,32 +953,21 @@ struct APIKeySetup: View {
             // The Mac checks it, keeps it in its keychain and reads the usage at once, or says in a line why not.
             let err = await model.runSealed("api-admin-key", secret: k)
             saving = false
-            if let err { failure = err } else { dismiss() }
+            if let err { failure = err } else { withAnimation(Motion.quick) { model.apiSetup = false } }
         }
     }
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    // Not a password to iOS, so it never offers to save it.
-                    SecureField("Admin key", text: $key).textContentType(.oneTimeCode).autocorrectionDisabled().submitLabel(.done).onSubmit(save)
-                    if let failure { FailText(failure) }
-                } footer: { Text("Made in the Claude Console under an organization. It goes to the Mac’s keychain and isn’t kept on this phone.") }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                // Not a password to iOS, so it never offers to save it.
+                SecureField("Admin key", text: $key).textContentType(.oneTimeCode).autocorrectionDisabled()
+                    .submitLabel(.done).onSubmit(save).focused($focused)
+                if saving { ProgressView().frame(minWidth: 56) }
+                else { Button("Save", action: save).buttonStyle(.borderedProminent).disabled(blank) }
             }
-            .navigationTitle("API usage")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { key = ""; dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    if saving { ProgressView() } else { Button("Save", action: save).disabled(key.trimmingCharacters(in: .whitespaces).isEmpty) }
-                }
-            }
+            if let failure { FailText(failure) }
         }
-        // Just the field and its note: a taller sheet sat short of the foot with one corner squared off. Wide, the Duo
-        // presents it as a form sheet, which ignores detents, so it's sized to this height there instead.
-        .frame(idealHeight: 260)
-        .presentationSizing(.form.fitted(horizontal: false, vertical: true))
-        .presentationDetents([.height(260)])
+        .onAppear { if model.pose.isEmpty { focused = true } }
     }
 }
 
@@ -1046,32 +1055,33 @@ struct UpgradeTab: View {
         }
         .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
     }
+    func header(_ t: String) -> some View { Text(t).font(.title3.weight(.semibold)).padding(.leading, 4) }
     // The same edges as the system's list cards on every other tab: 20 pt in from the leading side, out to the trailing
     // edge of the space, and in the right pane open, from its leading edge.
     var body: some View {
         switch side {
         case .all:
-            VStack(spacing: 12) {
+            // Only the log's lines scroll; the summary and the log's header stay put above them.
+            VStack(alignment: .leading, spacing: 12) {
                 summary
                 agent
-                UpdateLog(log: s.upgrade.log)
+                VStack(alignment: .leading, spacing: 8) { header("Log"); UpdateLog(log: s.upgrade.log) }
             }
             .padding(.leading, 20).padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
         case .left:
-            // A header of its own, like the log's beside it, so both panes' first cards start on one line.
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("This Mac").font(.title3.weight(.semibold)).padding(.leading, 4)
-                    VStack(spacing: 12) { summary; facts; agent }
-                }
-                .padding(.leading, 20)
+            // A header of its own, like the log's beside it, so both panes' first cards start on one line. It stays put
+            // while the cards under it scroll.
+            VStack(alignment: .leading, spacing: 8) {
+                header("This Mac")
+                ScrollView { VStack(spacing: 12) { summary; facts; agent } }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollEdgeEffectHidden(true, for: .top)
             }
-                .scrollBounceBehavior(.basedOnSize)
-                .scrollEdgeEffectHidden(true, for: .top)
+            .padding(.leading, 20)
         case .right:
             VStack(alignment: .leading, spacing: 8) {
-                Text("Log").font(.title3.weight(.semibold)).padding(.leading, 4)
+                header("Log")
                 UpdateLog(log: s.upgrade.log)
             }
             .padding(.bottom, 12)
@@ -1133,7 +1143,7 @@ extension Status.Upgrade {
         for i in 0..<160 {
             let t = String(format: "%02d:%02d:%02d", 1 + i / 60, i % 60, (i * 7) % 60)
             switch i % 23 {
-            case 5: lines.append("[\(t)] Download failed: the connection was reset. Trying again in 30 s.")
+            case 5: lines.append("[\(t)] Download failed: the connection was reset. Trying again in 30\u{00A0}s.")
             case 11: lines.append("[\(t)] Root patch step finished. Nothing to do.")
             default: lines.append("[\(t)] Checking softwareupdate catalogue, pass \(i + 1) of 160")
             }

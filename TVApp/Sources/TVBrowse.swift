@@ -88,7 +88,16 @@ final class BrowseStore: ObservableObject {
             failed = rows.isEmpty
             return
         }
-        rows = base == nil ? a.rows : Self.fold(a.rows); loadedFor = q; loadedAt = Date()
+        rows = base == nil ? a.rows : Self.fold(Self.once(a.rows)); loadedFor = q; loadedAt = Date()
+    }
+    // Each title once on the page, in the first row it comes in. Continue watching is his own, and takes no part.
+    static func once(_ rows: [MediaRow]) -> [MediaRow] {
+        var seen = Set<String>()
+        return rows.compactMap { r in
+            if r.title == "Continue watching" { return r }
+            let items = r.items.filter { seen.insert($0.stremioRef?.imdb ?? $0.id).inserted }
+            return items.isEmpty ? nil : MediaRow(title: r.title, items: items)
+        }
     }
     // A shelf of only a few is never shown on its own: its cards go to the front of the full row before it (else the
     // one after), with nothing twice. Continue watching is his own, however short.

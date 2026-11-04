@@ -132,6 +132,8 @@ struct RingingCard: View {
     // its words never change while it fades.
     struct Shown: Equatable { var ring: Sys.Ringing; var until: Date?; var away: Bool; var seen: Date? }
     @State private var frozen: Shown?
+    // Room for the wave and "Snooze" in the card's type, with the capsule's ends.
+    @ScaledMetric(relativeTo: .title3) private var snoozeMin: CGFloat = 136
     var live: Shown? { model.sys.ringing.map { Shown(ring: $0, until: model.snoozeEnds, away: model.unreachable, seen: model.seenAt) } }
     var shown: Shown? { live ?? frozen }
     var body: some View {
@@ -163,19 +165,23 @@ struct RingingCard: View {
                     .font(.custom("Trebuchet MS", size: 24).weight(.bold))
                     Text(name(s.ring)).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
                 }
-                // Snooze narrows to nothing inside its own frame, clipped there, while Stop widens into the room it leaves,
-                // so Stop never passes over its label.
+                // Snooze narrows to nothing while Stop widens into the room it leaves. Its glass is its own capsule, sized by
+                // the frame, so the glass narrows with it rather than vanishing; the word fades out before the frame reaches
+                // it. Never narrower than "Snooze" until it goes.
                 HStack(spacing: 0) {
                     Button { model.ringSnooze() } label: {
-                        Label("Snooze", systemImage: "water.waves").lineLimit(1).fixedSize()
+                        Label("Snooze", systemImage: "water.waves").labelStyle(.titleAndIcon).lineLimit(1).fixedSize()
+                            .opacity(snoozed ? 0 : 1)
+                            .animation(.easeOut(duration: 0.07), value: snoozed)
                             .frame(minWidth: 0, maxWidth: .infinity, minHeight: 56)
+                            .clipped()
+                            .contentShape(Capsule())
+                            .glassEffect(.regular.interactive(), in: Capsule())
                     }
-                    .buttonStyle(.glass)
-                    .frame(maxWidth: snoozed ? 0 : .infinity)
-                    .clipped()
-                    .opacity(snoozed ? 0 : 1)
+                    .buttonStyle(.plain)
+                    .frame(minWidth: snoozed ? 0 : snoozeMin, maxWidth: snoozed ? 0 : .infinity)
                     .padding(.trailing, snoozed ? 0 : 14)
-                    .disabled(snoozed).accessibilityHidden(snoozed)
+                    .allowsHitTesting(!snoozed).accessibilityHidden(snoozed)
                     Button { model.ringOff() } label: { Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity, minHeight: 56) }
                         .buttonStyle(.glassProminent).tint(ChumbyPalette.orange)
                 }
@@ -191,7 +197,7 @@ struct RingingCard: View {
 extension AnyTransition {
     // Stopped: the card is gone by opacity alone within 0.12 s, before the controls under it start up (ChumbyModel.stopSpring).
     static var ringCard: AnyTransition {
-        .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.95, anchor: .top)), removal: .opacity.animation(.easeOut(duration: 0.12)))
+        .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.95, anchor: .top)), removal: .opacity.animation(.easeOut(duration: ChumbyModel.stopFade)))
     }
 }
 
@@ -235,9 +241,11 @@ struct NapChips: View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             let left = max(due.timeIntervalSince(ctx.date), 0)
             let k = min(left / Double(total * 60), 1)
+            // Whole minutes left, rounded up, so it never reads as a time of day beside the clock.
+            let minutes = max(Int((left / 60).rounded(.up)), 1)
             HStack(spacing: 4) {
-                Text(String(format: "%d:%02d", Int(left) / 60, Int(left) % 60)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-                    .contentTransition(.numericText(countsDown: true)).animation(.snappy, value: Int(left))
+                Text("\(minutes) min left").monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+                    .contentTransition(.numericText(countsDown: true)).animation(.snappy, value: minutes)
                 Button { Task { await model.cancelNap() } } label: { Image(systemName: "xmark").font(.footnote.weight(.bold)) }
                     .buttonStyle(.borderless).foregroundStyle(.white).accessibilityLabel("Cancel nap")
             }
@@ -255,7 +263,7 @@ struct NapChips: View {
                 }
                 .clipShape(Capsule())
             }
-            .accessibilityLabel("Nap, \(Int(left) / 60) minutes left")
+            .accessibilityLabel("Nap, \(minutes) minutes left")
         }
     }
 }
@@ -434,8 +442,13 @@ struct AlarmsTab: View {
     }
     func show(_ p: Pane) { withAnimation(.snappy) { pane = p } }
     func edit(_ a: Alarm?) { if wide { show(.editor(a)) } else { editing = EditTarget(alarm: a) } }
-    func openDay(_ k: String) { if wide { show(.day(k)) } else { day = DayTarget(id: k) } }
-    func openSettings() { if wide { show(.settings) } else { model.alarmsPage = true } }
+    // With the side column, a day is a page in the content column like Calendar settings, so no sheet's corner sits under
+    // the rail's clock. With the bars across it's a sheet the height of what's in it.
+    func openDay(_ k: String) {
+        if wide { show(.day(k)) } else if rail { dayPage = k; model.alarmsPage = true } else { day = DayTarget(id: k) }
+    }
+    func openSettings() { if wide { show(.settings) } else { dayPage = nil; model.alarmsPage = true } }
+    @State private var dayPage: String?
     var plus: some View {
         Button { edit(nil) } label: { Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).frame(width: 30, height: 30) }
             .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Add alarm")
@@ -443,31 +456,44 @@ struct AlarmsTab: View {
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
     @State private var scrollTo: String?
-    // With the Duo's side column, Calendar settings is a page swapped in inside this tab, never a navigation push: a push
+    // With the Duo's side column, Calendar settings (or a calendar day) is a page swapped in inside this tab, never a push: a push
     // carried the rail off with the page. The list fades under it, kept as it was, so coming back finds it where it was left.
     var rail: Bool { model.railWidth >= 44 }
     var body: some View {
         let swapped = rail && model.alarmsPage
         ZStack {
+            // Never clipped or masked, so it stays drawn whole while it crossfades over the length of the slide.
             ScrollViewReader { proxy in
                 page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
             }
             .opacity(swapped ? 0 : 1)
+            .animation(.easeInOut(duration: Self.slide), value: swapped)
             .allowsHitTesting(!swapped).accessibilityHidden(swapped)
-            if swapped {
-                CalendarWakeSettings()
-                    // A swipe in from the left edge goes back, as it would from a pushed page.
-                    .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { g in
-                        if g.startLocation.x < 40 && g.translation.width > 80 && abs(g.translation.height) < g.translation.width { model.alarmsPage = false }
-                    })
-                    .transition(.move(edge: .trailing))
-                    .zIndex(1)
+            // Only the incoming page is cut, at the rail's edge, by a frame that stays put while the page moves inside it,
+            // so the pages still run under the top and bottom bars. It brings no sea of its own: the tab's stays as it is.
+            ZStack {
+                if swapped {
+                    Group {
+                        if let k = dayPage {
+                            List { CalendarDaySheet(key: k, close: { model.alarmsPage = false }, done: false).listRowBackground(GlassRow()) }
+                                .seaList()
+                        } else {
+                            CalendarWakeSettings(ownSea: false)
+                        }
+                    }
+                        // A swipe in from the left edge goes back, as it would from a pushed page.
+                        .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { g in
+                            if g.startLocation.x < 40 && g.translation.width > 80 && abs(g.translation.height) < g.translation.width { model.alarmsPage = false }
+                        })
+                        .transition(.move(edge: .trailing))
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipShape(TrailingEdge())
+            .animation(.snappy(duration: Self.slide), value: swapped)
         }
-        // Nothing slides under the rail: cut at the trailing edge only, so the pages still run under the top and bottom bars.
-        .clipShape(TrailingEdge())
-        .animation(.snappy(duration: 0.35), value: swapped)
     }
+    static let slide = 0.35
     var page: some View {
         TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
             // + lives in the side bar's column when there is one (RootView puts it there); only with the bars across is it here.
@@ -653,7 +679,7 @@ struct AlarmsTab: View {
                     .listRowBackground(pane == .settings ? AnyView(Color.accentColor.opacity(0.18)) : AnyView(GlassRow()))
                 } else {
                     // Opened through the model, so the rail knows to swap + for Back.
-                    Button { model.alarmsPage = true } label: {
+                    Button { openSettings() } label: {
                         HStack { Text("Settings"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -784,11 +810,12 @@ struct AlarmEditor: View {
         return original.map { .replace($0, a) } ?? .add(a)
     }
     // Rick's rule, worked out before Save: a new alarm, or one whose time or label changes, switches the others off.
-    var switchesOff: [String] {
+    var switchesOff: [String] { switchedOffAlarms.map { alarmLabel($0) } }
+    private var switchedOffAlarms: [Alarm] {
         guard loaded, let change else { return [] }
         var sending = model.deviceState
         change.apply(&sending)
-        return ChumbyState.switchedOff(saved: model.deviceState.alarms, sending: sending.alarms).map { alarmLabel(sending.alarms[$0]) }
+        return ChumbyState.switchedOff(saved: model.deviceState.alarms, sending: sending.alarms).map { sending.alarms[$0] }
     }
     static func list(_ names: [String]) -> String {
         names.count < 2 ? names.joined() : names.dropLast().joined(separator: ", ") + " and " + names.last!
@@ -945,8 +972,11 @@ struct AlarmEditor: View {
     }
     func run(_ c: AlarmChange) {
         saving = true; problem = nil
+        // What the note above Save said this turns off: shown before Save, so saving is the user's own say-so for those.
+        var shownOff = Set(switchedOffAlarms.map(\.key))
+        if case .delete = c { shownOff = [] }
         Task {
-            let why = await model.save(c)
+            let why = await model.save(c, alsoOff: shownOff)
             saving = false
             if let why { problem = why } else { finish() }
         }

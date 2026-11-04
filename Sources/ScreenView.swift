@@ -52,6 +52,8 @@ struct RemoteScreenView: View {
     @State private var copyState = ClipState.idle
     @State private var pasteState = ClipState.idle
     @State private var clipClear: [Bool: Task<Void, Never>] = [:]
+    // Checked without reading the clipboard, so no paste prompt appears just for opening the screen.
+    @State private var phoneHasText = true
     @AppStorage("screenGesturesSeen") private var gesturesSeen = false
     @State private var rate = (frames: 0, updates: 0)
 
@@ -74,12 +76,16 @@ struct RemoteScreenView: View {
             case "screen", "transitions", "screenhint": screen.showSample()
             case "screenclip":
                 screen.showSample()
-                copyState = .done; pasteState = .failed("Nothing to paste on this iPhone")
+                copyState = .done; pasteState = .failed("Couldn’t reach the Mac")
             case "screenlogin": screen.showNeedsLogin()
             default: screen.open(base: model.api.base)
             }
             keepAwake(true)
+            checkPhoneClipboard()
         }
+        #if canImport(UIKit)
+        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in checkPhoneClipboard() }
+        #endif
         .onDisappear {
             screen.close()
             keepAwake(false)
@@ -87,7 +93,7 @@ struct RemoteScreenView: View {
         }
         .onChange(of: scene) { _, p in
             if p == .background { screen.enteredBackground() }
-            if p == .active { screen.enteredForeground() }
+            if p == .active { screen.enteredForeground(); checkPhoneClipboard() }
         }
         .sheet(isPresented: $signingIn) {
             LoginSheet { u, p in
@@ -208,13 +214,17 @@ struct RemoteScreenView: View {
         switch state {
         case .done: icon = "checkmark"
         case .failed: icon = "exclamationmark"
-        default: icon = paste ? "doc.on.clipboard" : "doc.on.doc"
+        // The same glyphs as Copy from Mac and Send to Mac on Status, so the same action looks the same everywhere.
+        default: icon = paste ? "square.and.arrow.up" : "square.and.arrow.down"
         }
+        // Nothing on this iPhone's clipboard isn't a failure: Paste just sits dimmed until there is.
+        let empty = paste && !phoneHasText
         return railButton(icon, paste ? "Paste the iPhone’s clipboard on the Mac" : "Copy from the Mac to the iPhone",
                           tint: state == .done ? macBlue : .white) {
             if paste { pasteFromPhone() } else { copyToPhone() }
         }
-        .opacity(state == .working ? 0.45 : 1)
+        .disabled(empty)
+        .opacity(state == .working || empty ? 0.45 : 1)
         .contentTransition(.symbolEffect(.replace))
         .animation(Motion.quick, value: state)
         // Above the button, its right edge on the button's, so it grows leftwards and never runs off the display.
@@ -263,11 +273,16 @@ struct RemoteScreenView: View {
             setClip(false, .done)
         }
     }
+    func checkPhoneClipboard() {
+        #if canImport(UIKit)
+        phoneHasText = UIPasteboard.general.hasStrings || model.pose == "screenclip"
+        #endif
+    }
     // This iPhone's clipboard onto the Mac's, then ⌘V.
     func pasteFromPhone() {
         guard pasteState != .working else { return }
         #if canImport(UIKit)
-        guard UIPasteboard.general.hasStrings else { setClip(true, .failed("Nothing to paste on this iPhone")); return }
+        guard UIPasteboard.general.hasStrings else { phoneHasText = false; return }
         guard let text = UIPasteboard.general.string, !text.isEmpty else { setClip(true, .failed("Paste wasn’t allowed")); return }
         #else
         let text = ""
@@ -509,12 +524,10 @@ struct RemoteScreenView: View {
             ("arrow.left.arrow.right", "Two fingers in from an edge", "Back and forward"),
             ("square.grid.3x3", "Thumb and three fingers together", "Launchpad"),
             ("menubar.dock.rectangle", "Thumb and three fingers apart", "Show the desktop"),
-            ("plus.magnifyingglass", "Pinch, or double-tap with two", "Zoom"),
+            ("plus.magnifyingglass", "Pinch, or double-tap with two fingers", "Zoom"),
         ]
         let columns = canvasSize.width >= 600 ? 2 : 1
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Trackpad gestures").font(.headline).foregroundStyle(.white)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 18, alignment: .leading), count: columns), alignment: .leading, spacing: 8) {
+        let grid = LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 18, alignment: .leading), count: columns), alignment: .leading, spacing: 8) {
                 ForEach(rows.indices, id: \.self) { i in
                     let (icon, gesture, does) = rows[i]
                     HStack(spacing: 10) {
@@ -527,6 +540,13 @@ struct RemoteScreenView: View {
                     }
                 }
             }
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Trackpad gestures").font(.headline).foregroundStyle(.white)
+            // Folded, the half display is shorter than the list: the rows scroll and Got it stays at the card's foot.
+            ViewThatFits(in: .vertical) {
+                grid
+                ScrollView { grid }.scrollIndicators(.visible)
+            }
             Button {
                 withAnimation(Motion.quick) { gesturesSeen = true }
             } label: {
@@ -536,8 +556,11 @@ struct RemoteScreenView: View {
         }
         .padding(16)
         .frame(maxWidth: columns == 2 ? 620 : 340)
+        // A dark layer over the glass, so the picture behind only part of the card doesn't show as a patch of other blur.
+        .background(Color(white: 0.07).opacity(0.82), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         .padding(10)
+        .frame(maxHeight: max(canvasSize.height, 1))
         .transition(.opacity)
     }
 

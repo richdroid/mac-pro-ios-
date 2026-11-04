@@ -134,13 +134,28 @@ struct RootView: View {
     }
 }
 
-// The top of every page: the system's soft edge under the bar, the same in every scroll view, so whichever pane is
-// scrolled fades the same way and nothing hard-edged is drawn over just one of them. Nothing laid over the page, which
-// stopped at the side bar and kept the big title from folding away.
+// The top of every page. The system's soft edge drew a frosted block behind the clock over scrolled rows, so it's off,
+// and each scroll view fades its own top instead: the same fade edge to edge, side bar and panes alike.
 private struct TopShade: ViewModifier {
-    func body(content: Content) -> some View { content.scrollEdgeEffectStyle(.soft, for: .top) }
+    func body(content: Content) -> some View { content.scrollEdgeEffectHidden(true, for: .top) }
 }
-extension View { func topShade() -> some View { modifier(TopShade()) } }
+// The fade itself, from the very top of the display, so it reaches under the side bar and the clock too.
+private struct TopFade: ViewModifier {
+    func body(content: Content) -> some View {
+        content.mask {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom).frame(height: 24)
+                Color.black
+            }
+            .ignoresSafeArea()
+        }
+    }
+}
+extension View {
+    func topShade() -> some View { modifier(TopShade()) }
+    // On a page's own scroll view (or the group of them), never on a whole stack, whose bar would fade with it.
+    func topFade() -> some View { modifier(TopFade()) }
+}
 
 // Each tab's frame: the art behind it, its title, and the gear.
 struct Page<C: View>: View {
@@ -154,13 +169,10 @@ struct Page<C: View>: View {
     @State private var path = NavigationPath()
     @State private var top = 0
     var body: some View {
-        // The art and the soft edge sit on the stack, not the page, so the page's scroll view stays the stack's root
-        // and the large title can track it and fold away.
+        // The art and the edge setting sit on the stack, not the page, so the page's scroll view stays the stack's root
+        // and the large title can track it and fold away. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
-                // Again on the page itself, nearest its scroll views: on the stack alone, scrolled content was still
-                // cut hard at the top edge.
-                .topShade()
                 .environment(\.backToTop, top)
                 .navigationDestination(for: RowRoute.self) { $0.page }
                 .containerBackground(.clear, for: .navigation)
@@ -180,20 +192,17 @@ struct TVSettingsTab: View {
     @EnvironmentObject var model: TVModel
     @Environment(\.paneLayout) private var panes
     var retaps = 0
-    @State private var address = ""
     @State private var path: [ManagePage] = []
     @StateObject private var store = ManageStore()
     var manage: some View { TVManageSections() }
-    // How the app reaches the TV, and the launcher's own two jobs. The note about Tailscale is under the TV's sections.
+    // The launcher's own two jobs, then how the app reaches the TV, which is set once and lives on its own page.
     @ViewBuilder var connection: some View {
         Section {
-            TextField("Address", text: $address).autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
-                .submitLabel(.done)
-                .onSubmit { model.address = address.trimmingCharacters(in: .whitespacesAndNewlines); model.start() }
-        } header: { Text("Mac Pro address") }
+            SettingsAction(title: "Refresh the TV’s recommendations", icon: "arrow.clockwise") { model.post("refresh") }
+            SettingsAction(title: "Launcher settings on the TV", icon: "rectangle.grid.1x2") { model.post("launcher-settings") }
+        }
         Section {
-            Button("Refresh the TV’s recommendations") { model.tick(); model.post("refresh") }
-            Button("Open launcher settings on the TV") { model.tick(); model.post("launcher-settings") }
+            NavigationLink(value: ManagePage.connection) { Label("Connection", systemImage: "network") }
         }
     }
     var body: some View {
@@ -207,7 +216,7 @@ struct TVSettingsTab: View {
                         Form { manage; connection }.scrollContentBackground(.hidden).poseScroll()
                     }
                 }
-                .topShade()
+                .topShade().topFade()
                 // Tapping the tab again: out of a page opened from here, else back to the top.
                 .onChange(of: retaps) { _, _ in
                     if path.isEmpty { withAnimation(.snappy) { proxy.scrollTo(ManagePage.apps, anchor: .top) } } else { path = [] }
@@ -217,14 +226,35 @@ struct TVSettingsTab: View {
                 switch page {
                 case .apps: ManageAppsView(store: store)
                 case .settings: ManageSettingsView(store: store)
+                case .connection: ConnectionView()
                 }
             }
             .background { Ambience() }
             .navigationTitle("Settings")
             // The same title as every other tab: large on the outer screen, in the bar when unfolded.
             .navigationBarTitleDisplayMode(panes ? .inline : .large)
-            .onAppear { address = model.address }
         }
+    }
+}
+
+// Where the Mac is, and what it takes to reach it from away.
+struct ConnectionView: View {
+    @EnvironmentObject var model: TVModel
+    @State private var address = ""
+    var body: some View {
+        Form {
+            Section {
+                TextField("Address", text: $address).autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
+                    .submitLabel(.done)
+                    .onSubmit { model.address = address.trimmingCharacters(in: .whitespacesAndNewlines); model.start() }
+            } header: { Text("Mac Pro address") } footer: { Text("Everything here works anywhere with Tailscale on, as long as the Mac is awake and can reach the TV.") }
+        }
+        .scrollContentBackground(.hidden)
+        .topShade().topFade()
+        .background { Ambience() }
+        .navigationTitle("Connection")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { address = model.address }
     }
 }
 
@@ -302,7 +332,7 @@ struct RowList<Content: View>: View {
         List { content().listRowBackground(Color.clear) }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .topShade()
+            .topShade().topFade()
             .background { Ambience() }
             .toolbarBackground(.hidden, for: .navigationBar)
             .navigationTitle(title)
@@ -323,7 +353,11 @@ struct MirrorView: View {
         if model.filmOnScreen, let s = model.status?.session { return model.picture(for: s).flatMap(URL.init(string:)) }
         return model.standInNow.flatMap(URL.init(string:))
     }
+    // The picture drawn, which only moves on to a new one once it's loaded, then fades in over what was there: the
+    // flicked poster gives way to the TV's own without a frame of empty glass between. Unset until first drawn.
+    @State private var drawn: URL??
     var body: some View {
+        let film = drawn ?? self.film
         ZStack {
             Color.black.opacity(0.35)
             if let film {
@@ -335,6 +369,7 @@ struct MirrorView: View {
                         .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
                         .padding(14)
                 }
+                .id(film)
                 .transition(.opacity)
             } else if model.mirrorLive {
                 #if os(iOS)
@@ -362,7 +397,14 @@ struct MirrorView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
-        .animation(.easeInOut(duration: 0.25), value: film)
+        .animation(.easeOut(duration: 0.25), value: film)
+        .task(id: self.film) {
+            let next = self.film
+            guard let current = drawn else { drawn = .some(next); return }
+            guard next != current else { return }
+            if let next, ImageStore.shared.cached(next) == nil { _ = await ImageStore.shared.load(next) }
+            if !Task.isCancelled { drawn = .some(next) }
+        }
         // Where it is, for a flick's screen to move onto it. Nothing moves this view, so the measure moves nothing.
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.mirrorSlot = $0 }
         .onAppear { model.mirrorShown(true) }
@@ -508,6 +550,7 @@ struct PlayKey: View {
     var playing: Bool?
     var tint: Color = TVLook.accent
     var size: CGFloat = 68
+    var glow = true
     // For a player on this phone rather than the TV.
     var action: (() -> Void)?
     var body: some View {
@@ -516,7 +559,8 @@ struct PlayKey: View {
                 .font(.system(size: size * 0.36, weight: .semibold)).foregroundStyle(.black.opacity(0.85))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: size, height: size).background(tint, in: Circle())
-                .shadow(color: tint.opacity(0.45), radius: 14, y: 4)
+                .shadow(color: tint.opacity(glow ? 0.45 : 0), radius: 14, y: 4)
+                .animation(.easeOut(duration: 0.2), value: glow)
         }
         .buttonStyle(PressCard()).accessibilityLabel(playing == true ? "Pause" : playing == false ? "Play" : "Play or pause")
     }
@@ -537,7 +581,8 @@ struct RemoteTab: View {
         if s.screen == "screensaver" { return "Screensaver" }
         // What's playing, by name, rather than the app it's playing in. Only while it's what's on, never one left behind.
         if model.videoIsCurrent, let title = s.session?.description.first, !title.isEmpty { return title }
-        return "On " + (s.apps?.first { $0.pkg == s.app }?.name ?? "Home")
+        // Nothing with a name on: nothing said, rather than which app is in front.
+        return ""
     }
     var keys: some View {
         VStack(spacing: 12) {
@@ -569,7 +614,8 @@ struct RemoteTab: View {
             if stremio { SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1, size: 50) } else { GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: 50) }
             Spacer()
             // Says which it'll do, as on the Playing tab, once the TV's word is fresh.
-            PlayKey(playing: model.staleStatus ? nil : model.status?.session?.playing)
+            // No glow while typing: it would smear through the keyboard just above.
+            PlayKey(playing: model.staleStatus ? nil : model.status?.session?.playing, glow: !typing)
             Spacer()
             if stremio { SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1, size: 50) } else { GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: 50) }
             Spacer()
@@ -614,7 +660,8 @@ struct RemoteTab: View {
             } else {
                 // Folded, the pad gets the room until the screen is asked for.
                 VStack(spacing: 14) {
-                    if model.mirrorLive { MirrorView(store: model.mirrorStore) }
+                    // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
+                    if model.mirrorLive && !typing { MirrorView(store: model.mirrorStore).transition(.opacity) }
                     Group {
                         DPad().frame(minHeight: 150, maxHeight: .infinity)
                         keysBlock
@@ -845,11 +892,13 @@ struct AppsTab: View {
         return t.count >= 2 && !SendBar.isLink(t) ? t : nil
     }
     static let listen = ["com.codex.musicwebtv", "com.google.android.youtube.tvmusic"]
-    static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.google.android.play.games", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.macropinch.axe"]
+    static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.macropinch.axe"]
+    // Never offered on the phone at all: no games.
+    static let hidden: Set<String> = ["com.google.android.play.games"]
     static let watchOrder = ["com.mint.letterboxd", "com.stremio.one", "com.google.android.youtube.tv", "com.google.android.youtube.tvunplugged", "com.netflix.ninja", "com.plexapp.android", "com.apple.atve.androidtv.appletv", "com.amazon.amazonvideo.livingroom", "com.cbs.ott"]
-    var all: [TVStatus.App] { model.status?.apps ?? [] }
+    var all: [TVStatus.App] { (model.status?.apps ?? []).filter { !Self.hidden.contains($0.pkg) } }
     static func watching(_ all: [TVStatus.App]) -> [TVStatus.App] {
-        let rest = all.filter { !tools.contains($0.pkg) && !listen.contains($0.pkg) }
+        let rest = all.filter { !tools.contains($0.pkg) && !listen.contains($0.pkg) && !hidden.contains($0.pkg) }
         return rest.sorted { (watchOrder.firstIndex(of: $0.pkg) ?? 99) < (watchOrder.firstIndex(of: $1.pkg) ?? 99) }
     }
     var watch: [TVStatus.App] { Self.watching(all) }
@@ -1146,7 +1195,7 @@ struct NowControls: View {
             if music.duration > 0 && !model.staleStatus { MusicProgress(music: music) } else { ProgressPlaceholder() }
             HStack(spacing: 26) {
                 GlassKey(icon: "backward.fill", label: "Previous", key: "previous", size: 54)
-                PlayKey(playing: model.staleStatus ? nil : music.playing, tint: .white, size: 74)
+                PlayKey(playing: model.staleStatus ? nil : music.playing, size: 74)
                 GlassKey(icon: "forward.fill", label: "Next", key: "next", size: 54)
             }
         }
@@ -1178,7 +1227,7 @@ struct PhoneControls: View {
             }
             HStack(spacing: 26) {
                 GlassButton(icon: "backward.fill", label: "Previous", size: 54) { phone.previous() }
-                PlayKey(playing: phone.playing, tint: .white, size: 74) { phone.toggle() }
+                PlayKey(playing: phone.playing, size: 74) { phone.toggle() }
                 GlassButton(icon: "forward.fill", label: "Next", size: 54) { phone.next() }
             }
         }
@@ -1244,7 +1293,6 @@ struct PlayingTab: View {
     @Environment(\.paneLayout) private var panes
     @ObservedObject private var phone = PhonePlayer.shared
     @ObservedObject private var nextUp = NextUp.shared
-    @ObservedObject private var recent = RecentFlicks.shared
     @State private var query = ""
     @State private var kind = "song"
     // What Mint finds as he types, the same search as the Apps page's.
@@ -1302,11 +1350,11 @@ struct PlayingTab: View {
                     if stremio {
                         // Its player ignores the skip keys, so the bridge moves its seek bar instead.
                         SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1)
-                        PlayKey(playing: playing, tint: .white, size: 74)
+                        PlayKey(playing: playing, size: 74)
                         SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1)
                     } else {
                         GlassKey(icon: "gobackward.10", label: "Back 10 seconds", key: "rewind", size: 56)
-                        PlayKey(playing: playing, tint: .white, size: 74)
+                        PlayKey(playing: playing, size: 74)
                         GlassKey(icon: "goforward.10", label: "Forward 10 seconds", key: "forward", size: 56)
                     }
                 }
@@ -1431,17 +1479,17 @@ struct PlayingTab: View {
             if pending { pendingWait?.cancel(); withAnimation(.easeOut(duration: 0.2)) { pending = false }; query = "" }
         }
     }
-    // With a film or show on, the spare side has what comes after it: the next episode, ready to flick, or failing that
-    // where he is in other things, and what was flicked lately. Never a row of one. The music search is for when Mint
-    // is what's on, or there's nothing else to offer.
+    // With a film, show or video on, what's under it is what comes after it: the next episode, ready to flick, or failing
+    // that where he is in other things, and what was flicked lately. Never a row of one, and never the music search,
+    // which is only for when Mint is what's on or nothing is.
     @ObservedObject private var stremio = BrowseStore.shared(.stremio)
     var continuing: [MediaItem] { Array((stremio.rows.first { $0.title == "Continue watching" }?.items ?? []).prefix(5)) }
-    var watching: Bool {
-        otherAppIsActive && model.status?.session?.pkg == "com.stremio.one" && (nextUp.next != nil || continuing.count > 1 || recent.list.count > 1)
-    }
+    var watching: Bool { otherAppIsActive && model.status?.session != nil }
     var upNext: some View {
         VStack(alignment: .leading, spacing: 24) {
-            if let n = nextUp.next {
+            // Only ever shows when the phone itself is playing a song, and keeps AirPlay in reach for Siri.
+            FlickCard().padding(.horizontal, 20)
+            if model.status?.session?.pkg == "com.stremio.one", let n = nextUp.next {
                 VStack(alignment: .leading, spacing: 0) {
                     RowTitle("Up next")
                     FlickCardButton(item: n, source: .stremio, width: 168, ready: true)
@@ -1459,7 +1507,7 @@ struct PlayingTab: View {
             }
             RecentRow()
         }
-        .padding(.vertical, 20)
+        .padding(.vertical, panes ? 20 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
     var body: some View {
@@ -1469,12 +1517,20 @@ struct PlayingTab: View {
                     ScrollView { if watching { upNext } else { send.padding(20) } }.backToTop()
                 }
             } else {
-                ScrollView { VStack(spacing: 24) { now; send }.padding(.horizontal, 16).padding(.bottom, 16) }.backToTop()
+                // The rows under a film run to the screen's edges, as rows do everywhere else.
+                ScrollView {
+                    VStack(spacing: 24) {
+                        now.padding(.horizontal, 16)
+                        if watching { upNext } else { send.padding(.horizontal, 16) }
+                    }
+                    .padding(.bottom, 16)
+                }
+                .backToTop()
             }
         }
         .environment(\.keysInScroll, true)
-        // Where he is in Stremio, for the spare side when a show is on.
-        .task { if panes { await stremio.load() } }
+        // Where he is in Stremio, for what's under a show while it's on.
+        .task { await stremio.load() }
     }
 }
 
@@ -1564,10 +1620,34 @@ struct DiscoverColumn: View {
     @ObservedObject var store: BrowseStore
     @Binding var kind: String
     var part = BrowseColumn.Part.all
+    // Both lists, so where he is stays put above the switch while the other kind's rows are still coming.
+    @ObservedObject private var films = BrowseStore.discover("movie")
+    @ObservedObject private var shows = BrowseStore.discover("series")
+    static let continueTitle = "Continue watching"
+    // Films and shows together, so it sits above the switch and belongs to neither.
+    var continuing: MediaRow? {
+        guard store.query.isEmpty else { return nil }
+        let other = store === films ? shows : films
+        return [store, other].lazy.compactMap { $0.rows.first { $0.title == Self.continueTitle && !$0.items.isEmpty } }.first
+    }
+    var rows: [MediaRow] { store.rows.filter { $0.title != Self.continueTitle } }
     var shown: [MediaRow] {
-        part == .all ? store.rows : store.rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)
+        part == .all ? rows : rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)
+    }
+    func shelf(_ row: MediaRow) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            RowHeader(title: row.title, route: .media(row, .stremio)).padding(.leading, 20)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 10) {
+                    ForEach(row.items) { item in FlickCardButton(item: item, source: .stremio, width: 124) }
+                }
+                .padding(.horizontal, 20)
+            }
+            .rowEdge()
+        }
     }
     @ViewBuilder var controls: some View {
+        if let continuing { shelf(continuing).id(Self.continueTitle) }
         Picker("Kind", selection: $kind) { Text("Films").tag("movie"); Text("Shows").tag("series") }
             .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
         HStack(spacing: 8) {
@@ -1605,16 +1685,7 @@ struct DiscoverColumn: View {
                 if part != .right { controls }
                 // Each kind's rows are their own, so switching crossfades the rows alone.
                 ForEach(shown, id: \.title) { row in
-                    VStack(alignment: .leading, spacing: 0) {
-                        RowHeader(title: row.title, route: .media(row, .stremio)).padding(.leading, 20)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 10) {
-                                ForEach(row.items) { item in FlickCardButton(item: item, source: .stremio, width: 124) }
-                            }
-                            .padding(.horizontal, 20)
-                        }
-                        .rowEdge()
-                    }
+                    shelf(row)
                     .id(kind + "/" + row.title)
                     .transition(.opacity)
                 }

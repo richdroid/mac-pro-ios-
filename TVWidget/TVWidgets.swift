@@ -152,7 +152,8 @@ struct RoundPlay: View {
             Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: size * 0.4, weight: .semibold))
                 .foregroundStyle(mode == .fullColor ? Color.black.opacity(0.85) : Color.white)
                 .frame(width: size, height: size)
-                .background(Color.white.opacity(mode == .fullColor ? 0.92 : 0.2), in: Circle())
+                // Cyan, as play is everywhere in the app.
+                .background(mode == .fullColor ? TVLook.accent : Color.white.opacity(0.2), in: Circle())
                 .widgetAccentable()
         }.buttonStyle(.plain).accessibilityLabel(playing ? "Pause" : "Play")
     }

@@ -77,6 +77,11 @@ struct Alarm: Codable, Identifiable, Equatable {
         action = t.action; action_param = t.action_param; backup = t.backup; backupDelay = t.backupDelay
     }
     var isOn: Bool { enabled == "1" }
+    // How a message names it: the calendar's by their event, your own by name or time.
+    var spoken: String {
+        if isCalendar { return "“" + name.dropFirst(Alarm.calendarPrefix.count) + "”" }
+        return name.isEmpty ? "your \(clock) \(meridiem) alarm" : "“\(name)”"
+    }
     // Minutes after local midnight. A one-off stores absolute minutes since 1970.
     var localMinutes: Int {
         guard when == "once", let t = Double(time) else { return Int(time) ?? 0 }
@@ -147,9 +152,13 @@ struct ChumbyState: Decodable {
     var calTpl: Alarm?
     // Whether a day the calendar wakes you keeps your repeating alarms quiet: 1 or 0. Missing on a Chumby too old for it.
     var calOverride: Int?
+    // The Chumby's own clock as it answered, in seconds since 1970. Alarms ring by this clock, not the phone's.
+    var now: Double?
+    var chumbyNow: Date? { now.map { Date(timeIntervalSince1970: $0) } }
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: Key.self)
+        now = (try? c.decodeIfPresent(Double.self, forKey: .now)) ?? nil
         volume = try c.decodeIfPresent(Int.self, forKey: .volume) ?? 100
         fade = try c.decodeIfPresent(Int.self, forKey: .fade) ?? -1
         shuffle = try c.decodeIfPresent(Int.self, forKey: .shuffle) ?? 0
@@ -174,7 +183,7 @@ struct ChumbyState: Decodable {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride }
+    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, now }
 }
 
 // ?a=chlist: per channel, [id, name, secs] rows (a "#" row names the channel) and saved [id, on, secs] edits.
@@ -185,9 +194,11 @@ struct ChannelList: Decodable {
 
 enum ChumbyError: LocalizedError {
     case message(String), deviceDown, waiting(String)
+    // A save AlarmWriter turned down because it would have cost an alarm that's about to ring. Never retried on its own.
+    case refused(String)
     var errorDescription: String? {
         switch self {
-        case .message(let m): return m
+        case .message(let m), .refused(let m): return m
         case .waiting(let why): return "Waiting: \(why)."
         case .deviceDown: return "The Chumby isn’t answering."
         }
@@ -311,13 +322,27 @@ extension ChumbyState {
         }
         return best
     }
-    // One-off alarms and naps long past (a day's margin is far more than any snooze), so the 16 places don't fill up.
-    // The Chumby clears its own Catch-up.
-    mutating func dropExpired(now: Date = Date()) {
-        let limit = now.timeIntervalSince1970 / 60 - 12 * 60
-        alarms.removeAll { $0.when == "once" && $0.name != "Catch-up" && (Double($0.time) ?? 0) < limit && !$0.isPlaceholder }
+    // A one-off or nap whose time is truly behind it by the Chumby's own clock (`chumby`, from its state), with two hours to
+    // spare for any snooze. Without the Chumby's clock nothing counts as expired. The Chumby clears its own Catch-up.
+    static func isExpired(_ a: Alarm, chumby: Date?) -> Bool {
+        guard let chumby, a.when == "once", a.name != "Catch-up", !a.isPlaceholder, let t = Double(a.time) else { return false }
+        return t * 60 < chumby.timeIntervalSince1970 - 2 * 3600
+    }
+    // So the 16 places don't fill up with alarms that can never ring again.
+    mutating func dropExpired(chumby: Date?) {
+        alarms.removeAll { Self.isExpired($0, chumby: chumby) }
     }
     static let maxAlarms = 16
+}
+
+// What a save may cost, beyond the alarms it adds or changes. AlarmWriter checks every save against this.
+struct SavePermit {
+    // Alarms (by key) the user deleted, turned off or edited, that very alarm, by hand. Only these may go when due soon.
+    var userOff: Set<String> = []
+    // Calendar alarms (by key) the calendar sync found really gone: the event deleted, declined or canceled.
+    var deliberate: Set<String> = []
+    // A calendar sync: it may touch calendar alarms only, never another alarm, nor whether one is on.
+    var calendarOnly = false
 }
 
 // MARK: - The one way alarms are saved
@@ -332,8 +357,14 @@ actor AlarmWriter {
     // `template` says, from the list as read, whether to send the first calendar alarm as the set every calendar alarm
     // shares. `quiet` holds the save while an alarm rings or is due within 3 minutes, since a save restarts the alarm panel.
     // `force` saves even when nothing else changed, as long as there's a set to send (the calendar settings themselves).
+    // `permit` says what the save may cost besides what it changes (see SavePermit and `check`).
     func edit(_ api: ChumbyAPI, quiet: Bool = false, force: Bool = false, template: @escaping (ChumbyState) -> Bool = { _ in false },
-              _ change: @escaping (inout ChumbyState) -> Void) async throws -> Result {
+              permit: SavePermit = SavePermit(), _ change: @escaping (inout ChumbyState) -> Void) async throws -> Result {
+        try await edit(api, quiet: quiet, force: force, template: template, planned: { change(&$0); return permit })
+    }
+    // The same, for a change that works out its own permit from the list as read fresh.
+    func edit(_ api: ChumbyAPI, quiet: Bool = false, force: Bool = false, template: @escaping (ChumbyState) -> Bool = { _ in false },
+              planned change: @escaping (inout ChumbyState) -> SavePermit) async throws -> Result {
         let before = last
         let task = Task<Result, Error> {
             await before?.value
@@ -343,11 +374,11 @@ actor AlarmWriter {
         return try await task.value
     }
 
-    private static func run(_ api: ChumbyAPI, quiet: Bool, force: Bool, template: (ChumbyState) -> Bool, _ change: (inout ChumbyState) -> Void) async throws -> Result {
+    private static func run(_ api: ChumbyAPI, quiet: Bool, force: Bool, template: (ChumbyState) -> Bool, _ change: (inout ChumbyState) -> SavePermit) async throws -> Result {
         var s = try JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state"))
         let saved = s.alarms
         let was = s.alarmForm()
-        change(&s)
+        let permit = change(&s)
         let asTemplate = template(s)
         guard (force && asTemplate) || ChumbyAPI.form(s.alarmForm()) != ChumbyAPI.form(was) else { s.reindex(); return Result(state: s, saved: false) }
         if quiet {
@@ -355,10 +386,13 @@ actor AlarmWriter {
             let soon = Date().addingTimeInterval(180)
             if s.alarms.contains(where: { ($0.nextFire() ?? .distantFuture) < soon }) { throw ChumbyError.waiting("an alarm is due") }
         }
-        s.dropExpired()
+        s.dropExpired(chumby: s.chumbyNow)
         guard s.alarms.count <= ChumbyState.maxAlarms else { throw ChumbyError.message(AlarmWriter.fullText) }
+        let forceKeep = try check(saved: saved, sending: s.alarms, permit: permit, clock: s.chumbyNow ?? Date())
         var form = s.alarmForm()
         if asTemplate, let first = s.alarms.firstIndex(where: { $0.isCalendar }) { form.append(("tpl", "\(first)")) }
+        // The Chumby keeps any calendar wake due within 24 h that a save drops (chalarm.c, 11-04), unless told this one is meant.
+        if forceKeep { form.append(("force", "1")) }
         do { try await api.post("save", body: ChumbyAPI.form(form)) }
         catch ChumbyError.message(let m) where m.contains("token") { try await api.post("save", body: ChumbyAPI.form(form)) }
         // What the Chumby now holds, as it will read back: anything it switched off, off here too.
@@ -368,12 +402,52 @@ actor AlarmWriter {
         return Result(state: s, saved: true)
     }
 
+    // The safety net, run on every save just before it's sent. `saved` is the list as read from the Chumby, `sending` what's
+    // about to go, and `clock` the Chumby's time. What the Chumby will hold afterwards includes the alarms its newest_wins
+    // rule switches off, so those count as lost too. It refuses (throws) when:
+    // - an alarm that's on and due within 3 hours would be removed or switched off, and the user didn't delete, turn off or
+    //   edit that very alarm by hand;
+    // - a calendar alarm that's on and due within 24 hours would go without the user or a really-gone event saying so;
+    // - a calendar sync would add, remove or switch on or off any alarm that isn't the calendar's.
+    // Returns whether the save drops a calendar wake due within 24 h on purpose, so the Chumby's own guard lets it go.
+    static func check(saved: [Alarm], sending: [Alarm], permit: SavePermit, clock: Date) throws -> Bool {
+        var after = sending
+        for i in ChumbyState.switchedOff(saved: saved, sending: sending) { after[i].enabled = "0" }
+        let stillOn = Set(after.filter(\.isOn).map(\.key))
+        var forceKeep = false
+        for a in saved where a.isOn && !stillOn.contains(a.key) {
+            guard let due = a.nextFire(after: clock) else { continue }
+            let byHand = permit.userOff.contains(a.key)
+            let when = due.formatted(date: .omitted, time: .shortened)
+            if due.timeIntervalSince(clock) <= 3 * 3600 && !byHand {
+                throw ChumbyError.refused("Not saved: that would have taken away \(a.spoken), due at \(when).")
+            }
+            if a.isCalendar && a.when == "once" && due.timeIntervalSince(clock) <= 86400 {
+                guard byHand || permit.deliberate.contains(a.key) else {
+                    throw ChumbyError.refused("Not saved: that would have taken away the calendar alarm \(a.spoken), due at \(when).")
+                }
+                forceKeep = true
+            }
+        }
+        if permit.calendarOnly {
+            // Every other alarm goes back exactly as it was read, on or off, apart from one-offs long past. And since none is
+            // new, the Chumby's newest_wins rule can't switch anything off either.
+            func own(_ l: [Alarm]) -> [String] { l.filter { !$0.isCalendar && !$0.isPlaceholder }.map { $0.key + "|" + $0.enabled }.sorted() }
+            let expected = own(saved.filter { !ChumbyState.isExpired($0, chumby: clock) })
+            guard own(sending) == expected, ChumbyState.switchedOff(saved: saved, sending: sending).isEmpty else {
+                throw ChumbyError.refused("Not saved: the calendar update would have changed your other alarms.")
+            }
+        }
+        return forceKeep
+    }
+
     static let fullText = "The Chumby holds 16 alarms. Delete one, then try again."
     // The Chumby's own reasons, in words.
     static func explain(_ e: Error) -> String {
         switch e {
         case ChumbyError.waiting(let why): return "Waiting: \(why)."
         case ChumbyError.deviceDown: return "The Chumby isn’t answering."
+        case ChumbyError.refused(let why): return why
         case ChumbyError.message(let m):
             switch m {
             case "bad count": return fullText

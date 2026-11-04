@@ -420,6 +420,8 @@ private struct BackToTop: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
+            // Every tab's scrolling page takes this, so it's where the page's top fade goes too.
+            .topFade()
             .onChange(of: top) { _, _ in withAnimation(.snappy) { position.scrollTo(edge: .top) } }
             // Animated, like a drag, so the bar follows it and folds the title as a real scroll would.
             .task { if posed, let y = PoseScroll.offset { try? await Task.sleep(nanoseconds: 900_000_000); withAnimation { position.scrollTo(y: y) } } }

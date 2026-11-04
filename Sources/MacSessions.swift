@@ -182,10 +182,19 @@ struct SessionTerminal: View {
         }
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
+    func glyph(_ k: String, _ label: String) -> Text {
+        let tab = Image(systemName: "arrow.right.to.line")
+        switch k {
+        case "tab": return Text(tab)
+        case "shift-tab": return Text("\(Image(systemName: "shift"))\(tab)")
+        default: return Text(label)
+        }
+    }
     func keyButton(_ k: String, _ label: String, _ name: String) -> some View {
         Button { send(["key": k]) } label: {
-            // One fixed size for every glyph. The font's own ⇥ is drawn small, so Tab is the symbol, the size of ⇧ beside it.
-            (k == "tab" ? Text(Image(systemName: "arrow.right.to.line")) : Text(label)).lineLimit(1).fixedSize().frame(maxWidth: .infinity)
+            // One fixed size for every glyph. The font's own ⇥ is drawn small, so Tab is the symbol in both keys, and Shift
+            // beside it is the symbol too, so ⇧⇥ is drawn at the same size as ⇥.
+            glyph(k, label).lineLimit(1).fixedSize().frame(maxWidth: .infinity)
         }
         .font(.system(size: 15, weight: .semibold))
         .buttonStyle(.bordered)

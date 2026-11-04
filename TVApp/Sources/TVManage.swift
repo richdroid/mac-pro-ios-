@@ -46,13 +46,27 @@ final class ManageStore: ObservableObject {
 }
 
 // The pages opened from Settings, as values, so tapping the tab again can close them.
-enum ManagePage: Hashable { case apps, settings }
+enum ManagePage: Hashable { case apps, settings, connection }
 struct TVManageSections: View {
+    @EnvironmentObject var model: TVModel
     var body: some View {
         Section {
             NavigationLink(value: ManagePage.apps) { Label("Apps on the TV", systemImage: "square.grid.2x2") }.id(ManagePage.apps)
             NavigationLink(value: ManagePage.settings) { Label("TV settings", systemImage: "slider.horizontal.3") }
-        } footer: { Text("These work anywhere with Tailscale on, as long as the Mac is awake and can reach the TV.") }
+            // The one TV setting he goes looking for, a tap away rather than two pages down.
+            SettingsAction(title: "Screensaver", icon: "photo.on.rectangle.angled") { model.post("settings-page", ["page": "screensaver"]) }
+        }
+    }
+}
+// A row that does something on the TV, drawn like the rows that open a page: the icon in the accent, the words in white.
+struct SettingsAction: View {
+    @EnvironmentObject var model: TVModel
+    let title: String, icon: String
+    let action: () -> Void
+    var body: some View {
+        Button { model.tick(); action() } label: {
+            Label { Text(title).foregroundStyle(.primary) } icon: { Image(systemName: icon) }
+        }
     }
 }
 
@@ -120,7 +134,7 @@ struct ManageAppsView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }
             }
         }
-        .topShade()
+        .topShade().topFade()
         .navigationTitle("Apps on the TV")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { if store.state?.canArrange == true { EditButton() } }
@@ -170,7 +184,7 @@ struct ManageSettingsView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }
             }
         }
-        .topShade()
+        .topShade().topFade()
         .navigationTitle("TV settings")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await store.load() }

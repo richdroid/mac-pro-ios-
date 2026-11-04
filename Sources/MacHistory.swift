@@ -290,15 +290,16 @@ struct DisplayHoldButton: View {
     static let hold = 0.4, settle = 0.12
     var body: some View {
         // Dimmed in its own colours while the Mac can't be reached: an opacity laid over it from outside didn't reach
-        // the glyph, which draws in its own layer for the symbol swap.
-        let dim = model.stale ? 0.5 : 1
+        // the glyph, which draws in its own layer for the symbol swap. Offline it takes exactly the other three's colours,
+        // white circle or not, so it doesn't look as if it still works.
+        let dim = model.stale ? offlineDim : 1, lit = isOn && !model.stale
         VStack(spacing: 6) {
             Image(systemName: isOn ? "sun.max.fill" : "moon.fill")
                 .font(.system(size: 20))
-                .foregroundStyle((isOn ? Color.black : Color.white).opacity(isOn ? 1 : dim))
+                .foregroundStyle(lit ? Color.black : Color.white.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 52, height: 52)
-                .background((isOn ? Color.white : Color(white: 0.16)).opacity(dim), in: Circle())
+                .background(lit ? Color.white : Color(white: 0.16).opacity(dim), in: Circle())
                 .overlay {
                     Circle().trim(from: 0, to: fill)
                         .stroke(macBlue, style: StrokeStyle(lineWidth: 3, lineCap: .round))

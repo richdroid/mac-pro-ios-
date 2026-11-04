@@ -163,8 +163,8 @@ struct TwoPane<L: View, R: View>: View {
 
 extension View {
     // Each tab paints its own sea: the system tab view is opaque behind its content. Only the tab on screen drifts.
-    func overSea(active: Bool = true) -> some View {
-        self.background { ZStack { SeaBackground(active: active); GhostOctopus(active: active) }.ignoresSafeArea() }
+    func overSea(active: Bool = true, shown: Bool = true) -> some View {
+        self.background { if shown { ZStack { SeaBackground(active: active); GhostOctopus(active: active) }.ignoresSafeArea() } }
     }
     // A tab's own page: its title is the first row, so no empty bar sits above it and every tab starts at the same height.
     func tabPage(_ tab: Int, _ model: ChumbyModel) -> some View {
@@ -362,7 +362,7 @@ struct LiveOctopus: View {
     }
 }
 // Snoozing: a ring of water round the octopus that drains as the snooze runs out.
-// Always there, faded and grown in by `shown`, which HomeTab moves in the same spring as the device's drop, so the ring
+// Always there, faded and grown in by `shown`, which moves in the same spring as the device's drop, so the ring
 // never pops in on one frame. While it fades out it keeps the water level it had.
 struct SnoozeRing: View {
     @EnvironmentObject var model: ChumbyModel
@@ -450,8 +450,9 @@ struct HomeTab: View {
     // The snooze ring stands this far above the octopus's top: its extra size, its 2 pt lift and half its 5 pt stroke.
     var ringRise: CGFloat { ringSize - octHeight + 2 + 2.5 }
     // Snoozed, the octopus and device drop just enough that the ring's top keeps the same 6 pt clear of the wordmark.
-    // Moved by `snoozeK` in the ring spring (see onChange below), so the drop and the ring's arrival are one movement.
-    @State private var snoozeK: CGFloat = 0
+    // Read straight from the ring, so the drop moves in the very transaction (and spring) that changed it, with the card's
+    // buttons, rather than starting a frame later from an onChange.
+    var snoozeK: CGFloat { snoozing ? 1 : 0 }
     var snoozeRoom: CGFloat { max(0, ringRise + Self.clearance - restGap) * snoozeK }
     // From the octopus's top up to the wordmark's foot.
     var wordGap: CGFloat { restGap + snoozeRoom }
@@ -511,9 +512,9 @@ struct HomeTab: View {
                 while ringing && !Task.isCancelled { puff(2); try? await Task.sleep(nanoseconds: 450_000_000) }
             }
             .onChange(of: model.unreachable) { _, gone in goneAt = gone ? Date() : nil }
-            .onChange(of: snoozing) { _, s in withAnimation(ChumbyModel.ringSpring) { snoozeK = s ? 1 : 0 } }
+            // Going quiet mid-snooze moves him too, in the same spring a ring change would.
+            .animation(ChumbyModel.ringChange(to: model.sys.ringing), value: snoozing)
             .onAppear {
-                snoozeK = snoozing ? 1 : 0
                 if model.unreachable && goneAt == nil { goneAt = Date().addingTimeInterval(-5) }
                 if let p = model.homePoke, Date().timeIntervalSince(p) < 1.5 { poke() }
                 // For the build's film: the alarm rings, is snoozed, then stopped.
@@ -699,7 +700,7 @@ struct HomeTab: View {
                 if let f = model.failed("homeVolume") { FailNote(text: f) }
                 if !model.state.channelNames.isEmpty {
                     Menu {
-                        ForEach(model.state.channelNames, id: \.self) { n in Button(n) { model.state.channel = n; model.cmd("channel", n, id: "homeChannel") } }
+                        ForEach(model.state.channelNames, id: \.self) { n in Button(n) { model.playChannel(n, id: "homeChannel") } }
                     } label: {
                         HStack { Image(systemName: "tv"); Text(model.state.channel.isEmpty ? "Channel" : model.state.channel).lineLimit(1); Spacer(); Image(systemName: "chevron.up.chevron.down").font(.footnote) }
                     }.foregroundStyle(.tint)
@@ -999,20 +1000,46 @@ struct ChannelsTab: View {
         catalog += matches(#"/guide/([0-9A-F-]+)/widget">([^<]+)</a>"#, t).filter { seen.insert($0.0).inserted }
         more = t.contains("category?page=\(page + 1)")
     }
-    // Choosing what plays also selects it on the editing side. Changing `picked` runs pick(), which sends any waiting edit
-    // first. The reverse never happens: picking a channel to edit doesn't touch what plays.
-    func followPlaying(_ name: String) {
+    // Choosing what plays, here or on Home (model.chosenChannel), also selects it on the editing side. Changing `picked`
+    // runs pick(), which sends any waiting edit first. The reverse never happens: picking a channel to edit doesn't touch
+    // what plays.
+    func channelID(named name: String) -> String? {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let c = channels.first(where: { title($0).trimmingCharacters(in: .whitespacesAndNewlines) == n }), c.id != picked else { return }
-        picked = c.id
+        return channels.first { title($0).trimmingCharacters(in: .whitespacesAndNewlines) == n }?.id
     }
-    // From what was kept last time, so the editor is whole from the first frame.
+    func followPlaying(_ name: String) {
+        guard let id = channelID(named: name), id != picked else { return }
+        picked = id
+    }
+    // From what was kept last time, so the editor is whole from the first frame: the channel last chosen to play, if any.
     func startFromCache() {
         guard picked.isEmpty else { return }
-        picked = (model.channelData?.cur ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        picked = model.chosenChannel.flatMap { channelID(named: $0.name) } ?? (model.channelData?.cur ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if picked.isEmpty { picked = channels.first?.id ?? "" }
         pick()
     }
+    // One + row, the same for the Chumby's own widgets and the catalog's.
+    func moreRow(id: String, name: String, own: Int, scroll: ScrollViewProxy) -> some View {
+        HStack(spacing: 14) {
+            Text(name).font(.custom("Trebuchet MS", size: 17)).lineLimit(1)
+            Spacer(minLength: 12)
+            Button { add(id: id, name: name, own: own, scroll: scroll) } label: {
+                Image(systemName: "plus").font(.system(size: 16, weight: .bold)).frame(width: 30, height: 30)
+            }
+            .buttonStyle(.glass).buttonBorderShape(.circle)
+            .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
+            .accessibilityLabel("Add \(name) to this channel")
+        }
+        .padding(.vertical, 2)
+    }
+    // What "More widgets" lists: the Chumby's own that this channel lacks, or a catalog category's.
+    var moreList: [(id: String, name: String, own: Int)] {
+        if category.isEmpty { return notHere.map { ($0[0], $0[1], $0.count > 2 ? Int($0[2]) ?? 0 : 0) } }
+        return catalog.filter { c in !rows.contains { $0.id == c.0 } }.map { ($0.0, $0.1, 0) }
+    }
+    // For the build: a channel chosen in Now playing (chsync), then a widget added with + (chdemo).
+    @State private var posed = false
+    @State private var demoAdd: Date?
 
     var body: some View {
         ScrollViewReader { scroll in
@@ -1020,7 +1047,7 @@ struct ChannelsTab: View {
             PageTitle("Channels")
             ReachRow()
             Section("Now playing") {
-                Picker("Channel", selection: Binding(get: { model.state.channel }, set: { n in model.state.channel = n; model.cmd("channel", n, id: "nowPlaying"); followPlaying(n) })) {
+                Picker("Channel", selection: Binding(get: { model.state.channel }, set: { model.playChannel($0, id: "nowPlaying") })) {
                     ForEach(model.state.channelNames, id: \.self) { Text($0).tag($0) }
                     if !model.state.channelNames.contains(model.state.channel) { Text(model.state.channel).tag(model.state.channel) }
                 }
@@ -1029,19 +1056,6 @@ struct ChannelsTab: View {
                 }.foregroundStyle(.tint)
                 Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
                 if let f = model.failed("nowPlaying") { FailNote(text: f) }
-            }
-            Section("Catalog") {
-                Picker("Category", selection: $category) {
-                    Text("Choose…").tag("")
-                    ForEach(categories, id: \.0) { Text($0.1).tag($0.0) }
-                }
-                .onChange(of: category) { _, _ in catalog = []; page = 1; Task { await loadCatalog() } }
-                if busy { ProgressView() }
-                ForEach(catalog.filter { c in !rows.contains { $0.id == c.0 } }, id: \.0) { c in
-                    Button(c.1) { add(id: c.0, name: c.1, own: 0, scroll: scroll) }
-                }
-                if more { Button("Load more") { page += 1; Task { await loadCatalog() } } }
-                if let f = model.failed("catalog") { FailNote(text: f) }
             }
         } right: {
             Section {
@@ -1102,32 +1116,42 @@ struct ChannelsTab: View {
             } footer: {
                 Text((model.state.shuffle == 1 ? "Shuffle is on, so your order won’t show until you turn it off. " : "") + "Tap Reorder, then drag a widget by its handle. Swipe one left to take it out.")
             }
-            if !picked.isEmpty && !notHere.isEmpty {
+            // The one way to add a widget: the Chumby's own, or a catalog category's, each with the same +.
+            if !picked.isEmpty {
                 Section {
-                    ForEach(notHere, id: \.self) { w in
-                        HStack(spacing: 14) {
-                            Text(w[1]).font(.custom("Trebuchet MS", size: 17)).lineLimit(1)
-                            Spacer(minLength: 12)
-                            Button { add(id: w[0], name: w[1], own: w.count > 2 ? Int(w[2]) ?? 0 : 0, scroll: scroll) } label: {
-                                Image(systemName: "plus").font(.system(size: 16, weight: .bold)).frame(width: 30, height: 30)
-                            }
-                            .buttonStyle(.glass).buttonBorderShape(.circle)
-                            .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
-                            .accessibilityLabel("Add \(w[1]) to this channel")
-                        }
-                        .padding(.vertical, 2)
+                    Picker("Category", selection: $category) {
+                        Text("On the Chumby").tag("")
+                        ForEach(categories, id: \.0) { Text($0.1).tag($0.0) }
                     }
-                    .deleteDisabled(true).moveDisabled(true)
+                    .onChange(of: category) { _, _ in catalog = []; page = 1; more = false; Task { await loadCatalog() } }
+                    ForEach(moreList, id: \.id) { w in moreRow(id: w.id, name: w.name, own: w.own, scroll: scroll) }
+                        .deleteDisabled(true).moveDisabled(true)
+                    if busy { ProgressView().frame(maxWidth: .infinity) }
+                    if category.isEmpty && notHere.isEmpty { Text("Every widget on the Chumby is in this channel.").foregroundStyle(.secondary) }
+                    if !category.isEmpty && more && !busy { Button("Load more") { page += 1; Task { await loadCatalog() } }.foregroundStyle(.tint) }
+                    if let f = model.failed("catalog") { FailNote(text: f) }
                 } header: {
-                    Text("Not in this channel").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
+                    Text("More widgets").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
                 }
             }
         }
+        .onChange(of: demoAdd) { _, _ in if let w = moreList.first { add(id: w.id, name: w.name, own: w.own, scroll: scroll) } }
         }
         .seaList()
         .dragToReorder(reordering)
-        .onAppear(perform: startFromCache)
+        .onAppear {
+            startFromCache()
+            guard !posed, ChumbyModel.pose == "chsync" || ChumbyModel.pose == "chdemo" else { return }
+            posed = true
+            Task {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                if let n = model.state.channelNames.first(where: { $0 != model.state.channel }) { model.playChannel(n, id: "nowPlaying") }
+                guard ChumbyModel.pose == "chdemo" else { return }
+                try? await Task.sleep(nanoseconds: 3_000_000_000); demoAdd = Date()
+            }
+        }
         .onChange(of: picked) { _, _ in pick() }
+        .onChange(of: model.chosenChannel) { _, c in if let c { followPlaying(c.name) } }
         .task { await model.loadChannels(); if rows.isEmpty { startFromCache(); if rows.isEmpty { pick() } }; await loadCategories() }
         .onDisappear { flush() }
         .refreshable { flush(); edited = [:]; await model.loadChannels(); await model.loadState(); pick() }
