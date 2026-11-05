@@ -278,6 +278,12 @@ final class ChumbyModel: ObservableObject {
     }
     // The Chumby's list, with whatever is still on its way laid over it.
     private func took(_ s: ChumbyState) {
+        // A song newer than the newest one known goes straight to "Woke up to" and the widgets.
+        if let new = s.song, new.t > (songs.first?.t ?? 0) {
+            songs.insert(new, at: 0)
+            SongArt.shared.prefetch(songs, s.alarms)
+            WidgetCenter.shared.reloadAllTimelines()
+        }
         deviceState = s
         if !stateKnown { stateKnown = true }
         // A change that didn't get through, which the Chumby now matches anyway (put right on the Chumby, say), is done.

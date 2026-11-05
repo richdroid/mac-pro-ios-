@@ -157,6 +157,8 @@ struct ChumbyState: Decodable {
     var skipKnown = false
     // The panel's own report of a ringing or snoozing alarm; `until` is when a snooze rings again (0 if not known).
     var ringingNow: RingReport?
+    // The newest song Pandora logged (the Chumby adds it to its state), so a new one shows without reading the history.
+    var song: Song?
     // Whether the panel's music player is playing something, from its own report ("music": {…, playing} or null).
     var musicPlaying = false
     // The Chumby's own clock as it answered, in seconds since 1970. Alarms ring by this clock, not the phone's.
@@ -187,6 +189,7 @@ struct ChumbyState: Decodable {
         skipKnown = c.contains(.skipped)
         skipped = (try? c.decodeIfPresent(SkippedAlarm.self, forKey: .skipped)) ?? nil
         ringingNow = (try? c.decodeIfPresent(RingReport.self, forKey: .ringing)) ?? nil
+        song = (try? c.decodeIfPresent(Song.self, forKey: .song)) ?? nil
         musicPlaying = ((try? c.decodeIfPresent(MusicReport.self, forKey: .music)) ?? nil)?.playing ?? false
         reindex()
     }
@@ -194,7 +197,7 @@ struct ChumbyState: Decodable {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, now }
+    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, song, now }
 }
 
 // The panel's own SKIP, pinned to one alarm and one minute ({"name","at","when"}).
