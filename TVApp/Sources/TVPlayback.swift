@@ -183,8 +183,8 @@ final class NextUp: ObservableObject {
         // The Mac's own season and episode first, when it says them.
         let said = p.season.flatMap { se in p.episode.flatMap { ep in meta.episodes.first { $0.season == se && $0.episode == ep } } }
         guard let current = said ?? named ?? meta.episodes.first(where: { $0.id == known }) else { return nil }
-        let show = Series(imdb: imdb, title: title, art: art, current: current.id)
-        return (after(current, in: meta.episodes).map { item(show, $0) }, before(current, in: meta.episodes).map { item(show, $0) }, show)
+        let found = Series(imdb: imdb, title: title, art: art, current: current.id)
+        return (after(current, in: meta.episodes).map { item(found, $0) }, before(current, in: meta.episodes).map { item(found, $0) }, found)
     }
 }
 
@@ -652,7 +652,8 @@ struct LoadingRing: View {
                 .shadow(color: TVLook.accent.opacity(0.7), radius: 4)
         }
         .allowsHitTesting(false)
-        .onAppear { if !still { withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) { phase = 1 } } }
+        // 1.4 s a lap, the same light on the flick's TV and on the Remote's picture it moves onto.
+        .onAppear { if !still { withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { phase = 1 } } }
         .accessibilityLabel("Loading")
     }
 }
@@ -801,5 +802,4 @@ struct PlayingVideo: View {
             withAnimation(.easeOut(duration: 0.25)) { about = info?.about[e.id] }
         }
     }
-}
 }

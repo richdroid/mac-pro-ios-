@@ -96,9 +96,9 @@ struct RootView: View {
         Task {
             // The page is loading the same list, so wait for it rather than asking again.
             for _ in 0..<40 {
-                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream", "startover", "toremote"].contains(pose) ? "movie" : "series") }) {
+                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream"].contains(pose) || pose.hasPrefix("flick-") ? "movie" : "series") }) {
                     // The stream flick goes as he does it most: the best stream found for him, in the hand, thrown.
-                    model.flick(FlickTarget(item: item, source: .stremio, ready: pose == "flickdemo-stream")); return
+                    model.flick(FlickTarget(item: item, source: .stremio, ready: pose == "flickdemo-stream" || pose.hasPrefix("flick-"))); return
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
@@ -804,7 +804,8 @@ struct RemoteTab: View {
     // Hidden, not removed, while a flick's screen moves onto the picture: it carries its own bar, and two showed at once.
     @ViewBuilder var progress: some View {
         if model.videoIsCurrent, let s = model.status?.session, (s.duration ?? 0) > 0 {
-            VideoProgress(session: s, live: !model.staleStatus).opacity(model.flickHandoff ? 0 : 1).transition(.opacity)
+            // While a flicked start is under way the bar is only a hint of where it'll start, at 40 %.
+            VideoProgress(session: s, live: !model.staleStatus).opacity(model.flickHandoff ? 0 : model.starting != nil ? 0.4 : 1).transition(.opacity)
         }
     }
     // Asleep or out of reach, the picture is dark with a moon or a cut wire, not the last frame passed off as now.
@@ -812,6 +813,10 @@ struct RemoteTab: View {
     static let dim = 0.35
     func picture(closable: Bool) -> some View {
         MirrorView(store: model.mirrorStore, closable: closable && !dark)
+            // A start the flick sent: its poster in the picture, with the light lapping its edge, until it plays and the
+            // TV's own picture takes over (§2.5a C5). The flick's screen lands on exactly this.
+            .overlay { if let s = model.starting { StartingPicture(start: s).transition(.opacity) } }
+            .animation(.easeOut(duration: 0.25), value: model.starting?.played)
             .overlay {
                 if dark {
                     ZStack {
@@ -885,6 +890,7 @@ struct RemoteTab: View {
     func side(apps: Bool) -> some View {
         VStack(spacing: 14) {
             picture(closable: true)
+            StartingNote()
             progress
             EpisodesLine()
             music
@@ -916,7 +922,7 @@ struct RemoteTab: View {
                 // Folded, the pad gets the room until the screen is asked for.
                 VStack(spacing: 14) {
                     // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
-                    if model.mirrorLive && !typing { picture(closable: false).transition(.opacity) }
+                    if model.mirrorLive && !typing { picture(closable: false).transition(.opacity); StartingNote() }
                     // Mint playing has no transport here, so its own player is the way to pause it.
                     if !typing { progress; EpisodesLine(); music }
                     Group {
@@ -1045,28 +1051,78 @@ struct TypeBar: View {
     }
 }
 // Whole tiles only, as many across as fit, in up to two rows: a row running off the pane cut the last one to "YouTu".
+// The flicked film on the Remote's picture while the TV starts it: its poster, the light running round its edge.
+// Dimmed if nothing would start.
+private struct StartingPicture: View {
+    let start: TVModel.Starting
+    var body: some View {
+        ZStack {
+            Color.clear.overlay { Art(url: URL(string: start.art)) { $0.resizable().scaledToFill() } placeholder: { Color.black } }.clipped()
+                .opacity(start.failed ? 0.5 : 1)
+            if !start.failed && !start.played { LoadingRing(radius: TVLook.card).transition(.opacity) }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
+        // Playing: the light finishes, and the picture under it is the TV's own.
+        .opacity(start.played ? 0 : 1)
+        .animation(.easeOut(duration: 0.3), value: start.played)
+        .allowsHitTesting(false)
+        .accessibilityLabel(start.failed ? "\(start.title) didn’t start" : "\(start.title) is starting")
+    }
+}
+// Under the picture while a start takes long: one quiet line after eight seconds. If it failed, one way on.
+struct StartingNote: View {
+    @Environment(TVModel.self) var model
+    var body: some View {
+        if let s = model.starting, !s.played {
+            if s.failed {
+                Button { model.tick(); model.chooseAnother() } label: {
+                    Text("That stream didn’t start · Choose another").font(.subheadline.weight(.semibold)).padding(.horizontal, 18).frame(height: 44)
+                }
+                .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
+                .transition(.opacity)
+            } else {
+                TimelineView(.periodic(from: s.since, by: 1)) { ctx in
+                    Text("Still starting").font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                        .opacity(ctx.date.timeIntervalSince(s.since) >= 8 ? 1 : 0)
+                        .animation(.easeOut(duration: 0.3), value: ctx.date.timeIntervalSince(s.since) >= 8)
+                }
+                .frame(height: 18)
+            }
+        }
+    }
+}
 struct QuickApps: View {
     @Environment(TVModel.self) var model
-    @State private var width: CGFloat = 0
     var body: some View {
-        let across = max(1, Int((width + TVLook.gap) / (TVLook.bannerSize.width + TVLook.gap)))
-        let apps = Array(AppsTab.watching(model.status?.apps ?? []).prefix(across * 2))
-        let rows = (apps.count + across - 1) / across
-        // Measured on an empty frame the pane sizes, with the tiles laid over it: measured on the tiles themselves, a
-        // third that didn't fit widened the frame to fit it, and so went on being counted, cut at the pane's edge.
-        Color.clear
-            .frame(height: CGFloat(rows) * TVLook.bannerSize.height + CGFloat(max(rows - 1, 0)) * TVLook.gap)
-            .frame(maxWidth: .infinity)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-            .overlay(alignment: .topLeading) {
-                VStack(alignment: .leading, spacing: TVLook.gap) {
-                    ForEach(Array(stride(from: 0, to: apps.count, by: across)), id: \.self) { i in
-                        HStack(spacing: TVLook.gap) {
-                            ForEach(apps[i..<min(i + across, apps.count)]) { Banner(app: $0) }
-                        }
-                    }
-                }
-            }
+        // Laid out by the width it's given, in the same pass: never a first frame at zero width (one tile a row) that then
+        // jumped to the real count. Up to two rows of whole tiles, spread across the pane so no ragged gap is left at the
+        // right.
+        TileRows(tile: TVLook.bannerSize, gap: TVLook.gap, rows: 2) {
+            ForEach(Array(AppsTab.watching(model.status?.apps ?? []).prefix(12))) { Banner(app: $0) }
+        }
+    }
+}
+// Whole tiles in rows: as many across as fit, at most `rows` rows, spread to fill the width. Any that don't fit go out of
+// sight rather than being cut at the edge.
+struct TileRows: Layout {
+    var tile: CGSize
+    var gap: CGFloat
+    var rows: Int
+    func across(_ w: CGFloat) -> Int { max(1, Int((w + gap) / (tile.width + gap))) }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let w = proposal.width ?? (tile.width * 3 + gap * 2)
+        let a = across(w), n = min(subviews.count, a * rows)
+        let r = n == 0 ? 0 : (n + a - 1) / a
+        return CGSize(width: w, height: CGFloat(r) * tile.height + CGFloat(max(r - 1, 0)) * gap)
+    }
+    func placeSubviews(in b: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let a = across(b.width), n = min(subviews.count, a * rows)
+        let spacing = a > 1 ? max(gap, (b.width - CGFloat(a) * tile.width) / CGFloat(a - 1)) : 0
+        for (i, v) in subviews.enumerated() {
+            guard i < n else { v.place(at: CGPoint(x: b.minX - 10_000, y: b.minY), anchor: .topLeading, proposal: ProposedViewSize(tile)); continue }
+            let x = b.minX + CGFloat(i % a) * (tile.width + spacing), y = b.minY + CGFloat(i / a) * (tile.height + gap)
+            v.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(tile))
+        }
     }
 }
 struct MiniPlayer: View {
@@ -1123,6 +1179,8 @@ struct Transport: View {
             PlayKey(playing: ended ? false : model.staleStatus ? nil : model.status?.session?.playing, size: playSize, glow: glow)
                 .contextMenu {
                     Button("Stop", systemImage: "stop.fill") {
+                        // Held while a flicked film is still starting, it calls the start off too.
+                        if model.starting != nil { model.post("stop-playing", ["pkg": "com.stremio.one"]); model.clearStart() }
                         model.key(stremio ? "back" : "stop")
                         Task { try? await Task.sleep(nanoseconds: 1_200_000_000); await model.load() }
                     }
@@ -1171,7 +1229,10 @@ struct Banner: View {
                         else {
                             VStack(spacing: 4) { i.resizable().scaledToFit().frame(width: 30, height: 30); Text(app.name).font(.caption.weight(.medium)).lineLimit(1).padding(.horizontal, 8) }
                         }
-                    } placeholder: { TVLook.bannerTile }
+                    } placeholder: {
+                        // Waiting for a wide banner: its brand's colour, never a grey tile over black.
+                        if app.wide == true, let c = BannerFallback.brands[app.pkg] { Color(hex: c) } else { TVLook.bannerTile }
+                    }
                 } else { BannerFallback(app: app) }
             }
             .frame(width: TVLook.bannerSize.width, height: TVLook.bannerSize.height)
@@ -1260,7 +1321,8 @@ struct AppsTab: View {
                 RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).fill(.white.opacity(0.08)).frame(width: TVLook.bannerSize.width, height: TVLook.bannerSize.height)
             }
         }
-        .padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading).clipped()
+        // minWidth 0, so six banners never widen the page they wait on (the cold-entry jump).
+        .padding(.horizontal, 20).frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
     }
     var body: some View {
         content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0) }
@@ -1928,7 +1990,7 @@ struct DiscoverColumn: View {
     }
     // What's in Continue watching isn't shown again further down. A row left with fewer than four isn't shown alone, and
     // never under another row's name, which would then say something false ("Top rated" over a friend's pick): what's
-    // left of the short ones goes together at the end, as "More to watch", once each, or onto the last full row if too few.
+    // left of the short ones goes together at the end, as "More to watch", once each, if there are enough of them.
     // Worked out when the lists change, not on every redraw of the column.
     @State private var built: [MediaRow]?
     var rows: [MediaRow] { built ?? computeRows() }
@@ -1943,10 +2005,10 @@ struct DiscoverColumn: View {
         for r in kept { if r.items.count >= 4 { out.append(r) } else { spare += r.items } }
         var seen = Set(out.flatMap { $0.items.map(key) })
         spare = spare.filter { seen.insert(key($0)).inserted }
-        // Always under its own name. Too few for a row of its own (and there's a full row to take them), they go on the end
-        // of the last full row instead, where they're simply more of the page, not a sparse shelf.
+        // Always under their own name, never another row's: four or more make "More to watch". Fewer, with full rows on
+        // the page, are dropped (a sparse shelf or a false heading are both worse than three fewer cards). With no full
+        // row at all, whatever there is shows as "More to watch" rather than an empty page.
         if spare.count >= 4 || (out.isEmpty && !spare.isEmpty) { out.append(MediaRow(title: "More to watch", items: spare)) }
-        else if !spare.isEmpty, let last = out.indices.last { out[last] = MediaRow(title: out[last].title, items: out[last].items + spare) }
         return out
     }
     var shown: [MediaRow] {
@@ -2059,7 +2121,9 @@ struct PlaceholderShelf: View {
             HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(0.08)).frame(width: cardWidth, height: cardHeight) } }
                 .padding(.leading, 20)
         }
-        .frame(maxWidth: .infinity, alignment: .leading).clipped()
+        // minWidth 0: four cards are wider than a folded column, and without it their width widened the whole page,
+        // which then drew about 90 pt to the left and snapped back once the real row came (the Apps cold-entry jump).
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
         // A plain repeating fade rather than a phase animator, which would lay this out at its natural size.
         .opacity(breathe ? 1 : 0.5)
         .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true } }

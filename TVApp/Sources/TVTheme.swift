@@ -96,7 +96,12 @@ final class ImageStore {
         var s: [Int: TVImage] = [:]; s[6] = r.six; s[16] = r.sixteen
         if smalls.count > 400 { smalls.removeAll(keepingCapacity: true) }
         smalls[url] = s
-        cache.setObject(r.image, forKey: url as NSURL, cost: Int(r.image.size.width * r.image.size.height * r.image.scale * r.image.scale) * 4)
+        #if canImport(UIKit)
+        let scale = r.image.scale
+        #else
+        let scale: CGFloat = 1
+        #endif
+        cache.setObject(r.image, forKey: url as NSURL, cost: Int(r.image.size.width * r.image.size.height * scale * scale) * 4)
         return r.image
     }
     // Decoded at no more than `maxPixels` on its longer side, and ready to draw, so the first frame that shows it doesn't
@@ -145,12 +150,25 @@ struct Art<Content: View, Placeholder: View>: View {
     @ViewBuilder let content: (Image) -> Content
     @ViewBuilder let placeholder: () -> Placeholder
     @State private var loaded: TVImage?
+    @State private var fading = false
     var body: some View {
-        Group {
-            if let i = ImageStore.shared.cached(url) ?? loaded { content(Image(tv: i)).transition(.opacity) } else { placeholder().transition(.opacity) }
+        // The stand-in stays underneath, never faded away, and only the art fades in over it: a stand-in fading out as
+        // the art fades in showed the page behind for a few frames.
+        let shown = ImageStore.shared.cached(url) ?? loaded
+        ZStack {
+            if shown == nil || fading { placeholder() }
+            if let i = shown { content(Image(tv: i)).transition(.opacity) }
         }
-        // Art that arrives after the first frame fades in over its stand-in; art already kept is there from the start.
-        .task(id: url) { if let url, ImageStore.shared.cached(url) == nil { let i = await ImageStore.shared.load(url); withAnimation(.easeOut(duration: 0.25)) { loaded = i } } }
+        // Art that arrives after the first frame fades in over its stand-in, which goes only once the fade is done; art
+        // already kept is there from the start.
+        .task(id: url) {
+            guard let url, ImageStore.shared.cached(url) == nil else { return }
+            let i = await ImageStore.shared.load(url)
+            fading = true
+            withAnimation(.easeOut(duration: 0.25)) { loaded = i }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            fading = false
+        }
     }
 }
 

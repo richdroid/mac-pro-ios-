@@ -86,6 +86,64 @@ final class TVModel {
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { flicking = nil }
     }
+    // A start the flick sent, kept here rather than by the flick screen, which closes as he lands on the Remote: the
+    // Remote's picture shows it (the poster, the light lapping its edge) until the TV plays it or says no.
+    struct Starting: Equatable {
+        var title: String
+        var art: String
+        var line: String?
+        var phase: String?
+        var since = Date()
+        var failed = false
+        var played = false
+        var token: String?
+    }
+    var starting: Starting?
+    // What to reopen for "Choose another", with the streams that didn't start set apart.
+    @ObservationIgnored var startingTarget: FlickTarget?
+    @ObservationIgnored var startingAvoid: Set<String> = []
+    func beginStart(_ s: Starting, target: FlickTarget) {
+        startingTarget = target
+        withAnimation(.easeOut(duration: 0.2)) { starting = s }
+    }
+    func startPhase(_ p: String) {
+        guard starting != nil else { return }
+        starting?.phase = p
+    }
+    // Playing: the light finishes its lap, then the picture is the TV's own again. The yes is felt here.
+    func startPlayed() {
+        guard let st = starting, !st.failed, !st.played else { return }
+        // The light finishes its lap and the picture becomes the TV's own (the Remote reads `played`).
+        withAnimation(.easeOut(duration: 0.3)) { starting?.played = true }
+        #if canImport(UIKit)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        #endif
+        Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            withAnimation(.easeOut(duration: 0.3)) { starting = nil }
+            await load()
+        }
+    }
+    // Nothing would start, the fallbacks included: the poster stays, dimmed, with one way on.
+    func startFailed(tokens: [String]) {
+        guard let st = starting, !st.failed, !st.played else { return }
+        startingAvoid.formUnion(tokens)
+        #if canImport(UIKit)
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        #endif
+        withAnimation(.easeOut(duration: 0.25)) { starting?.failed = true }
+    }
+    // Called off from the Remote (holding ⏯), or done with after a failure.
+    func clearStart() { withAnimation(.easeOut(duration: 0.25)) { starting = nil } }
+    // The failed one's stream list, with the ones that didn't start set apart.
+    func chooseAnother() {
+        guard var t = startingTarget else { clearStart(); return }
+        clearStart()
+        t.streamsFirst = true
+        t.avoid = startingAvoid
+        t.ready = false; t.autoplay = false
+        flick(t)
+    }
     // Sound from the phone that isn't music. Mint's last song is still in the status then, but it isn't what's playing.
     var otherAirPlay: Bool { status?.airplay?.active == true && status?.airplay?.kind != "music" }
     var nowMusic: TVStatus.Music? { otherAirPlay ? nil : status?.music }
@@ -143,6 +201,7 @@ final class TVModel {
     @ObservationIgnored private var lastTouch = Date()
     @ObservationIgnored private var keyChain: Task<Void, Never>?
     @ObservationIgnored private var filmsLoaded = false
+    @ObservationIgnored private var bannersWarm = false
     private static var cacheFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("tv.json") }
 
     init() {
@@ -245,6 +304,17 @@ final class TVModel {
         #endif
         if s != status {
             status = s
+            // Every app's banner fetched once, as soon as the list first comes, so the Apps tab and the Remote's tiles
+            // never wait on one.
+            if !bannersWarm, let apps = s.apps, !apps.isEmpty {
+                bannersWarm = true
+                for a in apps where a.hasIcon { if let u = url("/api/tv/icon?pkg=\(a.pkg)&v=2") { Task { _ = await ImageStore.shared.load(u) } } }
+            }
+            // A start this phone sent, followed through the Mac's own word too, for when its line of news was cut off.
+            if starting != nil, let last = s.lastStart, last.token == nil || last.token == starting?.token {
+                if last.result == "playing" || last.result == "ok" { startPlayed() }
+                else if last.result == "failed" { startFailed(tokens: [last.token].compactMap { $0 }) }
+            }
             // Kept for the next launch, written off the main thread.
             if s.online { let file = Self.cacheFile; Task.detached(priority: .utility) { try? d.write(to: file, options: .atomic) } }
         }
@@ -433,3 +503,34 @@ enum Keyboard {
     static func warm() { light.prepare() }
 }
 #endif
+
+// The flick's whole set of touches and nothing else (§2.5a C9): lift, the one detent, charged, the impact, caught, and
+// the outcome on the Remote. Each generator made once and kept warm, so the hit lands on the frame it belongs to.
+@MainActor enum FlickHaptic {
+    #if canImport(UIKit)
+    private static let soft = { let g = UIImpactFeedbackGenerator(style: .soft); g.prepare(); return g }()
+    private static let rigid = { let g = UIImpactFeedbackGenerator(style: .rigid); g.prepare(); return g }()
+    private static let medium = { let g = UIImpactFeedbackGenerator(style: .medium); g.prepare(); return g }()
+    private static let heavy = { let g = UIImpactFeedbackGenerator(style: .heavy); g.prepare(); return g }()
+    private static let note = { let g = UINotificationFeedbackGenerator(); g.prepare(); return g }()
+    static func warm() { soft.prepare(); rigid.prepare(); medium.prepare(); heavy.prepare(); note.prepare() }
+    static func lift() { soft.impactOccurred(intensity: 0.5); soft.prepare() }
+    static func detent() { rigid.impactOccurred(intensity: 0.45); rigid.prepare() }
+    static func charged() { medium.impactOccurred(intensity: 0.8); medium.prepare() }
+    static func impact() { heavy.impactOccurred(intensity: 1); heavy.prepare() }
+    static func caught() { rigid.impactOccurred(intensity: 0.6); rigid.prepare() }
+    static func putBack() { soft.impactOccurred(intensity: 0.6); soft.prepare() }
+    static func settle() { soft.impactOccurred(intensity: 0.35); soft.prepare() }
+    static func error() { note.notificationOccurred(.error); note.prepare() }
+    #else
+    static func warm() {}
+    static func lift() {}
+    static func detent() {}
+    static func charged() {}
+    static func impact() {}
+    static func caught() {}
+    static func putBack() {}
+    static func settle() {}
+    static func error() {}
+    #endif
+}

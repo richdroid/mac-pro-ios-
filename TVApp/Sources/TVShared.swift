@@ -43,6 +43,12 @@ struct TVStatus: Decodable, Equatable {
     var session: Session?
     var apps: [App]?
     var airplay: AirPlayState?
+    // A stream start the Mac is running, and how the last one ended (for 30 s after), so the Remote can follow a start
+    // even after the flick screen that sent it has closed. Both absent on a Mac from before.
+    struct Start: Decodable, Equatable { var imdb: String?; var video: String?; var token: String?; var phase: String?; var since: Double? }
+    struct LastStart: Decodable, Equatable { var result: String?; var token: String?; var at: Double? }
+    var starting: Start?
+    var lastStart: LastStart?
     // Sound coming from the phone. Anything but music stays out of Mint.
     struct AirPlayState: Decodable, Equatable {
         var active: Bool

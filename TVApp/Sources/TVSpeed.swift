@@ -45,12 +45,15 @@ final class StreamCache {
 
 // The TV made ready for a stream while the card is still in the hand: woken if it's asleep, and Stremio cleared if it
 // has no player open. Harmless if he puts the card down, and the Mac skips both in the start itself if this ran lately.
+// With what's coming (type, imdb, video, and the stream's token once it's chosen), the Mac can also warm that stream's
+// link on the TV ahead of the throw (§2.5a C6). The same ask isn't repeated within 20 s; a new one (a token now known) is.
 enum Prepare {
-    @MainActor private static var last = Date.distantPast
-    @MainActor static func arm() {
-        guard Date().timeIntervalSince(last) > 20 else { return }
-        last = Date()
-        Task { _ = try? await TVBridge.post("prepare", [:], timeout: 20) }
+    @MainActor private static var last = (key: "", at: Date.distantPast)
+    @MainActor static func arm(_ body: [String: Any] = [:]) {
+        let key = body.keys.sorted().map { "\($0)=\(body[$0] ?? "")" }.joined(separator: "&")
+        guard key != last.key || Date().timeIntervalSince(last.at) > 20 else { return }
+        last = (key, Date())
+        Task { _ = try? await TVBridge.post("prepare", body, timeout: 20) }
     }
 }
 
