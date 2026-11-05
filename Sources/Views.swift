@@ -568,6 +568,9 @@ struct QuickActions: View {
                 }
             }
         }
+        // Room above and below for the Display key's hold ring and its swell (about 10 pt past the circle), which the
+        // row's own bounds clipped flat at the top.
+        .padding(.vertical, 10)
         .animation(Motion.fade, value: fails)
         .animation(Motion.fade, value: done)
         .sensoryFeedback(trigger: successes) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
