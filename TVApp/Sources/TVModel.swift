@@ -39,6 +39,10 @@ final class TVModel {
     // While a flick's screen is moving onto the Remote's picture: that picture stays hidden under it until the screen has
     // landed, or the two showed at once, the one below peeking out under the one moving.
     var flickHandoff = false
+    // The side bar's width, so a show's page opened over everything can leave it uncovered and in reach.
+    var railWidth: CGFloat = 0
+    // The flick screen is on a show's or a stream's page (not the card): the side bar stays usable, and a tab leaves it.
+    var flickChoosing = false
     // A film's colour kept on the pages behind after the flick closes, until something else is playing.
     @ObservationIgnored var moodArt: String?
     func keepMood(until art: String) { moodArt = art }
@@ -81,6 +85,24 @@ final class TVModel {
         }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { flicking = target }
+    }
+    // The thing on a card is what the TV is playing now (the same film, or the episode named on the card): tapping it goes
+    // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
+    // without an episode on its card still opens its page, which says "On the TV".
+    func isOnTV(_ item: MediaItem, _ source: MediaSource) -> Bool {
+        guard source == .stremio, videoIsCurrent, let s = status?.session, s.pkg == "com.stremio.one", let ref = item.stremioRef else { return false }
+        if ref.type == "series" {
+            guard let v = ref.video, let on = NextUp.shared.series, on.imdb == ref.imdb else { return false }
+            return v == on.current
+        }
+        guard let now = s.description.first, !now.isEmpty else { return false }
+        return now.localizedCaseInsensitiveContains(item.title) || item.title.localizedCaseInsensitiveContains(now)
+    }
+    func showOnRemote() {
+        Keyboard.dismiss()
+        tick()
+        if status?.session?.playing == false { holdPlay(true); key("resume") }
+        tab = 0
     }
     func closeFlick() {
         var t = Transaction(); t.disablesAnimations = true
@@ -164,25 +186,35 @@ final class TVModel {
     var filmOnScreen: Bool { !staleStatus && videoIsCurrent && status?.session?.playing == true }
     // Opening an app's page, or going to another tab, leaves whatever field was being typed into.
     var browsing: MediaSource? { didSet { if browsing != nil { Keyboard.dismiss() } } }
-    // Play or pause as pressed, shown at once and held over the status for a moment, as the TV takes a beat to say so.
-    // Let go as soon as the TV agrees, or after three seconds, when what it says is the truth again.
+    // Play or pause as pressed, shown at once and held over the status until the TV itself has answered: let go when it
+    // agrees, or when a reading taken after the press says otherwise. Never on a timer alone, since the TV can take a few
+    // seconds to say, and a glyph that flips back makes him press again (r17: two presses, and the phone said the
+    // opposite of the TV). Eight seconds at most.
     private(set) var playHeld: (playing: Bool, at: Date)?
     func holdPlay(_ playing: Bool) {
-        playHeld = (playing, Date())
+        let at = Date()
+        playHeld = (playing, at)
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if let self, let h = self.playHeld, Date().timeIntervalSince(h.at) >= 2.9 { self.playHeld = nil }
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            if let self, let h = self.playHeld, h.at == at { self.playHeld = nil }
         }
     }
-    // What a play key should say: the press, while it's held, else what the TV reports.
-    // The TV's ⏯: the glyph flips at once, then the key goes. The Remote's button and the build's pause flow both come here.
+    // The TV's ⏯: the glyph flips at once, then the key that does what the glyph now says (pause or play), never the
+    // toggle, so a press made on an old picture can't do the opposite. The toggle only when it isn't known what's on.
+    // The Remote's button and the build's pause flow both come here.
     func togglePlay(shown: Bool?) {
-        if let p = shown { holdPlay(!p) }
-        key("play")
+        guard let p = shown else { key("play"); return }
+        holdPlay(!p)
+        key(p ? "pause" : "resume")
     }
-    func shownPlaying(_ reported: Bool?) -> Bool? {
-        guard let h = playHeld, Date().timeIntervalSince(h.at) < 3 else { return reported }
-        return h.playing
+    // What a play key should say: the press, while it's held, else what the TV reports.
+    func shownPlaying(_ reported: Bool?) -> Bool? { playHeld?.playing ?? reported }
+    // A status that settles a held press: it agrees, or it was read on the TV after the press and still says otherwise.
+    func settlePlayHold(_ s: TVStatus) {
+        guard let h = playHeld, let now = s.session?.playing ?? s.music?.playing else { return }
+        if now == h.playing { playHeld = nil; return }
+        let read = (s.session?.sampledAt ?? s.music?.sampledAt).map { Date(timeIntervalSince1970: $0 / 1000) }
+        if let read, read.timeIntervalSince(h.at) > 1.5 { playHeld = nil }
     }
     // Mint's song is what's on: playing, or Mint is the app in front. A film or show on the TV, playing or paused in
     // front, is never shown beside a song left over from before.
@@ -318,8 +350,7 @@ final class TVModel {
             // Kept for the next launch, written off the main thread.
             if s.online { let file = Self.cacheFile; Task.detached(priority: .utility) { try? d.write(to: file, options: .atomic) } }
         }
-        // The TV agrees with the press: nothing left to hold.
-        if let h = playHeld, (s.session?.playing ?? s.music?.playing) == h.playing { playHeld = nil }
+        settlePlayHold(s)
         if staleStatus { staleStatus = false }
         PhonePlayer.shared.follow(s)
         NextUp.shared.follow(s)

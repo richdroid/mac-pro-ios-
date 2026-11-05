@@ -96,7 +96,14 @@ http.createServer((q, s) => {
   if (q.url === '/api/tv/device-image') { s.setHeader('content-type', 'image/png'); return s.end(pictures.square); }
   if (q.url === '/api/tv/device') { const up = [12, 18, 9, 22, 30, 14, 11, 16, 25, 19]; s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 18, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 2.4e6, txRate: 8e4, hist: { cpu: up, mem: up.map(x => x + 50), rx: up, tx: up } })); }
   if (q.url === '/api/tv/shot') { s.setHeader('content-type', 'image/jpeg'); return s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); }
-  if (q.url.startsWith('/api/tv/icon')) { s.setHeader('content-type', 'image/png'); const a = tvApps.find(x => q.url.endsWith(x[0])); return s.end(a && a[2] ? pictures.wide : pictures.square); }
+  // The apps' real banners wherever the repo has them (ci/tv-icons), so every scene shows what his TV shows, never a
+  // made-up gradient a fallback has to stand in for (r17: text-only tiles on the open Remote).
+  if (q.url.startsWith('/api/tv/icon')) {
+    s.setHeader('content-type', 'image/png');
+    const pkg = new URL(q.url, 'http://x').searchParams.get('pkg') || '', file = __dirname + '/tv-icons/' + pkg + '.png';
+    if (/^[\w.]+$/.test(pkg) && require('fs').existsSync(file)) return s.end(require('fs').readFileSync(file));
+    const a = tvApps.find(x => x[0] === pkg); return s.end(a && a[2] ? pictures.wide : pictures.square);
+  }
   // Sending to the TV takes a moment there, so the waiting can be seen.
   if (q.method === 'POST' && /play-stream|stremio-open|mint-open/.test(q.url)) { s.setHeader('content-type', 'application/json'); return setTimeout(() => s.end('{"ok":true}'), 3000); }
   if (q.url === '/poster.png' || q.url === '/art.png') { s.setHeader('content-type', 'image/png'); return s.end(pictures[q.url.slice(1, -4)]); }
@@ -323,7 +330,7 @@ function tvFlickStart(kind, q, s, path, json) {
   }
   if (q.method === 'POST' && path === '/api/tv/prepare') return read(b => { log('prepare', b); setTimeout(() => json({ ok: true, awake: true, fresh: !!b.token }), 300); });
   if (q.method === 'POST' && path === '/api/tv/key') return read(b => { log('key', b); json({ ok: true }); });
-  if (q.method === 'POST' && /^\/api\/tv\/(flick|open|stremio-open|film|send|mint-open|music)$/.test(path)) return read(b => { log(path.slice(8), b); json({ ok: true }); });
+  if (q.method === 'POST' && /^\/api\/tv\/(flick|open|stremio-open|film|send|mint-open|music|stop-playing)$/.test(path)) return read(b => { log(path.slice(8), b); if (path.endsWith('stop-playing')) { st.result = 'stopped'; st.endedAt = Date.now(); } json({ ok: true }); });
   if (q.method === 'POST' && path === '/api/tv/play-stream') return read(b => {
     log('play-stream', b);
     const begun = Date.now(), tokens = [b.token, ...(Array.isArray(b.fallbacks) ? b.fallbacks : [])].filter(x => typeof x === 'string').slice(0, 3);
@@ -420,7 +427,7 @@ function tvReal(q, s, path, query, json) {
       json({ ok: true, position: r.pos, duration: REAL_MS });
     });
   });
-  if (q.method === 'POST' && /^\/api\/tv\/(play-stream|flick|open|prepare|stremio-open|film|send|mint-open|music)$/.test(path)) return read(b => {
+  if (q.method === 'POST' && /^\/api\/tv\/(play-stream|flick|open|prepare|stremio-open|film|send|mint-open|music|stop-playing)$/.test(path)) return read(b => {
     log(path.slice(8), b);
     if (path === '/api/tv/prepare') return late(1200, () => json({ ok: true, awake: true, fresh: !!b.token }));
     if (path !== '/api/tv/play-stream') return late(800, () => json({ ok: true }));

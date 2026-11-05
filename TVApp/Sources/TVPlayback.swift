@@ -463,7 +463,7 @@ private struct BackToTop: ViewModifier {
             .topFade()
             .onChange(of: top) { _, _ in withAnimation(.snappy) { position.scrollTo(edge: .top) } }
             // Animated, like a drag, so the bar follows it and folds the title as a real scroll would.
-            .task { if posed, let y = PoseScroll.offset { try? await Task.sleep(nanoseconds: 900_000_000); withAnimation { position.scrollTo(y: y) } } }
+            .task { if posed { await PoseScroll.apply { position.scrollTo(y: $0) } } }
     }
 }
 // Unfolded, the side that isn't the page's list (Status's picture of the box) passes false, so the build's scrolled
@@ -472,12 +472,21 @@ extension View { func backToTop(posed: Bool = true) -> some View { modifier(Back
 // The build's shots of a page scrolled a little way ("-scroll 40"), to show what sits under the bar then.
 enum PoseScroll {
     static let offset: CGFloat? = { let v = UserDefaults.standard.double(forKey: "scroll"); return v > 0 ? v : nil }()
+    // Asked again as the page fills: at 0.9 s it was often still too short to scroll, so the shot stayed at the top (r17).
+    @MainActor static func apply(_ to: (CGFloat) -> Void) async {
+        guard let y = offset else { return }
+        for wait in [900, 1600, 2500] as [UInt64] {
+            try? await Task.sleep(nanoseconds: wait * 1_000_000)
+            if Task.isCancelled { return }
+            withAnimation { to(y) }
+        }
+    }
 }
 private struct PoseScrolled: ViewModifier {
     @State private var position = ScrollPosition(edge: .top)
     func body(content: Content) -> some View {
         if let y = PoseScroll.offset {
-            content.scrollPosition($position).task { try? await Task.sleep(nanoseconds: 900_000_000); withAnimation { position.scrollTo(y: y) } }
+            content.scrollPosition($position).task { _ = y; await PoseScroll.apply { position.scrollTo(y: $0) } }
         } else { content }
     }
 }
@@ -680,6 +689,7 @@ struct EpisodesLine: View {
     @State private var open = false
     var body: some View {
         if model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one", let line = s.episodeLine, nextUp.series != nil {
+          Group {
             Button { model.tick(); open = true } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "list.bullet.rectangle.portrait").foregroundStyle(TVLook.accent)
@@ -701,6 +711,9 @@ struct EpisodesLine: View {
                     .presentationCompactAdaptation(.sheet)
                     .presentationDetents([.medium, .large])
             }
+          }
+          // The build's shot of the episodes over the Remote ("-pose episodes").
+          .task { if UserDefaults.standard.string(forKey: "pose") == "episodes" { try? await Task.sleep(nanoseconds: 3_000_000_000); open = true } }
         }
     }
 }
@@ -711,6 +724,9 @@ struct ShowEpisodes: View {
     @Environment(TVModel.self) var model
     @ObservedObject private var nextUp = NextUp.shared
     var titled = false
+    // Brought into view on its own only where the list is all that scrolls (the sheet, the open right pane). Inside a page
+    // that also holds the film, scrolling to it took the whole page down and cut the picture off (r17).
+    var bringsIntoView = true
     var picked: () -> Void = {}
     @State private var meta: StremioMeta?
     @State private var info: SeriesInfo.Info?
@@ -738,8 +754,10 @@ struct ShowEpisodes: View {
                 guard let m = await NextUp.meta(s.imdb) else { return }
                 season = m.episodes.first { $0.id == s.current }?.season ?? m.episodes.first?.season ?? 0
                 meta = m
-                try? await Task.sleep(nanoseconds: 60_000_000)
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(s.current, anchor: .center) }
+                if bringsIntoView {
+                    try? await Task.sleep(nanoseconds: 60_000_000)
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(s.current, anchor: .center) }
+                }
                 if info == nil { let i = await SeriesInfo.load(s.imdb); withAnimation(.easeOut(duration: 0.2)) { info = i } }
             }
         }

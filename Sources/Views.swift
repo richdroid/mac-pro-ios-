@@ -125,10 +125,31 @@ struct ScrollsUnder: ViewModifier {
     @Environment(\.topEdgeUnder) private var report
     @State private var rest: CGFloat?
     @State private var now: CGFloat = 0
+    // Where the content rests inside the scroll view's own frame: the foot of the title above it.
+    @State private var inset: CGFloat = 0
     @Environment(\.refresh) private var refresh
     let id: Int
+    // Content scrolled up past where it rests fades out over 24 pt as it goes under the title, so the title never sits on
+    // top of text, with no bar or band (Richard, 2026-11-05: "just get rid of this top bar"). The fade rides up with the
+    // first 24 pt of scroll, so at rest it sits wholly above the content and nothing resting is ever dimmed. One mask on
+    // the scroll view, none per row.
+    var fadeFoot: CGFloat { inset - 24 + min(max(now - (rest ?? now), 0), 24) }
     func body(content: Content) -> some View {
         content
+            .mask {
+                GeometryReader { g in
+                    let h = max(g.size.height, 1), foot = fadeFoot, top = foot - 24
+                    if foot <= 0 {
+                        Color.black
+                    } else {
+                        // The fade may start above the frame: then the frame's top edge is already part-way into it.
+                        let start = top < 0 ? Color.black.opacity(-top / 24) : Color.black.opacity(0)
+                        LinearGradient(stops: [.init(color: start, location: max(top, 0) / h), .init(color: .black, location: min(foot / h, 1))],
+                                       startPoint: .top, endPoint: .bottom)
+                    }
+                }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.top } action: { _, t in inset = t }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 now = y
                 if rest == nil { rest = y }

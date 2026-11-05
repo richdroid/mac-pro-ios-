@@ -38,8 +38,9 @@ jobs:
       - name: Screenshot in the simulator
         continue-on-error: true
         # Raised from 40 for the Mac Pro state shots, about 3.5 minutes more across both displays, then to 60 for the TV
-        # app's flick, tour and scrolled shots, about 6 minutes more across the three postures.
-        timeout-minutes: 65
+        # app's flick, tour and scrolled shots, about 6 minutes more across the three postures, then to 80 for the real-data
+        # flows and the flick's starts (r17 ran out at 65, in the Chumby open shots, before any TV open shot).
+        timeout-minutes: 80
         run: |
           set +x
           exec > >(tee dist/sim.log) 2>&1
@@ -116,6 +117,13 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose screentrace -openScreen YES
             sleep 6
             cp "$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data)/Documents/screen-input-trace.jsonl" dist/screen-input-trace$2.jsonl || echo "no screen trace"
+            # Every scripted hand carries its own check; a failed one, or no trace at all, is reported loudly.
+            if [ ! -s dist/screen-input-trace$2.jsonl ]; then
+              echo "::error::Mac Pro screen trace missing$2"; echo "no trace written" > dist/FAILED-screen-trace$2.txt
+            elif grep -q '"pass":false' dist/screen-input-trace$2.jsonl; then
+              echo "::error::Mac Pro trackpad gesture check failed$2: $(grep '"pass":false' dist/screen-input-trace$2.jsonl | tr '\n' ' ')"
+              grep '"pass":false' dist/screen-input-trace$2.jsonl > dist/FAILED-screen-trace$2.txt
+            fi
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/macpro-screen-fold$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
@@ -305,6 +313,26 @@ jobs:
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-remote-$S$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             done
+            # The episodes over the Remote, and a drag along the bar held with its time bubble up, while an episode plays.
+            for P in episodes scrub; do
+              curl -s http://127.0.0.1:9002/real/reset > /dev/null
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 0 -pose $P
+              sleep 25
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$P$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            done
+            # The Live Activity: the episode playing, then the app put in the background so the Dynamic Island and its
+            # cover show (folded only; the simulator's island is on the outer screen).
+            if [ -z "$2" ]; then
+              curl -s http://127.0.0.1:9002/real/reset > /dev/null
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 0 -pose island
+              sleep 24
+              xcrun simctl launch "$DEVICE" com.apple.Preferences > /dev/null 2>&1 || true
+              sleep 4
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-island$2.png
+              xcrun simctl terminate "$DEVICE" com.apple.Preferences || true
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            fi
             tv_real "$1" "$2"
             tv_flick "$1" "$2"
             tv_flickstarts "$1" "$2"
@@ -343,6 +371,9 @@ jobs:
           tv_real() { # display, file suffix
             real() { curl -s http://127.0.0.1:9002/real/reset > /dev/null; }
             real
+            # Unfolded, only the two flows whose layout differs most there (tapping what's on, and pause/play), to stay
+            # inside the step's time.
+            if [ -z "$2" ]; then
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-real-remote$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 5
             xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 0
@@ -356,6 +387,7 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 2
             sleep 9; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-playing$2.png
             sleep 14; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-playing-length$2.png
+            fi
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             # His tasks, each filmed: tap the show that's already playing in Continue watching (nothing may be sent),
             # search and pick a result (the keyboard must go), open a series to its episodes, and pause then play (the
@@ -364,6 +396,7 @@ jobs:
             if [ "${TV_REAL_HOOKS:-0}" = 1 ]; then
               for V in "realtap 1 16" "realsearch 1 18" "realseries 3 14" "realpause 0 16"; do
                 set -- "$1" "$2" $V
+                if [ -n "$2" ] && ! [[ "$3" =~ ^(realtap|realpause)$ ]]; then set -- "$1" "$2"; continue; fi
                 real
                 xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-$3$2.mp4 > /dev/null 2>&1 & REC=$!
                 sleep 5
@@ -427,8 +460,9 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
           sleep 5
           shots 3 "-open"
-          chumby_poses 3 "-open" || echo "Chumby poses open incomplete"
+          # The TV first: it's what he's using most, and the part a long run must not lose.
           tv_poses 3 "-open" || echo "TV poses open incomplete"
+          chumby_poses 3 "-open" || echo "Chumby poses open incomplete"
           tv_tour 3 "-open" || echo "TV tour open incomplete"
           reference 3 "-open"
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5

@@ -209,12 +209,21 @@ struct RemoteScreenView: View {
         case .book:
             let c = fold.crease ?? CGRect(x: (w * 0.478).rounded(), y: 0, width: 40, height: h)
             let page = c.minX - air
-            let pic = fitWidth(page, maxHeight: h * 0.6)
+            // The left page is the screen with the whole keyboard under it, so it's a laptop's lid and keys side by side; the
+            // right page is the trackpad, a MacBook's 16:10 set low and centred under the thumb, with nothing above it.
+            let pic = fitWidth(page, maxHeight: h * 0.5)
             p.picture = CGRect(x: (page - pic.width) / 2, y: top, width: pic.width, height: pic.height)
             p.fnRow = CGRect(x: side, y: p.picture.maxY + 8, width: page - side * 2, height: 32)
-            p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: page - side * 2, height: 40)
-            let right = c.maxX + air
-            p.trackpad = CGRect(x: right + side, y: top + side, width: w - right - side * 2, height: h - top - bottom - side * 2)
+            let kbHeight = min(190, h - bottom - 8 - p.fnRow.maxY - 8)
+            if kbHeight >= 130 {
+                p.keyboard = CGRect(x: side, y: p.fnRow.maxY + 8, width: page - side * 2, height: kbHeight)
+            } else {
+                p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: page - side * 2, height: 40)
+            }
+            let right = c.maxX + air, padRoom = w - right - side * 2
+            let padHeight = min((padRoom * 10 / 16).rounded(), h - top - bottom - side * 2)
+            let padWidth = min(padRoom, (padHeight * 16 / 10).rounded())
+            p.trackpad = CGRect(x: right + side + (padRoom - padWidth) / 2, y: h - bottom - side - padHeight, width: padWidth, height: padHeight)
         case .closedLandscape, .flatLandscape:
             // The dock lives in the black under the picture, never over the Mac's own Dock.
             let dock: CGFloat = 52
@@ -1206,6 +1215,119 @@ struct GestureClassifier {
     }
 }
 
+// MARK: - Two to five fingers
+// What several fingers mean, settled by how many came down and where: two scroll (mostly one axis, as on a Mac), or from
+// an edge go back, forward or to Notification Centre; three or four swipe once; four pinched in or spread out are
+// Launchpad and the desktop. A finger that lands a moment late still counts, until the hand has really moved. Pure:
+// fingers, positions and movement in, scrolls and swipes out, so the build can run scripted hands through it.
+struct MultiFingerClassifier {
+    enum Out: Equatable { case scroll(CGSize, ScrollStep), swipe(MacSwipe), glide(CGPoint) }
+    enum Mode: Equatable { case none, scroll, edge(back: Bool), three, four }
+    private(set) var mode = Mode.none
+    private(set) var fingers = 0
+    private var travel = CGPoint.zero
+    private var fired = false
+    private var startSpread: CGFloat = 0
+    private var axis = 0                 // 0 not yet, 1 sideways, 2 up and down, 3 both
+    private(set) var scrolling = false
+    // Whether the left edge goes back (only while smooth scrolling can't carry the swipe between pages itself).
+    var edgeBack = false
+    static let edge: CGFloat = 22
+
+    mutating func began() { mode = .none; fingers = 0; travel = .zero; fired = false; axis = 0; scrolling = false }
+    // `count` is real fingers (less a resting thumb); `touches` all of them; `spread` their mean distance from their centre.
+    mutating func changed(count: Int, touches: Int, at: CGPoint, width: CGFloat, delta: CGSize, spread: CGFloat, pinching: Bool) -> [Out] {
+        travel.x += delta.width; travel.y += delta.height
+        settle(count: count, at: at, width: width, spread: spread)
+        var out: [Out] = []
+        step(delta, touches: touches, spread: spread, pinching: pinching, into: &out)
+        return out
+    }
+    mutating func ended(velocity: CGPoint, completed: Bool, pinching: Bool) -> [Out] {
+        var out: [Out] = []
+        if scrolling {
+            scrolling = false
+            out.append(.scroll(.zero, .ended))
+            // A flick glides on, along the axis it was locked to.
+            if mode == .scroll, completed, !pinching {
+                var v = velocity
+                if axis == 1 { v.y = 0 } else if axis == 2 { v.x = 0 }
+                if hypot(v.x, v.y) > 180 { out.append(.glide(v)) }
+            }
+        }
+        mode = .none; fingers = 0
+        return out
+    }
+    private mutating func settle(count: Int, at: CGPoint, width: CGFloat, spread: CGFloat) {
+        fingers = max(fingers, count)
+        let moved = hypot(travel.x, travel.y)
+        switch mode {
+        case .none:
+            guard fingers >= 2 else { return }
+            if fingers >= 4 { mode = .four; startSpread = spread }
+            else if fingers == 3 { mode = .three }
+            else if at.x > width - Self.edge { mode = .edge(back: false) }
+            else if at.x < Self.edge, edgeBack { mode = .edge(back: true) }
+            else { mode = .scroll }
+        case .scroll, .edge:
+            if fingers >= 3, moved < 36, !scrolling { mode = fingers >= 4 ? .four : .three; if fingers >= 4 { startSpread = spread } }
+        case .three:
+            if fingers >= 4, !fired, moved < 36 { mode = .four; startSpread = spread }
+        case .four: break
+        }
+    }
+    private func locked(_ d: CGSize) -> CGSize {
+        axis == 1 ? CGSize(width: d.width, height: 0) : axis == 2 ? CGSize(width: 0, height: d.height) : d
+    }
+    private mutating func step(_ d: CGSize, touches: Int, spread: CGFloat, pinching: Bool, into out: inout [Out]) {
+        switch mode {
+        case .scroll:
+            guard !pinching else { return }
+            if axis == 0, hypot(travel.x, travel.y) > 10 {
+                axis = abs(travel.x) > abs(travel.y) * 1.7 ? 1 : abs(travel.y) > abs(travel.x) * 1.7 ? 2 : 3
+            }
+            if scrolling { out.append(.scroll(locked(d), .changed)) } else { scrolling = true; out.append(.scroll(locked(d), .began)) }
+        case .edge(let back):
+            // Sideways from the edge, inwards, is the edge's gesture; anything else was a scroll that began near it.
+            let inward = back ? travel.x : -travel.x
+            if abs(travel.y) > 24 && abs(travel.y) > abs(travel.x) || inward < -20 {
+                mode = .scroll
+                step(CGSize(width: travel.x, height: travel.y), touches: touches, spread: spread, pinching: pinching, into: &out)
+            } else if !fired, inward > 64 {
+                fired = true
+                out.append(.swipe(back ? .back : edgeBack ? .forward : .notifications))
+            }
+        case .three:
+            swipeOnce(into: &out)
+        case .four:
+            guard !fired, startSpread > 0, touches >= 4 else { return }
+            let s = spread / startSpread
+            if s < 0.72 { fired = true; out.append(.swipe(.launchpad)) }
+            else if s > 1.38 { fired = true; out.append(.swipe(.desktop)) }
+            // Four fingers moving together, not spreading, swipe as three do.
+            else if (0.85...1.15).contains(s) { swipeOnce(into: &out) }
+        case .none: break
+        }
+    }
+    private mutating func swipeOnce(into out: inout [Out]) {
+        guard !fired, hypot(travel.x, travel.y) > 44 else { return }
+        fired = true
+        if abs(travel.y) >= abs(travel.x) { out.append(.swipe(travel.y < 0 ? .up : .down)) }
+        else { out.append(.swipe(travel.x < 0 ? .left : .right)) }
+    }
+}
+
+// A flick's glide: slows as a scroll view does and stops under 30 pt a second. Pure, so the build can run it.
+struct Glide {
+    var velocity: CGPoint
+    mutating func step(_ dt: Double) -> CGSize? {
+        let decay = CGFloat(pow(0.998, dt * 1000))
+        velocity.x *= decay; velocity.y *= decay
+        if hypot(velocity.x, velocity.y) < 30 { return nil }
+        return CGSize(width: velocity.x * CGFloat(dt), height: velocity.y * CGFloat(dt))
+    }
+}
+
 // The build's check of the trackpad: scripted touches through GestureClassifier, one JSON line per thing it sends,
 // written where the build collects it. Gestures can't be filmed; this is how they're seen.
 enum ScreenTrace {
@@ -1249,6 +1371,89 @@ enum ScreenTrace {
         // The pointer's curve: Mac pixels per point at ten speeds, on a 446 pt pad driving a 1680 px Mac.
         for v in [0, 30, 60, 150, 300, 500, 800, 1100, 1500, 2500] as [CGFloat] {
             lines.append(#"{"case":"pointer-curve","speed":\#(Int(v)),"gain":\#(String(format: "%.3f", GestureClassifier.gain(speed: v, macWidth: 1680, padWidth: 446)))}"#)
+        }
+        lines += runHands()
+        return lines
+    }
+
+    // MARK: Several fingers
+    // Scripted hands through MultiFingerClassifier and Glide, as the touch surface feeds them, each with what a Mac would
+    // have to do for it to pass. A line with "pass":false is a failure the build reports.
+    struct Hand { var t: Double; var count: Int; var at = CGPoint(x: 223, y: 125); var delta = CGSize.zero; var spread: CGFloat = 60; var touches: Int? = nil }
+    struct HandScript { var name: String; var hands: [Hand]; var release: CGPoint = .zero; var landAfter: Int? = nil; var check: ([String]) -> (Bool, String) }
+    static func strokes(_ n: Int, count: Int, from t0: Double = 0, d: CGSize, at: CGPoint = CGPoint(x: 223, y: 125), spread: (Int) -> CGFloat = { _ in 60 }, touches: Int? = nil) -> [Hand] {
+        (0..<n).map { Hand(t: t0 + Double($0) * 0.016, count: count, at: at, delta: d, spread: spread($0), touches: touches) }
+    }
+    static func count(_ outs: [String], _ prefix: String) -> Int { outs.filter { $0.hasPrefix(prefix) }.count }
+    static let handScripts: [HandScript] = [
+        HandScript(name: "two-finger-scroll", hands: strokes(12, count: 2, d: CGSize(width: 1, height: -6)), release: CGPoint(x: 0, y: -60)) { o in
+            let changed = o.filter { $0.hasPrefix("scroll changed") }
+            let ok = o.first?.hasPrefix("scroll began") == true && o.last?.hasPrefix("scroll ended") == true && changed.count >= 10
+                && changed.allSatisfy { $0.hasPrefix("scroll changed 0.0 ") }
+                && count(o, "momentum") == 0 && count(o, "swipe") == 0
+            return (ok, "began, changed, ended; locked to up and down; no glide from a slow lift")
+        },
+        HandScript(name: "scroll-momentum", hands: strokes(10, count: 2, d: CGSize(width: 0, height: -14)), release: CGPoint(x: 0, y: -1400)) { o in
+            let ended = o.lastIndex { $0.hasPrefix("scroll ended") } ?? -1, began = o.firstIndex(of: "momentum began") ?? -1
+            let ok = ended >= 0 && began > ended && count(o, "momentum changed") >= 20 && o.last?.hasPrefix("momentum ended") == true
+            return (ok, "scroll ended, then momentum began, changed, ended, as the Mac's own glide")
+        },
+        HandScript(name: "momentum-finger-lands", hands: strokes(10, count: 2, d: CGSize(width: 0, height: -14)), release: CGPoint(x: 0, y: -1400), landAfter: 8) { o in
+            let ok = count(o, "momentum changed") == 8 && o.last?.hasPrefix("momentum ended") == true
+            return (ok, "a finger landing mid-glide ends the momentum at once")
+        },
+        HandScript(name: "three-up", hands: strokes(10, count: 3, d: CGSize(width: 0, height: -8))) { o in
+            (o == ["swipe up"], "three fingers up: Mission Control, exactly once, no scroll")
+        },
+        HandScript(name: "three-sideways", hands: strokes(10, count: 3, d: CGSize(width: -8, height: 1))) { o in
+            (o == ["swipe left"], "three fingers sideways: switch space, exactly once")
+        },
+        HandScript(name: "four-swipe", hands: strokes(10, count: 4, d: CGSize(width: 9, height: 0))) { o in
+            (o == ["swipe right"], "four fingers together sideways swipe as three, exactly once")
+        },
+        HandScript(name: "four-spread", hands: strokes(10, count: 4, d: .zero, spread: { 60 + CGFloat($0) * 4 })) { o in
+            (o == ["swipe desktop"], "thumb and three fingers spreading: show the desktop, exactly once")
+        },
+        HandScript(name: "right-edge-in", hands: strokes(10, count: 2, d: CGSize(width: -9, height: 0), at: CGPoint(x: 438, y: 125))) { o in
+            (o == ["swipe notifications"], "two fingers in from the right edge: Notification Centre, exactly once, no scroll")
+        },
+        HandScript(name: "resting-thumb-and-finger", hands: strokes(12, count: 1, d: CGSize(width: 5, height: -3), touches: 2)) { o in
+            (o.isEmpty, "a resting thumb plus one moving finger is the pointer, never a scroll or a swipe")
+        },
+    ]
+    static func describe(_ o: MultiFingerClassifier.Out) -> String {
+        switch o {
+        case .scroll(let d, let step): return String(format: "scroll \(step == .began ? "began" : step == .ended ? "ended" : "changed") %.1f %.1f", d.width, d.height)
+        case .swipe(let s): return "swipe \(s)"
+        case .glide(let v): return String(format: "glide %.0f %.0f", v.x, v.y)
+        }
+    }
+    static func runHands() -> [String] {
+        var lines: [String] = []
+        for script in handScripts {
+            var c = MultiFingerClassifier()
+            var outs: [String] = []
+            c.began()
+            var events: [MultiFingerClassifier.Out] = []
+            for h in script.hands {
+                events += c.changed(count: h.count, touches: h.touches ?? h.count, at: h.at, width: 446, delta: h.delta, spread: h.spread, pinching: false)
+            }
+            events += c.ended(velocity: script.release, completed: true, pinching: false)
+            for e in events {
+                if case .glide(let v) = e {
+                    // As the touch surface does: momentum begins, steps at 60 Hz until it stops or a finger lands.
+                    outs.append("momentum began")
+                    var g = Glide(velocity: v), n = 0
+                    while let d = g.step(1.0 / 60) {
+                        if let land = script.landAfter, n >= land { break }
+                        outs.append(String(format: "momentum changed %.1f %.1f", d.width, d.height)); n += 1
+                    }
+                    outs.append(String(format: "momentum ended after %.2f s", Double(n) / 60))
+                } else { outs.append(describe(e)) }
+            }
+            for line in outs { lines.append(#"{"case":"\#(script.name)","out":"\#(line)"}"#) }
+            let (pass, what) = script.check(outs)
+            lines.append(#"{"case":"\#(script.name)","assert":"\#(what)","pass":\#(pass)}"#)
         }
         return lines
     }
@@ -1592,17 +1797,10 @@ struct TouchSurface: UIViewRepresentable {
         // What they mean is settled by how many came down and where: two scroll, or (from an edge) go back, forward or to
         // Notification Centre; three or four swipe; four pinch. A finger that lands a moment late still counts, until the
         // hand has really moved. A thumb resting at the trackpad's edge isn't one of them.
-        private enum Mode: Equatable { case none, scroll, edge(back: Bool), three, four }
-        private var mode = Mode.none
-        private var fingers = 0
-        private var travel = CGPoint.zero
-        private var fired = false
-        private var startSpread: CGFloat = 0
-        private var axis = 0                 // 0 not yet, 1 sideways, 2 up and down, 3 both
+        // The two-to-five-finger rules live in MultiFingerClassifier, pure, so the build can run them; this feeds it.
+        private var multiC = MultiFingerClassifier()
         private var pinching = false
         private var pinchAmount: CGFloat = 0
-        private var scrolling = false
-        private static let edge: CGFloat = 22
 
         private func spread(_ g: UIGestureRecognizer) -> CGFloat {
             let n = g.numberOfTouches
@@ -1616,103 +1814,40 @@ struct TouchSurface: UIViewRepresentable {
         private func count(_ g: UIGestureRecognizer) -> Int {
             parent.mode == .trackpad ? g.numberOfTouches - classifier.palms - classifier.undecided : g.numberOfTouches
         }
-        private func settle(_ g: UIPanGestureRecognizer) {
-            fingers = max(fingers, count(g))
-            let moved = hypot(travel.x, travel.y)
-            switch mode {
-            case .none:
-                guard fingers >= 2 else { return }
-                if fingers >= 4 { mode = .four; startSpread = spread(g) }
-                else if fingers == 3 { mode = .three }
-                else {
-                    let at = g.location(in: g.view), width = g.view?.bounds.width ?? 0
-                    if at.x > width - Self.edge { mode = .edge(back: false) }
-                    else if at.x < Self.edge, parent.edgeBack { mode = .edge(back: true) }
-                    else { mode = .scroll }
-                }
-            case .scroll, .edge:
-                if fingers >= 3, moved < 36, !scrolling { mode = fingers >= 4 ? .four : .three; if fingers >= 4 { startSpread = spread(g) } }
-            case .three:
-                if fingers >= 4, !fired, moved < 36 { mode = .four; startSpread = spread(g) }
-            case .four: break
-            }
-        }
         @objc func multi(_ g: UIPanGestureRecognizer) {
+            multiC.edgeBack = parent.edgeBack
             switch g.state {
             case .began, .changed:
-                if g.state == .began { stopGlide(); mode = .none; fingers = 0; travel = .zero; fired = false; axis = 0; scrolling = false }
+                if g.state == .began { stopGlide(); multiC.began() }
                 let t = g.translation(in: g.view)
                 g.setTranslation(.zero, in: g.view)
-                travel.x += t.x; travel.y += t.y
-                settle(g)
-                step(g, CGSize(width: t.x, height: t.y))
+                apply(multiC.changed(count: count(g), touches: g.numberOfTouches, at: g.location(in: g.view), width: g.view?.bounds.width ?? 0,
+                                     delta: CGSize(width: t.x, height: t.y), spread: spread(g), pinching: pinching))
             case .ended, .cancelled, .failed:
-                if scrolling {
-                    scrolling = false
-                    parent.onScroll(.zero, .ended)
-                    if mode == .scroll, g.state == .ended, !pinching { glide(g.velocity(in: g.view)) }
-                }
-                mode = .none; fingers = 0
+                apply(multiC.ended(velocity: g.velocity(in: g.view), completed: g.state == .ended, pinching: pinching))
             default: break
             }
         }
-        private func locked(_ d: CGSize) -> CGSize {
-            axis == 1 ? CGSize(width: d.width, height: 0) : axis == 2 ? CGSize(width: 0, height: d.height) : d
-        }
-        private func scrollStep(_ d: CGSize) {
-            if scrolling { parent.onScroll(locked(d), .changed) } else { scrolling = true; parent.onScroll(locked(d), .began) }
-        }
-        private func step(_ g: UIPanGestureRecognizer, _ d: CGSize) {
-            switch mode {
-            case .scroll:
-                guard !pinching else { return }
-                // Mostly up and down stays up and down, as on a Mac trackpad; a diagonal moves both ways.
-                if axis == 0, hypot(travel.x, travel.y) > 10 {
-                    axis = abs(travel.x) > abs(travel.y) * 1.7 ? 1 : abs(travel.y) > abs(travel.x) * 1.7 ? 2 : 3
+        private func apply(_ outs: [MultiFingerClassifier.Out]) {
+            for o in outs {
+                switch o {
+                case .scroll(let d, let step): parent.onScroll(d, step)
+                case .swipe(let s): parent.onSwipe(s)
+                case .glide(let v): glide(v)
                 }
-                scrollStep(d)
-            case .edge(let back):
-                // Sideways from the edge, inwards, is the edge's gesture; anything else was a scroll that began near it.
-                let inward = back ? travel.x : -travel.x
-                if abs(travel.y) > 24 && abs(travel.y) > abs(travel.x) || inward < -20 {
-                    mode = .scroll
-                    step(g, CGSize(width: travel.x, height: travel.y))
-                } else if !fired, inward > 64 {
-                    fired = true
-                    parent.onSwipe(back ? .back : parent.edgeBack ? .forward : .notifications)
-                }
-            case .three:
-                swipeOnce()
-            case .four:
-                guard !fired, startSpread > 0, g.numberOfTouches >= 4 else { return }
-                let s = spread(g) / startSpread
-                if s < 0.72 { fired = true; parent.onSwipe(.launchpad) }
-                else if s > 1.38 { fired = true; parent.onSwipe(.desktop) }
-                // Four fingers moving together, not spreading, swipe as three do.
-                else if (0.85...1.15).contains(s) { swipeOnce() }
-            case .none: break
             }
-        }
-        private func swipeOnce() {
-            guard !fired, hypot(travel.x, travel.y) > 44 else { return }
-            fired = true
-            if abs(travel.y) >= abs(travel.x) { parent.onSwipe(travel.y < 0 ? .up : .down) }
-            else { parent.onSwipe(travel.x < 0 ? .left : .right) }
         }
 
         // MARK: Momentum
         // After a flick the page keeps going and slows as a scroll view does, sent as the Mac's own momentum, until a
         // finger touches down again.
         private var link: CADisplayLink?
-        private var velocity = CGPoint.zero
+        private var coast = Glide(velocity: .zero)
         private var last: CFTimeInterval = 0
         private var gliding = false
         private func glide(_ v: CGPoint) {
-            var v = v
-            if axis == 1 { v.y = 0 } else if axis == 2 { v.x = 0 }
-            guard hypot(v.x, v.y) > 180 else { return }
             stopGlide()
-            velocity = v
+            coast = Glide(velocity: v)
             last = CACurrentMediaTime()
             gliding = true
             parent.onScroll(.zero, .momentumBegan)
@@ -1723,10 +1858,8 @@ struct TouchSurface: UIViewRepresentable {
         @objc private func glideTick(_ l: CADisplayLink) {
             let now = CACurrentMediaTime()
             let dt = max(0, min(now - last, 0.05)); last = now
-            let decay = CGFloat(pow(0.998, dt * 1000))
-            velocity.x *= decay; velocity.y *= decay
-            if hypot(velocity.x, velocity.y) < 30 { stopGlide(); return }
-            parent.onScroll(CGSize(width: velocity.x * CGFloat(dt), height: velocity.y * CGFloat(dt)), .momentum)
+            guard let d = coast.step(dt) else { stopGlide(); return }
+            parent.onScroll(d, .momentum)
         }
         func stopGlide() {
             link?.invalidate(); link = nil
@@ -1736,7 +1869,7 @@ struct TouchSurface: UIViewRepresentable {
         @objc func pinch(_ g: UIPinchGestureRecognizer) {
             let at = g.location(in: g.view)
             // Three or more fingers are a gesture of their own, never a zoom.
-            if g.numberOfTouches > 2 || fingers >= 3 {
+            if g.numberOfTouches > 2 || multiC.fingers >= 3 {
                 if pinching { pinching = false; parent.onPinch(.ended, g.scale, at) }
                 return
             }

@@ -34,7 +34,8 @@ struct RootView: View {
     func poseForShots() {
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
         if pose == "search" { SendDraft.shared.text = "Heat"; return }
-        if pose == "tour" || pose == "type" { return }
+        // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
+        if ["tour", "type", "episodes", "scrub", "island"].contains(pose) { return }
         // The real-data flows (CI's /real scene): each taps through the same code a finger would.
         if pose == "realtap" {
             Task {
@@ -137,7 +138,11 @@ struct RootView: View {
             // from the bottom, a blurred panel with a hard top edge. The flick fades its own way in and out.
             .overlay {
                 if let target = model.flicking {
+                    // On a show's or a stream's page it stops short of the side bar, so another tab is a tap away; the card
+                    // and the throw have the whole screen.
                     FlickScreen(target: target).environment(model).id(target.id)
+                        .padding(.trailing, model.flickChoosing ? model.railWidth : 0)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.9), value: model.flickChoosing)
                 }
             }
         }
@@ -261,6 +266,8 @@ struct Page<C: View>: View {
         }
         .topShade()
         .background { Ambience() }
+        // How wide the side bar is, read off the room it takes from the page, for pages laid over everything.
+        .background { Color.clear.onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
         // A list opened from the tab closes first; once on the tab's own page, it goes to the top.
         .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
         // A page opened from a search leaves the keyboard behind.
@@ -304,10 +311,12 @@ struct PageHeading: View {
 struct PageBar<Actions: View>: View {
     @Environment(TVModel.self) var model
     @Environment(\.dismiss) private var dismiss
+    // Where back goes, for a page that isn't a pushed one (a show's page over everything); a pushed page pops.
+    var back: (() -> Void)? = nil
     @ViewBuilder let actions: () -> Actions
     var body: some View {
         HStack(spacing: 2) {
-            Button { model.tick(); dismiss() } label: {
+            Button { model.tick(); if let back { back() } else { dismiss() } } label: {
                 Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).frame(width: 50, height: 50).contentShape(Rectangle())
             }
             .buttonStyle(PressIcon()).accessibilityLabel("Back")
@@ -527,7 +536,9 @@ struct MirrorView: View {
     // So does one just flicked, until the TV says it's playing.
     var film: URL? {
         guard model.mirrorLive else { return nil }
-        if model.filmOnScreen, let s = model.status?.session { return model.picture(for: s).flatMap(URL.init(string:)) }
+        // Including the status kept from last time, on opening, so the first frame is the poster it'll stay, not the last
+        // still of the screen swapped for the poster a moment later (r17).
+        if model.videoIsCurrent, let s = model.status?.session, s.playing { return model.picture(for: s).flatMap(URL.init(string:)) }
         return model.standInNow.flatMap(URL.init(string:))
     }
     // The picture drawn, which only moves on to a new one once it's loaded, then fades in over what was there: the
@@ -538,14 +549,7 @@ struct MirrorView: View {
         ZStack {
             Color.black.opacity(0.35)
             if let film {
-                ZStack {
-                    Color.clear.overlay { Art(url: film) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
-                        .clipped().blur(radius: 24).opacity(0.7)
-                    Art(url: film) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
-                        .padding(14)
-                }
+                PosterOnBlur(url: film)
                 .id(film)
                 .transition(.opacity)
             } else if model.mirrorLive {
@@ -795,18 +799,29 @@ struct RemoteTab: View {
         }
         return out
     }
-    // Something on with a player: only then are there keys to play, pause and jump.
-    var session: Bool { model.status?.session != nil }
+    // Something on with a player, or being started: only then are there keys to play, pause and jump. Kept while the TV
+    // can't be reached, dimmed with everything else rather than taken away, so the layout never collapses (r17).
+    var session: Bool { model.status?.session != nil || model.starting != nil || (unreachable && hadSession) }
+    @State private var hadSession = false
     var asleep: Bool { !model.staleStatus && model.status?.screen == "asleep" }
     // The Mac answers but the TV doesn't: the keys can't reach it, so they show it.
     var unreachable: Bool { model.status.map { !$0.online } ?? false }
     // While something plays, where it is and a bar to move it, right under the picture, as on the Playing tab.
     // Hidden, not removed, while a flick's screen moves onto the picture: it carries its own bar, and two showed at once.
+    // Its place is kept from the landing on (a start, or a film whose length isn't known yet shows the time it's at), so
+    // nothing pops in and the picture never shrinks when the length arrives (r17).
     @ViewBuilder var progress: some View {
-        if model.videoIsCurrent, let s = model.status?.session, (s.duration ?? 0) > 0 {
-            // While a flicked start is under way the bar is only a hint of where it'll start, at 40 %.
-            VideoProgress(session: s, live: !model.staleStatus).opacity(model.flickHandoff ? 0 : model.starting != nil ? 0.4 : 1).transition(.opacity)
+        Group {
+            if model.videoIsCurrent, model.starting == nil || model.starting?.played == true, let s = model.status?.session {
+                VideoProgress(session: s, live: !model.staleStatus && !unreachable)
+            } else if session {
+                // While a flicked start is under way: the bar's place, at 40 %, until there's a film to show.
+                ProgressPlaceholder().opacity(0.4)
+            }
         }
+        .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1)
+        .allowsHitTesting(!unreachable)
+        .transition(.opacity)
     }
     // Asleep or out of reach, the picture is dark with a moon or a cut wire, not the last frame passed off as now.
     var dark: Bool { asleep || unreachable }
@@ -876,6 +891,8 @@ struct RemoteTab: View {
         }
         .opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
         .animation(.easeInOut(duration: 0.25), value: session)
+        // Whether something was on when the TV was last heard: kept through a drop, so its keys stay (dimmed).
+        .onChange(of: model.status?.session != nil, initial: true) { _, has in if !unreachable { hadSession = has } }
     }
     // The pad, dimmed while the TV can't be reached. Asleep, its keys step back and the wake button sits in the empty ring.
     var pad: some View {
@@ -1053,11 +1070,28 @@ struct TypeBar: View {
 // Whole tiles only, as many across as fit, in up to two rows: a row running off the pane cut the last one to "YouTu".
 // The flicked film on the Remote's picture while the TV starts it: its poster, the light running round its edge.
 // Dimmed if nothing would start.
+// A film's poster as the Remote's picture shows it: sat on a blurred copy of itself. The same from the moment a flick
+// lands, through its start, to playing, so the picture never changes look on the way (r17: full-bleed, then
+// portrait-on-blur, a jump at the start).
+struct PosterOnBlur: View {
+    let url: URL?
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+            Color.clear.overlay { Art(url: url) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
+                .clipped().blur(radius: 24).opacity(0.7)
+            Art(url: url) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
+                .padding(14)
+        }
+    }
+}
 private struct StartingPicture: View {
     let start: TVModel.Starting
     var body: some View {
         ZStack {
-            Color.clear.overlay { Art(url: URL(string: start.art)) { $0.resizable().scaledToFill() } placeholder: { Color.black } }.clipped()
+            PosterOnBlur(url: URL(string: start.art))
                 .opacity(start.failed ? 0.5 : 1)
             if !start.failed && !start.played { LoadingRing(radius: TVLook.card).transition(.opacity) }
         }
@@ -1164,8 +1198,10 @@ struct Transport: View {
     var playSize: CGFloat = 68
     // Said to be playing but already at the end: an old report, shown as stopped there.
     var ended = false
+    // Whether what it plays is playing, when that's not the video session's to say (Mint's music).
+    var playing: Bool?? = nil
     var body: some View {
-        let stremio = model.status?.session?.pkg == "com.stremio.one"
+        let stremio = playing == nil && model.status?.session?.pkg == "com.stremio.one"
         HStack(spacing: 0) {
             Group {
                 if stremio { GlassButton(icon: "backward.end.fill", label: nextUp.previous.map { "Start over, or \($0.subtitle)" } ?? "Start over", size: size) { StremioBack.press(model) } }
@@ -1176,7 +1212,7 @@ struct Transport: View {
             }.frame(maxWidth: .infinity)
             // Says which it'll do, as on the Playing tab, once the TV's word is fresh.
             // Held, it stops: the flick's own control screen is gone, and Stop went with it to here.
-            PlayKey(playing: ended ? false : model.staleStatus ? nil : model.status?.session?.playing, size: playSize, glow: glow)
+            PlayKey(playing: playing ?? (ended ? false : model.staleStatus ? nil : model.status?.session?.playing), size: playSize, glow: glow)
                 .contextMenu {
                     Button("Stop", systemImage: "stop.fill") {
                         // Held while a flicked film is still starting, it calls the start off too.
@@ -1249,6 +1285,10 @@ struct Banner: View {
 // simple one, and its name in the launcher's weight. Never a white card, never an icon in a grey box.
 struct BannerFallback: View {
     let app: TVStatus.App
+    var monogram: some View {
+        Text(String(app.name.prefix(1)).uppercased()).font(.system(size: 17, weight: .heavy, design: .rounded))
+            .frame(width: 34, height: 34).background(.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
     static let brands: [String: UInt32] = ["com.google.android.youtube.tvmusic": 0x0F0F0F, "flar2.homebutton": 0x1E3A5F, "com.netflix.ninja": 0x141414,
                                            "com.stremio.one": 0x19152C, "com.codex.musicwebtv": 0x1F9E78, "com.mint.letterboxd": 0x202830]
     var body: some View {
@@ -1263,11 +1303,14 @@ struct BannerFallback: View {
                         Image(systemName: "play.fill").font(.system(size: 8, weight: .bold)).offset(x: 0.6)
                     }
                     .frame(width: 30, height: 30)
-                } else if app.hasIcon, let u = TVBridge.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
+                } else if app.hasIcon, let u = TVBridge.url("/api/tv/icon?pkg=\(app.pkg)&v=2"), !ImageStore.shared.isFlat(u) {
                     // Its own icon beside its name, when it has one with something in it.
                     Art(url: u) { i in
-                        if !ImageStore.shared.isFlat(u) { i.resizable().scaledToFit().frame(width: 34, height: 34).clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous)) }
-                    } placeholder: { EmptyView() }
+                        i.resizable().scaledToFit().frame(width: 34, height: 34).clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    } placeholder: { monogram }
+                } else {
+                    // No mark of its own: a drawn one, its initial on a lighter disc, so the tile is never words alone.
+                    monogram
                 }
                 Text(app.name).font(.system(size: 15, weight: .semibold)).lineLimit(2).minimumScaleFactor(0.8).multilineTextAlignment(.leading)
             }
@@ -1603,11 +1646,8 @@ struct NowControls: View {
         VStack(spacing: 14) {
             // The bar keeps its place before there's anything true to show on it.
             if music.duration > 0 && !model.staleStatus { MusicProgress(music: music) } else { ProgressPlaceholder() }
-            HStack(spacing: 26) {
-                GlassKey(icon: "backward.fill", label: "Previous", key: "previous", size: 54)
-                PlayKey(playing: model.staleStatus ? nil : music.playing, size: 74)
-                GlassKey(icon: "forward.fill", label: "Next", key: "next", size: 54)
-            }
+            // The one transport, the same five as for a film: one way to play anything in this app (r17).
+            Transport(playing: .some(model.staleStatus ? nil : music.playing))
         }
     }
 }
@@ -1707,6 +1747,7 @@ struct PlayingTab: View {
     @State private var kind = "song"
     // What Mint finds as he types, the same search as the Apps page's.
     @StateObject private var found = BrowseStore(.mint)
+    @ObservedObject private var mintHome = BrowseStore.shared(.mint)
     // A play asked for and not yet showing on the TV.
     @State private var pending = false
     @State private var pendingWait: Task<Void, Never>?
@@ -1813,6 +1854,20 @@ struct PlayingTab: View {
                 .animation(.snappy, value: shuffles)
                 .animation(.easeOut(duration: 0.2), value: pending)
             }
+            if results.isEmpty {
+                ForEach(Array(mintHome.rows.prefix(3))) { row in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(row.title).font(.headline)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 10) {
+                                ForEach(row.items) { item in FlickCardButton(item: item, source: .mint, width: 112) }
+                            }
+                        }
+                        .rowEdge()
+                    }
+                    .transition(.opacity)
+                }
+            }
             ForEach(results) { row in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(row.title).font(.headline)
@@ -1827,6 +1882,7 @@ struct PlayingTab: View {
                 .transition(.opacity.combined(with: .offset(y: 10)))
             }
         }
+        .task { if mintHome.rows.isEmpty { await mintHome.load() } }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: results.map(\.id))
         .onChange(of: query) { _, _ in
             if pending { pendingWait?.cancel(); pending = false }
@@ -1851,7 +1907,7 @@ struct PlayingTab: View {
             // A show: its episodes, the one on marked Playing and the next Up next, in view, rather than a lone card
             // of the same poster again (Richard, 2026-11-05: "again looks bad").
             if model.status?.session?.pkg == "com.stremio.one", nextUp.series != nil {
-                ShowEpisodes().padding(.horizontal, 20)
+                ShowEpisodes(bringsIntoView: panes).padding(.horizontal, 20)
             } else if continuing.count > 1 {
                 VStack(alignment: .leading, spacing: 0) {
                     RowTitle("Continue watching").padding(.leading, 20)
@@ -2222,6 +2278,8 @@ struct VideoProgress: View {
             .animation(.snappy(duration: 0.25), value: seeker.pending)
             .animation(.spring(response: 0.5, dampingFraction: 0.88), value: locked)
         }
+        // The build's shot of a drag along the bar, its bubble up ("-pose scrub"): held at 40 %, never let go.
+        .task(id: canSeek) { if UserDefaults.standard.string(forKey: "pose") == "scrub", canSeek, scrub == nil { try? await Task.sleep(nanoseconds: 1_500_000_000); scrub = duration * 0.4 } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Position")
         .accessibilityValue(!live ? "" : duration > 0 ? "\(clock(position(at: Date()))) of \(clock(duration))" : clock(position(at: Date())))
@@ -2276,6 +2334,26 @@ final class AmbienceStore: ObservableObject {
     // The last few, so going back to something played lately needs no fetching.
     private var recent: [(art: String, image: TVImage, band: Color?)] = []
     private var wanted: String?
+    // The last background, kept for the next launch, so the first frame is already the right colour rather than a
+    // stand-in that changes a second later (r17: blue-grey, then brown).
+    private static let keptFile = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("ambience.png")
+    init() {
+        #if canImport(UIKit)
+        if let d = try? Data(contentsOf: Self.keptFile), let i = UIImage(data: d) {
+            image = i
+            key = UserDefaults.standard.string(forKey: "ambienceArt")
+            if let c = UserDefaults.standard.array(forKey: "ambienceBand") as? [Double], c.count == 3 { band = Color(red: c[0], green: c[1], blue: c[2]) }
+        }
+        #endif
+    }
+    private func keep(_ art: String, _ image: TVImage, _ band: Color?) {
+        #if canImport(UIKit)
+        UserDefaults.standard.set(art, forKey: "ambienceArt")
+        if let band { let c = UIColor(band).cgColor.components ?? []; if c.count >= 3 { UserDefaults.standard.set(Array(c.prefix(3)).map(Double.init), forKey: "ambienceBand") } }
+        let file = Self.keptFile
+        Task.detached(priority: .utility) { if let d = image.pngData() { try? d.write(to: file, options: .atomic) } }
+        #endif
+    }
     func show(_ art: String?) async {
         guard let art, art != key else { return }
         wanted = art
@@ -2295,5 +2373,6 @@ final class AmbienceStore: ObservableObject {
         // A newer one asked for meanwhile wins.
         guard wanted == art else { return }
         withAnimation(.easeInOut(duration: 0.7)) { image = entry.image; band = entry.band; key = art }
+        keep(art, entry.image, entry.band)
     }
 }

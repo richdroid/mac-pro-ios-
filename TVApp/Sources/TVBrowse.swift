@@ -61,6 +61,11 @@ final class BrowseStore: ObservableObject {
         let s = BrowseStore(.stremio, base: "/api/tv/discover?type=\(type)"); discovering[type] = s; return s
     }
     private var searching: Task<Void, Never>?
+    // The rows only if they're the answer to what's asked now: a search never shows the last search's rows, or the
+    // recently played it started from (r17: "I typed Heat and it showed me albums").
+    var answerRows: [MediaRow] {
+        loadedFor == query.trimmingCharacters(in: .whitespaces) + (genre.isEmpty ? "" : "\u{1}" + genre) ? rows : []
+    }
     init(_ source: MediaSource, base: String? = nil) { self.source = source; self.base = base }
     func endpoint(_ q: String) -> String {
         guard let base else { return source.endpoint(q) }
@@ -340,12 +345,13 @@ struct FlickCardButton: View {
     @State private var place = FrameBox()
     // What a tap on a card does; the build's real-data flows tap through here too.
     @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil) {
+        if model.isOnTV(item, source) { model.showOnRemote(); return }
         model.flick(FlickTarget(item: item, source: source, ready: ready, origin: origin))
     }
     var body: some View {
         Button { Self.tap(model, item, source, ready: ready, origin: place.rect) } label: { MediaCard(item: item, source: source, width: width) }
             // A sleeping box takes seconds to bring Stremio up, so it's told the moment a finger lands, not at the throw.
-            .buttonStyle(PressCard(onPress: source == .stremio ? { StreamCache.shared.prefetch(item); Prepare.arm() } : nil))
+            .buttonStyle(PressCard(onPress: source == .stremio && !model.isOnTV(item, source) ? { StreamCache.shared.prefetch(item); Prepare.arm() } : nil))
             // Outside the press's own squeeze, so the measure never moves with what it measures.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
@@ -396,7 +402,7 @@ struct EverywhereSearch: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             ForEach(stores, id: \.source) { store in
-                ForEach(store.rows) { row in
+                ForEach(store.answerRows) { row in
                     VStack(alignment: .leading, spacing: 8) {
                         // The row's own name only: what's in it says whether it's films or music, not the app it's from.
                         Text(row.title).font(.title3.weight(.bold))
@@ -412,7 +418,7 @@ struct EverywhereSearch: View {
                     .transition(.opacity.combined(with: .offset(y: 12)))
                 }
             }
-            if films.rows.isEmpty && music.rows.isEmpty {
+            if films.answerRows.isEmpty && music.answerRows.isEmpty {
                 Group {
                     if films.loading || music.loading { ProgressView() }
                     else { ContentUnavailableView.search(text: text) }
@@ -420,14 +426,14 @@ struct EverywhereSearch: View {
                 .frame(maxWidth: .infinity).padding(.top, 30)
             }
         }
-        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: films.rows.map(\.id) + music.rows.map(\.id))
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: films.answerRows.map(\.id) + music.answerRows.map(\.id))
         .onChange(of: text, initial: true) { _, t in
             for s in stores { s.query = t; s.searchSoon() }
         }
         // The first card, as the grid shows it, for the build's search flow to tap.
-        .onChange(of: films.rows.first?.items.first?.id ?? music.rows.first?.items.first?.id, initial: true) { _, _ in
-            if let r = films.rows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, films.source) }
-            else if let r = music.rows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, music.source) }
+        .onChange(of: films.answerRows.first?.items.first?.id ?? music.answerRows.first?.items.first?.id, initial: true) { _, _ in
+            if let r = films.answerRows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, films.source) }
+            else if let r = music.answerRows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, music.source) }
             else { SendDraft.shared.firstResult = nil }
         }
     }
