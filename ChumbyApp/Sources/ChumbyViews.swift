@@ -685,7 +685,6 @@ struct HomeTab: View {
                 NightButton()
                 RemoteButton(icon: "backward.fill", label: "Previous widget", big: true) { model.cmd("prev", id: "remote") }
                 RemoteButton(icon: "forward.fill", label: "Next widget", big: true) { model.cmd("next", id: "remote") }
-                ScreenButton()
             }
             .disabled(model.unreachable).opacity(model.unreachable ? 0.45 : 1)
             if let f = model.failed("remote") { FailNote(text: f) }
@@ -864,46 +863,44 @@ struct RemoteButton: View {
 }
 // One button for night mode, showing the mode the Chumby is really in: the moon fills in while it's on. Tap to switch it;
 // hold for which kind. The Chumby can't say which kind it's in, so that part is remembered from here.
+// One button for day and night (Richard, 2026-11-05: "one button for night and day mode haptic button"). It shows the
+// mode the Chumby is really in, a sun by day and a moon by night, and a tap swaps it with a firm haptic and the glyph turning
+// over. Ending night also brings the screen back up. Hold for the kind of night, or to dim or turn off the screen.
 struct NightButton: View {
     @EnvironmentObject var model: ChumbyModel
     @AppStorage("nightKind") private var kind = "on"
     static let kinds = [("on", "Clock"), ("dim", "Dim"), ("dark", "Dark")]
     var on: Bool { model.sys.night == 1 }
-    var menu: some View {
+    func flip(_ v: String) {
+        #if canImport(UIKit)
+        Haptics.medium.impactOccurred(); Haptics.medium.prepare()
+        #endif
+        withAnimation(.spring(duration: 0.35, bounce: 0.3)) { model.setNight(v) }
+    }
+    var body: some View {
         Menu {
-            ForEach(Self.kinds, id: \.0) { k in
-                Button { kind = k.0; model.setNight(k.0) } label: { if on && kind == k.0 { Label(k.1, systemImage: "checkmark") } else { Text(k.1) } }
+            Section("Night") {
+                ForEach(Self.kinds, id: \.0) { k in
+                    Button { kind = k.0; flip(k.0) } label: { if on && kind == k.0 { Label(k.1, systemImage: "checkmark") } else { Text(k.1) } }
+                }
             }
-            if on { Divider(); Button("Night mode off") { model.setNight("off") } }
+            if on { Button("Day") { flip("off") } }
+            Section("Screen") {
+                Button("Screen dim") { model.cmd("screen", "dim", id: "remote") }
+                Button("Screen off") { model.cmd("screen", "off", id: "remote") }
+            }
         } label: {
-            Image(systemName: on ? "moon.fill" : "moon").font(.system(size: 20)).frame(width: 40, height: 40)
+            Image(systemName: on ? "moon.fill" : "sun.max.fill").font(.system(size: 20, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp)))
+                .foregroundStyle(on ? ChumbyPalette.hex(0xa4b7d6) : ChumbyPalette.hex(0xffc477))
         } primaryAction: {
-            model.setNight(on ? "off" : kind)
-        }
-        .buttonBorderShape(.circle).controlSize(.large)
-        .accessibilityLabel(on ? "End night mode" : "Night mode").accessibilityHint("Hold for dim or dark")
-    }
-    var body: some View {
-        if on { menu.buttonStyle(.glassProminent) } else { menu.buttonStyle(.glass) }
-    }
-}
-// Brighten the screen with a tap; hold to dim it or turn it off.
-struct ScreenButton: View {
-    @EnvironmentObject var model: ChumbyModel
-    var body: some View {
-        Menu {
-            Button("Screen dim") { model.cmd("screen", "dim", id: "remote") }
-            Button("Screen off") { model.cmd("screen", "off", id: "remote") }
-        } label: {
-            Image(systemName: "sun.max").font(.system(size: 20)).frame(width: 40, height: 40)
-        } primaryAction: {
-            model.cmd("screen", "bright", id: "remote")
+            flip(on ? "off" : kind)
         }
         .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
-        .accessibilityLabel("Brighten the screen").accessibilityHint("Hold to dim it or turn it off")
+        .accessibilityLabel(on ? "Night mode, tap for day" : "Day mode, tap for night").accessibilityHint("Hold for the kind of night, or the screen")
     }
 }
-
 // MARK: - Channels
 struct EditorRow: Identifiable, Equatable { let id: String; var name: String; var on: Bool; var secs: Int; var own: Int }
 let widgetTimes = [10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600]

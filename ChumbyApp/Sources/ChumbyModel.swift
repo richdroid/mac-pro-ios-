@@ -351,7 +351,6 @@ final class ChumbyModel: ObservableObject {
     // Night mode, as the Chumby reports it, changed at once here so the button answers straight away.
     func setNight(_ v: String) {
         sys.night = v == "off" ? 0 : 1
-        tick()
         hold(5)
         Task {
             do {
