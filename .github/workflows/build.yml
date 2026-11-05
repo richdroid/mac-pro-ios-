@@ -280,6 +280,14 @@ jobs:
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-cold-status$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # The Remote in each state it can be in: asleep, not answering, YouTube playing, Mint's music only, nothing on,
+            # and a Stremio episode part way through (its title line and the bar to move along it).
+            for S in rasleep roffline ryoutube rmint ridle repisode; do
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 0
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-remote-$S$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            done
             tv_flick "$1" "$2"
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-toremote$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 6

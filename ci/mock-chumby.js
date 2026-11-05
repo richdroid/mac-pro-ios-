@@ -194,11 +194,14 @@ function chumbyScene(q, s) {
 //                 the status goes from the home screen to Stremio open, its player paused, then playing.
 //   /blankbanner  YouTube Music's banner as it once came from the Mac, white on white, to show the app's drawn one.
 //   /cold         Status as the real box first answers after a quiet spell: no CPU reading, nothing moving, no history.
+//   /rasleep /roffline /ryoutube /rmint /ridle /repisode
+//                 The Remote's states: the TV asleep, the TV not answering, a YouTube video playing, Mint's music only,
+//                 nothing on (the home screen), and a Stremio episode part way through.
 // And /api/tv/screen-live, a short canned H.264 stream of a drawn home screen, sent at 30 frames a second, looping.
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'cold' && path === '/api/tv/device') {
@@ -240,6 +243,16 @@ function tvPose(q, s) {
     const timer = setInterval(() => { s.write(tvPose.units[n % tvPose.units.length]); n++; }, 33);
     q.on('close', () => clearInterval(timer));
     return true;
+  }
+  if (/^r(asleep|offline|youtube|mint|idle|episode)$/.test(scene || '') && path === '/api/tv/status') {
+    const v = JSON.parse(tvStatus), now = Date.now();
+    if (scene === 'rasleep') { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
+    if (scene === 'roffline') { v.online = false; delete v.session; }
+    if (scene === 'ryoutube') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Sample Video'], position: 95000, sampledAt: now, duration: 610000, canSeek: false }; }
+    if (scene === 'rmint') { v.app = 'com.codex.musicwebtv'; delete v.session; }
+    if (scene === 'ridle') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
+    if (scene === 'repisode') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Sample Series', 'S1E2 Episode Two'], position: 1260000, sampledAt: now, duration: 3480000, canSeek: true }; }
+    return json(v);
   }
   if (scene === 'tour' && path === '/api/tv/status') {
     const v = JSON.parse(tvStatus);

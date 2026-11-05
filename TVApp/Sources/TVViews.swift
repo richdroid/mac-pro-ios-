@@ -596,9 +596,38 @@ struct RemoteTab: View {
         if s.screen == "asleep" { return "Asleep. Press anything to wake it." }
         if s.screen == "screensaver" { return "Screensaver" }
         // What's playing, by name, rather than the app it's playing in. Only while it's what's on, never one left behind.
-        if model.videoIsCurrent, let title = s.session?.description.first, !title.isEmpty { return title }
+        if model.videoIsCurrent, let p = s.session, let title = p.description.first, !title.isEmpty { return ([title] + Self.detail(p)).joined(separator: " · ") }
         // Nothing with a name on: nothing said, rather than which app is in front.
         return ""
+    }
+    // After the title: which episode, if it's one, and how long is left, if the TV says. "S1 E2 · 37 min left".
+    static func detail(_ s: TVStatus.Session) -> [String] {
+        var out: [String] = []
+        if let ep = s.description.dropFirst().lazy.map(Wording.episode).first(where: { $0.hasPrefix("S") && $0.contains(" E") }) {
+            out.append(String(ep.prefix { $0 != "·" }).trimmingCharacters(in: .whitespaces))
+        }
+        if let d = s.duration, d > 0, let p = s.position, d > p { out.append("\(max(1, Int(((d - p) / 60000).rounded(.up)))) min left") }
+        return out
+    }
+    // Something on with a player: only then are there keys to play, pause and jump.
+    var session: Bool { model.status?.session != nil }
+    var asleep: Bool { !model.staleStatus && model.status?.screen == "asleep" }
+    // The Mac answers but the TV doesn't: the keys can't reach it, so they show it.
+    var unreachable: Bool { model.status.map { !$0.online } ?? false }
+    // While something plays, where it is and a bar to move it, right under the picture, as on the Playing tab.
+    @ViewBuilder var progress: some View {
+        if model.videoIsCurrent, let s = model.status?.session, (s.duration ?? 0) > 0 {
+            VideoProgress(session: s, live: !model.staleStatus).transition(.opacity)
+        }
+    }
+    // Asleep, one big way to wake it over the pad, which wakes it too.
+    @ViewBuilder var wake: some View {
+        if asleep {
+            Button { model.tick(); model.key("wake") } label: {
+                Label("Wake the TV", systemImage: "power").font(.title3.weight(.semibold)).padding(.horizontal, 26).frame(height: 60)
+            }
+            .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule()).transition(.opacity.combined(with: .scale(scale: 0.9)))
+        }
     }
     var keys: some View {
         VStack(spacing: 12) {
@@ -617,7 +646,8 @@ struct RemoteTab: View {
                 GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu")
             }
             // Folded, typing takes the transport's room: the keyboard sliced it in half, and its glow smeared through.
-            if !(typing && size != .regular) { transport.transition(.opacity) }
+            // Only with something on to play: idle on the home screen, five transport keys did nothing.
+            if session && !(typing && size != .regular) { transport.transition(.opacity) }
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
         }
     }
@@ -626,38 +656,50 @@ struct RemoteTab: View {
     @ViewBuilder var transport: some View {
         let stremio = model.status?.session?.pkg == "com.stremio.one"
         HStack {
-            if stremio { Color.clear.frame(width: 50, height: 50) } else { GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: 50) }
+            if stremio { Color.clear.frame(width: 54, height: 54) } else { GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: 54) }
             Spacer()
-            if stremio { SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1, size: 50) } else { GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: 50) }
+            if stremio { SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1, size: 54) } else { GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: 54) }
             Spacer()
             // Says which it'll do, as on the Playing tab, once the TV's word is fresh.
             // No glow while typing: it would smear through the keyboard just above.
             PlayKey(playing: model.staleStatus ? nil : model.status?.session?.playing, glow: !typing)
             Spacer()
-            if stremio { SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1, size: 50) } else { GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: 50) }
+            if stremio { SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1, size: 54) } else { GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: 54) }
             Spacer()
-            if !stremio { GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: 50) }
+            if !stremio { GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: 54) }
             else if let next = nextUp.next {
-                GlassButton(icon: "forward.end.fill", label: "Next episode, \(next.subtitle)", size: 50) {
+                GlassButton(icon: "forward.end.fill", label: "Next episode, \(next.subtitle)", size: 54) {
                     model.flick(FlickTarget(item: next, source: .stremio, ready: true, autoplay: true))
                 }
-            } else { Color.clear.frame(width: 50, height: 50) }
+            } else { Color.clear.frame(width: 54, height: 54) }
         }
     }
     var keysBlock: some View {
         VStack(spacing: 12) {
             // Above the keys, and up for as long as it's wanted, so typing and moving between boxes go together.
             if typing { TypeBar(open: $typing).transition(.move(edge: .bottom).combined(with: .opacity)) }
-            keys
+            // A remote's width at most, so held in portrait the keys don't spread to the edges.
+            keys.frame(maxWidth: 380)
         }
+        .opacity(unreachable ? 0.4 : 1).allowsHitTesting(!unreachable)
+        .animation(.easeInOut(duration: 0.25), value: session)
+    }
+    // The pad, dimmed under the wake button while the TV sleeps, and when it can't be reached.
+    var pad: some View {
+        DPad().opacity(asleep || unreachable ? 0.35 : 1).allowsHitTesting(!unreachable)
+            .overlay { wake }
+            .animation(.easeInOut(duration: 0.25), value: asleep)
     }
     func side(apps: Bool) -> some View {
         VStack(spacing: 14) {
-            MirrorView(store: model.mirrorStore, closable: true)
-            if let m = model.nowMusic { MiniPlayer(music: m) }
+            MirrorView(store: model.mirrorStore, closable: true).opacity(model.flickHandoff ? 0 : 1)
+            progress
+            // Only when the music is what's on: a song's player beside a film's was two now-playings on one TV.
+            if !model.videoIsCurrent, let m = model.nowMusic { MiniPlayer(music: m) }
             if apps, model.status?.apps?.isEmpty == false { QuickApps() }
-            Spacer(minLength: 0)
+            // Right under the tiles, not pushed to the foot with dead space above it.
             SendBar()
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 20).padding(.bottom, 16)
     }
@@ -671,17 +713,18 @@ struct RemoteTab: View {
                         // rather than squeezing the screen and cutting its labels. Its own search box still lifts.
                         .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
                 } right: {
-                    VStack(spacing: 14) { DPad().frame(maxHeight: .infinity); keysBlock }.padding(.horizontal, 20).padding(.bottom, 16)
+                    VStack(spacing: 14) { pad.frame(maxHeight: .infinity); keysBlock }.padding(.horizontal, 20).padding(.bottom, 16)
                         .modifier(KeysArrive(shown: keysIn))
                 }
             } else {
                 // Folded, the pad gets the room until the screen is asked for.
                 VStack(spacing: 14) {
                     // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
-                    if model.mirrorLive && !typing { MirrorView(store: model.mirrorStore).transition(.opacity) }
+                    if model.mirrorLive && !typing { MirrorView(store: model.mirrorStore).opacity(model.flickHandoff ? 0 : 1).transition(.opacity) }
+                    if !typing { progress }
                     Group {
                         // Clear of the title above it, which the keyboard pushes the page up under.
-                        DPad().frame(minHeight: 150, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
+                        pad.frame(minHeight: 150, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
                         keysBlock
                     }
                     .modifier(KeysArrive(shown: keysIn))
@@ -690,15 +733,16 @@ struct RemoteTab: View {
             }
         }
         .navigationSubtitle(state)
-        // Folded, the keyboard would slice the tab rail and leave half a button peeking above it: the rail steps aside
-        // while typing, and comes back with the keyboard's going.
+        // The keyboard would slice the tab rail and leave half a button peeking above it, folded or open: the rail steps
+        // aside while typing, and comes back with the keyboard's going.
         #if os(iOS)
-        .toolbarVisibility(typing && size != .regular ? .hidden : .automatic, for: .tabBar)
+        .toolbarVisibility(typing ? .hidden : .automatic, for: .tabBar)
         #endif
         .toolbar {
             // Folded, the screen goes above the pad unless he's hidden it, so the bar has the switch. Wider, it has its
             // own place and button.
-            if size != .regular {
+            // Not while typing folded: the picture steps aside then, so its switch would do nothing.
+            if size != .regular && !typing {
                 ToolbarItem(placement: .primaryAction) {
                     Button { model.setMirror(!model.mirrorLive) } label: { Label(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen", systemImage: model.mirrorLive ? "eye.slash" : "eye") }
                 }
@@ -707,6 +751,12 @@ struct RemoteTab: View {
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
         .onAppear { model.warmMirror() }
+        // The app tiles' banners fetched once, ahead, so the open Remote's tiles never show their stand-ins first.
+        .task(id: model.status?.apps?.map(\.pkg) ?? []) {
+            for a in AppsTab.watching(model.status?.apps ?? []).prefix(8) where a.hasIcon {
+                if let u = model.url("/api/tv/icon?pkg=\(a.pkg)&v=2") { _ = await ImageStore.shared.load(u) }
+            }
+        }
         .task(id: model.remoteArrival) {
             guard Date().timeIntervalSince(model.remoteArrival) < 1 else { return }
             var quiet = Transaction(); quiet.disablesAnimations = true
@@ -716,7 +766,7 @@ struct RemoteTab: View {
             // than a second if no move comes.
             let arrival = model.remoteArrival
             for _ in 0..<60 where model.remoteMoveAt < arrival { try? await Task.sleep(nanoseconds: 16_000_000) }
-            try? await Task.sleep(nanoseconds: 140_000_000)
+            try? await Task.sleep(nanoseconds: 70_000_000)
             withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) { keysIn = true }
         }
     }
@@ -1658,27 +1708,21 @@ struct DiscoverColumn: View {
         guard store.query.isEmpty else { return nil }
         return home.rows.first { $0.title == Self.continueTitle && !$0.items.isEmpty }
     }
-    // What's in Continue watching isn't shown again further down. A row that leaves fewer than four isn't shown alone:
-    // what's left of it goes to the end of the row before it (else the front of the one after), never twice.
+    // What's in Continue watching isn't shown again further down. A row left with fewer than four isn't shown alone, and
+    // never under another row's name, which would then say something false ("Top rated" over a friend's pick): what's
+    // left of the short ones goes together at the end, as "More to watch", once each.
     var rows: [MediaRow] {
-        let mine = Set((continuing?.items ?? []).map { $0.stremioRef?.imdb ?? $0.id })
+        func key(_ i: MediaItem) -> String { i.stremioRef?.imdb ?? i.id }
+        let mine = Set((continuing?.items ?? []).map(key))
         let kept = store.rows.filter { $0.title != Self.continueTitle }.compactMap { r -> MediaRow? in
-            let items = r.items.filter { !mine.contains($0.stremioRef?.imdb ?? $0.id) }
+            let items = r.items.filter { !mine.contains(key($0)) }
             return items.isEmpty ? nil : MediaRow(title: r.title, items: items)
         }
-        func key(_ i: MediaItem) -> String { i.stremioRef?.imdb ?? i.id }
-        var out: [MediaRow] = [], waiting: [MediaItem] = []
-        for r in kept {
-            if r.items.count >= 4 {
-                let have = Set(r.items.map(key))
-                out.append(MediaRow(title: r.title, items: waiting.filter { !have.contains(key($0)) } + r.items)); waiting = []
-            } else if let last = out.indices.last {
-                let have = Set(out[last].items.map(key))
-                out[last] = MediaRow(title: out[last].title, items: out[last].items + r.items.filter { !have.contains(key($0)) })
-            } else { waiting += r.items }
-        }
-        // Nothing full to join: shown as one row rather than lost.
-        if out.isEmpty, let first = kept.first, !waiting.isEmpty { out = [MediaRow(title: first.title, items: waiting)] }
+        var out: [MediaRow] = [], spare: [MediaItem] = []
+        for r in kept { if r.items.count >= 4 { out.append(r) } else { spare += r.items } }
+        var seen = Set(out.flatMap { $0.items.map(key) })
+        spare = spare.filter { seen.insert(key($0)).inserted }
+        if !spare.isEmpty { out.append(MediaRow(title: out.isEmpty ? (kept.first?.title ?? "More to watch") : "More to watch", items: spare)) }
         return out
     }
     var shown: [MediaRow] {

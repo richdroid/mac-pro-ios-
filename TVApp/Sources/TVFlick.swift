@@ -376,10 +376,21 @@ struct FlickScreen: View {
             // Going to the Remote folded, the tick becomes the Remote's own eye in the same place, so the bar never swaps in
             // a frame. Unfolded the Remote has no bar button, and the tick just fades with the screen.
             let eye = toRemote && !stops && !panes ? (model.mirrorLive ? "eye.slash" : "eye") : nil
-            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : step == .control ? "Done" : "Close", systemImage: eye ?? (stops || step != .control ? "xmark" : "checkmark")) }
-                .contentTransition(.symbolEffect(.replace))
-                // Its own animation: the bar doesn't take the move's transaction, so without this the glyph cut in one frame.
-                .animation(.snappy, value: eye)
+            Button { stops ? callOff() : leave() } label: {
+                // Both glyphs always drawn, one crossfading into the other: a symbol swap here cut in one frame, as the bar
+                // rebuilds its item rather than animating it.
+                Label {
+                    Text(stops ? "Stop" : step == .control ? "Done" : "Close")
+                } icon: {
+                    ZStack {
+                        Image(systemName: stops || step != .control ? "xmark" : "checkmark")
+                            .opacity(eye == nil ? 1 : 0).scaleEffect(eye == nil ? 1 : 0.6)
+                        Image(systemName: eye ?? (model.mirrorLive ? "eye.slash" : "eye"))
+                            .opacity(eye == nil ? 0 : 1).scaleEffect(eye == nil ? 0.6 : 1)
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: eye == nil)
+                }
+            }
         }
     }
 
@@ -1160,6 +1171,7 @@ struct FlickScreen: View {
         // Under the screen, so the Remote is laid out, and its picture's place known, by the time the screen moves.
         // No animation starts in this tick: laying the Remote out hitches the main thread, and swallowed the fades.
         model.remoteArrival = Date()
+        model.flickHandoff = true
         model.tab = 0
         Task {
             var slot: CGRect?
@@ -1167,7 +1179,7 @@ struct FlickScreen: View {
                 if let s = model.mirrorSlot, s.width > 20 { slot = s; break }
                 try? await Task.sleep(nanoseconds: 25_000_000)
             }
-            guard let s = slot else { leave(restoreMood: false); Task { await model.load() }; return }
+            guard let s = slot else { model.flickHandoff = false; leave(restoreMood: false); Task { await model.load() }; return }
             remoteSlot = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
             // Two more frames, so the Remote's first layout is done before anything moves.
             try? await Task.sleep(nanoseconds: 33_000_000)
@@ -1204,6 +1216,8 @@ struct FlickScreen: View {
             }
             // Landed on it: the screen gives way to the same picture underneath, and whatever of this screen is still
             // over the keys fades with it before it's taken away.
+            // The picture underneath back first, unanimated, so the screen fades onto it, not onto the backdrop.
+            model.flickHandoff = false
             withAnimation(.easeOut(duration: 0.2)) { screenOut = true; fadingOut = true }
             try? await Task.sleep(nanoseconds: 230_000_000)
             model.closeFlick()
