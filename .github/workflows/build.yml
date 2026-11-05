@@ -98,7 +98,12 @@ jobs:
             # done and Paste failed at their buttons, and its frame rate against the mock Screen Sharing (45 ms each way
             # behind it, like Tailscale) asking one picture at a time (before) and four ahead (after), with the rate on screen.
             # These only add files; the shots above are unchanged.
-            for V in "api-estimate 9001 -tab 3 -pose api-estimate" "screenhint 9001 -tab 0 -pose screenhint -openScreen YES" "screenclip 9001 -tab 0 -pose screenclip -openScreen YES" "screenfps-before 9001 -tab 0 -pose screenfps -screenPipeline 1 -openScreen YES" "screenfps-after 9001 -tab 0 -pose screenfps -openScreen YES" "offline 9009 -tab 0" "signin 9003 -tab 0" "longlog 9001 -tab 4 -pose longlog" "pink 9001 -tab 0 -accent pink" "pink-usage 9001 -tab 3 -accent pink" "api-none 9001 -tab 3 -pose api-none" "api-refused 9001 -tab 3 -pose api-refused" "api-live 9001 -tab 3 -pose api-live" "api-sheet 9001 -tab 3 -pose api-sheet" "screenlogin 9001 -tab 0 -pose screenlogin -openScreen YES" "scrolled 9001 -tab 0 -pose scrolled" "controlfail 9001 -tab 5 -pose controlfail" "forget 9001 -tab 5 -pose forget" "quickdone 9001 -tab 0 -pose quickdone" "settings-lower 9001 -tab 9 -pose settings-lower" "budget-custom 9001 -tab 9 -pose budget-custom"; do
+            for V in "api-estimate 9001 -tab 3 -pose api-estimate" "screenhint 9001 -tab 0 -pose screenhint -openScreen YES" "screenclip 9001 -tab 0 -pose screenclip -openScreen YES" "screenfps-before 9001 -tab 0 -pose screenfps -screenPipeline 1 -openScreen YES" "screenfps-after 9001 -tab 0 -pose screenfps -openScreen YES" "offline 9009 -tab 0" "signin 9003 -tab 0" "longlog 9001 -tab 4 -pose longlog" "pink 9001 -tab 0 -accent pink" "pink-usage 9001 -tab 3 -accent pink" "api-none 9001 -tab 3 -pose api-none" "api-refused 9001 -tab 3 -pose api-refused" "api-live 9001 -tab 3 -pose api-live" "api-sheet 9001 -tab 3 -pose api-sheet" "screenlogin 9001 -tab 0 -pose screenlogin -openScreen YES" "scrolled 9001 -tab 0 -pose scrolled" "controlfail 9001 -tab 5 -pose controlfail" "forget 9001 -tab 5 -pose forget" "quickdone 9001 -tab 0 -pose quickdone" "settings-lower 9001 -tab 9 -pose settings-lower" "budget-custom 9001 -tab 9 -pose budget-custom" \
+                     "screen-laptop 9001 -tab 0 -pose screen -openScreen YES -screenPosture laptop" "screen-book 9001 -tab 0 -pose screen -openScreen YES -screenPosture book" \
+                     "screen-closed-landscape 9001 -tab 0 -pose screen -openScreen YES -screenPosture closedLandscape" \
+                     "screen-laptop-typing 9001 -tab 0 -pose screentyping -openScreen YES -screenPosture laptop" "screen-closed-typing 9001 -tab 0 -pose screentyping -openScreen YES" \
+                     "screen-zoomed 9001 -tab 0 -pose screenzoomed -openScreen YES" "screen-modlock 9001 -tab 0 -pose screenmodlock -openScreen YES" \
+                     "screen-cursor 9001 -tab 0 -pose screencursor -openScreen YES"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$4 "${@:5}"
               sleep 8
@@ -106,6 +111,18 @@ jobs:
               xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
               set -- "$1" "$2"
             done
+            # The Mac Pro screen's trackpad, which can't be filmed: scripted touches through its gesture reader, one line per
+            # thing it would send. And the screen moving between postures (flat, laptop, flat, book, flat), filmed.
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose screentrace -openScreen YES
+            sleep 6
+            cp "$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data)/Documents/screen-input-trace.jsonl" dist/screen-input-trace$2.jsonl || echo "no screen trace"
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/macpro-screen-fold$2.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose screenfold -openScreen YES
+            sleep 14
+            kill -INT $REC; wait $REC; echo "Mac Pro screen fold film exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 2 -pose calendar
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-calendar$2.png

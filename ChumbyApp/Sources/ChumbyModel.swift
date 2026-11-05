@@ -108,7 +108,9 @@ final class ChumbyModel: ObservableObject {
     @Published var dead = false        // the Mac answers, but the Chumby itself has gone quiet
     @Published var lastSeen: Date?     // when the Mac last heard from it
     // When this phone last heard from it, kept across launches, for "last seen" when the Mac can't be reached either.
-    @Published var lastHeard: Date? = UserDefaults.standard.object(forKey: "lastHeard") as? Date
+    // Not published: it moves on every reading, and is only shown while the Chumby can't be reached, when the change to
+    // `offline` or `dead` redraws what shows it. Publishing it rebuilt every tab every few seconds for nothing.
+    var lastHeard: Date? = UserDefaults.standard.object(forKey: "lastHeard") as? Date
     @Published var busy: (text: String, until: Date)?
     @Published var snoozedAt: Date?
     @Published var songs: [Song] = []
@@ -217,10 +219,11 @@ final class ChumbyModel: ObservableObject {
             let r = try await fetch("sys", from: api)
             // The cache stops refreshing when nobody is looking, so one old answer on opening means nothing.
             staleReadings = r.age > 60 ? staleReadings + 1 : 0
-            failures = 0; offline = false; dead = staleReadings >= 3
+            // Each set only when it changes: an unchanged value still republishes and redraws every tab.
+            failures = 0; set(\.offline, false); set(\.dead, staleReadings >= 3)
             if r.age <= 60 { heard() }
             // A frozen Chumby mostly shows up here, as an old copy from the Mac, rather than as an error.
-            lastSeen = dead ? (await api.lastSeen() ?? lastSeen) : nil
+            set(\.lastSeen, dead ? (await api.lastSeen() ?? lastSeen) : nil)
             guard Date() >= sysHold, r.data != sysBytes else { return }
             // An old copy from the Mac never starts, snoozes or ends a ring; it's read again until a fresh one says so.
             let fresh = r.age <= 10
@@ -228,20 +231,24 @@ final class ChumbyModel: ObservableObject {
             var s = try JSONDecoder().decode(Sys.self, from: r.data)
             if !fresh { s.ring = sys.ring }
             if s.ringing?.snoozed == true, sys.ringing?.snoozed != true { snoozedAt = sys.ringing == nil ? nil : Date() }
-            if s.ringing == nil { snoozedAt = nil }
+            if s.ringing == nil, snoozedAt != nil { snoozedAt = nil }
             if sys.up > s.up, busy != nil { busy = nil }     // back from its restart
             // A ring starting, snoozing or ending on the Chumby moves the page as one, never in a single frame.
-            if s.ringing != sys.ringing { withAnimation(Self.ringChange(to: s.ringing)) { sys = s } } else { sys = s }
+            if s.ringing != sys.ringing { withAnimation(Self.ringChange(to: s.ringing)) { sys = s } } else if s != sys { sys = s }
             try? r.data.write(to: Self.cache("sys"), options: .atomic)
         } catch is CancellationError {
         } catch ChumbyError.deviceDown {
-            failures = 0; offline = false; dead = true; staleReadings = 3
-            lastSeen = await api.lastSeen()
+            failures = 0; set(\.offline, false); set(\.dead, true); staleReadings = 3
+            set(\.lastSeen, await api.lastSeen())
         } catch {
             if Task.isCancelled { return }
             failures += 1
-            if failures >= 2 { offline = true; switchRoute() }
+            if failures >= 2 { set(\.offline, true); switchRoute() }
         }
+    }
+    // Assigns only a different value, so a poll that finds nothing new publishes nothing.
+    private func set<T: Equatable>(_ key: ReferenceWritableKeyPath<ChumbyModel, T>, _ value: T) {
+        if self[keyPath: key] != value { self[keyPath: key] = value }
     }
     private func heard() {
         let now = Date()
@@ -259,7 +266,7 @@ final class ChumbyModel: ObservableObject {
         // an older copy (the Mac's, just after a save) is never shown over it.
         let recent = r.age < 30
         if !recent && stateConfirmed { return }
-        if recent { stateConfirmed = true }
+        if recent, !stateConfirmed { stateConfirmed = true }
         if r.data == stateBytes { return }
         guard Date() >= stateHold, let s = try? JSONDecoder().decode(ChumbyState.self, from: r.data) else { return }
         stateBytes = r.data
@@ -269,7 +276,7 @@ final class ChumbyModel: ObservableObject {
     // The Chumby's list, with whatever is still on its way laid over it.
     private func took(_ s: ChumbyState) {
         deviceState = s
-        stateKnown = true
+        if !stateKnown { stateKnown = true }
         // A change that didn't get through, which the Chumby now matches anyway (put right on the Chumby, say), is done.
         pending.removeAll { p in
             guard p.failed != nil else { return false }

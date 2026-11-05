@@ -520,7 +520,7 @@ struct QuickActions: View {
             button("screen", "macwindow", "Screen") { model.screenOpen = true }
             // Dims itself, in its own colours, to match the other three.
             DisplayHoldButton().disabled(model.stale)
-            button("copy", "square.and.arrow.down", "Copy from Mac") {
+            button("copy", "doc.on.doc", "Copy from Mac") {
                 fails["copy"] = nil
                 Task {
                     guard let t = try? await model.api.clipboard() else { fail("copy", "Can’t reach the Mac"); return }
@@ -531,7 +531,7 @@ struct QuickActions: View {
                     succeed("copy")
                 }
             }
-            button("send", "square.and.arrow.up", "Send to Mac") {
+            button("send", "doc.on.clipboard", "Send to Mac") {
                 fails["send"] = nil
                 #if canImport(UIKit)
                 let t = UIPasteboard.general.string ?? ""

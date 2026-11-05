@@ -38,6 +38,35 @@ struct ChumbyApp: App {
 }
 
 // MARK: - The sea, the ghost, the glass
+// The sea's soft blobs and the ghost octopus, each drawn once and kept, so the drift only moves pictures: drawing four big
+// gradients and a path again every frame cost every tab its smoothness, and every glass control over them its backdrop.
+@MainActor enum SeaArt {
+    private static var blobs: [String: Image] = [:], ghosts: [String: Image] = [:]
+    // The gradient for one blob, at a fixed size; a soft gradient scaled up looks the same as one drawn at full size.
+    static func blob(_ dark: Bool, _ i: Int, _ color: Color) -> Image {
+        let key = "\(dark)-\(i)"
+        if let b = blobs[key] { return b }
+        let side: CGFloat = 512
+        let r = ImageRenderer(content: Circle().fill(RadialGradient(colors: [color, color.opacity(0.75), color.opacity(0)], center: .center, startRadius: 0, endRadius: side / 2)).frame(width: side, height: side))
+        r.scale = 1
+        let image = r.cgImage.map { Image(decorative: $0, scale: 1) } ?? Image(systemName: "circle")
+        blobs[key] = image
+        return image
+    }
+    // The ghost at the size it's shown, at the display's scale, so its edge is as crisp as the shape drawn live.
+    static func ghost(_ dark: Bool, _ size: CGSize, _ scale: CGFloat) -> Image {
+        let key = "\(dark)-\(Int(size.width))x\(Int(size.height))@\(scale)"
+        if let g = ghosts[key] { return g }
+        let r = ImageRenderer(content: ArtShape(art: ChumbyArt.octBody, box: ChumbyArt.octBox)
+            .fill(dark ? ChumbyPalette.hex(0x79bbff).opacity(0.08) : Color.white.opacity(0.34), style: FillStyle(eoFill: true))
+            .frame(width: max(size.width, 1), height: max(size.height, 1)))
+        r.scale = scale
+        let image = r.cgImage.map { Image(decorative: $0, scale: scale) } ?? Image(systemName: "circle")
+        if ghosts.count > 6 { ghosts.removeAll() }
+        ghosts[key] = image
+        return image
+    }
+}
 // Soft gradients drifting with the clock. Only where they are in their drift changes, worked out afresh each frame from
 // the size the sea has now, so nothing ever animates from where it was before the page had a size.
 struct SeaBackground: View {
@@ -50,22 +79,24 @@ struct SeaBackground: View {
             let m = max(g.size.width, g.size.height)
             TimelineView(.animation(minimumInterval: 1.0 / 24, paused: still || !active)) { ctx in
                 let t = still ? 0 : ctx.date.timeIntervalSinceReferenceDate
+                let dark = scheme == .dark
                 ZStack {
                     c[0]
-                    blob(c[1], m * 1.05, -0.30, -0.28, 26, m, t)
-                    blob(c[2], m * 0.75, 0.34, -0.10, 33, m, t)
-                    blob(c[3], m * 0.80, -0.22, 0.32, 29, m, t)
-                    blob(c[4], m * 0.55, 0.26, 0.32, 37, m, t)
+                    blob(SeaArt.blob(dark, 1, c[1]), m * 1.05, -0.30, -0.28, 26, m, t)
+                    blob(SeaArt.blob(dark, 2, c[2]), m * 0.75, 0.34, -0.10, 33, m, t)
+                    blob(SeaArt.blob(dark, 3, c[3]), m * 0.80, -0.22, 0.32, 29, m, t)
+                    blob(SeaArt.blob(dark, 4, c[4]), m * 0.55, 0.26, 0.32, 37, m, t)
                 }
                 .frame(width: g.size.width, height: g.size.height)
             }
         }
         .transaction { $0.animation = nil }
     }
-    // The same ease in and out as before, back and forth over twice its period, as a sine of the time.
-    func blob(_ color: Color, _ size: CGFloat, _ x: CGFloat, _ y: CGFloat, _ period: Double, _ m: CGFloat, _ t: Double) -> some View {
+    // The same ease in and out as before, back and forth over twice its period, as a sine of the time. Each frame only
+    // moves and scales a gradient drawn once (SeaArt), rather than drawing the gradient again.
+    func blob(_ art: Image, _ size: CGFloat, _ x: CGFloat, _ y: CGFloat, _ period: Double, _ m: CGFloat, _ t: Double) -> some View {
         let k = CGFloat(0.5 - 0.5 * cos(.pi * t / period))
-        return Circle().fill(RadialGradient(colors: [color, color.opacity(0.75), color.opacity(0)], center: .center, startRadius: 0, endRadius: size / 2))
+        return art.resizable().interpolation(.high)
             .frame(width: size, height: size)
             .scaleEffect(1 + 0.14 * k)
             .offset(x: m * x + size * (-0.05 + 0.12 * k), y: m * y + size * (-0.03 + 0.09 * k))
@@ -76,13 +107,16 @@ struct GhostOctopus: View {
     var active = true
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var still
+    @Environment(\.displayScale) private var displayScale
     var body: some View {
         GeometryReader { g in
+            // Drawn once at this size, then only turned and moved each frame.
+            let size = CGSize(width: min(g.size.width, g.size.height) * 1.5, height: g.size.height)
+            let art = SeaArt.ghost(scheme == .dark, size, displayScale)
             TimelineView(.animation(minimumInterval: 1.0 / 24, paused: still || !active)) { ctx in
                 let k = still ? 0.5 : 0.5 - 0.5 * cos(.pi * ctx.date.timeIntervalSinceReferenceDate / 14)
-                ArtShape(art: ChumbyArt.octBody, box: ChumbyArt.octBox)
-                    .fill(scheme == .dark ? ChumbyPalette.hex(0x79bbff).opacity(0.08) : Color.white.opacity(0.34), style: FillStyle(eoFill: true))
-                    .frame(width: min(g.size.width, g.size.height) * 1.5)
+                art.resizable()
+                    .frame(width: size.width, height: size.height)
                     .rotationEffect(.degrees(-3 + 6 * k))
                     .offset(y: -8 + 22 * k)
                     .position(x: g.size.width / 2, y: g.size.height * 0.42)

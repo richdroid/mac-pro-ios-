@@ -94,9 +94,15 @@ struct Status: Decodable {
 }
 
 // The numbers that change every second.
-struct LiveStatus: Decodable {
+struct LiveStatus: Decodable, Equatable {
     let uptime: Double; let load: [Double]; let cpu: Status.CPU; let mem: Status.Memory; let net: Status.Network; let hist: Status.History; let temps: [Status.Temp]?
 }
+// Compared, so a reading that's the same as the last one doesn't redraw the live tiles.
+extension Status.CPU: Equatable {}
+extension Status.Memory: Equatable {}
+extension Status.Network: Equatable {}
+extension Status.History: Equatable {}
+extension Status.Temp: Equatable {}
 
 enum APIError: LocalizedError {
     case signInNeeded, message(String), badResponse

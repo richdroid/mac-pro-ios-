@@ -43,9 +43,11 @@ struct MarkNote: View {
 struct LandBubble: View {
     @EnvironmentObject var model: ChumbyModel
     let mark: String
+    // The bubble is gone (faded out) by 0.9 s; past 1.2 s its clock stops, instead of ticking until the next redraw.
+    @State private var done = false
     var body: some View {
         if case .landed(let at) = model.marks[mark], Date().timeIntervalSince(at) < 1.2 {
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: done)) { ctx in
                 let p = min(ctx.date.timeIntervalSince(at) / 0.9, 1)
                 Circle()
                     .fill(RadialGradient(colors: [.white.opacity(0.95), .white.opacity(0.15), ChumbyPalette.hex(0x79bbff).opacity(0.3)], center: UnitPoint(x: 0.32, y: 0.28), startRadius: 0, endRadius: 8))
@@ -56,6 +58,11 @@ struct LandBubble: View {
                     .opacity(p > 0.85 ? 1 - (p - 0.85) / 0.15 : 1)
             }
             .allowsHitTesting(false)
+            .task(id: at) {
+                done = false
+                try? await Task.sleep(nanoseconds: UInt64(max(0, 1.2 - Date().timeIntervalSince(at)) * 1e9))
+                done = true
+            }
         }
     }
 }

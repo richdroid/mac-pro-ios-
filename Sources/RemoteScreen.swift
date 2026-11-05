@@ -31,8 +31,22 @@ final class RemoteScreen: ObservableObject {
     // takes the newest one on each display refresh (see ScreenLayer).
     @Published private(set) var hasPicture = false
     @Published var size = CGSize.zero
-    // Where the Mac's pointer should be, kept here so the picture can follow it.
-    @Published var cursor = CGPoint.zero
+    // Where the Mac's pointer should be. Not published: it changes at the touch rate, and a published value redrew the
+    // whole screen view on every sample. Whoever draws the pointer listens through `cursorChanged` instead.
+    var cursor = CGPoint.zero { didSet { if cursor != oldValue { cursorChanged?(cursor) } } }
+    var cursorChanged: ((CGPoint) -> Void)?
+    // The Mac's own pointer picture and its hotspot (in Mac pixels), from the Cursor pseudo-encoding, to be drawn on the
+    // phone at `cursor` with no round trip. Nil until the Mac sends one, or while it hides the pointer.
+    @Published private(set) var cursorImage: CGImage?
+    @Published private(set) var cursorHotspot = CGPoint.zero
+    // True once the bridge says it can post smooth pixel scrolls on the Mac (its input helper is trusted); until then,
+    // scrolling goes as wheel steps.
+    @Published private(set) var pixelScrollAvailable = false
+    // For the measuring badge: the WebSocket round trip, and how many pointer moves went out in the last second.
+    @Published private(set) var pingRTT: Double?
+    @Published private(set) var movesPerSecond = 0
+    // Modifier keys held for the next pointer action: click, hold and pixelScroll press them around what they send.
+    var heldModifiers: [UInt32] = []
 
     private var socket: URLSessionWebSocketTask?
     // Reading the stream and painting the picture happen off the main thread, so touches never wait on a frame.
@@ -134,6 +148,8 @@ final class RemoteScreen: ObservableObject {
 
     func disconnect() {
         running = false
+        stopMeasuring()
+        flushTimer = nil
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         if phase != .needsLogin { phase = .idle }
@@ -149,7 +165,10 @@ final class RemoteScreen: ObservableObject {
             do {
                 switch try await task.receive() {
                 case .data(let d): data = d
-                case .string(let s): data = Data(s.utf8)
+                // Text frames are the bridge's own notes (what it can do), never part of the Mac's stream.
+                case .string(let s):
+                    guard let owner, await owner.bridgeSaid(s, on: task) else { return }
+                    continue
                 @unknown default: continue
                 }
             } catch {
@@ -174,8 +193,18 @@ final class RemoteScreen: ObservableObject {
         if drew, !hasPicture { hasPicture = true }
         return running && socket === task
     }
+    // {"pixelScroll":true} when the bridge's input helper can post smooth scrolls. False once this socket isn't wanted.
+    private func bridgeSaid(_ text: String, on task: URLSessionWebSocketTask) -> Bool {
+        guard running, socket === task else { return false }
+        if let d = text.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let on = o["pixelScroll"] as? Bool {
+            pixelScrollAvailable = on
+        }
+        return true
+    }
     private func dropped(_ task: URLSessionWebSocketTask, code: Int) {
         guard running, socket === task else { return }
+        stopMeasuring()
+        pixelScrollAvailable = false
         running = false
         socket = nil
         if code == 409 { phase = .needsLogin; return }
@@ -216,6 +245,12 @@ final class RemoteScreen: ObservableObject {
             cursor = CGPoint(x: w / 2, y: h / 2)
             phase = .connected
             attempts = 0
+            // Tells the bridge this end speaks its extras; it answers in a text frame. A plain RFB bridge would pass the
+            // message on to the Mac, which ignores a type it doesn't know only if it never sees one, so only ask ours.
+            send([251, 0, 0, 0])
+            startMeasuring()
+        case .cursor(let image, let hotspot):
+            cursorImage = image; cursorHotspot = hotspot
         case .resized(let w, let h):
             width = w; height = h
             size = CGSize(width: w, height: h)
@@ -230,24 +265,84 @@ final class RemoteScreen: ObservableObject {
 
     // MARK: Input
     func pointer(x: Int, y: Int, buttons mask: UInt8) {
+        // A pending move goes first, so a press never lands where the pointer was a frame ago.
+        if pendingMove { pendingMove = false }
         buttons = mask
+        sendPointer(x: x, y: y, mask: mask)
+    }
+    private func sendPointer(x: Int, y: Int, mask: UInt8) {
         send([5, mask, UInt8((x >> 8) & 255), UInt8(x & 255), UInt8((y >> 8) & 255), UInt8(y & 255)])
+        movesThisSecond += 1
     }
     func click(x: Int, y: Int, right: Bool = false) {
         let mask: UInt8 = right ? 4 : 1
         cursor = CGPoint(x: x, y: y)
+        let mods = heldModifiers
+        for m in mods { keyEvent(m, down: true) }
         pointer(x: x, y: y, buttons: 0); pointer(x: x, y: y, buttons: mask); pointer(x: x, y: y, buttons: 0)
+        for m in mods.reversed() { keyEvent(m, down: false) }
     }
-    // Moves the pointer, keeping whatever button is held.
+    // Moves the pointer now, keeping whatever button is held.
     func move(to p: CGPoint) {
-        cursor = CGPoint(x: max(0, min(size.width - 1, p.x)), y: max(0, min(size.height - 1, p.y)))
+        cursor = clamped(p)
         pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: buttons)
     }
-    func hold(_ down: Bool) { pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: down ? 1 : 0) }
-    func clickHere(right: Bool = false) { click(x: Int(cursor.x), y: Int(cursor.y), right: right) }
+    // Moves the pointer at most once per display refresh: touches arrive faster than that, and each one sent on its own
+    // queues up behind the others over a slow link. The newest position wins; presses and keys flush it first.
+    func moveCoalesced(to p: CGPoint) {
+        cursor = clamped(p)
+        pendingMove = true
+        scheduleFlush()
+    }
+    private func clamped(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: max(0, min(max(size.width - 1, 0), p.x)), y: max(0, min(max(size.height - 1, 0), p.y)))
+    }
+    private var pendingMove = false
+    private func flushMove() {
+        guard pendingMove else { return }
+        pendingMove = false
+        sendPointer(x: Int(cursor.x), y: Int(cursor.y), mask: buttons)
+    }
+    #if canImport(UIKit)
+    private final class Ticker: NSObject {
+        let fire: () -> Void
+        init(_ fire: @escaping () -> Void) { self.fire = fire }
+        @objc func tick() { fire() }
+    }
+    private var flushTimer: CADisplayLink? { didSet { oldValue?.invalidate() } }
+    private func scheduleFlush() {
+        guard flushTimer == nil else { flushTimer?.isPaused = false; return }
+        let link = CADisplayLink(target: Ticker { [weak self] in self?.displayTick() }, selector: #selector(Ticker.tick))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        flushTimer = link
+    }
+    private func displayTick() {
+        if pendingMove { flushMove() } else { flushTimer?.isPaused = true }
+    }
+    #else
+    private var flushTimer: Bool? = nil
+    private func scheduleFlush() { DispatchQueue.main.async { [weak self] in self?.flushMove() } }
+    #endif
+    // Presses the button down (or lets it go) where the pointer is, with any held modifiers pressed around the hold.
+    private var holdModifiers: [UInt32] = []
+    func hold(_ down: Bool) {
+        flushMove()
+        if down {
+            holdModifiers = heldModifiers
+            for m in holdModifiers { keyEvent(m, down: true) }
+            pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: 1)
+        } else {
+            pointer(x: Int(cursor.x), y: Int(cursor.y), buttons: 0)
+            for m in holdModifiers.reversed() { keyEvent(m, down: false) }
+            holdModifiers = []
+        }
+    }
+    func clickHere(right: Bool = false) { flushMove(); click(x: Int(cursor.x), y: Int(cursor.y), right: right) }
     // Wheel steps, as many as the fingers have earned, in one message. Positive is up (or left): the content comes
     // down (or right). A held button stays held throughout, so scrolling mid-drag doesn't drop what's being dragged.
     func scroll(lines: Int, columns: Int) {
+        flushMove()
         let x = Int(cursor.x), y = Int(cursor.y)
         func event(_ mask: UInt8) -> [UInt8] { [5, mask, UInt8((x >> 8) & 255), UInt8(x & 255), UInt8((y >> 8) & 255), UInt8(y & 255)] }
         var bytes: [UInt8] = []
@@ -256,9 +351,70 @@ final class RemoteScreen: ObservableObject {
         for _ in 0..<min(abs(columns), 40) { bytes += event(buttons | (left ? 32 : 64)) + event(buttons) }
         if !bytes.isEmpty { send(bytes) }
     }
+
+    // MARK: Smooth scrolling
+    // A trackpad's scroll, as the Mac's own trackpad sends it: in points, with the phase of the fingers (began, changed,
+    // ended) and then of the glide after they lift (momentum began, changed, ended). With those, apps scroll 1:1,
+    // rubber-band at the ends and swipe between pages, as they do on the Mac itself.
+    enum ScrollPhase { case none, began, changed, ended }
+    enum MomentumPhase { case none, began, changed, ended }
+    private var scrollRemainder = CGSize.zero
+    private var wheelRemainder = CGSize.zero
+    static let wheelLine: Double = 10
+    // dx and dy are Mac points, in the direction the content moves: positive dy brings what's above into view.
+    func pixelScroll(dx: Double, dy: Double, phase: ScrollPhase, momentum: MomentumPhase) {
+        flushMove()
+        guard pixelScrollAvailable else {
+            // Without the bridge's helper: wheel steps, keeping the part of a step not yet earned, with the held
+            // modifiers pressed around them.
+            if phase == .began || momentum == .began { wheelRemainder = .zero }
+            wheelRemainder.width += dx; wheelRemainder.height += dy
+            let lines = Int(wheelRemainder.height / Self.wheelLine), columns = Int(wheelRemainder.width / Self.wheelLine)
+            wheelRemainder.height -= Double(lines) * Self.wheelLine; wheelRemainder.width -= Double(columns) * Self.wheelLine
+            guard lines != 0 || columns != 0 else { return }
+            let mods = heldModifiers
+            for m in mods { keyEvent(m, down: true) }
+            scroll(lines: lines, columns: columns)
+            for m in mods.reversed() { keyEvent(m, down: false) }
+            return
+        }
+        if phase == .began || momentum == .began { scrollRemainder = .zero }
+        scrollRemainder.width += dx; scrollRemainder.height += dy
+        let x = Int(scrollRemainder.width.rounded(.towardZero)), y = Int(scrollRemainder.height.rounded(.towardZero))
+        scrollRemainder.width -= Double(x); scrollRemainder.height -= Double(y)
+        // The phase changes always go, even with nothing to move: an end with no distance still ends the gesture.
+        let marks = phase != .changed && phase != .none || momentum != .changed && momentum != .none
+        guard x != 0 || y != 0 || marks else { return }
+        let sp: UInt8 = switch phase { case .none: 0; case .began: 1; case .changed: 2; case .ended: 4 }
+        let mp: UInt8 = switch momentum { case .none: 0; case .began: 1; case .changed: 2; case .ended: 3 }
+        let cx = Int16(clamping: x), cy = Int16(clamping: y)
+        send([250, sp, mp, Self.modifierMask(heldModifiers),
+              UInt8(UInt16(bitPattern: cx) >> 8), UInt8(UInt16(bitPattern: cx) & 255),
+              UInt8(UInt16(bitPattern: cy) >> 8), UInt8(UInt16(bitPattern: cy) & 255)])
+    }
+    // The held modifiers as the bridge's helper wants them: 1 shift, 2 control, 4 option, 8 command.
+    static func modifierMask(_ keys: [UInt32]) -> UInt8 {
+        var m: UInt8 = 0
+        for k in keys {
+            switch k {
+            case 0xffe1, 0xffe2: m |= 1
+            case 0xffe3, 0xffe4: m |= 2
+            case 0xffe9, 0xffea: m |= 4
+            case 0xffe7, 0xffe8, 0xffeb, 0xffec: m |= 8
+            default: break
+            }
+        }
+        return m
+    }
+
+    // MARK: Keys
     func keyEvent(_ sym: UInt32, down: Bool) {
+        flushMove()
         send([4, down ? 1 : 0, 0, 0, UInt8((sym >> 24) & 255), UInt8((sym >> 16) & 255), UInt8((sym >> 8) & 255), UInt8(sym & 255)])
     }
+    // A key pressed on touch-down and let go on touch-up, so the Mac repeats a held key itself.
+    func keyDown(_ sym: UInt32) { keyEvent(sym, down: true) }
+    func keyUp(_ sym: UInt32) { keyEvent(sym, down: false) }
     func key(_ sym: UInt32) { keyEvent(sym, down: true); keyEvent(sym, down: false) }
     // A key with modifiers held around it.
     func key(_ sym: UInt32, with modifiers: [UInt32]) {
@@ -266,6 +422,31 @@ final class RemoteScreen: ObservableObject {
         key(sym)
         for m in modifiers.reversed() { keyEvent(m, down: false) }
     }
+
+    // MARK: Measuring
+    // The WebSocket's own ping every two seconds (the bridge answers it at once), and the moves sent each second.
+    private var measuring: Task<Void, Never>?
+    private var movesThisSecond = 0
+    private func startMeasuring() {
+        measuring?.cancel()
+        measuring = Task { [weak self] in
+            var beat = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.movesPerSecond = self.movesThisSecond; self.movesThisSecond = 0
+                beat += 1
+                if beat % 2 == 0, let task = self.socket {
+                    let sent = Date()
+                    task.sendPing { [weak self] error in
+                        let ms = Date().timeIntervalSince(sent) * 1000
+                        Task { @MainActor in if error == nil, self?.socket === task { self?.pingRTT = ms } }
+                    }
+                }
+            }
+        }
+    }
+    private func stopMeasuring() { measuring?.cancel(); measuring = nil; pingRTT = nil; movesPerSecond = 0 }
     // A stand-in picture, for the build's simulator shots, which have no Mac to connect to.
     func showSample() {
         wanted = false
@@ -329,7 +510,7 @@ final class ZRLEInflater {
 }
 
 enum ScreenEvent {
-    case opened(Int, Int), resized(Int, Int), drew, failed(String)
+    case opened(Int, Int), resized(Int, Int), drew, failed(String), cursor(CGImage?, CGPoint)
     var isDrawing: Bool { if case .drew = self { return true }; return false }
 }
 // Which picture the layer is showing: the connection it came from and its number on that connection.
@@ -420,9 +601,10 @@ final class ScreenDecoder: @unchecked Sendable {
                 guard let head = take(24 + nameLength) else { return }
                 width = be16(head, 0); height = be16(head, 2)
                 frame = FrameBuffer(width: width, height: height)
-                // 32-bit little-endian BGRA. ZRLE first, moved areas next, raw as the fallback, and being told of a resize.
+                // 32-bit little-endian BGRA. ZRLE first, moved areas next, raw as the fallback, being told of a resize,
+                // and the pointer's own picture (Cursor, -239), so the phone draws it where the finger is with no wait.
                 send([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0])
-                send([2, 0, 0, 4,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33])
+                send([2, 0, 0, 5,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33,  255, 255, 255, 17])
                 // The whole picture first, then a few requests already waiting, so each change on the Mac is sent as
                 // it happens instead of a round trip after the last one arrived.
                 request(incremental: false)
@@ -463,18 +645,26 @@ final class ScreenDecoder: @unchecked Sendable {
                 guard buffer.count >= at + 4 else { return false }
                 at += 4 + be32(buffer, at)
             case -223: break
+            case -239: at += w * h * 4 + (w + 7) / 8 * h
             default: fail("Unexpected screen data."); return false
             }
             guard buffer.count >= at else { return false }
         }
         var read = 4
-        var resized = false
+        var resized = false, painted = false
         for _ in 0..<count {
             let x = be16(buffer, read), y = be16(buffer, read + 2), w = be16(buffer, read + 4), h = be16(buffer, read + 6)
             let encoding = Int32(truncatingIfNeeded: be32(buffer, read + 8))
             read += 12
             switch encoding {
+            case -239:
+                // The pointer's picture, x and y being its hotspot: BGRA pixels, then a bitmask of which ones show.
+                let length = w * h * 4, maskRow = (w + 7) / 8
+                let image = buffer.withUnsafeBytes { src in Self.cursorImage(src.baseAddress! + read, mask: src.baseAddress! + read + length, w: w, h: h, maskRow: maskRow) }
+                events.append(.cursor(image, CGPoint(x: x, y: y)))
+                read += length + maskRow * h
             case 0:
+                painted = true
                 let offset = read
                 buffer.withUnsafeBytes { src in
                     for row in 0..<h where y + row < height && x + w <= width {
@@ -483,9 +673,11 @@ final class ScreenDecoder: @unchecked Sendable {
                 }
                 read += w * h * 4
             case 1:
+                painted = true
                 copyRect(fromX: be16(buffer, read), fromY: be16(buffer, read + 2), x: x, y: y, w: w, h: h)
                 read += 4
             case 16:
+                painted = true
                 let length = be32(buffer, read)
                 let offset = read + 4
                 let ok = buffer.withUnsafeBytes { src -> Bool in
@@ -503,11 +695,33 @@ final class ScreenDecoder: @unchecked Sendable {
             }
         }
         buffer = Data(buffer.dropFirst(read))
-        finished()
-        events.append(.drew)
+        // An update that only changed the pointer's picture leaves the screen's picture as it was.
+        if painted || resized || count == 0 {
+            finished()
+            events.append(.drew)
+        }
         // One answered, one more asked for, so the same number always wait. After a resize the whole new picture.
         request(incremental: !resized)
         return true
+    }
+    // BGRA (our pixel format) and a 1-bit mask, most significant bit first, into an image with real transparency.
+    // An empty one (0 × 0) means the Mac hides its pointer.
+    static func cursorImage(_ pixels: UnsafeRawPointer, mask: UnsafeRawPointer, w: Int, h: Int, maskRow: Int) -> CGImage? {
+        guard w > 0, h > 0 else { return nil }
+        var out = [UInt8](repeating: 0, count: w * h * 4)
+        let px = pixels.assumingMemoryBound(to: UInt8.self), mk = mask.assumingMemoryBound(to: UInt8.self)
+        for row in 0..<h {
+            for col in 0..<w {
+                let shows = mk[row * maskRow + col / 8] & (0x80 >> UInt8(col % 8)) != 0
+                guard shows else { continue }
+                let i = (row * w + col) * 4
+                out[i] = px[i + 2]; out[i + 1] = px[i + 1]; out[i + 2] = px[i]; out[i + 3] = 255
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(out) as CFData) else { return nil }
+        return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: provider,
+                       decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
     private func copyRect(fromX: Int, fromY: Int, x: Int, y: Int, w: Int, h: Int) {
         guard fromX + w <= width, fromY + h <= height, x + w <= width, y + h <= height else { return }

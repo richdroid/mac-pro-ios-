@@ -1,7 +1,7 @@
 import Foundation
 
 // The Chumby's own CGI API. Reads are open on the network; writes need the device's token.
-struct Sys: Decodable {
+struct Sys: Decodable, Equatable {
     var up = 0, memFree = 0, memTotal = 0, pspFree = 0, wifi = -1, vol = -1, shuffle = 0, wall = 0, night = 0
     var load = 0.0
     var airplayOn = false

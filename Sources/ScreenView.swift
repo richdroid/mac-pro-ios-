@@ -8,25 +8,31 @@ enum MacKey {
     static let command: UInt32 = 0xffeb, option: UInt32 = 0xffe9, control: UInt32 = 0xffe3, shift: UInt32 = 0xffe1
     static let esc: UInt32 = 0xff1b, tab: UInt32 = 0xff09, returnKey: UInt32 = 0xff0d, delete: UInt32 = 0xff08
     static let left: UInt32 = 0xff51, up: UInt32 = 0xff52, right: UInt32 = 0xff53, down: UInt32 = 0xff54
-    static let f4: UInt32 = 0xffc1, f11: UInt32 = 0xffc8
+    static let space: UInt32 = 0x20, f4: UInt32 = 0xffc1, f11: UInt32 = 0xffc8
+    static let modifiers: Set<UInt32> = [command, option, control, shift]
 }
 
 // A Mac trackpad's own gestures, as the phone's surfaces recognise them.
-enum MacSwipe { case up, down, left, right, back, forward, launchpad, desktop }
+enum MacSwipe { case up, down, left, right, back, forward, launchpad, desktop, notifications }
 
-// The Mac's screen, shaped by how the Duo is held.
-//  - Closed: the Mac's screen fills the top half, the trackpad and keys the bottom half.
-//  - Partly folded like a laptop (the crease across): the screen above the fold, the controls below it.
-//  - Partly folded like a book (the crease down the middle): the screen on the left page, the controls on the right.
-//  - Open and upright: the screen across the full width at the top, the controls under it, clear of the fold.
-//  - Open flat: the whole screen, touched directly, with a dock under it, or over it when there's no room.
-// Done and the screen's own controls sit together on the right, as Back does on every other page: at the trailing end of
-// the glass bar above the keys, or of the dock when it's open flat.
+// The Mac's screen as a small MacBook, shaped by how the Duo is held (the system gives the posture, never the angle):
+//  - Laptop (partly folded, the crease across) and open flat upright share one plan: the picture on the lid, set on
+//    the hinge; below it a function row, a full Mac keyboard and a trackpad, so folding between them moves nothing.
+//  - Closed: the picture whole under the camera, then the function row, a row of modifiers and arrows, the trackpad.
+//  - Book (the crease down the middle): picture and keys on the left page, the right page all trackpad.
+//  - Landscape, closed or open flat: the picture pinned to the top, its dock in the black under it.
+// The picture is never cropped and never letterboxed inside its own space: the space is the Mac's shape, and what's
+// left goes to the controls. Every part keeps its identity across postures and moves there in one spring.
 struct RemoteScreenView: View {
     let model: AppModel
-    init(model: AppModel) { self.model = model; observed = model.screen }
+    init(model: AppModel) {
+        self.model = model
+        observed = model.screen
+        _keys = StateObject(wrappedValue: MacKeyboard(screen: model.screen))
+    }
     private var screen: RemoteScreen { model.screen }
     @ObservedObject private var observed: RemoteScreen
+    @StateObject private var keys: MacKeyboard
     @Environment(\.scenePhase) private var scene
     @State private var signingIn = false
     @State private var zoom: CGFloat = 1
@@ -34,17 +40,8 @@ struct RemoteScreenView: View {
     @State private var pan = CGSize.zero
     @State private var panBase = CGSize.zero
     @State private var canvasSize = CGSize.zero
-    // The picture starts filling its space where that only trims the sides; once he zooms himself, it's his.
-    @State private var fillWanted = false
-    @State private var userZoomed = false
     @State private var typing = false
-    @State private var modifiers = Set<UInt32>()
-    @State private var showCursor = false
-    @State private var cursorHide: Task<Void, Never>?
-    @State private var scrollX: CGFloat = 0
-    @State private var scrollY: CGFloat = 0
-    @State private var dragging = false
-    @State private var lastTap = Date.distantPast
+    @State private var keyboardHeight: CGFloat = 0
     @State private var dockOpen = true
     @State private var loginPassword = ""
     @State private var loggingIn = false
@@ -56,46 +53,76 @@ struct RemoteScreenView: View {
     @State private var phoneHasText = true
     @AppStorage("screenGesturesSeen") private var gesturesSeen = false
     @State private var rate = (frames: 0, updates: 0)
+    // Touch bookkeeping that changes on every sample, kept out of SwiftUI's state so a moving finger never rebuilds the view.
+    @State private var pad = TrackpadBox()
+    // The build's way to shoot a posture the simulator can't fold into.
+    @State private var postureOverride = UserDefaults.standard.string(forKey: "screenPosture")
 
     enum ClipState: Equatable {
         case idle, working, done, failed(String)
         var failed: Bool { if case .failed = self { return true }; return false }
     }
-    // A line of a Mac's scroll view, in its pixels: what one wheel step moves.
-    static let lineHeight: CGFloat = 10
+    static let posture = Animation.spring(duration: 0.35, bounce: 0)
 
     var body: some View {
-        // The whole display: the cover has no side bar of its own, so the picture gets that room too.
+        // The whole display: the cover has no side bar of its own, so the picture gets that room too. The system
+        // keyboard slides over the controls rather than squeezing them.
         GeometryReader { full in
-            layout(full.size, fold: fold(full))
+            let (f, force) = effectiveFold(fold(full), full.size)
+            let insets = ScreenInsets.current
+            let p = Self.plan(area: full.size, fold: f, aspect: aspect, top: insets.top, bottom: insets.bottom,
+                              keyboard: typing ? keyboardHeight : 0, force: force)
+            stage(p, area: full.size)
         }
-        .ignoresSafeArea(.container)
+        .ignoresSafeArea()
         .background(Color.black.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onAppear {
+            screen.heldModifiers = []
             switch model.pose {
-            case "screen", "transitions", "screenhint": screen.showSample()
+            case "screen", "transitions", "screenhint", "screenfold": screen.showSample()
+            case "screentyping": screen.showSample(); typing = true
+            case "screenzoomed":
+                screen.showSample()
+                Task { try? await Task.sleep(nanoseconds: 1_500_000_000); zoom = 2.2; pan = clampedPan(.zero) }
+            case "screenmodlock": screen.showSample(); keys.demoLatches()
+            case "screencursor":
+                screen.showSample()
+                pad.lastTouch = .greatestFiniteMagnitude
+                Task { try? await Task.sleep(nanoseconds: 1_500_000_000); screen.moveCoalesced(to: CGPoint(x: screen.size.width * 0.42, y: screen.size.height * 0.38)) }
+            case "screentrace": screen.showSample(); ScreenTrace.write()
             case "screenclip":
                 screen.showSample()
                 copyState = .done; pasteState = .failed("Couldn’t reach the Mac")
             case "screenlogin": screen.showNeedsLogin()
             default: screen.open(base: model.api.base)
             }
+            if model.pose == "screenfold" { foldDemo() }
             keepAwake(true)
             checkPhoneClipboard()
+            ScreenHaptics.prepare()
         }
         #if canImport(UIKit)
         .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in checkPhoneClipboard() }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
+            guard let end = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            let screenHeight = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.bounds.height }.first ?? end.maxY
+            withAnimation(Self.posture) { keyboardHeight = max(0, screenHeight - end.minY) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(Self.posture) { keyboardHeight = 0 }
+        }
         #endif
         .onDisappear {
+            keys.releaseAll()
             screen.close()
             keepAwake(false)
             loginPassword = ""
         }
         .onChange(of: scene) { _, p in
-            if p == .background { screen.enteredBackground() }
+            if p == .background { keys.releaseAll(); screen.enteredBackground() }
             if p == .active { screen.enteredForeground(); checkPhoneClipboard() }
         }
         .sheet(isPresented: $signingIn) {
@@ -105,9 +132,10 @@ struct RemoteScreenView: View {
             }
         }
     }
+    var aspect: CGFloat { screen.size.width > 0 ? screen.size.height / screen.size.width : 0.625 }
 
     // Where the hinge runs, in this view's own space, and whether the Duo is partly folded there (the region is active)
-    // or open flat. The system gives the posture, not an angle, so the layout answers to the posture.
+    // or open flat.
     struct Fold { var crease: CGRect?; var folded = false }
     func fold(_ g: GeometryProxy) -> Fold {
         #if os(iOS)
@@ -118,112 +146,168 @@ struct RemoteScreenView: View {
         #endif
         return Fold()
     }
-
-    @ViewBuilder func layout(_ area: CGSize, fold: Fold) -> some View {
-        let wide = area.width > area.height
-        // Clear of the crease on both sides, so nothing sits on the fold.
-        let air: CGFloat = 6
-        if fold.folded, let c = fold.crease, c.width >= c.height {
-            // A laptop: the Mac's screen above the fold, the keys and trackpad below it.
-            VStack(spacing: 0) {
-                canvas(fill: false).frame(height: max(0, c.minY - air))
-                Color.clear.frame(height: c.height + air * 2)
-                deck.frame(maxHeight: .infinity)
-            }
-        } else if fold.folded, let c = fold.crease {
-            // A book: the Mac's screen on the left page, the controls on the right, where the Duo's controls live.
-            HStack(spacing: 0) {
-                canvas(fill: false).frame(width: max(0, c.minX - air))
-                Color.clear.frame(width: c.width + air * 2)
-                deck.frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        } else if wide {
-            let picture = min(fittedHeight(area.width), area.height)
-            if area.height - picture >= 64 {
-                // Room under the picture: the dock sits in the black there, clear of the Mac's own Dock.
-                VStack(spacing: 8) {
-                    canvas(fill: false).frame(height: picture)
-                    dock(area.width, crease: fold.crease)
-                }
-                .frame(maxHeight: .infinity)
-            } else {
-                ZStack(alignment: .bottom) {
-                    canvas(fill: false)
-                    dock(area.width, crease: fold.crease)
-                }
-            }
-        } else if area.width >= 600 {
-            // Open and upright: the picture as wide as the display, the controls under it. Where the fold crosses just
-            // under the picture, the controls start below the fold rather than on it.
-            let picture = fittedHeight(area.width)
-            let below = fold.crease.map { c in c.width >= c.height && c.minY < picture + 64 && c.maxY > picture ? c.maxY + air - picture : 0 } ?? 0
-            VStack(spacing: 0) {
-                canvas(fill: false).frame(height: picture)
-                Color.clear.frame(height: max(10, below))
-                deck
-            }
-        } else {
-            // Closed: the Mac's screen fills the top half, the controls the bottom half.
-            VStack(spacing: 8) {
-                canvas(fill: true).frame(height: (area.height / 2).rounded())
-                deck
+    // Only for the build's shots and film: a posture made up in whatever display the simulator has.
+    func effectiveFold(_ f: Fold, _ area: CGSize) -> (Fold, ScreenPlan.Kind?) {
+        switch postureOverride {
+        case "laptop": return (Fold(crease: CGRect(x: 0, y: (area.height * 0.478).rounded(), width: area.width, height: 40), folded: true), nil)
+        case "book": return (Fold(crease: CGRect(x: (area.width * 0.478).rounded(), y: 0, width: 40, height: area.height), folded: true), nil)
+        case "closedLandscape": return (Fold(), .closedLandscape)
+        default: return (f, nil)
+        }
+    }
+    func foldDemo() {
+        Task {
+            for next in ["laptop", "", "book", ""] {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                withAnimation(Self.posture) { postureOverride = next.isEmpty ? nil : next }
             }
         }
     }
 
-    func fittedHeight(_ width: CGFloat) -> CGFloat {
-        guard screen.size.width > 0 else { return width * 0.65 }
-        return width * screen.size.height / screen.size.width
+    // MARK: The plan
+    // Every part's place for a display size and posture, worked out in one go, so a change of posture is one change of
+    // value that every part springs to together.
+    static func plan(area: CGSize, fold: Fold, aspect: CGFloat, top: CGFloat, bottom: CGFloat, keyboard: CGFloat, force: ScreenPlan.Kind? = nil) -> ScreenPlan {
+        let w = area.width, h = area.height, air: CGFloat = 6, side: CGFloat = 10
+        func fitWidth(_ width: CGFloat, maxHeight: CGFloat) -> CGSize {
+            let ph = width * aspect
+            return ph <= maxHeight ? CGSize(width: width, height: ph) : CGSize(width: maxHeight / aspect, height: maxHeight)
+        }
+        let kind: ScreenPlan.Kind
+        if let force { kind = force }
+        else if fold.folded, let c = fold.crease { kind = c.width >= c.height ? .laptop : .book }
+        else if w > h { kind = w >= 800 ? .flatLandscape : .closedLandscape }
+        else if w >= 600 { kind = .laptop }
+        else { kind = .closed }
+        var p = ScreenPlan(kind: kind)
+        switch kind {
+        case .laptop:
+            // The lid: the picture as wide as the display, set down on the hinge, the camera in the black above it.
+            let c = fold.crease.flatMap { $0.width >= $0.height ? $0 : nil } ?? CGRect(x: 0, y: (h * 0.478).rounded(), width: w, height: 40)
+            let lid = fitWidth(w, maxHeight: max(c.minY - air - top, 1))
+            p.picture = CGRect(x: (w - lid.width) / 2, y: c.minY - air - lid.height, width: lid.width, height: lid.height)
+            // The base: function row, the keyboard, and a trackpad centred under it like a MacBook's.
+            let y0 = c.maxY + 8, base = h - bottom - 8 - y0
+            p.fnRow = CGRect(x: side, y: y0, width: w - side * 2, height: 32)
+            let kbHeight = min(190, base - 32 - 8 - 10 - 110)
+            if kbHeight >= 130 {
+                p.keyboard = CGRect(x: side, y: p.fnRow.maxY + 8, width: w - side * 2, height: kbHeight)
+            } else {
+                p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: w - side * 2, height: 40)
+            }
+            let above = max(p.keyboard.maxY, p.modRow.maxY, p.fnRow.maxY) + 10
+            let padWidth = (w * 0.62).rounded()
+            p.trackpad = CGRect(x: (w - padWidth) / 2, y: above, width: padWidth, height: max(h - bottom - 8 - above, 60))
+        case .closed:
+            let pic = fitWidth(w, maxHeight: h * 0.5)
+            p.picture = CGRect(x: (w - pic.width) / 2, y: top, width: pic.width, height: pic.height)
+            p.fnRow = CGRect(x: side, y: p.picture.maxY + 8, width: w - side * 2, height: 32)
+            p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: w - side * 2, height: 40)
+            p.trackpad = CGRect(x: side, y: p.modRow.maxY + 10, width: w - side * 2, height: max(h - bottom - 8 - p.modRow.maxY - 10, 60))
+            // Typing: the system keyboard comes up over the trackpad and the modifiers and arrows ride on top of it.
+            if keyboard > 0 { p.modRow.origin.y = max(p.fnRow.maxY + 6, h - keyboard - 46) }
+        case .book:
+            let c = fold.crease ?? CGRect(x: (w * 0.478).rounded(), y: 0, width: 40, height: h)
+            let page = c.minX - air
+            let pic = fitWidth(page, maxHeight: h * 0.6)
+            p.picture = CGRect(x: (page - pic.width) / 2, y: top, width: pic.width, height: pic.height)
+            p.fnRow = CGRect(x: side, y: p.picture.maxY + 8, width: page - side * 2, height: 32)
+            p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: page - side * 2, height: 40)
+            let right = c.maxX + air
+            p.trackpad = CGRect(x: right + side, y: top + side, width: w - right - side * 2, height: h - top - bottom - side * 2)
+        case .closedLandscape, .flatLandscape:
+            // The dock lives in the black under the picture, never over the Mac's own Dock.
+            let dock: CGFloat = 52
+            let pic = fitWidth(w, maxHeight: kind == .closedLandscape ? h - dock - 4 : h)
+            p.picture = CGRect(x: (w - pic.width) / 2, y: 0, width: pic.width, height: pic.height)
+            let room = h - pic.height
+            p.dock = room >= dock + 4
+                ? CGRect(x: 0, y: pic.height + (room - dock) / 2, width: w, height: dock)
+                : CGRect(x: 0, y: h - dock - 6 - bottom, width: w, height: dock)
+            p.crease = kind == .flatLandscape ? fold.crease : nil
+        }
+        return p
     }
 
-    // MARK: The rail
-    func railButton(_ icon: String, _ a11y: String, on: Bool = false, tint: Color = .white, action: @escaping () -> Void) -> some View {
+    @ViewBuilder func stage(_ p: ScreenPlan, area: CGSize) -> some View {
+        ZStack(alignment: .topLeading) {
+            place(canvas(always: p.kind != .flatLandscape && p.kind != .closedLandscape), p.picture)
+            place(functionRow, p.fnRow)
+            place(MacKeyboardView(keys: keys), p.keyboard)
+            place(modifierRow, p.modRow)
+            place(trackpad, p.trackpad)
+            place(dock(area.width, crease: p.crease), p.dock)
+            // The one field the system keyboard types into, wherever its button is.
+            KeyCatcher(active: $typing, onText: typeText, onDelete: { keys.tap(MacKey.delete) })
+                .frame(width: 1, height: 1).opacity(0.01)
+        }
+        .frame(width: area.width, height: area.height, alignment: .topLeading)
+        .animation(Self.posture, value: p)
+    }
+    func place<V: View>(_ v: V, _ r: CGRect) -> some View {
+        v.frame(width: max(r.width, 0), height: max(r.height, 0))
+            .opacity(r.isEmpty ? 0 : 1)
+            .allowsHitTesting(!r.isEmpty)
+            .position(x: r.midX, y: r.midY)
+    }
+
+    // MARK: The function row
+    // Where a MacBook's function keys are: the Mac's own shortcuts on the left, this screen's tools and Done on the right.
+    var functionRow: some View {
+        HStack(spacing: 5) {
+            fnKey("esc", nil, "Escape") { keys.tap(MacKey.esc) }
+            fnKey("", "rectangle.3.group", "Mission Control") { keys.tap(MacKey.up, with: [MacKey.control]) }
+            fnKey("", "macwindow", "App Exposé") { keys.tap(MacKey.down, with: [MacKey.control]) }
+            fnKey("", "magnifyingglass", "Spotlight") { keys.tap(MacKey.space, with: [MacKey.command]) }
+            fnKey("", "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() }
+            Spacer(minLength: 6)
+            toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Dictate or type", on: typing, compact: true) { typing.toggle() }
+            clipButton(paste: false, compact: true)
+            clipButton(paste: true, compact: true)
+            toolButton("key.fill", "Sign in to the Mac", compact: true) { signingIn = true }
+            if zoomed { toolButton("arrow.down.right.and.arrow.up.left", "Fit the screen", compact: true) { fitScreen() } }
+            toolButton("xmark", "Done", on: true, compact: true) { model.screenOpen = false }
+        }
+    }
+    func fnKey(_ label: String, _ icon: String?, _ a11y: String, action: @escaping () -> Void) -> some View {
         Button { tick(.light); action() } label: {
-            Image(systemName: icon).font(.system(size: 17, weight: .semibold))
-                .frame(width: 44, height: 44)
-                .background(Circle().fill(.white.opacity(on ? 0.24 : 0)))
+            Group {
+                if let icon { Image(systemName: icon).font(.system(size: 13, weight: .semibold)) }
+                else { Text(label).font(.system(size: 12, weight: .semibold)) }
+            }
+            .frame(minWidth: 30, maxWidth: 44, minHeight: 32).contentShape(Rectangle())
+        }
+        .buttonStyle(MacKeyStyle()).accessibilityLabel(a11y)
+    }
+    // A round tool on a dark glass, the size of the row it sits in.
+    func toolButton(_ icon: String, _ a11y: String, on: Bool = false, tint: Color = .white, compact: Bool = false, action: @escaping () -> Void) -> some View {
+        let side: CGFloat = compact ? 32 : 44
+        return Button { tick(.light); action() } label: {
+            Image(systemName: icon).font(.system(size: compact ? 14 : 17, weight: .semibold))
+                .frame(width: side, height: side)
+                .background(Circle().fill(.white.opacity(on ? 0.24 : compact ? 0.1 : 0)))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain).foregroundStyle(tint).accessibilityLabel(a11y).accessibilityAddTraits(on ? .isSelected : [])
     }
-    @ViewBuilder var railItems: some View {
-        railButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Show keyboard", on: typing) { typing.toggle() }
-            .background { KeyCatcher(active: $typing, onText: typeText, onDelete: { send(MacKey.delete) }).frame(width: 1, height: 1).opacity(0.01) }
-        railButton("arrow.down.right.and.arrow.up.left", "Fit the screen") {
-            userZoomed = true
-            withAnimation(Motion.quick) { zoom = 1; pan = .zero }
-        }
-        railButton("key.fill", "Sign in to the Mac") { signingIn = true }
-        clipButton(paste: false)
-        clipButton(paste: true)
-    }
-    // The screen's controls in one glass bar, Done last, at its right-hand end.
-    var controlBar: some View {
-        HStack(spacing: 4) {
-            railItems
-            Capsule().fill(.white.opacity(0.18)).frame(width: 1, height: 24).padding(.horizontal, 2)
-            railButton("xmark", "Done", on: true) { model.screenOpen = false }
-        }
-        .padding(4)
-        .glassEffect(.regular, in: Capsule())
-    }
+    var zoomed: Bool { zoom > 1.01 }
+    func fitScreen() { withAnimation(Motion.quick) { zoom = 1; pan = .zero } }
 
     // MARK: Clipboard
     // Copy and Paste carry text between the two clipboards. Done is a tick on the button itself, for a moment; a failure
     // says why, right at the button.
-    func clipButton(paste: Bool) -> some View {
+    func clipButton(paste: Bool, compact: Bool = false) -> some View {
         let state = paste ? pasteState : copyState
         let icon: String
         switch state {
         case .done: icon = "checkmark"
         case .failed: icon = "exclamationmark.triangle"
-        // The same glyphs as Copy from Mac and Send to Mac on Status, so the same action looks the same everywhere.
-        default: icon = paste ? "square.and.arrow.up" : "square.and.arrow.down"
+        default: icon = paste ? "doc.on.clipboard" : "doc.on.doc"
         }
         // Nothing on this iPhone's clipboard isn't a failure: Paste just sits dimmed until there is.
         let empty = paste && !phoneHasText
-        return railButton(icon, paste ? "Paste the iPhone’s clipboard on the Mac" : "Copy from the Mac to the iPhone",
-                          tint: state == .done ? macBlue : state.failed ? .red : .white) {
+        return toolButton(icon, paste ? "Paste the iPhone’s clipboard on the Mac" : "Copy from the Mac to the iPhone",
+                          tint: state == .done ? macBlue : state.failed ? .red : .white, compact: compact) {
             if paste { pasteFromPhone() } else { copyToPhone() }
         }
         .disabled(empty)
@@ -305,22 +389,10 @@ struct RemoteScreenView: View {
     }
 
     // MARK: The picture
-    // Scale that fits the Mac in the space, before any zoom.
+    // Scale that fits the Mac in the space, before any zoom. The space is the Mac's own shape, so this fills it.
     var fit: CGFloat {
         guard screen.size.width > 0, canvasSize.width > 0 else { return 1 }
         return min(canvasSize.width / screen.size.width, canvasSize.height / screen.size.height)
-    }
-    // The zoom at which the picture fills the space. Only ever trims the sides, so the menu bar and the Dock stay in view.
-    var fillZoom: CGFloat {
-        guard screen.size.width > 0, canvasSize.width > 0, canvasSize.height > 0 else { return 1 }
-        let sx = canvasSize.width / screen.size.width, sy = canvasSize.height / screen.size.height
-        return sy > sx ? min(sy / sx, 2) : 1
-    }
-    var baseZoom: CGFloat { fillWanted ? fillZoom : 1 }
-    func settleZoom(fill: Bool) {
-        fillWanted = fill
-        if !userZoomed { zoom = baseZoom; pan = .zero }
-        pan = clampedPan(pan)
     }
     func macPoint(_ p: CGPoint) -> CGPoint {
         let s = fit * zoom
@@ -342,12 +414,13 @@ struct RemoteScreenView: View {
     var measuring: Bool { model.pose == "screenfps" || UserDefaults.standard.bool(forKey: "showFPS") }
     var showHint: Bool { model.pose == "screenhint" || (model.pose.isEmpty && !gesturesSeen) }
 
-    func canvas(fill: Bool) -> some View {
-        // The space sets the size and the picture fits inside it, never the other way round.
+    // `always`: the pointer stays in view, as on a laptop, where there's a trackpad. Touched directly, it shows for a
+    // moment after each touch.
+    func canvas(always: Bool) -> some View {
         Color.black
             .overlay {
-                // Drawn from the space it's actually given, not from a remembered size, so a new layout (unfolding, the
-                // dock moving) never leaves it blank. The layer takes each new picture on the next display refresh.
+                // Drawn from the space it's actually given, not from a remembered size, so a new posture never leaves it
+                // blank. The layer takes each new picture on the next display refresh.
                 GeometryReader { geo in
                     if screen.hasPicture, screen.size.width > 0, geo.size.width > 0 {
                         let f = min(geo.size.width / screen.size.width, geo.size.height / screen.size.height)
@@ -361,36 +434,38 @@ struct RemoteScreenView: View {
                 }
             }
             .overlay {
-                if showCursor, screen.hasPicture {
-                    Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5)
-                        .background(Circle().fill(macBlue.opacity(0.3)))
-                        .frame(width: 26, height: 26)
-                        .shadow(color: .black.opacity(0.5), radius: 3)
-                        .position(viewPoint(screen.cursor))
+                // The Mac's own pointer, drawn here at once rather than waiting for it to come back in the picture.
+                if screen.hasPicture {
+                    CursorOverlay(screen: screen, pad: pad,
+                                  map: CursorMap(scale: fit * zoom, pan: pan, canvas: canvasSize, mac: screen.size, always: always),
+                                  image: observed.cursorImage, hotspot: observed.cursorHotspot)
                         .allowsHitTesting(false)
-                        .transition(.opacity)
                 }
             }
             .overlay {
                 TouchSurface(
+                    mode: .picture,
                     onTap: { p in
                         bump()
                         screen.click(x: Int(macPoint(p).x), y: Int(macPoint(p).y))
+                        keys.consume()
                         tick(.light)
                     },
                     onTwoFingerTap: { p in
                         bump()
                         screen.click(x: Int(macPoint(p).x), y: Int(macPoint(p).y), right: true)
+                        keys.consume()
                         tick(.medium)
                     },
                     onSmartZoom: { p in smartZoom(around: p) },
                     onLongPress: { p in
                         bump()
                         screen.click(x: Int(macPoint(p).x), y: Int(macPoint(p).y), right: true)
+                        keys.consume()
                         tick(.medium)
                     },
                     onDrag: { phase, location, delta in directDrag(phase, location, delta) },
-                    onScroll: { d, speed in scrollBy(d, speed: speed, onPicture: true) },
+                    onScroll: { d, step in scroll(d, step, onPicture: true) },
                     onPinch: { phase, scale, center in pinch(phase, scale, center) },
                     onSwipe: { swipe($0) }
                 )
@@ -399,19 +474,20 @@ struct RemoteScreenView: View {
             .overlay(alignment: .topLeading) { if measuring { rateBadge } }
             .overlay { if showHint, screen.hasPicture { gestureHint } }
             .clipped()
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0; settleZoom(fill: fill) }
-            .onChange(of: screen.size) { _, _ in settleZoom(fill: fill) }
-            .onChange(of: fill) { _, f in settleZoom(fill: f) }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0; pan = clampedPan(pan) }
+            .onChange(of: screen.size) { _, _ in pan = clampedPan(pan) }
     }
     var rateBadge: some View {
-        Text("\(rate.frames) fps shown · \(rate.updates) sent by the Mac · \(RemoteScreen.pipeline) in flight")
+        let rtt = observed.pingRTT.map { " · \(Int($0.rounded())) ms" } ?? ""
+        return Text("\(rate.frames) fps shown · \(rate.updates) sent by the Mac · \(RemoteScreen.pipeline) in flight\(rtt) · \(observed.movesPerSecond) moves/s")
             .font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(.white)
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(.black.opacity(0.7), in: Capsule())
             .padding(8)
             .allowsHitTesting(false)
     }
-    // A finger on the picture: moves the view when zoomed in, and otherwise holds the mouse down and drags.
+    // A finger on the picture: moves the view when zoomed in, and otherwise holds the mouse down and drags, from where
+    // the finger first landed.
     func directDrag(_ phase: TouchPhase, _ location: CGPoint, _ delta: CGSize) {
         if zoom > 1.001 {
             if phase == .changed { pan = clampedPan(CGSize(width: pan.width + delta.width, height: pan.height + delta.height)) }
@@ -421,16 +497,15 @@ struct RemoteScreenView: View {
         case .began:
             bump(); screen.move(to: macPoint(location)); screen.hold(true); tick(.light)
         case .changed:
-            bump(); screen.move(to: macPoint(location))
+            bump(); screen.moveCoalesced(to: macPoint(location))
         case .ended:
-            screen.hold(false)
+            screen.hold(false); keys.consume()
         }
     }
     func pinch(_ phase: TouchPhase, _ scale: CGFloat, _ center: CGPoint) {
         switch phase {
         case .began: zoomBase = zoom; panBase = pan
         case .changed:
-            userZoomed = true
             let next = max(1, min(8, zoomBase * scale))
             // The spot between the fingers stays where it is.
             let cx = center.x - canvasSize.width / 2, cy = center.y - canvasSize.height / 2
@@ -441,16 +516,14 @@ struct RemoteScreenView: View {
             if zoom < 1.05 { withAnimation(Motion.quick) { zoom = 1; pan = .zero } }
         }
     }
-    // Two fingers tapped twice: in on that spot, or back out to where it started, as smart zoom does on a Mac.
+    // Two fingers tapped twice on the picture: in on that spot, or back out, as smart zoom does on a Mac.
     func smartZoom(around p: CGPoint) {
         tick(.light)
         withAnimation(Motion.quick) {
-            if zoom > baseZoom * 1.05 {
-                userZoomed = false
-                zoom = baseZoom; pan = clampedPan(.zero)
+            if zoom > 1.05 {
+                zoom = 1; pan = .zero
             } else {
-                userZoomed = true
-                let next = min(8, baseZoom * 2.2)
+                let next: CGFloat = 2.2
                 let cx = p.x - canvasSize.width / 2, cy = p.y - canvasSize.height / 2
                 let k = next / zoom
                 let target = CGSize(width: cx - (cx - pan.width) * k, height: cy - (cy - pan.height) * k)
@@ -459,31 +532,39 @@ struct RemoteScreenView: View {
             }
         }
     }
-    // Two fingers move the page with them, as on a Mac trackpad with natural scrolling: on the picture exactly as far
-    // as the fingers went over it, on the trackpad about as far as on a Mac's own. Faster fingers go further, the way
-    // macOS accelerates a real trackpad, and a flick keeps gliding after the fingers lift (TouchSurface's momentum).
-    func scrollBy(_ d: CGSize, speed: CGFloat, onPicture: Bool) {
+    // Two fingers move the page with them, in points and with their phases, as a Mac's own trackpad sends them: 1:1,
+    // rubber-banding at the ends, swiping between pages, and gliding on as momentum after a flick. On the picture exactly
+    // as far as the fingers went over it; on the trackpad about as far as a Mac's own, which adds its own acceleration.
+    func scroll(_ d: CGSize, _ step: ScrollStep, onPicture: Bool) {
         bump()
-        let perPoint: CGFloat = onPicture ? 1 / max(fit * zoom, 0.05) : 2.4
-        let gain = perPoint * (1 + min(max(speed - 300, 0) / 600, 3)) * (MacPrefs.naturalScroll ? 1 : -1)
-        scrollY += d.height * gain; scrollX += d.width * gain
-        let lines = Int(scrollY / Self.lineHeight), columns = Int(scrollX / Self.lineHeight)
-        guard lines != 0 || columns != 0 else { return }
-        scrollY -= CGFloat(lines) * Self.lineHeight; scrollX -= CGFloat(columns) * Self.lineHeight
-        screen.scroll(lines: lines, columns: columns)
+        let perPoint = onPicture ? 1 / max(fit * zoom, 0.05) : max(screen.size.width, 1) / max(pad.width, 1) * 0.9
+        let k = Double(perPoint) * (MacPrefs.naturalScroll ? 1 : -1)
+        let dx = Double(d.width) * k, dy = Double(d.height) * k
+        switch step {
+        case .began: screen.pixelScroll(dx: dx, dy: dy, phase: .began, momentum: .none)
+        case .changed: screen.pixelScroll(dx: dx, dy: dy, phase: .changed, momentum: .none)
+        case .ended: screen.pixelScroll(dx: 0, dy: 0, phase: .ended, momentum: .none); keys.used()
+        case .momentumBegan: screen.pixelScroll(dx: dx, dy: dy, phase: .none, momentum: .began)
+        case .momentum: screen.pixelScroll(dx: dx, dy: dy, phase: .none, momentum: .changed)
+        case .momentumEnded: screen.pixelScroll(dx: 0, dy: 0, phase: .none, momentum: .ended); keys.consume()
+        }
+        if step == .ended { keys.consume() }
     }
     // Three fingers, four, and two in from the edge: the Mac's own gestures, as its keyboard shortcuts.
     func swipe(_ s: MacSwipe) {
         bump(); tick(.medium)
         switch s {
-        case .up: screen.key(MacKey.up, with: [MacKey.control])
-        case .down: screen.key(MacKey.down, with: [MacKey.control])
+        case .up: keys.tap(MacKey.up, with: [MacKey.control])
+        case .down: keys.tap(MacKey.down, with: [MacKey.control])
         // Fingers to the left bring in the space on the right, as on the Mac.
-        case .left: screen.key(MacKey.right, with: [MacKey.control])
-        case .right: screen.key(MacKey.left, with: [MacKey.control])
-        case .back: screen.key(0x5b, with: [MacKey.command])
-        case .forward: screen.key(0x5d, with: [MacKey.command])
-        case .desktop: screen.key(MacKey.f11)
+        case .left: keys.tap(MacKey.right, with: [MacKey.control])
+        case .right: keys.tap(MacKey.left, with: [MacKey.control])
+        case .back: keys.tap(0x5b, with: [MacKey.command])
+        case .forward: keys.tap(0x5d, with: [MacKey.command])
+        case .desktop: keys.tap(MacKey.f11)
+        case .notifications:
+            let api = model.api
+            Task { try? await api.action("notification-center") }
         case .launchpad:
             // Launchpad (Apps on Tahoe) has no shortcut a remote key reaches, so the Mac opens it; F4 if it can't.
             let api = model.api
@@ -492,29 +573,34 @@ struct RemoteScreenView: View {
             }
         }
     }
-    // Shows the pointer for a moment, and brings it back into view if zoomed in.
-    func bump() {
-        if !showCursor { withAnimation(Motion.fade) { showCursor = true } }
-        cursorHide?.cancel()
-        cursorHide = Task {
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            if !Task.isCancelled { withAnimation(.easeOut(duration: 0.3)) { showCursor = false } }
+    // One finger on the trackpad, as GestureClassifier reads it.
+    func track(_ o: GestureClassifier.Out) {
+        switch o {
+        case .move(let d):
+            bump()
+            screen.moveCoalesced(to: CGPoint(x: screen.cursor.x + d.width, y: screen.cursor.y + d.height))
+        case .button(let down):
+            bump(); screen.hold(down)
+            if !down { keys.consume() }
+        case .rightClick:
+            bump(); screen.clickHere(right: true); keys.consume()
+        case .haptic(let h): tick(h)
         }
-        guard zoom > 1 else { return }
+    }
+    // A touch: the pointer shows (where it isn't always shown), and comes back into view if zoomed in.
+    func bump() {
+        pad.lastTouch = Date().timeIntervalSinceReferenceDate
+        guard zoom > 1.001 else { return }
         let at = viewPoint(screen.cursor), margin: CGFloat = 40
         var next = pan
         if at.x < margin { next.width += margin - at.x }
         if at.x > canvasSize.width - margin { next.width -= at.x - (canvasSize.width - margin) }
         if at.y < margin { next.height += margin - at.y }
         if at.y > canvasSize.height - margin { next.height -= at.y - (canvasSize.height - margin) }
-        pan = clampedPan(next)
+        let clamped = clampedPan(next)
+        if abs(clamped.width - pan.width) > 0.5 || abs(clamped.height - pan.height) > 0.5 { pan = clamped }
     }
-    func tick(_ style: Haptic) {
-        #if canImport(UIKit)
-        if MacPrefs.haptics { UIImpactFeedbackGenerator(style: style == .light ? .light : .medium).impactOccurred() }
-        #endif
-    }
-    enum Haptic { case light, medium }
+    func tick(_ style: ScreenHaptic) { ScreenHaptics.play(style) }
 
     // MARK: First use
     // Once, the first time the screen opens: what the fingers do, in the Mac's own words. Gone for good on Got it.
@@ -523,10 +609,12 @@ struct RemoteScreenView: View {
             ("hand.draw", "Two fingers", "Scroll"),
             ("hand.tap", "Tap with two fingers", "Right click"),
             ("hand.point.up.left", "Tap, then drag", "Drag"),
-            ("rectangle.3.group", "Three fingers up", "Mission Control"),
-            ("macwindow", "Three fingers down", "App Exposé"),
-            ("rectangle.split.3x1", "Three fingers sideways", "Switch spaces"),
-            ("arrow.left.arrow.right", "Two fingers in from an edge", "Back and forward"),
+            ("hand.point.down", "Press and hold, then move", "Click and drag"),
+            ("rectangle.3.group", "Three or four fingers up", "Mission Control"),
+            ("macwindow", "Three or four fingers down", "App Exposé"),
+            ("rectangle.split.3x1", "Three or four fingers sideways", "Switch spaces"),
+            ("arrow.left.arrow.right", "Two fingers sideways", "Back and forward"),
+            ("bell", "Two fingers in from the right edge", "Notification Centre"),
             ("square.grid.3x3", "Thumb and three fingers together", "Launchpad"),
             ("menubar.dock.rectangle", "Thumb and three fingers apart", "Show the desktop"),
             ("plus.magnifyingglass", "Pinch, or double-tap with two fingers", "Zoom"),
@@ -570,124 +658,57 @@ struct RemoteScreenView: View {
     }
 
     // MARK: Trackpad and keys
-    var deck: some View {
-        VStack(spacing: 8) {
-            HStack { Spacer(minLength: 0); controlBar }
-            keyRows
-            trackpad
-        }
-        .padding(.horizontal, 10).padding(.bottom, 8)
-    }
     var trackpad: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.white.opacity(0.07))
-                .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.white.opacity(0.1)) }
-            Text("Trackpad").font(.footnote.weight(.medium)).foregroundStyle(.white.opacity(0.18)).allowsHitTesting(false)
-            TouchSurface(
-                onTap: { _ in
-                    bump(); lastTap = Date()
-                    screen.clickHere(); tick(.light)
-                },
-                onTwoFingerTap: { _ in bump(); screen.clickHere(right: true); tick(.medium) },
-                // Smart zoom on the trackpad zooms where the pointer is.
-                onSmartZoom: { _ in smartZoom(around: viewPoint(screen.cursor)) },
-                onLongPress: { _ in },
-                onDrag: { phase, _, delta in trackpadDrag(phase, delta) },
-                onScroll: { d, speed in scrollBy(d, speed: speed, onPicture: false) },
-                onPinch: { phase, scale, _ in
-                    // Pinching the trackpad zooms around the pointer.
-                    pinch(phase, scale, viewPoint(screen.cursor))
-                },
-                onSwipe: { swipe($0) }
-            )
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .frame(minHeight: 60)
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        return TouchSurface(
+            mode: .trackpad,
+            macWidth: screen.size.width,
+            edgeBack: !observed.pixelScrollAvailable,
+            onTrack: { track($0) },
+            onScroll: { d, step in scroll(d, step, onPicture: false) },
+            // Pinching the trackpad zooms around the pointer.
+            onPinch: { phase, scale, _ in pinch(phase, scale, viewPoint(screen.cursor)) },
+            onSwipe: { swipe($0) }
+        )
+        .background(Color.clear.glassEffect(.regular.tint(.white.opacity(0.04)), in: shape))
+        // A hairline of light along its top edge, as on the aluminium.
+        .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.22), .white.opacity(0.03)], startPoint: .top, endPoint: .bottom), lineWidth: 1).allowsHitTesting(false))
+        .clipShape(shape)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pad.width = $0 }
+        .accessibilityLabel("Trackpad")
     }
-    // A tap then a drag holds the button, as on a Mac trackpad with drag on.
-    func trackpadDrag(_ phase: TouchPhase, _ delta: CGSize) {
-        switch phase {
-        case .began:
-            if Date().timeIntervalSince(lastTap) < 0.3 { dragging = true; screen.hold(true); tick(.light) }
-        case .changed:
-            let speed = hypot(delta.width, delta.height)
-            let gain = (1.0 + min(speed / 12, 2.2)) * max(screen.size.width, 1) / 1000
-            bump()
-            screen.move(to: CGPoint(x: screen.cursor.x + delta.width * gain, y: screen.cursor.y + delta.height * gain))
-        case .ended:
-            if dragging { dragging = false; screen.hold(false) }
+    // ⌃ ⌥ ⌘ ⇧ and the arrows, where there's no room for the whole keyboard.
+    var modifierRow: some View {
+        HStack(spacing: 5) {
+            MacKeyCap(label: "⌃", sym: MacKey.control, keys: keys, a11y: "Control", size: 16)
+            MacKeyCap(label: "⌥", sym: MacKey.option, keys: keys, a11y: "Option", size: 16)
+            MacKeyCap(label: "⌘", sym: MacKey.command, keys: keys, a11y: "Command", size: 16)
+            MacKeyCap(label: "⇧", sym: MacKey.shift, keys: keys, a11y: "Shift", size: 16)
+            Color.clear.frame(width: 4, height: 1)
+            MacKeyCap(label: "", icon: "arrow.left", sym: MacKey.left, keys: keys, a11y: "Left arrow")
+            MacKeyCap(label: "", icon: "arrow.up", sym: MacKey.up, keys: keys, a11y: "Up arrow")
+            MacKeyCap(label: "", icon: "arrow.down", sym: MacKey.down, keys: keys, a11y: "Down arrow")
+            MacKeyCap(label: "", icon: "arrow.right", sym: MacKey.right, keys: keys, a11y: "Right arrow")
         }
     }
-    func send(_ sym: UInt32, _ extra: [UInt32] = []) {
-        screen.key(sym, with: extra + modifiers.sorted())
-        tick(.light)
-        modifiers = []
+    func typeText(_ text: String) {
+        for scalar in text.unicodeScalars {
+            if scalar == "\n" { keys.tap(MacKey.returnKey); continue }
+            keys.tap(scalar.value < 256 ? scalar.value : 0x0100_0000 | scalar.value)
+        }
     }
-    func keyButton(_ label: String, icon: String? = nil, _ a11y: String, flexible: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    func keyButton(_ label: String, icon: String? = nil, _ a11y: String, action: @escaping () -> Void) -> some View {
+        Button { tick(.light); action() } label: {
             Group {
                 if let icon { Image(systemName: icon).font(.system(size: 15, weight: .semibold)) }
                 else { Text(label).font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8) }
             }
-            .frame(minWidth: flexible ? 30 : 40, maxWidth: flexible ? .infinity : nil, minHeight: 40).contentShape(Rectangle())
+            .frame(minWidth: 40, minHeight: 40).contentShape(Rectangle())
         }
         .buttonStyle(MacKeyStyle()).accessibilityLabel(a11y)
     }
-    var arrows: some View {
-        HStack(spacing: 6) {
-            keyButton("", icon: "arrow.left", "Left arrow", flexible: true) { send(MacKey.left) }
-            keyButton("", icon: "arrow.up", "Up arrow", flexible: true) { send(MacKey.up) }
-            keyButton("", icon: "arrow.down", "Down arrow", flexible: true) { send(MacKey.down) }
-            keyButton("", icon: "arrow.right", "Right arrow", flexible: true) { send(MacKey.right) }
-        }
-    }
-    var modifierRow: some View {
-        HStack(spacing: 6) {
-            modifierKey("⌃", MacKey.control, "Control")
-            modifierKey("⌥", MacKey.option, "Option")
-            modifierKey("⌘", MacKey.command, "Command")
-            modifierKey("⇧", MacKey.shift, "Shift")
-        }
-    }
-    // Every key in view at once and every row the same width: nothing scrolls or is cut off. The arrows stay together,
-    // ← ↑ ↓ →, beside the modifiers when there's room and under them when there isn't.
-    var keyRows: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                keyButton("esc", "Escape", flexible: true) { send(MacKey.esc) }
-                keyButton("tab", "Tab", flexible: true) { send(MacKey.tab) }
-                keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps", flexible: true) { send(MacKey.tab, [MacKey.command]) }
-                keyButton("", icon: "magnifyingglass", "Spotlight", flexible: true) { send(0x20, [MacKey.command]) }
-                keyButton("", icon: "rectangle.3.group", "Mission Control", flexible: true) { send(MacKey.up, [MacKey.control]) }
-                keyButton("", icon: "delete.left", "Delete", flexible: true) { send(MacKey.delete) }
-                keyButton("", icon: "return", "Return", flexible: true) { send(MacKey.returnKey) }
-            }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 6) { modifierRow; Color.clear.frame(width: 6, height: 1); arrows }
-                VStack(spacing: 6) { arrows; modifierRow }
-            }
-        }
-    }
-    func modifierKey(_ label: String, _ sym: UInt32, _ a11y: String) -> some View {
-        let on = modifiers.contains(sym)
-        return Button {
-            tick(.light)
-            if on { modifiers.remove(sym) } else { modifiers.insert(sym) }
-        } label: {
-            Text(label).font(.system(size: 16, weight: .semibold)).frame(minWidth: 40, maxWidth: .infinity, minHeight: 40).contentShape(Rectangle())
-        }
-        .buttonStyle(MacKeyStyle(on: on)).accessibilityLabel(a11y).accessibilityAddTraits(on ? .isSelected : [])
-    }
-    func typeText(_ text: String) {
-        for scalar in text.unicodeScalars {
-            if scalar == "\n" { send(MacKey.returnKey); continue }
-            let sym = scalar.value < 256 ? scalar.value : 0x0100_0000 | scalar.value
-            if modifiers.isEmpty { screen.key(sym) } else { send(sym) }
-        }
-    }
-    // Open flat the picture has the room, so the trackpad is a touch away instead of always there.
-    // Every key and control in one row that fits the open display: 40 pt keys, 4 pt apart. Where the hinge crosses the
-    // row it splits in two, one capsule each side of the fold, so no key sits on the crease.
+    // Landscape, the picture has the room, so the keys sit in one dock under it: 40 pt keys, 4 pt apart. Where the
+    // hinge crosses it, it splits in two, one capsule each side of the fold, so no key sits on the crease.
     @ViewBuilder func dock(_ width: CGFloat, crease: CGRect?) -> some View {
         if let crease, crease.minX > 0, crease.maxX < width {
             // Half the fold, never under 20 pt, plus a little air.
@@ -711,22 +732,25 @@ struct RemoteScreenView: View {
     }
     // Left of the fold: ⌘ through →.
     @ViewBuilder var dockKeys: some View {
-        modifierKey("⌘", MacKey.command, "Command").frame(width: 44)
-        keyButton("esc", "Escape") { send(MacKey.esc) }
-        keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { send(MacKey.tab, [MacKey.command]) }
-        keyButton("", icon: "magnifyingglass", "Spotlight") { send(0x20, [MacKey.command]) }
-        keyButton("", icon: "rectangle.3.group", "Mission Control") { send(MacKey.up, [MacKey.control]) }
-        keyButton("", icon: "arrow.left", "Left arrow") { send(MacKey.left) }
-        keyButton("", icon: "arrow.up", "Up arrow") { send(MacKey.up) }
-        keyButton("", icon: "arrow.down", "Down arrow") { send(MacKey.down) }
-        keyButton("", icon: "arrow.right", "Right arrow") { send(MacKey.right) }
+        MacKeyCap(label: "⌘", sym: MacKey.command, keys: keys, a11y: "Command", size: 16).frame(width: 44, height: 40)
+        keyButton("esc", "Escape") { keys.tap(MacKey.esc) }
+        keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() }
+        keyButton("", icon: "magnifyingglass", "Spotlight") { keys.tap(MacKey.space, with: [MacKey.command]) }
+        keyButton("", icon: "rectangle.3.group", "Mission Control") { keys.tap(MacKey.up, with: [MacKey.control]) }
+        ForEach([(MacKey.left, "arrow.left", "Left arrow"), (MacKey.up, "arrow.up", "Up arrow"), (MacKey.down, "arrow.down", "Down arrow"), (MacKey.right, "arrow.right", "Right arrow")], id: \.0) { k in
+            MacKeyCap(label: "", icon: k.1, sym: k.0, keys: keys, a11y: k.2).frame(width: 40, height: 40)
+        }
     }
     // Right of the fold: ⌫ ⏎, the tools and Done.
     @ViewBuilder var dockTools: some View {
         if dockOpen {
-            keyButton("", icon: "delete.left", "Delete") { send(MacKey.delete) }
-            keyButton("", icon: "return", "Return") { send(MacKey.returnKey) }
-            railItems
+            MacKeyCap(label: "", icon: "delete.left", sym: MacKey.delete, keys: keys, a11y: "Delete").frame(width: 40, height: 40)
+            MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return").frame(width: 40, height: 40)
+            toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Show keyboard", on: typing) { typing.toggle() }
+            if zoomed { toolButton("arrow.down.right.and.arrow.up.left", "Fit the screen") { fitScreen() } }
+            toolButton("key.fill", "Sign in to the Mac") { signingIn = true }
+            clipButton(paste: false)
+            clipButton(paste: true)
         }
         Button {
             tick(.light)
@@ -737,7 +761,7 @@ struct RemoteScreenView: View {
         }
         .buttonStyle(.plain).foregroundStyle(.white.opacity(0.7)).accessibilityLabel(dockOpen ? "Hide the keys" : "Show the keys")
         // Done stays, at the right-hand end, even with the keys tucked away.
-        railButton("xmark", "Done", on: true) { model.screenOpen = false }
+        toolButton("xmark", "Done", on: true) { model.screenOpen = false }
     }
 
     // Watching doesn't count as touching, so keep the iPhone's display on while the Mac's screen is open.
@@ -804,6 +828,253 @@ extension RemoteScreenView {
     }
 }
 
+// Where each part of the screen goes, for one size and posture.
+struct ScreenPlan: Equatable {
+    enum Kind: Equatable { case laptop, closed, book, closedLandscape, flatLandscape }
+    var kind: Kind
+    var picture = CGRect.zero
+    var fnRow = CGRect.zero
+    var keyboard = CGRect.zero
+    var modRow = CGRect.zero
+    var trackpad = CGRect.zero
+    var dock = CGRect.zero
+    var crease: CGRect?
+}
+
+// The window's own insets (the camera at the top, the home bar at the foot), which the screen's plan keeps clear of
+// itself, since the view runs edge to edge.
+enum ScreenInsets {
+    @MainActor static var current: (top: CGFloat, bottom: CGFloat) {
+        #if os(iOS)
+        let w = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        return (w?.safeAreaInsets.top ?? 0, w?.safeAreaInsets.bottom ?? 0)
+        #else
+        return (0, 0)
+        #endif
+    }
+}
+
+// Touch bookkeeping that changes on every sample: kept in a box, not in SwiftUI state, so nothing rebuilds per touch.
+final class TrackpadBox {
+    var width: CGFloat = 1
+    // When a finger last touched, for showing the pointer a moment after a direct touch.
+    var lastTouch: Double = 0
+}
+
+enum ScreenHaptic { case light, medium, soft }
+// One of each feedback, made once and kept warm, so a tick lands with the touch, not after it.
+enum ScreenHaptics {
+    #if canImport(UIKit)
+    @MainActor static let light = UIImpactFeedbackGenerator(style: .light)
+    @MainActor static let medium = UIImpactFeedbackGenerator(style: .medium)
+    @MainActor static let soft = UIImpactFeedbackGenerator(style: .soft)
+    #endif
+    @MainActor static func prepare() {
+        #if canImport(UIKit)
+        light.prepare(); medium.prepare(); soft.prepare()
+        #endif
+    }
+    @MainActor static func play(_ h: ScreenHaptic) {
+        #if canImport(UIKit)
+        guard MacPrefs.haptics else { return }
+        switch h {
+        case .light: light.impactOccurred(); light.prepare()
+        case .medium: medium.impactOccurred(); medium.prepare()
+        case .soft: soft.impactOccurred(intensity: 0.5); soft.prepare()
+        }
+        #endif
+    }
+}
+
+// MARK: - Keys
+// The phone's Mac keyboard, as a Mac's keys behave: each key goes down when the finger lands and up when it lifts, so
+// the Mac repeats a held key itself. Modifiers: a tap holds one for the next key, click or scroll; a quick second tap
+// locks it until tapped again; held while something else is pressed, it's a chord. They reach the Mac through the
+// screen's heldModifiers, which it presses around every key, click and scroll.
+@MainActor final class MacKeyboard: ObservableObject {
+    enum Latch: Equatable { case once, locked, held }
+    @Published private(set) var latched: [UInt32: Latch] = [:]
+    let screen: RemoteScreen
+    private var pressing: [UInt32: (was: Latch?, used: Bool)] = [:]
+    private var tapped: [UInt32: Date] = [:]
+    private var keyMods: [UInt32: [UInt32]] = [:]
+    // ⌘ held down by ⌘Tab while the app switcher is open; let go when he's done browsing.
+    private var switching = false
+    private var switcherClose: Task<Void, Never>?
+    init(screen: RemoteScreen) { self.screen = screen }
+    var shifted: Bool { latched[MacKey.shift] != nil }
+
+    private func sync() { screen.heldModifiers = latched.keys.sorted().filter { !(switching && $0 == MacKey.command) } }
+    func press(_ sym: UInt32) {
+        if MacKey.modifiers.contains(sym) {
+            let was = latched[sym]
+            if was == nil { latched[sym] = .held; sync() }
+            pressing[sym] = (was, false)
+            return
+        }
+        used()
+        if switching, sym != MacKey.tab { closeSwitcher() }
+        let mods = screen.heldModifiers
+        for m in mods { screen.keyDown(m) }
+        screen.keyDown(sym)
+        keyMods[sym] = mods
+    }
+    func release(_ sym: UInt32) {
+        if MacKey.modifiers.contains(sym) { releaseModifier(sym); return }
+        guard let mods = keyMods.removeValue(forKey: sym) else { return }
+        screen.keyUp(sym)
+        for m in mods.reversed() { screen.keyUp(m) }
+        consume()
+    }
+    private func releaseModifier(_ m: UInt32) {
+        guard let p = pressing.removeValue(forKey: m) else { return }
+        if p.used {
+            // A chord: it was held while something else was pressed.
+            latched[m] = p.was; sync(); return
+        }
+        switch p.was {
+        case nil:
+            latched[m] = .once; tapped[m] = Date()
+        case .once:
+            if let t = tapped[m], Date().timeIntervalSince(t) < 0.4 { latched[m] = .locked } else { off(m) }
+        case .locked, .held:
+            off(m)
+        }
+        sync()
+    }
+    private func off(_ m: UInt32) {
+        latched[m] = nil
+        if m == MacKey.command, switching { closeSwitcher() }
+        sync()
+    }
+    // A key or shortcut from a button, pressed and let go at once, with what's latched and the shortcut's own modifiers.
+    func tap(_ sym: UInt32, with extra: [UInt32] = []) {
+        used()
+        if switching { closeSwitcher() }
+        screen.key(sym, with: screen.heldModifiers + extra.filter { !screen.heldModifiers.contains($0) })
+        consume()
+    }
+    // Something else was pressed while a modifier is held: that modifier is now a chord.
+    func used() { for k in pressing.keys { pressing[k]?.used = true } }
+    // A one-use modifier is used up by the key, click or scroll it went with.
+    func consume() {
+        for (m, l) in latched where l == .once && pressing[m] == nil { latched[m] = nil }
+        sync()
+    }
+    // ⌘Tab with ⌘ kept down, so another tap goes on to the next app; a moment's pause, or any other key, picks it.
+    func switchApps() {
+        if !switching {
+            switching = true
+            screen.keyDown(MacKey.command)
+            sync()
+        }
+        screen.key(MacKey.tab)
+        switcherClose?.cancel()
+        switcherClose = Task {
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if !Task.isCancelled { closeSwitcher() }
+        }
+    }
+    private func closeSwitcher() {
+        guard switching else { return }
+        switching = false
+        switcherClose?.cancel()
+        screen.keyUp(MacKey.command)
+        if latched[MacKey.command] == .once { latched[MacKey.command] = nil }
+        sync()
+    }
+    // Nothing stays down on the Mac once the screen goes away.
+    func releaseAll() {
+        for (sym, mods) in keyMods { screen.keyUp(sym); for m in mods.reversed() { screen.keyUp(m) } }
+        keyMods = [:]; pressing = [:]
+        closeSwitcher()
+        latched = [:]; sync()
+    }
+    // For the build's shot: ⌘ locked and ⇧ held for one key.
+    func demoLatches() { latched = [MacKey.command: .locked, MacKey.shift: .once]; sync() }
+}
+
+// One key: down on touch-down, up on lift, and up if the touch is cancelled or the key goes away.
+struct MacKeyCap: View {
+    let label: String
+    var icon: String? = nil
+    let sym: UInt32
+    @ObservedObject var keys: MacKeyboard
+    let a11y: String
+    var size: CGFloat = 13
+    @GestureState private var pressing = false
+    var body: some View {
+        let latch = keys.latched[sym]
+        let lit = latch != nil && MacKey.modifiers.contains(sym)
+        Group {
+            if let icon { Image(systemName: icon).font(.system(size: size, weight: .semibold)) }
+            else { Text(keys.shifted && label.count == 1 ? label.uppercased() : label).font(.system(size: size, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.6) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .foregroundStyle(lit ? .black : .white)
+        .background(lit ? Color.white.opacity(latch == .locked ? 1 : 0.82) : Color.white.opacity(pressing ? 0.3 : 0.12),
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        // Locked shows a small light, as Caps Lock does.
+        .overlay(alignment: .bottom) { if latch == .locked { Capsule().fill(macBlue).frame(width: 10, height: 3).padding(.bottom, 3) } }
+        .scaleEffect(pressing ? 0.94 : 1)
+        .animation(Motion.press, value: pressing)
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 0).updating($pressing) { _, s, _ in s = true })
+        .onChange(of: pressing) { _, down in
+            if down { ScreenHaptics.play(.light); keys.press(sym) } else { keys.release(sym) }
+        }
+        .onDisappear { if pressing { keys.release(sym) } }
+        .accessibilityLabel(a11y).accessibilityAddTraits(.isButton)
+    }
+}
+
+// A Mac's keyboard in five rows, every key where a MacBook has it.
+struct MacKeyboardView: View {
+    @ObservedObject var keys: MacKeyboard
+    struct K { var label: String; var sym: UInt32; var weight: CGFloat = 1; var icon: String? = nil; var a11y: String? = nil }
+    static func chars(_ s: String) -> [K] { s.map { K(label: String($0), sym: $0.unicodeScalars.first!.value) } }
+    static let rows: [[K]] = [
+        chars("`1234567890-=") + [K(label: "", sym: MacKey.delete, weight: 1.5, icon: "delete.left", a11y: "Delete")],
+        [K(label: "tab", sym: MacKey.tab, weight: 1.5, a11y: "Tab")] + chars("qwertyuiop[]\\"),
+        chars("asdfghjkl;'") + [K(label: "return", sym: MacKey.returnKey, weight: 1.75, a11y: "Return")],
+        [K(label: "⇧", sym: MacKey.shift, weight: 2.25, a11y: "Shift")] + chars("zxcvbnm,./") + [K(label: "⇧", sym: MacKey.shift, weight: 2.25, a11y: "Shift")],
+    ]
+    var body: some View {
+        GeometryReader { g in
+            let gap: CGFloat = 5, rowHeight = max((g.size.height - gap * 4) / 5, 0)
+            VStack(spacing: gap) {
+                ForEach(Self.rows.indices, id: \.self) { i in row(Self.rows[i], width: g.size.width, gap: gap).frame(height: rowHeight) }
+                bottomRow(width: g.size.width, gap: gap).frame(height: rowHeight)
+            }
+        }
+    }
+    func cap(_ k: K, width: CGFloat) -> some View {
+        MacKeyCap(label: k.label, icon: k.icon, sym: k.sym, keys: keys, a11y: k.a11y ?? k.label, size: k.label.count > 1 ? 11 : 15)
+            .frame(width: max(width, 0))
+    }
+    func row(_ ks: [K], width: CGFloat, gap: CGFloat) -> some View {
+        let unit = max((width - gap * CGFloat(ks.count - 1)) / ks.reduce(0) { $0 + $1.weight }, 0)
+        return HStack(spacing: gap) { ForEach(ks.indices, id: \.self) { j in cap(ks[j], width: unit * ks[j].weight) } }
+    }
+    // ⌃ ⌥ ⌘ space ⌘ ⌥, then the arrows as an inverted T with ↑ and ↓ halved.
+    func bottomRow(width: CGFloat, gap: CGFloat) -> some View {
+        let ks = [K(label: "⌃", sym: MacKey.control, a11y: "Control"), K(label: "⌥", sym: MacKey.option, a11y: "Option"),
+                  K(label: "⌘", sym: MacKey.command, weight: 1.25, a11y: "Command"), K(label: "", sym: MacKey.space, weight: 5, a11y: "Space"),
+                  K(label: "⌘", sym: MacKey.command, weight: 1.25, a11y: "Command"), K(label: "⌥", sym: MacKey.option, a11y: "Option")]
+        let total = ks.reduce(0) { $0 + $1.weight } + 3
+        let unit = max((width - gap * CGFloat(ks.count + 2)) / total, 0)
+        return HStack(spacing: gap) {
+            ForEach(ks.indices, id: \.self) { j in cap(ks[j], width: unit * ks[j].weight) }
+            cap(K(label: "", sym: MacKey.left, icon: "arrowtriangle.left.fill", a11y: "Left arrow"), width: unit)
+            VStack(spacing: 2) {
+                cap(K(label: "", sym: MacKey.up, icon: "arrowtriangle.up.fill", a11y: "Up arrow"), width: unit)
+                cap(K(label: "", sym: MacKey.down, icon: "arrowtriangle.down.fill", a11y: "Down arrow"), width: unit)
+            }
+            cap(K(label: "", sym: MacKey.right, icon: "arrowtriangle.right.fill", a11y: "Right arrow"), width: unit)
+        }
+    }
+}
+
 struct MacKeyStyle: ButtonStyle {
     var on = false
     func makeBody(configuration: Configuration) -> some View {
@@ -816,6 +1087,197 @@ struct MacKeyStyle: ButtonStyle {
 }
 
 enum TouchPhase { case began, changed, ended }
+// Two fingers' scroll, with the phases a Mac's trackpad sends: the fingers' own, then the glide's.
+enum ScrollStep: Equatable { case began, changed, ended, momentumBegan, momentum, momentumEnded }
+
+// MARK: - The trackpad's one finger
+// One finger on the trackpad as a Mac reads it: the pointer, with a Mac's acceleration; a tap clicks, holding the
+// button up a moment in case a drag follows (tap, then drag); a still press clicks and holds, with a firmer tick;
+// two fingers tapped together right-click at once. A thumb resting at the pad's edge doesn't count as a finger. Pure:
+// touches and times in, what to send out, so the build can run scripted touches through it and check the result.
+struct GestureClassifier {
+    enum Out: Equatable { case move(CGSize), button(down: Bool), rightClick, haptic(ScreenHaptic) }
+    struct Touch { var start: CGPoint; var at: CGPoint; var began: Double; var moved: CGFloat = 0; var palm: Bool? }
+    private(set) var touches: [Int: Touch] = [:]
+    var pad = CGSize(width: 400, height: 250)
+    var macWidth: CGFloat = 1680
+    private var gestureBegan: Double = 0
+    private var maxFingers = 0
+    private var gestureMoved: CGFloat = 0
+    private var pendingUp: Double?
+    private var follower: Int?
+    private var holding = false
+    private var pressed = false
+    private var samples: [(t: Double, p: CGPoint)] = []
+    static let tapWindow = 0.28, pressDelay = 0.35, edge: CGFloat = 16
+
+    // Fingers known to be fingers; a touch at the edge waits 150 ms (or until it moves) to be judged.
+    var fingers: Int { touches.values.filter { $0.palm == false }.count }
+    var palms: Int { touches.values.filter { $0.palm == true }.count }
+    var undecided: Int { touches.values.filter { $0.palm == nil }.count }
+    var idle: Bool { touches.isEmpty && pendingUp == nil && !holding }
+
+    static func smoothstep(_ a: CGFloat, _ b: CGFloat, _ x: CGFloat) -> CGFloat {
+        let t = min(max((x - a) / (b - a), 0), 1)
+        return t * t * (3 - 2 * t)
+    }
+    // Mac pixels per point of finger travel, for a finger moving at v points a second: slow is precise enough for a
+    // 3-pixel window edge, a flick crosses the screen.
+    static func gain(speed v: CGFloat, macWidth: CGFloat, padWidth: CGFloat) -> CGFloat {
+        let k = macWidth / max(padWidth, 1) * 0.55
+        return k * (0.45 + 2.1 * smoothstep(60, 1500, v))
+    }
+
+    mutating func began(_ id: Int, at p: CGPoint, t: Double) -> [Out] {
+        if touches.isEmpty { gestureBegan = t; maxFingers = 0; gestureMoved = 0; samples = [] }
+        let atEdge = p.y > pad.height - Self.edge || p.x < Self.edge || p.x > pad.width - Self.edge
+        touches[id] = Touch(start: p, at: p, began: t, palm: atEdge ? nil : false)
+        if pendingUp != nil, follower == nil { follower = id }
+        maxFingers = max(maxFingers, fingers)
+        return []
+    }
+    mutating func moved(_ id: Int, to p: CGPoint, t: Double) -> [Out] {
+        guard var touch = touches[id] else { return [] }
+        let d = CGSize(width: p.x - touch.at.x, height: p.y - touch.at.y)
+        touch.at = p
+        touch.moved = max(touch.moved, hypot(p.x - touch.start.x, p.y - touch.start.y))
+        if touch.palm == nil, touch.moved > 6 { touch.palm = false }
+        touches[id] = touch
+        gestureMoved = max(gestureMoved, touch.moved)
+        maxFingers = max(maxFingers, fingers)
+        // Only one finger moves the pointer; two or more are a scroll or a gesture, which the recognisers have.
+        guard touch.palm == false, fingers == 1 else { samples = []; return [] }
+        // A finger that landed while a tap's button was still held, and moves: that's a drag with the same press.
+        if follower == id, pendingUp != nil, touch.moved > 4 { pendingUp = nil; holding = true }
+        samples.append((t, p))
+        if samples.count > 4 { samples.removeFirst() }
+        let g = Self.gain(speed: speed(), macWidth: macWidth, padWidth: pad.width)
+        return [.move(CGSize(width: d.width * g, height: d.height * g))]
+    }
+    // Finger speed in points a second, over the last three intervals.
+    private func speed() -> CGFloat {
+        guard let a = samples.first, let b = samples.last, b.t > a.t else { return 0 }
+        return hypot(b.p.x - a.p.x, b.p.y - a.p.y) / CGFloat(b.t - a.t)
+    }
+    mutating func ended(_ id: Int, t: Double) -> [Out] {
+        guard let touch = touches.removeValue(forKey: id) else { return [] }
+        guard touches.isEmpty else { return [] }
+        defer { follower = nil; samples = [] }
+        if holding {
+            holding = false
+            if pressed { pressed = false; return [.button(down: false), .haptic(.soft)] }
+            return [.button(down: false)]
+        }
+        let quick = t - gestureBegan < 0.25
+        if maxFingers == 2, quick, gestureMoved < 8 { return [.rightClick, .haptic(.medium)] }
+        if maxFingers <= 1, touch.palm != true, quick, gestureMoved < 6 {
+            if pendingUp != nil {
+                // A second tap in time: the first click's up, then a whole second click, which the Mac counts as a double.
+                pendingUp = nil
+                return [.button(down: false), .button(down: true), .button(down: false), .haptic(.light)]
+            }
+            pendingUp = t + Self.tapWindow
+            return [.button(down: true), .haptic(.light)]
+        }
+        return []
+    }
+    mutating func cancelled(_ id: Int) -> [Out] {
+        touches.removeValue(forKey: id)
+        guard touches.isEmpty else { return [] }
+        follower = nil; samples = []
+        if holding { holding = false; pressed = false; return [.button(down: false)] }
+        return []
+    }
+    mutating func tick(t: Double) -> [Out] {
+        var out: [Out] = []
+        for (id, var touch) in touches where touch.palm == nil && t - touch.began >= 0.15 {
+            touch.palm = touch.moved < 6
+            touches[id] = touch
+        }
+        maxFingers = max(maxFingers, fingers)
+        if let due = pendingUp, t >= due, !holding { pendingUp = nil; follower = nil; out.append(.button(down: false)) }
+        let still = touches.values.filter { $0.palm == false }
+        if !holding, pendingUp == nil, maxFingers <= 1, still.count == 1, let only = still.first, only.moved < 4, t - only.began >= Self.pressDelay {
+            // Press to click: held still, the button goes down with a firmer tick, and moving now drags.
+            holding = true; pressed = true
+            out += [.button(down: true), .haptic(.medium)]
+        }
+        return out
+    }
+}
+
+// The build's check of the trackpad: scripted touches through GestureClassifier, one JSON line per thing it sends,
+// written where the build collects it. Gestures can't be filmed; this is how they're seen.
+enum ScreenTrace {
+    struct Step { var t: Double; var kind: String; var id = 0; var p = CGPoint.zero }
+    static let scripts: [(String, [Step])] = [
+        ("tap", [Step(t: 0, kind: "down", p: CGPoint(x: 200, y: 120)), Step(t: 0.1, kind: "up")] + ticks(0.15, 0.6)),
+        ("tap-then-drag", [Step(t: 0, kind: "down", p: CGPoint(x: 200, y: 120)), Step(t: 0.1, kind: "up"),
+                           Step(t: 0.2, kind: "down", id: 1, p: CGPoint(x: 200, y: 120))]
+            + (1...10).map { Step(t: 0.2 + Double($0) * 0.02, kind: "move", id: 1, p: CGPoint(x: 200 + CGFloat($0) * 4, y: 120)) }
+            + [Step(t: 0.5, kind: "up", id: 1)] + ticks(0.55, 0.9)),
+        ("double-tap", [Step(t: 0, kind: "down", p: CGPoint(x: 200, y: 120)), Step(t: 0.08, kind: "up"),
+                        Step(t: 0.18, kind: "down", id: 1, p: CGPoint(x: 201, y: 121)), Step(t: 0.26, kind: "up", id: 1)] + ticks(0.3, 0.7)),
+        ("two-finger-tap", [Step(t: 0, kind: "down", p: CGPoint(x: 180, y: 120)), Step(t: 0.01, kind: "down", id: 1, p: CGPoint(x: 230, y: 120)),
+                            Step(t: 0.12, kind: "up"), Step(t: 0.13, kind: "up", id: 1)] + ticks(0.15, 0.5)),
+        ("thumb-at-edge-and-pointer", [Step(t: 0, kind: "down", id: 9, p: CGPoint(x: 220, y: 245)), Step(t: 0.05, kind: "down", p: CGPoint(x: 150, y: 100))]
+            + (1...10).map { Step(t: 0.2 + Double($0) * 0.016, kind: "move", p: CGPoint(x: 150 + CGFloat($0) * 6, y: 100)) }
+            + ticks(0.16, 0.2) + [Step(t: 0.5, kind: "up"), Step(t: 0.6, kind: "up", id: 9)] + ticks(0.65, 1.0)),
+        ("press-to-click-and-drag", [Step(t: 0, kind: "down", p: CGPoint(x: 200, y: 120))] + ticks(0.05, 0.45)
+            + (1...8).map { Step(t: 0.45 + Double($0) * 0.02, kind: "move", p: CGPoint(x: 200, y: 120 + CGFloat($0) * 5)) }
+            + [Step(t: 0.7, kind: "up")]),
+    ]
+    static func ticks(_ from: Double, _ to: Double) -> [Step] {
+        stride(from: from, through: to, by: 0.05).map { Step(t: $0, kind: "tick") }
+    }
+    static func run() -> [String] {
+        var lines: [String] = []
+        for (name, steps) in scripts {
+            var c = GestureClassifier()
+            c.pad = CGSize(width: 446, height: 250); c.macWidth = 1680
+            for s in steps.sorted(by: { $0.t < $1.t }) {
+                let outs: [GestureClassifier.Out]
+                switch s.kind {
+                case "down": outs = c.began(s.id, at: s.p, t: s.t)
+                case "move": outs = c.moved(s.id, to: s.p, t: s.t)
+                case "up": outs = c.ended(s.id, t: s.t)
+                default: outs = c.tick(t: s.t)
+                }
+                for o in outs { lines.append(#"{"case":"\#(name)","t":\#(Int(s.t * 1000)),"out":"\#(describe(o))"}"#) }
+            }
+        }
+        // The pointer's curve: Mac pixels per point at ten speeds, on a 446 pt pad driving a 1680 px Mac.
+        for v in [0, 30, 60, 150, 300, 500, 800, 1100, 1500, 2500] as [CGFloat] {
+            lines.append(#"{"case":"pointer-curve","speed":\#(Int(v)),"gain":\#(String(format: "%.3f", GestureClassifier.gain(speed: v, macWidth: 1680, padWidth: 446)))}"#)
+        }
+        return lines
+    }
+    static func describe(_ o: GestureClassifier.Out) -> String {
+        switch o {
+        case .move(let d): return String(format: "move %.1f %.1f", d.width, d.height)
+        case .button(let down): return down ? "button down" : "button up"
+        case .rightClick: return "right click"
+        case .haptic(let h): return "haptic \(h)"
+        }
+    }
+    static func write() {
+        guard let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        try? (run().joined(separator: "\n") + "\n").write(to: dir.appendingPathComponent("screen-input-trace.jsonl"), atomically: true, encoding: .utf8)
+    }
+}
+
+// Where the pointer is drawn: the picture's scale and offset in its space, and whether it's always shown.
+struct CursorMap: Equatable {
+    var scale: CGFloat
+    var pan: CGSize
+    var canvas: CGSize
+    var mac: CGSize
+    var always: Bool
+    func point(_ m: CGPoint) -> CGPoint {
+        CGPoint(x: (m.x - mac.width / 2) * scale + canvas.width / 2 + pan.width,
+                y: (m.y - mac.height / 2) * scale + canvas.height / 2 + pan.height)
+    }
+}
 
 #if os(iOS)
 // The Mac's picture, as a plain layer: each new picture is set on it at the next display refresh, never through
@@ -885,14 +1347,106 @@ struct ScreenLayer: UIViewRepresentable {
     }
 }
 
-// One finger, two, three, four, and pinch, which SwiftUI's own gestures can't tell apart reliably.
+// The Mac's pointer, drawn on the phone where the phone has just put it: the Mac's own cursor image (an I-beam over
+// text, a hand over a link) when the Mac sends it, a standard arrow until then, so there's never no pointer. It moves
+// on the screen's cursorChanged, a layer move with no SwiftUI rebuild.
+struct CursorOverlay: UIViewRepresentable {
+    let screen: RemoteScreen
+    let pad: TrackpadBox
+    var map: CursorMap
+    var image: CGImage?
+    var hotspot: CGPoint
+    func makeUIView(context: Context) -> CursorView {
+        let v = CursorView()
+        v.isUserInteractionEnabled = false
+        v.pad = pad
+        screen.cursorChanged = { [weak v] p in v?.place(p) }
+        return v
+    }
+    func updateUIView(_ v: CursorView, context: Context) {
+        v.map = map; v.image = image; v.hotspot = hotspot
+        v.place(screen.cursor)
+        screen.cursorChanged = { [weak v] p in v?.place(p) }
+    }
+    static func dismantleUIView(_ v: CursorView, coordinator: ()) { v.stop() }
+
+    final class CursorView: UIView {
+        var map = CursorMap(scale: 1, pan: .zero, canvas: .zero, mac: .zero, always: true)
+        var image: CGImage? { didSet { if image !== oldValue { setImage() } } }
+        var hotspot = CGPoint.zero
+        weak var pad: TrackpadBox?
+        private let pointer = CALayer()
+        private var hideTimer: Timer?
+        private static let arrow: CGImage? = {
+            // A symbol is drawn, not a bitmap, so it's drawn once into one.
+            let config = UIImage.SymbolConfiguration(pointSize: 20, weight: .regular)
+            guard let symbol = UIImage(systemName: "cursorarrow", withConfiguration: config)?.withTintColor(.white, renderingMode: .alwaysOriginal) else { return nil }
+            return UIGraphicsImageRenderer(size: symbol.size).image { _ in symbol.draw(at: .zero) }.cgImage
+        }()
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            pointer.shadowColor = UIColor.black.cgColor
+            pointer.shadowOpacity = 0.55; pointer.shadowRadius = 1.5; pointer.shadowOffset = CGSize(width: 0, height: 1)
+            pointer.magnificationFilter = .linear
+            layer.addSublayer(pointer)
+            setImage()
+        }
+        required init?(coder: NSCoder) { return nil }
+        private func setImage() {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            pointer.contents = image ?? Self.arrow
+            CATransaction.commit()
+        }
+        func place(_ m: CGPoint) {
+            let at = map.point(m)
+            let size: CGSize, hot: CGPoint
+            if let image {
+                // The Mac's cursor in its own pixels, at the picture's scale.
+                size = CGSize(width: CGFloat(image.width) * map.scale, height: CGFloat(image.height) * map.scale)
+                hot = CGPoint(x: hotspot.x * map.scale, y: hotspot.y * map.scale)
+            } else {
+                size = CGSize(width: 16, height: 20); hot = CGPoint(x: 3, y: 2)
+            }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            pointer.frame = CGRect(x: at.x - hot.x, y: at.y - hot.y, width: size.width, height: size.height)
+            CATransaction.commit()
+            show()
+        }
+        // Always there beside a trackpad; touched directly, it fades a moment after the last touch.
+        private func show() {
+            if pointer.opacity < 1 { pointer.opacity = 1 }
+            hideTimer?.invalidate()
+            guard !map.always else { return }
+            let last = pad?.lastTouch ?? 0
+            let left = max(0.05, 1.5 - (Date().timeIntervalSinceReferenceDate - last))
+            hideTimer = Timer.scheduledTimer(withTimeInterval: left, repeats: false) { [weak self] _ in
+                guard let self else { return }
+                if Date().timeIntervalSinceReferenceDate - (self.pad?.lastTouch ?? 0) >= 1.45 { self.pointer.opacity = 0 }
+            }
+        }
+        func stop() { hideTimer?.invalidate() }
+    }
+}
+
+// The picture and the trackpad, each read as a Mac's trackpad would be, which SwiftUI's own gestures can't do.
+//  - On the picture: a tap clicks there, two fingers right-click, a held finger right-clicks, a finger drags (from where
+//    it landed), two fingers scroll and pinch, three and four are the Mac's gestures.
+//  - On the trackpad: one finger is GestureClassifier's (pointer, taps, drags, press to click), read from the raw
+//    touches with no dead zone; two to five fingers scroll, pinch and swipe.
 struct TouchSurface: UIViewRepresentable {
-    var onTap: (CGPoint) -> Void
-    var onTwoFingerTap: (CGPoint) -> Void
-    var onSmartZoom: (CGPoint) -> Void
-    var onLongPress: (CGPoint) -> Void
-    var onDrag: (TouchPhase, CGPoint, CGSize) -> Void
-    var onScroll: (CGSize, CGFloat) -> Void
+    enum Mode { case picture, trackpad }
+    var mode: Mode
+    var macWidth: CGFloat = 0
+    // Two fingers in from the left edge go back, from the right forward, only while scrolling can't carry the swipe
+    // between pages itself; with smooth scrolling, the right edge brings in Notification Centre, as on a Mac.
+    var edgeBack = true
+    var onTap: (CGPoint) -> Void = { _ in }
+    var onTwoFingerTap: (CGPoint) -> Void = { _ in }
+    var onSmartZoom: (CGPoint) -> Void = { _ in }
+    var onLongPress: (CGPoint) -> Void = { _ in }
+    var onDrag: (TouchPhase, CGPoint, CGSize) -> Void = { _, _, _ in }
+    var onTrack: (GestureClassifier.Out) -> Void = { _ in }
+    var onScroll: (CGSize, ScrollStep) -> Void
     var onPinch: (TouchPhase, CGFloat, CGPoint) -> Void
     var onSwipe: (MacSwipe) -> Void
 
@@ -902,34 +1456,53 @@ struct TouchSurface: UIViewRepresentable {
         v.backgroundColor = .clear
         v.isMultipleTouchEnabled = true
         let c = context.coordinator
-        v.onTouchDown = { Coordinator.touched() }
-        let tap = UITapGestureRecognizer(target: c, action: #selector(Coordinator.tap(_:)))
-        let two = UITapGestureRecognizer(target: c, action: #selector(Coordinator.twoTap(_:)))
-        two.numberOfTouchesRequired = 2
-        let twoTwice = UITapGestureRecognizer(target: c, action: #selector(Coordinator.smartZoom(_:)))
-        twoTwice.numberOfTouchesRequired = 2; twoTwice.numberOfTapsRequired = 2
-        // A Mac waits the same moment to tell a right click from smart zoom.
-        two.require(toFail: twoTwice)
-        let long = UILongPressGestureRecognizer(target: c, action: #selector(Coordinator.long(_:)))
-        long.minimumPressDuration = 0.55
-        let drag = UIPanGestureRecognizer(target: c, action: #selector(Coordinator.drag(_:)))
-        drag.minimumNumberOfTouches = 1; drag.maximumNumberOfTouches = 1
+        v.coordinator = c
+        var recognizers: [UIGestureRecognizer] = []
+        if mode == .picture {
+            let tap = UITapGestureRecognizer(target: c, action: #selector(Coordinator.tap(_:)))
+            let two = UITapGestureRecognizer(target: c, action: #selector(Coordinator.twoTap(_:)))
+            two.numberOfTouchesRequired = 2
+            let twoTwice = UITapGestureRecognizer(target: c, action: #selector(Coordinator.smartZoom(_:)))
+            twoTwice.numberOfTouchesRequired = 2; twoTwice.numberOfTapsRequired = 2
+            // On the picture a two-finger tap waits a moment to tell a right click from smart zoom.
+            two.require(toFail: twoTwice)
+            let long = UILongPressGestureRecognizer(target: c, action: #selector(Coordinator.long(_:)))
+            long.minimumPressDuration = 0.55
+            long.allowableMovement = 6
+            let drag = UIPanGestureRecognizer(target: c, action: #selector(Coordinator.drag(_:)))
+            drag.minimumNumberOfTouches = 1; drag.maximumNumberOfTouches = 1
+            recognizers += [tap, two, twoTwice, long, drag]
+        }
         let multi = UIPanGestureRecognizer(target: c, action: #selector(Coordinator.multi(_:)))
         multi.minimumNumberOfTouches = 2; multi.maximumNumberOfTouches = 5
         let pinch = UIPinchGestureRecognizer(target: c, action: #selector(Coordinator.pinch(_:)))
         multi.delegate = c; pinch.delegate = c
-        for g in [tap, two, twoTwice, long, drag, multi, pinch] as [UIGestureRecognizer] { v.addGestureRecognizer(g) }
+        // On the trackpad a lift goes straight to the one-finger reading, not held back while these decide.
+        if mode == .trackpad { multi.delaysTouchesEnded = false; pinch.delaysTouchesEnded = false }
+        recognizers += [multi, pinch]
+        for g in recognizers { v.addGestureRecognizer(g) }
         return v
     }
     func updateUIView(_ uiView: TouchView, context: Context) { context.coordinator.parent = self }
-    static func dismantleUIView(_ uiView: TouchView, coordinator: Coordinator) { coordinator.stopGlide() }
+    static func dismantleUIView(_ uiView: TouchView, coordinator: Coordinator) { coordinator.stopGlide(); coordinator.stopTicking() }
 
     final class TouchView: UIView {
-        var onTouchDown: (() -> Void)?
-        // A finger coming down stops a glide at once, as it does on a Mac.
+        weak var coordinator: Coordinator?
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-            onTouchDown?()
+            coordinator?.raw(.began, touches, event, in: self)
             super.touchesBegan(touches, with: event)
+        }
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+            coordinator?.raw(.moved, touches, event, in: self)
+            super.touchesMoved(touches, with: event)
+        }
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+            coordinator?.raw(.ended, touches, event, in: self)
+            super.touchesEnded(touches, with: event)
+        }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+            coordinator?.raw(.cancelled, touches, event, in: self)
+            super.touchesCancelled(touches, with: event)
         }
         // Three fingers here are the Mac's gestures, not the system's undo and copy.
         override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
@@ -937,6 +1510,7 @@ struct TouchSurface: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: TouchSurface
+        private var classifier = GestureClassifier()
         // Every surface, so a touch on either stops a glide started on the other.
         private static let all = NSHashTable<Coordinator>.weakObjects()
         static func touched() { for c in all.allObjects { c.stopGlide() } }
@@ -945,25 +1519,79 @@ struct TouchSurface: UIViewRepresentable {
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
             (g is UIPinchGestureRecognizer && other is UIPanGestureRecognizer) || (g is UIPanGestureRecognizer && other is UIPinchGestureRecognizer)
         }
+
+        // MARK: Raw touches
+        enum Raw { case began, moved, ended, cancelled }
+        func raw(_ phase: Raw, _ touches: Set<UITouch>, _ event: UIEvent?, in v: UIView) {
+            if phase == .began {
+                // A finger coming down stops a glide at once, as it does on a Mac, and warms the feedback for the touch.
+                Self.touched()
+                ScreenHaptics.prepare()
+                longFired = false
+            }
+            guard parent.mode == .trackpad else { return }
+            classifier.pad = v.bounds.size
+            classifier.macWidth = max(parent.macWidth, 1)
+            for t in touches {
+                let id = ObjectIdentifier(t).hashValue
+                switch phase {
+                case .began: emit(classifier.began(id, at: t.location(in: v), t: t.timestamp))
+                case .moved:
+                    // Every sample the display took, not only the last, so a quick finger moves the pointer smoothly.
+                    for s in event?.coalescedTouches(for: t) ?? [t] {
+                        emit(classifier.moved(id, to: s.location(in: v), t: s.timestamp))
+                    }
+                case .ended: emit(classifier.ended(id, t: t.timestamp))
+                case .cancelled: emit(classifier.cancelled(id))
+                }
+            }
+            if classifier.idle { stopTicking() } else { startTicking() }
+        }
+        private func emit(_ outs: [GestureClassifier.Out]) { for o in outs { parent.onTrack(o) } }
+        private var ticker: CADisplayLink?
+        private func startTicking() {
+            guard ticker == nil else { return }
+            let l = CADisplayLink(target: self, selector: #selector(ticked(_:)))
+            l.add(to: .main, forMode: .common)
+            ticker = l
+        }
+        func stopTicking() { ticker?.invalidate(); ticker = nil }
+        @objc private func ticked(_ l: CADisplayLink) {
+            emit(classifier.tick(t: CACurrentMediaTime()))
+            if classifier.idle { stopTicking() }
+        }
+
+        // MARK: The picture's own gestures
+        private var longFired = false
+        private var ignoringDrag = false
         @objc func tap(_ g: UITapGestureRecognizer) { if g.state == .ended { parent.onTap(g.location(in: g.view)) } }
         @objc func twoTap(_ g: UITapGestureRecognizer) { if g.state == .ended { parent.onTwoFingerTap(g.location(in: g.view)) } }
         @objc func smartZoom(_ g: UITapGestureRecognizer) { if g.state == .ended { parent.onSmartZoom(g.location(in: g.view)) } }
-        @objc func long(_ g: UILongPressGestureRecognizer) { if g.state == .began { parent.onLongPress(g.location(in: g.view)) } }
+        @objc func long(_ g: UILongPressGestureRecognizer) { if g.state == .began { longFired = true; parent.onLongPress(g.location(in: g.view)) } }
         @objc func drag(_ g: UIPanGestureRecognizer) {
             let t = g.translation(in: g.view)
             g.setTranslation(.zero, in: g.view)
             let at = g.location(in: g.view), delta = CGSize(width: t.x, height: t.y)
             switch g.state {
-            case .began: parent.onDrag(.began, at, .zero); parent.onDrag(.changed, at, delta)
-            case .changed: parent.onDrag(.changed, at, delta)
-            case .ended, .cancelled, .failed: parent.onDrag(.ended, at, .zero)
+            case .began:
+                // A held finger already right-clicked; moving it after doesn't also drag.
+                ignoringDrag = longFired
+                guard !ignoringDrag else { return }
+                // The press goes down where the finger first landed, not where it had got to once the pan began.
+                let start = CGPoint(x: at.x - t.x, y: at.y - t.y)
+                parent.onDrag(.began, start, .zero); parent.onDrag(.changed, at, delta)
+            case .changed: if !ignoringDrag { parent.onDrag(.changed, at, delta) }
+            case .ended, .cancelled, .failed:
+                if !ignoringDrag { parent.onDrag(.ended, at, .zero) }
+                ignoringDrag = false
             default: break
             }
         }
 
         // MARK: Two to five fingers
-        // What they mean is settled by how many came down and where: two scroll, or go back and forward from an edge;
-        // three swipe; four pinch. A finger that lands a moment late still counts, until the hand has really moved.
+        // What they mean is settled by how many came down and where: two scroll, or (from an edge) go back, forward or to
+        // Notification Centre; three or four swipe; four pinch. A finger that lands a moment late still counts, until the
+        // hand has really moved. A thumb resting at the trackpad's edge isn't one of them.
         private enum Mode: Equatable { case none, scroll, edge(back: Bool), three, four }
         private var mode = Mode.none
         private var fingers = 0
@@ -973,7 +1601,8 @@ struct TouchSurface: UIViewRepresentable {
         private var axis = 0                 // 0 not yet, 1 sideways, 2 up and down, 3 both
         private var pinching = false
         private var pinchAmount: CGFloat = 0
-        private static let edge: CGFloat = 36
+        private var scrolling = false
+        private static let edge: CGFloat = 22
 
         private func spread(_ g: UIGestureRecognizer) -> CGFloat {
             let n = g.numberOfTouches
@@ -983,19 +1612,26 @@ struct TouchSurface: UIViewRepresentable {
             let cx = points.reduce(0) { $0 + $1.x } / CGFloat(n), cy = points.reduce(0) { $0 + $1.y } / CGFloat(n)
             return points.reduce(0) { $0 + hypot($1.x - cx, $1.y - cy) } / CGFloat(n)
         }
+        // Touches that are really fingers: on the trackpad, less any resting thumb.
+        private func count(_ g: UIGestureRecognizer) -> Int {
+            parent.mode == .trackpad ? g.numberOfTouches - classifier.palms - classifier.undecided : g.numberOfTouches
+        }
         private func settle(_ g: UIPanGestureRecognizer) {
-            fingers = max(fingers, g.numberOfTouches)
+            fingers = max(fingers, count(g))
             let moved = hypot(travel.x, travel.y)
             switch mode {
             case .none:
+                guard fingers >= 2 else { return }
                 if fingers >= 4 { mode = .four; startSpread = spread(g) }
                 else if fingers == 3 { mode = .three }
                 else {
                     let at = g.location(in: g.view), width = g.view?.bounds.width ?? 0
-                    mode = at.x < Self.edge ? .edge(back: true) : at.x > width - Self.edge ? .edge(back: false) : .scroll
+                    if at.x > width - Self.edge { mode = .edge(back: false) }
+                    else if at.x < Self.edge, parent.edgeBack { mode = .edge(back: true) }
+                    else { mode = .scroll }
                 }
             case .scroll, .edge:
-                if fingers >= 3, moved < 36 { mode = fingers >= 4 ? .four : .three; if fingers >= 4 { startSpread = spread(g) } }
+                if fingers >= 3, moved < 36, !scrolling { mode = fingers >= 4 ? .four : .three; if fingers >= 4 { startSpread = spread(g) } }
             case .three:
                 if fingers >= 4, !fired, moved < 36 { mode = .four; startSpread = spread(g) }
             case .four: break
@@ -1004,20 +1640,27 @@ struct TouchSurface: UIViewRepresentable {
         @objc func multi(_ g: UIPanGestureRecognizer) {
             switch g.state {
             case .began, .changed:
-                if g.state == .began { stopGlide(); mode = .none; fingers = 0; travel = .zero; fired = false; axis = 0 }
+                if g.state == .began { stopGlide(); mode = .none; fingers = 0; travel = .zero; fired = false; axis = 0; scrolling = false }
                 let t = g.translation(in: g.view)
                 g.setTranslation(.zero, in: g.view)
                 travel.x += t.x; travel.y += t.y
                 settle(g)
                 step(g, CGSize(width: t.x, height: t.y))
             case .ended, .cancelled, .failed:
-                if mode == .scroll, g.state == .ended, !pinching { glide(g.velocity(in: g.view)) }
+                if scrolling {
+                    scrolling = false
+                    parent.onScroll(.zero, .ended)
+                    if mode == .scroll, g.state == .ended, !pinching { glide(g.velocity(in: g.view)) }
+                }
                 mode = .none; fingers = 0
             default: break
             }
         }
         private func locked(_ d: CGSize) -> CGSize {
             axis == 1 ? CGSize(width: d.width, height: 0) : axis == 2 ? CGSize(width: 0, height: d.height) : d
+        }
+        private func scrollStep(_ d: CGSize) {
+            if scrolling { parent.onScroll(locked(d), .changed) } else { scrolling = true; parent.onScroll(locked(d), .began) }
         }
         private func step(_ g: UIPanGestureRecognizer, _ d: CGSize) {
             switch mode {
@@ -1027,37 +1670,43 @@ struct TouchSurface: UIViewRepresentable {
                 if axis == 0, hypot(travel.x, travel.y) > 10 {
                     axis = abs(travel.x) > abs(travel.y) * 1.7 ? 1 : abs(travel.y) > abs(travel.x) * 1.7 ? 2 : 3
                 }
-                let v = g.velocity(in: g.view)
-                parent.onScroll(locked(d), hypot(v.x, v.y))
+                scrollStep(d)
             case .edge(let back):
-                // Sideways from the edge, inwards, is back or forward; anything else was a scroll that began near it.
+                // Sideways from the edge, inwards, is the edge's gesture; anything else was a scroll that began near it.
                 let inward = back ? travel.x : -travel.x
                 if abs(travel.y) > 24 && abs(travel.y) > abs(travel.x) || inward < -20 {
                     mode = .scroll
                     step(g, CGSize(width: travel.x, height: travel.y))
                 } else if !fired, inward > 64 {
                     fired = true
-                    parent.onSwipe(back ? .back : .forward)
+                    parent.onSwipe(back ? .back : parent.edgeBack ? .forward : .notifications)
                 }
             case .three:
-                guard !fired, hypot(travel.x, travel.y) > 44 else { return }
-                fired = true
-                if abs(travel.y) >= abs(travel.x) { parent.onSwipe(travel.y < 0 ? .up : .down) }
-                else { parent.onSwipe(travel.x < 0 ? .left : .right) }
+                swipeOnce()
             case .four:
                 guard !fired, startSpread > 0, g.numberOfTouches >= 4 else { return }
                 let s = spread(g) / startSpread
                 if s < 0.72 { fired = true; parent.onSwipe(.launchpad) }
                 else if s > 1.38 { fired = true; parent.onSwipe(.desktop) }
+                // Four fingers moving together, not spreading, swipe as three do.
+                else if (0.85...1.15).contains(s) { swipeOnce() }
             case .none: break
             }
         }
+        private func swipeOnce() {
+            guard !fired, hypot(travel.x, travel.y) > 44 else { return }
+            fired = true
+            if abs(travel.y) >= abs(travel.x) { parent.onSwipe(travel.y < 0 ? .up : .down) }
+            else { parent.onSwipe(travel.x < 0 ? .left : .right) }
+        }
 
         // MARK: Momentum
-        // After a flick the page keeps going and slows as a scroll view does, until a finger touches down again.
+        // After a flick the page keeps going and slows as a scroll view does, sent as the Mac's own momentum, until a
+        // finger touches down again.
         private var link: CADisplayLink?
         private var velocity = CGPoint.zero
         private var last: CFTimeInterval = 0
+        private var gliding = false
         private func glide(_ v: CGPoint) {
             var v = v
             if axis == 1 { v.y = 0 } else if axis == 2 { v.x = 0 }
@@ -1065,20 +1714,24 @@ struct TouchSurface: UIViewRepresentable {
             stopGlide()
             velocity = v
             last = CACurrentMediaTime()
-            let l = CADisplayLink(target: self, selector: #selector(gliding(_:)))
+            gliding = true
+            parent.onScroll(.zero, .momentumBegan)
+            let l = CADisplayLink(target: self, selector: #selector(glideTick(_:)))
             l.add(to: .main, forMode: .common)
             link = l
         }
-        @objc private func gliding(_ l: CADisplayLink) {
+        @objc private func glideTick(_ l: CADisplayLink) {
             let now = CACurrentMediaTime()
             let dt = max(0, min(now - last, 0.05)); last = now
             let decay = CGFloat(pow(0.998, dt * 1000))
             velocity.x *= decay; velocity.y *= decay
-            let speed = hypot(velocity.x, velocity.y)
-            if speed < 30 { stopGlide(); return }
-            parent.onScroll(CGSize(width: velocity.x * CGFloat(dt), height: velocity.y * CGFloat(dt)), speed)
+            if hypot(velocity.x, velocity.y) < 30 { stopGlide(); return }
+            parent.onScroll(CGSize(width: velocity.x * CGFloat(dt), height: velocity.y * CGFloat(dt)), .momentum)
         }
-        func stopGlide() { link?.invalidate(); link = nil }
+        func stopGlide() {
+            link?.invalidate(); link = nil
+            if gliding { gliding = false; parent.onScroll(.zero, .momentumEnded) }
+        }
 
         @objc func pinch(_ g: UIPinchGestureRecognizer) {
             let at = g.location(in: g.view)
@@ -1142,13 +1795,26 @@ struct ScreenLayer: View {
     var onRate: ((Int, Int) -> Void)?
     var body: some View { Color.black }
 }
+struct CursorOverlay: View {
+    let screen: RemoteScreen
+    let pad: TrackpadBox
+    var map: CursorMap
+    var image: CGImage?
+    var hotspot: CGPoint
+    var body: some View { Color.clear }
+}
 struct TouchSurface: View {
-    var onTap: (CGPoint) -> Void
-    var onTwoFingerTap: (CGPoint) -> Void
-    var onSmartZoom: (CGPoint) -> Void
-    var onLongPress: (CGPoint) -> Void
-    var onDrag: (TouchPhase, CGPoint, CGSize) -> Void
-    var onScroll: (CGSize, CGFloat) -> Void
+    enum Mode { case picture, trackpad }
+    var mode: Mode
+    var macWidth: CGFloat = 0
+    var edgeBack = true
+    var onTap: (CGPoint) -> Void = { _ in }
+    var onTwoFingerTap: (CGPoint) -> Void = { _ in }
+    var onSmartZoom: (CGPoint) -> Void = { _ in }
+    var onLongPress: (CGPoint) -> Void = { _ in }
+    var onDrag: (TouchPhase, CGPoint, CGSize) -> Void = { _, _, _ in }
+    var onTrack: (GestureClassifier.Out) -> Void = { _ in }
+    var onScroll: (CGSize, ScrollStep) -> Void
     var onPinch: (TouchPhase, CGFloat, CGPoint) -> Void
     var onSwipe: (MacSwipe) -> Void
     var body: some View { Color.clear }

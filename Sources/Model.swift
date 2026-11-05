@@ -143,7 +143,7 @@ final class AppModel: ObservableObject {
             if liveStore.live != nil, !Task.isCancelled { liveStore.live = nil }
             return
         }
-        liveStore.live = l
+        if liveStore.live != l { liveStore.live = l }
     }
 
     func refresh() async {
