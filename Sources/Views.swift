@@ -308,10 +308,10 @@ struct Screen<Content: View>: View {
         NavigationStack {
             Group {
                 if listed {
-                    if panes { FoldSplit { list(.left) } right: { list(.right) }.navigationBarTitleDisplayMode(.inline) }
+                    if panes { FoldSplit { list(.left) } right: { list(.right) } }
                     else { list(.all) }
                 } else {
-                    if panes { FoldSplit { page(.left) } right: { page(.right) }.navigationBarTitleDisplayMode(.inline) }
+                    if panes { FoldSplit { page(.left) } right: { page(.right) } }
                     else { page(.all) }
                 }
             }
@@ -319,6 +319,9 @@ struct Screen<Content: View>: View {
             // Laid over both panes at once, so open there's one edge, not one per pane.
             .topEdge()
             .navigationTitle(title)
+            // Large open too, so the page's name leads and its section headings follow. Small in the bar, it sat under
+            // headings like "This Mac" and "Log" and read wrong (Richard, 2026-11-05).
+            .navigationBarTitleDisplayMode(.large)
             .navigationDestination(item: tab == 0 ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
             .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0) }
         }
@@ -990,8 +993,18 @@ struct UpgradeTab: View {
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
     var onTahoe: Bool { (Int(s.macos.split(separator: ".").first ?? "") ?? 0) >= 26 }
+    // The update service's status line comes as a log line: "2026-11-04 03:30:15 healthy: macos 26.7.2 (25g332), oclp …".
+    // The card says only its word ("Healthy"), with when it was checked under it; the versions are already on the line below.
+    var statusParts: (word: String, at: Date?) {
+        var t = s.upgrade.status.trimmingCharacters(in: .whitespaces)
+        var at: Date?
+        if t.count >= 19, let d = Self.stamp.date(from: String(t.prefix(19))) { at = d; t = String(t.dropFirst(19)).trimmingCharacters(in: .whitespaces) }
+        if let colon = t.firstIndex(of: ":") { t = String(t[..<colon]) }
+        return (sentenceCase(t), at)
+    }
+    static let stamp: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; return f }()
     var headline: String {
-        s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : sentenceCase(s.upgrade.status)) : onTahoe ? "On Tahoe" : "Waiting for your password to start"
+        s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : statusParts.word) : onTahoe ? "On Tahoe" : "Waiting for your password to start"
     }
     var oclp: String { s.upgrade.state["oclp_tag"] ?? s.oclp.version }
     // A seal for how it stands: done, working, or something to look at.
@@ -1009,6 +1022,9 @@ struct UpgradeTab: View {
                 Image(systemName: seal.0).font(.system(size: 30)).foregroundStyle(seal.1).symbolRenderingMode(.hierarchical).frame(width: 36)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(headline).font(.headline).lineLimit(2)
+                    if s.upgrade.installed, let at = statusParts.at {
+                        Text("Checked \(at.formatted(.relative(presentation: .named)))").font(.footnote).foregroundStyle(.secondary)
+                    }
                     Text("macOS \(s.macos) · OCLP \(oclp)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                     Text(patched).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
                     // The date on a line of its own, so it never breaks across two.
