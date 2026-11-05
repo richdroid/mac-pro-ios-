@@ -501,7 +501,7 @@ final class ChumbyModel: ObservableObject {
     private func sendCalendarTemplate() async -> String? {
         guard let t = heldCalendar, let api else { return nil }
         do {
-            let r = try await AlarmWriter.shared.edit(api, quiet: true, force: true, template: { $0.alarms.contains { $0.isCalendar } }) { s in
+            let r = try await AlarmWriter.shared.edit(api, quiet: true, force: true, template: { $0.alarms.contains { $0.isCalendar } }, permit: SavePermit()) { (s: inout ChumbyState) -> Void in
                 for i in s.alarms.indices where s.alarms[i].isCalendar { s.alarms[i].takeSettings(from: t) }
             }
             heldCalendar = nil; calendarWaiting = false

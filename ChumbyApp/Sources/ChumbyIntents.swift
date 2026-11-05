@@ -68,7 +68,7 @@ struct ChumbyNapIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         // A real alarm on the Chumby, so its backup and catch-up cover it, saved the one careful way.
         let minutes = minutes
-        do { _ = try await chumbyTry { try await AlarmWriter.shared.edit($0) { $0.addNap(minutes: minutes) } } }
+        do { _ = try await chumbyTry { try await AlarmWriter.shared.edit($0, permit: SavePermit()) { (s: inout ChumbyState) -> Void in s.addNap(minutes: minutes) } } }
         catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
         WidgetCenter.shared.reloadAllTimelines()
         return .result(dialog: IntentDialog(stringLiteral: "Blub. Waking you in \(minutes) minutes."))
