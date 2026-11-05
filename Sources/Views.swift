@@ -94,24 +94,22 @@ struct FlatStyle: ButtonStyle {
 struct TopEdge: ViewModifier {
     // The scroll views on the page that have content under the bar; open, each pane reports its own.
     @State private var under: Set<Int> = []
-    // Where each scroll view's content rests on the display: the foot of whatever title is above it, large or inline.
-    // Open, two panes report; the black ends at the higher of the two.
-    @State private var rest: [Int: CGFloat] = [:]
     func body(content: Content) -> some View {
         bar(content.scrollEdgeEffectHidden(true, for: .top))
-            .environment(\.topEdgeUnder) { id, on, inset in
+            .environment(\.topEdgeUnder) { id, on in
                 if on { under.insert(id) } else { under.remove(id) }
-                rest[id] = inset
             }
             .overlay {
-                // Read where the bar ends whether the content's frame starts under the bar or below it.
                 GeometryReader { g in
-                    // To where the content rests, which is the foot of whatever title is there: the large title never collapses
-                    // on the Duo, so an inline bar's height left text behind the title, and the safe area reached ~100 pt past it.
-                    let y = g.frame(in: .global).minY, bar = rest.values.min() ?? max(y, TopEdge.statusBar + 44)
+                    // The page's own top is where its content rests, just under the title, large or inline. The black stops
+                    // there, fading over the 12 pt either side, so it hides what has scrolled up behind the title and never
+                    // anything still in its resting place. (Measuring insets and safe areas overshot by up to 100 pt on the
+                    // Duo, over the Mac Pro's portrait.) A page drawn from the very top under the bar gets the bar's height.
+                    let y = g.frame(in: .global).minY
+                    let foot = y > TopEdge.statusBar + 30 ? y : TopEdge.statusBar + 96
                     let lead = g.safeAreaInsets.leading, width = g.size.width + lead + g.safeAreaInsets.trailing
                     VStack(spacing: 0) {
-                        Color.black.frame(height: max(bar, 0))
+                        Color.black.frame(height: max(foot - 12, 0))
                         LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 24)
                     }
                     .frame(width: width)
@@ -140,24 +138,30 @@ struct TopEdge: ViewModifier {
         #endif
     }
 }
-private struct TopEdgeUnderKey: EnvironmentKey { static let defaultValue: (Int, Bool, CGFloat) -> Void = { _, _, _ in } }
+private struct TopEdgeUnderKey: EnvironmentKey { static let defaultValue: (Int, Bool) -> Void = { _, _ in } }
 extension EnvironmentValues {
-    var topEdgeUnder: (Int, Bool, CGFloat) -> Void { get { self[TopEdgeUnderKey.self] } set { self[TopEdgeUnderKey.self] = newValue } }
+    var topEdgeUnder: (Int, Bool) -> Void { get { self[TopEdgeUnderKey.self] } set { self[TopEdgeUnderKey.self] = newValue } }
 }
-// Put on each scroll view inside a top edge, so its fade shows only while that view has content under the bar.
+// Put on each scroll view inside a top edge, so its black shows only once its content has really moved up from where it
+// rests. "At rest" is where it first settles, not where the insets say it should be: on the phone those differ by a few
+// points, and the black showed over the portrait with nothing scrolled.
 struct ScrollsUnder: ViewModifier {
-    struct Under: Equatable { var on: Bool; var inset: CGFloat }
     @Environment(\.topEdgeUnder) private var report
-    @State private var under = Under(on: false, inset: 0)
-    @State private var top: CGFloat = 0
+    @State private var rest: CGFloat?
+    @State private var now: CGFloat = 0
     let id: Int
     func body(content: Content) -> some View {
-        // The resting top on the display: the scroll view's own top plus its inset (the inset alone is from its frame, which
-        // starts under the bar).
         content
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top = $0 }
-            .onScrollGeometryChange(for: Under.self) { Under(on: $0.contentOffset.y + $0.contentInsets.top > 1, inset: $0.contentInsets.top) } action: { _, u in under = u }
-            .onChange(of: Under(on: under.on, inset: under.inset + top)) { _, u in report(id, u.on, u.inset) }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
+                now = y
+                if rest == nil { rest = y }
+                report(id, y > (rest ?? y) + 4)
+            }
+            // Only a stop can lower where it rests (back at the top after a bounce, say); mid-bounce it's past the top
+            // and would leave the black showing once it settled.
+            .onScrollPhaseChange { _, phase in
+                if phase == .idle, let r = rest, now < r { rest = now; report(id, false) }
+            }
     }
 }
 extension View {
