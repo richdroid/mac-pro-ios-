@@ -239,7 +239,7 @@ struct RemoteScreenView: View {
                         .background(Color.red.opacity(0.9), in: Capsule())
                         .fixedSize()
                 }
-                .offset(y: -40)
+                .offset(y: -48)
                 .transition(.opacity)
                 .allowsHitTesting(false)
             }

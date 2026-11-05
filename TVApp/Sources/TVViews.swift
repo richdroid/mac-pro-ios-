@@ -711,11 +711,12 @@ struct RemoteTab: View {
             guard Date().timeIntervalSince(model.remoteArrival) < 1 else { return }
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { keysIn = false }
-            // Just after the screen starts its move, so the keys come up while the controls are still fading out and
-            // there's never a moment of picture alone on the backdrop. Not later than a second if no move comes.
+            // Once the flick's title, poster and controls are nearly gone (they fade in 0.12 s from the move's start), so the
+            // two never sit on each other, and still early enough that the picture is never alone on the backdrop. Not later
+            // than a second if no move comes.
             let arrival = model.remoteArrival
             for _ in 0..<60 where model.remoteMoveAt < arrival { try? await Task.sleep(nanoseconds: 16_000_000) }
-            try? await Task.sleep(nanoseconds: 80_000_000)
+            try? await Task.sleep(nanoseconds: 140_000_000)
             withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) { keysIn = true }
         }
     }
@@ -1657,13 +1658,28 @@ struct DiscoverColumn: View {
         guard store.query.isEmpty else { return nil }
         return home.rows.first { $0.title == Self.continueTitle && !$0.items.isEmpty }
     }
-    // What's in Continue watching isn't shown again further down.
+    // What's in Continue watching isn't shown again further down. A row that leaves fewer than four isn't shown alone:
+    // what's left of it goes to the end of the row before it (else the front of the one after), never twice.
     var rows: [MediaRow] {
         let mine = Set((continuing?.items ?? []).map { $0.stremioRef?.imdb ?? $0.id })
-        return store.rows.filter { $0.title != Self.continueTitle }.compactMap { r in
+        let kept = store.rows.filter { $0.title != Self.continueTitle }.compactMap { r -> MediaRow? in
             let items = r.items.filter { !mine.contains($0.stremioRef?.imdb ?? $0.id) }
             return items.isEmpty ? nil : MediaRow(title: r.title, items: items)
         }
+        func key(_ i: MediaItem) -> String { i.stremioRef?.imdb ?? i.id }
+        var out: [MediaRow] = [], waiting: [MediaItem] = []
+        for r in kept {
+            if r.items.count >= 4 {
+                let have = Set(r.items.map(key))
+                out.append(MediaRow(title: r.title, items: waiting.filter { !have.contains(key($0)) } + r.items)); waiting = []
+            } else if let last = out.indices.last {
+                let have = Set(out[last].items.map(key))
+                out[last] = MediaRow(title: out[last].title, items: out[last].items + r.items.filter { !have.contains(key($0)) })
+            } else { waiting += r.items }
+        }
+        // Nothing full to join: shown as one row rather than lost.
+        if out.isEmpty, let first = kept.first, !waiting.isEmpty { out = [MediaRow(title: first.title, items: waiting)] }
+        return out
     }
     var shown: [MediaRow] {
         part == .all ? rows : rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)

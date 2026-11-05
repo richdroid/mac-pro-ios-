@@ -206,15 +206,11 @@ struct RootView: View {
             // inside Alarms, Back takes the same slot alone. It sits out here, over the tabs, so it never slides with the page.
             .overlay {
                 if model.tab == 2 && model.railWidth >= 44 {
-                    ZStack {
-                        if model.alarmsPage {
-                            railButton("chevron.left", "Back") { model.alarmsPage = false }
-                                .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                        } else {
-                            railButton("plus", "Add alarm") { model.addAlarm = Date() }
-                                .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                        }
+                    // One glass circle whose glyph turns from + to Back: two glass buttons swapped in a single frame.
+                    railButton(model.alarmsPage ? "chevron.left" : "plus", model.alarmsPage ? "Back" : "Add alarm") {
+                        if model.alarmsPage { model.alarmsPage = false } else { model.addAlarm = Date() }
                     }
+                    .contentTransition(.symbolEffect(.replace))
                     .animation(.snappy(duration: 0.25), value: model.alarmsPage)
                     .frame(width: model.railWidth).padding(.top, 196)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -1054,7 +1050,7 @@ struct ChannelsTab: View {
         TwoPane {
             PageTitle("Channels")
             ReachRow()
-            Section("Now playing") {
+            Section {
                 Picker("Channel", selection: Binding(get: { model.state.channel }, set: { model.playChannel($0, id: "nowPlaying") })) {
                     ForEach(model.state.channelNames, id: \.self) { Text($0).tag($0) }
                     if !model.state.channelNames.contains(model.state.channel) { Text(model.state.channel).tag(model.state.channel) }
@@ -1064,6 +1060,9 @@ struct ChannelsTab: View {
                 }.foregroundStyle(.tint)
                 Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
                 if let f = model.failed("nowPlaying") { FailNote(text: f) }
+            } header: {
+                // The same header as More widgets, so the page's sections read as one set.
+                Text("Now playing").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
             }
         } right: {
             Section {
@@ -1341,12 +1340,12 @@ extension View {
     }
 }
 
-// Home's big skip, in the Chumby's own look: a fat gel button in the website's blue, white Trebuchet, and the octopus
-// asleep on it. One tap lets the next alarm pass; once skipped it goes pale and sleepy, with Undo, until the time passes.
+// Home's big skip, in the Chumby's own look: a fat gel button in the logo's blue, white Trebuchet, and the octopus on
+// it. One tap lets the next alarm pass; once skipped the gel turns night navy and the octopus sleeps, with Undo, until the
+// time passes.
 struct SkipCard: View {
     @EnvironmentObject var model: ChumbyModel
-    @Environment(\.colorScheme) private var scheme
-    private var dark: Bool { scheme == .dark }
+    static let day: [UInt32] = [0x5584d6, 0x2b5cad], night: [UInt32] = [0x34508f, 0x1f2f5c]
     private func label(_ name: String) -> String {
         let n = name.hasPrefix("Calendar: ") ? String(name.dropFirst(10)) : name
         return n.isEmpty ? "Alarm" : n
@@ -1355,56 +1354,64 @@ struct SkipCard: View {
     private func day(_ d: Date) -> String {
         Calendar.current.isDateInToday(d) ? "Today" : Calendar.current.isDateInTomorrow(d) ? "Tomorrow" : d.formatted(.dateTime.weekday(.wide))
     }
+    // A skip whose time has gone is over, even before the Chumby's next answer says so (a kept copy on opening, say).
+    private var skipped: SkippedAlarm? { model.state.skipped.flatMap { $0.date > Date() ? $0 : nil } }
+    private func lines(_ head: String, _ at: Date, _ name: String, struck: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(head).font(.custom("Trebuchet MS", size: 15).weight(.bold))
+            Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold)).strikethrough(struck, color: .white.opacity(0.7))
+            Text("\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1)
+        }
+        .foregroundStyle(.white)
+    }
     var body: some View {
-        if model.stateKnown && model.state.skipKnown && !model.unreachable && model.sys.ringing == nil {
+        if model.stateKnown && model.state.skipKnown && !model.unreachable && model.sys.ringing == nil, let next = skipped.map({ ($0.date, $0.name) }) ?? model.nextRing().map({ ($0.at, $0.alarm.name) }) {
+            let asleep = skipped != nil
             VStack(alignment: .leading, spacing: 8) {
-              // One place for both states, so they crossfade where they stand rather than stacking for a spring.
-              ZStack(alignment: .leading) {
-                if let s = model.state.skipped {
+                // One slab that only changes colour, night laid over day, so it never thins to the sea between states;
+                // only what's written on it crossfades.
+                // Awake, the whole slab is the button; asleep it does nothing, and only Undo (laid on it, not inside it)
+                // answers.
+                Button { if !asleep { Task { await model.skipNext() } } } label: {
+                ZStack {
+                    ChumbyGel(colors: Self.day, rim: 0x1f4589)
+                    ChumbyGel(colors: Self.night, rim: 0x172447).opacity(asleep ? 1 : 0)
                     HStack(spacing: 14) {
-                        SleepyOctopus(asleep: true, tint: .white)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Skipped").font(.custom("Trebuchet MS", size: 15).weight(.bold)).foregroundStyle(.white)
-                            Text(time(s.date)).font(.custom("Trebuchet MS", size: 30).weight(.bold)).strikethrough(color: .white.opacity(0.7)).foregroundStyle(.white)
-                            Text("\(day(s.date)) · \(label(s.name))").font(.custom("Trebuchet MS", size: 14)).foregroundStyle(.white).lineLimit(1)
+                        SleepyOctopus(asleep: asleep, tint: .white)
+                        ZStack(alignment: .leading) {
+                            if asleep { lines("Skipped", next.0, next.1, struck: true).transition(.opacity) }
+                            else { lines("Skip next alarm", next.0, next.1, struck: false).transition(.opacity) }
                         }
                         Spacer(minLength: 8)
+                        Image(systemName: "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
+                            .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
+                            .opacity(asleep ? 0 : 1)
+                            // Room for Undo, which sits over this end of the slab.
+                            .frame(minWidth: asleep ? 92 : 0, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 18).padding(.vertical, 16)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                }
+                .buttonStyle(GelPress(enabled: !asleep))
+                .disabled(asleep)
+                .accessibilityLabel(asleep ? "Skipped, \(time(next.0)) alarm" : "Skip the \(time(next.0)) alarm, \(day(next.0))")
+                .overlay(alignment: .trailing) {
+                    if asleep {
                         Button { Task { await model.unskip() } } label: {
-                            Text("Undo").font(.custom("Trebuchet MS", size: 18).weight(.bold)).foregroundStyle(ChumbyPalette.word(false))
+                            Text("Undo").font(.custom("Trebuchet MS", size: 18).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
                                 .padding(.horizontal, 20).padding(.vertical, 11)
                                 .background(.white, in: Capsule())
                         }
                         .buttonStyle(GelPress())
-                        .accessibilityLabel("Undo the skip, so the \(time(s.date)) alarm rings")
+                        .padding(.trailing, 18)
+                        .accessibilityLabel("Undo the skip, so the \(time(next.0)) alarm rings")
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
                     }
-                    .padding(.horizontal, 18).padding(.vertical, 16)
-                    .background(ChumbyGel(colors: [0x5d7599, 0x3e5273], rim: 0x2f3f59))
-                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                } else if let n = model.nextRing() {
-                    Button { Task { await model.skipNext() } } label: {
-                        HStack(spacing: 14) {
-                            SleepyOctopus(asleep: false, tint: .white)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("Skip next alarm").font(.custom("Trebuchet MS", size: 15).weight(.bold)).foregroundStyle(.white)
-                                Text(time(n.at)).font(.custom("Trebuchet MS", size: 30).weight(.bold)).foregroundStyle(.white)
-                                Text("\(day(n.at)) · \(label(n.alarm.name))").font(.custom("Trebuchet MS", size: 14)).foregroundStyle(.white).lineLimit(1)
-                            }
-                            Spacer(minLength: 8)
-                            Image(systemName: "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
-                                .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
-                        }
-                        .padding(.horizontal, 18).padding(.vertical, 16)
-                        .background(ChumbyGel(colors: [0x5584d6, 0x2b5cad], rim: 0x1f4589))
-                        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-                    }
-                    .buttonStyle(GelPress())
-                    .accessibilityLabel("Skip the \(time(n.at)) alarm, \(day(n.at))")
-                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
-              }
                 if let f = model.failed("skip") { FailNote(text: f) }
             }
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: model.state.skipped)
+            .animation(.easeInOut(duration: 0.3), value: asleep)
             // For the build's film: skip the next alarm, then undo it.
             .task {
                 guard ChumbyModel.pose == "skipdemo", !Self.demoed else { return }
@@ -1417,8 +1424,8 @@ struct SkipCard: View {
     @MainActor static var demoed = false
 }
 
-// The Chumby's own button: a rounded slab of colour with a glossy top half and a darker rim, like its control panel's.
-// In the logo's own blue family, so it reads as kin to the wordmark and octopus above it.
+// The Chumby's own button: a rounded slab of colour with a glossy cap and a darker rim, like its control panel's. In the
+// logo's own blue family, so it reads as kin to the wordmark and octopus above it.
 struct ChumbyGel: View {
     let colors: [UInt32]
     var rim: UInt32
@@ -1426,10 +1433,11 @@ struct ChumbyGel: View {
         let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
         shape.fill(LinearGradient(colors: colors.map(ChumbyPalette.hex), startPoint: .top, endPoint: .bottom))
             .overlay(alignment: .top) {
-                // The gloss: a soft white sheen over the top half, fading out around the middle rather than stopping on a line.
-                shape.fill(LinearGradient(colors: [.white.opacity(0.38), .white.opacity(0.06)], startPoint: .top, endPoint: .bottom))
+                // The gloss: a soft sheen that ends at the big digits' cap line, as on the panel's own buttons, so it never
+                // cuts through a number or a strikethrough.
+                shape.fill(LinearGradient(colors: [.white.opacity(0.38), .white.opacity(0.08)], startPoint: .top, endPoint: .bottom))
                     .padding(3)
-                    .mask(LinearGradient(stops: [.init(color: .white, location: 0), .init(color: .white, location: 0.44), .init(color: .clear, location: 0.56)], startPoint: .top, endPoint: .bottom))
+                    .mask(LinearGradient(stops: [.init(color: .white, location: 0), .init(color: .white, location: 0.30), .init(color: .clear, location: 0.40)], startPoint: .top, endPoint: .bottom))
             }
             .overlay(shape.strokeBorder(.white.opacity(0.35), lineWidth: 1))
             .overlay(shape.inset(by: 0.5).stroke(LinearGradient(colors: [.clear, ChumbyPalette.hex(rim)], startPoint: .center, endPoint: .bottom), lineWidth: 1.5))
@@ -1439,34 +1447,45 @@ struct ChumbyGel: View {
 
 // Pressed, it squashes a little and springs back, like pressing the Chumby's soft body.
 struct GelPress: ButtonStyle {
+    var enabled = true
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.95 : 1)
+            .scaleEffect(configuration.isPressed && enabled ? 0.95 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.55), value: configuration.isPressed)
     }
 }
-
-// The octopus, in white on the button: eyes open while there's an alarm to skip; asleep, with a slow "z", once skipped.
+// The octopus, in white on the button: eyes open while there's an alarm to skip; asleep, eyes shut to two little arcs
+// and a slow "z" rising over its head.
 struct SleepyOctopus: View {
     let asleep: Bool
     let tint: Color
     @Environment(\.accessibilityReduceMotion) private var still
+    // Closed eyes, in the drawing's own coordinates: a smile-shaped lid across each eye.
+    static let lids: Path = {
+        var p = Path()
+        p.move(to: CGPoint(x: -20, y: -28)); p.addQuadCurve(to: CGPoint(x: 0, y: -28), control: CGPoint(x: -10, y: -19))
+        p.move(to: CGPoint(x: 17, y: -30)); p.addQuadCurve(to: CGPoint(x: 35, y: -30), control: CGPoint(x: 26, y: -22))
+        return p
+    }()
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack(alignment: .top) {
             ZStack {
                 ArtShape(art: ChumbyArt.octBody, box: ChumbyArt.octBox).fill(tint, style: FillStyle(eoFill: true))
-                // Asleep, the eyes close to lines, the way the hero sleeps.
-                ArtShape(art: ChumbyArt.octEyes, box: ChumbyArt.octBox).fill(ChumbyPalette.hex(asleep ? 0x3e5273 : 0x2b5cad), style: FillStyle(eoFill: true))
-                    .scaleEffect(x: 1, y: asleep ? 0.08 : 1, anchor: ChumbyPalette.eyeAnchor)
+                ArtShape(art: ChumbyArt.octEyes, box: ChumbyArt.octBox).fill(ChumbyPalette.hex(0x2b5cad), style: FillStyle(eoFill: true))
+                    .opacity(asleep ? 0 : 1)
+                ArtShape(art: Self.lids, box: ChumbyArt.octBox).stroke(ChumbyPalette.hex(0x1f2f5c), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .opacity(asleep ? 1 : 0)
             }
             .frame(width: 56, height: 44)
+            .padding(.top, 8)
             if asleep {
                 TimelineView(.animation(minimumInterval: 1.0 / 20, paused: still)) { ctx in
                     let k = still ? 0.5 : (ctx.date.timeIntervalSinceReferenceDate / 2.4).truncatingRemainder(dividingBy: 1)
-                    Text("z").font(.custom("Trebuchet MS", size: 14).weight(.bold)).foregroundStyle(tint)
-                        .offset(x: 6 + 4 * k, y: -6 - 10 * k)
+                    Text("z").font(.custom("Trebuchet MS", size: 13).weight(.bold)).foregroundStyle(tint)
+                        .offset(x: 4 + 3 * k, y: -2 - 8 * k)
                         .opacity(sin(.pi * k))
                 }
+                .transition(.opacity)
             }
         }
         .frame(width: 60, height: 52)

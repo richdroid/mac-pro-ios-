@@ -378,6 +378,8 @@ struct FlickScreen: View {
             let eye = toRemote && !stops && !panes ? (model.mirrorLive ? "eye.slash" : "eye") : nil
             Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : step == .control ? "Done" : "Close", systemImage: eye ?? (stops || step != .control ? "xmark" : "checkmark")) }
                 .contentTransition(.symbolEffect(.replace))
+                // Its own animation: the bar doesn't take the move's transaction, so without this the glyph cut in one frame.
+                .animation(.snappy, value: eye)
         }
     }
 
@@ -887,8 +889,11 @@ struct FlickScreen: View {
                     .allowsHitTesting(false)
             }
             // The poster filling the screen stays put underneath through the growing, so there's never a frame without it.
+            // Going to the Remote it fades with the move: the Remote's picture has only its 0.35 black under the blurred
+            // copy, and this sharp poster showing through that copy made the slab lighter and flatter than where it lands.
             if landed || big {
                 Color.clear.overlay { artwork(fill: true) }.clipped()
+                    .opacity(Double(1 - t))
                     .transition(.asymmetric(insertion: .scale(scale: 1.3).combined(with: .opacity), removal: .opacity))
             }
             // The tick fades out as the screen grows, rather than going the moment the step changes.
@@ -1174,8 +1179,9 @@ struct FlickScreen: View {
             model.remoteMoveAt = Date()
             withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) {
                 toRemote = true
-                withAnimation(.easeOut(duration: 0.2)) { controlsIn = false }
-                withAnimation(.easeOut(duration: 0.15)) { arrived = false }
+                // The title, the poster and the controls all gone in 0.12 s, before the keys come, so the two never overlap.
+                withAnimation(.easeOut(duration: 0.12)) { controlsIn = false }
+                withAnimation(.easeOut(duration: 0.12)) { arrived = false }
             }
             // The Remote's picture can still settle as its page lays out, so the move keeps aiming at where it is now,
             // place and size, until the spring has run its course and the picture has stopped moving. Once the screen

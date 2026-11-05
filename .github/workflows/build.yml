@@ -245,7 +245,7 @@ jobs:
               # alarmsdemo runs 20 s so the nap's countdown and its cancel stay on film after the scroll down to Quick nap.
               # chdemo: a channel chosen in Now playing moves the editor to it, then + adds a widget, which scrolls to it and glows.
               # skipdemo: Home's Skip next alarm tapped, then Undo.
-              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 20" "chdemo 1 live 12" "skipdemo 0 live 14"; do
+              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 20" "chdemo 1 live 12" "skipdemo 0 live 20"; do
                 set -- "$1" "$2" $V
                 xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-$3.mp4 > /dev/null 2>&1 & REC=$!
                 sleep 5

@@ -244,8 +244,9 @@ struct NapChips: View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             let left = max(due.timeIntervalSince(ctx.date), 0)
             let k = min(left / Double(total * 60), 1)
-            // Whole minutes left, rounded up, so it never reads as a time of day beside the clock.
-            let minutes = max(Int((left / 60).rounded(.up)), 1)
+            // Whole minutes left, rounded up, so it never reads as a time of day beside the clock. Never more than the nap
+            // chosen: the Chumby rings on a whole minute, so a 10-minute nap can be up to 10:59 away, and must still say 10.
+            let minutes = min(max(Int((left / 60).rounded(.up)), 1), total)
             HStack(spacing: 4) {
                 // "left" is what the falling tide already says; with it the chip clipped to "11 min l…" beside the ×.
                 Text("\(minutes) min").monospacedDigit().lineLimit(1).fixedSize()
@@ -470,10 +471,10 @@ struct AlarmsTab: View {
             ScrollViewReader { proxy in
                 page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
             }
-            // Gone in the slide's first third going out, so the incoming page's rows never pass over its words; back in the
-            // last stretch of the slide coming home, once the page leaving has mostly cleared.
+            // Gone in the slide's first third going out, so the incoming page's rows never pass over its words; coming home
+            // it starts back once the leaving page is a little way off, and is nearly whole as that page clears.
             .opacity(swapped ? 0 : 1)
-            .animation(swapped ? .easeOut(duration: Self.slide / 3) : .easeIn(duration: Self.slide / 2).delay(Self.slide / 2), value: swapped)
+            .animation(swapped ? .easeOut(duration: Self.slide / 3) : .easeOut(duration: Self.slide * 0.6).delay(Self.slide * 0.15), value: swapped)
             .allowsHitTesting(!swapped).accessibilityHidden(swapped)
             // Only the incoming page is cut, at the rail's edge, by a frame that stays put while the page moves inside it,
             // so the pages still run under the top and bottom bars. It brings no sea of its own: the tab's stays as it is.
@@ -567,7 +568,7 @@ struct AlarmsTab: View {
                     try? await Task.sleep(nanoseconds: 2_000_000_000); openSettings()
                     try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { model.alarmsPage = false }
                     try? await Task.sleep(nanoseconds: 1_200_000_000); scrollTo = "nap"
-                    try? await Task.sleep(nanoseconds: 1_200_000_000); await model.nap(10)
+                    try? await Task.sleep(nanoseconds: 1_200_000_000); UserDefaults.standard.set(10, forKey: "napLength"); await model.nap(10)
                     try? await Task.sleep(nanoseconds: 4_500_000_000); await model.cancelNap()
                 }
             default: break

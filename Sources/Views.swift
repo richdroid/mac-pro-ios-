@@ -94,20 +94,21 @@ struct FlatStyle: ButtonStyle {
 struct TopEdge: ViewModifier {
     // The scroll views on the page that have content under the bar; open, each pane reports its own.
     @State private var under: Set<Int> = []
-    // Where the scroll views' content rests: the foot of whatever title is above it, large or inline.
-    @State private var rest: CGFloat?
+    // Where each scroll view's content rests on the display: the foot of whatever title is above it, large or inline.
+    // Open, two panes report; the black ends at the higher of the two.
+    @State private var rest: [Int: CGFloat] = [:]
     func body(content: Content) -> some View {
         bar(content.scrollEdgeEffectHidden(true, for: .top))
             .environment(\.topEdgeUnder) { id, on, inset in
                 if on { under.insert(id) } else { under.remove(id) }
-                rest = inset
+                rest[id] = inset
             }
             .overlay {
                 // Read where the bar ends whether the content's frame starts under the bar or below it.
                 GeometryReader { g in
                     // To where the content rests, which is the foot of whatever title is there: the large title never collapses
                     // on the Duo, so an inline bar's height left text behind the title, and the safe area reached ~100 pt past it.
-                    let y = g.frame(in: .global).minY, bar = y + (rest ?? min(g.safeAreaInsets.top, TopEdge.statusBar + 44 - y))
+                    let y = g.frame(in: .global).minY, bar = rest.values.min() ?? max(y, TopEdge.statusBar + 44)
                     let lead = g.safeAreaInsets.leading, width = g.size.width + lead + g.safeAreaInsets.trailing
                     VStack(spacing: 0) {
                         Color.black.frame(height: max(bar, 0))
@@ -147,9 +148,16 @@ extension EnvironmentValues {
 struct ScrollsUnder: ViewModifier {
     struct Under: Equatable { var on: Bool; var inset: CGFloat }
     @Environment(\.topEdgeUnder) private var report
+    @State private var under = Under(on: false, inset: 0)
+    @State private var top: CGFloat = 0
     let id: Int
     func body(content: Content) -> some View {
-        content.onScrollGeometryChange(for: Under.self) { Under(on: $0.contentOffset.y + $0.contentInsets.top > 1, inset: $0.contentInsets.top) } action: { _, u in report(id, u.on, u.inset) }
+        // The resting top on the display: the scroll view's own top plus its inset (the inset alone is from its frame, which
+        // starts under the bar).
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top = $0 }
+            .onScrollGeometryChange(for: Under.self) { Under(on: $0.contentOffset.y + $0.contentInsets.top > 1, inset: $0.contentInsets.top) } action: { _, u in under = u }
+            .onChange(of: Under(on: under.on, inset: under.inset + top)) { _, u in report(id, u.on, u.inset) }
     }
 }
 extension View {
@@ -406,7 +414,7 @@ struct TempDials: View {
     @State private var width: CGFloat = 0
     // As many across as fit, then evened out, so the last row is never one short (eight dials are 4 + 4, not 3 + 3 + 2).
     static func columns(_ n: Int, width: CGFloat) -> Int {
-        let fit = max(Int((width + 12) / 84), 1)
+        let fit = max(Int((width + 12) / 76), 1)
         guard n > fit else { return max(n, 1) }
         let rows = (n + fit - 1) / fit
         return (n + rows - 1) / rows
