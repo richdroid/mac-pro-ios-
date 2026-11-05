@@ -195,8 +195,10 @@ targets:
     platform: iOS
     sources:
       - TVWidget/TVWidgets.swift
+      - TVWidget/TVIslandWidget.swift
       - TVApp/Sources/TVShared.swift
       - TVApp/Sources/TVTheme.swift
+      - TVApp/Sources/TVIsland.swift
       - ci/gallery-tv
     settings:
       base:

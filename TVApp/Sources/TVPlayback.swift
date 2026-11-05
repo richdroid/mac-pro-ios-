@@ -152,6 +152,8 @@ final class NextUp: ObservableObject {
         Task { [weak self] in
             let found = await Self.resolve(p)
             guard let self, self.key == k else { return }
+            // Not found yet (Stremio's rows not in, say): asked again on the next reading rather than given up on.
+            if found == nil { self.key = "" }
             if found?.next != self.next { self.next = found?.next }
             if found?.previous != self.previous { self.previous = found?.previous }
             if found?.series != self.series { self.series = found?.series }
@@ -175,6 +177,10 @@ final class NextUp: ObservableObject {
         if let r = RecentFlicks.shared.list.first(where: { $0.type == "series" && same($0.title) }) {
             imdb = r.imdb; title = r.title; art = r.art; known = r.video
         } else if let i = BrowseStore.shared(.stremio).rows.first(where: { $0.title == "Continue watching" })?.items.first(where: { $0.stremioRef?.type == "series" && same($0.title) }), let ref = i.stremioRef {
+            imdb = ref.imdb; title = i.title; art = i.art; known = ref.video
+        } else if let i = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.stremioRef != nil && same($0.title) }), let ref = i.stremioRef {
+            // Any of Stremio's own rows naming the show, whatever kind its card says it is: the real bridge's
+            // "Show - S02E03 - Title" plus its season and episode is enough to find the rest (r18).
             imdb = ref.imdb; title = i.title; art = i.art; known = ref.video
         }
         guard let imdb, let meta = await meta(imdb) else { return nil }

@@ -58,6 +58,43 @@ const png = (w, h, a, b) => {
   const head = Buffer.alloc(13); head.writeUInt32BE(w, 0); head.writeUInt32BE(h, 4); head[8] = 8; head[9] = 2;
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 };
+// Pictures drawn pixel by pixel (RGBA), for the box's photo on Status and a still of the TV's home screen: something that
+// reads as the real thing in the build's shots, rather than a flat square (r18). Drawn here; nothing personal in them.
+const paint = (w, h, at) => {
+  const raw = Buffer.alloc((w * 4 + 1) * h);
+  for (let y = 0, o = 0; y < h; y++) { o++; for (let x = 0; x < w; x++) { const p = at(x, y); for (let c = 0; c < 4; c++) raw[o++] = Math.max(0, Math.min(255, p[c])); } }
+  const head = Buffer.alloc(13); head.writeUInt32BE(w, 0); head.writeUInt32BE(h, 4); head[8] = 8; head[9] = 6;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+};
+const inRound = (x, y, x0, y0, w, h, r) => { const cx = Math.max(x0 + r, Math.min(x, x0 + w - r)), cy = Math.max(y0 + r, Math.min(y, y0 + h - r)); return (x - cx) ** 2 + (y - cy) ** 2 <= r * r && x >= x0 && x < x0 + w && y >= y0 && y < y0 + h; };
+// A small black streaming box at a slight angle of light: soft top sheen, a status light at the front.
+const boxPhoto = paint(320, 320, (x, y) => {
+  if (inRound(x, y, 50, 70, 220, 200, 34)) {
+    const sheen = Math.max(0, 1 - (y - 70) / 90) * 46, edge = inRound(x, y, 54, 74, 212, 192, 30) ? 0 : 22;
+    if ((x - 160) ** 2 + (y - 250) ** 2 < 16) return [255, 255, 255, 230];
+    return [14 + sheen + edge, 14 + sheen + edge, 16 + sheen + edge, 255];
+  }
+  // Its shadow on the table.
+  const d = ((x - 160) / 130) ** 2 + ((y - 282) / 18) ** 2;
+  return d < 1 ? [0, 0, 0, Math.round(90 * (1 - d))] : [0, 0, 0, 0];
+});
+// The launcher's home screen: a wide recommendation row, then two rows of app banners, on its dark ground.
+const homeTiles = [[[190, 50, 40], [70, 20, 60]], [[40, 120, 190], [20, 40, 90]], [[220, 170, 60], [140, 60, 30]], [[40, 160, 120], [20, 60, 70]]];
+const appTiles = [[230, 30, 30], [20, 20, 20], [124, 77, 255], [245, 245, 245], [15, 15, 15], [229, 9, 20], [229, 160, 13], [30, 30, 30]];
+const homeStill = paint(960, 540, (x, y) => {
+  const bg = [18 + y / 30, 22 + y / 30, 30 + y / 24, 255];
+  for (let i = 0; i < 4; i++) {
+    const x0 = 60 + i * 215, y0 = 70;
+    if (x >= x0 && x < x0 + 200 && y >= y0 && y < y0 + 200 && inRound(x, y, x0, y0, 200, 200, 8)) {
+      const [a, b] = homeTiles[i], t = (y - y0) / 200; return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, 255];
+    }
+  }
+  for (let r = 0; r < 2; r++) for (let i = 0; i < 4; i++) {
+    const x0 = 60 + i * 215, y0 = 300 + r * 105;
+    if (inRound(x, y, x0, y0, 200, 92, 6)) { const c = appTiles[r * 4 + i]; return [c[0], c[1], c[2], 255]; }
+  }
+  return bg;
+});
 const pictures = { wide: png(284, 160, [200, 40, 60], [240, 150, 40]), square: png(160, 160, [230, 230, 240], [120, 200, 240]), poster: png(234, 352, [40, 70, 120], [220, 120, 70]), art: png(300, 300, [190, 40, 120], [30, 90, 200]) };
 const tvBase = 'http://127.0.0.1:9002';
 const tvApps = [['com.codex.musicwebtv', 'Mint Music', 1], ['com.mint.letterboxd', 'Letterboxd', 1], ['com.stremio.one', 'Stremio', 1], ['com.google.android.youtube.tv', 'YouTube', 1], ['com.google.android.youtube.tvmusic', 'YouTube Music', 1], ['com.netflix.ninja', 'Netflix', 1], ['com.plexapp.android', 'Plex', 1], ['com.apple.atve.androidtv.appletv', 'Apple TV', 1], ['com.android.tv.settings', 'Settings', 1], ['com.google.android.play.games', 'Google Play Games', 1], ['flar2.homebutton', 'Button Mapper', 1]];
@@ -87,15 +124,24 @@ http.createServer((q, s) => {
   if (scene && q.url === '/api/tv/status') { s.setHeader('content-type', 'application/json'); return s.end(tvScene(scene)); }
   // Skips take the real player a few seconds, so the shot catches them still on their way.
   if (scene && q.method === 'POST' && q.url === '/api/tv/player-seek') { s.setHeader('content-type', 'application/json'); return setTimeout(() => s.end(JSON.stringify({ ok: true, position: 7630000, duration: 8000000 })), 6000); }
-  if (q.url.startsWith('/api/tv/mint')) { s.setHeader('content-type', 'application/json'); return s.end(tvMint); }
+  if (q.url.startsWith('/api/tv/mint')) {
+    s.setHeader('content-type', 'application/json');
+    // A search only answers with what matches it, as the real bridge does; the plain list otherwise.
+    const want = (new URL(q.url, 'http://x').searchParams.get('q') || '').trim().toLowerCase();
+    if (!want) return s.end(tvMint);
+    const all = JSON.parse(tvMint), seen = new Set();
+    const items = (all.rows || []).flatMap(r => r.items || []).filter(i => (i.title + ' ' + (i.subtitle || '')).toLowerCase().includes(want) && !seen.has(i.id) && seen.add(i.id));
+    return s.end(JSON.stringify({ rows: items.length ? [{ title: 'Music', items }] : [] }));
+  }
   if (q.url.startsWith('/api/tv/streams')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ streams: [['1080p', '1080p', 3.2, ''], ['1080p', '1080p', 1.4, ''], ['4K HDR', '4K', 18.4, 'HDR'], ['720p', '720p', 0.9, '']].map(([name, quality, gb, hdr], n) => ({ token: 's' + n, addon: 'Sample addon', name, description: 'Sample.Film.2024.' + quality + '.WEB-DL.x264', quality, hdr, gb, instant: n < 3 })) })); }
   if (q.url.startsWith('/api/tv/discover')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }
   if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: 'Episode ' + n, thumb: tvBase + '/poster.png' }))) })); }
   if (q.url.startsWith('/api/tv/recs')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ films: ['Rope', 'Match Point', 'Blue Velvet', 'Klute'].map(title => ({ title, year: '1990', slug: title.toLowerCase(), imdb: 'tt1234567', art: tvBase + '/poster.png', why: 'Because you liked Heat' })) })); }
   if (q.url.startsWith('/api/tv/stremio')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }
-  if (q.url === '/api/tv/device-image') { s.setHeader('content-type', 'image/png'); return s.end(pictures.square); }
+  if (q.url === '/api/tv/device-image') { s.setHeader('content-type', 'image/png'); return s.end(boxPhoto); }
   if (q.url === '/api/tv/device') { const up = [12, 18, 9, 22, 30, 14, 11, 16, 25, 19]; s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 18, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 2.4e6, txRate: 8e4, hist: { cpu: up, mem: up.map(x => x + 50), rx: up, tx: up } })); }
-  if (q.url === '/api/tv/shot') { s.setHeader('content-type', 'image/jpeg'); return s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); }
+  // The TV's home screen, for the stage's TV and the Remote's still (shot.jpg was a photo of a Chumby).
+  if (q.url === '/api/tv/shot') { s.setHeader('content-type', 'image/png'); return s.end(homeStill); }
   // The apps' real banners wherever the repo has them (ci/tv-icons), so every scene shows what his TV shows, never a
   // made-up gradient a fallback has to stand in for (r17: text-only tiles on the open Remote).
   if (q.url.startsWith('/api/tv/icon')) {
@@ -242,7 +288,7 @@ function tvPose(q, s) {
     return json(tvPose.discover[query.get('type') === 'series' ? 'series' : 'movie']);
   }
   // A still taken after a key press: the same picture here, at once.
-  if (path === '/api/tv/shot' && q.url !== '/api/tv/shot') { s.setHeader('content-type', 'image/jpeg'); s.end(fs.readFileSync(__dirname + '/shot.jpg')); return true; }
+  if (path === '/api/tv/shot' && q.url !== '/api/tv/shot') { s.setHeader('content-type', 'image/png'); s.end(homeStill); return true; }
   if (/^\/art[0-2]\.png$/.test(path)) {
     const tones = [[[200, 60, 40], [40, 20, 90]], [[30, 150, 110], [10, 40, 60]], [[230, 190, 60], [120, 30, 120]]][+path[4]];
     s.setHeader('content-type', 'image/png'); s.end(png(300, 300, tones[0], tones[1])); return true;

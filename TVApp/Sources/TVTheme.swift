@@ -11,6 +11,8 @@ enum TVLook {
     static let bannerSize = CGSize(width: 142, height: 80)
     static let card: CGFloat = 22, banner: CGFloat = 12, gap: CGFloat = 12
     static let press = Animation.spring(duration: 0.25, bounce: 0.25)
+    // The side bar's glass and its margin from the display's edge, folded and open alike.
+    static let railRoom: CGFloat = 76
     // A form row in the same glass as the cards, never the system's opaque grey over the living background.
     static var glassRow: some View { Rectangle().fill(.ultraThinMaterial) }
 }

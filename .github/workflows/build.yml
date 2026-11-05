@@ -35,6 +35,15 @@ jobs:
             (cd dist && zip -qry $APP.ipa Payload && rm -rf Payload)
           done
           ls build/Build/Products/Release-iphoneos/MacPro.app/PlugIns
+      # The simulator builds on their own, so the screenshot step's time is all screenshots.
+      - name: Build for the simulator
+        continue-on-error: true
+        timeout-minutes: 25
+        run: |
+          for APP in MacPro Chumby TV GalleryMac GalleryChumby GalleryTV; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -1
+          done
       - name: Screenshot in the simulator
         continue-on-error: true
         # Raised from 40 for the Mac Pro state shots, about 3.5 minutes more across both displays, then to 60 for the TV
@@ -47,10 +56,6 @@ jobs:
           set +e
           DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
           xcrun simctl list devices available | grep -m1 "$DEVICE"
-          for APP in MacPro Chumby TV GalleryMac GalleryChumby GalleryTV; do
-            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
-              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build
-          done
           xcrun simctl boot "$DEVICE"
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
@@ -321,20 +326,16 @@ jobs:
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$P$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             done
-            # The Live Activity: the episode playing, then the app put in the background so the Dynamic Island and its
-            # cover show (folded only; the simulator's island is on the outer screen).
+            # The Live Activity, drawn by the TV gallery as the Lock Screen and the island would show it (the simulator never
+            # put the island up for a background shot: r18's was blank). Folded only.
             if [ -z "$2" ]; then
-              curl -s http://127.0.0.1:9002/real/reset > /dev/null
-              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 0 -pose island
-              sleep 24
-              xcrun simctl launch "$DEVICE" com.apple.Preferences > /dev/null 2>&1 || true
-              sleep 4
+              xcrun simctl launch "$DEVICE" local.macpro.GalleryTV -page island
+              sleep 6
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-island$2.png
-              xcrun simctl terminate "$DEVICE" com.apple.Preferences || true
-              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+              xcrun simctl terminate "$DEVICE" local.macpro.GalleryTV || true
             fi
             tv_real "$1" "$2"
-            tv_flick "$1" "$2"
+            [ -z "$2" ] && tv_flick "$1" "$2"
             tv_flickstarts "$1" "$2"
           }
           # The flick as rebuilt (tv-iphone.md §2.5a), each on the mock's scripted start: the stage at rest, a normal start,
@@ -459,20 +460,18 @@ jobs:
           open -a DeviceHub; sleep 10
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
           sleep 5
-          shots 3 "-open"
-          # The TV first: it's what he's using most, and the part a long run must not lose.
+          # The TV and Chumby poses before the general shots: r17 and r18 ran out inside "shots -open", so not one TV or
+          # Chumby open pose was ever taken. The tours and Apple's own apps are only taken folded now (the open tour and
+          # references were the least looked at), and the old flick demo only folded and partly folded.
           tv_poses 3 "-open" || echo "TV poses open incomplete"
           chumby_poses 3 "-open" || echo "Chumby poses open incomplete"
-          tv_tour 3 "-open" || echo "TV tour open incomplete"
-          reference 3 "-open"
+          shots 3 "-open"
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
           pose_shots 3 "-partial" || echo "partial shots incomplete"
           tv_flick 3 "-partial" || echo "TV flick partial incomplete"
-          tv_tour 3 "-partial" || echo "TV tour partial incomplete"
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; sleep 3
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
           pose_shots 3 "-portrait" || echo "portrait shots incomplete"
-          reference 3 "-portrait"
       - name: Collect crash reports
         if: always()
         run: |

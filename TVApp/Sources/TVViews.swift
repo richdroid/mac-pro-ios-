@@ -99,7 +99,8 @@ struct RootView: View {
             for _ in 0..<40 {
                 if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream"].contains(pose) || pose.hasPrefix("flick-") ? "movie" : "series") }) {
                     // The stream flick goes as he does it most: the best stream found for him, in the hand, thrown.
-                    model.flick(FlickTarget(item: item, source: .stremio, ready: pose == "flickdemo-stream" || pose.hasPrefix("flick-"))); return
+                    // Through the card's own tap, as a finger would: what's already on goes to the Remote with nothing sent.
+                    FlickCardButton.tap(model, item, .stremio, ready: pose == "flickdemo-stream" || pose.hasPrefix("flick-")); return
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
@@ -255,6 +256,10 @@ struct Page<C: View>: View {
         // and the large title can track it and fold away. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
+                // Under a show's or stream's page laid over everything, this page steps out of sight, so nothing of it (a
+                // search pill, chips, its own back bar) shows in the strip between that page and the side bar.
+                .opacity(model.flickChoosing || model.flickCovering ? 0 : 1)
+                .animation(.easeOut(duration: 0.15), value: model.flickChoosing || model.flickCovering)
                 .environment(\.backToTop, top)
                 .navigationDestination(for: RowRoute.self) { $0.page }
                 .containerBackground(.clear, for: .navigation)
@@ -266,8 +271,9 @@ struct Page<C: View>: View {
         }
         .topShade()
         .background { Ambience() }
-        // How wide the side bar is, read off the room it takes from the page, for pages laid over everything.
-        .background { Color.clear.onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
+        // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
+        // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
+        .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
         // A list opened from the tab closes first; once on the tab's own page, it goes to the top.
         .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
         // A page opened from a search leaves the keyboard behind.
@@ -538,7 +544,9 @@ struct MirrorView: View {
         guard model.mirrorLive else { return nil }
         // Including the status kept from last time, on opening, so the first frame is the poster it'll stay, not the last
         // still of the screen swapped for the poster a moment later (r17).
-        if model.videoIsCurrent, let s = model.status?.session, s.playing { return model.picture(for: s).flatMap(URL.init(string:)) }
+        // Playing or paused: a paused film is as black on a capture as a playing one, and swapping to the capture on pause
+        // (and back on play) made the picture jump with every press (r18).
+        if model.videoIsCurrent, let s = model.status?.session { return model.picture(for: s).flatMap(URL.init(string:)) }
         return model.standInNow.flatMap(URL.init(string:))
     }
     // The picture drawn, which only moves on to a new one once it's loaded, then fades in over what was there: the
@@ -810,18 +818,33 @@ struct RemoteTab: View {
     // Hidden, not removed, while a flick's screen moves onto the picture: it carries its own bar, and two showed at once.
     // Its place is kept from the landing on (a start, or a film whose length isn't known yet shows the time it's at), so
     // nothing pops in and the picture never shrinks when the length arrives (r17).
+    // One slot of one height for whatever sits under the picture while something is on or starting: the bar, its 40 %
+    // stand-in, "Still starting", or the failed line. Whatever changes inside it, nothing around it moves (r18: the pad
+    // and keys jumped 40 px the moment playing arrived).
+    static let barSlot: CGFloat = 46
     @ViewBuilder var progress: some View {
-        Group {
-            if model.videoIsCurrent, model.starting == nil || model.starting?.played == true, let s = model.status?.session {
-                VideoProgress(session: s, live: !model.staleStatus && !unreachable)
-            } else if session {
-                // While a flicked start is under way: the bar's place, at 40 %, until there's a film to show.
-                ProgressPlaceholder().opacity(0.4)
+        if session {
+            ZStack {
+                if let st = model.starting, !st.played, st.failed {
+                    StartingNote()
+                } else if model.videoIsCurrent, model.starting == nil || model.starting?.played == true, let s = model.status?.session {
+                    VideoProgress(session: s, live: !model.staleStatus && !unreachable)
+                } else {
+                    // While a flicked start is under way: the bar's place, at 40 %, with "Still starting" after 8 s under it.
+                    ProgressPlaceholder().opacity(0.4)
+                        .overlay(alignment: .bottom) { StartingNote().offset(y: 4) }
+                }
             }
+            .frame(height: Self.barSlot)
+            .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1)
+            .allowsHitTesting(!unreachable)
+            .animation(.easeOut(duration: 0.2), value: model.starting?.played)
         }
-        .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1)
-        .allowsHitTesting(!unreachable)
-        .transition(.opacity)
+    }
+    // The episode line's place is kept from the start of an episode's flick, so it fills in rather than pushes in.
+    var seriesOn: Bool { (model.starting?.line?.hasPrefix("S") ?? false) || model.status?.session?.season != nil }
+    @ViewBuilder var episodes: some View {
+        if session && seriesOn { ZStack { EpisodesLine() }.frame(height: 46) } else { EpisodesLine() }
     }
     // Asleep or out of reach, the picture is dark with a moon or a cut wire, not the last frame passed off as now.
     var dark: Bool { asleep || unreachable }
@@ -890,7 +913,6 @@ struct RemoteTab: View {
             keys.frame(maxWidth: 380)
         }
         .opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
-        .animation(.easeInOut(duration: 0.25), value: session)
         // Whether something was on when the TV was last heard: kept through a drop, so its keys stay (dimmed).
         .onChange(of: model.status?.session != nil, initial: true) { _, has in if !unreachable { hadSession = has } }
     }
@@ -907,9 +929,8 @@ struct RemoteTab: View {
     func side(apps: Bool) -> some View {
         VStack(spacing: 14) {
             picture(closable: true)
-            StartingNote()
             progress
-            EpisodesLine()
+            episodes
             music
             // Typing, the keyboard comes up over this pane's foot: the tiles and the send box step aside rather than show
             // through it.
@@ -939,9 +960,9 @@ struct RemoteTab: View {
                 // Folded, the pad gets the room until the screen is asked for.
                 VStack(spacing: 14) {
                     // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
-                    if model.mirrorLive && !typing { picture(closable: false).transition(.opacity); StartingNote() }
+                    if model.mirrorLive && !typing { picture(closable: false).transition(.opacity) }
                     // Mint playing has no transport here, so its own player is the way to pause it.
-                    if !typing { progress; EpisodesLine(); music }
+                    if !typing { progress; episodes; music }
                     Group {
                         // Clear of the title above it, which the keyboard pushes the page up under.
                         pad.frame(minHeight: 150, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
@@ -1127,35 +1148,63 @@ struct StartingNote: View {
 }
 struct QuickApps: View {
     @Environment(TVModel.self) var model
+    // Never two tiles at the pane's edges with a hole between (r18): at least three across, sized to share the width
+    // equally, as many as fit at the launcher's own size where there's more room. Up to two rows of whole tiles.
     var body: some View {
-        // Laid out by the width it's given, in the same pass: never a first frame at zero width (one tile a row) that then
-        // jumped to the real count. Up to two rows of whole tiles, spread across the pane so no ragged gap is left at the
-        // right.
-        TileRows(tile: TVLook.bannerSize, gap: TVLook.gap, rows: 2) {
-            ForEach(Array(AppsTab.watching(model.status?.apps ?? []).prefix(12))) { Banner(app: $0) }
+        TileRows(tile: TVLook.bannerSize, gap: TVLook.gap, rows: 2, least: 3) { w in
+            ForEach(Array(AppsTab.watching(model.status?.apps ?? []).prefix(12))) { Banner(app: $0, width: w) }
         }
     }
 }
 // Whole tiles in rows: as many across as fit, at most `rows` rows, spread to fill the width. Any that don't fit go out of
 // sight rather than being cut at the edge.
-struct TileRows: Layout {
+struct TileRows<Content: View>: View {
     var tile: CGSize
     var gap: CGFloat
     var rows: Int
-    func across(_ w: CGFloat) -> Int { max(1, Int((w + gap) / (tile.width + gap))) }
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let w = proposal.width ?? (tile.width * 3 + gap * 2)
-        let a = across(w), n = min(subviews.count, a * rows)
-        let r = n == 0 ? 0 : (n + a - 1) / a
-        return CGSize(width: w, height: CGFloat(r) * tile.height + CGFloat(max(r - 1, 0)) * gap)
+    var least = 1
+    @ViewBuilder var content: (CGFloat) -> Content
+    // The tile width for a row this wide: the launcher's own size where enough of them fit, else at least `least` across,
+    // each the same share of the width.
+    static func layout(_ w: CGFloat, tile: CGFloat, gap: CGFloat, least: Int) -> (across: Int, width: CGFloat) {
+        let fit = max(1, Int((w + gap) / (tile + gap)))
+        if fit >= least { return (fit, tile + (w - CGFloat(fit) * tile - CGFloat(fit - 1) * gap) / CGFloat(fit)) }
+        return (least, (w - CGFloat(least - 1) * gap) / CGFloat(least))
     }
-    func placeSubviews(in b: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let a = across(b.width), n = min(subviews.count, a * rows)
-        let spacing = a > 1 ? max(gap, (b.width - CGFloat(a) * tile.width) / CGFloat(a - 1)) : 0
-        for (i, v) in subviews.enumerated() {
-            guard i < n else { v.place(at: CGPoint(x: b.minX - 10_000, y: b.minY), anchor: .topLeading, proposal: ProposedViewSize(tile)); continue }
-            let x = b.minX + CGFloat(i % a) * (tile.width + spacing), y = b.minY + CGFloat(i / a) * (tile.height + gap)
-            v.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(tile))
+    var body: some View {
+        // The width it's given in this pass, read by the layout, so there's no first frame at the wrong size.
+        TileGrid(gap: gap, rows: rows, aspect: tile.height / tile.width) { w in
+            Self.layout(w, tile: tile.width, gap: gap, least: least)
+        } content: { w in content(w) }
+    }
+}
+// Lays the tiles out from the width it's offered: whole tiles in rows, equal widths, any beyond `rows` rows out of sight.
+private struct TileGrid<Content: View>: View {
+    var gap: CGFloat, rows: Int, aspect: CGFloat
+    var plan: (CGFloat) -> (across: Int, width: CGFloat)
+    @ViewBuilder var content: (CGFloat) -> Content
+    @State private var width: CGFloat = 0
+    var body: some View {
+        let p = plan(max(width, 1))
+        Grid(width: p.width, across: p.across, gap: gap, rows: rows, aspect: aspect) { content(p.width) }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if abs($0 - width) > 0.5 { width = $0 } }
+            .opacity(width > 0 ? 1 : 0)
+    }
+    private struct Grid: Layout {
+        var width: CGFloat, across: Int, gap: CGFloat, rows: Int, aspect: CGFloat
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            let n = min(subviews.count, across * rows), r = n == 0 ? 0 : (n + across - 1) / across
+            let h = width * aspect
+            return CGSize(width: proposal.width ?? CGFloat(across) * width, height: CGFloat(r) * h + CGFloat(max(r - 1, 0)) * gap)
+        }
+        func placeSubviews(in b: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            let n = min(subviews.count, across * rows), h = width * aspect
+            for (i, v) in subviews.enumerated() {
+                let size = ProposedViewSize(width: width, height: h)
+                guard i < n else { v.place(at: CGPoint(x: b.minX - 10_000, y: b.minY), anchor: .topLeading, proposal: size); continue }
+                v.place(at: CGPoint(x: b.minX + CGFloat(i % across) * (width + gap), y: b.minY + CGFloat(i / across) * (h + gap)), anchor: .topLeading, proposal: size)
+            }
         }
     }
 }
@@ -1200,8 +1249,14 @@ struct Transport: View {
     var ended = false
     // Whether what it plays is playing, when that's not the video session's to say (Mint's music).
     var playing: Bool?? = nil
+    // A flicked start under way: ⏯ says pause (it's going), ⏭ is dimmed for a film. Failed: everything but holding ⏯ to
+    // stop is dimmed, since nothing is on to control (r18).
+    var starting: TVModel.Starting? { model.starting.flatMap { $0.played ? nil : $0 } }
+    var failed: Bool { starting?.failed == true }
+    // An episode on whose next can't be worked out yet: ⏭ stays lit and works it out on the press (r18: dimmed on S2 E3 of 4).
+    var episodeOn: Bool { model.status?.session?.season != nil || (starting?.line?.hasPrefix("S") ?? false) }
     var body: some View {
-        let stremio = playing == nil && model.status?.session?.pkg == "com.stremio.one"
+        let stremio = playing == nil && (model.status?.session?.pkg == "com.stremio.one" || starting != nil)
         HStack(spacing: 0) {
             Group {
                 if stremio { GlassButton(icon: "backward.end.fill", label: nextUp.previous.map { "Start over, or \($0.subtitle)" } ?? "Start over", size: size) { StremioBack.press(model) } }
@@ -1212,7 +1267,7 @@ struct Transport: View {
             }.frame(maxWidth: .infinity)
             // Says which it'll do, as on the Playing tab, once the TV's word is fresh.
             // Held, it stops: the flick's own control screen is gone, and Stop went with it to here.
-            PlayKey(playing: playing ?? (ended ? false : model.staleStatus ? nil : model.status?.session?.playing), size: playSize, glow: glow)
+            PlayKey(playing: ended ? false : playing ?? (starting != nil && !failed ? true : model.staleStatus ? nil : model.status?.session?.playing), size: playSize, glow: glow)
                 .contextMenu {
                     Button("Stop", systemImage: "stop.fill") {
                         // Held while a flicked film is still starting, it calls the start off too.
@@ -1231,12 +1286,23 @@ struct Transport: View {
                     GlassButton(icon: "forward.end.fill", label: "Next episode, \(next.subtitle)", size: size) {
                         model.flick(FlickTarget(item: next, source: .stremio, ready: true, autoplay: true))
                     }
+                } else if episodeOn && nextUp.series == nil && starting == nil {
+                    // Not worked out yet: asked for on the press, and the TV's own next if it still can't be.
+                    GlassButton(icon: "forward.end.fill", label: "Next episode", size: size) {
+                        Task {
+                            NextUp.shared.forget(); NextUp.shared.follow(model.status)
+                            for _ in 0..<20 where NextUp.shared.next == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+                            if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) } else { model.key("next") }
+                        }
+                    }
                 } else {
                     // A film, or the last episode: the key stays, dimmed, rather than leave a gap.
                     GlassButton(icon: "forward.end.fill", label: "Nothing after this", size: size) {}.disabled(true).opacity(0.35)
                 }
             }.frame(maxWidth: .infinity)
         }
+        // Failed: nothing to control but stopping, which is the held ⏯.
+        .opacity(failed ? 0.4 : 1)
     }
 }
 
@@ -1245,6 +1311,8 @@ struct Banner: View {
     @Environment(TVModel.self) var model
     let app: TVStatus.App
     var browses = false
+    // Its width where a row fits its tiles to the room (the Remote's tiles, three across); the launcher's own otherwise.
+    var width: CGFloat = TVLook.bannerSize.width
     var current: Bool { model.status?.app == app.pkg }
     func open() { model.tick(); model.post("open", ["pkg": app.pkg]) }
     var body: some View {
@@ -1271,7 +1339,7 @@ struct Banner: View {
                     }
                 } else { BannerFallback(app: app) }
             }
-            .frame(width: TVLook.bannerSize.width, height: TVLook.bannerSize.height)
+            .frame(width: width, height: width * TVLook.bannerSize.height / TVLook.bannerSize.width)
             .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
             .overlay {
                 if current { RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2.5) }
@@ -1647,7 +1715,8 @@ struct NowControls: View {
             // The bar keeps its place before there's anything true to show on it.
             if music.duration > 0 && !model.staleStatus { MusicProgress(music: music) } else { ProgressPlaceholder() }
             // The one transport, the same five as for a film: one way to play anything in this app (r17).
-            Transport(playing: .some(model.staleStatus ? nil : music.playing))
+            // At the song's end with the TV still saying playing: an old word, shown stopped there, as a film's is (r18).
+            Transport(ended: music.duration > 0 && music.playing && music.position + Date().timeIntervalSince1970 * 1000 - music.sampledAt >= music.duration, playing: .some(model.staleStatus ? nil : music.playing))
         }
     }
 }
@@ -2084,8 +2153,17 @@ struct DiscoverColumn: View {
     }
     @ViewBuilder var controls: some View {
         if let continuing { shelf(continuing).id(Self.continueTitle) }
+        else if home.rows.isEmpty && UserDefaults.standard.bool(forKey: "hadContinueWatching") {
+            // Stremio's home not in yet, and there was a Continue watching last time: its room is kept, so it fills in
+            // rather than arriving above the films and pushing them down (r18).
+            PlaceholderShelf(headed: true).id(Self.continueTitle)
+        }
         Picker("Kind", selection: $kind) { Text("Films").tag("movie"); Text("Shows").tag("series") }
             .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
+            // Whether Stremio's home had a Continue watching, for keeping its room next time before it's in.
+            .onChange(of: home.rows.isEmpty || !store.query.isEmpty ? nil : continuing != nil, initial: true) { _, v in
+                if let v { UserDefaults.standard.set(v, forKey: "hadContinueWatching") }
+            }
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField(kind == "movie" ? "Search films" : "Search shows", text: $store.query).autocorrectionDisabled().submitLabel(.search)
@@ -2209,7 +2287,15 @@ struct VideoProgress: View {
     // Where the TV is known to be: the player's own answer to a jump for a moment after it, else the status.
     func confirmed(at date: Date) -> Double {
         var now = seeker.held(for: session, at: date) ?? (session.position ?? 0)
-        if seeker.held(for: session, at: date) == nil, live, session.playing, let at = session.sampledAt { now += max(0, date.timeIntervalSince1970 * 1000 - at) }
+        // While a ⏯ press is held, the clock goes by the press, not the TV's last word: paused, it stops where it was
+        // pressed (r18: it kept counting 0:05 to 0:08 under a paused key); played, it runs from the press.
+        let held = model.playHeld
+        let running = held?.playing ?? session.playing
+        if seeker.held(for: session, at: date) == nil, live, let at = session.sampledAt {
+            if session.playing && held?.playing == false { now += max(0, held!.at.timeIntervalSince1970 * 1000 - at) }
+            else if running && session.playing { now += max(0, date.timeIntervalSince1970 * 1000 - at) }
+            else if running, let h = held { now += max(0, date.timeIntervalSince(h.at) * 1000) }
+        }
         return max(0, duration > 0 ? min(now, duration) : now)
     }
     // Ahead of that by any jumps tapped that the TV hasn't confirmed yet.
@@ -2279,7 +2365,9 @@ struct VideoProgress: View {
             .animation(.spring(response: 0.5, dampingFraction: 0.88), value: locked)
         }
         // The build's shot of a drag along the bar, its bubble up ("-pose scrub"): held at 40 %, never let go.
-        .task(id: canSeek) { if UserDefaults.standard.string(forKey: "pose") == "scrub", canSeek, scrub == nil { try? await Task.sleep(nanoseconds: 1_500_000_000); scrub = duration * 0.4 } }
+        // Waits for the film's length (the real bridge's comes about 20 s in) rather than for the TV to allow seeking, which
+        // the mock never said, so it was never shown (r18).
+        .task(id: scrubbable && duration > 0) { if UserDefaults.standard.string(forKey: "pose") == "scrub", scrubbable, duration > 0, scrub == nil { try? await Task.sleep(nanoseconds: 1_500_000_000); scrub = duration * 0.4 } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Position")
         .accessibilityValue(!live ? "" : duration > 0 ? "\(clock(position(at: Date()))) of \(clock(duration))" : clock(position(at: Date())))

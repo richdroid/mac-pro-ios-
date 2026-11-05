@@ -399,10 +399,14 @@ struct EverywhereSearch: View {
     @StateObject private var films = BrowseStore(.stremio)
     @StateObject private var music = BrowseStore(.mint)
     var stores: [BrowseStore] { [films, music] }
+    // Shown together once both have answered, so films never arrive later and push in above the music being looked at
+    // (r18). Half a second's wait at most for the slower one beyond the first.
+    @State private var settledFor: String?
+    var settled: Bool { settledFor == text }
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             ForEach(stores, id: \.source) { store in
-                ForEach(store.answerRows) { row in
+                ForEach(settled ? store.answerRows : []) { row in
                     VStack(alignment: .leading, spacing: 8) {
                         // The row's own name only: what's in it says whether it's films or music, not the app it's from.
                         Text(row.title).font(.title3.weight(.bold))
@@ -418,21 +422,38 @@ struct EverywhereSearch: View {
                     .transition(.opacity.combined(with: .offset(y: 12)))
                 }
             }
-            if films.answerRows.isEmpty && music.answerRows.isEmpty {
+            if !settled || (films.answerRows.isEmpty && music.answerRows.isEmpty) {
                 Group {
-                    if films.loading || music.loading { ProgressView() }
+                    if !settled { ProgressView() }
                     else { ContentUnavailableView.search(text: text) }
                 }
-                .frame(maxWidth: .infinity).padding(.top, 30)
+                .frame(maxWidth: .infinity, minHeight: 220)
+                // Its own ground, so it never reads over whatever the page had under it (r18: over Watch's banners).
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
+                .padding(.horizontal, 20).padding(.top, 10)
             }
+        }
+        .task(id: text) {
+            settledFor = nil
+            // Both answered for this text, or the first answered and half a second more has gone by.
+            var firstAt: Date?
+            for _ in 0..<150 {
+                let f = !films.loading && films.query == text, m = !music.loading && music.query == text
+                if f && m { break }
+                if (f || m) && firstAt == nil { firstAt = Date() }
+                if let a = firstAt, Date().timeIntervalSince(a) > 0.5 { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if !Task.isCancelled { settledFor = text }
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: films.answerRows.map(\.id) + music.answerRows.map(\.id))
         .onChange(of: text, initial: true) { _, t in
             for s in stores { s.query = t; s.searchSoon() }
         }
         // The first card, as the grid shows it, for the build's search flow to tap.
-        .onChange(of: films.answerRows.first?.items.first?.id ?? music.answerRows.first?.items.first?.id, initial: true) { _, _ in
-            if let r = films.answerRows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, films.source) }
+        .onChange(of: settled ? (films.answerRows.first?.items.first?.id ?? music.answerRows.first?.items.first?.id) : nil, initial: true) { _, _ in
+            if !settled { SendDraft.shared.firstResult = nil }
+            else if let r = films.answerRows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, films.source) }
             else if let r = music.answerRows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, music.source) }
             else { SendDraft.shared.firstResult = nil }
         }

@@ -43,6 +43,9 @@ final class TVModel {
     var railWidth: CGFloat = 0
     // The flick screen is on a show's or a stream's page (not the card): the side bar stays usable, and a tab leaves it.
     var flickChoosing = false
+    // The flick's stage is up over a page (not yet moving onto the Remote): the page steps out of sight under it, so its
+    // rows never ghost through the stage's fade (r18).
+    var flickCovering = false
     // A film's colour kept on the pages behind after the flick closes, until something else is playing.
     @ObservationIgnored var moodArt: String?
     func keepMood(until art: String) { moodArt = art }
@@ -214,7 +217,9 @@ final class TVModel {
         guard let h = playHeld, let now = s.session?.playing ?? s.music?.playing else { return }
         if now == h.playing { playHeld = nil; return }
         let read = (s.session?.sampledAt ?? s.music?.sampledAt).map { Date(timeIntervalSince1970: $0 / 1000) }
-        if let read, read.timeIntervalSince(h.at) > 1.5 { playHeld = nil }
+        // Only a reading taken well after the press can say it didn't land: the box takes 2.2 s, and a reading from before
+        // the flip let go of the press and left a stale "paused" (r18).
+        if let read, read.timeIntervalSince(h.at) > 3 { playHeld = nil }
     }
     // Mint's song is what's on: playing, or Mint is the app in front. A film or show on the TV, playing or paused in
     // front, is never shown beside a song left over from before.

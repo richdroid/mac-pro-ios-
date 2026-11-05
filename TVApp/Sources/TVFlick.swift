@@ -228,6 +228,7 @@ struct FlickScreen: View {
     }
     // A Stremio stream or title: the kind of send the TV can be made ready for.
     var video: Bool { source == .stremio && target.send == nil && item.stremioRef != nil }
+    var onTV: Bool { model.isOnTV(shown, source) || model.isOnTV(item, source) }
     // Everything else steps back while the card is in the air.
     var calm: Double { !arrived ? 0 : flown ? 0.15 : 1 - 0.85 * min(1, Double(progress) * 1.6) }
     var shown: MediaItem {
@@ -266,9 +267,10 @@ struct FlickScreen: View {
             .onChange(of: progress < 0.6) { _, below in if below && !flown { charged = false } }
             // The TV made ready, with what's coming, at each point he shows he means it: the show's page with its Resume,
             // the streams opening, the card in the hand with its stream, and the card lifted (§2.5a C6).
-            .onChange(of: lifted) { _, now in if now && video { Prepare.arm(prepareBody) } }
-            .onChange(of: step == .flick && stream != nil) { _, now in if now && video && !flown { Prepare.arm(prepareBody) } }
-            .onChange(of: step) { _, now in if now == .streams && video { Prepare.arm(prepareBody) } }
+            // Nothing is prepared for what's already on the TV (r18: a prepare went out for the film already playing).
+            .onChange(of: lifted) { _, now in if now && video && !onTV { Prepare.arm(prepareBody) } }
+            .onChange(of: step == .flick && stream != nil) { _, now in if now && video && !flown && !onTV { Prepare.arm(prepareBody) } }
+            .onChange(of: step) { _, now in if now == .streams && video && !onTV { Prepare.arm(prepareBody) } }
             .onChange(of: resumeKnown ? resumeTarget?.episode.id : nil) { _, id in
                 if let id, video, step == .episodes, let t = resumeTarget, !isOn(t.episode) { Prepare.arm(prepareBody(for: id)) }
             }
@@ -318,6 +320,9 @@ struct FlickScreen: View {
             // On the card and after it, the X in the bar. While choosing (the show's page, the streams), back is in a
             // glass bar at the foot by the side bar, like every other page's, never loose circles over the side bar.
             .toolbar { if barShown && !choosing { bar } }
+            // Open, the X sat over the side bar until the screen had landed (r18); it goes with the stage. Folded it has
+            // become the Remote's eye by then, so it stays.
+            .navBarHidden(toRemote && panes)
             // While choosing, back is the same glass bar every page has, at the foot by the side bar, stepping away as he
             // scrolls down and back as he scrolls up; never a loose circle (r17).
             .environment(\.pageBar, pageBar)
@@ -331,7 +336,8 @@ struct FlickScreen: View {
                 }
             }
             .onChange(of: choosing && !leaving, initial: true) { _, c in model.flickChoosing = c }
-            .onDisappear { model.flickChoosing = false }
+            .onChange(of: !choosing && !toRemote && !leaving, initial: true) { _, c in model.flickCovering = c }
+            .onDisappear { model.flickChoosing = false; model.flickCovering = false }
             // Another tab, from the side bar while choosing, leaves the page for it.
             .onChange(of: model.tab) { _, _ in if choosing && !leaving { leave() } }
             .toolbarBackground(.hidden, for: .navigationBar)
@@ -366,7 +372,7 @@ struct FlickScreen: View {
             withAnimation(.easeOut(duration: 0.3)) { tint = c }
             if !leaving, !flown { model.mood = c }
         }
-        if step == .flick && stream != nil && video { Prepare.arm(prepareBody) }
+        if step == .flick && stream != nil && video && !onTV { Prepare.arm(prepareBody) }
         if ["flickdemo", "flickdemo-stream"].contains(Self.pose) || Self.pose?.hasPrefix("flick-") == true { Task { await demo() } }
         // Side by side, so a slow description doesn't hold up the streams.
         async let details: Void = loadMeta()
@@ -536,7 +542,8 @@ struct FlickScreen: View {
     // Straight to the Remote with nothing sent; if it's paused there, asked to play (MEDIA_PLAY, never the toggle).
     func toRemoteNow() {
         model.tick()
-        if model.status?.session?.playing == false { model.key("resume") }
+        // Held as playing, as from a card, so the key shows the play it asked for at once.
+        if model.status?.session?.playing == false { model.holdPlay(true); model.key("resume") }
         if let prior = priorMood { model.mood = prior }
         model.tab = 0
         leave(restoreMood: false)
@@ -559,7 +566,8 @@ struct FlickScreen: View {
             }
             .buttonStyle(PressCard())
             .transition(.opacity)
-        } else if let t = resumeTarget {
+        } else if let t = resumeTarget, resumeKnown {
+            // Only once it's known where he is: until then it said "Play S1 E1" for a show he's halfway through (r18).
             let p = t.episode.id == upNext ? (upNextProgress ?? 0) : 0
             let mins = info?.minutes[t.episode.id] ?? info?.show
             let left = t.verb == "Resume" ? mins.map { "\(max(1, Int(Double($0) * (1 - p)))) min left" } : mins.map { "\($0) min" }
@@ -647,7 +655,8 @@ struct FlickScreen: View {
                 ScrollViewReader { proxy in
                     let target = resumeTarget?.episode
                     EpisodePicker(episodes: meta?.episodes ?? [], season: $season, current: target?.id,
-                                  currentLabel: resumeTarget?.verb == "Resume" ? "Resume" : "Up next",
+                                  // The episode that's on the TV says so, never "Up next" (r18).
+                                  currentLabel: target.map(isOn) == true ? "Playing" : resumeTarget?.verb == "Resume" ? "Resume" : "Up next",
                                   progress: target?.id == upNext ? upNextProgress : nil, info: info) { choose($0) }
                     // To where he is, as soon as that's known, and again on coming back from the streams.
                     .onChange(of: target?.id, initial: true) { _, id in
@@ -840,6 +849,20 @@ struct FlickScreen: View {
         }
     }
     var screenURL: URL? { URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art) }
+    // What the TV's screen shows from 200 ms into the flight to the Remote: the Remote's own poster sat on a blur of
+    // itself, the same picture StartingPicture shows there, so it never changes look on the way (r18).
+    @ViewBuilder var landedPicture: some View {
+        if let image = target.image {
+            ZStack {
+                Color.black.opacity(0.35)
+                Color.clear.overlay { image.resizable().scaledToFill() }.clipped().blur(radius: 24).opacity(0.7)
+                image.resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .shadow(color: .black.opacity(0.5), radius: 14, y: 6).padding(14)
+            }
+        } else {
+            PosterOnBlur(url: URL(string: screenURL?.absoluteString ?? item.art))
+        }
+    }
     @ViewBuilder func artwork(fill: Bool) -> some View {
         if let image = target.image { image.resizable().aspectRatio(contentMode: fill ? .fill : .fit) }
         else { Art(url: screenURL) { $0.resizable().aspectRatio(contentMode: fill ? .fill : .fit) } placeholder: { fill ? (tint ?? Color(white: 0.15)) : Color.clear } }
@@ -853,7 +876,8 @@ struct FlickScreen: View {
         // The Remote's picture's own corners by the end of the move, so landing on it changes nothing but place and size.
         let radius = 9 + (TVLook.card - 9) * t
         let lean = landed ? 0 : charge
-        let glow = Double(1 - t)
+        // The TV's rim and glow go as the move starts, not over it: drawn round a moving picture they lagged beside it (r18).
+        let glow = toRemote ? 0 : Double(1 - t)
         return ZStack {
             RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.black.opacity(0.55 - 0.2 * Double(t)))
             // What the TV is showing now, so it reads as his TV rather than an empty slab. It gives way as the card comes.
@@ -871,7 +895,7 @@ struct FlickScreen: View {
             }
             // Landed: the card's own picture, in the same place at the same size, so the hand-over from the flying card is
             // invisible. No transition: a second poster scaling in, or a fade, read as two pictures.
-            if landed { Color.clear.overlay { artwork(fill: true) }.clipped() }
+            if landed { landedPicture }
             // The TV starting it: the light round the picture's edge, carried across into the Remote.
             if landed && sending { LoadingRing(radius: radius).transition(.opacity) }
         }
@@ -971,7 +995,7 @@ struct FlickScreen: View {
             // whole from its first frame (no fade of either, so never two translucent pictures at once), and its size is
             // given before the card's scale, so it ends exactly on the TV's screen.
             .overlay {
-                Color.clear.overlay { artwork(fill: true) }.clipped()
+                landedPicture.background(.black)
                     .opacity(morph ? 1 : 0).animation(nil, value: morph)
                     .frame(width: (morph ? tvFrame.width : cardFrame.width) / max(size, 0.01),
                            height: (morph ? tvFrame.height : cardFrame.height) / max(size, 0.01))
@@ -1353,7 +1377,8 @@ struct FlickScreen: View {
             // brings the card back (failedOnStage, from start()).
             let hold = 0.45 - Date().timeIntervalSince(releasedAt)
             if hold > 0 { try? await Task.sleep(nanoseconds: UInt64(hold * 1_000_000_000)) }
-            while !answered && !cancelled && !handedOver && (!written || Date().timeIntervalSince(releasedAt) < 1.5) {
+            // On the Remote by 1.2 s on every throw: nothing waits for the TV's answer, only for the request to be on its way.
+            while !written && !answered && !cancelled && !handedOver {
                 // Still choosing its stream (thrown the instant it was lifted): on once it's sent, however long that takes.
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
@@ -1682,5 +1707,15 @@ struct AppBrowse: View {
                 PageBarAction(title: "Open on TV", icon: "tv") { model.post("open", ["pkg": source.pkg]) }
             }
         }
+    }
+}
+
+extension View {
+    @ViewBuilder func navBarHidden(_ hidden: Bool) -> some View {
+        #if os(iOS)
+        toolbarVisibility(hidden ? .hidden : .automatic, for: .navigationBar)
+        #else
+        self
+        #endif
     }
 }

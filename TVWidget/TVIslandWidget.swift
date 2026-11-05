@@ -84,6 +84,34 @@ private struct IslandCard: View {
         }
     }
 }
+// The Live Activity's views drawn as they'd show, for the build's gallery: the simulator never put up the island itself
+// (r18: a blank shot). The Lock Screen card, the island opened, and its compact and minimal forms, playing and paused.
+struct TVIslandGallery: View {
+    let playing: TVIslandAttributes.ContentState
+    let paused: TVIslandAttributes.ContentState
+    var body: some View {
+        VStack(spacing: 18) {
+            ForEach([playing, paused], id: \.self) { st in
+                IslandCard(state: st, stale: false, cover: 64).padding(14).foregroundStyle(.white)
+                    .background(Color(hex: 0x14181C), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                IslandCard(state: st, stale: false).padding(.horizontal, 18).padding(.vertical, 16).foregroundStyle(.white)
+                    .background(.black, in: RoundedRectangle(cornerRadius: 42, style: .continuous))
+            }
+            HStack(spacing: 16) {
+                // Compact: the cover leading, the play state trailing, either side of the camera.
+                HStack {
+                    Cover(state: playing, radius: 8, height: 24)
+                    Spacer(minLength: 90)
+                    Image(systemName: playing.playing ? "pause.fill" : "play.fill").foregroundStyle(.white)
+                }
+                .padding(.horizontal, 10).frame(height: 36).background(.black, in: Capsule())
+                // Minimal.
+                Cover(state: playing, radius: 8, height: 22).padding(7).background(.black, in: Circle())
+            }
+        }
+        .padding(16)
+    }
+}
 struct TVIslandWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TVIslandAttributes.self) { context in
