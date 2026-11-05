@@ -1489,9 +1489,11 @@ struct SleepyOctopus: View {
             if asleep {
                 TimelineView(.animation(minimumInterval: 1.0 / 20, paused: still)) { ctx in
                     let k = still ? 0.5 : (ctx.date.timeIntervalSinceReferenceDate / 2.4).truncatingRemainder(dividingBy: 1)
-                    Text("z").font(.custom("Trebuchet MS", size: 13).weight(.bold)).foregroundStyle(tint)
+                    // Fully white at its peak, with a navy edge, so it reads over the gloss rather than as a grey smudge.
+                    Text("z").font(.custom("Trebuchet MS", size: 15).weight(.bold)).foregroundStyle(tint)
+                        .shadow(color: ChumbyPalette.hex(0x1f2f5c), radius: 1)
                         .offset(x: 4 + 3 * k, y: -2 - 8 * k)
-                        .opacity(sin(.pi * k))
+                        .opacity(min(1, 1.6 * sin(.pi * k)))
                 }
                 .transition(.opacity)
             }

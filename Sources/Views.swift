@@ -102,15 +102,15 @@ struct TopEdge: ViewModifier {
             .overlay {
                 GeometryReader { g in
                     // The page's own top is where its content rests, just under the title, large or inline. The black stops
-                    // there, fading over the 12 pt either side, so it hides what has scrolled up behind the title and never
+                    // there, fading over its last few points, so it hides what has scrolled up behind the title and never
                     // anything still in its resting place. (Measuring insets and safe areas overshot by up to 100 pt on the
                     // Duo, over the Mac Pro's portrait.) A page drawn from the very top under the bar gets the bar's height.
                     let y = g.frame(in: .global).minY
                     let foot = y > TopEdge.statusBar + 30 ? y : TopEdge.statusBar + 96
                     let lead = g.safeAreaInsets.leading, width = g.size.width + lead + g.safeAreaInsets.trailing
                     VStack(spacing: 0) {
-                        Color.black.frame(height: max(foot - 12, 0))
-                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 24)
+                        Color.black.frame(height: max(foot - 4, 0))
+                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 8)
                     }
                     .frame(width: width)
                     .offset(x: -lead, y: -y)
@@ -149,6 +149,7 @@ struct ScrollsUnder: ViewModifier {
     @Environment(\.topEdgeUnder) private var report
     @State private var rest: CGFloat?
     @State private var now: CGFloat = 0
+    @Environment(\.refresh) private var refresh
     let id: Int
     func body(content: Content) -> some View {
         content
@@ -159,8 +160,10 @@ struct ScrollsUnder: ViewModifier {
             }
             // Only a stop can lower where it rests (back at the top after a bounce, say); mid-bounce it's past the top
             // and would leave the black showing once it settled.
+            // A pull to refresh stops with the list held down under its spinner, which isn't where it rests, so a stop that
+            // far down never counts.
             .onScrollPhaseChange { _, phase in
-                if phase == .idle, let r = rest, now < r { rest = now; report(id, false) }
+                if phase == .idle, let r = rest, now < r, !(refresh != nil && now < r - 30) { rest = now; report(id, false) }
             }
     }
 }
