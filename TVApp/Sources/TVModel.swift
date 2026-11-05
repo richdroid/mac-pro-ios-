@@ -167,7 +167,10 @@ final class TVModel {
         #endif
         Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
+            startEndedAt = Date()
             withAnimation(.easeOut(duration: 0.3)) { starting = nil }
+            // The live mirror only now the film plays: before, it showed the launcher behind the starting poster (r24).
+            if !mirrorLive { setMirror(true) }
             await load()
         }
     }
@@ -181,7 +184,10 @@ final class TVModel {
         withAnimation(.easeOut(duration: 0.25)) { starting?.failed = true }
     }
     // Called off from the Remote (holding ⏯), or done with after a failure.
-    func clearStart() { withAnimation(.easeOut(duration: 0.25)) { starting = nil } }
+    func clearStart() { startEndedAt = Date(); withAnimation(.easeOut(duration: 0.25)) { starting = nil } }
+    // When a start last ended: the Remote keeps the bar's and episode line's places for a while after, until the TV's own
+    // reading of what's on has caught up, so nothing drops out and back in at playing (r24: the pad jumped 10 pt).
+    var startEndedAt = Date.distantPast
     // The failed one's stream list, with the ones that didn't start set apart.
     func chooseAnother() {
         guard var t = startingTarget else { clearStart(); return }

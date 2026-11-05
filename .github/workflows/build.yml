@@ -49,7 +49,7 @@ jobs:
         # Raised from 40 for the Mac Pro state shots, about 3.5 minutes more across both displays, then to 60 for the TV
         # app's flick, tour and scrolled shots, about 6 minutes more across the three postures, then to 80 for the real-data
         # flows and the flick's starts (r17 ran out at 65, in the Chumby open shots, before any TV open shot).
-        timeout-minutes: 80
+        timeout-minutes: 88
         run: |
           set +x
           exec > >(tee dist/sim.log) 2>&1
@@ -325,6 +325,21 @@ jobs:
             xcrun simctl ui "$DEVICE" appearance light
           }
           # ---- end Chumby app poses ----
+          # The TV and Mac Pro apps in the posture he holds too (Duo open in portrait, the tabs a bar along the foot), every
+          # tab, light and dark (r24: only TV 0 and 1 and Mac Pro 3 were shot there).
+          apps_portrait() {
+            for M in light dark; do
+              xcrun simctl ui "$DEVICE" appearance $M
+              for P in "TV 0 9002" "TV 1 9002" "TV 2 9002" "TV 3 9002" "TV 5 9002" "TV 9 9002" "MacPro 0 9001" "MacPro 1 9001" "MacPro 2 9001" "MacPro 3 9001" "MacPro 4 9001" "MacPro 5 9001" "MacPro 9 9001"; do
+                read -r APP TAB PORT <<< "$P"
+                xcrun simctl launch "$DEVICE" local.macpro.$APP -address http://127.0.0.1:$PORT -tab $TAB
+                sleep 6
+                xcrun simctl io "$DEVICE" screenshot --display=3 dist/$APP-$TAB-$M-portrait.png
+                xcrun simctl terminate "$DEVICE" local.macpro.$APP || true
+              done
+            done
+            xcrun simctl ui "$DEVICE" appearance light
+          }
           # ---- TV app poses (separate block) ----
           # What Richard found on his phone on 2026-11-03, filmed or shot so it can't pass unseen again: pages scrolled 40 pt
           # (one pane scrolled and the other not, so a band under the bar would differ between them), YouTube Music's old
@@ -407,6 +422,12 @@ jobs:
               if [ "$3" = flick-already ] && grep -q '"what":"play-stream"' dist/tv-$3-sends$2.log; then
                 echo "::error title=flick-already$2::play-stream was posted for a film already playing"
                 echo "play-stream was posted for a film already playing" > dist/FAILED-flick-already$2.txt
+              fi
+              # A throw from Continue watching opens where he was: the request carries the resume point (r24: "85 min left"
+              # opened at 0:08).
+              if [ "$3" = flick-starting ] && ! grep -q '"resume"' dist/tv-$3-sends$2.log; then
+                echo "::error title=flick-starting$2::play-stream carried no resume point"
+                echo "play-stream carried no resume point" > dist/FAILED-flick-resume$2.txt
               fi
               set -- "$1" "$2"
             done
@@ -524,6 +545,7 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
           pose_shots 3 "-portrait" || echo "portrait shots incomplete"
           chumby_portrait || echo "Chumby portrait shots incomplete"
+          apps_portrait || echo "TV and Mac portrait shots incomplete"
       - name: Collect crash reports
         if: always()
         run: |

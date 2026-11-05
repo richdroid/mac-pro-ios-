@@ -106,7 +106,7 @@ const tvFilms = JSON.stringify({ signedIn: true,
   watchlist: ['Dirty Harry', 'Chinatown', 'Heat', 'Alien', 'Ran', 'Klute', 'Thief', 'Le Samourai'].map(t => film(t, { friends_count: '4', friends_rating_avg: '3.5' })),
   friends: ['Battle Heater', 'Paris, Texas', 'Ran', 'Vertigo', 'Stalker', 'Tampopo', 'Ikiru', 'Paris, Texas'].map(t => film(t, { friend_name: 'a friend', rating: '4.0' })) });
 const tvMint = JSON.stringify({ rows: ['Recently played', 'Made for you', 'New releases'].map(title => ({ title, items: ['Sample Album', 'Another Album', 'Third Album', 'Fourth Album'].map(t => ({ title: t, subtitle: 'Sample Artist', art: tvBase + '/art.png', id: 'https://music.apple.com/us/album/' + title + t, kind: 'album' })) })) });
-const tvStremio = JSON.stringify({ rows: ['Continue watching', 'Popular movies', 'Popular series'].map(title => ({ title, items: ['Heat', 'Alien', 'Chinatown', 'Thief'].map((t, n) => ({ title: t, subtitle: title === 'Continue watching' ? `Continue · ${85 - 11 * n}m left` : '1995 · ★ 8.3', art: tvBase + '/poster.png', id: (title === 'Popular series' ? 'tt123456' : 'tt765432') + n, kind: title === 'Popular series' ? 'series' : 'movie', progress: t === 'Alien' ? 0.4 : undefined, about: 'A sample description of the film.' })) })) });
+const tvStremio = JSON.stringify({ rows: ['Continue watching', 'Popular movies', 'Popular series'].map(title => ({ title, items: ['Heat', 'Alien', 'Chinatown', 'Thief', 'Collateral', 'Ronin', 'Sorcerer'].map((t, n) => ({ title: t, subtitle: title === 'Continue watching' ? `Continue · ${85 - 11 * n}m left` : '1995 · ★ 8.3', art: tvBase + '/poster.png', id: (title === 'Popular series' ? 'tt123456' : 'tt765432') + n, kind: title === 'Popular series' ? 'series' : 'movie', progress: title === 'Continue watching' ? +(1 - (85 - 11 * n) / 170).toFixed(3) : t === 'Alien' ? 0.4 : undefined, about: 'A sample description of the film.' })) })) });
 // A TV with a player open, for the shots of what the app shows then. Asked for by putting /stremio or /youtube in front
 // of the address, so every other shot gets the same answers as before.
 const tvScene = scene => {
@@ -389,7 +389,7 @@ function tvFlickStart(kind, q, s, path, json) {
     const t = st.sent ? now - st.sent : -1;
     const playAt = kind === 'slow' ? 9000 : 3200;
     if (t < 0 || (st.result && st.result !== 'ok')) v.app = 'com.google.android.tvlauncher';
-    else if (st.result === 'ok' || t >= playAt) { v.app = 'com.stremio.one'; v.session = { ...film, playing: true, position: Math.max(0, t - playAt) }; }
+    else if (st.result === 'ok' || t >= playAt) { v.app = 'com.stremio.one'; v.session = { ...film, playing: true, position: Math.round((st.resume || 0) * film.duration) + Math.max(0, t - playAt) }; }
     else { v.app = t >= 2000 ? 'com.stremio.one' : 'com.google.android.tvlauncher'; v.starting = { imdb: 'tt7654320', token: st.token, phase: st.phase || 'awake', since: st.sent }; }
     if (st.result && now - st.endedAt < 30000) v.lastStart = { result: st.result, token: st.token, at: st.endedAt };
     return json(v);
@@ -400,7 +400,7 @@ function tvFlickStart(kind, q, s, path, json) {
   if (q.method === 'POST' && path === '/api/tv/play-stream') return read(b => {
     log('play-stream', b);
     const begun = Date.now(), tokens = [b.token, ...(Array.isArray(b.fallbacks) ? b.fallbacks : [])].filter(x => typeof x === 'string').slice(0, 3);
-    Object.assign(st, { sent: begun, token: tokens[0] || '', result: '', endedAt: 0, phase: 'awake' });
+    Object.assign(st, { sent: begun, token: tokens[0] || '', result: '', endedAt: 0, phase: 'awake', resume: typeof b.resume === 'number' ? b.resume : 0 });
     const steps = [];
     if (kind === 'fail') {
       // Each stream tried in turn, the next one after a failed start, then given up.

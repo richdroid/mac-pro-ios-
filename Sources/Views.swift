@@ -133,7 +133,9 @@ struct ScrollsUnder: ViewModifier {
     // top of text, with no bar or band (Richard, 2026-11-05: "just get rid of this top bar"). The fade rides up with the
     // first 24 pt of scroll, so at rest it sits wholly above the content and nothing resting is ever dimmed. One mask on
     // the scroll view, none per row.
-    var fadeFoot: CGFloat { inset - 24 + min(max(now - (rest ?? now), 0), 24) }
+    // Measured from where content rests by the insets, not from the first offset seen: on a cold launch in open portrait
+    // the first reading came before the title's layout, and the fade sat 150 pt down the page as a black band (r24).
+    var fadeFoot: CGFloat { inset - 24 + min(max(now + inset, 0), 24) }
     func body(content: Content) -> some View {
         content
             .mask {
@@ -336,6 +338,7 @@ struct Screen<Content: View>: View {
                     else { page(.all) }
                 }
             }
+            .modifier(TabBarFade())
             .background(groupedBackground.ignoresSafeArea())
             // Laid over both panes at once, so open there's one edge, not one per pane.
             .topEdge()
@@ -1531,3 +1534,26 @@ struct ShareSheet: UIViewControllerRepresentable {
 #else
 struct ShareSheet: View { let url: URL; var body: some View { Text(url.lastPathComponent) } }
 #endif
+
+// Open in portrait the tabs are a bar along the foot, and the page ran on to a hard edge above it (r24). The page fades
+// out over 18 pt above the bar and is clear behind it. The inset is measured on the page itself: read in a view that
+// ignores the safe area it is always 0. Only where the foot inset is a tab bar's, not just the home indicator's.
+struct TabBarFade: ViewModifier {
+    @State private var foot: CGFloat = 0
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { foot = $0 }
+            .mask {
+                if foot > 40 {
+                    VStack(spacing: 0) {
+                        Color.black
+                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 18)
+                        Color.clear.frame(height: foot)
+                    }
+                    .ignoresSafeArea()
+                } else {
+                    Color.black.ignoresSafeArea()
+                }
+            }
+    }
+}

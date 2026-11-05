@@ -283,6 +283,7 @@ struct Page<C: View>: View {
         NavigationStack(path: $path) {
             content()
                 .underFlick()
+                .modifier(TabBarFade())
                 .environment(\.backToTop, top)
                 .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true) }
                 .containerBackground(.clear, for: .navigation)
@@ -345,8 +346,15 @@ struct PageBar<Actions: View>: View {
     @ViewBuilder let actions: () -> Actions
     var body: some View {
         HStack(spacing: 2) {
+            // Alone, back says so in words, so the bar is a bar and never a loose glass circle over the page (r24).
+            let alone = Actions.self == EmptyView.self
             Button { model.tick(); if let back { back() } else { dismiss() } } label: {
-                Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).frame(width: 50, height: 50).contentShape(Rectangle())
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold))
+                    if alone { Text("Back").font(.subheadline.weight(.semibold)) }
+                }
+                .padding(.leading, alone ? 16 : 0).padding(.trailing, alone ? 18 : 0)
+                .frame(minWidth: 50, minHeight: 50).contentShape(Rectangle())
             }
             .buttonStyle(PressIcon()).accessibilityLabel("Back")
             actions()
@@ -835,7 +843,10 @@ struct RemoteTab: View {
     }
     // Something on with a player, or being started: only then are there keys to play, pause and jump. Kept while the TV
     // can't be reached, dimmed with everything else rather than taken away, so the layout never collapses (r17).
-    var session: Bool { model.status?.session != nil || model.starting != nil || (unreachable && hadSession) }
+    var session: Bool {
+        model.status?.session != nil || model.starting != nil || (unreachable && hadSession)
+            || Date().timeIntervalSince(model.startEndedAt) < 12
+    }
     @State private var hadSession = false
     var asleep: Bool { !model.staleStatus && model.status?.screen == "asleep" }
     // The Mac answers but the TV doesn't: the keys can't reach it, so they show it.
@@ -868,7 +879,11 @@ struct RemoteTab: View {
         }
     }
     // The episode line's place is kept from the start of an episode's flick, so it fills in rather than pushes in.
-    var seriesOn: Bool { (model.starting?.line?.hasPrefix("S") ?? false) || model.status?.session?.seasonEpisode != nil }
+    var seriesOn: Bool {
+        (model.starting?.line?.hasPrefix("S") ?? false) || model.status?.session?.seasonEpisode != nil
+            || (Date().timeIntervalSince(model.startEndedAt) < 12 && lastStartWasSeries)
+    }
+    @State private var lastStartWasSeries = false
     @ViewBuilder var episodes: some View {
         if session && seriesOn { ZStack { EpisodesLine() }.frame(height: 46) } else { EpisodesLine() }
     }
@@ -941,6 +956,7 @@ struct RemoteTab: View {
         .opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
         // Whether something was on when the TV was last heard: kept through a drop, so its keys stay (dimmed).
         .onChange(of: model.status?.session != nil, initial: true) { _, has in if !unreachable { hadSession = has } }
+        .onChange(of: model.starting?.line) { _, line in if let line { lastStartWasSeries = line.hasPrefix("S") } }
     }
     // The pad, dimmed while the TV can't be reached. Asleep, its keys step back and the wake button sits in the empty ring.
     var pad: some View {
@@ -1260,8 +1276,17 @@ struct MiniPlayer: View {
             if song != nil { PlayKey(playing: phone.playing, size: 44) { phone.toggle() } }
             else { PlayKey(playing: model.songPlaying(music), size: 44) }
         }
-        .padding(10).tvCard()
+        .padding(10)
+        // Mint's own colour, or the song's, never the colour of whatever else is on the page (r24: a Mint song sat on
+        // Stremio purple).
+        .background((band ?? Color(hex: 0x3EB489)).opacity(0.32), in: RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
+        .tvCard()
+        .task(id: music.art) {
+            guard let u = URL(string: music.art) else { band = nil; return }
+            band = await ImageStore.shared.band(u)
+        }
     }
+    @State private var band: Color?
 }
 
 // The five keys under whatever's playing, the same on the Remote and on Playing: back, ten back, play, ten on, next.
@@ -2560,3 +2585,27 @@ struct UnderFlick: ViewModifier {
     }
 }
 extension View { func underFlick(barHidden: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden)) } }
+
+// Open in portrait the tabs are a bar along the foot, and the page ran on through its glass (r24: "Recently played"
+// read through it). The page fades out over 18 pt above the bar and is clear behind it. The inset is measured on the
+// page itself; read inside a view that ignores the safe area it was always 0, and the fade did nothing (the Chumby's).
+// Only where the foot inset is a tab bar's, not just the home indicator's.
+struct TabBarFade: ViewModifier {
+    @State private var foot: CGFloat = 0
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { foot = $0 }
+            .mask {
+                if foot > 40 {
+                    VStack(spacing: 0) {
+                        Color.black
+                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 18)
+                        Color.clear.frame(height: foot)
+                    }
+                    .ignoresSafeArea()
+                } else {
+                    Color.black.ignoresSafeArea()
+                }
+            }
+    }
+}

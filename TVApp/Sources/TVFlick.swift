@@ -116,6 +116,8 @@ struct FlickScreen: View {
     @State private var answered = false
     // The request has gone out to the Mac. From then on it's never called off for being slow: a written start runs.
     @State private var written = false
+    // The card's picture, decoded, taken at the throw so the landed TV never waits on a fetch.
+    @State private var heldImage: TVImage?
     @State private var flight: Task<Void, Never>?
     @State private var cancelled = false
     @State private var morphing = false
@@ -535,14 +537,17 @@ struct FlickScreen: View {
     // Unfolded, the show has the left side to itself: poster and name side by side, what it's about under them, and the
     // one big way to carry on, so the side reads full rather than a small poster over empty space.
     var bigHeading: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            // The poster large enough to hold its half: with a small one, the bottom half of the side stood empty (r17).
-            HStack(alignment: .bottom, spacing: 16) {
-                poster.frame(width: 196, height: 294).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                titles(big: true)
+        // The name leads, at the top line shared with the other pane; under it the poster at no more than 40 % of the
+        // pane, with what it's about beside it, so neither a giant poster nor a name squeezed into a sliver (r24).
+        VStack(alignment: .leading, spacing: 16) {
+            titles(big: true)
+            HStack(alignment: .top, spacing: 16) {
+                poster.aspectRatio(2 / 3, contentMode: .fit)
+                    .containerRelativeFrame(.horizontal) { w, _ in min(w * 0.4, 220) }
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                blurb(10)
                 Spacer(minLength: 0)
             }
-            blurb(12)
             if step == .episodes { resumeButton }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -893,7 +898,9 @@ struct FlickScreen: View {
     // What the TV's screen shows from 200 ms into the flight to the Remote: the Remote's own poster sat on a blur of
     // itself, the same picture StartingPicture shows there, so it never changes look on the way (r18).
     @ViewBuilder var landedPicture: some View {
-        if let image = target.image {
+        // Always a picture already in hand: the card's own, or the one decoded when it was thrown. A fetch by address
+        // here blanked the TV for a moment after the impact (r24).
+        if let image = target.image ?? heldImage.map({ Image(tv: $0) }) {
             ZStack {
                 Color.black.opacity(0.35)
                 Color.clear.overlay { image.resizable().scaledToFill() }.clipped().blur(radius: 24).opacity(0.7)
@@ -1165,7 +1172,23 @@ struct FlickScreen: View {
         flight?.cancel()
         model.clearStart()
         model.tick()
-        model.post("stop-playing", ["pkg": source == .mint || target.send != nil ? "com.codex.musicwebtv" : "com.stremio.one"])
+        // Stop only what this throw put on the TV (r24: a cancel before the request had left sent stop-playing and would
+        // have closed a film he already had on). Never sent: nothing to stop. Sent but not on yet: stop it only if it turns
+        // up there in the next 20 s.
+        let pkg = source == .mint || target.send != nil ? "com.codex.musicwebtv" : "com.stremio.one"
+        if written {
+            let mine = target.send != nil || source == .mint ? true : alreadyOn
+            if mine { model.post("stop-playing", ["pkg": pkg]) }
+            else if let ref = item.stremioRef {
+                let m = model, title = item.title, ep = ref.type == "series" ? (episode?.id ?? ref.video) : nil
+                Task { @MainActor in
+                    for _ in 0..<20 {
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        if m.isOn(imdb: ref.imdb, title: title, episode: ep) { m.post("stop-playing", ["pkg": pkg]); return }
+                    }
+                }
+            }
+        }
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { sending = false }
         leave()
     }
@@ -1230,8 +1253,9 @@ struct FlickScreen: View {
         // The film's own colour goes to the Remote with the stage; the app's colour (Stremio's purple) stayed behind the
         // Remote while it started, a band of another colour down its side (r19).
         withAnimation(.easeOut(duration: 0.3)) { model.mood = tint }
-        if let art = screenURL?.absoluteString { model.standIn(art) }
-        if !model.mirrorLive { model.setMirror(true) }
+        // The stand-in was set at the impact; the live mirror waits until the start has cleared (startPlayed), so no stale
+        // launcher capture shows behind a starting film (r24).
+        if model.starting == nil, !model.mirrorLive { model.setMirror(true) }
         // Held where it is first: the tab changing under it lays the space around it out again.
         if flickFrame.width > 0 { held = flickFrame }
         // Under the screen, so the Remote is laid out, and its picture's place known, by the time the screen moves.
@@ -1392,6 +1416,12 @@ struct FlickScreen: View {
             var body: [String: Any] = ["token": stream.token, "imdb": ref.imdb]
             if ref.type == "series", let video = episode?.id ?? ref.video { body["video"] = video }
             if nearEnd && startOver { body["restart"] = true }
+            // Where he was in it, as a share of its length, so the Mac can make sure it opens there and not at 0:00 (r24:
+            // "85 min left" opened at 0:08). Not for a start over.
+            else {
+                let p = ref.type == "series" ? ((episode?.id ?? ref.video) == upNext ? upNextProgress : nil) : item.progress
+                if let p, p > 0.01, p < 0.97 { body["resume"] = (p * 1000).rounded() / 1000 }
+            }
             let spare = streams.filter { $0.token != stream.token && !failedTokens.contains($0.token) }.prefix(2).map(\.token)
             if !spare.isEmpty { body["fallbacks"] = Array(spare) }
             return ("play-stream", body)
@@ -1428,6 +1458,7 @@ struct FlickScreen: View {
         let vx = abs(across) > 8 ? max(-5, min(5, velocity.width / across)) : 0
         thrown += 1
         answered = false; written = false; caught = false
+        if target.image == nil, let u = screenURL ?? URL(string: item.art) { heldImage = ImageStore.shared.cached(u) }
         withAnimation(.interpolatingSpring(duration: 0.32, bounce: 0, initialVelocity: vy), completionCriteria: .logicallyComplete) {
             flown = true; lean = 0
         } completion: { arrivedAtTV() }
@@ -1446,9 +1477,8 @@ struct FlickScreen: View {
             withAnimation(.easeOut(duration: 0.12)) { morph = true }
         }
         phase = nil; streamed = false
-        // The start is the model's from the release, on every path, so the Remote shows it from the moment it comes up:
-        // the poster on its blur with the light, never the TV's launcher behind a film that's starting (r21).
-        if !alreadyOn { beginStarting() }
+        // The start becomes the model's a frame after the impact (arrivedAtTV), not on the release frame: the Remote laid out
+        // under the stage redrew for it there and the card stalled 80–275 ms as it left his finger (r24).
         flight = Task { await start() }
     }
     // The card reaches the TV: the hit, felt and seen, then the second tick; and at 600 ms on into the Remote.
@@ -1461,6 +1491,12 @@ struct FlickScreen: View {
             // The hit's look and the light round the picture a frame after the swap, so the impact frame carries only the
             // swap itself (r17: a ~140 ms stall at the impact).
             await Task.yield()
+            // The start is the model's from here, well before the hand-over, so the Remote comes up with it (r21), and the
+            // stand-in picture is set now rather than at 600 ms with everything else.
+            if !alreadyOn {
+                if model.starting == nil { beginStarting() } else if let t = stream?.token { model.starting?.token = t }
+                if let art = screenURL?.absoluteString { model.standIn(art) }
+            }
             impacts += 1
             withAnimation(.easeOut(duration: 0.2)) { sending = true; caught = true }
             try? await Task.sleep(nanoseconds: 110_000_000)
@@ -1500,7 +1536,7 @@ struct FlickScreen: View {
         askedRestart = order.1["restart"] as? Bool == true
         // Normally begun at the release already (so the Remote's picture is the poster from the hand-over on); this only
         // fills in the stream it went with.
-        if model.starting == nil { beginStarting() } else { model.starting?.token = stream?.token }
+        if model.starting != nil { model.starting?.token = stream?.token }
         timing.mark("request")
         written = true
         var resent = false
