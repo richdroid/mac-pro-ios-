@@ -247,15 +247,17 @@ struct NapChips: View {
             // Whole minutes left, rounded up, so it never reads as a time of day beside the clock. Never more than the nap
             // chosen: the Chumby rings on a whole minute, so a 10-minute nap can be up to 10:59 away, and must still say 10.
             let minutes = min(max(Int((left / 60).rounded(.up)), 1), total)
-            HStack(spacing: 4) {
+            HStack(spacing: 3) {
                 // "left" is what the falling tide already says; with it the chip clipped to "11 min l…" beside the ×.
                 Text("\(minutes) min").monospacedDigit().lineLimit(1).fixedSize()
                     .contentTransition(.numericText(countsDown: true)).animation(.snappy, value: minutes)
-                Button { Task { await model.cancelNap() } } label: { Image(systemName: "xmark").font(.footnote.weight(.bold)) }
+                Button { Task { await model.cancelNap() } } label: { Image(systemName: "xmark").font(.caption2.weight(.heavy)) }
                     .buttonStyle(.borderless).foregroundStyle(.white).accessibilityLabel("Cancel nap")
             }
             .font(.callout.weight(.semibold))
             .foregroundStyle(.white)
+            // The same breathing room inside as the chips beside it.
+            .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, minHeight: 34)
             // The accent, with the time left as a lighter tide that falls as the nap runs down.
             .background {
@@ -582,7 +584,17 @@ struct AlarmsTab: View {
             HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) }.padding(.vertical, 6)
         } else if let n = model.nextRing() {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Next alarm").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                // A skip shows here too, with its Undo, so the time below never looks as if the skipped one vanished.
+                if let s = model.state.skipped, s.date > Date() {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(clockParts(s.date).0 + " " + clockParts(s.date).1).font(.custom("Trebuchet MS", size: 17).weight(.bold)).strikethrough().foregroundStyle(.secondary)
+                        Text("Skipped").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Button("Undo") { Task { await model.unskip() } }.font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
+                    }
+                    .padding(.bottom, 4)
+                }
+                Text(model.state.skipped.map { $0.date > Date() } == true ? "Then" : "Next alarm").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     let c = clockParts(n.at)
                     Text(c.0).font(.custom("Trebuchet MS", size: 52).weight(.bold)).monospacedDigit().contentTransition(.numericText())

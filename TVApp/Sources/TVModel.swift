@@ -31,6 +31,9 @@ final class TVModel: ObservableObject {
     @Published var remoteArrival = Date.distantPast
     // When the flick's screen actually starts its move onto the Remote's picture, which the keys follow closely.
     var remoteMoveAt = Date.distantPast
+    // While a flick's screen is moving onto the Remote's picture: that picture stays hidden under it until the screen has
+    // landed, or the two showed at once, the one below peeking out under the one moving.
+    @Published var flickHandoff = false
     // A film's colour kept on the pages behind after the flick closes, until something else is playing.
     var moodArt: String?
     func keepMood(until art: String) { moodArt = art }
