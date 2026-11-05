@@ -36,8 +36,11 @@ struct FoldSplit<L: View, R: View>: View {
                 // Each pane stops short of the crease, which is about 40 pt wide: half of it plus a little air, and never
                 // less than 24, so no card sits on the fold.
                 let gutter: CGFloat = wide && !folded ? min(max(24, (crease?.width ?? 0) / 2 + 4), 40) : 0
+                // Open, the left pane meets the display's bare outer edge (no safe area there), so its cards and titles get
+                // the same air from that edge as the right pane has from the side column.
+                let outer: CGFloat = wide && !folded ? 14 : 0
                 ArrangementView {
-                    left.padding(.trailing, gutter).splitArrangementLayoutRatio(ratio)
+                    left.padding(.leading, outer).padding(.trailing, gutter).splitArrangementLayoutRatio(ratio)
                 } secondary: {
                     right.padding(.leading, gutter)
                 }
