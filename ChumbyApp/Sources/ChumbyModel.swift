@@ -594,8 +594,6 @@ final class ChumbyModel: ObservableObject {
     private func settleSkip() async {
         try? await Task.sleep(nanoseconds: 2_500_000_000)
         await loadState()
-        // The widgets show the skip too, so they mustn't wait for their next refresh to catch up.
-        WidgetCenter.shared.reloadAllTimelines()
     }
     // Calendar days keep the repeating alarms quiet. Changes at once here; goes back if the Chumby says no.
     func setCalendarOverride(_ on: Bool) async {

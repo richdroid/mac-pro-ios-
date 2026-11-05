@@ -280,14 +280,6 @@ jobs:
             sleep 8
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-cold-status$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
-            # The Remote in each state it can be in: asleep, not answering, YouTube playing, Mint's music only, nothing on,
-            # and a Stremio episode part way through (its title line and the bar to move along it).
-            for S in rasleep roffline ryoutube rmint ridle repisode; do
-              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 0
-              sleep 8
-              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-remote-$S$2.png
-              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
-            done
             tv_flick "$1" "$2"
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-toremote$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 6
@@ -332,13 +324,6 @@ jobs:
             sleep 6
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/gallery-$G.png
             xcrun simctl terminate "$DEVICE" local.macpro.Gallery$G
-          done
-          # The Chumby gallery's other two screens: Your Chumby in each state, then tinted and Lock Screen renders.
-          for P in 1 2; do
-            xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page $P
-            sleep 6
-            xcrun simctl io "$DEVICE" screenshot --display=1 dist/gallery-Chumby-$P.png
-            xcrun simctl terminate "$DEVICE" local.macpro.GalleryChumby
           done
           # Unfold the Duo through Device Hub; display 3 is then live.
           # Someone else's code, built and run here, so a known version only: never whatever its latest commit is.
