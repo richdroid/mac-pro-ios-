@@ -286,8 +286,14 @@ final class ChumbyModel: ObservableObject {
         // what the Chumby holds, with the mark saying it couldn't be changed.
         for p in pending where p.failed == nil { p.change.apply(&shown) }
         shown.reindex()
+        // A skip or undo just sent stays shown until a read agrees, or 10 s pass, so the card never flips back and forth
+        // while the panel catches up.
+        if let w = skipWanted {
+            if shown.skipped == w.skipped || Date() > w.until { skipWanted = nil } else { shown.skipped = w.skipped }
+        }
         state = shown
     }
+    private var skipWanted: (skipped: SkippedAlarm?, until: Date)?
     func loadChannels() async {
         guard let api, let r = try? await fetch("chlist", from: api), r.data != channelBytes, let c = try? JSONDecoder().decode(ChannelList.self, from: r.data) else { return }
         channelBytes = r.data; channelData = c
@@ -565,18 +571,22 @@ final class ChumbyModel: ObservableObject {
         guard let n = state.nextRing() else { return }
         let before = state.skipped
         state.skipped = SkippedAlarm(name: n.alarm.name, at: n.at.timeIntervalSince1970, when: n.alarm.when); deviceState.skipped = state.skipped
+        skipWanted = (state.skipped, Date().addingTimeInterval(10))
         tick()
         hold(4)
         guard let why = await sendInOrder("skip", extra: "") else { await settleSkip(); return }
+        skipWanted = nil
         state.skipped = before; deviceState.skipped = before
         fail("skip", "Couldn’t skip it. \(why)")
     }
     func unskip() async {
         let before = state.skipped
         state.skipped = nil; deviceState.skipped = nil
+        skipWanted = (nil, Date().addingTimeInterval(10))
         tick()
         hold(4)
         guard let why = await sendInOrder("unskip", extra: "") else { await settleSkip(); return }
+        skipWanted = nil
         state.skipped = before; deviceState.skipped = before
         fail("skip", "Couldn’t undo the skip. \(why)")
     }

@@ -294,7 +294,7 @@ struct DisplayHoldButton: View {
         // white circle or not, so it doesn't look as if it still works.
         let dim = model.stale ? offlineDim : 1, lit = isOn && !model.stale
         VStack(spacing: 6) {
-            Image(systemName: isOn ? "sun.max.fill" : "moon.fill")
+            Image(systemName: isOn ? "sun.max.fill" : "moon")
                 .font(.system(size: 20))
                 .foregroundStyle(lit ? Color.black : Color.white.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))

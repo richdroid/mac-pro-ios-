@@ -177,6 +177,9 @@ struct RingingCard: View {
                             .clipped()
                             .contentShape(Capsule())
                             .glassEffect(.regular.interactive(), in: Capsule())
+                            // The glass goes with the word, so it never narrows as an empty blob.
+                            .opacity(snoozed ? 0 : 1)
+                            .animation(.easeOut(duration: 0.1), value: snoozed)
                     }
                     .buttonStyle(.plain)
                     .frame(minWidth: snoozed ? 0 : snoozeMin, maxWidth: snoozed ? 0 : .infinity)
@@ -226,7 +229,7 @@ struct NapChips: View {
                             napLength = m; sending = m
                             Task { await model.nap(m); sending = nil }
                         } label: {
-                            Group { if sending == m { ProgressView() } else { Text("\(m) min") } }.frame(maxWidth: .infinity, minHeight: 34)
+                            Group { if sending == m { ProgressView() } else { Text("\(m) min").lineLimit(1) } }.frame(maxWidth: .infinity, minHeight: 34)
                         }
                         .buttonStyle(.bordered).disabled(sending != nil)
                     }
@@ -265,7 +268,6 @@ struct NapChips: View {
                 .clipShape(Capsule())
             }
             .accessibilityLabel("Nap, \(minutes) minutes left")
-            .layoutPriority(1)
         }
     }
 }
@@ -464,12 +466,14 @@ struct AlarmsTab: View {
     var body: some View {
         let swapped = rail && model.alarmsPage
         ZStack {
-            // Never clipped or masked, so it stays drawn whole while it crossfades over the length of the slide.
+            // Never clipped or masked, so it stays drawn whole while it fades.
             ScrollViewReader { proxy in
                 page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
             }
+            // Gone in the slide's first third going out, so the incoming page's rows never pass over its words; back in the
+            // last stretch of the slide coming home, once the page leaving has mostly cleared.
             .opacity(swapped ? 0 : 1)
-            .animation(.easeInOut(duration: Self.slide), value: swapped)
+            .animation(swapped ? .easeOut(duration: Self.slide / 3) : .easeIn(duration: Self.slide / 2).delay(Self.slide / 2), value: swapped)
             .allowsHitTesting(!swapped).accessibilityHidden(swapped)
             // Only the incoming page is cut, at the rail's edge, by a frame that stays put while the page moves inside it,
             // so the pages still run under the top and bottom bars. It brings no sea of its own: the tab's stays as it is.

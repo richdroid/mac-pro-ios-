@@ -230,16 +230,18 @@ struct RemoteScreenView: View {
         .opacity(state == .working || empty ? 0.45 : 1)
         .contentTransition(.symbolEffect(.replace))
         .animation(Motion.quick, value: state)
-        // Above the button, its right edge on the button's, so it grows leftwards and never runs off the display.
-        .overlay(alignment: .topTrailing) {
+        // Centred above its button, nudged in only as far as it takes to stay 12 pt clear of the display's edges.
+        .overlay(alignment: .top) {
             if case .failed(let message) = state {
-                Text(message).font(.caption.weight(.medium)).foregroundStyle(.white)
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(Color.red.opacity(0.9), in: Capsule())
-                    .fixedSize()
-                    .offset(y: -40)
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
+                EdgeClamped {
+                    Text(message).font(.caption.weight(.medium)).foregroundStyle(.white)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Color.red.opacity(0.9), in: Capsule())
+                        .fixedSize()
+                }
+                .offset(y: -40)
+                .transition(.opacity)
+                .allowsHitTesting(false)
             }
         }
     }
@@ -1158,3 +1160,26 @@ struct KeyCatcher: View {
     var body: some View { Color.clear }
 }
 #endif
+
+// Shifted sideways just enough to keep its whole width on the display, with a 12 pt margin.
+struct EdgeClamped<Content: View>: View {
+    @ViewBuilder let content: Content
+    @State private var shift: CGFloat = 0
+    var body: some View {
+        content
+            .fixedSize()
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
+                let width = EdgeClamped.displayWidth, base = f.minX - shift
+                let want = base < 12 ? 12 - base : (base + f.width > width - 12 ? width - 12 - (base + f.width) : 0)
+                if abs(want - shift) > 0.5 { shift = want }
+            }
+            .offset(x: shift)
+    }
+    @MainActor static var displayWidth: CGFloat {
+        #if os(iOS)
+        return UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.bounds.width ?? 400
+        #else
+        return 10_000
+        #endif
+    }
+}

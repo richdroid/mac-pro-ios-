@@ -94,17 +94,20 @@ struct FlatStyle: ButtonStyle {
 struct TopEdge: ViewModifier {
     // The scroll views on the page that have content under the bar; open, each pane reports its own.
     @State private var under: Set<Int> = []
+    // Where the scroll views' content rests: the foot of whatever title is above it, large or inline.
+    @State private var rest: CGFloat?
     func body(content: Content) -> some View {
         bar(content.scrollEdgeEffectHidden(true, for: .top))
-            .environment(\.topEdgeUnder) { id, on in
+            .environment(\.topEdgeUnder) { id, on, inset in
                 if on { under.insert(id) } else { under.remove(id) }
+                rest = inset
             }
             .overlay {
                 // Read where the bar ends whether the content's frame starts under the bar or below it.
                 GeometryReader { g in
-                    // To the foot of whatever title is there: the large title never collapses on the Duo, so capping this at an
-                    // inline bar's height left scrolled text showing behind the title. Drawn only while something is under it.
-                    let y = g.frame(in: .global).minY, bar = y + g.safeAreaInsets.top
+                    // To where the content rests, which is the foot of whatever title is there: the large title never collapses
+                    // on the Duo, so an inline bar's height left text behind the title, and the safe area reached ~100 pt past it.
+                    let y = g.frame(in: .global).minY, bar = y + (rest ?? min(g.safeAreaInsets.top, TopEdge.statusBar + 44 - y))
                     let lead = g.safeAreaInsets.leading, width = g.size.width + lead + g.safeAreaInsets.trailing
                     VStack(spacing: 0) {
                         Color.black.frame(height: max(bar, 0))
@@ -136,16 +139,17 @@ struct TopEdge: ViewModifier {
         #endif
     }
 }
-private struct TopEdgeUnderKey: EnvironmentKey { static let defaultValue: (Int, Bool) -> Void = { _, _ in } }
+private struct TopEdgeUnderKey: EnvironmentKey { static let defaultValue: (Int, Bool, CGFloat) -> Void = { _, _, _ in } }
 extension EnvironmentValues {
-    var topEdgeUnder: (Int, Bool) -> Void { get { self[TopEdgeUnderKey.self] } set { self[TopEdgeUnderKey.self] = newValue } }
+    var topEdgeUnder: (Int, Bool, CGFloat) -> Void { get { self[TopEdgeUnderKey.self] } set { self[TopEdgeUnderKey.self] = newValue } }
 }
 // Put on each scroll view inside a top edge, so its fade shows only while that view has content under the bar.
 struct ScrollsUnder: ViewModifier {
+    struct Under: Equatable { var on: Bool; var inset: CGFloat }
     @Environment(\.topEdgeUnder) private var report
     let id: Int
     func body(content: Content) -> some View {
-        content.onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 1 } action: { _, on in report(id, on) }
+        content.onScrollGeometryChange(for: Under.self) { Under(on: $0.contentOffset.y + $0.contentInsets.top > 1, inset: $0.contentInsets.top) } action: { _, u in report(id, u.on, u.inset) }
     }
 }
 extension View {
@@ -1209,7 +1213,7 @@ struct ControlTab: View {
                         Circle().fill(locked ? Color.orange : Color.green).frame(width: 9, height: 9)
                         Text(locked ? "Locked" : "Logged in")
                         Spacer()
-                        Label(displayOn ? "Display on" : "Display off", systemImage: displayOn ? "sun.max.fill" : "moon")
+                        HStack(spacing: 5) { Image(systemName: displayOn ? "sun.max.fill" : "moon"); Text(displayOn ? "Display on" : "Display off") }
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }

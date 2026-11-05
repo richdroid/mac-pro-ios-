@@ -5,7 +5,7 @@ const data = {
   tok: { t: 'test' },
   sys: { ok: true, up: 291000, memFree: 22000, memTotal: 62000, pspFree: 3100, load: 0.42, wifi: 71, vol: 40, shuffle: 0, airplayOn: true, chan: 'Default', cp: '1.7.3', lock: '', wall: 1, tw: ['NASA', 'BBCBreaking'] },
   state: {
-    ok: true, volume: 80, fade: 30, pending: false, shuffle: 0, channel: 'Default',
+    ok: true, volume: 80, fade: 30, pending: false, shuffle: 0, channel: 'Default', skipped: null,
     alarms: [alarm({ name: 'Work', time: '405' }), alarm({ name: 'Weekend', time: '570', when: 'weekend', enabled: '0', type: 'audio', arg: 'directurl', param_description: 'Jazz Radio' })],
     streams: [{ id: 's1', name: 'Jazz Radio', url: 'http://example.com/jazz.mp3', mimetype: 'audio/mpeg' }],
     tones: ['Beep', 'Bells', 'Chime'], channels: [{ id: 'A', name: 'Default' }, { id: 'B', name: 'News' }],
@@ -121,12 +121,20 @@ http.createServer((q, s) => {
 // The live scenes keep what's saved and what's ringing, for the films of Snooze, Stop and a nap set and cancelled.
 const chumbyLive = { live: { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)) },
   liveringing: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) } };
+// The next Work alarm (6:45 on a weekday), as the Chumby names a skipped one.
+function nextWork() {
+  const d = new Date();
+  for (let i = 0; i < 8; i++) {
+    const t = new Date(d.getFullYear(), d.getMonth(), d.getDate() + i, 6, 45);
+    if (t > d && t.getDay() !== 0 && t.getDay() !== 6) return { name: 'Work', at: t.getTime() / 1000, when: 'weekday' };
+  }
+}
 function chumbyScene(q, s) {
   const a = new URL(q.url, 'http://x').searchParams.get('a');
   // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
   const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped)\//);
   if (!m) return false;
   const scene = m[1];
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
@@ -139,6 +147,9 @@ function chumbyScene(q, s) {
         const qs = new URL(q.url, 'http://x').searchParams, f = new URLSearchParams(body);
         if (a === 'cmd' && qs.get('c') === 'ringsnooze') live.sys.ring = live.sys.ring.replace(/^r/, 's');
         if (a === 'cmd' && qs.get('c') === 'ringoff') live.sys.ring = '';
+        // The panel's own skip, as the Chumby answers it.
+        if (a === 'skip') { live.state.skipped = nextWork(); return json({ ok: true, pending: false, skipped: live.state.skipped }); }
+        if (a === 'unskip') { live.state.skipped = null; return json({ ok: true, pending: false, skipped: null }); }
         // A channel chosen in the app stays chosen, so Now playing doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
         if (a === 'save') {
@@ -163,6 +174,7 @@ function chumbyScene(q, s) {
   // Work rings with Beep, so that's what the card says.
   if (scene === 'ringing' && a === 'sys') return json({ ...data.sys, ring: 'r\tWork\tBeep' });
   if (scene === 'snoozed' && a === 'sys') return json({ ...data.sys, ring: 's\tWork\tBeep' });
+  if (scene === 'skipped' && a === 'state') return json({ ...data.state, skipped: nextWork() });
   if (scene === 'dead') {
     // The Mac answers, but says the Chumby itself hasn't for 25 minutes.
     if (a === 'health') return json({ up: false, lastSeen: Date.now() / 1000 - 25 * 60 });
