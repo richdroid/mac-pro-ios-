@@ -393,9 +393,11 @@ final class ChumbyModel: ObservableObject {
         hold(5)
         Task { do { try await api?.cmd("ringsnooze") } catch { withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "The Chumby didn’t snooze. \(AlarmWriter.explain(error))") } }
     }
-    // When a snooze ends, if it's known: from when it began and that alarm's own snooze length.
+    // When a snooze ends: the panel's own time when it reports one, else from when it began and that alarm's snooze length.
     var snoozeEnds: Date? {
-        guard let r = sys.ringing, r.snoozed, let snoozedAt else { return nil }
+        guard let r = sys.ringing, r.snoozed else { return nil }
+        if let p = state.ringingNow, p.state == "snoozing", p.name == r.name, let u = p.until, u > Date().timeIntervalSince1970 { return Date(timeIntervalSince1970: u) }
+        guard let snoozedAt else { return nil }
         let minutes = Double(state.alarms.first { $0.name == r.name }?.snooze ?? "") ?? 9
         return snoozedAt.addingTimeInterval(minutes * 60)
     }

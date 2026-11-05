@@ -155,6 +155,8 @@ struct ChumbyState: Decodable {
     // The one alarm time skipped by hand (the panel's own SKIP), until it passes. `skipKnown` is false on a Chumby too old to skip.
     var skipped: SkippedAlarm?
     var skipKnown = false
+    // The panel's own report of a ringing or snoozing alarm; `until` is when a snooze rings again (0 if not known).
+    var ringingNow: RingReport?
     // The Chumby's own clock as it answered, in seconds since 1970. Alarms ring by this clock, not the phone's.
     var now: Double?
     var chumbyNow: Date? { now.map { Date(timeIntervalSince1970: $0) } }
@@ -182,13 +184,14 @@ struct ChumbyState: Decodable {
         calOverride = (try? c.decodeIfPresent(Int.self, forKey: .calOverride)) ?? nil
         skipKnown = c.contains(.skipped)
         skipped = (try? c.decodeIfPresent(SkippedAlarm.self, forKey: .skipped)) ?? nil
+        ringingNow = (try? c.decodeIfPresent(RingReport.self, forKey: .ringing)) ?? nil
         reindex()
     }
     mutating func reindex() {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, now }
+    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, now }
 }
 
 // The panel's own SKIP, pinned to one alarm and one minute ({"name","at","when"}).
@@ -197,6 +200,12 @@ struct SkippedAlarm: Decodable, Equatable {
     var at: Double
     var when: String
     var date: Date { Date(timeIntervalSince1970: at) }
+}
+
+struct RingReport: Decodable, Equatable {
+    var state: String
+    var name: String
+    var until: Double?
 }
 
 // ?a=chlist: per channel, [id, name, secs] rows (a "#" row names the channel) and saved [id, on, secs] edits.
