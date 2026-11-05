@@ -454,7 +454,9 @@ struct Hero: View {
     var body: some View {
         VStack(spacing: 2) {
             Image("MacPro").resizable().scaledToFit().frame(height: 148)
-                .background(RadialGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadius: 4, endRadius: 96).frame(width: 190, height: 190))
+                // The glow fades to nothing inside the portrait's own height: a round one reached past the row's top and was
+                // cut there in a straight line.
+                .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: 148))
                 .accessibilityLabel("Mac Pro, Late 2013")
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
