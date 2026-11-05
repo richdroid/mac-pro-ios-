@@ -10,7 +10,7 @@ struct ChumbyApp: App {
                 .font(.custom("Trebuchet MS", size: 16))
                 .toggleStyle(SwitchToggleStyle(tint: ChumbyPalette.on))
                 .onChange(of: phase) { _, p in
-                    if p == .active { model.start(); CalendarWake.shared.syncIfDue() } else { model.stop() }
+                    if p == .active { model.start(); CalendarWake.shared.syncIfDue(); Task { await model.loadSongs(force: true) } } else { model.stop() }
                     #if os(iOS)
                     if p == .background { CalendarWake.shared.scheduleRefresh() }
                     #endif

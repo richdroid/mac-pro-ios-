@@ -233,6 +233,9 @@ final class ChumbyModel: ObservableObject {
             if s.ringing?.snoozed == true, sys.ringing?.snoozed != true { snoozedAt = sys.ringing == nil ? nil : Date() }
             if s.ringing == nil, snoozedAt != nil { snoozedAt = nil }
             if sys.up > s.up, busy != nil { busy = nil }     // back from its restart
+            // An alarm just ended: what it woke him to goes into Pandora's history song by song, so "Woke up to" (and its
+            // widget) reads it again soon after and a few times more, rather than waiting out the usual five minutes.
+            if sys.ringing != nil, s.ringing == nil { songsAfterRing() }
             // A ring starting, snoozing or ending on the Chumby moves the page as one, never in a single frame.
             if s.ringing != sys.ringing { withAnimation(Self.ringChange(to: s.ringing)) { sys = s } } else if s != sys { sys = s }
             try? r.data.write(to: Self.cache("sys"), options: .atomic)
@@ -323,6 +326,21 @@ final class ChumbyModel: ObservableObject {
     // What Pandora played, newest first, for "Woke up to". Kept, so it's there at once next time.
     private var histAt = Date.distantPast
     // `force`: Sounds, while something plays, reads it every 20 s so the song it names is the one playing.
+    private var afterRing: Task<Void, Never>?
+    func songsAfterRing() {
+        afterRing?.cancel()
+        afterRing = Task { [weak self] in
+            for wait in [20, 60, 180, 480] as [UInt64] {
+                try? await Task.sleep(nanoseconds: wait * 1_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                await self.loadSongs(force: true)
+                SongArt.shared.prefetch(self.songs, self.state.alarms)
+                #if canImport(WidgetKit)
+                WidgetCenter.shared.reloadAllTimelines()
+                #endif
+            }
+        }
+    }
     func loadSongs(force: Bool = false) async {
         guard let api, Date().timeIntervalSince(histAt) > (force ? 15 : 300) else { return }
         histAt = Date()
