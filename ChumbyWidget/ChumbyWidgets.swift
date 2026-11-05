@@ -23,12 +23,12 @@ struct ChumbyEntry: TimelineEntry {
     var deviceDown = false
     // When the Chumby was last heard from, for saying how long it's been gone rather than guessing why.
     var lastSeen: Date?
-    var problem: String {
-        if deviceDown { return "Chumby not answering" }
-        guard let lastSeen else { return "Can’t reach it" }
-        let cal = Calendar.current
-        let at = cal.isDateInToday(lastSeen) ? lastSeen.formatted(date: .omitted, time: .shortened) : lastSeen.formatted(.dateTime.weekday(.abbreviated).hour().minute())
-        return "Can’t reach · \(at)"
+    var problem: String { deviceDown ? "Chumby not answering" : "Can’t reach it" }
+    // Its own smaller line, so the time never reads as an alarm time.
+    var lastSeenLine: String? {
+        guard let lastSeen else { return nil }
+        let at = Calendar.current.isDateInToday(lastSeen) ? lastSeen.formatted(date: .omitted, time: .shortened) : lastSeen.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        return "Last seen \(at)"
     }
     var whenText: String { nextAt.map(Self.day) ?? "" }
     static func day(_ at: Date) -> String {
@@ -176,11 +176,32 @@ func entryDuration(_ s: Int) -> String {
 // A sad octopus when the Chumby can't be reached.
 struct Lost: View {
     var text = "Can’t reach it"
+    var seen: String?
     var body: some View {
         VStack(spacing: 4) {
             Octo(faded: true).frame(maxHeight: 62)
             Label(text, systemImage: "wifi.slash").font(.trebuchet(14, .bold)).multilineTextAlignment(.center).minimumScaleFactor(0.8)
+            if let seen { Text(seen).font(.trebuchet(12)).opacity(0.8).lineLimit(1).minimumScaleFactor(0.8) }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+// A time as the widgets draw it, big digits with a small AM, the same awake or skipped; skipped only adds a line across.
+struct ClockText: View {
+    let date: Date
+    var big: CGFloat = 34, small: CGFloat = 14
+    var struck = false
+    var parts: (String, String) {
+        let t = date.formatted(date: .omitted, time: .shortened)
+        guard let r = t.rangeOfCharacter(from: .whitespaces, options: .backwards) else { return (t, "") }
+        return (String(t[..<r.lowerBound]), String(t[r.upperBound...]))
+    }
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 2) {
+            Text(parts.0).font(.trebuchet(big, .bold)).minimumScaleFactor(0.6).monospacedDigit()
+            if !parts.1.isEmpty && small > 0 { Text(parts.1).font(.trebuchet(small, .bold)) }
+        }
+        .lineLimit(1)
+        .overlay { if struck { Rectangle().fill(.white.opacity(0.7)).frame(height: 2) } }
     }
 }
 
@@ -196,8 +217,13 @@ struct AlarmBody: View {
             ZStack {
                 AccessoryWidgetBackground()
                 VStack(spacing: 0) {
-                    OctopusMark(color: .white).frame(width: 20, height: 15)
-                    Text(clock?.0 ?? (entry.alarmsKnown ? "–" : "?")).font(.trebuchet(15, .bold)).minimumScaleFactor(0.6)
+                    // Skipped: the octopus asleep and the skipped time struck through.
+                    OctopusMark(color: .white, blink: entry.skipped == nil ? 1 : 0.08).frame(width: 20, height: 15)
+                    if let s = entry.skipped {
+                        ClockText(date: s.date, big: 15, small: 0, struck: true).minimumScaleFactor(0.6)
+                    } else {
+                        Text(clock?.0 ?? (entry.alarmsKnown ? "–" : "?")).font(.trebuchet(15, .bold)).minimumScaleFactor(0.6)
+                    }
                 }
             }
         case .accessoryInline:
@@ -230,7 +256,7 @@ struct AlarmBody: View {
                         Text("Skipped").font(.trebuchet(13, .bold)).opacity(0.85)
                     }
                     Spacer(minLength: 0)
-                    Text(ChumbyEntry.clock(s.date)).font(.trebuchet(28, .bold)).strikethrough(color: .white.opacity(0.7)).monospacedDigit().minimumScaleFactor(0.6).lineLimit(1)
+                    ClockText(date: s.date, big: 34, small: 14, struck: true)
                     Text(entry.nextAt.map { "then \(ChumbyEntry.then($0))" } ?? "then none set").font(.trebuchet(14)).lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: 6)
                     if entry.reachable { SkipButton(entry: entry, height: 30) }
@@ -250,7 +276,7 @@ struct AlarmBody: View {
                     if entry.reachable { SkipButton(entry: entry, height: 30) }
                 }
             } else if !entry.alarmsKnown {
-                Lost(text: entry.problem)
+                Lost(text: entry.problem, seen: entry.lastSeenLine)
             } else {
                 VStack(spacing: 6) {
                     Octo(blink: 0.08).frame(maxHeight: 74)
@@ -293,7 +319,7 @@ struct RemoteBody: View {
                 Octo(faded: !entry.reachable, blink: entry.skipped != nil || entry.night ? 0.08 : 1).frame(width: 46, height: 34)
                 Spacer(minLength: 2)
                 if let s = entry.skipped {
-                    Text(ChumbyEntry.clock(s.date)).font(.trebuchet(22, .bold)).strikethrough(color: .white.opacity(0.7)).monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
+                    ClockText(date: s.date, big: 26, small: 13, struck: true)
                     Text(entry.nextAt.map { "Skipped · then \(ChumbyEntry.then($0))" } ?? "Skipped").font(.trebuchet(13)).lineLimit(1).minimumScaleFactor(0.8)
                 } else if let a = entry.nextAlarm, entry.nextAt != nil {
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
@@ -304,6 +330,7 @@ struct RemoteBody: View {
                     Text(entry.whenLine).font(.trebuchet(13)).opacity(0.85).lineLimit(1).minimumScaleFactor(0.8)
                 } else {
                     Text(entry.reachable ? (entry.alarmsKnown ? "No alarm set" : "Chumby") : entry.problem).font(.trebuchet(15, .bold)).lineLimit(2).minimumScaleFactor(0.8)
+                    if !entry.reachable, let seen = entry.lastSeenLine { Text(seen).font(.trebuchet(12)).opacity(0.8).lineLimit(1) }
                 }
                 Spacer(minLength: 6)
                 if entry.reachable { SkipButton(entry: entry, height: 30) }
@@ -359,12 +386,19 @@ struct StatusRow: View {
     let label: String, text: String
     var value: Double?
     var color = ChumbyPalette.oct(true)
+    // A long value ("Tomorrow 6:45 AM") goes under its label rather than crowding it.
+    var stacked = false
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
+            if stacked {
+                Text(label).font(.trebuchet(15)).opacity(0.85).lineLimit(1)
+                Text(text).font(.trebuchet(17, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+            } else {
             HStack(alignment: .firstTextBaseline) {
                 Text(label).font(.trebuchet(15)).opacity(0.85).lineLimit(1)
                 Spacer(minLength: 4)
                 Text(text).font(.trebuchet(17, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+            }
             }
             if let value { StatusBar(value: value, color: color) }
         }
@@ -388,7 +422,7 @@ struct ChumbyStatusBody: View {
     }
     var body: some View {
         if !entry.reachable {
-            Lost(text: entry.problem)
+            Lost(text: entry.problem, seen: entry.lastSeenLine)
         } else if family == .systemSmall {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .top) {
@@ -409,9 +443,10 @@ struct ChumbyStatusBody: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if sys.wifi >= 0 { StatusRow(label: "Wi-Fi", text: "\(sys.wifi)%", value: Double(sys.wifi) / 100) }
                     StatusRow(label: "Memory", text: "\(Int((memoryUsed * 100).rounded()))%", value: memoryUsed, color: memoryColor)
-                    if let alarmText { StatusRow(label: "Next alarm", text: alarmText) }
+                    if let alarmText { StatusRow(label: "Next alarm", text: alarmText, stacked: true) }
                     // Only a channel worth naming: "Default" tells him nothing.
-                    if !sys.chan.isEmpty && sys.chan != "Default" { StatusRow(label: "Channel", text: sys.chan) }
+                    // (and only when there's room: the next alarm takes two lines)
+                    if alarmText == nil && !sys.chan.isEmpty && sys.chan != "Default" { StatusRow(label: "Channel", text: sys.chan) }
                 }
             }
         }
