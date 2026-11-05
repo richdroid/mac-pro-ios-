@@ -650,14 +650,19 @@ private struct ScreenPicture: View {
                     TimelineView(.periodic(from: .now, by: 1)) { ctx in
                         let old = ctx.date.timeIntervalSince(store.at) > 4 && ctx.date.timeIntervalSince(shownAt) > 1.5
                         Image(tv: m).resizable().scaledToFit().opacity(old ? 0.5 : 1)
-                            .overlay { if old { ProgressView().tint(.white).transition(.opacity) } }
+                            .overlay { if old && !live.stalled { ProgressView().tint(.white).transition(.opacity) } }
                             .animation(.easeOut(duration: 0.3), value: old)
                     }
                 } else {
-                    // Nothing yet: what's playing, blurred, with a spinner, rather than an empty box.
+                    // Nothing yet: what's playing, blurred, with a spinner, rather than an empty box. Once the stream has had 1.5 s
+                    // and no picture (a TV asleep, say), the spinner goes: the poster as it is, or a quiet moon with none.
                     Color.clear.overlay { Art(url: art.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
-                        .clipped().blur(radius: 26).opacity(0.5)
-                        .overlay { ProgressView().tint(.white) }
+                        .clipped().blur(radius: live.stalled ? 0 : 26).opacity(live.stalled ? 0.7 : 0.5)
+                        .overlay {
+                            if !live.stalled { ProgressView().tint(.white) }
+                            else if art == nil { Image(systemName: "moon.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55)) }
+                        }
+                        .animation(.easeOut(duration: 0.3), value: live.stalled)
                 }
             }
             // One layer throughout, kept frame and live stream alike: swapping one for another faded the picture from
@@ -665,7 +670,7 @@ private struct ScreenPicture: View {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 let old = held && live.heldAt.map { ctx.date.timeIntervalSince($0) > 4 } == true && ctx.date.timeIntervalSince(shownAt) > 1.5
                 LiveMirrorLayer(mirror: live).opacity(live.showing || held ? (old ? 0.5 : 1) : 0)
-                    .overlay { if old { ProgressView().tint(.white).transition(.opacity) } }
+                    .overlay { if old && !live.stalled { ProgressView().tint(.white).transition(.opacity) } }
                     .animation(.easeOut(duration: 0.3), value: old)
             }
         }
@@ -1384,7 +1389,9 @@ struct ResolvingNextKey: View {
             Task {
                 NextUp.shared.forget(); NextUp.shared.follow(model.status)
                 for _ in 0..<20 where NextUp.shared.next == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
-                if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) } else { model.key("next") }
+                // Stremio ignores the TV's own skip keys, so with no next episode found there's nothing to send: said so,
+                // never a key that does nothing (real-TV test, 2026-11-05).
+                if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) } else { model.say("Couldn’t find the next episode") }
                 busy = false
             }
     }

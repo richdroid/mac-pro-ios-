@@ -14,6 +14,10 @@ final class LiveMirror: ObservableObject {
     // When the stream last had a picture, set as it closes: the layer keeps that last frame, so coming back to the Remote
     // shows it at once, marked as old, rather than an older still.
     @Published private(set) var heldAt: Date?
+    // Asked for, and no picture within 1.5 s: a TV asleep, or a Mac with nothing to stream. Nothing on screen waits on it
+    // from then (no endless spinner); it clears the moment a picture comes.
+    @Published private(set) var stalled = false
+    private var watchdog: Task<Void, Never>?
     let layer = AVSampleBufferDisplayLayer()
     private var feed: LiveFeed?
     private var url: URL?
@@ -33,6 +37,14 @@ final class LiveMirror: ObservableObject {
         guard feed == nil, retry == nil, let address = self.url else { return }
         generation += 1
         let gen = generation
+        if !showing {
+            watchdog?.cancel()
+            watchdog = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard let self, !Task.isCancelled, gen == self.generation || self.feed == nil, !self.showing else { return }
+                if !self.stalled { self.stalled = true }
+            }
+        }
         feed = LiveFeed(url: address, renderer: layer.sampleBufferRenderer,
                         picture: { [weak self] in Task { @MainActor in self?.pictured(gen) } },
                         ended: { [weak self] in Task { @MainActor in self?.ended(gen) } })
@@ -56,6 +68,8 @@ final class LiveMirror: ObservableObject {
     private func pictured(_ gen: Int) {
         guard gen == generation else { return }
         failures = 0
+        watchdog?.cancel(); watchdog = nil
+        if stalled { stalled = false }
         if !showing { showing = true }
     }
     private func ended(_ gen: Int) {

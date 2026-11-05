@@ -194,12 +194,13 @@ function nextWork() {
     if (t > d && t.getDay() !== 0 && t.getDay() !== 6) return { name: 'Work', at: t.getTime() / 1000, when: 'weekday' };
   }
 }
+const songScene = { at: 0 };
 function chumbyScene(q, s) {
   const a = new URL(q.url, 'http://x').searchParams.get('a');
   // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
   const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange)\//);
   if (!m) return false;
   const scene = m[1];
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
@@ -240,6 +241,15 @@ function chumbyScene(q, s) {
   if (scene === 'ringing' && a === 'sys') return json({ ...data.sys, ring: 'r\tWork\tBeep' });
   if (scene === 'snoozed' && a === 'sys') return json({ ...data.sys, ring: 's\tWork\tBeep' });
   if (scene === 'skipped' && a === 'state') return json({ ...data.state, skipped: nextWork() });
+  // A Pandora wake-up 5 minutes ago with no song logged yet; 8 s into the scene the Chumby's state names the first song,
+  // so "Woke up to" (Sounds) must gain its tile live.
+  if (scene === 'songchange' && a === 'state') {
+    songScene.at ||= Date.now();
+    const now = Date.now() / 1000, fire = Math.floor(now / 60) - 5;
+    const wake = alarm({ name: 'Wake', time: String(fire), when: 'once', type: 'audio', arg: 'pandora', param: '1', param_description: 'Morning Mix' });
+    const song = Date.now() - songScene.at > 8000 ? { t: fire * 60 + 40, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' } : null;
+    return json({ ...data.state, alarms: [...data.state.alarms, wake], song });
+  }
   // Pandora playing a song it started a minute and a half ago, for Sounds' Now.
   if (scene === 'playing' && a === 'state') return json({ ...data.state, music: { playing: true } });
   // Night mode on, for Home's day/night pill lit as Night.
@@ -267,12 +277,13 @@ function chumbyScene(q, s) {
 //   /rasleep /roffline /ryoutube /rmint /ridle /repisode
 //                 The Remote's states: the TV asleep, the TV not answering, a YouTube video playing, Mint's music only,
 //                 nothing on (the home screen), and a Stremio episode part way through.
-//   /fnormal /fslow /ffail /foffline /falready
+//   /fnormal /fslow /ffail /foffline /falready /fbridgeon /fjoined
 //                 The flick's starts (tv-iphone.md §2.5a): play-stream as NDJSON with each step's time since the request
 //                 (awake 0, sent 120, player 2000, playing 3200); slow (playing at 9 s); failing (two fallbacks retried,
 //                 then failed:"start"); the TV not answering for 2 s; and the film already playing on the TV, where nothing
 //                 may be sent. Status carries starting and lastStart, prepare answers {ok, awake, fresh}, and every send is
-//                 logged to /tmp/tv-flick-sends.log (GET /<scene>/reset clears it).
+//                 logged to /tmp/tv-flick-sends.log (GET /<scene>/reset clears it). bridgeon: the bridge finds it already
+//                 on and answers {ok, alreadyOn} at once; joined: the answer carries joined:true. Both are plain successes.
 //   /real         The real bridge's quirks, not the sample's perfect answers (Richard, 2026-11-05: bugs on his TV never
 //                 showed here). A Stremio episode playing from 0:00 with no length for its first 20 s, then the catalogue's
 //                 rounded 26 min against a real 21:55 (put right by the first seek); Mint's paused song still listed beside
@@ -284,13 +295,13 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode|realscrub|real|fnormal|fslow|ffail|foffline|falready)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode|realscrub|real|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; return tvReal(q, s, path, query, json); }
   // The real scene with the episode's length known from the start, for the shot of a drag along the bar with its bubble.
   if (scene === 'realscrub') { tvReal.known = true; return tvReal(q, s, path, query, json); }
-  if (/^f(normal|slow|fail|offline|already)$/.test(scene || '')) return tvFlickStart(scene.slice(1), q, s, path, json);
+  if (/^f(normal|slow|fail|offline|already|bridgeon|joined)$/.test(scene || '')) return tvFlickStart(scene.slice(1), q, s, path, json);
   // The prepare call's answer everywhere else too, in the bridge's own shape.
   if (q.method === 'POST' && path === '/api/tv/prepare') { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} json({ ok: true, awake: true, fresh: !!v.token }); }); return true; }
   if (scene === 'cold' && path === '/api/tv/device') {
@@ -411,9 +422,13 @@ function tvFlickStart(kind, q, s, path, json) {
         steps.push([base + 120, { phase: 'sent' }]);
       });
       steps.push([tokens.length * 2000, { error: 'That stream didn’t start on the TV', failed: 'start', token: tokens[tokens.length - 1] || '' }]);
+    } else if (kind === 'bridgeon') {
+      // The bridge found it already on the TV (the phone hadn't known): every step at once and a plain yes, nothing sent.
+      steps.push([0, { phase: 'awake' }], [60, { phase: 'player' }], [120, { phase: 'playing' }], [180, { ok: true, alreadyOn: true, token: tokens[0] || '' }]);
     } else {
       const playAt = kind === 'slow' ? 9000 : 3200;
-      steps.push([0, { phase: 'awake' }], [120, { phase: 'sent' }], [2000, { phase: 'player' }], [playAt, { phase: 'playing' }], [playAt + 200, { ok: true, token: tokens[0] || '' }]);
+      // Joined: a second identical send rides along with the start already under way, and hears the same yes.
+      steps.push([0, { phase: 'awake' }], [120, { phase: 'sent' }], [2000, { phase: 'player' }], [playAt, { phase: 'playing' }], [playAt + 200, { ok: true, token: tokens[0] || '', ...(kind === 'joined' ? { joined: true } : {}) }]);
     }
     // Not answering: not a byte for 2 s, then the start as usual.
     const delay = kind === 'offline' ? 2000 : 0;

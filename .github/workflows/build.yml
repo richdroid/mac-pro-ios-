@@ -281,7 +281,8 @@ jobs:
               # chdemo: a channel chosen in Now playing moves the editor to it, then Add widgets opens the picker, a widget is
               # added and ticked, and on Done the list scrolls to it and it glows.
               # skipdemo: Home's Skip next alarm tapped, then Undo.
-              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 20" "chdemo 1 live 12" "skipdemo 0 live 20"; do
+              # songchange: Sounds open while a wake-up's first song arrives in the Chumby's state; "Woke up to" gains it live.
+              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 20" "chdemo 1 live 12" "skipdemo 0 live 20" "songchange 3 songchange 16"; do
                 set -- "$1" "$2" $V
                 xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-$3.mp4 > /dev/null 2>&1 & REC=$!
                 sleep 5
@@ -400,7 +401,8 @@ jobs:
           # normal start and already-on, to keep the job inside its time.
           tv_flickstarts() { # display, file suffix
             for V in "flick-stage normal 10 0" "flick-starting normal 18 1" "flick-slow slow 24 1" "flick-failed fail 20 1" \
-                     "flick-offline offline 16 1" "flick-already already 16 1" "flick-putback normal 14 1" "flick-cancel normal 14 1"; do
+                     "flick-offline offline 16 1" "flick-already already 16 1" "flick-putback normal 14 1" "flick-cancel normal 14 1" \
+                     "flick-bridgeon bridgeon 14 0" "flick-joined joined 16 0"; do
               set -- "$1" "$2" $V
               # Unfolded too, all but the slow start and the put-back (r19: cancel, failed and offline were never seen open).
               if [ -n "$2" ] && ! [[ "$3" =~ ^flick-(stage|starting|already|cancel|failed|offline)$ ]]; then set -- "$1" "$2"; continue; fi
@@ -557,7 +559,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          (cd dist && zip -qry ../apps.zip .)
+          # Three parts, so no one asset nears the release limit or times out: the apps and logs (all the phone needs), the
+          # shots, and the films. status.txt goes last, so a reader who sees the new status finds every part already there.
+          (cd dist && zip -qry ../apps.zip . -x '*.png' -x '*.mp4')
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          ls -la apps.zip shots.zip films.zip
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "Latest build" --notes "Built by the workflow. Fetched by the Mac."
-          gh release upload latest apps.zip status.txt --clobber
+          for f in apps.zip shots.zip films.zip status.txt; do
+            for i in 1 2 3 4; do gh release upload latest "$f" --clobber && break; echo "upload of $f failed, try $i"; sleep 20; done
+          done

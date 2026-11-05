@@ -186,7 +186,6 @@ struct FlickScreen: View {
     // The picked thing's own colour, which floods in a little while the card is held.
     @State private var tint: Color?
     // The TV taking a breath as its player comes up.
-    @State private var timing = FlickTiming()
     // When the Mac said the film is playing: the play key says so at once, before the TV's own status catches up.
     @State private var playedAt: Date?
     // Follows the finger exactly, with nothing in between.
@@ -295,7 +294,7 @@ struct FlickScreen: View {
     // caught tick follows the impact by 120 ms (in `arrivedAtTV`).
     var felt: some View {
         screen
-            .onChange(of: lifted) { _, now in if now { FlickHaptic.lift() } }
+            .onChange(of: lifted) { _, now in if now { FlickHaptic.lift(); FlickClock.touched() } }
             .onChange(of: detent) { old, new in if new == 1 && old == 0 && lifted { FlickHaptic.detent() } }
             .onChange(of: charged) { _, now in if now && lifted { FlickHaptic.charged() } }
             .onChange(of: impacts) { _, _ in FlickHaptic.impact() }
@@ -1316,7 +1315,7 @@ struct FlickScreen: View {
             // over the keys fades with it before it's taken away.
             // The picture underneath back first, unanimated, so the screen fades onto it, not onto the backdrop.
             model.flickHandoff = false
-            timing.mark("remote")
+            FlickClock.current.remoteLanded()
             withAnimation(.easeOut(duration: 0.2)) { onRemote = true; screenOut = true; fadingOut = true }
             try? await Task.sleep(nanoseconds: 230_000_000)
             model.closeFlick()
@@ -1449,7 +1448,7 @@ struct FlickScreen: View {
     // reached at all does.
     func send(flicked velocity: CGSize = .zero) {
         guard !flown else { return }
-        timing = FlickTiming(); timing.mark("release")
+        FlickClock.begin()
         releasedAt = Date()
         note = nil; detent = 0
         let from = cardY, to = tvFrame.midY - cardFrame.midY
@@ -1486,7 +1485,7 @@ struct FlickScreen: View {
         guard flown, !cancelled, !returning else { return }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { landed = true }
-        timing.mark("impact")
+        FlickClock.current.mark("impact")
         Task {
             // The hit's look and the light round the picture a frame after the swap, so the impact frame carries only the
             // swap itself (r17: a ~140 ms stall at the impact).
@@ -1527,6 +1526,7 @@ struct FlickScreen: View {
         // (Richard, 2026-11-05: "the episode restarted i think because of the app").
         if alreadyOn {
             if model.status?.session?.playing == false { model.key("resume") }
+            FlickClock.current.mark("already-on"); FlickClock.current.finished()
             answered = true
             sending = false
             return
@@ -1537,7 +1537,7 @@ struct FlickScreen: View {
         // Normally begun at the release already (so the Remote's picture is the poster from the hand-over on); this only
         // fills in the stream it went with.
         if model.starting != nil { model.starting?.token = stream?.token }
-        timing.mark("request")
+        FlickClock.current.mark("request")
         written = true
         var resent = false
         while true {
@@ -1545,19 +1545,24 @@ struct FlickScreen: View {
                 let answer: Data
                 if early {
                     answer = try await TVBridge.playStream(order.1, opened: { _ in
-                        answered = true; timing.mark("first-byte")
+                        answered = true; FlickClock.current.mark("first-byte")
                     }, phase: { p in took(p) })
                 } else {
                     answer = try await TVBridge.post(order.0, order.1, timeout: 60)
                     answered = true
+                }
+                // The Mac found it already on, or joined a start of the same thing already under way: a success like any
+                // other, with nothing more to do (real-TV test, 2026-11-05).
+                if let j = try? JSONSerialization.jsonObject(with: answer) as? [String: Any] {
+                    if j["alreadyOn"] as? Bool == true { FlickClock.current.mark("already-on") }
+                    if j["joined"] as? Bool == true { FlickClock.current.mark("joined") }
                 }
                 target.sent?()
                 remember()
                 flicksDone += 1
                 // An answer with no "playing" line (an old Mac, or a send that isn't a stream) is the yes.
                 model.startPlayed()
-                timing.mark("answer"); timing.send()
-                _ = answer
+                FlickClock.current.mark("answer"); FlickClock.current.finished()
                 return
             } catch {
                 if Task.isCancelled || cancelled { return }
@@ -1570,7 +1575,7 @@ struct FlickScreen: View {
                     stream = streams.first { $0.description == was?.description && !failedTokens.contains($0.token) } ?? streams.first { !failedTokens.contains($0.token) }
                     if stream != nil { continue }
                 }
-                timing.mark("failed"); timing.send()
+                FlickClock.current.mark("failed"); FlickClock.current.finished(onStage: !handedOver)
                 if let s = stream { failedTokens.insert(s.token) }
                 // Still on the stage (no answer at all): the card comes back. On the Remote: the poster dims, with one
                 // way on.
@@ -1582,11 +1587,11 @@ struct FlickScreen: View {
     }
     // A step of the start, as the Mac reports it: the model's, so the Remote follows it after this screen has closed.
     func took(_ p: String) {
-        timing.mark("phase-" + p)
+        FlickClock.current.mark("phase-" + p)
         phase = p
         model.startPhase(p)
         if p == "playing" {
-            timing.mark("playing")
+            FlickClock.current.mark("playing")
             playedAt = Date()
             model.startPlayed()
         }
@@ -1612,7 +1617,7 @@ struct FlickScreen: View {
     func handOver() {
         guard step == .flick, !handedOver else { return }
         handedOver = true
-        timing.mark("handover")
+        FlickClock.current.mark("handover")
         if !item.art.isEmpty { model.lastArt = item.art; model.lastArtTitle = item.title; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
         goRemote()
     }

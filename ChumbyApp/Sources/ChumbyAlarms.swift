@@ -472,10 +472,6 @@ struct AlarmsTab: View {
     }
     func openSettings() { if wide { show(.settings) } else { dayPage = nil; model.alarmsPageTitle = "Calendar settings"; model.alarmsPage = true } }
     @State private var dayPage: String?
-    var plus: some View {
-        Button { edit(nil) } label: { Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).frame(width: 30, height: 30) }
-            .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Add alarm")
-    }
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
     @State private var scrollTo: String?
@@ -527,8 +523,9 @@ struct AlarmsTab: View {
     // and "Woke up to" to Sounds.
     var page: some View {
         TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
-            // + lives in the side bar's column when there is one (RootView puts it there); only with the bars across is it here.
-            PageTitle("Alarms") { if model.railWidth < 44 { plus } }
+            // Add alarm is never a loose circle: by the rail it's RootView's foot bar; with the tabs across the foot, the same bar
+            // sits centred just above them (below).
+            PageTitle("Alarms")
             ReachRow()
             if model.sys.ringing != nil { Section { RingingCard() } }
             Section { glance }
@@ -569,6 +566,13 @@ struct AlarmsTab: View {
         .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model) }
         .refreshable { await model.loadState() }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
+        // With the tab bar along the foot (folded, or open in portrait), the page's bar sits centred just above it: Add alarm
+        // only, since a pushed page there brings its own back. Away while scrolling down, back on any scroll up.
+        .safeAreaInset(edge: .bottom) {
+            if !rail && !model.alarmsPage {
+                PageFootBar().padding(.bottom, 10).frame(maxWidth: .infinity)
+            }
+        }
         .onChange(of: wide) { _, _ in pane = .schedule }
         .onAppear {
             wake.refreshPlan()

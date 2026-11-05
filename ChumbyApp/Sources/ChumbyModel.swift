@@ -279,11 +279,13 @@ final class ChumbyModel: ObservableObject {
     }
     // The Chumby's list, with whatever is still on its way laid over it.
     private func took(_ s: ChumbyState) {
-        // A song newer than the newest one known goes straight to "Woke up to" and the widgets.
+        // A song newer than the newest one known goes straight to "Woke up to", and into the kept copy, so the next cold
+        // open shows it at once rather than the old list with the new song popping in. (No widget shows songs.)
         if let new = s.song, new.t > (songs.first?.t ?? 0) {
             songs.insert(new, at: 0)
             SongArt.shared.prefetch(songs, s.alarms)
-            WidgetCenter.shared.reloadAllTimelines()
+            let keep = songs, file = Self.cache("hist")
+            Task.detached(priority: .utility) { try? JSONEncoder().encode(keep).write(to: file, options: .atomic) }
         }
         deviceState = s
         if !stateKnown { stateKnown = true }
@@ -342,9 +344,6 @@ final class ChumbyModel: ObservableObject {
                 guard !Task.isCancelled, let self else { return }
                 await self.loadSongs(force: true)
                 SongArt.shared.prefetch(self.songs, self.state.alarms)
-                #if canImport(WidgetKit)
-                WidgetCenter.shared.reloadAllTimelines()
-                #endif
             }
         }
     }
@@ -355,8 +354,6 @@ final class ChumbyModel: ObservableObject {
         guard let r = try? await fetch("hist", from: api), let h = try? JSONDecoder().decode(H.self, from: r.data) else { return }
         if h.songs != songs {
             songs = h.songs
-            // A new song: the widgets show it too, now rather than at their next scheduled refresh.
-            WidgetCenter.shared.reloadAllTimelines()
         }
         try? JSONEncoder().encode(h.songs).write(to: Self.cache("hist"), options: .atomic)
     }

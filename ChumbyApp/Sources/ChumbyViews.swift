@@ -216,12 +216,16 @@ struct TwoPane<L: View, R: View>: View {
 // only the page's own cards and words dissolve as they reach the bar. The bar's own space is the page's bottom safe area,
 // so this follows it folded (bar along the foot) and open (rail at the side, only the home indicator below).
 // The fade runs from the bar's top edge down its first 18 pt, so a card resting just above the bar is never touched.
+// The inset is read on the page itself: a reader inside the mask that ignores the safe area always saw 0, so the fade was
+// 0 pt tall and the words read through the bar anyway (r24/r25).
 struct TabBarFade: ViewModifier {
     static let fade: CGFloat = 18
+    @State private var inset: CGFloat = 0
     func body(content: Content) -> some View {
-        content.mask {
-            GeometryReader { g in
-                let inset = g.safeAreaInsets.bottom
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { inset = $0 }
+            .mask {
+            GeometryReader { _ in
                 VStack(spacing: 0) {
                     Color.black
                     LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: min(Self.fade, inset))
@@ -862,7 +866,8 @@ struct HomeTab: View {
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
-                            Color.clear.frame(height: 40)
+                            // The same top line as the left pane's first thing, the wordmark, rather than a guessed gap.
+                            Color.clear.frame(height: Self.wordTop)
                             controls
                             more.padding(.top, Self.sectionGap)
                         }.padding(.horizontal, 12)
@@ -1108,8 +1113,8 @@ struct NightButton: View {
     // Night: the slab in the Skip card's night navy, the moon pale. Day: plain glass, the sun amber.
     var navy: [Color] { [ChumbyPalette.hex(0x34508f), ChumbyPalette.hex(0x1f2f5c)] }
     var dark: Bool { scheme == .dark }
-    var body: some View {
-        let shape = Capsule()
+    // The words and glyph, in the given inks: drawn once in the mode's own colours, and again in white over the hold's fill.
+    func row(title: Color, sub: Color) -> some View {
         HStack(spacing: 12) {
             ZStack {
                 Circle().fill(on ? Color.white.opacity(0.14) : amber.opacity(dark ? 0.22 : 0.18))
@@ -1122,10 +1127,8 @@ struct NightButton: View {
             // The mode it's in, in words, and what holding it does: never a mystery circle (Richard, 2026-11-05: "i dont
             // like the night / display on button").
             VStack(alignment: .leading, spacing: 1) {
-                Text(on ? "Night" : "Day").font(.custom("Trebuchet MS", size: 19).weight(.bold))
-                    .foregroundStyle(on ? .white : ChumbyPalette.ink(dark))
-                Text(on ? "Hold for day" : "Hold for night").font(.custom("Trebuchet MS", size: 13).weight(.bold))
-                    .foregroundStyle(on ? Color.white.opacity(0.72) : ChumbyPalette.sub(dark))
+                Text(on ? "Night" : "Day").font(.custom("Trebuchet MS", size: 19).weight(.bold)).foregroundStyle(title)
+                Text(on ? "Hold for day" : "Hold for night").font(.custom("Trebuchet MS", size: 13).weight(.bold)).foregroundStyle(sub)
             }
             .contentTransition(.opacity)
             .lineLimit(1).minimumScaleFactor(0.85)
@@ -1133,6 +1136,21 @@ struct NightButton: View {
         }
         .padding(.leading, 11).padding(.trailing, 16)
         .frame(height: HomeKey.size).frame(maxWidth: .infinity)
+    }
+    var body: some View {
+        let shape = Capsule()
+        row(title: on ? .white : ChumbyPalette.ink(dark), sub: on ? Color.white.opacity(0.72) : ChumbyPalette.sub(dark))
+        // Over the fill the words are white, cut to the fill's width, so dark ink never sits on the navy as it passes
+        // under them (light mode: ink on navy was illegible). Elsewhere they keep the mode's ink.
+            .overlay {
+                if progress > 0.01 {
+                    row(title: .white, sub: Color.white.opacity(0.8))
+                        .mask(alignment: .leading) {
+                            GeometryReader { g in Rectangle().frame(width: max(g.size.height, g.size.width * progress)) }
+                        }
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
         .background {
             ZStack(alignment: .leading) {
                 // Night's slab, faded in over the glass rather than swapped, so the change is a crossfade.
@@ -1762,7 +1780,7 @@ struct SoundsTab: View {
                     ForEach([(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")], id: \.0) { Text($0.1).tag($0.0) }
                 }
                 MarkNote(mark: "fade")
-            } header: { SectionHead(icon: "alarm", text: "Alarms play", color: ChumbyPalette.acc(dark)) }
+            } header: { SectionHead(icon: "alarm", text: "Alarms play", color: ChumbyPalette.sub(dark)) }
             Section {
                 ForEach(model.state.streams, id: \.key) { s in
                     HStack(spacing: 12) {

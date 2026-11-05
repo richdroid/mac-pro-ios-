@@ -60,12 +60,39 @@ enum Prepare {
     }
 }
 
-// How long each part of a flick took, on this phone's clock, for the Mac's log. Never in the way: a failure is dropped.
-struct FlickTiming {
-    private(set) var events: [(String, Double)] = []
-    mutating func mark(_ name: String) { events.append((name, Date().timeIntervalSince1970 * 1000)) }
-    func send() {
-        guard !events.isEmpty else { return }
+// How long each part of a flick took, on this phone's clock, for the Mac's log (its `timing` route), so real flicks can be
+// timed from the bridge: touch, release, request, impact, remote, the phases, playing, answer. One flick at a time, held
+// here rather than in the flick screen, which closes long before the TV plays. Sent once, when both the answer and the
+// landing on the Remote are in (or 25 s on, whatever there is). Never in the way: a failure is dropped.
+@MainActor
+final class FlickClock {
+    static private(set) var current = FlickClock()
+    private var events: [(String, Double)] = []
+    private var answered = false, landed = false, sent = false
+    private static var touchAt: Double?
+    static func now() -> Double { Date().timeIntervalSince1970 * 1000 }
+    // The card picked up: kept for the throw that may follow.
+    static func touched() { touchAt = now() }
+    // The release: a new flick, starting with its touch if there was one.
+    static func begin() {
+        current.flush()
+        let c = FlickClock()
+        if let t = touchAt { c.events.append(("touch", t)) }
+        touchAt = nil
+        c.mark("release")
+        current = c
+        Task { [weak c] in
+            try? await Task.sleep(nanoseconds: 25_000_000_000)
+            c?.flush()
+        }
+    }
+    func mark(_ name: String) { events.append((name, Self.now())) }
+    // The answer, or the failure: sent once the Remote's landing is in too (it may come either side).
+    func finished(onStage: Bool = false) { answered = true; if landed || onStage { flush() } }
+    func remoteLanded() { mark("remote"); landed = true; if answered { flush() } }
+    func flush() {
+        guard !sent, !events.isEmpty else { return }
+        sent = true
         let body: [String: Any] = ["events": events.map { ["name": $0.0, "at": $0.1] }]
         Task { _ = try? await TVBridge.post("timing", body, timeout: 10) }
     }

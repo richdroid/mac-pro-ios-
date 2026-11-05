@@ -332,7 +332,7 @@ struct CalendarSettingsSections: View {
                         Text("\(wake.rules.daysAhead) wake-up\(wake.rules.daysAhead == 1 ? "" : "s")").font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
-            } header: { Text("Awake before it starts") } footer: { Text("A day runs from \(wake.rules.dayStartHour) AM, so a late shift counts as the day it began.") }
+            } header: { Text("Awake before it starts") }
             Section {
                 CalendarSoundRow(autoOpen: ChumbyModel.pose == "template")
             } header: { Text("How they ring") }
