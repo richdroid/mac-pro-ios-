@@ -346,7 +346,11 @@ final class ChumbyModel: ObservableObject {
         histAt = Date()
         struct H: Decodable { let songs: [Song] }
         guard let r = try? await fetch("hist", from: api), let h = try? JSONDecoder().decode(H.self, from: r.data) else { return }
-        if h.songs != songs { songs = h.songs }
+        if h.songs != songs {
+            songs = h.songs
+            // A new song: the widgets show it too, now rather than at their next scheduled refresh.
+            WidgetCenter.shared.reloadAllTimelines()
+        }
         try? JSONEncoder().encode(h.songs).write(to: Self.cache("hist"), options: .atomic)
     }
 

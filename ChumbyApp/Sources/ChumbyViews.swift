@@ -26,6 +26,14 @@ struct ChumbyApp: App {
                     TabTour.run([0, 1, 2, 3, 4]) { model.tab = $0 }
                 }
                 .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
+                // While music plays on the Chumby, "Woke up to" and its widget follow it song by song, on any tab.
+                .task(id: model.state.musicPlaying) {
+                    while model.state.musicPlaying && !Task.isCancelled {
+                        await model.loadSongs(force: true)
+                        SongArt.shared.prefetch(model.songs, model.state.alarms)
+                        try? await Task.sleep(nanoseconds: 20_000_000_000)
+                    }
+                }
         }
         #if os(iOS)
         // iOS decides when, so this only helps; the alarms already on the Chumby ring regardless.
