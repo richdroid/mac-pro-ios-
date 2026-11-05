@@ -125,6 +125,8 @@ struct RootView: View {
         }
         .animation(TVLook.press, value: model.toast)
         .onAppear { followRequest(); poseForShots(); TabTour.run([0, 1, 2, 3, 5, 9]) { model.tab = $0 } }
+        // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
+        .task { await BrowseStore.shared(.stremio).load() }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
     }
     // Control Center and Siri can ask before this view exists, so the request waits in a flag.
@@ -421,8 +423,10 @@ private struct ScreenPicture: View {
     @ObservedObject var store: MirrorStore
     let art: String?
     var body: some View {
+        // The stream's own last frame, while it's newer than the latest still: what was on screen when last looked at.
+        let held = !live.showing && live.heldAt.map { $0 > store.at } == true
         ZStack {
-            if !live.showing {
+            if !live.showing && !held {
                 if let m = store.image {
                     TimelineView(.periodic(from: .now, by: 1)) { ctx in
                         let old = ctx.date.timeIntervalSince(store.at) > 4
@@ -437,7 +441,17 @@ private struct ScreenPicture: View {
                         .overlay { ProgressView().tint(.white) }
                 }
             }
-            LiveMirrorLayer(mirror: live).opacity(live.showing ? 1 : 0)
+            if held, let at = live.heldAt {
+                // Old the same way a still is: dimmed with a spinner once it's more than a few seconds old.
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    let old = ctx.date.timeIntervalSince(at) > 4
+                    LiveMirrorLayer(mirror: live).opacity(old ? 0.5 : 1)
+                        .overlay { if old { ProgressView().tint(.white).transition(.opacity) } }
+                        .animation(.easeOut(duration: 0.3), value: old)
+                }
+            } else {
+                LiveMirrorLayer(mirror: live).opacity(live.showing ? 1 : 0)
+            }
         }
         .animation(.easeOut(duration: 0.2), value: live.showing)
     }
@@ -676,6 +690,11 @@ struct RemoteTab: View {
             }
         }
         .navigationSubtitle(state)
+        // Folded, the keyboard would slice the tab rail and leave half a button peeking above it: the rail steps aside
+        // while typing, and comes back with the keyboard's going.
+        #if os(iOS)
+        .toolbarVisibility(typing && size != .regular ? .hidden : .automatic, for: .tabBar)
+        #endif
         .toolbar {
             // Folded, the screen goes above the pad unless he's hidden it, so the bar has the switch. Wider, it has its
             // own place and button.
@@ -692,8 +711,11 @@ struct RemoteTab: View {
             guard Date().timeIntervalSince(model.remoteArrival) < 1 else { return }
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { keysIn = false }
-            // Partway through the screen's move, as the flick's backdrop thins, rather than after it.
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            // Just after the screen starts its move, so the keys come up while the controls are still fading out and
+            // there's never a moment of picture alone on the backdrop. Not later than a second if no move comes.
+            let arrival = model.remoteArrival
+            for _ in 0..<60 where model.remoteMoveAt < arrival { try? await Task.sleep(nanoseconds: 16_000_000) }
+            try? await Task.sleep(nanoseconds: 80_000_000)
             withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) { keysIn = true }
         }
     }
@@ -1629,14 +1651,20 @@ struct DiscoverColumn: View {
     @ObservedObject private var shows = BrowseStore.discover("series")
     @ObservedObject private var home = BrowseStore.shared(.stremio)
     static let continueTitle = "Continue watching"
-    // Films and shows together, so it sits above the switch and belongs to neither. The same row as on Apps and Playing,
-    // so there's one list of where he is everywhere; the discover lists' own only until that one is in.
+    // Films and shows together, so it sits above the switch and belongs to neither. Only ever the row on Apps and Playing,
+    // so there's one list of where he is everywhere: nothing until that one is in, never a different list that then swaps.
     var continuing: MediaRow? {
         guard store.query.isEmpty else { return nil }
-        let other = store === films ? shows : films
-        return [home, store, other].lazy.compactMap { $0.rows.first { $0.title == Self.continueTitle && !$0.items.isEmpty } }.first
+        return home.rows.first { $0.title == Self.continueTitle && !$0.items.isEmpty }
     }
-    var rows: [MediaRow] { store.rows.filter { $0.title != Self.continueTitle } }
+    // What's in Continue watching isn't shown again further down.
+    var rows: [MediaRow] {
+        let mine = Set((continuing?.items ?? []).map { $0.stremioRef?.imdb ?? $0.id })
+        return store.rows.filter { $0.title != Self.continueTitle }.compactMap { r in
+            let items = r.items.filter { !mine.contains($0.stremioRef?.imdb ?? $0.id) }
+            return items.isEmpty ? nil : MediaRow(title: r.title, items: items)
+        }
+    }
     var shown: [MediaRow] {
         part == .all ? rows : rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)
     }
@@ -1702,6 +1730,7 @@ struct DiscoverColumn: View {
         }
         .restsOnRows()
         .backToTop(posed: part != .left)
+        .task { if home.rows.isEmpty { await home.load() } }
         .refreshable { await store.load(force: true) }
         .task(id: kind) { await store.load() }
     }

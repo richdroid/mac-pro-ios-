@@ -307,26 +307,25 @@ struct FlickCardButton: View {
 final class FrameBox { var rect: CGRect? }
 
 // A row of cards that scrolls sideways. It stops where the page's other content stops, fading out there rather than cut
-// square, and fading in at the start too once it's been scrolled. On the outer screen that's short of the clock and the
-// glass side bar: run on under them, its cards read through their glass.
+// square, and fading in at the start too once it's been scrolled. Folded or open, nothing runs on under the clock or the
+// glass side bar.
 private struct RowEdge: ViewModifier {
     @State private var scrolled = false
     func body(content: Content) -> some View {
         content
             .scrollTargetBehavior(FreeScroll())
             .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 4 } action: { _, s in scrolled = s }
+            // The row's own frame already ends where the page's content does (level with the search field), so the fade
+            // ends at that edge and nothing of the row is drawn past it. No reader here: measuring the safe area took it
+            // off twice, and laid the page out a frame late on first visit.
             .mask {
-                GeometryReader { g in
-                    HStack(spacing: 0) {
-                        LinearGradient(colors: [.black.opacity(scrolled ? 0 : 1), .black], startPoint: .leading, endPoint: .trailing).frame(width: 28)
-                        Color.black
-                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
-                        // A scroll view reaches into the safe area; what of the row is in the side bar's room is never shown.
-                        Color.clear.frame(width: g.safeAreaInsets.trailing)
-                    }
-                    // Only the fade eases, so nothing in the row animates with it.
-                    .animation(.easeOut(duration: 0.2), value: scrolled)
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(scrolled ? 0 : 1), .black], startPoint: .leading, endPoint: .trailing).frame(width: 28)
+                    Color.black
+                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
                 }
+                // Only the fade eases, so nothing in the row animates with it.
+                .animation(.easeOut(duration: 0.2), value: scrolled)
             }
     }
 }

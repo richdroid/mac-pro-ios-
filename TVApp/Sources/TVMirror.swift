@@ -11,6 +11,9 @@ import UIKit
 final class LiveMirror: ObservableObject {
     // A picture has come through, and the stream is still open.
     @Published private(set) var showing = false
+    // When the stream last had a picture, set as it closes: the layer keeps that last frame, so coming back to the Remote
+    // shows it at once, marked as old, rather than an older still.
+    @Published private(set) var heldAt: Date?
     let layer = AVSampleBufferDisplayLayer()
     private var feed: LiveFeed?
     private var url: URL?
@@ -48,7 +51,7 @@ final class LiveMirror: ObservableObject {
         feed?.cancel(); feed = nil
         retry?.cancel(); retry = nil
         generation += 1
-        if showing { showing = false }
+        if showing { heldAt = Date(); showing = false }
     }
     private func pictured(_ gen: Int) {
         guard gen == generation else { return }
@@ -58,7 +61,7 @@ final class LiveMirror: ObservableObject {
     private func ended(_ gen: Int) {
         guard gen == generation else { return }
         feed = nil
-        if showing { showing = false }
+        if showing { heldAt = Date(); showing = false }
         failures += 1
         guard wanted else { return }
         // Again soon, backing off while the Mac has no stream to give, as an older one won't.

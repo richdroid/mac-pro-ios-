@@ -29,6 +29,8 @@ final class TVModel: ObservableObject {
     func standIn(_ art: String) { standInArt = art; standInUntil = Date().addingTimeInterval(30) }
     // When a flick's controls last handed over to the Remote, so its keys can settle in after the screen lands.
     @Published var remoteArrival = Date.distantPast
+    // When the flick's screen actually starts its move onto the Remote's picture, which the keys follow closely.
+    var remoteMoveAt = Date.distantPast
     // A film's colour kept on the pages behind after the flick closes, until something else is playing.
     var moodArt: String?
     func keepMood(until art: String) { moodArt = art }

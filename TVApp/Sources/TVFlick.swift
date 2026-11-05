@@ -373,7 +373,11 @@ struct FlickScreen: View {
         ToolbarItem(placement: .cancellationAction) {
             // While anything is still on its way to the TV, the X stops it, on the controls too. Once it's there, a tick.
             let stops = flown && (step != .control || sending)
-            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : step == .control ? "Done" : "Close", systemImage: stops || step != .control ? "xmark" : "checkmark") }
+            // Going to the Remote folded, the tick becomes the Remote's own eye in the same place, so the bar never swaps in
+            // a frame. Unfolded the Remote has no bar button, and the tick just fades with the screen.
+            let eye = toRemote && !stops && !panes ? (model.mirrorLive ? "eye.slash" : "eye") : nil
+            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : step == .control ? "Done" : "Close", systemImage: eye ?? (stops || step != .control ? "xmark" : "checkmark")) }
+                .contentTransition(.symbolEffect(.replace))
         }
     }
 
@@ -866,7 +870,8 @@ struct FlickScreen: View {
         let lean = big ? 0 : charge
         let glow = Double(1 - t)
         return ZStack {
-            RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.black.opacity(0.55))
+            // Going to the Remote it thins to the Remote picture's own 0.35 black, so where the move ends, the two match.
+            RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.black.opacity(0.55 - 0.2 * Double(t)))
             // What the TV is showing now, so it reads as his TV rather than an empty slab. It gives way as the card comes.
             if !landed && !big {
                 TVNowPicture(store: model.mirrorStore)
@@ -894,7 +899,8 @@ struct FlickScreen: View {
                 ZStack {
                     // As the Remote draws its own picture of the TV, so the move into it ends on the same thing.
                     // Never solid black before the poster's in: its own colour, which the blurred poster then covers.
-                    (tint ?? Color(white: 0.12)).opacity(1 - 0.65 * Double(t))
+                    // Gone by the end of the move, as the Remote's picture has no tint under its poster.
+                    (tint ?? Color(white: 0.12)).opacity(1 - Double(t))
                     Color.clear.overlay { artwork(fill: true) }.clipped().blur(radius: 24).opacity(0.7)
                     artwork(fill: false)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -1165,6 +1171,7 @@ struct FlickScreen: View {
             // through it.
             // One update, so the controls can't be gone a frame before the screen starts to move. The bar's ✓ stays to the
             // end and fades with the rest of this screen: taken off now, it left an empty glass circle behind.
+            model.remoteMoveAt = Date()
             withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) {
                 toRemote = true
                 withAnimation(.easeOut(duration: 0.2)) { controlsIn = false }
