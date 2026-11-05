@@ -88,7 +88,6 @@ enum AlarmChange {
 struct Failure: Equatable { let id: String; let text: String; let at: Date }
 enum AlarmMark: Equatable { case failed(head: String, why: String), landed(Date) }
 
-struct Song: Codable, Identifiable, Hashable { let t: Double; let title: String; let artist: String; let album: String; var id: String { "\(t)\(title)" } }
 
 @MainActor
 final class ChumbyModel: ObservableObject {
@@ -120,6 +119,8 @@ final class ChumbyModel: ObservableObject {
     @Published var addAlarm: Date?
     // Folded, Calendar settings pushed inside Alarms. Kept here so its Back can sit in the rail, outside the page that slides.
     @Published var alarmsPage = false
+    // The page shown in place of Alarms ("Calendar settings", or the day's name), for its bar's title.
+    @Published var alarmsPageTitle = "Calendar settings"
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []
     private var failureClear: Task<Void, Never>?

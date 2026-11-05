@@ -103,6 +103,11 @@ struct Alarm: Codable, Identifiable, Equatable {
         default: return Alarm.dayKeys.firstIndex(of: when).map { Calendar.current.weekdaySymbols[$0] + "s" } ?? when
         }
     }
+    // When it rings, unless its name already says so ("Weekend · Weekends" said nothing twice).
+    var whenUnlessNamed: String {
+        let w = whenText
+        return name.range(of: w, options: [.caseInsensitive, .diacriticInsensitive]) != nil || w.lowercased().hasPrefix(name.lowercased()) && !name.isEmpty ? "" : w
+    }
     var soundText: String {
         if type == "none" { return "Silent" }
         if type == "beep" { return arg.isEmpty ? "Beep" : arg }
@@ -218,6 +223,9 @@ struct MusicReport: Decodable {
     }
     enum K: String, CodingKey { case playing }
 }
+// A song Pandora logged: in the history, and the newest one in the Chumby's own state. Here, so the widgets see it too.
+struct Song: Codable, Identifiable, Hashable { let t: Double; let title: String; let artist: String; let album: String; var id: String { "\(t)\(title)" } }
+
 struct RingReport: Decodable, Equatable {
     var state: String
     var name: String

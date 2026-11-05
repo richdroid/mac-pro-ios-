@@ -286,7 +286,8 @@ struct ChumbyCalendarIntent: AppIntent {
     }
 }
 
-func leadText(_ m: Int) -> String { m % 60 == 0 ? "\(m / 60) h" : m < 60 ? "\(m) min" : "\(m / 60) h \(m % 60) min" }
+// Non-breaking spaces, so "2 h 40 min" never splits across lines.
+func leadText(_ m: Int) -> String { m % 60 == 0 ? "\(m / 60)\u{00A0}h" : m < 60 ? "\(m)\u{00A0}min" : "\(m / 60)\u{00A0}h\u{00A0}\(m % 60)\u{00A0}min" }
 
 // For Calendars access turned off in Settings: the one place it can be turned back on.
 struct OpenSettingsButton: View {
@@ -349,7 +350,7 @@ struct CalendarSettingsSections: View {
                 WordsGroup(title: "Counts as work", words: $wake.rules.workWords)
                 WordsGroup(title: "Never wake for", words: $wake.rules.ignoreWords)
                 WordsGroup(title: "Days off", words: $wake.rules.offWords)
-            } header: { Text("Words in titles") } footer: { Text("Whole words, so “work” won’t match “workout”.") }
+            } header: { Text("Words in titles") }
             if !wake.calendars.isEmpty {
                 Section {
                     // Closed to begin with: it's set once and rarely looked at again.
@@ -471,7 +472,7 @@ struct CalendarDaySheet: View {
                 }
                 if item.custom { Button("Use the usual time") { wake.rules.leadOverrides[key] = nil }.foregroundStyle(.tint) }
                 Toggle("Ring that day", isOn: Binding(get: { !item.skipped }, set: { _ in wake.toggleSkip(item) }))
-            } footer: { Text("This day only.") }
+            }
             Section { CalendarSoundRow().background { foot } } header: { Text("How they ring") }
         } else {
             Text("That day is no longer on your calendar.").foregroundStyle(.secondary).background { foot }

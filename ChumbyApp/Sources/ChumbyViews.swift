@@ -1,4 +1,8 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+import UIKit.UIGestureRecognizerSubclass
+#endif
 
 @main
 struct ChumbyApp: App {
@@ -151,10 +155,10 @@ extension View {
     func card(_ radius: CGFloat = 26) -> some View { modifier(CardFill(radius: radius)) }
     func glass(_ radius: CGFloat = 26) -> some View { self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous)) }
     func glassCircle() -> some View { self.glassEffect(.regular.interactive(), in: Circle()) }
-    func seaList() -> some View { self.scrollContentBackground(.hidden).listSectionSpacing(14).roomyIndicators() }
+    func seaList() -> some View { self.scrollContentBackground(.hidden).listSectionSpacing(14).roomyIndicators().modifier(SummonsBar()) }
     // The scroll bar 7 pt in from the screen's edge rather than on it (Richard, 2026-11-05: "the scroll bar is too close to
     // the screen for my eyes"), in every Chumby list and scroll.
-    func roomyIndicators() -> some View { self.contentMargins(.trailing, 7, for: .scrollIndicators) }
+    func roomyIndicators() -> some View { self.contentMargins(.trailing, 7, for: .scrollIndicators).modifier(PoseIndicators()) }
 }
 struct GlassRow: View {
     @Environment(\.colorScheme) private var scheme
@@ -269,30 +273,79 @@ struct RootView: View {
             }
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
-            // Add alarm, in the side column under the clock, where the system would put a bar button on the Duo. On a page
-            // inside Alarms, Back takes the same slot alone. It sits out here, over the tabs, so it never slides with the page.
-            .overlay {
+            // With the side column, Alarms' page actions sit in one glass bar at the foot of the content column, by the rail:
+            // Add alarm, or Back with the page's title on Calendar settings or a day. Never a loose circle over the rail
+            // (Richard, 2026-11-05). Shown at the top of the page, away while scrolling down, back on any scroll up.
+            .overlay(alignment: .bottomTrailing) {
                 if model.tab == 2 && model.railWidth >= 44 {
-                    // One glass circle whose glyph turns from + to Back: two glass buttons swapped in a single frame.
-                    railButton(model.alarmsPage ? "chevron.left" : "plus", model.alarmsPage ? "Back" : "Add alarm") {
-                        if model.alarmsPage { model.alarmsPage = false } else { model.addAlarm = Date() }
-                    }
-                    .contentTransition(.symbolEffect(.replace))
-                    .animation(.snappy(duration: 0.25), value: model.alarmsPage)
-                    .frame(width: model.railWidth).padding(.top, 196)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .ignoresSafeArea()
+                    // The overlay keeps to the safe area, which already stops short of the side column.
+                    PageFootBar()
+                        .padding(.trailing, 12)
+                        .padding(.bottom, 12)
                 }
             }
         }
         .sheet(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
     }
-    // The rail's own glass circle, in the page's ink, the same for + and Back.
-    func railButton(_ symbol: String, _ label: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(.system(size: 20, weight: .semibold)).frame(width: 30, height: 30) }
-            .buttonStyle(.glass).buttonBorderShape(.circle)
-            .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
-            .accessibilityLabel(label)
+}
+// For the build's "indicators" shot: the scroll bars flashed over and over, so a still catches them and their inset.
+struct PoseIndicators: ViewModifier {
+    @State private var flash = 0
+    func body(content: Content) -> some View {
+        if ChumbyModel.pose == "indicators" {
+            content.scrollIndicatorsFlash(trigger: flash)
+                .task { while !Task.isCancelled { try? await Task.sleep(nanoseconds: 400_000_000); flash += 1 } }
+        } else { content }
+    }
+}
+// Shown or put away by the page's own scrolling: away once he scrolls down past the top, back on any scroll up.
+@MainActor final class PageBar: ObservableObject {
+    static let shared = PageBar()
+    @Published var shown = true
+}
+struct SummonsBar: ViewModifier {
+    @State private var last: CGFloat = 0
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
+            let bar = PageBar.shared
+            if y < 24 { if !bar.shown { withAnimation(.snappy) { bar.shown = true } } }
+            else if y > last + 6 { if bar.shown { withAnimation(.snappy) { bar.shown = false } } }
+            else if y < last - 6 { if !bar.shown { withAnimation(.snappy) { bar.shown = true } } }
+            if abs(y - last) > 6 || y < 24 { last = y }
+        }
+    }
+}
+// Alarms' one bar of page actions, in the page's glass and ink.
+struct PageFootBar: View {
+    @EnvironmentObject var model: ChumbyModel
+    @ObservedObject private var bar = PageBar.shared
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        HStack(spacing: 10) {
+            if model.alarmsPage {
+                Button { model.alarmsPage = false } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
+                        Text(model.alarmsPageTitle).font(.custom("Trebuchet MS", size: 17).weight(.bold)).lineLimit(1)
+                    }
+                    .padding(.horizontal, 16).frame(height: 44)
+                }
+                .accessibilityLabel("Back from \(model.alarmsPageTitle)")
+            } else {
+                Button { model.addAlarm = Date() } label: {
+                    Label("Add alarm", systemImage: "plus").font(.custom("Trebuchet MS", size: 17).weight(.bold))
+                        .padding(.horizontal, 16).frame(height: 44)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .opacity(bar.shown ? 1 : 0).offset(y: bar.shown ? 0 : 20)
+        .allowsHitTesting(bar.shown)
+        .animation(.snappy(duration: 0.25), value: model.alarmsPage)
+        .onChange(of: model.alarmsPage) { _, _ in bar.shown = true }
+        .onAppear { bar.shown = true }
     }
 }
 // "Offline · last seen 7:12" as a row under a page's title, never floating over the list; a tap says what to do.
@@ -803,14 +856,25 @@ struct HomeTab: View {
                     }.roomyIndicators()
                 }
             } else {
+                ScrollViewReader { scroll in
                 ScrollView {
                     // The wordmark is drawn by the stage itself. The remote sits right under the device, within reach of the thumb; a ringing alarm above even that.
                     VStack(spacing: 0) {
                         stage; status
                         if model.sys.ringing != nil { RingingCard().card().padding(.top, 20).transition(.ringCard) }
-                        remote.padding(.top, 20); SkipCard().padding(.top, 20); rightNow; about; if moreInfo { more }
+                        remote.padding(.top, 20); SkipCard().padding(.top, 20); rightNow
+                        Color.clear.frame(height: 1).id("homebar")
+                        about; if moreInfo { more }
                     }.padding(.horizontal, 16)
                 }.roomyIndicators()
+                // For the build's shot: Home scrolled so the device's caption sits right at the tab bar, where Richard saw
+                // "Chumby Classic" through it.
+                .task {
+                    guard ChumbyModel.pose == "homebar" else { return }
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    scroll.scrollTo("homebar", anchor: .bottom)
+                }
+                }
             }
         }
         .animation(ChumbyModel.ringChange(to: model.sys.ringing), value: model.sys.ringing)
@@ -902,6 +966,56 @@ extension ChumbyModel {
     var nightStyle: String { state.nightStyle ?? UserDefaults.standard.string(forKey: "nightKind") ?? "on" }
 }
 
+// A press that starts the moment a finger lands and ends when it lifts or wanders more than 16 pt (a scroll), never
+// delayed by an enclosing scroll view.
+#if canImport(UIKit)
+struct PressCatcher: UIViewRepresentable {
+    let began: () -> Void, ended: () -> Void
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView(); v.backgroundColor = .clear
+        let g = PressRecognizer(target: context.coordinator, action: #selector(Coordinator.changed(_:)))
+        g.delegate = context.coordinator
+        v.addGestureRecognizer(g)
+        return v
+    }
+    func updateUIView(_ v: UIView, context: Context) { context.coordinator.parent = self }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: PressCatcher
+        init(_ p: PressCatcher) { parent = p }
+        @objc func changed(_ g: UIGestureRecognizer) {
+            switch g.state {
+            case .began: parent.began()
+            case .ended, .cancelled, .failed: parent.ended()
+            default: break
+            }
+        }
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
+    }
+    final class PressRecognizer: UIGestureRecognizer {
+        private var start: CGPoint = .zero
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            guard touches.count == 1, let t = touches.first else { state = .failed; return }
+            start = t.location(in: view); state = .began
+        }
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            guard let t = touches.first else { return }
+            let p = t.location(in: view)
+            state = hypot(p.x - start.x, p.y - start.y) > 16 ? .cancelled : .changed
+        }
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { state = .ended }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { state = .cancelled }
+    }
+}
+#else
+struct PressCatcher: View {
+    let began: () -> Void, ended: () -> Void
+    var body: some View {
+        Circle().fill(.clear).contentShape(Circle())
+            .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 16) {} onPressingChanged: { p in if p { began() } else { ended() } }
+    }
+}
+#endif
 // One button for day and night that works like the Lock Screen's flashlight (Richard, 2026-11-05: "a single botton with two
 // actions that u press like u would a flashlight on lockscrene in terms of haptics and such that toggles simply night mode
 // and screen"). It shows the mode the Chumby is really in, a sun by day and a moon by night. Press and hold: a light tick on
@@ -911,7 +1025,10 @@ extension ChumbyModel {
 struct NightButton: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.accessibilityReduceMotion) private var still
+    @Environment(\.colorScheme) private var scheme
     static let hold = 0.5
+    @State private var pressing = false
+    @State private var holdTimer: Task<Void, Never>?
     @State private var progress: CGFloat = 0
     @State private var committed = false
     @State private var ticks: Task<Void, Never>?
@@ -921,7 +1038,15 @@ struct NightButton: View {
     var moon: Color { ChumbyPalette.hex(0xa4b7d6) }
 
     func begin() {
+        guard !pressing else { return }
+        pressing = true
         committed = false
+        holdTimer?.cancel()
+        holdTimer = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(Self.hold * 1_000_000_000))
+            guard !Task.isCancelled, pressing, !committed else { return }
+            commit()
+        }
         #if canImport(UIKit)
         Haptics.light.impactOccurred(intensity: 0.45); Haptics.light.prepare(); Haptics.heavy.prepare()
         #endif
@@ -939,6 +1064,8 @@ struct NightButton: View {
         }
     }
     func release() {
+        pressing = false
+        holdTimer?.cancel()
         ticks?.cancel()
         guard !committed else { return }
         withAnimation(.spring(duration: 0.3, bounce: 0.45)) { progress = 0 }
@@ -958,12 +1085,6 @@ struct NightButton: View {
         // read by the circle laid over it.
         Button {} label: {
             ZStack {
-                // The track says it's a hold before it's ever pressed; the fill is the press itself.
-                Circle().inset(by: 1.5).stroke(.white.opacity(0.12), lineWidth: 3)
-                Circle().inset(by: 1.5).trim(from: 0, to: progress)
-                    .stroke(on ? amber : moon, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .opacity(progress > 0.01 ? 1 : 0)
                 Image(systemName: on ? "moon.fill" : "sun.max.fill").font(.system(size: 24, weight: .semibold))
                     .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp)))
                     .symbolEffect(.bounce, value: turned)
@@ -973,12 +1094,24 @@ struct NightButton: View {
         }
         .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
         .allowsHitTesting(false).accessibilityHidden(true)
+        // The ring on the glass disc's own rim, not inside it: the track says it's a hold before it's pressed (visible on
+        // the light sea too), the fill is the press itself.
+        .overlay {
+            ZStack {
+                Circle().inset(by: 1.5).stroke(scheme == .dark ? Color.white.opacity(0.2) : ChumbyPalette.ink(false).opacity(0.25), lineWidth: 3)
+                Circle().inset(by: 1.5).trim(from: 0, to: progress)
+                    .stroke(on ? amber : moon, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .opacity(progress > 0.01 ? 1 : 0)
+            }
+            .allowsHitTesting(false)
+        }
         .scaleEffect(still ? 1 : 1 + 0.12 * progress)
         .overlay {
-            Circle().fill(.clear).contentShape(Circle())
-                .onLongPressGesture(minimumDuration: Self.hold, maximumDistance: 16) { commit() } onPressingChanged: { p in
-                    if p { begin() } else { release() }
-                }
+            // The press is read by UIKit straight away, so the first tick lands at touch-down even inside Home's scroll
+            // view (whose own delay would hold a SwiftUI press back while it decides whether he's scrolling).
+            PressCatcher(began: begin, ended: release)
+                .clipShape(Circle()).contentShape(Circle())
                 .accessibilityElement()
                 .accessibilityLabel(on ? "Night mode" : "Day")
                 .accessibilityHint(on ? "Hold for day" : "Hold for night mode")
@@ -1048,6 +1181,14 @@ struct ChannelsTab: View {
         }
         lastAdded = id
         changed()
+        // Open, the channel's list is beside the picker: the new widget lands there at once, glowing.
+        if adding && wide {
+            withAnimation(.snappy) { justAdded = id }
+            Task {
+                try? await Task.sleep(nanoseconds: 1_600_000_000)
+                if justAdded == id { withAnimation(.easeOut(duration: 0.6)) { justAdded = nil } }
+            }
+        }
     }
     func remove(_ id: String) {
         withAnimation(.snappy) { if let i = rows.firstIndex(where: { $0.id == id }) { rows[i].on = false } }
@@ -1198,6 +1339,11 @@ struct ChannelsTab: View {
         .accessibilityLabel(isIn ? "\(w.name), in this channel" : "Add \(w.name)")
     }
     var catalogItems: [MoreItem] { catalog.map { MoreItem(id: $0.0, name: $0.1, own: 0) } }
+    // One Done for the picker, folded or open: the same glass capsule in the page's ink.
+    func doneButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) { Text("Done").font(.custom("Trebuchet MS", size: 17).weight(.bold)).padding(.horizontal, 6) }
+            .buttonStyle(.glass).foregroundStyle(ChumbyPalette.ink(scheme == .dark))
+    }
     var pickedTitle: String { channels.first { $0.id == picked }.map(title) ?? "this channel" }
     // The picker's sections: his Chumby's own widgets first, then the catalog by category.
     @ViewBuilder var addSections: some View {
@@ -1264,7 +1410,7 @@ struct ChannelsTab: View {
     var body: some View {
         ScrollViewReader { scroll in
         TwoPane(rightTitle: adding && wide ? "Add to \(pickedTitle)" : " ",
-                rightTrailing: adding && wide ? AnyView(Button("Done") { closeAdd(scroll) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
+                rightTrailing: adding && wide ? AnyView(doneButton { closeAdd(scroll) }) : nil) {
             PageTitle("Channels")
             ReachRow()
             Section {
@@ -1279,6 +1425,24 @@ struct ChannelsTab: View {
                 if let f = model.failed("nowPlaying") { FailNote(text: f) }
             } header: {
                 Text("Now playing").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
+            }
+            // Adding, open: what's already in the channel stays in view on this side, and each add lands here live.
+            if adding && wide {
+                Section {
+                    if shown.isEmpty { Text("Nothing in this channel yet.").foregroundStyle(.secondary) }
+                    ForEach(shown, id: \.id) { w in
+                        HStack {
+                            Text(w.name).lineLimit(1)
+                            Spacer(minLength: 12)
+                            Text(w.secs == 0 ? (w.own > 0 ? "Auto · \(w.own)s" : "Auto") : timeText(w.secs)).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                        }
+                        .frame(minHeight: 34)
+                        .listRowBackground(GlassRow().overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+                } header: {
+                    Text("In \(pickedTitle)").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
+                }
             }
         } right: {
             if adding && wide {
@@ -1329,7 +1493,7 @@ struct ChannelsTab: View {
                     .navigationTitle("Add to \(pickedTitle)").navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .principal) { Text("Add to \(pickedTitle)").font(.custom("Trebuchet MS", size: 18).weight(.bold)).lineLimit(1) }
-                        ToolbarItem(placement: .confirmationAction) { Button("Done") { closeAdd(scroll) }.fontWeight(.semibold).foregroundStyle(.tint) }
+                        ToolbarItem(placement: .confirmationAction) { doneButton { closeAdd(scroll) } }
                     }
             }
             .tint(ChumbyPalette.acc(scheme == .dark))
@@ -1411,16 +1575,16 @@ struct SoundsTab: View {
         let f = song.flatMap { art.found[SongArt.key($0)] }
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
+                // The stand-in stays underneath and the cover fades in over it when it arrives, never a swap in one frame.
                 ZStack {
-                    if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
-                    else {
-                        ZStack {
-                            ChumbyPalette.hex(0x2c5bae).opacity(model.state.musicPlaying ? 1 : 0.45)
-                            if model.state.musicPlaying { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
-                            else { OctopusMark(color: .white.opacity(0.85), eyes: ChumbyPalette.hex(0x2c5bae), blink: 0.08).padding(14) }
-                        }
+                    ZStack {
+                        ChumbyPalette.hex(0x2c5bae).opacity(model.state.musicPlaying ? 1 : 0.45)
+                        if model.state.musicPlaying { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
+                        else { OctopusMark(color: .white.opacity(0.85), eyes: ChumbyPalette.hex(0x2c5bae), blink: 0.08).padding(14) }
                     }
+                    if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
                 }
+                .animation(.easeInOut(duration: 0.35), value: f?.image != nil)
                 .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 VStack(alignment: .leading, spacing: 3) {
                     if let song {
@@ -1437,7 +1601,8 @@ struct SoundsTab: View {
                         .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Stop")
                 }
             }
-            .onAppear { if let song { art.look(song) } }
+            // Asked again whenever the song changes: it's often nil on first appearance, before state and history arrive.
+            .task(id: song.map(SongArt.key)) { if let song { art.look(song) } }
             HStack(spacing: 12) {
                 Button {
                     if volume > 0 { lastVolume = Int(volume); set(0) } else { set(lastVolume > 0 ? lastVolume : 4) }
@@ -1504,7 +1669,7 @@ struct SoundsTab: View {
             Section {
                 ForEach(mine, id: \.key) { a in
                     VStack(alignment: .leading, spacing: 4) {
-                        soundRow("\(a.clock) \(a.meridiem)", [a.name, a.whenText].filter { !$0.isEmpty }.joined(separator: " · "), a, mark: a.key) { b in
+                        soundRow("\(a.clock) \(a.meridiem)", [a.name, a.whenUnlessNamed].filter { !$0.isEmpty }.joined(separator: " · "), a, mark: a.key) { b in
                             model.change(.replace(a, b))
                         }
                         MarkNote(mark: a.key)
@@ -1518,7 +1683,9 @@ struct SoundsTab: View {
                 }
                 if mine.isEmpty && calendarSound == nil { Text("No alarms yet.").foregroundStyle(.secondary) }
                 // How loud they ring: saved the careful way, and marked here if it doesn't reach the Chumby.
-                VStack(spacing: 10) {
+                // Named in words, so it's never mistaken for the music's volume under Now.
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Alarm volume").font(.subheadline.weight(.semibold))
                     HStack(spacing: 12) {
                         Image(systemName: "alarm.waves.left.and.right.fill").frame(width: 26)
                         Slider(value: $alarmVolume, in: 0...100, step: 5) { e in
@@ -1594,6 +1761,7 @@ struct SoundsTab: View {
 // MARK: - Tinker
 struct TinkerTab: View {
     @EnvironmentObject var model: ChumbyModel
+    @Environment(\.colorScheme) private var scheme
     @State private var accounts = ""
     @State private var edited = false
     @State private var confirm: String?
@@ -1618,9 +1786,9 @@ struct TinkerTab: View {
                     }
                 }.disabled(!edited).foregroundStyle(edited ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                 if let f = model.failed("twset") { FailNote(text: f) }
-            } header: { Text("X (Twitter) accounts") }
+            } header: { SectionHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X (Twitter) accounts", color: ChumbyPalette.sub(scheme == .dark)) }
             } right: {
-            Section("The Chumby itself") {
+            Section {
                 Button("Restart channel") { confirm = "restart" }.foregroundStyle(.tint).confirmationDialog(
                     "Restart the channel? The screen goes away for about two minutes.", isPresented: .init(get: { confirm == "restart" }, set: { if !$0 { confirm = nil } }), titleVisibility: .visible) {
                     Button("Restart", role: .destructive) { model.restart(false) }
@@ -1631,7 +1799,7 @@ struct TinkerTab: View {
                     Button("Reboot", role: .destructive) { model.restart(true) }
                 }
                 if let f = model.failed("reboot") { FailNote(text: f) }
-            }
+            } header: { SectionHead(icon: "wrench.and.screwdriver.fill", text: "The Chumby itself", color: ChumbyPalette.sub(scheme == .dark)) }
             // The connection lives here, with the rest of the settings, at the foot of the side bar.
             Section {
                 TextField("http://chumby.local", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -1639,7 +1807,7 @@ struct TinkerTab: View {
                     .onSubmit { connect() }
                 Button("Connect") { connect() }.disabled(address.isEmpty || address == model.address)
                 if let f = model.failed("connect") { FailNote(text: f) }
-            } header: { Text("Chumby address") } footer: { Text("Already set to your Chumby. Change it only if its address moves.") }
+            } header: { SectionHead(icon: "network", text: "Chumby address", color: ChumbyPalette.sub(scheme == .dark)) }
             Text("Black Chumby photo: Edward Yanquen, Wikimedia Commons, CC BY 2.0, cut out and retouched. Octopus and wordmark: Chumby’s own artwork, from this device.").font(.caption2).foregroundStyle(.secondary).listRowBackground(Color.clear)
         }
         .seaList()
@@ -1654,6 +1822,7 @@ struct TinkerTab: View {
 // saying they run with the phone away; he found the Alarms tab confusing (2026-11-05), so they live here now.
 struct NightSettings: View {
     @EnvironmentObject var model: ChumbyModel
+    @Environment(\.colorScheme) private var scheme
     @AppStorage("nightKind") private var kind = "on"
     // Night here is always the chosen style, so a time set to Night never disagrees with the button.
     var actions: [(String, String)] {
@@ -1700,7 +1869,7 @@ struct NightSettings: View {
                 model.state.schedule.append(e); model.state.reindex(); Task { await model.saveSchedule() }
             } label: { Label("Add a time", systemImage: "plus.circle.fill") }.foregroundStyle(.tint)
             if let f = model.failed("schedule") { FailNote(text: f) }
-        } header: { Text("Night") }
+        } header: { SectionHead(icon: "moon.fill", text: "Night", color: ChumbyPalette.sub(scheme == .dark)) }
     }
     static func date(_ s: String) -> Date {
         let p = s.split(separator: ":").compactMap { Int($0) }

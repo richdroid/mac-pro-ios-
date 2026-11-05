@@ -94,6 +94,8 @@ struct AlarmRow<Notes: View>: View {
     let on: Bool
     var mark: String?
     var tile: AnyView?
+    // One line, shrinking a touch before it would wrap: "6:00 PM · 2 h 40 min before" never breaks mid-phrase.
+    var oneLine = false
     let tap: () -> Void
     let toggle: Binding<Bool>
     @ViewBuilder var notes: () -> Notes
@@ -109,7 +111,7 @@ struct AlarmRow<Notes: View>: View {
                         }
                         .opacity(on ? 1 : 0.5)
                         Text(title).font(.body.weight(.semibold)).lineLimit(1).opacity(on ? 1 : 0.6)
-                        Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(2).opacity(on ? 1 : 0.7)
+                        Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(oneLine ? 1 : 2).minimumScaleFactor(oneLine ? 0.85 : 1).opacity(on ? 1 : 0.7)
                         notes()
                     }
                 }
@@ -241,9 +243,11 @@ struct NapChips: View {
                             napLength = m; sending = m
                             Task { await model.nap(m); sending = nil }
                         } label: {
-                            Group { if sending == m { ProgressView() } else { Text("\(m) min").lineLimit(1) } }.frame(maxWidth: .infinity, minHeight: 34)
+                            // While a nap runs its chip says "min", so the others say just the number and all four stay equal.
+                            Group { if sending == m { ProgressView() } else { Text(running == nil ? "\(m) min" : "\(m)").lineLimit(1).minimumScaleFactor(0.8) } }.frame(maxWidth: .infinity, minHeight: 34)
                         }
                         .buttonStyle(.bordered).disabled(sending != nil)
+                        .accessibilityLabel("\(m) minute nap")
                     }
                 }
             }
@@ -261,7 +265,7 @@ struct NapChips: View {
             let minutes = min(max(Int((left / 60).rounded(.up)), 1), total)
             HStack(spacing: 3) {
                 // "left" is what the falling tide already says; with it the chip clipped to "11 min l…" beside the ×.
-                Text("\(minutes) min").monospacedDigit().lineLimit(1).fixedSize()
+                Text("\(minutes) min").monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
                     .contentTransition(.numericText(countsDown: true)).animation(.snappy, value: minutes)
                 Button { Task { await model.cancelNap() } } label: { Image(systemName: "xmark").font(.caption2.weight(.heavy)) }
                     .buttonStyle(.borderless).foregroundStyle(.white).accessibilityLabel("Cancel nap")
@@ -460,9 +464,13 @@ struct AlarmsTab: View {
     // With the side column, a day is a page in the content column like Calendar settings, so no sheet's corner sits under
     // the rail's clock. With the bars across it's a sheet the height of what's in it.
     func openDay(_ k: String) {
-        if wide { show(.day(k)) } else if rail { dayPage = k; model.alarmsPage = true } else { day = DayTarget(id: k) }
+        if wide { show(.day(k)) } else if rail {
+            dayPage = k
+            model.alarmsPageTitle = wake.plan.first { $0.key == k }.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "That day"
+            model.alarmsPage = true
+        } else { day = DayTarget(id: k) }
     }
-    func openSettings() { if wide { show(.settings) } else { dayPage = nil; model.alarmsPage = true } }
+    func openSettings() { if wide { show(.settings) } else { dayPage = nil; model.alarmsPageTitle = "Calendar settings"; model.alarmsPage = true } }
     @State private var dayPage: String?
     var plus: some View {
         Button { edit(nil) } label: { Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).frame(width: 30, height: 30) }
@@ -533,7 +541,7 @@ struct AlarmsTab: View {
                         }
                         .swipeActions { Button("Dismiss") { dismissedRaw = (dismissed.union([m.id])).joined(separator: "\n") }.tint(.gray) }
                     }
-                } footer: { Text("The Chumby was frozen or off when these came due. Swipe to dismiss.") }
+                } footer: { Text("The Chumby was frozen or off when these came due.") }
             }
             calendar
         } right: {
@@ -611,7 +619,7 @@ struct AlarmsTab: View {
                 }
                 // What kind it is, in that kind's colour, the same glyph as its row below.
                 SectionHead(icon: fromCalendar ? "calendar" : "alarm.fill",
-                            text: (skippedNow ? "Then" : "Next alarm") + " · " + kindWord(n.alarm),
+                            text: (skippedNow ? "Then" : "Next alarm") + " · " + { let k = kindWord(n.alarm); return k.prefix(1).uppercased() + k.dropFirst() }(),
                             color: fromCalendar ? ChumbyPalette.cal(scheme == .dark) : ChumbyPalette.acc(scheme == .dark))
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     let c = clockParts(n.at)
@@ -670,7 +678,7 @@ struct AlarmsTab: View {
             }
             ForEach(mine, id: \.key) { a in
                 AlarmRow(clock: (a.clock, a.meridiem), title: a.name.isEmpty ? "Alarm" : a.name,
-                         detail: [a.whenText, a.soundText].filter { !$0.isEmpty }.joined(separator: " · "), on: a.isOn, mark: a.key,
+                         detail: [a.whenUnlessNamed, a.soundText].filter { !$0.isEmpty }.joined(separator: " · "), on: a.isOn, mark: a.key,
                          tile: AnyView(AlarmTile(calendarDay: nil, on: a.isOn)),
                          tap: { edit(a) },
                          toggle: Binding(get: { a.isOn }, set: { model.change(.toggle(a, $0)) })) {
@@ -711,9 +719,10 @@ struct AlarmsTab: View {
                     // Only against a recent reading, and never in the build's sample, which has no Chumby behind it.
                     let status = model.stateConfirmed && !CalendarWake.sample ? wake.onDevice(item, in: model.deviceState) : .set
                     AlarmRow(clock: clockParts(item.wake), title: item.title,
-                             detail: "Starts \(item.start.formatted(date: .omitted, time: .shortened)) · \(leadText(item.lead)) before",
+                             detail: "\(item.start.formatted(date: .omitted, time: .shortened)) · \(leadText(item.lead)) before",
                              on: !item.skipped,
                              tile: AnyView(AlarmTile(calendarDay: item.wake, on: !item.skipped)),
+                             oneLine: true,
                              tap: { openDay(item.key) },
                              toggle: Binding(get: { !item.skipped }, set: { _ in model.tick(); wake.toggleSkip(item) })) {
                         if let short = item.shortNight { RowNote(icon: "moon.zzz", text: "Short night: \(short)") }
@@ -739,7 +748,7 @@ struct AlarmsTab: View {
                     HStack(alignment: .firstTextBaseline, spacing: 3) {
                         Text(a.clock).font(.custom("Trebuchet MS", size: 26)).monospacedDigit()
                         Text(a.meridiem).font(.custom("Trebuchet MS", size: 14))
-                        Text(a.whenText).font(.subheadline).foregroundStyle(.secondary).padding(.leading, 6)
+                        Text(a.whenUnlessNamed).font(.subheadline).foregroundStyle(.secondary).padding(.leading, 6)
                     }
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         RowNote(icon: "exclamationmark.circle.fill", text: "Old calendar alarm: \(alarmLabel(a))")

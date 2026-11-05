@@ -291,6 +291,31 @@ jobs:
               done
             fi
           }
+          # The posture Richard actually holds (2026-11-05: his screenshots are the Duo open in portrait, bottom tab bar):
+          # every tab, light and dark; Home scrolled so its caption sits at the tab bar; and the lists with their scroll bars
+          # flashing, so their inset from the edge can be judged.
+          chumby_portrait() {
+            for M in light dark; do
+              xcrun simctl ui "$DEVICE" appearance $M
+              for T in 0 1 2 3 4; do
+                xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
+                sleep 7
+                xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-$T-$M-portrait.png
+                xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+              done
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 0 -pose homebar
+              sleep 9
+              xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-pose-homebar-$M-portrait.png
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
+            xcrun simctl ui "$DEVICE" appearance light
+            for T in 2 3; do
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T -pose indicators
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-pose-indicators-$T-portrait.png
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
+          }
           # ---- end Chumby app poses ----
           # ---- TV app poses (separate block) ----
           # What Richard found on his phone on 2026-11-03, filmed or shot so it can't pass unseen again: pages scrolled 40 pt
@@ -490,6 +515,7 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; sleep 3
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
           pose_shots 3 "-portrait" || echo "portrait shots incomplete"
+          chumby_portrait || echo "Chumby portrait shots incomplete"
       - name: Collect crash reports
         if: always()
         run: |
