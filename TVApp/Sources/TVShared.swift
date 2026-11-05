@@ -32,6 +32,23 @@ struct TVStatus: Decodable, Equatable {
             }
             return description.count > 1 ? Wording.episode(description[1]) : nil
         }
+        // Which episode, from the Mac's fields, else "S02E03" or "S2 E3" anywhere in what the player says (r19: a session
+        // without the fields read as a film, so ⏭ dimmed and the episode line went missing). Nil for a film.
+        var seasonEpisode: (season: Int, episode: Int)? {
+            if let s = season, let e = episode { return (s, e) }
+            for line in description {
+                guard let r = line.range(of: #"[Ss](\d{1,2})\s*[Ee](\d{1,3})"#, options: .regularExpression) else { continue }
+                let digits = line[r].split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+                if digits.count == 2 { return (digits[0], digits[1]) }
+            }
+            return nil
+        }
+        // Whether this is the show called this, by its name as the Mac or the player says it.
+        func isShow(_ title: String) -> Bool {
+            func plain(_ t: String) -> String { t.lowercased().filter { $0.isLetter || $0.isNumber } }
+            let a = plain(showName), b = plain(title)
+            return !a.isEmpty && !b.isEmpty && (a == b || a.hasPrefix(b) || b.hasPrefix(a))
+        }
     }
     struct App: Decodable, Identifiable, Equatable { let pkg: String; let name: String; let hasIcon: Bool; var wide: Bool?; var id: String { pkg } }
     let online: Bool

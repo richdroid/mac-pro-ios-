@@ -138,8 +138,9 @@ final class NextUp: ObservableObject {
     nonisolated static func link(_ imdb: String, _ video: String) -> String { "stremio:///detail/series/\(imdb)/" + video.replacingOccurrences(of: ":", with: "%3A") }
     // Asked again after a flick, which may have changed what's known.
     func forget() { key = "" }
+    private struct SearchAnswer: Decodable { let rows: [MediaRow] }
     func follow(_ s: TVStatus?) {
-        guard let p = s?.session, p.pkg == "com.stremio.one", p.description.count > 1 || p.season != nil else {
+        guard let p = s?.session, p.pkg == "com.stremio.one", p.description.count > 1 || p.seasonEpisode != nil else {
             key = ""
             if next != nil { next = nil }
             if previous != nil { previous = nil }
@@ -183,11 +184,19 @@ final class NextUp: ObservableObject {
             // "Show - S02E03 - Title" plus its season and episode is enough to find the rest (r18).
             imdb = ref.imdb; title = i.title; art = i.art; known = ref.video
         }
+        // Nowhere on this phone yet: Stremio's own search by the show's name (r19: "Sample Series" never resolved, so ⏭
+        // dimmed and the episode line never came).
+        if imdb == nil, !show.isEmpty, p.seasonEpisode != nil,
+           let d = await TVBridge.data(TVBridge.url(MediaSource.stremio.endpoint(show)), timeout: 10),
+           let a = try? JSONDecoder().decode(SearchAnswer.self, from: d),
+           let i = a.rows.flatMap(\.items).first(where: { $0.stremioRef?.type == "series" && same($0.title) }), let ref = i.stremioRef {
+            imdb = ref.imdb; title = i.title; art = i.art
+        }
         guard let imdb, let meta = await meta(imdb) else { return nil }
         // The episode on screen by its name in what the TV reports, the longest name that fits, else the one last sent.
         let named = meta.episodes.filter { $0.name.count > 2 && on.localizedCaseInsensitiveContains($0.name) }.max { $0.name.count < $1.name.count }
         // The Mac's own season and episode first, when it says them.
-        let said = p.season.flatMap { se in p.episode.flatMap { ep in meta.episodes.first { $0.season == se && $0.episode == ep } } }
+        let said = p.seasonEpisode.flatMap { se in meta.episodes.first { $0.season == se.season && $0.episode == se.episode } }
         guard let current = said ?? named ?? meta.episodes.first(where: { $0.id == known }) else { return nil }
         let found = Series(imdb: imdb, title: title, art: art, current: current.id)
         return (after(current, in: meta.episodes).map { item(found, $0) }, before(current, in: meta.episodes).map { item(found, $0) }, found)
@@ -609,22 +618,26 @@ struct EpisodePicker: View {
             Chips(options: seasons.map { ($0, $0 == 0 ? "Specials" : "\($0)") }, selected: $season).rowEdge()
         }
     }
+    // In a narrow pane the still gives way to the name, so a name is never cut to "Episod…" (r19).
+    @State private var narrow = false
+    var thumb: CGFloat { narrow ? 80 : 112 }
     func row(_ e: StremioEpisode) -> some View {
         let on = e.id == current
         let mins = info?.minutes[e.id] ?? info?.show
         return Button { choose(e) } label: {
             HStack(spacing: 12) {
                 Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
-                    .frame(width: 112, height: 63)
+                    .frame(width: thumb, height: thumb * 9 / 16)
                     .overlay(alignment: .bottomLeading) {
                         // How far into it he is, as on Stremio's own cards. The still's width is fixed, so no reader.
                         if on, let p = progress, p > 0 {
-                            ZStack(alignment: .leading) { Color.white.opacity(0.25); TVLook.accent.frame(width: 112 * min(p, 1)) }.frame(height: 3)
+                            ZStack(alignment: .leading) { Color.white.opacity(0.25); TVLook.accent.frame(width: thumb * min(p, 1)) }.frame(height: 3)
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(e.episode). \(e.name)").font(.subheadline.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 6) {
                         if on { Text(currentLabel).font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(TVLook.accent, in: Capsule()).foregroundStyle(.black) }
                         else if e.id == after { Text("Up next").font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(.white.opacity(0.2), in: Capsule()).foregroundStyle(.white) }
@@ -648,6 +661,7 @@ struct EpisodePicker: View {
             header.padding(.bottom, 2)
             ForEach(episodes.filter { $0.season == season }) { e in row(e).id(e.id) }
         }
+        .onGeometryChange(for: Bool.self) { $0.size.width < 330 } action: { narrow = $0 }
         .animation(.easeInOut(duration: 0.2), value: season)
     }
 }
@@ -789,22 +803,30 @@ struct PlayingVideo: View {
     let ended: Bool
     @State private var still: String?
     @State private var about: String?
+    @State private var pictureCap: CGFloat = 300
     var series: NextUp.Series? { session.pkg == "com.stremio.one" ? nextUp.series : nil }
     var body: some View {
         let name = session.showName
         let episode = session.episodeLine
         VStack(alignment: .leading, spacing: 14) {
-            Group {
+            // One 16:9 picture, never taller than about 38 % of the page, so the title, the bar and the keys are all on the
+            // first screen (r19: a portrait poster filled the page and pushed everything under the fold). The episode's
+            // still fills it; otherwise the poster sits on a blur of itself, as on the Remote.
+            ZStack {
                 if let still, !still.isEmpty {
                     Cover(url: URL(string: still), mode: .fill) { Color.white.opacity(0.06) }
-                        .aspectRatio(16 / 9, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 } else {
-                    Cover(url: model.picture(for: session).flatMap(URL.init(string:)), radius: 14) {
-                        Image(systemName: "play.tv.fill").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: 220)
+                    PosterOnBlur(url: model.picture(for: session).flatMap(URL.init(string:)))
                 }
+            }
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .frame(maxWidth: .infinity, maxHeight: pictureCap, alignment: .leading)
+            // The page's own height, read once from the container, for the cap.
+            .background {
+                Color.clear.containerRelativeFrame(.vertical) { h, _ in h }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in let c = h * 0.38; if abs(c - pictureCap) > 1 { pictureCap = c } }
+                    .hidden()
             }
             .shadow(color: .black.opacity(0.4), radius: 16, y: 8)
             .opacity(stale ? 0.45 : 1)

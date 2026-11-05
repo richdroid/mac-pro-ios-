@@ -271,7 +271,7 @@ struct FlickScreen: View {
             .onChange(of: lifted) { _, now in if now && video && !onTV { Prepare.arm(prepareBody) } }
             .onChange(of: step == .flick && stream != nil) { _, now in if now && video && !flown && !onTV { Prepare.arm(prepareBody) } }
             .onChange(of: step) { _, now in if now == .streams && video && !onTV { Prepare.arm(prepareBody) } }
-            .onChange(of: resumeKnown ? resumeTarget?.episode.id : nil) { _, id in
+            .onChange(of: resumeKnown && !onTVUnsettled ? resumeTarget?.episode.id : nil) { _, id in
                 if let id, video, step == .episodes, let t = resumeTarget, !isOn(t.episode) { Prepare.arm(prepareBody(for: id)) }
             }
             .task { await opened() }
@@ -320,9 +320,8 @@ struct FlickScreen: View {
             // On the card and after it, the X in the bar. While choosing (the show's page, the streams), back is in a
             // glass bar at the foot by the side bar, like every other page's, never loose circles over the side bar.
             .toolbar { if barShown && !choosing { bar } }
-            // Open, the X sat over the side bar until the screen had landed (r18); it goes with the stage. Folded it has
-            // become the Remote's eye by then, so it stays.
-            .navBarHidden(toRemote && panes)
+            // The X goes with the stage, folded and open: left over the side bar it swapped to the Remote's eye in one frame (r19).
+            .navBarHidden(toRemote)
             // While choosing, back is the same glass bar every page has, at the foot by the side bar, stepping away as he
             // scrolls down and back as he scrolls up; never a loose circle (r17).
             .environment(\.pageBar, pageBar)
@@ -535,9 +534,20 @@ struct FlickScreen: View {
     }
     // The episode the big key would play is already what's on the TV: the key says so, and takes him to the Remote.
     func isOn(_ e: StremioEpisode) -> Bool {
-        guard let ref = item.stremioRef, model.videoIsCurrent, model.status?.session?.pkg == "com.stremio.one",
-              let on = NextUp.shared.series, on.imdb == ref.imdb else { return false }
-        return on.current == e.id
+        guard let ref = item.stremioRef, !model.staleStatus, model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one" else { return false }
+        if let on = NextUp.shared.series, on.imdb == ref.imdb { return on.current == e.id }
+        // Decided from the session itself, without waiting on the series lookup (r19: folded, it offered "Resume S2 E3"
+        // for the episode already playing, and prepared it).
+        guard let se = s.seasonEpisode, s.isShow(item.title) else { return false }
+        return se.season == e.season && se.episode == e.episode
+    }
+    // This show is what the TV's playing, but which episode isn't known yet: no key and no prepare until it is.
+    var onTVUnsettled: Bool {
+        guard item.stremioRef?.type == "series", model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one" else { return false }
+        // Not settled until a fresh reading is in.
+        if model.staleStatus { return true }
+        if let on = NextUp.shared.series, on.imdb == item.stremioRef?.imdb { return false }
+        return (s.isShow(item.title)) && s.seasonEpisode == nil
     }
     // Straight to the Remote with nothing sent; if it's paused there, asked to play (MEDIA_PLAY, never the toggle).
     func toRemoteNow() {
@@ -566,7 +576,7 @@ struct FlickScreen: View {
             }
             .buttonStyle(PressCard())
             .transition(.opacity)
-        } else if let t = resumeTarget, resumeKnown {
+        } else if let t = resumeTarget, resumeKnown, !onTVUnsettled {
             // Only once it's known where he is: until then it said "Play S1 E1" for a show he's halfway through (r18).
             let p = t.episode.id == upNext ? (upNextProgress ?? 0) : 0
             let mins = info?.minutes[t.episode.id] ?? info?.show
@@ -823,9 +833,18 @@ struct FlickScreen: View {
         let centre = CGPoint(x: look.midX, y: look.midY)
         // The card is held low in the hand, well clear of the TV's stand so a throw has a real way to travel, with its
         // title strip (at its foot) always at least 12 pt above the edge: a quarter past the edge hid the title (r17).
-        let width: CGFloat = wide ? 136 : 124
-        let height = MediaCard.height(width, source)
-        let top = hand.maxY - height - 12
+        var width: CGFloat = wide ? 136 : 124
+        var height = MediaCard.height(width, source)
+        // Never over the TV: on a short screen (open, flat) the card is made smaller until it clears the TV by 24 pt, rather
+        // than sit on its stand (r19: the card's top was over the TV's bottom bezel).
+        if hand.intersects(CGRect(x: look.minX, y: centre.y, width: look.width, height: 1)) {
+            let room = hand.maxY - 12 - (centre.y + tv.height / 2 + 24)
+            if height > room, room > 0 {
+                let smaller = max(96, (width * room / height).rounded(.down))
+                width = smaller; height = MediaCard.height(width, source)
+            }
+        }
+        let top = max(hand.maxY - height - 12, min(centre.y + tv.height / 2 + 24, hand.maxY - height * 0.75))
         return Stage(centre: centre, tv: tv, cardX: hand.midX, cardTop: top, cardWidth: width, floor: hand.maxY - 4, wide: wide)
     }
     // Last: nothing left to decide, just the TV and the card in your hand.
@@ -875,9 +894,12 @@ struct FlickScreen: View {
         let slot = toRemote || t > 0 ? between(tvFrame, remoteSlot, t) : tvFrame
         // The Remote's picture's own corners by the end of the move, so landing on it changes nothing but place and size.
         let radius = 9 + (TVLook.card - 9) * t
-        let lean = landed ? 0 : charge
-        // The TV's rim and glow go as the move starts, not over it: drawn round a moving picture they lagged beside it (r18).
-        let glow = toRemote ? 0 : Double(1 - t)
+        // Leaning in stays leant in through the landing and eases off only with the move, so the TV never drops a size in
+        // one frame (r19: a 10 % snap at the impact); the squash keyframes are its only other change of size.
+        let lean = charge * (1 - t)
+        // The rim and glow go at the landing: from then the light round the picture is its only frame (r19: the rim and the
+        // light drew two frames on one picture, and the rim lagged beside it on the move).
+        let glow = toRemote || landed ? 0 : Double(1 - t)
         return ZStack {
             RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.black.opacity(0.55 - 0.2 * Double(t)))
             // What the TV is showing now, so it reads as his TV rather than an empty slab. It gives way as the card comes.
@@ -1154,6 +1176,9 @@ struct FlickScreen: View {
         model.tick()
         leaving = true
         model.keepMood(until: item.art)
+        // The film's own colour goes to the Remote with the stage; the app's colour (Stremio's purple) stayed behind the
+        // Remote while it started, a band of another colour down its side (r19).
+        withAnimation(.easeOut(duration: 0.3)) { model.mood = tint }
         if let art = screenURL?.absoluteString { model.standIn(art) }
         if !model.mirrorLive { model.setMirror(true) }
         // Held where it is first: the tab changing under it lays the space around it out again.
@@ -1260,6 +1285,12 @@ struct FlickScreen: View {
             let sess = model.status?.session
             let p = sess.flatMap { x in x.duration.flatMap { d in d > 0 ? x.position.map { $0 / d } : nil } }
             return (s.current, p)
+        }
+        // The TV's session names the show and episode itself, before the series lookup has caught up.
+        if let sess = model.status?.session, sess.pkg == "com.stremio.one", model.videoIsCurrent, sess.isShow(item.title),
+           let se = sess.seasonEpisode, let e = m.episodes.first(where: { $0.season == se.season && $0.episode == se.episode }) {
+            let p = sess.duration.flatMap { d in d > 0 ? sess.position.map { $0 / d } : nil }
+            return (e.id, p)
         }
         if let v = ref.video, m.episodes.contains(where: { $0.id == v }) { return (v, item.progress) }
         if let e = Self.episode(named: item.subtitle, in: m.episodes) { return (e.id, item.progress) }
@@ -1375,13 +1406,10 @@ struct FlickScreen: View {
             // never called off for being slow (r17: "It said the TV isn't answering, then the film started anyway"): no
             // word by 1.5 s goes on to the Remote all the same, as starting. Only a request that couldn't be sent at all
             // brings the card back (failedOnStage, from start()).
-            let hold = 0.45 - Date().timeIntervalSince(releasedAt)
+            // On the Remote by 1.2 s on every throw: the move starts at 600 ms from the release whatever the request is doing
+            // (r19: it waited on the request and started at about 1 s). The start is the model's, so it carries on there.
+            let hold = 0.6 - Date().timeIntervalSince(releasedAt)
             if hold > 0 { try? await Task.sleep(nanoseconds: UInt64(hold * 1_000_000_000)) }
-            // On the Remote by 1.2 s on every throw: nothing waits for the TV's answer, only for the request to be on its way.
-            while !written && !answered && !cancelled && !handedOver {
-                // Still choosing its stream (thrown the instant it was lifted): on once it's sent, however long that takes.
-                try? await Task.sleep(nanoseconds: 50_000_000)
-            }
             guard !cancelled, step == .flick else { return }
             handOver()
         }

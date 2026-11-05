@@ -93,10 +93,16 @@ final class TVModel {
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
     // without an episode on its card still opens its page, which says "On the TV".
     func isOnTV(_ item: MediaItem, _ source: MediaSource) -> Bool {
-        guard source == .stremio, videoIsCurrent, let s = status?.session, s.pkg == "com.stremio.one", let ref = item.stremioRef else { return false }
+        // Only on a fresh reading: the status kept from the last launch said a film was on that had long finished, and a
+        // throw was swallowed as "already on" with nothing sent (r19: flick-slow and flick-putback never threw).
+        guard source == .stremio, !staleStatus, videoIsCurrent, let s = status?.session, s.pkg == "com.stremio.one", let ref = item.stremioRef else { return false }
         if ref.type == "series" {
-            guard let v = ref.video, let on = NextUp.shared.series, on.imdb == ref.imdb else { return false }
-            return v == on.current
+            guard let v = ref.video else { return false }
+            if let on = NextUp.shared.series, on.imdb == ref.imdb { return v == on.current }
+            // Not worked out yet: the session itself says which show and episode (r19: a race offered to resume it).
+            let parts = v.split(separator: ":")
+            guard parts.count == 3, let se = s.seasonEpisode, s.isShow(item.title) else { return false }
+            return Int(parts[1]) == se.season && Int(parts[2]) == se.episode
         }
         guard let now = s.description.first, !now.isEmpty else { return false }
         return now.localizedCaseInsensitiveContains(item.title) || item.title.localizedCaseInsensitiveContains(now)
@@ -200,6 +206,15 @@ final class TVModel {
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             if let self, let h = self.playHeld, h.at == at { self.playHeld = nil }
+        }
+        // Asked again often until the TV agrees, so the clock frozen at the press moves to where the TV really stopped
+        // while it's still paused, not at the next press (r19: resume jumped the clock from 0:05 to 0:09).
+        Task { [weak self] in
+            for _ in 0..<12 {
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                guard let self, let h = self.playHeld, h.at == at else { return }
+                await self.load()
+            }
         }
     }
     // The TV's ⏯: the glyph flips at once, then the key that does what the glyph now says (pause or play), never the

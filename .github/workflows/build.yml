@@ -321,7 +321,9 @@ jobs:
             # The episodes over the Remote, and a drag along the bar held with its time bubble up, while an episode plays.
             for P in episodes scrub; do
               curl -s http://127.0.0.1:9002/real/reset > /dev/null
-              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 0 -pose $P
+              # The drag needs the length from the start (r19: the bar sat at 10:24 with no remaining and no bubble).
+              SC=real; [ "$P" = scrub ] && SC=realscrub
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$SC -tab 0 -pose $P
               sleep 25
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$P$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
@@ -348,7 +350,8 @@ jobs:
             for V in "flick-stage normal 10 0" "flick-starting normal 18 1" "flick-slow slow 24 1" "flick-failed fail 20 1" \
                      "flick-offline offline 16 1" "flick-already already 16 1" "flick-putback normal 14 1" "flick-cancel normal 14 1"; do
               set -- "$1" "$2" $V
-              if [ -n "$2" ] && ! [[ "$3" =~ ^flick-(stage|starting|already)$ ]]; then set -- "$1" "$2"; continue; fi
+              # Unfolded too, all but the slow start and the put-back (r19: cancel, failed and offline were never seen open).
+              if [ -n "$2" ] && ! [[ "$3" =~ ^flick-(stage|starting|already|cancel|failed|offline)$ ]]; then set -- "$1" "$2"; continue; fi
               curl -s http://127.0.0.1:9002/f$4/reset > /dev/null
               if [ "$6" = 1 ]; then xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-$3$2.mp4 > /dev/null 2>&1 & REC=$!; sleep 5; fi
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/f$4 -tab 1 -pose $3
@@ -372,8 +375,7 @@ jobs:
           tv_real() { # display, file suffix
             real() { curl -s http://127.0.0.1:9002/real/reset > /dev/null; }
             real
-            # Unfolded, only the two flows whose layout differs most there (tapping what's on, and pause/play), to stay
-            # inside the step's time.
+            # The real remote film folded only; the four task flows folded and unfolded.
             if [ -z "$2" ]; then
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-real-remote$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 5
@@ -397,7 +399,6 @@ jobs:
             if [ "${TV_REAL_HOOKS:-0}" = 1 ]; then
               for V in "realtap 1 16" "realsearch 1 18" "realseries 3 14" "realpause 0 16"; do
                 set -- "$1" "$2" $V
-                if [ -n "$2" ] && ! [[ "$3" =~ ^(realtap|realpause)$ ]]; then set -- "$1" "$2"; continue; fi
                 real
                 xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-$3$2.mp4 > /dev/null 2>&1 & REC=$!
                 sleep 5
@@ -464,6 +465,8 @@ jobs:
           # Chumby open pose was ever taken. The tours and Apple's own apps are only taken folded now (the open tour and
           # references were the least looked at), and the old flick demo only folded and partly folded.
           tv_poses 3 "-open" || echo "TV poses open incomplete"
+          # Coming back to each tab, unfolded: one tour, so "coming back" can be judged open as well (r19).
+          tv_tour 3 "-open" || echo "TV tour open incomplete"
           chumby_poses 3 "-open" || echo "Chumby poses open incomplete"
           shots 3 "-open"
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5

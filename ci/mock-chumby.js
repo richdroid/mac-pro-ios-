@@ -137,6 +137,12 @@ http.createServer((q, s) => {
   if (q.url.startsWith('/api/tv/discover')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }
   if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: 'Episode ' + n, thumb: tvBase + '/poster.png' }))) })); }
   if (q.url.startsWith('/api/tv/recs')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ films: ['Rope', 'Match Point', 'Blue Velvet', 'Klute'].map(title => ({ title, year: '1990', slug: title.toLowerCase(), imdb: 'tt1234567', art: tvBase + '/poster.png', why: 'Because you liked Heat' })) })); }
+  // A search for the show on the TV finds it, as the real catalogue would (the app looks a series up by name when its
+  // rows don't carry it).
+  if (q.url.startsWith('/api/tv/stremio') && /sample\+?%20?series|sample series/i.test(decodeURIComponent(q.url.replace(/\+/g, ' ')))) {
+    s.setHeader('content-type', 'application/json');
+    return s.end(JSON.stringify({ rows: [{ title: 'Series', items: [{ title: 'Sample Series', subtitle: '2 seasons', art: tvBase + '/poster.png', id: 'tt1234567', kind: 'series' }] }] }));
+  }
   if (q.url.startsWith('/api/tv/stremio')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }
   if (q.url === '/api/tv/device-image') { s.setHeader('content-type', 'image/png'); return s.end(boxPhoto); }
   if (q.url === '/api/tv/device') { const up = [12, 18, 9, 22, 30, 14, 11, 16, 25, 19]; s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 18, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 2.4e6, txRate: 8e4, hist: { cpu: up, mem: up.map(x => x + 50), rx: up, tx: up } })); }
@@ -267,10 +273,12 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode|real|fnormal|fslow|ffail|foffline|falready)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode|realscrub|real|fnormal|fslow|ffail|foffline|falready)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
-  if (scene === 'real') return tvReal(q, s, path, query, json);
+  if (scene === 'real') { tvReal.known = false; return tvReal(q, s, path, query, json); }
+  // The real scene with the episode's length known from the start, for the shot of a drag along the bar with its bubble.
+  if (scene === 'realscrub') { tvReal.known = true; return tvReal(q, s, path, query, json); }
   if (/^f(normal|slow|fail|offline|already)$/.test(scene || '')) return tvFlickStart(scene.slice(1), q, s, path, json);
   // The prepare call's answer everywhere else too, in the bridge's own shape.
   if (q.method === 'POST' && path === '/api/tv/prepare') { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} json({ ok: true, awake: true, fresh: !!v.token }); }); return true; }
@@ -357,7 +365,7 @@ function tvPose(q, s) {
 // The flick scenes. The film thrown is the first in Continue watching ("Heat", a made-up sample's title already used above).
 function tvFlickStart(kind, q, s, path, json) {
   const fs = require('fs'), now = Date.now(), LOG = '/tmp/tv-flick-sends.log';
-  if (path === '/reset') { tvFlickStart.st = null; try { fs.unlinkSync(LOG); } catch {} return json({ ok: true }); }
+  if (path === '/reset') { tvFlickStart.st = null; tvFlickStart.alreadyAt = 0; try { fs.unlinkSync(LOG); } catch {} return json({ ok: true }); }
   const st = tvFlickStart.st && tvFlickStart.st.kind === kind ? tvFlickStart.st : (tvFlickStart.st = { kind, sent: 0, token: '', result: '', endedAt: 0, phase: '' });
   const log = (what, body) => fs.appendFileSync(LOG, JSON.stringify({ at: now, scene: kind, what, body }) + '\n');
   const read = f => { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} f(v); }); return true; };
@@ -365,7 +373,8 @@ function tvFlickStart(kind, q, s, path, json) {
   if (path === '/api/tv/status') {
     const v = JSON.parse(tvStatus);
     delete v.music;
-    if (kind === 'already') { v.app = 'com.stremio.one'; v.session = { ...film, playing: true, position: 1800000 }; return json(v); }
+    // Already playing: the clock runs on from 30:00, as a real one does, rather than one spot repeated with a fresh time.
+    if (kind === 'already') { tvFlickStart.alreadyAt = tvFlickStart.alreadyAt || now; v.app = 'com.stremio.one'; v.session = { ...film, playing: true, position: 1800000 + (now - tvFlickStart.alreadyAt) }; return json(v); }
     const t = st.sent ? now - st.sent : -1;
     const playAt = kind === 'slow' ? 9000 : 3200;
     if (t < 0 || (st.result && st.result !== 'ok')) v.app = 'com.google.android.tvlauncher';
@@ -446,7 +455,7 @@ function tvReal(q, s, path, query, json) {
     // Mint's session stays listed, paused, after a film has started over it.
     v.music = { title: 'A Paused Song', artist: 'Some Band', album: 'Some Album', art: tvBase + '/art.png', playing: false, position: 61000, duration: 214000, sampledAt: now - 600000 };
     const session = { pkg: 'com.stremio.one', playing: r.playing, description: ['Sample Show - S02E03 - The Third One'], position: Math.max(0, Math.round(here())), sampledAt: now, canSeek: true, art: tvBase + '/poster.png', show: 'Sample Show', season: 2, episode: 3, episodeTitle: 'The Third One' };
-    if (r.seeked) session.duration = REAL_MS; else if (t >= 20) session.duration = CATALOGUE_MS;
+    if (r.seeked || tvReal.known) session.duration = REAL_MS; else if (t >= 20) session.duration = CATALOGUE_MS;
     v.session = session;
     return late(r.asks % 7 === 0 ? 2000 : 300 + Math.round(Math.random() * 600), () => json(v));
   }

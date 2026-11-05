@@ -66,6 +66,12 @@ final class BrowseStore: ObservableObject {
     var answerRows: [MediaRow] {
         loadedFor == query.trimmingCharacters(in: .whitespaces) + (genre.isEmpty ? "" : "\u{1}" + genre) ? rows : []
     }
+    // Whether this text has had its answer, rows or none, rather than merely not loading at this instant (a search waits
+    // a moment before it starts, and read as answered in that gap).
+    func answered(_ text: String) -> Bool {
+        let q = text.trimmingCharacters(in: .whitespaces) + (genre.isEmpty ? "" : "\u{1}" + genre)
+        return loadedFor == q || (failed && !loading && query.trimmingCharacters(in: .whitespaces) == text.trimmingCharacters(in: .whitespaces))
+    }
     init(_ source: MediaSource, base: String? = nil) { self.source = source; self.base = base }
     func endpoint(_ q: String) -> String {
         guard let base else { return source.endpoint(q) }
@@ -400,9 +406,11 @@ struct EverywhereSearch: View {
     @StateObject private var music = BrowseStore(.mint)
     var stores: [BrowseStore] { [films, music] }
     // Shown together once both have answered, so films never arrive later and push in above the music being looked at
-    // (r18). Half a second's wait at most for the slower one beyond the first.
+    // (r18), or after 2.5 s at most. "No results" only once every store has answered (r19: it showed "No results for
+    // 'Heat'" while the films were still coming, because music's empty answer came first).
     @State private var settledFor: String?
     var settled: Bool { settledFor == text }
+    var allAnswered: Bool { films.answered(text) && music.answered(text) }
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             ForEach(stores, id: \.source) { store in
@@ -424,24 +432,21 @@ struct EverywhereSearch: View {
             }
             if !settled || (films.answerRows.isEmpty && music.answerRows.isEmpty) {
                 Group {
-                    if !settled { ProgressView() }
-                    else { ContentUnavailableView.search(text: text) }
+                    if settled && allAnswered { ContentUnavailableView.search(text: text) } else { ProgressView() }
                 }
                 .frame(maxWidth: .infinity, minHeight: 220)
                 // Its own ground, so it never reads over whatever the page had under it (r18: over Watch's banners).
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
                 .padding(.horizontal, 20).padding(.top, 10)
+                // In once the page it replaces has faded out, never over it.
+                .transition(.opacity.animation(.easeOut(duration: 0.2).delay(0.15)))
             }
         }
         .task(id: text) {
             settledFor = nil
-            // Both answered for this text, or the first answered and half a second more has gone by.
-            var firstAt: Date?
-            for _ in 0..<150 {
-                let f = !films.loading && films.query == text, m = !music.loading && music.query == text
-                if f && m { break }
-                if (f || m) && firstAt == nil { firstAt = Date() }
-                if let a = firstAt, Date().timeIntervalSince(a) > 0.5 { break }
+            // Both answered for this text, or 2.5 s gone by.
+            for _ in 0..<25 {
+                if allAnswered { break }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
             if !Task.isCancelled { settledFor = text }

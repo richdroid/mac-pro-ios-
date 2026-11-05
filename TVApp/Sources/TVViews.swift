@@ -141,8 +141,11 @@ struct RootView: View {
                 if let target = model.flicking {
                     // On a show's or a stream's page it stops short of the side bar, so another tab is a tap away; the card
                     // and the throw have the whole screen.
+                    // Measured from the screen's own edge, not inside the tab view's trailing inset, which folded is far
+                    // wider than the bar (r19: an 88 pt strip of the page underneath showed between the two).
                     FlickScreen(target: target).environment(model).id(target.id)
-                        .padding(.trailing, model.flickChoosing ? model.railWidth : 0)
+                        .padding(.trailing, model.flickChoosing ? TVLook.railRoom : 0)
+                        .ignoresSafeArea(.container, edges: .trailing)
                         .animation(.spring(response: 0.4, dampingFraction: 0.9), value: model.flickChoosing)
                 }
             }
@@ -256,10 +259,6 @@ struct Page<C: View>: View {
         // and the large title can track it and fold away. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
-                // Under a show's or stream's page laid over everything, this page steps out of sight, so nothing of it (a
-                // search pill, chips, its own back bar) shows in the strip between that page and the side bar.
-                .opacity(model.flickChoosing || model.flickCovering ? 0 : 1)
-                .animation(.easeOut(duration: 0.15), value: model.flickChoosing || model.flickCovering)
                 .environment(\.backToTop, top)
                 .navigationDestination(for: RowRoute.self) { $0.page }
                 .containerBackground(.clear, for: .navigation)
@@ -269,6 +268,10 @@ struct Page<C: View>: View {
                 // (Richard, 2026-11-05). Only the Remote, which has no headings and no room to spare, keeps it in the bar.
                 .navigationBarTitleDisplayMode(alwaysInline ? .inline : .large)
         }
+        // Under a show's or stream's page laid over everything, the whole stack steps out of sight, its bar, toolbar
+        // items and pushed pages included, so nothing of it (a search pill, chips, a second back) shows beside it (r19).
+        .opacity(model.flickChoosing || model.flickCovering ? 0 : 1)
+        .animation(.easeOut(duration: 0.15), value: model.flickChoosing || model.flickCovering)
         .topShade()
         .background { Ambience() }
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
@@ -789,6 +792,9 @@ struct RemoteTab: View {
     var state: String {
         // Not reaching it is said once, by the red note at the top; "Connecting…" under it contradicted it.
         if unreachable || !model.reachable { return "" }
+        // A start under way, or one that failed: its title from the first frame, kept through a failure, so the line never
+        // appears late and pushes the title up (r19).
+        if let st = model.starting, !st.played { return ([st.title] + (st.line.map { [String($0.prefix { $0 != "·" }).trimmingCharacters(in: .whitespaces)] } ?? [])).joined(separator: " · ") }
         guard !model.staleStatus, let s = model.status else { return "Connecting…" }
         // The wake button says the rest.
         if s.screen == "asleep" { return "Asleep" }
@@ -800,7 +806,7 @@ struct RemoteTab: View {
     }
     // After the title: which episode, if it's one. "S1 E2". How long is left is the bar's to say, right under the picture.
     static func detail(_ s: TVStatus.Session) -> [String] {
-        if let se = s.season, let ep = s.episode { return ["S\(se) E\(ep)"] }
+        if let se = s.seasonEpisode { return ["S\(se.season) E\(se.episode)"] }
         var out: [String] = []
         if let ep = s.description.dropFirst().lazy.map(Wording.episode).first(where: { $0.hasPrefix("S") && $0.contains(" E") }) {
             out.append(String(ep.prefix { $0 != "·" }).trimmingCharacters(in: .whitespaces))
@@ -842,7 +848,7 @@ struct RemoteTab: View {
         }
     }
     // The episode line's place is kept from the start of an episode's flick, so it fills in rather than pushes in.
-    var seriesOn: Bool { (model.starting?.line?.hasPrefix("S") ?? false) || model.status?.session?.season != nil }
+    var seriesOn: Bool { (model.starting?.line?.hasPrefix("S") ?? false) || model.status?.session?.seasonEpisode != nil }
     @ViewBuilder var episodes: some View {
         if session && seriesOn { ZStack { EpisodesLine() }.frame(height: 46) } else { EpisodesLine() }
     }
@@ -1109,12 +1115,16 @@ struct PosterOnBlur: View {
     }
 }
 private struct StartingPicture: View {
+    @Environment(TVModel.self) var model
     let start: TVModel.Starting
     var body: some View {
         ZStack {
+            // Failed: dimmed to half by black over it, not by fading it, which let the picture under it show through (r19).
             PosterOnBlur(url: URL(string: start.art))
-                .opacity(start.failed ? 0.5 : 1)
-            if !start.failed && !start.played { LoadingRing(radius: TVLook.card).transition(.opacity) }
+                .overlay { Color.black.opacity(start.failed ? 0.5 : 0) }
+            // Not while the flick's screen is moving onto it: that picture carries its own light, and two drew a second
+            // frame lagging beside the moving one (r19).
+            if !start.failed && !start.played && !model.flickHandoff { LoadingRing(radius: TVLook.card).transition(.opacity) }
         }
         .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
         // Playing: the light finishes, and the picture under it is the TV's own.
@@ -1254,7 +1264,7 @@ struct Transport: View {
     var starting: TVModel.Starting? { model.starting.flatMap { $0.played ? nil : $0 } }
     var failed: Bool { starting?.failed == true }
     // An episode on whose next can't be worked out yet: ⏭ stays lit and works it out on the press (r18: dimmed on S2 E3 of 4).
-    var episodeOn: Bool { model.status?.session?.season != nil || (starting?.line?.hasPrefix("S") ?? false) }
+    var episodeOn: Bool { model.status?.session?.seasonEpisode != nil || (starting?.line?.hasPrefix("S") ?? false) }
     var body: some View {
         let stremio = playing == nil && (model.status?.session?.pkg == "com.stremio.one" || starting != nil)
         HStack(spacing: 0) {
@@ -1267,7 +1277,9 @@ struct Transport: View {
             }.frame(maxWidth: .infinity)
             // Says which it'll do, as on the Playing tab, once the TV's word is fresh.
             // Held, it stops: the flick's own control screen is gone, and Stop went with it to here.
-            PlayKey(playing: ended ? false : playing ?? (starting != nil && !failed ? true : model.staleStatus ? nil : model.status?.session?.playing), size: playSize, glow: glow)
+            // A start shows pause from the throw on, and keeps it if the start fails (the whole row dims instead): the key
+            // changed glyph at the failure for no reason (r19).
+            PlayKey(playing: ended ? false : playing ?? (starting != nil ? true : model.staleStatus ? nil : model.status?.session?.playing), size: playSize, glow: glow)
                 .contextMenu {
                     Button("Stop", systemImage: "stop.fill") {
                         // Held while a flicked film is still starting, it calls the start off too.
@@ -1286,15 +1298,10 @@ struct Transport: View {
                     GlassButton(icon: "forward.end.fill", label: "Next episode, \(next.subtitle)", size: size) {
                         model.flick(FlickTarget(item: next, source: .stremio, ready: true, autoplay: true))
                     }
-                } else if episodeOn && nextUp.series == nil && starting == nil {
-                    // Not worked out yet: asked for on the press, and the TV's own next if it still can't be.
-                    GlassButton(icon: "forward.end.fill", label: "Next episode", size: size) {
-                        Task {
-                            NextUp.shared.forget(); NextUp.shared.follow(model.status)
-                            for _ in 0..<20 where NextUp.shared.next == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
-                            if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) } else { model.key("next") }
-                        }
-                    }
+                } else if episodeOn && nextUp.series == nil {
+                    // Not worked out yet: asked for on the press, and the TV's own next if it still can't be. A series never
+                    // dims ⏭ for not knowing (r19), and the key shows it's working on it until it throws.
+                    ResolvingNextKey(size: size)
                 } else {
                     // A film, or the last episode: the key stays, dimmed, rather than leave a gap.
                     GlassButton(icon: "forward.end.fill", label: "Nothing after this", size: size) {}.disabled(true).opacity(0.35)
@@ -1303,6 +1310,28 @@ struct Transport: View {
         }
         // Failed: nothing to control but stopping, which is the held ⏯.
         .opacity(failed ? 0.4 : 1)
+    }
+}
+
+// ⏭ for an episode whose next isn't worked out yet: the light runs round the key from the press until the next one is
+// thrown (or the TV's own next is sent), so the press answers at once (r19: up to 2 s with no response).
+struct ResolvingNextKey: View {
+    @Environment(TVModel.self) var model
+    var size: CGFloat
+    @State private var busy = false
+    var body: some View {
+        GlassButton(icon: "forward.end.fill", label: "Next episode", size: size) {
+            guard !busy else { return }
+            busy = true
+            Task {
+                NextUp.shared.forget(); NextUp.shared.follow(model.status)
+                for _ in 0..<20 where NextUp.shared.next == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+                if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) } else { model.key("next") }
+                busy = false
+            }
+        }
+        .overlay { if busy { LoadingRing(radius: size / 2).frame(width: size, height: size).transition(.opacity) } }
+        .animation(.easeOut(duration: 0.15), value: busy)
     }
 }
 
@@ -2296,8 +2325,19 @@ struct VideoProgress: View {
             else if running && session.playing { now += max(0, date.timeIntervalSince1970 * 1000 - at) }
             else if running, let h = held { now += max(0, date.timeIntervalSince(h.at) * 1000) }
         }
+        // Playing, the clock never steps back for a reading a few seconds behind (a stalled report repeating its last spot
+        // with a fresh time): it holds and runs on instead. A real jump back (a seek, a restart) is more than 6 s, or asked.
+        let key = session.description.joined(separator: "\n")
+        if running && live && seeker.held(for: session, at: date) == nil && target == nil && floor.key == key {
+            let expected = floor.pos + max(0, date.timeIntervalSince(floor.at) * 1000)
+            if now < expected && expected - now < 6000 { now = expected }
+        }
+        floor.key = key; floor.pos = now; floor.at = date
         return max(0, duration > 0 ? min(now, duration) : now)
     }
+    // The last spot shown and when, for the no-stepping-back rule. A reference, so writing it from a frame redraws nothing.
+    final class ClockFloor { var key = ""; var pos: Double = 0; var at = Date.distantPast }
+    @State private var floor = ClockFloor()
     // Ahead of that by any jumps tapped that the TV hasn't confirmed yet.
     func position(at date: Date) -> Double {
         let now = confirmed(at: date) + seeker.offset(for: session)
