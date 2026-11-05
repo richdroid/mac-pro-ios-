@@ -387,10 +387,11 @@ struct ScrubBar: View {
 struct ProgressPlaceholder: View {
     var note: String? = nil
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 0) {
             ProgressTrack(fraction: nil).frame(height: 28)
             Text(note ?? "0:00").font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(TVLook.accent).opacity(note == nil ? 0 : 1)
                 .contentTransition(.opacity)
+                .padding(.top, -5)
         }
         .accessibilityHidden(note == nil)
     }

@@ -149,6 +149,8 @@ struct FlickScreen: View {
     @State private var returnSlot = CGRect.zero
     // Into the Remote: the screen moves onto the Remote's own picture of the TV.
     @State private var toRemote = false
+    // Set the moment the screen lands on the Remote's picture: the bar's tick turns into the Remote's eye right then.
+    @State private var onRemote = false
     @State private var remoteSlot = CGRect.zero
     @State private var screenOut = false
     // The last of it fading, so nothing over the Remote is gone in one frame when the screen closes.
@@ -375,7 +377,7 @@ struct FlickScreen: View {
             let stops = flown && (step != .control || sending)
             // Going to the Remote folded, the tick becomes the Remote's own eye in the same place, so the bar never swaps in
             // a frame. Unfolded the Remote has no bar button, and the tick just fades with the screen.
-            let eye = toRemote && !stops && !panes ? (model.mirrorLive ? "eye.slash" : "eye") : nil
+            let eye = onRemote && !stops && !panes ? (model.mirrorLive ? "eye.slash" : "eye") : nil
             Button { stops ? callOff() : leave() } label: {
                 // Both glyphs always drawn, one crossfading into the other: a symbol swap here cut in one frame, as the bar
                 // rebuilds its item rather than animating it.
@@ -1174,11 +1176,16 @@ struct FlickScreen: View {
         model.flickHandoff = true
         model.tab = 0
         Task {
-            var slot: CGRect?
-            for _ in 0..<30 {
-                if let s = model.mirrorSlot, s.width > 20 { slot = s; break }
+            // The same place on two reads in a row, so the move aims at where the picture settles, not at its first layout.
+            var slot: CGRect?, seen: CGRect?
+            for _ in 0..<40 {
+                if let s = model.mirrorSlot, s.width > 20 {
+                    if let p = seen, abs(p.minX - s.minX) + abs(p.minY - s.minY) + abs(p.width - s.width) < 0.5 { slot = s; break }
+                    seen = s
+                }
                 try? await Task.sleep(nanoseconds: 25_000_000)
             }
+            if slot == nil { slot = seen }
             guard let s = slot else { model.flickHandoff = false; leave(restoreMood: false); Task { await model.load() }; return }
             remoteSlot = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
             // Two more frames, so the Remote's first layout is done before anything moves.
@@ -1218,7 +1225,7 @@ struct FlickScreen: View {
             // over the keys fades with it before it's taken away.
             // The picture underneath back first, unanimated, so the screen fades onto it, not onto the backdrop.
             model.flickHandoff = false
-            withAnimation(.easeOut(duration: 0.2)) { screenOut = true; fadingOut = true }
+            withAnimation(.easeOut(duration: 0.2)) { onRemote = true; screenOut = true; fadingOut = true }
             try? await Task.sleep(nanoseconds: 230_000_000)
             model.closeFlick()
             // Only once the move is over, so its fetch and redraw can't hitch it.
