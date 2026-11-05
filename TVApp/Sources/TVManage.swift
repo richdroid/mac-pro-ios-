@@ -56,6 +56,7 @@ struct TVManageSections: View {
             // The one TV setting he goes looking for, a tap away rather than two pages down.
             SettingsAction(title: "Screensaver", icon: "photo.on.rectangle.angled") { model.post("settings-page", ["page": "screensaver"]) }
         }
+        .listRowBackground(TVLook.glassRow)
     }
 }
 // A row that does something on the TV, drawn like the rows that open a page: the icon in the accent, the words in white.

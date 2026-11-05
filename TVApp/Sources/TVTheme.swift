@@ -10,6 +10,8 @@ enum TVLook {
     static let bannerSize = CGSize(width: 142, height: 80)
     static let card: CGFloat = 22, banner: CGFloat = 12, gap: CGFloat = 12
     static let press = Animation.spring(duration: 0.25, bounce: 0.25)
+    // A form row in the same glass as the cards, never the system's opaque grey over the living background.
+    static var glassRow: some View { Rectangle().fill(.ultraThinMaterial) }
 }
 extension Color { init(hex: UInt32) { self.init(red: Double(hex >> 16 & 255) / 255, green: Double(hex >> 8 & 255) / 255, blue: Double(hex & 255) / 255) } }
 extension View {

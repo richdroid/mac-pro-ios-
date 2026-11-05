@@ -293,8 +293,9 @@ struct FlickScreen: View {
         }
         .scrollEdgeEffectStyle(.soft, for: .top)
         .preferredColorScheme(.dark)
-        // The build's recording only: what the flick is doing, so a frame can be read against the code.
-        .overlay(alignment: .bottomLeading) {
+        // The build's recording only: what the flick is doing, so a frame can be read against the code. Top left, clear of
+        // the card at rest.
+        .overlay(alignment: .topLeading) {
             if ["flickdemo", "flickdemo-stream", "toremote"].contains(Self.pose) {
                 Text("step \(step.rawValue) flown \(flown ? 1 : 0) landed \(landed ? 1 : 0) sending \(sending ? 1 : 0) done \(done ? 1 : 0) ok \(successes) phase \(phase ?? "-") lines \(streamed ? 1 : 0)")
                     .font(.system(size: 11, design: .monospaced)).padding(6).background(.black.opacity(0.7)).foregroundStyle(.yellow)
@@ -1086,6 +1087,13 @@ struct FlickScreen: View {
         }
         demoHeld = false
         send(flicked: CGSize(width: -260, height: -1900))
+        // The stream film goes on into the Remote the way he does, from the controls once they've settled, so the move is
+        // judged from the real state rather than from a pose that starts there.
+        guard Self.pose == "flickdemo-stream" else { return }
+        for _ in 0..<150 where !(step == .control && controlsIn) { try? await Task.sleep(nanoseconds: 100_000_000) }
+        guard step == .control else { return }
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        goRemote()
     }
     // The X while it's on its way: whatever started on the TV stops, and this closes.
     func callOff() {
@@ -1155,9 +1163,13 @@ struct FlickScreen: View {
             // The fade, the move and the Remote coming up through the backdrop start together, so there's never a lone
             // screen on an empty backdrop. The backdrop is gone quickly, before the keys arrive, so they never read grey
             // through it.
-            withAnimation(.easeOut(duration: 0.2)) { controlsIn = false }
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { toRemote = true }
-            withAnimation(.easeOut(duration: 0.15)) { arrived = false; barShown = false }
+            // One update, so the controls can't be gone a frame before the screen starts to move. The bar's ✓ stays to the
+            // end and fades with the rest of this screen: taken off now, it left an empty glass circle behind.
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) {
+                toRemote = true
+                withAnimation(.easeOut(duration: 0.2)) { controlsIn = false }
+                withAnimation(.easeOut(duration: 0.15)) { arrived = false }
+            }
             // The Remote's picture can still settle as its page lays out, so the move keeps aiming at where it is now,
             // place and size, until the spring has run its course and the picture has stopped moving. Once the screen
             // is on it, a late change eases across rather than stepping.

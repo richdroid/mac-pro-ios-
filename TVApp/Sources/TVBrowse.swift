@@ -90,11 +90,12 @@ final class BrowseStore: ObservableObject {
         }
         rows = base == nil ? a.rows : Self.fold(Self.once(a.rows)); loadedFor = q; loadedAt = Date()
     }
-    // Each title once on the page, in the first row it comes in. Continue watching is his own, and takes no part.
+    // Each title once on the page, in the first row it comes in. Continue watching is his own and is kept whole, but what
+    // it holds isn't repeated further down.
     static func once(_ rows: [MediaRow]) -> [MediaRow] {
         var seen = Set<String>()
         return rows.compactMap { r in
-            if r.title == "Continue watching" { return r }
+            if r.title == "Continue watching" { r.items.forEach { seen.insert($0.stremioRef?.imdb ?? $0.id) }; return r }
             let items = r.items.filter { seen.insert($0.stremioRef?.imdb ?? $0.id).inserted }
             return items.isEmpty ? nil : MediaRow(title: r.title, items: items)
         }
@@ -144,12 +145,12 @@ struct MediaCard: View {
     static func height(_ width: CGFloat, _ source: MediaSource) -> CGFloat { width / source.coverAspect + band(width) }
     @State private var band: Color?
     // A cover seen before has its colour ready, so the card arrives already tinted rather than fading in.
-    var shownBand: Color { band ?? ImageStore.shared.cachedBand(URL(string: item.art)) ?? Color(hex: 0x37474F) }
+    var shownBand: Color { band ?? ImageStore.shared.cachedBand(URL(string: item.art)) ?? CoverWait.band }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Group {
                 if let image { image.resizable().scaledToFill() }
-                else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color(hex: 0x37474F) } }
+                else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() } }
             }
                 .frame(width: width, height: width / source.coverAspect)
                 .clipped()
@@ -181,6 +182,26 @@ struct MediaCard: View {
             if let u = URL(string: item.art), ImageStore.shared.cachedBand(u) == nil, let c = await ImageStore.shared.band(u) { band = c }
         }
         .animation(.easeOut(duration: 0.25), value: band)
+    }
+}
+
+// A cover on its way: the app's own purple, with a soft light passing over it, so the row reads as loading rather than
+// as flat tiles. The title is already in the band under it.
+struct CoverWait: View {
+    static let band = Color(hex: 0x3A3152)
+    @Environment(\.accessibilityReduceMotion) private var still
+    var body: some View {
+        Color(hex: 0x352B4E)
+            .overlay {
+                if !still {
+                    GeometryReader { g in
+                        LinearGradient(colors: [.clear, .white.opacity(0.07), .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: g.size.width * 0.8)
+                            .phaseAnimator([false, true]) { c, on in c.offset(x: on ? g.size.width : -g.size.width * 0.8) } animation: { _ in .linear(duration: 1.3) }
+                    }
+                }
+            }
+            .clipped()
     }
 }
 
@@ -285,27 +306,28 @@ struct FlickCardButton: View {
 }
 final class FrameBox { var rect: CGRect? }
 
-// A row of cards that scrolls sideways. On the outer screen it runs on under the glass side bar to the screen's edge,
-// as every row does there; unfolded, it stops at its own pane, fading out at the pane's edge rather than cut square,
-// and fading in at the start too once it's been scrolled.
+// A row of cards that scrolls sideways. It stops where the page's other content stops, fading out there rather than cut
+// square, and fading in at the start too once it's been scrolled. On the outer screen that's short of the clock and the
+// glass side bar: run on under them, its cards read through their glass.
 private struct RowEdge: ViewModifier {
-    @Environment(\.paneLayout) private var panes
     @State private var scrolled = false
     func body(content: Content) -> some View {
-        if panes {
-            content
-                .scrollTargetBehavior(FreeScroll())
-                .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 4 } action: { _, s in scrolled = s }
-                .mask {
+        content
+            .scrollTargetBehavior(FreeScroll())
+            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 4 } action: { _, s in scrolled = s }
+            .mask {
+                GeometryReader { g in
                     HStack(spacing: 0) {
                         LinearGradient(colors: [.black.opacity(scrolled ? 0 : 1), .black], startPoint: .leading, endPoint: .trailing).frame(width: 28)
                         Color.black
                         LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
+                        // A scroll view reaches into the safe area; what of the row is in the side bar's room is never shown.
+                        Color.clear.frame(width: g.safeAreaInsets.trailing)
                     }
                     // Only the fade eases, so nothing in the row animates with it.
                     .animation(.easeOut(duration: 0.2), value: scrolled)
                 }
-        } else { content.scrollTargetBehavior(FreeScroll()) }
+            }
     }
 }
 extension View { func rowEdge() -> some View { modifier(RowEdge()) } }
@@ -330,11 +352,9 @@ struct EverywhereSearch: View {
             ForEach(stores, id: \.source) { store in
                 ForEach(store.rows) { row in
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Text(row.title).font(.title3.weight(.bold))
-                            Text(store.source.name).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                        }
-                        .padding(.leading, 20)
+                        // The row's own name only: what's in it says whether it's films or music, not the app it's from.
+                        Text(row.title).font(.title3.weight(.bold))
+                            .padding(.leading, 20)
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 10) {
                                 ForEach(row.items) { item in FlickCardButton(item: item, source: store.source, width: store.source.cardWidth) }

@@ -199,11 +199,13 @@ struct TVSettingsTab: View {
     @ViewBuilder var connection: some View {
         Section {
             SettingsAction(title: "Refresh the TV’s recommendations", icon: "arrow.clockwise") { model.post("refresh") }
-            SettingsAction(title: "Launcher settings on the TV", icon: "rectangle.grid.1x2") { model.post("launcher-settings") }
+            SettingsAction(title: "Home screen on the TV", icon: "rectangle.grid.1x2") { model.post("launcher-settings") }
         }
+        .listRowBackground(TVLook.glassRow)
         Section {
             NavigationLink(value: ManagePage.connection) { Label("Connection", systemImage: "network") }
         }
+        .listRowBackground(TVLook.glassRow)
     }
     var body: some View {
         NavigationStack(path: $path) {
@@ -600,7 +602,8 @@ struct RemoteTab: View {
                 Spacer()
                 GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu")
             }
-            transport
+            // Folded, typing takes the transport's room: the keyboard sliced it in half, and its glow smeared through.
+            if !(typing && size != .regular) { transport.transition(.opacity) }
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
         }
     }
@@ -663,7 +666,8 @@ struct RemoteTab: View {
                     // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
                     if model.mirrorLive && !typing { MirrorView(store: model.mirrorStore).transition(.opacity) }
                     Group {
-                        DPad().frame(minHeight: 150, maxHeight: .infinity)
+                        // Clear of the title above it, which the keyboard pushes the page up under.
+                        DPad().frame(minHeight: 150, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
                         keysBlock
                     }
                     .modifier(KeysArrive(shown: keysIn))
@@ -1623,12 +1627,14 @@ struct DiscoverColumn: View {
     // Both lists, so where he is stays put above the switch while the other kind's rows are still coming.
     @ObservedObject private var films = BrowseStore.discover("movie")
     @ObservedObject private var shows = BrowseStore.discover("series")
+    @ObservedObject private var home = BrowseStore.shared(.stremio)
     static let continueTitle = "Continue watching"
-    // Films and shows together, so it sits above the switch and belongs to neither.
+    // Films and shows together, so it sits above the switch and belongs to neither. The same row as on Apps and Playing,
+    // so there's one list of where he is everywhere; the discover lists' own only until that one is in.
     var continuing: MediaRow? {
         guard store.query.isEmpty else { return nil }
         let other = store === films ? shows : films
-        return [store, other].lazy.compactMap { $0.rows.first { $0.title == Self.continueTitle && !$0.items.isEmpty } }.first
+        return [home, store, other].lazy.compactMap { $0.rows.first { $0.title == Self.continueTitle && !$0.items.isEmpty } }.first
     }
     var rows: [MediaRow] { store.rows.filter { $0.title != Self.continueTitle } }
     var shown: [MediaRow] {

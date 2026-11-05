@@ -21,12 +21,18 @@ private struct Spark: View {
         GeometryReader { g in
             let peak = max(top ?? (values.max() ?? 1), 0.001), step = g.size.width / CGFloat(max(values.count - 1, 1))
             let point = { (i: Int) in CGPoint(x: CGFloat(i) * step, y: g.size.height * (1 - CGFloat(values[i] / peak))) }
+            // Too few points to be a line yet: a faint resting baseline in its place, rather than two points read as a trend.
+            if values.count < 8 {
+                Path { p in p.move(to: CGPoint(x: 0, y: g.size.height - 1)); p.addLine(to: CGPoint(x: g.size.width, y: g.size.height - 1)) }
+                    .stroke(.white.opacity(0.14), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [2, 5]))
+            } else {
             Path { p in
                 guard values.count > 1 else { return }
                 p.move(to: point(0))
                 for i in 1..<values.count { p.addLine(to: point(i)) }
             }
             .stroke(TVLook.accent, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+            }
         }
         .frame(height: 38)
     }
@@ -35,10 +41,15 @@ private struct Tile: View {
     let title: String, value: String, detail: String
     let spark: [Double]
     var top: Double?
+    // A box just woken answers 0% and 0 KB/s before it has measured anything: a dash, breathing, until a second reading.
+    var settled: Bool { spark.count >= 2 }
+    @State private var breathe = false
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-            Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
+            Text(settled ? value : "—").font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
+                .opacity(settled ? 1 : breathe ? 0.75 : 0.35)
+                .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true } }
             Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             Spark(values: spark, top: top).padding(.top, 8)
         }
