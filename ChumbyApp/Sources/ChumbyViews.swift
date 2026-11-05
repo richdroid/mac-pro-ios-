@@ -143,7 +143,10 @@ extension View {
     func card(_ radius: CGFloat = 26) -> some View { modifier(CardFill(radius: radius)) }
     func glass(_ radius: CGFloat = 26) -> some View { self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous)) }
     func glassCircle() -> some View { self.glassEffect(.regular.interactive(), in: Circle()) }
-    func seaList() -> some View { self.scrollContentBackground(.hidden).listSectionSpacing(14) }
+    func seaList() -> some View { self.scrollContentBackground(.hidden).listSectionSpacing(14).roomyIndicators() }
+    // The scroll bar 7 pt in from the screen's edge rather than on it (Richard, 2026-11-05: "the scroll bar is too close to
+    // the screen for my eyes"), in every Chumby list and scroll.
+    func roomyIndicators() -> some View { self.contentMargins(.trailing, 7, for: .scrollIndicators) }
 }
 struct GlassRow: View {
     @Environment(\.colorScheme) private var scheme
@@ -195,6 +198,28 @@ struct TwoPane<L: View, R: View>: View {
     }
 }
 
+// The page fades out just above the tab bar, so nothing reads through its glass ("Chumby Classic" did, on Home, under the
+// tabs: Richard's phone, 2026-11-05). A mask on the page, not a band of colour over it: the sea behind stays whole, and
+// only the page's own cards and words dissolve as they reach the bar. The bar's own space is the page's bottom safe area,
+// so this follows it folded (bar along the foot) and open (rail at the side, only the home indicator below).
+// The fade runs from the bar's top edge down its first 18 pt, so a card resting just above the bar is never touched.
+struct TabBarFade: ViewModifier {
+    static let fade: CGFloat = 18
+    func body(content: Content) -> some View {
+        content.mask {
+            GeometryReader { g in
+                let inset = g.safeAreaInsets.bottom
+                VStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: min(Self.fade, inset))
+                    Color.clear.frame(height: max(inset - Self.fade, 0))
+                }
+            }
+            .ignoresSafeArea()
+        }
+    }
+}
+
 extension View {
     // Each tab paints its own sea: the system tab view is opaque behind its content. Only the tab on screen drifts.
     func overSea(active: Bool = true, shown: Bool = true) -> some View {
@@ -202,7 +227,7 @@ extension View {
     }
     // A tab's own page: its title is the first row, so no empty bar sits above it and every tab starts at the same height.
     func tabPage(_ tab: Int, _ model: ChumbyModel) -> some View {
-        self.overSea(active: model.tab == tab).toolbar(.hidden, for: .navigationBar)
+        self.modifier(TabBarFade()).overSea(active: model.tab == tab).toolbar(.hidden, for: .navigationBar)
     }
 }
 
@@ -756,7 +781,7 @@ struct HomeTab: View {
                 // Each side scrolls on its own, so the octopus stays put while you use the controls.
                 FoldSplit {
                     // The wordmark is part of the stage, so it is spaced off the octopus the same way in both layouts.
-                    ScrollView { VStack(spacing: 0) { stage; status; about }.padding(.horizontal, 12) }
+                    ScrollView { VStack(spacing: 0) { stage; status; about }.padding(.horizontal, 12) }.roomyIndicators()
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
@@ -767,7 +792,7 @@ struct HomeTab: View {
                             rightNow
                             more
                         }.padding(.horizontal, 12)
-                    }
+                    }.roomyIndicators()
                 }
             } else {
                 ScrollView {
@@ -777,7 +802,7 @@ struct HomeTab: View {
                         if model.sys.ringing != nil { RingingCard().card().padding(.top, 20).transition(.ringCard) }
                         remote.padding(.top, 20); SkipCard().padding(.top, 20); rightNow; about; if moreInfo { more }
                     }.padding(.horizontal, 16)
-                }
+                }.roomyIndicators()
             }
         }
         .animation(ChumbyModel.ringChange(to: model.sys.ringing), value: model.sys.ringing)
@@ -861,47 +886,99 @@ struct RemoteButton: View {
         .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large).accessibilityLabel(label)
     }
 }
-// One button for night mode, showing the mode the Chumby is really in: the moon fills in while it's on. Tap to switch it;
-// hold for which kind. The Chumby can't say which kind it's in, so that part is remembered from here.
-// One button for day and night (Richard, 2026-11-05: "one button for night and day mode haptic button"). It shows the
-// mode the Chumby is really in, a sun by day and a moon by night, and a tap swaps it with a firm haptic and the glyph turning
-// over. Ending night also brings the screen back up. Hold for the kind of night, or to dim or turn off the screen.
+// The night style chosen in Tinker: what night looks like on the Chumby. Kept on the Chumby as the kind its nightly time
+// switches to (ChumbyState.nightStyle), so the widget nights the same way; remembered here too for a Chumby with no
+// nightly time.
+let nightStyles = [("on", "Clock"), ("dim", "Dim"), ("dark", "Dark")]
+extension ChumbyModel {
+    var nightStyle: String { state.nightStyle ?? UserDefaults.standard.string(forKey: "nightKind") ?? "on" }
+}
+
+// One button for day and night that works like the Lock Screen's flashlight (Richard, 2026-11-05: "a single botton with two
+// actions that u press like u would a flashlight on lockscrene in terms of haptics and such that toggles simply night mode
+// and screen"). It shows the mode the Chumby is really in, a sun by day and a moon by night. Press and hold: a light tick on
+// touch, ticks that firm up as a ring fills and the button swells, and at half a second a heavy thunk as it commits, the
+// glyph turning over. Let go early and it springs back having done nothing. Night is the style chosen in Tinker; day ends
+// night mode and brings the screen back up. There's no menu on it any more: one button, two actions.
 struct NightButton: View {
     @EnvironmentObject var model: ChumbyModel
-    @AppStorage("nightKind") private var kind = "on"
-    static let kinds = [("on", "Clock"), ("dim", "Dim"), ("dark", "Dark")]
+    @Environment(\.accessibilityReduceMotion) private var still
+    static let hold = 0.5
+    @State private var progress: CGFloat = 0
+    @State private var committed = false
+    @State private var ticks: Task<Void, Never>?
+    @State private var turned = 0
     var on: Bool { model.sys.night == 1 }
-    func flip(_ v: String) {
+    var amber: Color { ChumbyPalette.hex(0xe59a2e) }
+    var moon: Color { ChumbyPalette.hex(0xa4b7d6) }
+
+    func begin() {
+        committed = false
         #if canImport(UIKit)
-        Haptics.medium.impactOccurred(); Haptics.medium.prepare()
+        Haptics.light.impactOccurred(intensity: 0.45); Haptics.light.prepare(); Haptics.heavy.prepare()
         #endif
-        withAnimation(.spring(duration: 0.35, bounce: 0.3)) { model.setNight(v) }
+        withAnimation(.linear(duration: Self.hold)) { progress = 1 }
+        // The pressure building: two firmer ticks on the way to the thunk.
+        ticks?.cancel()
+        ticks = Task { @MainActor in
+            for k in [0.6, 0.8] as [CGFloat] {
+                try? await Task.sleep(nanoseconds: 170_000_000)
+                guard !Task.isCancelled else { return }
+                #if canImport(UIKit)
+                Haptics.medium.impactOccurred(intensity: k); Haptics.medium.prepare()
+                #endif
+            }
+        }
+    }
+    func release() {
+        ticks?.cancel()
+        guard !committed else { return }
+        withAnimation(.spring(duration: 0.3, bounce: 0.45)) { progress = 0 }
+    }
+    func commit() {
+        ticks?.cancel()
+        committed = true
+        #if canImport(UIKit)
+        Haptics.heavy.impactOccurred(); Haptics.heavy.prepare()
+        #endif
+        turned += 1
+        withAnimation(.spring(duration: 0.4, bounce: 0.35)) { model.setNight(on ? "off" : model.nightStyle) }
+        withAnimation(.spring(duration: 0.45, bounce: 0.5)) { progress = 0 }
     }
     var body: some View {
-        Menu {
-            Section("Night") {
-                ForEach(Self.kinds, id: \.0) { k in
-                    Button { kind = k.0; flip(k.0) } label: { if on && kind == k.0 { Label(k.1, systemImage: "checkmark") } else { Text(k.1) } }
-                }
+        // The same glass button as its neighbours, drawn only, so its size and glass match theirs to the point; the hold is
+        // read by the circle laid over it.
+        Button {} label: {
+            ZStack {
+                // The track says it's a hold before it's ever pressed; the fill is the press itself.
+                Circle().inset(by: 1.5).stroke(.white.opacity(0.12), lineWidth: 3)
+                Circle().inset(by: 1.5).trim(from: 0, to: progress)
+                    .stroke(on ? amber : moon, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .opacity(progress > 0.01 ? 1 : 0)
+                Image(systemName: on ? "moon.fill" : "sun.max.fill").font(.system(size: 24, weight: .semibold))
+                    .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp)))
+                    .symbolEffect(.bounce, value: turned)
+                    .foregroundStyle(on ? moon : amber)
             }
-            if on { Button("Day") { flip("off") } }
-            Section("Screen") {
-                // Always a way back after dimming or turning it off.
-                Button("Screen bright") { model.cmd("screen", "bright", id: "remote") }
-                Button("Screen dim") { model.cmd("screen", "dim", id: "remote") }
-                Button("Screen off") { model.cmd("screen", "off", id: "remote") }
-            }
-        } label: {
-            // The same size and weight as its neighbours; a deep amber sun so it never reads as disabled.
-            Image(systemName: on ? "moon.fill" : "sun.max.fill").font(.system(size: 24, weight: .semibold))
-                .frame(width: 52, height: 52)
-                .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp)))
-                .foregroundStyle(on ? ChumbyPalette.hex(0xa4b7d6) : ChumbyPalette.hex(0xe59a2e))
-        } primaryAction: {
-            flip(on ? "off" : kind)
+            .frame(width: 52, height: 52)
         }
         .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
-        .accessibilityLabel(on ? "Night mode, tap for day" : "Day mode, tap for night").accessibilityHint("Hold for the kind of night, or the screen")
+        .allowsHitTesting(false).accessibilityHidden(true)
+        .scaleEffect(still ? 1 : 1 + 0.12 * progress)
+        .overlay {
+            Circle().fill(.clear).contentShape(Circle())
+                .onLongPressGesture(minimumDuration: Self.hold, maximumDistance: 16) { commit() } onPressingChanged: { p in
+                    if p { begin() } else { release() }
+                }
+                .accessibilityElement()
+                .accessibilityLabel(on ? "Night mode" : "Day")
+                .accessibilityHint(on ? "Hold for day" : "Hold for night mode")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { commit() }
+        }
+        // For the build's shot: the button held halfway, ring half full, so the mid-hold state can be judged.
+        .onAppear { if ChumbyModel.pose == "nighthold" { progress = 0.55 } }
     }
 }
 // MARK: - Channels
@@ -927,6 +1004,11 @@ struct ChannelsTab: View {
     @State private var more = false
     @State private var busy = false
     @State private var justAdded: String?
+    // The Add widgets picker: a sheet folded, the right pane open (nothing sits across the fold).
+    @State private var adding = false
+    @State private var offered: [MoreItem] = []
+    @State private var lastAdded: String?
+    @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
 
     var channels: [ChannelList.Channel] { model.channelData?.channels ?? [] }
@@ -938,23 +1020,53 @@ struct ChannelsTab: View {
         return m.values.sorted { $0[1].localizedCaseInsensitiveCompare($1[1]) == .orderedAscending }
     }
 
-    // Every widget the Chumby knows by id that this channel doesn't hold, so it can be added in one tap.
-    var notHere: [[String]] { allWidgets.filter { w in !rows.contains { $0.id == w[0] } } }
-    // Joins the channel at the end, on, at the default time, and shows at once: the list scrolls to it and it glows a moment.
-    func add(id: String, name: String, own: Int, scroll: ScrollViewProxy) {
-        guard !rows.contains(where: { $0.id == id }) else { return }
-        withAnimation(.snappy) { rows.append(EditorRow(id: id, name: name, on: true, secs: 0, own: own)); justAdded = id }
+    // What the channel holds, as his list. On the Chumby a widget that's "off" in a channel (on=0 in its .conf, chedit/hook.sc)
+    // is simply left out of the rotation: there's no state of being in a channel but not shown. So off is removed, and the
+    // list shows only what plays (Richard, 2026-11-05: "not have unadded widgets shown under my widgets"). Removed ones stay
+    // in `rows` as off, so a widget that came with the channel is sent as on=0 and doesn't come back by itself.
+    var shown: [EditorRow] { rows.filter(\.on) }
+    // Every widget the Chumby knows by id that this channel doesn't play, for the Add widgets picker.
+    var notHere: [[String]] { allWidgets.filter { w in !rows.contains { $0.id == w[0] && $0.on } } }
+    // Joins the channel at the end of what plays, at the widget's own time. The list scrolls to it once the picker closes.
+    func add(id: String, name: String, own: Int) {
+        withAnimation(.snappy) {
+            if let i = rows.firstIndex(where: { $0.id == id }) {
+                guard !rows[i].on else { return }
+                var r = rows.remove(at: i); r.on = true
+                rows.insert(r, at: rows.lastIndex(where: \.on).map { $0 + 1 } ?? 0)
+            } else {
+                rows.insert(EditorRow(id: id, name: name, on: true, secs: 0, own: own), at: rows.lastIndex(where: \.on).map { $0 + 1 } ?? 0)
+            }
+        }
+        lastAdded = id
         changed()
+    }
+    func remove(_ id: String) {
+        withAnimation(.snappy) { if let i = rows.firstIndex(where: { $0.id == id }) { rows[i].on = false } }
+        if lastAdded == id { lastAdded = nil }
+        changed()
+    }
+    // Back from the picker, the list goes to the last widget added, which glows a moment.
+    func reveal(_ scroll: ScrollViewProxy) {
+        guard let id = lastAdded, shown.contains(where: { $0.id == id }) else { return }
+        lastAdded = nil
         Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
-            withAnimation(.snappy) { scroll.scrollTo(id, anchor: .center) }
+            withAnimation(.snappy) { scroll.scrollTo(id, anchor: .center); justAdded = id }
             try? await Task.sleep(nanoseconds: 1_600_000_000)
             if justAdded == id { withAnimation(.easeOut(duration: 0.6)) { justAdded = nil } }
         }
     }
-    func remove(_ id: String) {
-        withAnimation(.snappy) { rows.removeAll { $0.id == id } }
-        changed()
+    func openAdd() {
+        flush()
+        // Kept as it was on opening, so a row he adds stays under his finger, ticked, rather than leaving the list.
+        offered = notHere.map { MoreItem(id: $0[0], name: $0[1], own: $0.count > 2 ? Int($0[2]) ?? 0 : 0) }
+        model.tick()
+        withAnimation(.snappy) { adding = true }
+    }
+    func closeAdd(_ scroll: ScrollViewProxy) {
+        withAnimation(.snappy) { adding = false }
+        reveal(scroll)
     }
 
     func pick() {
@@ -1055,33 +1167,96 @@ struct ChannelsTab: View {
         if picked.isEmpty { picked = channels.first?.id ?? "" }
         pick()
     }
-    // One + row, the same for the Chumby's own widgets and the catalog's.
-    func moreRow(id: String, name: String, own: Int, scroll: ScrollViewProxy) -> some View {
-        HStack(spacing: 14) {
-            Text(name).font(.custom("Trebuchet MS", size: 17)).lineLimit(1)
-            Spacer(minLength: 12)
-            Button { add(id: id, name: name, own: own, scroll: scroll) } label: {
-                Image(systemName: "plus").font(.system(size: 16, weight: .bold)).frame(width: 30, height: 30)
+    // What the picker lists: the Chumby's own widgets this channel doesn't play, or a catalog category's.
+    struct MoreItem { let id: String, name: String, own: Int }
+    // One picker row, tapped anywhere: + to add, and once added a tick (tap again to take it back out).
+    func pickRow(_ w: MoreItem) -> some View {
+        let isIn = rows.contains { $0.id == w.id && $0.on }
+        return Button {
+            model.tick()
+            if isIn { remove(w.id) } else { add(id: w.id, name: w.name, own: w.own) }
+        } label: {
+            HStack(spacing: 14) {
+                Text(w.name).lineLimit(1)
+                Spacer(minLength: 12)
+                Image(systemName: isIn ? "checkmark.circle.fill" : "plus.circle.fill").font(.system(size: 24))
+                    .foregroundStyle(isIn ? ChumbyPalette.on : ChumbyPalette.acc(scheme == .dark))
+                    .contentTransition(.symbolEffect(.replace))
             }
-            .buttonStyle(.glass).buttonBorderShape(.circle)
-            .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
-            .accessibilityLabel("Add \(name) to this channel")
+            .frame(minHeight: 34)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 2)
+        .buttonStyle(.plain)
+        .accessibilityLabel(isIn ? "\(w.name), in this channel" : "Add \(w.name)")
     }
-    // What "More widgets" lists: the Chumby's own that this channel lacks, or a catalog category's.
-    struct MoreItem { let id: String, name: String, own: Int; var more: String { "more-" + id } }
-    var moreList: [MoreItem] {
-        if category.isEmpty { return notHere.filter { w in !rows.contains { $0.id == w[0] } }.map { MoreItem(id: $0[0], name: $0[1], own: $0.count > 2 ? Int($0[2]) ?? 0 : 0) } }
-        return catalog.filter { c in !rows.contains { $0.id == c.0 } }.map { MoreItem(id: $0.0, name: $0.1, own: 0) }
+    var catalogItems: [MoreItem] { catalog.map { MoreItem(id: $0.0, name: $0.1, own: 0) } }
+    var pickedTitle: String { channels.first { $0.id == picked }.map(title) ?? "this channel" }
+    // The picker's sections: his Chumby's own widgets first, then the catalog by category.
+    @ViewBuilder var addSections: some View {
+        Section {
+            if offered.isEmpty { Text("Every widget on your Chumby is in this channel.").foregroundStyle(.secondary) }
+            ForEach(offered, id: \.id) { pickRow($0) }
+        } header: { Text("On your Chumby").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil) }
+        Section {
+            Picker("Category", selection: $category) {
+                Text("Choose one").tag("")
+                ForEach(categories, id: \.0) { Text($0.1).tag($0.0) }
+            }
+            .onChange(of: category) { _, _ in catalog = []; page = 1; more = false; Task { await loadCatalog() } }
+            ForEach(catalogItems, id: \.id) { pickRow($0) }
+            if busy { ProgressView().frame(maxWidth: .infinity) }
+            if !category.isEmpty && more && !busy { Button("Load more") { page += 1; Task { await loadCatalog() } }.foregroundStyle(.tint) }
+            if let f = model.failed("catalog") { FailNote(text: f) }
+        } header: { Text("From the catalog").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil) }
     }
-    // For the build: a channel chosen in Now playing (chsync), then a widget added with + (chdemo).
+    // A widget in the channel: its name, and its time on screen on the right, well clear of it. Swipe (or hold) to remove.
+    func widgetRow(_ w: EditorRow) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            Text(w.name).lineLimit(1)
+            Spacer(minLength: 16)
+            Menu {
+                Picker("Time on screen", selection: rowBinding(w.id, \.secs, w.secs)) {
+                    Text(w.own > 0 ? "Auto (\(w.own)s)" : "Auto").tag(0)
+                    ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "timer")
+                    Text(w.secs == 0 ? (w.own > 0 ? "Auto · \(w.own)s" : "Auto") : timeText(w.secs))
+                    Image(systemName: "chevron.up.chevron.down").imageScale(.small)
+                }
+                .font(.footnote.weight(.medium))
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(.white.opacity(0.12), in: Capsule())
+            }
+            .accessibilityLabel("Time on screen")
+            .onChange(of: w.secs) { _, _ in changed() }
+        }
+        .padding(.vertical, 4)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button("Remove", role: .destructive) { remove(w.id) }
+        }
+        .contextMenu { Button("Remove from \(pickedTitle)", systemImage: "minus.circle", role: .destructive) { remove(w.id) } }
+        .listRowBackground(GlassRow().overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
+    }
+    // The end of the list: one row, tapped anywhere, that opens the picker.
+    var addRow: some View {
+        Button { openAdd() } label: {
+            Label("Add widgets", systemImage: "plus.circle.fill").font(.body.weight(.semibold))
+                .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .moveDisabled(true).deleteDisabled(true)
+    }
+    // For the build: a channel chosen in Now playing (chsync); then the picker opened and a widget added (chdemo), or the
+    // picker left open for its shot (chadd).
     @State private var posed = false
-    @State private var demoAdd: Date?
 
     var body: some View {
         ScrollViewReader { scroll in
-        TwoPane {
+        TwoPane(rightTitle: adding && wide ? "Add to \(pickedTitle)" : " ",
+                rightTrailing: adding && wide ? AnyView(Button("Done") { closeAdd(scroll) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
             PageTitle("Channels")
             ReachRow()
             Section {
@@ -1095,48 +1270,24 @@ struct ChannelsTab: View {
                 Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
                 if let f = model.failed("nowPlaying") { FailNote(text: f) }
             } header: {
-                // The same header as More widgets, so the page's sections read as one set.
                 Text("Now playing").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
             }
         } right: {
+            if adding && wide {
+                addSections
+            } else {
             Section {
-                // By id, never by index: following the playing channel swaps `rows` under a live switch, and an index
-                // binding then reads past the end (it crashed choosing a channel).
-                ForEach(rows, id: \.id) { w in
-                    // The name and its time on the left, the switch alone on the right, so the two never crowd each other.
-                    HStack(alignment: .center, spacing: 14) {
-                        VStack(alignment: .leading, spacing: 7) {
-                            Text(w.name).lineLimit(1).opacity(w.on ? 1 : 0.45)
-                            Menu {
-                                Picker("Time on screen", selection: rowBinding(w.id, \.secs, w.secs)) {
-                                    Text(w.own > 0 ? "Auto (\(w.own)s)" : "Auto").tag(0)
-                                    ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
-                                }
-                            } label: {
-                                HStack(spacing: 5) {
-                                    Image(systemName: "timer")
-                                    Text(w.secs == 0 ? (w.own > 0 ? "Auto · \(w.own)s" : "Auto") : timeText(w.secs))
-                                    Image(systemName: "chevron.up.chevron.down").imageScale(.small)
-                                }
-                                .font(.footnote.weight(.medium))
-                                .padding(.horizontal, 10).padding(.vertical, 5)
-                                .background(.white.opacity(0.12), in: Capsule())
-                            }
-                            .disabled(!w.on).opacity(w.on ? 1 : 0.4)
-                            .accessibilityLabel("Time on screen")
-                            .onChange(of: w.secs) { _, _ in changed() }
-                        }
-                        Spacer(minLength: 12)
-                        Toggle("On", isOn: rowBinding(w.id, \.on, w.on)).labelsHidden().onChange(of: w.on) { _, _ in changed() }
+                if shown.isEmpty && !picked.isEmpty { Text("Nothing in this channel yet.").foregroundStyle(.secondary) }
+                // By id, never by index: following the playing channel swaps `rows` under the list.
+                ForEach(shown, id: \.id) { widgetRow($0) }
+                    .onMove { from, to in
+                        var on = shown
+                        on.move(fromOffsets: from, toOffset: to)
+                        rows = on + rows.filter { !$0.on }
+                        changed()
                     }
-                    .padding(.vertical, 4)
-                    .swipeActions(edge: .trailing) {
-                        Button("Remove", role: .destructive) { remove(w.id) }
-                    }
-                    .listRowBackground(GlassRow().overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
-                }
-                .onMove { rows.move(fromOffsets: $0, toOffset: $1); changed() }
-                .deleteDisabled(true)
+                    .deleteDisabled(true)
+                if !picked.isEmpty && !reordering { addRow }
                 if let f = model.failed("chedit") { FailNote(text: f) }
             } header: {
                 // The channel being edited is the header itself, so there's one "Default" here, not two.
@@ -1152,49 +1303,50 @@ struct ChannelsTab: View {
                     }
                     .accessibilityLabel("Channel to edit")
                     Spacer()
-                    Button(reordering ? "Done" : "Reorder") { withAnimation(.snappy) { reordering.toggle() } }
-                        .font(.body.weight(.semibold)).foregroundStyle(.tint)
+                    if shown.count > 1 {
+                        Button(reordering ? "Done" : "Reorder") { withAnimation(.snappy) { reordering.toggle() } }
+                            .font(.body.weight(.semibold)).foregroundStyle(.tint)
+                    }
                 }
                 .textCase(nil)
             } footer: {
-                // Only what he couldn't guess: Reorder and swipe-to-remove explain themselves.
                 if model.state.shuffle == 1 { Text("Shuffle is on, so your order won’t show until you turn it off.") }
             }
-            // The one way to add a widget: the Chumby's own, or a catalog category's, each with the same +.
-            if !picked.isEmpty {
-                Section {
-                    Picker("Category", selection: $category) {
-                        Text("On the Chumby").tag("")
-                        ForEach(categories, id: \.0) { Text($0.1).tag($0.0) }
-                    }
-                    .onChange(of: category) { _, _ in catalog = []; page = 1; more = false; Task { await loadCatalog() } }
-                    // Its own ids, so an added widget fades out here and in above, rather than flying across as one row.
-                    ForEach(moreList, id: \.more) { w in moreRow(id: w.id, name: w.name, own: w.own, scroll: scroll).transition(.opacity) }
-                        .deleteDisabled(true).moveDisabled(true)
-                    if busy { ProgressView().frame(maxWidth: .infinity) }
-                    if category.isEmpty && notHere.isEmpty { Text("Every widget on the Chumby is in this channel.").foregroundStyle(.secondary) }
-                    if !category.isEmpty && more && !busy { Button("Load more") { page += 1; Task { await loadCatalog() } }.foregroundStyle(.tint) }
-                    if let f = model.failed("catalog") { FailNote(text: f) }
-                } header: {
-                    Text("More widgets").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
-                }
             }
         }
-        .onChange(of: demoAdd) { _, _ in if let w = moreList.first { add(id: w.id, name: w.name, own: w.own, scroll: scroll) } }
+        .sheet(isPresented: Binding(get: { adding && !wide }, set: { if !$0 { closeAdd(scroll) } })) {
+            NavigationStack {
+                List { addSections.listRowBackground(GlassRow()) }
+                    .seaList().background { SeaBackground().ignoresSafeArea() }
+                    .navigationTitle("Add to \(pickedTitle)").navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .principal) { Text("Add to \(pickedTitle)").font(.custom("Trebuchet MS", size: 18).weight(.bold)).lineLimit(1) }
+                        ToolbarItem(placement: .confirmationAction) { Button("Done") { closeAdd(scroll) }.fontWeight(.semibold).foregroundStyle(.tint) }
+                    }
+            }
+            .tint(ChumbyPalette.acc(scheme == .dark))
+            .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
+            .environment(\.colorScheme, scheme)
         }
-        .seaList()
-        .dragToReorder(reordering)
+        .onChange(of: picked) { _, _ in if adding { withAnimation(.snappy) { adding = false } } }
+        .onChange(of: wide) { _, _ in adding = false }
         .onAppear {
             startFromCache()
-            guard !posed, ChumbyModel.pose == "chsync" || ChumbyModel.pose == "chdemo" else { return }
+            guard !posed, ["chsync", "chdemo", "chadd"].contains(ChumbyModel.pose) else { return }
             posed = true
             Task {
+                if ChumbyModel.pose == "chadd" { try? await Task.sleep(nanoseconds: 1_500_000_000); openAdd(); return }
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 if let n = model.state.channelNames.first(where: { $0 != model.state.channel }) { model.playChannel(n, id: "nowPlaying") }
                 guard ChumbyModel.pose == "chdemo" else { return }
-                try? await Task.sleep(nanoseconds: 3_000_000_000); demoAdd = Date()
+                try? await Task.sleep(nanoseconds: 2_000_000_000); openAdd()
+                try? await Task.sleep(nanoseconds: 1_500_000_000); if let w = offered.first { add(id: w.id, name: w.name, own: w.own) }
+                try? await Task.sleep(nanoseconds: 1_500_000_000); closeAdd(scroll)
             }
         }
+        }
+        .seaList()
+        .dragToReorder(reordering)
         .onChange(of: picked) { _, _ in pick() }
         .onChange(of: model.chosenChannel) { _, c in if let c { followPlaying(c.name) } }
         .task { await model.loadChannels(); if rows.isEmpty { startFromCache(); if rows.isEmpty { pick() } }; await loadCategories() }
@@ -1204,8 +1356,16 @@ struct ChannelsTab: View {
 }
 
 // MARK: - Sounds
+// What the Chumby is playing, and what his alarms play. It used to be a volume, a toggle, a list of Pandora station names
+// that did nothing when tapped and a list of streams (Richard, 2026-11-05: "aou ds tab which is rn almost useless and so
+// confusing"). Now, left: what's playing now with Stop and the volume, AirPlay, and the songs that woke him. Right: each
+// alarm with what it plays, chosen right there from his tones, radio streams and Pandora stations; how loud they ring; and
+// those sources themselves, which exist to be chosen there.
 struct SoundsTab: View {
     @EnvironmentObject var model: ChumbyModel
+    @ObservedObject private var art = SongArt.shared
+    @ObservedObject private var wake = CalendarWake.shared
+    @Environment(\.colorScheme) private var scheme
     @AppStorage("lastVolume") private var lastVolume = 4
     @State private var volume = 0.0
     @State private var dragging = false
@@ -1214,6 +1374,7 @@ struct SoundsTab: View {
     @State private var streamURL = ""
     @State private var streamName = ""
     @State private var pendingRemoval: Stream?
+    var dark: Bool { scheme == .dark }
 
     func set(_ v: Int) { volume = Double(v); model.cmd("volume", String(v), id: "sounds") }
     var scanNote: String? {
@@ -1224,58 +1385,150 @@ struct SoundsTab: View {
         default: return nil
         }
     }
+    // The song playing, when the Chumby says its player is going and Pandora's history has a song from the last few
+    // minutes; otherwise nothing is named rather than an old song.
+    var nowSong: Song? {
+        guard model.state.musicPlaying, let s = model.songs.max(by: { $0.t < $1.t }), Date().timeIntervalSince1970 - s.t < 8 * 60 else { return nil }
+        return s
+    }
+    var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && !$0.isHelper && !$0.isCalendar }.sorted { $0.localMinutes < $1.localMinutes } }
+    // How calendar alarms ring: the saved set, else how the first one rings now.
+    var calendarSound: Alarm? {
+        guard wake.rules.enabled || model.state.alarms.contains(where: \.isCalendar) else { return nil }
+        return model.state.calTpl ?? wake.storedSettings ?? model.state.alarms.first(where: \.isCalendar)
+    }
+
+    var playing: some View {
+        let song = nowSong
+        let f = song.flatMap { art.found[SongArt.key($0)] }
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+                ZStack {
+                    if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
+                    else {
+                        ZStack {
+                            ChumbyPalette.hex(0x2c5bae).opacity(model.state.musicPlaying ? 1 : 0.45)
+                            if model.state.musicPlaying { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
+                            else { OctopusMark(color: .white.opacity(0.85), eyes: ChumbyPalette.hex(0x2c5bae), blink: 0.08).padding(14) }
+                        }
+                    }
+                }
+                .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    if let song {
+                        Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
+                        Text(song.artist).foregroundStyle(.secondary).lineLimit(1)
+                    } else {
+                        Text(model.state.musicPlaying ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
+                    }
+                }
+                Spacer(minLength: 8)
+                // Stop only while something plays: with nothing to stop, it's a dead button.
+                if model.state.musicPlaying {
+                    Button { model.cmd("stopmusic", id: "sounds") } label: { Image(systemName: "stop.fill").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44) }
+                        .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Stop")
+                }
+            }
+            .onAppear { if let song { art.look(song) } }
+            HStack(spacing: 12) {
+                Button {
+                    if volume > 0 { lastVolume = Int(volume); set(0) } else { set(lastVolume > 0 ? lastVolume : 4) }
+                } label: { Image(systemName: volume > 0 ? "speaker.wave.2.fill" : "speaker.slash.fill").frame(width: 26) }
+                .buttonStyle(.borderless).accessibilityLabel(volume > 0 ? "Mute" : "Unmute")
+                Slider(value: $volume, in: 0...100, step: 1) { e in
+                    dragging = e
+                    if !e { if volume > 0 { lastVolume = Int(volume) }; model.cmd("volume", String(Int(volume)), id: "sounds") }
+                }.accessibilityLabel("Volume").tint(ChumbyPalette.orange)
+                Text("\(Int(volume))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
+            }
+            if let f = model.failed("sounds") { FailNote(text: f) }
+        }
+        .padding(.vertical, 6)
+        .animation(.snappy, value: model.state.musicPlaying)
+    }
+
+    // One alarm and what it plays, chosen from the same sources the editor offers, sent the careful way.
+    func soundRow(_ title: String, _ detail: String, _ a: Alarm, mark: String?, choose: @escaping (Alarm) -> Void) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body.weight(.semibold)).lineLimit(1)
+                Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 12)
+            Menu {
+                Picker("Plays", selection: Binding(get: { a.soundTag(streams: model.state.streams) }, set: { t in
+                    var b = a; b.setSound(t, streams: model.state.streams, stations: model.pandoraStations); choose(b)
+                })) {
+                    Section("Tones") { ForEach(model.state.tones, id: \.self) { Text($0).tag("beep:" + $0) } }
+                    if !model.state.streams.isEmpty { Section("Radio") { ForEach(model.state.streams, id: \.key) { Text($0.name.isEmpty ? $0.url : $0.name).tag("stream:" + $0.key) } } }
+                    if !model.pandoraStations.isEmpty { Section("Pandora") { ForEach(model.pandoraStations) { Text($0.name).tag("pandora:" + $0.id) } } }
+                    Text("Silent").tag("none")
+                    if a.soundTag(streams: model.state.streams).isEmpty { Text(a.soundText).tag("") }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(a.soundText).lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down").imageScale(.small)
+                }
+                .font(.subheadline.weight(.medium))
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(.white.opacity(0.12), in: Capsule())
+            }
+            .accessibilityLabel("What \(title) plays")
+            .overlay(alignment: .top) { if let mark { LandBubble(mark: mark) } }
+        }
+        .padding(.vertical, 2)
+    }
 
     var body: some View {
         TwoPane {
             PageTitle("Sounds")
             ReachRow()
-            Section("Now") {
-                VStack(spacing: 10) {
-                    LabeledContent("Volume", value: "\(Int(volume))%")
-                    HStack(spacing: 12) {
-                        Button {
-                            if volume > 0 { lastVolume = Int(volume); set(0) } else { set(lastVolume > 0 ? lastVolume : 4) }
-                        } label: { Image(systemName: volume > 0 ? "speaker.wave.2.fill" : "speaker.slash.fill").frame(width: 24) }
-                        .buttonStyle(.borderless).accessibilityLabel(volume > 0 ? "Mute" : "Unmute")
-                        Slider(value: $volume, in: 0...100, step: 1) { e in
-                            dragging = e
-                            if !e { if volume > 0 { lastVolume = Int(volume) }; model.cmd("volume", String(Int(volume)), id: "sounds") }
-                        }.accessibilityLabel("Volume").tint(ChumbyPalette.orange)
+            Section { playing } header: { SectionHead(icon: "speaker.wave.2.fill", text: "Now", color: ChumbyPalette.sub(dark)) }
+            Section {
+                Toggle(isOn: Binding(get: { model.sys.airplayOn }, set: { on in model.sys.airplayOn = on; model.cmd("airplay", on ? "1" : "0", id: "airplay") })) {
+                    Label("AirPlay to Chumby", systemImage: "airplayaudio")
+                }
+                if let f = model.failed("airplay") { FailNote(text: f) }
+            }
+            WokeUpTo()
+        } right: {
+            Section {
+                ForEach(mine, id: \.key) { a in
+                    VStack(alignment: .leading, spacing: 4) {
+                        soundRow("\(a.clock) \(a.meridiem)", [a.name, a.whenText].filter { !$0.isEmpty }.joined(separator: " · "), a, mark: a.key) { b in
+                            model.change(.replace(a, b))
+                        }
+                        MarkNote(mark: a.key)
                     }
                 }
-                Button("Stop music") { model.cmd("stopmusic", id: "sounds") }.foregroundStyle(.tint)
-                Toggle("AirPlay receiver", isOn: Binding(get: { model.sys.airplayOn }, set: { on in model.sys.airplayOn = on; model.cmd("airplay", on ? "1" : "0", id: "sounds") }))
-                if let f = model.failed("sounds") { FailNote(text: f) }
-            }
-            Section {
-                ForEach(model.state.pandora) { Text($0.name) }
-                Button(model.state.pandora.isEmpty ? "Get my stations" : "Update station list") {
-                    Task {
-                        do { try await model.api?.post("pscan"); model.state.pandoraScan = "waiting" }
-                        catch { model.fail("pscan", "Couldn’t start listening. \(AlarmWriter.explain(error))") }
+                if let c = calendarSound {
+                    soundRow("Calendar alarms", "Every one your calendar sets", c, mark: nil) { b in
+                        Task { if let why = await model.saveCalendarTemplate(b) { model.fail("calsound", why) } }
                     }
-                }.foregroundStyle(.tint)
-                if let f = model.failed("pscan") { FailNote(text: f) }
-            } header: { Text("Pandora") } footer: { if let scanNote { Text(scanNote) } }
-            } right: {
-            // How loud the alarms ring: saved the careful way, and marked here if it doesn't reach the Chumby.
-            Section("Alarms") {
+                    if let f = model.failed("calsound") { FailNote(text: f) }
+                }
+                if mine.isEmpty && calendarSound == nil { Text("No alarms yet.").foregroundStyle(.secondary) }
+                // How loud they ring: saved the careful way, and marked here if it doesn't reach the Chumby.
                 VStack(spacing: 10) {
-                    LabeledContent("Volume", value: "\(Int(alarmVolume))%")
-                    Slider(value: $alarmVolume, in: 0...100, step: 5) { e in
-                        if !e { model.change(.volume(Int(alarmVolume))) }
-                    }.accessibilityLabel("Alarm volume").tint(ChumbyPalette.orange)
-                        .overlay(alignment: .trailing) { LandBubble(mark: "alarmVolume") }
+                    HStack(spacing: 12) {
+                        Image(systemName: "alarm.waves.left.and.right.fill").frame(width: 26)
+                        Slider(value: $alarmVolume, in: 0...100, step: 5) { e in
+                            if !e { model.change(.volume(Int(alarmVolume))) }
+                        }.accessibilityLabel("Alarm volume").tint(ChumbyPalette.orange)
+                            .overlay(alignment: .trailing) { LandBubble(mark: "alarmVolume") }
+                        Text("\(Int(alarmVolume))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
+                    }
                 }
                 MarkNote(mark: "alarmVolume")
                 Picker("Fade in", selection: Binding(get: { model.state.fade }, set: { model.change(.fade($0)) })) {
                     ForEach([(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")], id: \.0) { Text($0.1).tag($0.0) }
                 }
                 MarkNote(mark: "fade")
-            }
+            } header: { SectionHead(icon: "alarm", text: "Alarms play", color: ChumbyPalette.acc(dark)) }
             Section {
                 ForEach(model.state.streams, id: \.key) { s in
-                    Text(s.name.isEmpty ? s.url : s.name).lineLimit(1)
+                    Label(s.name.isEmpty ? s.url : s.name, systemImage: "dot.radiowaves.left.and.right").lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .swipeActions { Button("Remove", role: .destructive) { pendingRemoval = s } }
                         // The question hangs off the row that was swiped, so it points at what's going.
@@ -1285,15 +1538,38 @@ struct SoundsTab: View {
                             }
                         }
                 }
-                Button("Add a stream…") { addStream = true }.foregroundStyle(.tint)
+                Button { addStream = true } label: { Label("Add a radio stream", systemImage: "plus.circle.fill") }.foregroundStyle(.tint)
                 if let f = model.failed("streams") { FailNote(text: f) }
-            } header: { Text("Radio streams") } footer: { if !model.state.streams.isEmpty { Text("Swipe a stream to remove it.") } }
+                // Pandora's stations come from the Chumby itself, once Pandora has been opened there.
+                Button {
+                    Task {
+                        do { try await model.api?.post("pscan"); model.state.pandoraScan = "waiting" }
+                        catch { model.fail("pscan", "Couldn’t start listening. \(AlarmWriter.explain(error))") }
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Label(model.state.pandora.isEmpty ? "Get my Pandora stations" : "Pandora · \(model.state.pandora.count) station\(model.state.pandora.count == 1 ? "" : "s")", systemImage: "antenna.radiowaves.left.and.right")
+                        Spacer(minLength: 8)
+                        if !model.state.pandora.isEmpty { Text("Update").font(.subheadline.weight(.semibold)).foregroundStyle(.tint) }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).foregroundStyle(model.state.pandora.isEmpty ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                if let f = model.failed("pscan") { FailNote(text: f) }
+            } header: { SectionHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark)) } footer: { if let scanNote { Text(scanNote) } }
         }
         .seaList()
         .task(id: model.sys.vol) { if !dragging && model.sys.vol >= 0 { volume = Double(model.sys.vol) } }
         .task(id: model.state.volume) { alarmVolume = Double(model.state.volume) }
-        .refreshable { await model.loadSys(); await model.loadState() }
-        .alert("Add a stream", isPresented: $addStream) {
+        // While something plays and this tab is up, the history is read often, so the song shown is the one playing.
+        .task(id: model.tab == 3 && model.state.musicPlaying) {
+            while model.tab == 3 && !Task.isCancelled {
+                await model.loadSongs(force: model.state.musicPlaying)
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+            }
+        }
+        .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
+        .alert("Add a radio stream", isPresented: $addStream) {
             TextField("MP3 stream address", text: $streamURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
             TextField("Station name", text: $streamName)
             Button("Add") {
@@ -1323,6 +1599,7 @@ struct TinkerTab: View {
         TwoPane {
             PageTitle("Enjoy tinkering?")
             ReachRow()
+            NightSettings()
             Section {
                 TextField("NASA, BBCBreaking", text: $accounts).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .onChange(of: accounts) { _, n in edited = n != model.sys.tw.joined(separator: ", ") }
@@ -1361,6 +1638,69 @@ struct TinkerTab: View {
         .task(id: model.sys.tw) { if !edited { accounts = model.sys.tw.joined(separator: ", ") } }
         .onAppear { address = model.address }
         .refreshable { await model.loadSys(); await model.loadState() }
+    }
+}
+
+// Night, in one place: what night looks like (the style Home's day/night button and the widget use), and the times the
+// Chumby switches by itself every day. These were "Daily schedule" on Alarms, among the alarms but not alarms, with a footer
+// saying they run with the phone away; he found the Alarms tab confusing (2026-11-05), so they live here now.
+struct NightSettings: View {
+    @EnvironmentObject var model: ChumbyModel
+    @AppStorage("nightKind") private var kind = "on"
+    // Night here is always the chosen style, so a time set to Night never disagrees with the button.
+    var actions: [(String, String)] {
+        [("night:night", "Night"), ("night:off", "Day"), ("screen:bright", "Screen bright"), ("screen:dim", "Screen dim"), ("screen:off", "Screen off")]
+            + model.state.channelNames.map { ("channel:" + $0, "Channel: " + $0) }
+    }
+    func tag(_ e: ScheduleItem) -> String { e.cmd == "night" ? (e.val == "off" ? "night:off" : "night:night") : e.cmd + ":" + e.val }
+    // A new style is used everywhere at once: the Chumby's own nightly times, and the Chumby itself if it's night now.
+    func choose(_ style: String) {
+        kind = style
+        var changed = false
+        for i in model.state.schedule.indices where model.state.schedule[i].cmd == "night" && model.state.schedule[i].val != "off" && model.state.schedule[i].val != style {
+            model.state.schedule[i].val = style; changed = true
+        }
+        if changed { Task { await model.saveSchedule() } }
+        if model.sys.night == 1 { model.setNight(style) }
+    }
+    var body: some View {
+        Section {
+            Picker("Night looks like", selection: Binding(get: { model.nightStyle }, set: { model.tick(); choose($0) })) {
+                ForEach(nightStyles, id: \.0) { Text($0.1).tag($0.0) }
+            }
+            .pickerStyle(.segmented)
+            .listRowInsets(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
+            ForEach($model.state.schedule) { $e in
+                HStack(spacing: 12) {
+                    Image(systemName: e.cmd == "night" ? (e.val == "off" ? "sun.max.fill" : "moon.fill") : e.cmd == "screen" ? "sun.min" : "tv")
+                        .font(.body.weight(.semibold)).frame(width: 24)
+                        .foregroundStyle(e.cmd == "night" && e.val == "off" ? ChumbyPalette.hex(0xe59a2e) : ChumbyPalette.hex(0xa4b7d6))
+                    DatePicker("Time", selection: Binding(get: { NightSettings.date(e.time) }, set: { e.time = NightSettings.hhmm($0); model.saveScheduleSoon() }), displayedComponents: .hourAndMinute).labelsHidden()
+                    Spacer(minLength: 8)
+                    Picker("Action", selection: Binding(get: { tag(e) }, set: { v in
+                        let parts = v.split(separator: ":", maxSplits: 1).map(String.init)
+                        e.cmd = parts[0]; e.val = parts.count > 1 ? (parts[1] == "night" ? model.nightStyle : parts[1]) : ""
+                        Task { await model.saveSchedule() }
+                    })) {
+                        ForEach(actions, id: \.0) { Text($0.1).tag($0.0) }
+                    }.labelsHidden()
+                }
+            }
+            .onDelete { model.state.schedule.remove(atOffsets: $0); model.state.reindex(); Task { await model.saveSchedule() } }
+            Button {
+                var e = ScheduleItem(); e.val = model.nightStyle
+                model.state.schedule.append(e); model.state.reindex(); Task { await model.saveSchedule() }
+            } label: { Label("Add a time", systemImage: "plus.circle.fill") }.foregroundStyle(.tint)
+            if let f = model.failed("schedule") { FailNote(text: f) }
+        } header: { Text("Night") }
+    }
+    static func date(_ s: String) -> Date {
+        let p = s.split(separator: ":").compactMap { Int($0) }
+        return Calendar.current.date(bySettingHour: p.first ?? 22, minute: p.count > 1 ? p[1] : 0, second: 0, of: Date()) ?? Date()
+    }
+    static func hhmm(_ d: Date) -> String {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+        return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
     }
 }
 

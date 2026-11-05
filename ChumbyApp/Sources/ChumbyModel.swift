@@ -322,8 +322,9 @@ final class ChumbyModel: ObservableObject {
     }
     // What Pandora played, newest first, for "Woke up to". Kept, so it's there at once next time.
     private var histAt = Date.distantPast
-    func loadSongs() async {
-        guard let api, Date().timeIntervalSince(histAt) > 300 else { return }
+    // `force`: Sounds, while something plays, reads it every 20 s so the song it names is the one playing.
+    func loadSongs(force: Bool = false) async {
+        guard let api, Date().timeIntervalSince(histAt) > (force ? 15 : 300) else { return }
         histAt = Date()
         struct H: Decodable { let songs: [Song] }
         guard let r = try? await fetch("hist", from: api), let h = try? JSONDecoder().decode(H.self, from: r.data) else { return }
@@ -663,6 +664,8 @@ actor OneAtATime {
     static let light: UIImpactFeedbackGenerator = { let g = UIImpactFeedbackGenerator(style: .light); g.prepare(); return g }()
     static let medium: UIImpactFeedbackGenerator = { let g = UIImpactFeedbackGenerator(style: .medium); g.prepare(); return g }()
     static let note: UINotificationFeedbackGenerator = { let g = UINotificationFeedbackGenerator(); g.prepare(); return g }()
-    static func warm() { light.prepare(); medium.prepare(); note.prepare() }
+    // The firm thunk a held button lands with, like the Lock Screen's flashlight.
+    static let heavy: UIImpactFeedbackGenerator = { let g = UIImpactFeedbackGenerator(style: .heavy); g.prepare(); return g }()
+    static func warm() { light.prepare(); medium.prepare(); heavy.prepare(); note.prepare() }
 }
 #endif

@@ -1,7 +1,8 @@
 import SwiftUI
 import WidgetKit
-// Widgets at real sizes for the cloud build's screenshots. Never shipped. Three screens (-page 0, 1, 2), so nothing sits
-// below the capture: the Home Screen widgets, then Your Chumby in each state, then tinted and Lock Screen renders.
+// Widgets at real sizes for the cloud build's screenshots. Never shipped. Four screens (-page 0, 1, 2, 3), so nothing sits
+// below the capture: the Home Screen widgets, then Your Chumby in each state, then tinted and Lock Screen renders, then
+// Your Chumby on a clear Home Screen as his phone draws it.
 func card<C: View>(_ w: CGFloat, _ h: CGFloat, sea: Bool = true, @ViewBuilder _ c: () -> C) -> some View {
     c().padding(16).frame(width: w, height: h)
         .environment(\.colorScheme, .dark).foregroundStyle(sea ? ChumbyPalette.ink(true) : .white)
@@ -12,6 +13,10 @@ func card<C: View>(_ w: CGFloat, _ h: CGFloat, sea: Bool = true, @ViewBuilder _ 
 func accessory<C: View>(_ w: CGFloat, _ h: CGFloat, @ViewBuilder _ c: () -> C) -> some View {
     c().frame(width: w, height: h).foregroundStyle(.white).environment(\.widgetRenderingMode, .vibrant).environment(\.colorScheme, .dark)
 }
+// A clear or tinted Home Screen as the system draws it, at its harshest: every colour to white, keeping only how opaque
+// it is. The app can't flatten a render the way the Home Screen does, so the tinted shots looked fine while his phone
+// showed a blank white night button (2026-11-05); this shows what's left once the colours are gone.
+extension View { func flattened() -> some View { self.colorMultiply(.black).colorInvert() } }
 @main struct GalleryApp: App {
     let e = ChumbyProvider.sample
     var off: ChumbyEntry { ChumbyEntry(date: Date()) }
@@ -22,6 +27,7 @@ func accessory<C: View>(_ w: CGFloat, _ h: CGFloat, @ViewBuilder _ c: () -> C) -
         return s
     }
     var night: ChumbyEntry { var s = skipped; s.sys.night = 1; return s }
+    var nightOnly: ChumbyEntry { var s = ChumbyProvider.sample; s.sys.night = 1; return s }
     var playing: ChumbyEntry { var s = ChumbyProvider.sample; s.playing = true; return s }
     var lost: ChumbyEntry { var s = ChumbyEntry(date: Date()); s.lastSeen = Date().addingTimeInterval(-25 * 60); return s }
     var page: Int { UserDefaults.standard.integer(forKey: "page") }
@@ -33,6 +39,11 @@ func accessory<C: View>(_ w: CGFloat, _ h: CGFloat, @ViewBuilder _ c: () -> C) -
                 card(338, 158) { RemoteBody(entry: night) }
                 card(338, 158) { RemoteBody(entry: playing) }
                 card(338, 158) { RemoteBody(entry: lost) }
+            case 3:
+                // His Home Screen (2026-11-05): a pink clear-mode wallpaper. Day, night (lit button) and night with a skip.
+                card(338, 158, sea: false) { RemoteBody(entry: e).flattened() }.environment(\.widgetRenderingMode, .accented)
+                card(338, 158, sea: false) { RemoteBody(entry: nightOnly).flattened() }.environment(\.widgetRenderingMode, .accented)
+                card(338, 158, sea: false) { RemoteBody(entry: night).flattened() }.environment(\.widgetRenderingMode, .accented)
             case 2:
                 // A tinted (clear) Home Screen flattens every colour to one tone over the wallpaper.
                 HStack(spacing: 14) {
@@ -57,6 +68,6 @@ func accessory<C: View>(_ w: CGFloat, _ h: CGFloat, @ViewBuilder _ c: () -> C) -
             }
         }
         .padding(10).frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(page == 2 ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.12, green: 0.2, blue: 0.35), Color(red: 0.35, green: 0.25, blue: 0.4)], startPoint: .top, endPoint: .bottom)) : AnyShapeStyle(Color(white: 0.8)))
+        .background(page == 3 ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.86, green: 0.55, blue: 0.72), Color(red: 0.72, green: 0.42, blue: 0.62)], startPoint: .top, endPoint: .bottom)) : page == 2 ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.12, green: 0.2, blue: 0.35), Color(red: 0.35, green: 0.25, blue: 0.4)], startPoint: .top, endPoint: .bottom)) : AnyShapeStyle(Color(white: 0.8)))
     } }
 }

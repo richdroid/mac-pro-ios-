@@ -193,7 +193,7 @@ function chumbyScene(q, s) {
   // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
   const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing)\//);
   if (!m) return false;
   const scene = m[1];
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
@@ -234,6 +234,9 @@ function chumbyScene(q, s) {
   if (scene === 'ringing' && a === 'sys') return json({ ...data.sys, ring: 'r\tWork\tBeep' });
   if (scene === 'snoozed' && a === 'sys') return json({ ...data.sys, ring: 's\tWork\tBeep' });
   if (scene === 'skipped' && a === 'state') return json({ ...data.state, skipped: nextWork() });
+  // Pandora playing a song it started a minute and a half ago, for Sounds' Now.
+  if (scene === 'playing' && a === 'state') return json({ ...data.state, music: { playing: true } });
+  if (scene === 'playing' && a === 'hist') return json({ ok: true, songs: [{ t: Date.now() / 1000 - 90, title: 'Blue in Green', artist: 'Miles Davis', album: 'Kind of Blue' }, ...data.hist.songs] });
   if (scene === 'dead') {
     // The Mac answers, but says the Chumby itself hasn't for 25 minutes.
     if (a === 'health') return json({ up: false, lastSeen: Date.now() / 1000 - 25 * 60 });

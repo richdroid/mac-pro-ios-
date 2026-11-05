@@ -84,29 +84,34 @@ func alarmLabel(_ a: Alarm) -> String {
     return a.name.isEmpty ? "your \(a.clock) \(a.meridiem) alarm" : a.name
 }
 
-// One alarm row, the same for your own alarms and the calendar's: the time large, what it is under it, any word about it
-// under that, and the switch alone on the right.
+// One alarm row, the same shape for his own alarms and the calendar's: the kind's tile, the time large, what it is, a line
+// about when (or which event), any word about it under that, and the switch alone on the right. Tapped anywhere but the
+// switch, it opens.
 struct AlarmRow<Notes: View>: View {
     let clock: (String, String)
-    var day: String?
+    let title: String
     let detail: String
     let on: Bool
     var mark: String?
+    var tile: AnyView?
     let tap: () -> Void
     let toggle: Binding<Bool>
     @ViewBuilder var notes: () -> Notes
     var body: some View {
         HStack(spacing: 12) {
             Button(action: tap) {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 3) {
-                        Text(clock.0).font(.custom("Trebuchet MS", size: 44)).monospacedDigit()
-                        Text(clock.1).font(.custom("Trebuchet MS", size: 20))
-                        if let day { Text(day).font(.subheadline).foregroundStyle(.secondary).padding(.leading, 6) }
+                HStack(alignment: .top, spacing: 12) {
+                    if let tile { tile.padding(.top, 6) }
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text(clock.0).font(.custom("Trebuchet MS", size: 40)).monospacedDigit()
+                            Text(clock.1).font(.custom("Trebuchet MS", size: 18))
+                        }
+                        .opacity(on ? 1 : 0.5)
+                        Text(title).font(.body.weight(.semibold)).lineLimit(1).opacity(on ? 1 : 0.6)
+                        Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(2).opacity(on ? 1 : 0.7)
+                        notes()
                     }
-                    .opacity(on ? 1 : 0.5)
-                    Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(2).opacity(on ? 1 : 0.7)
-                    notes()
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -339,6 +344,7 @@ final class SongArt: ObservableObject {
 }
 struct WokeUpTo: View {
     @EnvironmentObject var model: ChumbyModel
+    @Environment(\.colorScheme) private var scheme
     @ObservedObject private var art = SongArt.shared
     @Environment(\.openURL) private var openURL
     // For each time an alarm went off, the first song Pandora played in the 45 minutes after it.
@@ -376,7 +382,7 @@ struct WokeUpTo: View {
                     .padding(.vertical, 4)
                 }
                 .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
-            } header: { Text("Woke up to") }
+            } header: { SectionHead(icon: "sunrise.fill", text: "Woke up to", color: ChumbyPalette.sub(scheme == .dark)) }
         }
     }
     func tile(_ s: Song) -> some View {
@@ -424,6 +430,7 @@ struct AlarmsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
     @Environment(\.paneLayout) private var wide
+    @Environment(\.colorScheme) private var scheme
     @State private var editing: EditTarget?
     @State private var day: DayTarget?
     // Open, the right pane holds whatever would otherwise be a sheet, so nothing sits across the fold.
@@ -435,16 +442,10 @@ struct AlarmsTab: View {
     @AppStorage("missedDismissed") private var dismissedRaw = ""
     struct EditTarget: Identifiable { let alarm: Alarm?; var id: String { alarm?.key ?? "new" } }
     struct DayTarget: Identifiable { let id: String }
-    static let actions = [("night", "on", "Night mode: clock"), ("night", "dim", "Night mode: dim"), ("night", "dark", "Night mode: dark"), ("night", "off", "Night mode off"), ("screen", "bright", "Screen bright"), ("screen", "dim", "Screen dim"), ("screen", "off", "Screen off")]
 
     var dismissed: Set<String> { Set(dismissedRaw.split(separator: "\n").map(String.init)) }
     var missed: [ChumbyState.Missed] { model.state.missed.filter { Date().timeIntervalSince1970 - $0.at < 86400 && !dismissed.contains($0.id) }.suffix(3).reversed().map { $0 } }
     var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" }.sorted { $0.localMinutes < $1.localMinutes } }
-    var volumeText: String {
-        let f = model.state.fade
-        let fade = f < 0 ? "" : f == 0 ? ", no fade" : ", fades in over " + (f < 60 ? "\(f) s" : "\(f / 60) min")
-        return "Rings at \(model.state.volume)%" + fade
-    }
     var paneShown: Pane { wide ? pane : .schedule }
     // Pages that bring their own title row (editor, day) have none from here.
     var rightTitle: String? {
@@ -510,6 +511,12 @@ struct AlarmsTab: View {
         }
     }
     static let slide = 0.35
+    // Folded, top to bottom as he uses it: what rings next (with Skip), then the calendar's alarms, then his own, then a
+    // nap. Open, the calendar's sit under the hero on the left and his own and the nap on the right, so both panes carry
+    // weight. The two kinds never look alike: the calendar's have a coral page-of-a-calendar tile and say which event and
+    // how long before it; his own have a blue alarm tile and say when they repeat (Richard, 2026-11-05: "theres little to
+    // no distinction between daily alarms and calendar alarms its just super unintuitive"). Night times moved to Tinker,
+    // and "Woke up to" to Sounds.
     var page: some View {
         TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
             // + lives in the side bar's column when there is one (RootView puts it there); only with the bars across is it here.
@@ -528,14 +535,12 @@ struct AlarmsTab: View {
                     }
                 } footer: { Text("The Chumby was frozen or off when these came due. Swipe to dismiss.") }
             }
-            yours
             calendar
         } right: {
             switch paneShown {
             case .schedule:
-                Section("Quick nap") { NapChips().id("nap") }
-                WokeUpTo()
-                schedule
+                yours
+                Section { NapChips().id("nap") } header: { SectionHead(icon: "zzz", text: "Nap", color: ChumbyPalette.sub(scheme == .dark)) }
             case .settings: CalendarSettingsSections()
             case .editor(let a): AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new")
             case .day(let k): CalendarDaySheet(key: k, close: { show(.schedule) }).id(k)
@@ -555,8 +560,6 @@ struct AlarmsTab: View {
         .onChange(of: wide) { _, _ in pane = .schedule }
         .onAppear {
             wake.refreshPlan()
-            SongArt.shared.prefetch(model.songs, model.state.alarms)
-            Task { await model.loadSongs(); SongArt.shared.prefetch(model.songs, model.state.alarms) }
             guard !posed else { return }
             posed = true
             switch ChumbyModel.pose {
@@ -565,13 +568,15 @@ struct AlarmsTab: View {
             case "calday": if let k = wake.plan.first?.key { openDay(k) }
             case "editor": edit(mine.first ?? Alarm())
             case "editornew": edit(nil)
+            // His own alarms and the nap brought on screen, folded, for their shot.
+            case "alarmsmine": Task { try? await Task.sleep(nanoseconds: 1_500_000_000); scrollTo = "nap" }
             case "failure":
                 Task {
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
                     if let a = mine.first { model.change(.toggle(a, !a.isOn)) }
                 }
             case "alarmsdemo":
-                // For the build's film: Settings in and out, then down to Quick nap, where a 10-minute nap is started,
+                // For the build's film: Settings in and out, then down to the nap, where a 10-minute nap is started,
                 // counts down for a while and is called off, all on screen.
                 Task {
                     try? await Task.sleep(nanoseconds: 2_000_000_000); openSettings()
@@ -585,23 +590,29 @@ struct AlarmsTab: View {
         }
     }
 
-    // What rings next, first, so it never has to be worked out from the list.
+    // What rings next, first, so it never has to be worked out from the list: what kind it is, the time, when, and Skip.
+    @State private var skipping = false
     @ViewBuilder var glance: some View {
         if !model.stateKnown {
             HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) }.padding(.vertical, 6)
         } else if let n = model.nextRing() {
-            VStack(alignment: .leading, spacing: 2) {
+            let fromCalendar = n.alarm.isCalendar
+            let skippedNow = model.state.skipped.map { $0.date > Date() } == true
+            VStack(alignment: .leading, spacing: 3) {
                 // A skip shows here too, with its Undo, so the time below never looks as if the skipped one vanished.
                 if let s = model.state.skipped, s.date > Date() {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(clockParts(s.date).0 + " " + clockParts(s.date).1).font(.custom("Trebuchet MS", size: 17).weight(.bold)).strikethrough().foregroundStyle(.secondary)
                         Text("Skipped").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                         Spacer(minLength: 8)
-                        Button("Undo") { Task { await model.unskip() } }.font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
+                        Button("Undo") { Task { await model.unskip() } }.font(.subheadline.weight(.semibold)).foregroundStyle(.tint).buttonStyle(.borderless)
                     }
                     .padding(.bottom, 4)
                 }
-                Text(model.state.skipped.map { $0.date > Date() } == true ? "Then" : "Next alarm").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                // What kind it is, in that kind's colour, the same glyph as its row below.
+                SectionHead(icon: fromCalendar ? "calendar" : "alarm.fill",
+                            text: (skippedNow ? "Then" : "Next alarm") + " · " + kindWord(n.alarm),
+                            color: fromCalendar ? ChumbyPalette.cal(scheme == .dark) : ChumbyPalette.acc(scheme == .dark))
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     let c = clockParts(n.at)
                     Text(c.0).font(.custom("Trebuchet MS", size: 52).weight(.bold)).monospacedDigit().contentTransition(.numericText())
@@ -609,7 +620,23 @@ struct AlarmsTab: View {
                     Spacer(minLength: 8)
                     Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
                 }
-                Text("\(dayWord(n.at)) · \(alarmLabel(n.alarm).capitalizedFirst)").foregroundStyle(.secondary).lineLimit(1).contentTransition(.numericText())
+                HStack(alignment: .center, spacing: 10) {
+                    Text("\(dayWord(n.at)) · \(alarmLabel(n.alarm).capitalizedFirst)").foregroundStyle(.secondary).lineLimit(1).contentTransition(.numericText())
+                    Spacer(minLength: 8)
+                    // The one thing he'd reach for here: let it pass. Only on a Chumby that can skip, and not twice.
+                    if model.state.skipKnown && !skippedNow && model.sys.ringing == nil {
+                        Button {
+                            skipping = true
+                            Task { await model.skipNext(); skipping = false }
+                        } label: {
+                            Group { if skipping { ProgressView() } else { Label("Skip", systemImage: "forward.end.fill") } }
+                                .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
+                        }
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .accessibilityLabel("Skip the \(clockParts(n.at).0) \(clockParts(n.at).1) alarm")
+                    }
+                }
+                if let f = model.failed("skip") { FailNote(text: f) }
             }
             .padding(.vertical, 2)
             // A nap starting or called off rolls the time over rather than swapping it.
@@ -622,41 +649,72 @@ struct AlarmsTab: View {
         }
     }
 
+    // What kind of alarm it is, in a few words, for the hero's heading.
+    func kindWord(_ a: Alarm) -> String {
+        if a.isCalendar { return "from your calendar" }
+        if a.name == "Nap" { return "nap" }
+        if a.name == "Catch-up" { return "catch-up" }
+        switch a.when {
+        case "once": return "one-off"
+        case "daily": return "every day"
+        case "weekday": return "weekdays"
+        case "weekend": return "weekends"
+        default: return a.whenText
+        }
+    }
+    // His own alarms: blue alarm tiles, each saying when it repeats and what it plays.
     var yours: some View {
         Section {
             if model.stateKnown && mine.isEmpty {
-                Text("No alarms yet. Tap + to add one.").foregroundStyle(.secondary)
+                Text("None of your own. Tap + to add one.").foregroundStyle(.secondary)
             }
             ForEach(mine, id: \.key) { a in
-                AlarmRow(clock: (a.clock, a.meridiem), detail: [a.name, a.whenText, a.soundText].filter { !$0.isEmpty }.joined(separator: " · "), on: a.isOn, mark: a.key,
+                AlarmRow(clock: (a.clock, a.meridiem), title: a.name.isEmpty ? "Alarm" : a.name,
+                         detail: [a.whenText, a.soundText].filter { !$0.isEmpty }.joined(separator: " · "), on: a.isOn, mark: a.key,
+                         tile: AnyView(AlarmTile(calendarDay: nil, on: a.isOn)),
                          tap: { edit(a) },
                          toggle: Binding(get: { a.isOn }, set: { model.change(.toggle(a, $0)) })) {
                     MarkNote(mark: a.key)
                 }
             }
-            if model.stateKnown {
-                Button { model.tab = 3 } label: {
-                    HStack(spacing: 8) { Image(systemName: "speaker.wave.2.fill").font(.footnote); Text(volumeText) }
-                        .font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).accessibilityHint("Opens Sounds")
-            }
-        } header: { Text("Your alarms") } footer: {
+        } header: { SectionHead(icon: "alarm", text: "My alarms", color: ChumbyPalette.acc(scheme == .dark)) } footer: {
             if model.state.pending { Text("The Chumby is putting your last change in place.") }
         }
     }
 
-    // The calendar's alarms in the same rows as your own, checked against what the Chumby really holds.
+    // The rule first, said plainly, and changed only as a rule; then the alarms it has set, checked against what the
+    // Chumby really holds. A row opens that day, which is also changed only as "how long before".
+    var ruleRow: some View {
+        Button { if wide { show(pane == .settings ? .schedule : .settings) } else { openSettings() } } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "calendar.badge.clock").font(.system(size: 22, weight: .semibold)).foregroundStyle(ChumbyPalette.cal(scheme == .dark))
+                    .frame(width: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Wakes you \(leadText(wake.rules.workLead)) before work")
+                    Text("\(leadText(wake.rules.otherLead)) before anything else").font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens calendar settings")
+        .listRowBackground(wide && pane == .settings ? AnyView(ChumbyPalette.cal(scheme == .dark).opacity(0.18)) : AnyView(GlassRow()))
+    }
     var calendar: some View {
         Section {
             if wake.rules.enabled && wake.allowed {
+                ruleRow
                 if wake.plan.isEmpty { Text("Nothing coming up that needs waking for.").foregroundStyle(.secondary) }
                 ForEach(wake.plan) { item in
                     // Only against a recent reading, and never in the build's sample, which has no Chumby behind it.
                     let status = model.stateConfirmed && !CalendarWake.sample ? wake.onDevice(item, in: model.deviceState) : .set
-                    AlarmRow(clock: clockParts(item.wake), day: item.wake.formatted(.dateTime.weekday(.abbreviated)),
-                             detail: "\(item.title) at \(item.start.formatted(date: .omitted, time: .shortened)), \(leadText(item.lead)) before",
-                             on: !item.skipped, tap: { openDay(item.key) },
+                    AlarmRow(clock: clockParts(item.wake), title: item.title,
+                             detail: "Starts \(item.start.formatted(date: .omitted, time: .shortened)) · \(leadText(item.lead)) before",
+                             on: !item.skipped,
+                             tile: AnyView(AlarmTile(calendarDay: item.wake, on: !item.skipped)),
+                             tap: { openDay(item.key) },
                              toggle: Binding(get: { !item.skipped }, set: { _ in model.tick(); wake.toggleSkip(item) })) {
                         if let short = item.shortNight { RowNote(icon: "moon.zzz", text: "Short night: \(short)") }
                         if !item.skipped, let other = wake.alsoRinging(item, in: model.state) { RowNote(icon: "alarm", text: "Also rings earlier: \(other)") }
@@ -695,58 +753,95 @@ struct AlarmsTab: View {
             }
             if let f = model.failed("stray") { FailNote(text: f) }
             if wake.denied { OpenSettingsButton() }
-            if wake.rules.enabled && wake.allowed {
-                // One way in for all of it: wake-up times, how the alarms ring, words and calendars.
-                if wide {
-                    Button { show(pane == .settings ? .schedule : .settings) } label: {
-                        HStack { Text("Settings"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(pane == .settings ? AnyView(Color.accentColor.opacity(0.18)) : AnyView(GlassRow()))
-                } else {
-                    // Opened through the model, so the rail knows to swap + for Back.
-                    Button { openSettings() } label: {
-                        HStack { Text("Settings"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }.contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
         } header: {
-            Text("From your calendar")
+            SectionHead(icon: "calendar", text: "Calendar", color: ChumbyPalette.cal(scheme == .dark))
         } footer: {
+            // Only what's wrong or waiting, and what turning it on does. No reassurance (Richard, 2026-11-05: "i dont need
+            // this message abt it ringing when my phone isnt on esp not twice").
             if let n = wake.note { Text(n) }
-            else if wake.rules.enabled, let s = wake.lastSync { Text("Set on the Chumby, so they ring with your phone off. Updated \(s.formatted(.relative(presentation: .named))). Tap one to change that day.") }
             else if !wake.rules.enabled { Text("Wakes you before the first thing each day.") }
         }
     }
-
-    var schedule: some View {
-        Section {
-            ForEach($model.state.schedule) { $e in
-                HStack {
-                    DatePicker("Time", selection: Binding(get: { Self.date(e.time) }, set: { e.time = Self.hhmm($0); model.saveScheduleSoon() }), displayedComponents: .hourAndMinute).labelsHidden()
-                    Picker("Action", selection: Binding(get: { e.cmd + ":" + e.val }, set: { v in
-                        let parts = v.split(separator: ":", maxSplits: 1).map(String.init)
-                        e.cmd = parts[0]; e.val = parts.count > 1 ? parts[1] : ""
-                        Task { await model.saveSchedule() }
-                    })) {
-                        ForEach(Self.actions, id: \.2) { Text($0.2).tag($0.0 + ":" + $0.1) }
-                        ForEach(model.state.channelNames, id: \.self) { Text("Channel: " + $0).tag("channel:" + $0) }
-                    }.labelsHidden()
+}
+// A section's heading with its kind's glyph and colour, so the two kinds of alarm can be told apart at a glance.
+struct SectionHead: View {
+    let icon: String, text: String, color: Color
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(.subheadline.weight(.semibold))
+            Text(text).font(.custom("Trebuchet MS", size: 16).weight(.bold))
+        }
+        .foregroundStyle(color).textCase(nil)
+    }
+}
+// The tile at the head of an alarm row. A calendar alarm's is a little page of a calendar in coral (its weekday over its
+// date); his own is the alarm glyph on blue. Dimmed with the row when it's off.
+struct AlarmTile: View {
+    let calendarDay: Date?
+    let on: Bool
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        Group {
+            if let d = calendarDay {
+                let c = ChumbyPalette.cal(scheme == .dark)
+                VStack(spacing: 0) {
+                    Text(d.formatted(.dateTime.weekday(.abbreviated))).font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 16).background(c)
+                    Text(d.formatted(.dateTime.day())).font(.custom("Trebuchet MS", size: 22).weight(.bold)).monospacedDigit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(c.opacity(0.2))
                 }
+            } else {
+                Image(systemName: "alarm.fill").font(.system(size: 20, weight: .semibold)).foregroundStyle(ChumbyPalette.acc(scheme == .dark))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(ChumbyPalette.acc(scheme == .dark).opacity(0.18))
             }
-            .onDelete { model.state.schedule.remove(atOffsets: $0); model.state.reindex(); Task { await model.saveSchedule() } }
-            Button("Add a time") { model.state.schedule.append(ScheduleItem()); model.state.reindex(); Task { await model.saveSchedule() } }.foregroundStyle(.tint)
-            if let f = model.failed("schedule") { FailNote(text: f) }
-        } header: { Text("Daily schedule") } footer: { Text("Runs every day at these times, even with your phone away.") }
+        }
+        .frame(width: 44, height: 48)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(.white.opacity(0.14), lineWidth: 1))
+        .opacity(on ? 1 : 0.5)
+        .accessibilityHidden(true)
     }
-    static func date(_ s: String) -> Date {
-        let p = s.split(separator: ":").compactMap { Int($0) }
-        return Calendar.current.date(bySettingHour: p.first ?? 22, minute: p.count > 1 ? p[1] : 0, second: 0, of: Date()) ?? Date()
+}
+extension ChumbyModel {
+    // His Pandora stations: the list the Chumby found, and any an alarm already plays.
+    var pandoraStations: [NamedID] {
+        var out = state.pandora
+        for a in state.alarms where a.arg == "pandora" && !a.param.isEmpty {
+            let p = a.param.components(separatedBy: "##")
+            if !out.contains(where: { $0.id == p[0] }) { out.append(NamedID(id: p[0], name: p.count > 1 ? p[1] : a.param_description)) }
+        }
+        return out
     }
-    static func hhmm(_ d: Date) -> String {
-        let c = Calendar.current.dateComponents([.hour, .minute], from: d)
-        return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+}
+// What an alarm plays, as one tag for a picker ("beep:Chime", "stream:<key>", "pandora:<id>", "none"), and set from one.
+// The same rules as the editor's Sound section. "" for something set on the Chumby that the phone can't name.
+extension Alarm {
+    func soundTag(streams: [Stream]) -> String {
+        if type == "none" { return "none" }
+        if type == "beep" { return "beep:" + (arg.isEmpty ? "Beep" : arg) }
+        if arg == "directurl", let s = streams.first(where: { (!$0.id.isEmpty && param.contains($0.id)) || param.contains($0.url.replacingOccurrences(of: "&", with: "&amp;")) }) { return "stream:" + s.key }
+        if arg == "pandora" { return "pandora:" + (param.components(separatedBy: "##").first ?? "") }
+        return ""
+    }
+    mutating func setSound(_ tag: String, streams: [Stream], stations: [NamedID]) {
+        let parts = tag.split(separator: ":", maxSplits: 1).map(String.init)
+        let kind = parts.first ?? "", value = parts.count > 1 ? parts[1] : ""
+        func esc(_ v: String) -> String { v.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;").replacingOccurrences(of: "<", with: "&lt;") }
+        switch kind {
+        case "beep": type = "beep"; arg = value; param = ""; param_description = value
+        case "none": type = "none"; arg = ""; param = ""; param_description = "None"; duration = "0"
+        case "stream":
+            guard let s = streams.first(where: { $0.key == value }) else { return }
+            type = "audio"; arg = "directurl"; param_description = s.name.isEmpty ? s.url : s.name
+            param = "<stream url=\"\(esc(s.url))\" id=\"\(esc(s.id))\" mimetype=\"\(esc(s.mimetype))\" name=\"\(esc(s.name.isEmpty ? s.url : s.name))\" />"
+        case "pandora":
+            let name = stations.first { $0.id == value }?.name ?? "Pandora"
+            type = "audio"; arg = "pandora"; param = value + "##" + name; param_description = name
+        default: return
+        }
+        // Back from Silent, it plays for the editor's usual half hour rather than not at all.
+        if kind != "none" && duration == "0" { duration = "30" }
     }
 }
 extension String { var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() } }
@@ -779,14 +874,7 @@ struct AlarmEditor: View {
     @State private var problem: String?
     @State private var loaded = false
 
-    var stations: [NamedID] {
-        var out = model.state.pandora
-        for a in model.state.alarms where a.arg == "pandora" && !a.param.isEmpty {
-            let p = a.param.components(separatedBy: "##")
-            if !out.contains(where: { $0.id == p[0] }) { out.append(NamedID(id: p[0], name: p.count > 1 ? p[1] : a.param_description)) }
-        }
-        return out
-    }
+    var stations: [NamedID] { model.pandoraStations }
     var afterOptions: [(String, String)] {
         var o = [("", "Return to what was on screen"), ("nightmode|on", "Night mode on"), ("nightmode|off", "Night mode off"), ("bright|bright", "Screen bright"), ("bright|dim", "Screen dim"), ("bright|off", "Screen off")]
         for c in model.state.channels { o.append(("profile|" + c.id, "Switch channel to “\(c.name)”")) }

@@ -14,7 +14,7 @@ struct ChumbyNow {
             let st = try? JSONDecoder().decode(ChumbyState.self, from: try await api.raw("state").data)
             return (sys, st)
         }) else { return nil }
-        var n = ChumbyNow(night: both.0.night == 1)
+        var n = ChumbyNow(night: chumbyNightWanted() ?? (both.0.night == 1))
         n.skipped = both.1?.skipped.flatMap { $0.date > Date() ? $0 : nil }
         n.next = both.1?.nextRing()?.at
         return n

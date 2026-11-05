@@ -98,6 +98,8 @@ struct ChumbyProvider: AppIntentTimelineProvider {
                 if r.age > 60 { try await Task.sleep(nanoseconds: 3_000_000_000); r = try await api.raw("sys") }
                 guard let s = try? JSONDecoder().decode(Sys.self, from: r.data) else { continue }
                 e.sys = s; e.deviceDown = r.age > 60; e.reachable = !e.deviceDown
+                // A day/night tap a moment ago wins over a reading the Mac took before the Chumby had it.
+                if e.reachable, let want = chumbyNightWanted() { e.sys.night = want ? 1 : 0 }
                 if e.reachable { try? Data().write(to: Self.seenFile) }
             } catch ChumbyError.deviceDown { e.deviceDown = true; continue } catch { continue }
             if e.reachable, let r = try? await api.raw("state"),
@@ -146,23 +148,31 @@ struct MiniGel: View {
             .widgetAccentable()
     }
 }
-// The Skip button, or Undo once skipped, as a full-width gel.
+// The Skip button, or Undo once skipped, as a full-width gel. On a tinted or clear Home Screen every colour flattens to
+// one tone, so a white capsule under navy words (Undo) or white words on the gel (Skip) became one blank shape
+// (Richard's phone, 2026-11-05). There the capsule is a faint glass and only the words take the accent.
 struct SkipButton: View {
     let entry: ChumbyEntry
     var height: CGFloat = 32
+    @Environment(\.widgetRenderingMode) private var mode
+    var full: Bool { mode == .fullColor }
     var body: some View {
         if entry.skipped != nil {
             Button(intent: ChumbyUnskipIntent()) {
-                Text("Undo").font(.trebuchet(15, .bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
-                    .frame(maxWidth: .infinity, minHeight: height).background(.white, in: Capsule())
+                Text("Undo").font(.trebuchet(15, .bold)).foregroundStyle(full ? ChumbyPalette.hex(0x1f2f5c) : .white)
+                    .widgetAccentable(!full)
+                    .frame(maxWidth: .infinity, minHeight: height)
+                    .background(full ? AnyShapeStyle(.white) : AnyShapeStyle(.white.opacity(0.22)), in: Capsule())
             }
-            .buttonStyle(.plain).accessibilityLabel("Undo the skip")
+            .buttonStyle(.plain).invalidatableContent().accessibilityLabel("Undo the skip")
         } else if entry.nextAt != nil {
             Button(intent: ChumbySkipIntent()) {
                 Label("Skip", systemImage: "forward.end.fill").font(.trebuchet(15, .bold)).foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, minHeight: height).background(MiniGel())
+                    .widgetAccentable(!full)
+                    .frame(maxWidth: .infinity, minHeight: height)
+                    .background { if full { MiniGel() } else { Capsule().fill(.white.opacity(0.22)) } }
             }
-            .buttonStyle(.plain).accessibilityLabel("Skip the \(entry.nextAt.map(ChumbyEntry.clock) ?? "") alarm")
+            .buttonStyle(.plain).invalidatableContent().accessibilityLabel("Skip the \(entry.nextAt.map(ChumbyEntry.clock) ?? "") alarm")
         }
     }
 }
@@ -307,11 +317,22 @@ struct BuddyBody: View {
 // MARK: - Your Chumby: what's next on the left, with Skip; four buttons on the right
 struct RemoteBody: View {
     let entry: ChumbyEntry
+    @Environment(\.widgetRenderingMode) private var mode
+    // A glyph on a glass disc. Only the glyph takes the accent; the disc stays a faint glass in the widget's own tone, so
+    // on a tinted or clear Home Screen the glyph always reads against it. The night button's lit state was a solid white
+    // disc under a navy moon, all one accent, which flattened to a blank white disc (Richard, 2026-11-05: "the night button
+    // is lowk ilegible"). Lit, it's now a brighter disc with a ring in every mode, and the navy-on-white only in full colour.
     func face(_ icon: String, on: Bool = false) -> some View {
-        Image(systemName: icon).font(.system(size: 19, weight: .semibold)).foregroundStyle(on ? ChumbyPalette.hex(0x1f2f5c) : .white)
+        let full = mode == .fullColor
+        return Image(systemName: icon).font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(full && on ? ChumbyPalette.hex(0x1f2f5c) : .white)
+            .widgetAccentable()
             .frame(width: 50, height: 50)
-            .background(on ? AnyShapeStyle(.white) : AnyShapeStyle(.white.opacity(0.18)), in: Circle())
-            .contentShape(Circle()).widgetAccentable()
+            .background {
+                Circle().fill(.white.opacity(full ? (on ? 1 : 0.18) : (on ? 0.32 : 0.14)))
+                if on && !full { Circle().strokeBorder(.white.opacity(0.95), lineWidth: 2).widgetAccentable() }
+            }
+            .contentShape(Circle())
     }
     var body: some View {
         HStack(spacing: 12) {
@@ -338,9 +359,12 @@ struct RemoteBody: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Grid(horizontalSpacing: 10, verticalSpacing: 10) {
                 GridRow {
-                    // One night button, filled while the Chumby is in night mode; tap to switch.
+                    // One day/night button, lit while the Chumby is in night mode. A widget button can't be held, so a tap
+                    // switches it; while the Chumby takes it the button shows the system's pending look, and the new state
+                    // is drawn at once from what was asked (chumbyNightWanted), not after the Mac's next reading.
                     Button(intent: ChumbyNightToggleIntent(!entry.night)) { face(entry.night ? "moon.fill" : "sun.max.fill", on: entry.night) }
-                        .buttonStyle(.plain).accessibilityLabel(entry.night ? "End night mode" : "Night mode")
+                        .buttonStyle(.plain).invalidatableContent()
+                        .accessibilityLabel(entry.night ? "Night mode, tap for day" : "Day, tap for night mode")
                     Button(intent: ChumbyPress("next")) { face("forward.fill") }.buttonStyle(.plain).accessibilityLabel("Next widget")
                 }
                 GridRow {

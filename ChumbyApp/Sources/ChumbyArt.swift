@@ -83,6 +83,8 @@ enum ChumbyPalette {
     static func acc(_ dark: Bool) -> Color { dark ? hex(0x79bbff) : hex(0x0051bd) }
     // Failures: a deep orange that reads on the cream cards (about 5:1), lighter on the dark ones.
     static func warn(_ dark: Bool) -> Color { dark ? hex(0xfdba74) : hex(0xc2410c) }
+    // Calendar alarms' own colour, a coral from the sea, so they never look like his own alarms in the accent blue.
+    static func cal(_ dark: Bool) -> Color { dark ? hex(0xff9a76) : hex(0xc4472a) }
     static func oct(_ dark: Bool) -> Color { dark ? hex(0x79bbff) : hex(0x2c5bae) }
     // The website's blue; in the dark only as much lighter as it needs to read against the deep sea (3.8:1).
     static func word(_ dark: Bool) -> Color { dark ? hex(0x3b78c3) : hex(0x0a57b4) }

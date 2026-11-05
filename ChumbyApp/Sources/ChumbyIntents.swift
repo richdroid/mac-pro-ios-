@@ -68,7 +68,8 @@ struct ChumbySkipToggleIntent: SetValueIntent {
     @Parameter(title: "Skipped") var value: Bool
     func perform() async throws -> some IntentResult { try await chumbySetSkip(value); return .result() }
 }
-// Night mode as one switch that shows the mode the Chumby is really in. Off also brightens the screen, as Good Morning did.
+// Night mode as one switch that shows the mode the Chumby is really in. Night is the kind he chose in Tinker (read from the
+// Chumby's own nightly time, see nightStyle); day ends night mode and brightens the screen, as Good Morning did.
 struct ChumbyNightToggleIntent: SetValueIntent {
     static var title: LocalizedStringResource = "Chumby Night Mode"
     static var isDiscoverable = false
@@ -76,13 +77,30 @@ struct ChumbyNightToggleIntent: SetValueIntent {
     init() {}
     init(_ on: Bool) { value = on }
     func perform() async throws -> some IntentResult {
-        try await chumbyTry { api in
-            try await api.cmd("night", value ? "on" : "off")
-            if !value { try await api.cmd("screen", "bright") }
-        }
+        let on = value
+        do {
+            try await chumbyTry { api in
+                if on {
+                    let style = (try? JSONDecoder().decode(ChumbyState.self, from: try await api.raw("state").data))?.nightStyle ?? "on"
+                    try await api.cmd("night", style)
+                } else {
+                    try await api.cmd("night", "off")
+                    try await api.cmd("screen", "bright")
+                }
+            }
+        } catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
+        chumbyNoteNight(on)
         WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
+}
+// What a day/night tap just asked for, kept 20 seconds, so the widget and Control Center draw the new state at once rather
+// than the Mac's reading from before the Chumby had it.
+func chumbyNoteNight(_ on: Bool) { UserDefaults.standard.set(["on": on, "at": Date().timeIntervalSince1970], forKey: "nightWanted") }
+func chumbyNightWanted() -> Bool? {
+    guard let d = UserDefaults.standard.dictionary(forKey: "nightWanted"), let on = d["on"] as? Bool, let at = d["at"] as? Double,
+          Date().timeIntervalSince1970 - at < 20 else { return nil }
+    return on
 }
 struct ChumbyNextIntent: AppIntent {
     static var title: LocalizedStringResource = "Next Chumby Widget"
@@ -92,7 +110,13 @@ struct ChumbyNextIntent: AppIntent {
 struct ChumbyGoodnightIntent: AppIntent {
     static var title: LocalizedStringResource = "Chumby Goodnight"
     static var description = IntentDescription("Puts the Chumby in night mode.")
-    func perform() async throws -> some IntentResult { try await chumbyTry { try await $0.cmd("night", "on") }; return .result() }
+    func perform() async throws -> some IntentResult {
+        try await chumbyTry { api in
+            let style = (try? JSONDecoder().decode(ChumbyState.self, from: try await api.raw("state").data))?.nightStyle ?? "on"
+            try await api.cmd("night", style)
+        }
+        return .result()
+    }
 }
 struct ChumbyMorningIntent: AppIntent {
     static var title: LocalizedStringResource = "Chumby Good Morning"
@@ -168,6 +192,9 @@ struct ChumbyOpenIntent: AppIntent {
 }
 
 extension ChumbyState {
+    // The kind of night he chose (Tinker's Night style): clock, dim or dark. Kept on the Chumby itself as the kind its own
+    // nightly time switches to, so the widget and Control Center, which can't read the app's settings, night the same way.
+    var nightStyle: String? { schedule.first { $0.cmd == "night" && $0.val != "off" }?.val }
     mutating func addNap(minutes: Int) { addNap(at: Int((Date().timeIntervalSince1970 / 60).rounded(.up)) + minutes) }
     // A one-off beep named Nap, due at `at` (minutes since 1970), in the first free place.
     mutating func addNap(at: Int) {

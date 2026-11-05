@@ -232,12 +232,15 @@ jobs:
           # ---- Chumby app poses (separate block) ----
           # The states the Chumby app's designer checks: ringing, snoozed, dead, offline, a first run with nothing kept, the
           # calendar settings, the editor sheets, a save turned down at its control, and every tab dark. The mock answers
-          # these from a path in front of the address, so the shots above get the same answers as before.
+          # these from a path in front of the address, so the shots above get the same answers as before. From 11-05: Home's
+          # day/night button held halfway (nighthold), Alarms scrolled to My alarms and the nap (alarmsmine), the Add widgets
+          # picker open (chadd), and Sounds with a song playing (playing).
           chumby_poses() { # display, file suffix
             for V in "ringing 0 ringing" "ringing-alarms 2 ringing" "snoozed 0 snoozed" "dead 0 dead" "dead-alarms 2 dead" \
                      "firstrun 2 slow -pose firstrun" "firstrun-home 0 slow -pose firstrun" "calsettings 2 - -pose calsettings" \
                      "calday 2 - -pose calday" "editor 2 - -pose editor" "template 2 - -pose template" "failure 2 fail -pose failure" \
-                     "editornew 2 - -pose editornew" "chsync 1 live -pose chsync" "skipped 0 skipped"; do
+                     "editornew 2 - -pose editornew" "chsync 1 live -pose chsync" "skipped 0 skipped" \
+                     "nighthold 0 - -pose nighthold" "alarmsmine 2 - -pose alarmsmine" "chadd 1 - -pose chadd" "playing 3 playing"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
@@ -273,7 +276,8 @@ jobs:
             # 10-minute nap started and cancelled. The mock's live scenes keep what's saved and flip what's ringing.
             if [ -z "$2" ]; then
               # alarmsdemo runs 20 s so the nap's countdown and its cancel stay on film after the scroll down to Quick nap.
-              # chdemo: a channel chosen in Now playing moves the editor to it, then + adds a widget, which scrolls to it and glows.
+              # chdemo: a channel chosen in Now playing moves the editor to it, then Add widgets opens the picker, a widget is
+              # added and ticked, and on Done the list scrolls to it and it glows.
               # skipdemo: Home's Skip next alarm tapped, then Undo.
               for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 20" "chdemo 1 live 12" "skipdemo 0 live 20"; do
                 set -- "$1" "$2" $V
@@ -450,8 +454,9 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/gallery-$G.png
             xcrun simctl terminate "$DEVICE" local.macpro.Gallery$G
           done
-          # The Chumby gallery's other two screens: Your Chumby in each state, then tinted and Lock Screen renders.
-          for P in 1 2; do
+          # The Chumby gallery's other screens: Your Chumby in each state, tinted and Lock Screen renders, then Your Chumby
+          # on a clear pink Home Screen with its colours flattened, as his phone drew the illegible night button (11-05).
+          for P in 1 2 3; do
             xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page $P
             sleep 6
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/gallery-Chumby-$P.png
