@@ -209,32 +209,53 @@ struct RemoteScreenView: View {
             // Typing: the system keyboard comes up over the trackpad and the modifiers and arrows ride on top of it.
             if keyboard > 0 { p.modRow.origin.y = max(p.fnRow.maxY + 6, h - keyboard - 46) }
         case .book:
-            // A MacBook's deck laid across the fold: the keys on the left page and the trackpad on the right sit level on
-            // one line, both set down on the bottom margin; the screen fills the left page above the keys. Every edge keeps
-            // the same air. Without a crease there's no book, only the closed layout.
+            // A MacBook opened across the fold: the left page is the screen alone, as large as the page allows; the right
+            // page is the base, the function row, the full keyboard and a 16:10 trackpad centred under it. Both pages keep
+            // one outer margin on every side, and neither has a dead band. Without a crease there's no book, only the closed
+            // layout.
             guard let c = fold.crease else {
                 return plan(area: area, fold: Fold(), aspect: aspect, top: top, bottom: bottom, keyboard: keyboard, force: .closed)
             }
+            let head = top + side, foot = h - bottom - side, tall = max(foot - head, 1)
+            // The screen: fitted to the left page inside the margin, whichever way it binds, centred.
             let page = c.minX - air
-            let foot = h - bottom - side
-            let kbHeight = min(190, foot - (top + side) - 32 - 8 - 8 - 120)
-            var deckTop: CGFloat
-            if kbHeight >= 130 {
-                p.keyboard = CGRect(x: side, y: foot - kbHeight, width: page - side * 2, height: kbHeight)
-                deckTop = p.keyboard.minY
-            } else {
-                p.modRow = CGRect(x: side, y: foot - 40, width: page - side * 2, height: 40)
-                deckTop = p.modRow.minY
+            let pic = fitWidth(max(page - side * 2, 1), maxHeight: tall)
+            p.picture = CGRect(x: (page - pic.width) / 2, y: head + (tall - pic.height) / 2, width: pic.width, height: pic.height)
+            // The base on the right page, stacked: function row, keyboard, trackpad.
+            let left = c.maxX + air + side, width = max(w - side - left, 1)
+            let fn: CGFloat = 32, gap: CGFloat = 8, padGap: CGFloat = 12
+            // Five rows of keys at 34 pt with their gaps, shrinking to 30 pt rows before giving up the full keyboard.
+            let kbFull: CGFloat = 190, kbMin: CGFloat = 170
+            var padW = (width * 0.62).rounded(), padH = (padW * 10 / 16).rounded()
+            let minPadH: CGFloat = 110
+            var kbH = min(kbFull, tall - fn - gap - padGap - padH)
+            if kbH < kbMin {
+                // Smaller trackpad first, down to its floor, so the keyboard keeps its rows.
+                padH = max(minPadH, tall - fn - gap - padGap - kbMin)
+                padW = min(width, (padH * 16 / 10).rounded())
+                kbH = min(kbFull, tall - fn - gap - padGap - padH)
             }
-            p.fnRow = CGRect(x: side, y: deckTop - 8 - 32, width: page - side * 2, height: 32)
-            let pic = fitWidth(page - side * 2, maxHeight: max(p.fnRow.minY - 8 - (top + side), 1))
-            p.picture = CGRect(x: (page - pic.width) / 2, y: top + side, width: pic.width, height: pic.height)
-            // The trackpad from the keyboard's first row down to the same foot, 16:10, centred on the right page with the
-            // left page's margins.
-            let right = c.maxX + air, padRoom = w - right - side * 2, padHeight = foot - deckTop
-            let padWidth = min(padRoom, (padHeight * 16 / 10).rounded())
-            let padH = min(padHeight, (padWidth * 10 / 16).rounded())
-            p.trackpad = CGRect(x: right + side + (padRoom - padWidth) / 2, y: foot - padH, width: padWidth, height: padH)
+            var deck: CGFloat
+            if kbH >= kbMin {
+                // Any room left grows the trackpad, still 16:10 and no wider than the page.
+                let spare = tall - fn - gap - kbH - padGap - padH
+                if spare > 0 { padH = min(padH + spare, (width * 10 / 16).rounded()); padW = (padH * 16 / 10).rounded() }
+                deck = fn + gap + kbH + padGap + padH
+                let y0 = head + max(tall - deck, 0) / 2
+                p.fnRow = CGRect(x: left, y: y0, width: width, height: fn)
+                p.keyboard = CGRect(x: left, y: p.fnRow.maxY + gap, width: width, height: kbH)
+                p.trackpad = CGRect(x: left + (width - padW) / 2, y: p.keyboard.maxY + padGap, width: padW, height: padH)
+            } else {
+                // Too short for the full keyboard: the modifier and arrow row, and the trackpad takes the rest.
+                let mod: CGFloat = 40
+                padH = min(tall - fn - gap - mod - padGap, (width * 10 / 16).rounded())
+                padW = (padH * 16 / 10).rounded()
+                deck = fn + gap + mod + padGap + padH
+                let y0 = head + max(tall - deck, 0) / 2
+                p.fnRow = CGRect(x: left, y: y0, width: width, height: fn)
+                p.modRow = CGRect(x: left, y: p.fnRow.maxY + gap, width: width, height: mod)
+                p.trackpad = CGRect(x: left + (width - padW) / 2, y: p.modRow.maxY + padGap, width: padW, height: max(padH, 60))
+            }
         case .closedLandscape, .flatLandscape:
             // The dock lives in the black under the picture, never over the Mac's own Dock.
             let dock: CGFloat = 52
