@@ -102,8 +102,9 @@ struct TopEdge: ViewModifier {
             .overlay {
                 // Read where the bar ends whether the content's frame starts under the bar or below it.
                 GeometryReader { g in
-                    // The safe area can still hold the large title's height; the black never reaches past an inline bar.
-                    let y = g.frame(in: .global).minY, bar = min(y + g.safeAreaInsets.top, TopEdge.statusBar + 44)
+                    // To the foot of whatever title is there: the large title never collapses on the Duo, so capping this at an
+                    // inline bar's height left scrolled text showing behind the title. Drawn only while something is under it.
+                    let y = g.frame(in: .global).minY, bar = y + g.safeAreaInsets.top
                     let lead = g.safeAreaInsets.leading, width = g.size.width + lead + g.safeAreaInsets.trailing
                     VStack(spacing: 0) {
                         Color.black.frame(height: max(bar, 0))
@@ -1198,7 +1199,7 @@ struct ControlTab: View {
                         Circle().fill(locked ? Color.orange : Color.green).frame(width: 9, height: 9)
                         Text(locked ? "Locked" : "Logged in")
                         Spacer()
-                        Label(displayOn ? "Display on" : "Display off", systemImage: displayOn ? "sun.max.fill" : "moon.fill")
+                        Label(displayOn ? "Display on" : "Display off", systemImage: displayOn ? "sun.max.fill" : "moon")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }

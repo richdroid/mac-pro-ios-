@@ -244,7 +244,8 @@ struct NapChips: View {
             // Whole minutes left, rounded up, so it never reads as a time of day beside the clock.
             let minutes = max(Int((left / 60).rounded(.up)), 1)
             HStack(spacing: 4) {
-                Text("\(minutes) min left").monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+                // "left" is what the falling tide already says; with it the chip clipped to "11 min l…" beside the ×.
+                Text("\(minutes) min").monospacedDigit().lineLimit(1).fixedSize()
                     .contentTransition(.numericText(countsDown: true)).animation(.snappy, value: minutes)
                 Button { Task { await model.cancelNap() } } label: { Image(systemName: "xmark").font(.footnote.weight(.bold)) }
                     .buttonStyle(.borderless).foregroundStyle(.white).accessibilityLabel("Cancel nap")
@@ -264,6 +265,7 @@ struct NapChips: View {
                 .clipShape(Capsule())
             }
             .accessibilityLabel("Nap, \(minutes) minutes left")
+            .layoutPriority(1)
         }
     }
 }

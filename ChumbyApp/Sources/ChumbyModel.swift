@@ -156,6 +156,10 @@ final class ChumbyModel: ObservableObject {
         address = saved
         api = Self.makeAPI(saved)
         needsAddress = api == nil
+        #if canImport(UIKit)
+        // Off the launch path, but ready before the first tap.
+        Task { try? await Task.sleep(nanoseconds: 1_000_000_000); Haptics.warm() }
+        #endif
         // Open with what we last knew. The app is always faster than the device. (The first-run shot starts with nothing.)
         if Self.pose != "firstrun" {
             // Never a ring from what was kept: only a fresh reading may say his alarm is going off.
@@ -317,7 +321,7 @@ final class ChumbyModel: ObservableObject {
     // A failure, at the control it came from. Nothing is said when things work: the control itself shows that.
     func fail(_ id: String, _ text: String) {
         #if canImport(UIKit)
-        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        Haptics.note.notificationOccurred(.error)
         #endif
         failure = Failure(id: id, text: text, at: Date())
         failureClear?.cancel()
@@ -327,7 +331,7 @@ final class ChumbyModel: ObservableObject {
     func hold(_ seconds: Double = 8) { let until = Date().addingTimeInterval(seconds); sysHold = until; stateHold = until; sysBytes = Data(); stateBytes = Data() }
     func tick() {
         #if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Haptics.light.impactOccurred(); Haptics.light.prepare()
         #endif
     }
     // Respond at once and let the Chumby catch up; only a failure interrupts.
@@ -379,7 +383,7 @@ final class ChumbyModel: ObservableObject {
     static func ringChange(to r: Sys.Ringing?) -> Animation { r == nil ? stopSpring : ringSpring }
     func ringOff() {
         #if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Haptics.medium.impactOccurred(); Haptics.medium.prepare()
         #endif
         let was = sys.ring
         withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
@@ -439,7 +443,7 @@ final class ChumbyModel: ObservableObject {
             marks[p.change.mark] = .failed(head: p.change.failHead, why: AlarmWriter.explain(error))
             relay()
             #if canImport(UIKit)
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            Haptics.note.notificationOccurred(.error)
             #endif
         }
     }
@@ -633,3 +637,14 @@ actor OneAtATime {
         if waiting.isEmpty { busy = false } else { waiting.removeFirst().resume() }
     }
 }
+
+#if canImport(UIKit)
+// One of each, made and warmed once. A new generator per tap could stall the first frames of the animation it starts
+// (the Snooze swap jumped in one frame after a freeze).
+@MainActor enum Haptics {
+    static let light: UIImpactFeedbackGenerator = { let g = UIImpactFeedbackGenerator(style: .light); g.prepare(); return g }()
+    static let medium: UIImpactFeedbackGenerator = { let g = UIImpactFeedbackGenerator(style: .medium); g.prepare(); return g }()
+    static let note: UINotificationFeedbackGenerator = { let g = UINotificationFeedbackGenerator(); g.prepare(); return g }()
+    static func warm() { light.prepare(); medium.prepare(); note.prepare() }
+}
+#endif

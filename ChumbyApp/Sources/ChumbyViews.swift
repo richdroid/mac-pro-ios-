@@ -666,7 +666,7 @@ struct HomeTab: View {
     @State private var dragging = false
     // Nothing to show until the Chumby has said something: an empty card is a meaningless glass dot.
     var rightNowEmpty: Bool {
-        !(model.stateKnown && model.nextRing() != nil) && model.sys.vol < 0 && model.failed("homeVolume") == nil && model.state.channelNames.isEmpty
+        !(model.stateKnown && !model.state.skipKnown && model.nextRing() != nil) && model.sys.vol < 0 && model.failed("homeVolume") == nil && model.state.channelNames.isEmpty
     }
     @ViewBuilder var rightNow: some View {
         if !rightNowEmpty { rightNowCard }
@@ -675,7 +675,8 @@ struct HomeTab: View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Right now").font(.custom("Trebuchet MS", size: 16).weight(.semibold)).foregroundStyle(ChumbyPalette.sub(dark)).padding(.leading, 18)
             VStack(alignment: .leading, spacing: 14) {
-                if model.stateKnown, let n = model.nextRing() {
+                // The Skip card shows the next alarm when the Chumby can skip, so it's never said twice.
+                if model.stateKnown, !model.state.skipKnown, let n = model.nextRing() {
                     Button { model.tab = 2 } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "alarm.fill").foregroundStyle(ChumbyPalette.orange)
@@ -1008,14 +1009,19 @@ struct ChannelsTab: View {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return channels.first { title($0).trimmingCharacters(in: .whitespacesAndNewlines) == n }?.id
     }
+    // A row's setting looked up by id each time, so a list that changed underneath can't be read out of range.
+    func rowBinding<T>(_ id: String, _ key: WritableKeyPath<EditorRow, T>, _ fallback: T) -> Binding<T> {
+        Binding(get: { rows.first { $0.id == id }?[keyPath: key] ?? fallback },
+                set: { v in if let i = rows.firstIndex(where: { $0.id == id }) { rows[i][keyPath: key] = v } })
+    }
     func followPlaying(_ name: String) {
         guard let id = channelID(named: name), id != picked else { return }
         picked = id
     }
-    // From what was kept last time, so the editor is whole from the first frame: the channel last chosen to play, if any.
+    // From what was kept last time, so the editor is whole from the first frame: the channel chosen or playing, if known.
     func startFromCache() {
         guard picked.isEmpty else { return }
-        picked = model.chosenChannel.flatMap { channelID(named: $0.name) } ?? (model.channelData?.cur ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        picked = model.chosenChannel.flatMap { channelID(named: $0.name) } ?? channelID(named: model.state.channel) ?? (model.channelData?.cur ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if picked.isEmpty { picked = channels.first?.id ?? "" }
         pick()
     }
@@ -1034,9 +1040,10 @@ struct ChannelsTab: View {
         .padding(.vertical, 2)
     }
     // What "More widgets" lists: the Chumby's own that this channel lacks, or a catalog category's.
-    var moreList: [(id: String, name: String, own: Int)] {
-        if category.isEmpty { return notHere.map { ($0[0], $0[1], $0.count > 2 ? Int($0[2]) ?? 0 : 0) } }
-        return catalog.filter { c in !rows.contains { $0.id == c.0 } }.map { ($0.0, $0.1, 0) }
+    struct MoreItem { let id: String, name: String, own: Int; var more: String { "more-" + id } }
+    var moreList: [MoreItem] {
+        if category.isEmpty { return notHere.filter { w in !rows.contains { $0.id == w[0] } }.map { MoreItem(id: $0[0], name: $0[1], own: $0.count > 2 ? Int($0[2]) ?? 0 : 0) } }
+        return catalog.filter { c in !rows.contains { $0.id == c.0 } }.map { MoreItem(id: $0.0, name: $0.1, own: 0) }
     }
     // For the build: a channel chosen in Now playing (chsync), then a widget added with + (chdemo).
     @State private var posed = false
@@ -1060,13 +1067,15 @@ struct ChannelsTab: View {
             }
         } right: {
             Section {
-                ForEach($rows) { $w in
+                // By id, never by index: following the playing channel swaps `rows` under a live switch, and an index
+                // binding then reads past the end (it crashed choosing a channel).
+                ForEach(rows, id: \.id) { w in
                     // The name and its time on the left, the switch alone on the right, so the two never crowd each other.
                     HStack(alignment: .center, spacing: 14) {
                         VStack(alignment: .leading, spacing: 7) {
                             Text(w.name).lineLimit(1).opacity(w.on ? 1 : 0.45)
                             Menu {
-                                Picker("Time on screen", selection: $w.secs) {
+                                Picker("Time on screen", selection: rowBinding(w.id, \.secs, w.secs)) {
                                     Text(w.own > 0 ? "Auto (\(w.own)s)" : "Auto").tag(0)
                                     ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
                                 }
@@ -1085,7 +1094,7 @@ struct ChannelsTab: View {
                             .onChange(of: w.secs) { _, _ in changed() }
                         }
                         Spacer(minLength: 12)
-                        Toggle("On", isOn: $w.on).labelsHidden().onChange(of: w.on) { _, _ in changed() }
+                        Toggle("On", isOn: rowBinding(w.id, \.on, w.on)).labelsHidden().onChange(of: w.on) { _, _ in changed() }
                     }
                     .padding(.vertical, 4)
                     .swipeActions(edge: .trailing) {
@@ -1125,7 +1134,8 @@ struct ChannelsTab: View {
                         ForEach(categories, id: \.0) { Text($0.1).tag($0.0) }
                     }
                     .onChange(of: category) { _, _ in catalog = []; page = 1; more = false; Task { await loadCatalog() } }
-                    ForEach(moreList, id: \.id) { w in moreRow(id: w.id, name: w.name, own: w.own, scroll: scroll) }
+                    // Its own ids, so an added widget fades out here and in above, rather than flying across as one row.
+                    ForEach(moreList, id: \.more) { w in moreRow(id: w.id, name: w.name, own: w.own, scroll: scroll).transition(.opacity) }
                         .deleteDisabled(true).moveDisabled(true)
                     if busy { ProgressView().frame(maxWidth: .infinity) }
                     if category.isEmpty && notHere.isEmpty { Text("Every widget on the Chumby is in this channel.").foregroundStyle(.secondary) }
@@ -1345,7 +1355,8 @@ struct SkipCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 if let s = model.state.skipped {
                     HStack(spacing: 14) {
-                        Image(systemName: "moon.zzz.fill").font(.system(size: 26)).foregroundStyle(ChumbyPalette.sub(dark))
+                        Image(systemName: "moon.zzz.fill").font(.system(size: 22, weight: .bold)).foregroundStyle(ChumbyPalette.sub(dark))
+                            .frame(width: 52, height: 52)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Skipped · \(when(s.date))").font(.custom("Trebuchet MS", size: 20).weight(.bold)).foregroundStyle(ChumbyPalette.ink(dark))
                             Text(label(s.name)).font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).lineLimit(1)
@@ -1354,18 +1365,19 @@ struct SkipCard: View {
                         Button { Task { await model.unskip() } } label: {
                             Text("Undo").font(.custom("Trebuchet MS", size: 17).weight(.bold)).padding(.horizontal, 18).padding(.vertical, 10)
                         }
-                        .buttonStyle(.plain).foregroundStyle(ChumbyPalette.orange).glassEffect(.regular.interactive(), in: .capsule)
+                        .buttonStyle(.plain).foregroundStyle(ChumbyPalette.acc(dark)).glassEffect(.regular.interactive(), in: .capsule)
                     }
                     .padding(18).frame(maxWidth: .infinity, alignment: .leading).card()
                     .transition(.opacity.combined(with: .scale(scale: 0.97)))
                 } else if let n = model.nextRing() {
                     Button { Task { await model.skipNext() } } label: {
                         HStack(spacing: 14) {
-                            Image(systemName: "forward.end.fill").font(.system(size: 24, weight: .bold)).foregroundStyle(.white)
-                                .frame(width: 52, height: 52).background(ChumbyPalette.orange, in: Circle())
+                            // Glass, not orange: orange is Stop's.
+                            Image(systemName: "moon.zzz.fill").font(.system(size: 22, weight: .bold)).foregroundStyle(ChumbyPalette.acc(dark))
+                                .frame(width: 52, height: 52).glassEffect(.regular, in: Circle())
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Skip next alarm").font(.custom("Trebuchet MS", size: 21).weight(.bold)).foregroundStyle(ChumbyPalette.ink(dark))
-                                Text("\(when(n.at)) · \(label(n.alarm.name))").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).lineLimit(1)
+                                Text("\(when(n.at)) · \(n.at, style: .relative) · \(label(n.alarm.name))").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).lineLimit(1)
                             }
                             Spacer(minLength: 0)
                         }

@@ -57,7 +57,10 @@ struct RemoteScreenView: View {
     @AppStorage("screenGesturesSeen") private var gesturesSeen = false
     @State private var rate = (frames: 0, updates: 0)
 
-    enum ClipState: Equatable { case idle, working, done, failed(String) }
+    enum ClipState: Equatable {
+        case idle, working, done, failed(String)
+        var failed: Bool { if case .failed = self { return true }; return false }
+    }
     // A line of a Mac's scroll view, in its pixels: what one wheel step moves.
     static let lineHeight: CGFloat = 10
 
@@ -213,14 +216,14 @@ struct RemoteScreenView: View {
         let icon: String
         switch state {
         case .done: icon = "checkmark"
-        case .failed: icon = "exclamationmark"
+        case .failed: icon = "exclamationmark.triangle"
         // The same glyphs as Copy from Mac and Send to Mac on Status, so the same action looks the same everywhere.
         default: icon = paste ? "square.and.arrow.up" : "square.and.arrow.down"
         }
         // Nothing on this iPhone's clipboard isn't a failure: Paste just sits dimmed until there is.
         let empty = paste && !phoneHasText
         return railButton(icon, paste ? "Paste the iPhone’s clipboard on the Mac" : "Copy from the Mac to the iPhone",
-                          tint: state == .done ? macBlue : .white) {
+                          tint: state == .done ? macBlue : state.failed ? .red : .white) {
             if paste { pasteFromPhone() } else { copyToPhone() }
         }
         .disabled(empty)
