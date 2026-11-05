@@ -59,20 +59,40 @@ final class ImageStore {
         #endif
     }
     func cachedBand(_ url: URL?) -> Color? { url.flatMap { bands[$0] } }
+    // Memory only: never a disk read or a decode on the main thread, which is what drawing calls this from (r21: banners
+    // read and decoded here, six at a time on the open Remote, froze the throw). The disk copies come in through warm().
     func cached(_ url: URL?) -> TVImage? {
         guard let url else { return nil }
-        if let i = cache.object(forKey: url as NSURL) { return i }
-        // The apps' banners are kept on disk too, so a cold launch draws them on its first frame rather than as empty tiles
-        // filled a second later (r20). They're small, so reading one here is cheaper than the empty frame.
-        guard let file = Self.bannerFile(url), let d = try? Data(contentsOf: file), let i = Self.decode(d, maxPixels: 1400) else { return nil }
-        if FileManager.default.fileExists(atPath: file.path + ".flat") { flats.insert(url) }
-        cache.setObject(i, forKey: url as NSURL)
-        return i
+        return cache.object(forKey: url as NSURL)
     }
-    // Where an app's banner is kept between launches; nil for anything that isn't a banner.
-    nonisolated static func bannerFile(_ url: URL) -> URL? {
-        guard url.path.hasSuffix("/icon"), let q = url.query, let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-banners", isDirectory: true) else { return nil }
+    // The apps' banners kept on disk between launches, read and decoded off the main thread at launch, so a cold launch
+    // still draws them from its first frames rather than as empty tiles (r20).
+    func warm(_ urls: [URL]) {
+        let todo = urls.filter { cache.object(forKey: $0 as NSURL) == nil }
+        guard !todo.isEmpty else { return }
+        Task.detached(priority: .userInitiated) {
+            var got: [(URL, TVImage, Bool)] = []
+            for u in todo {
+                guard let file = Self.bannerFile(u), let d = try? Data(contentsOf: file), let i = Self.decode(d, maxPixels: 1400) else { continue }
+                got.append((u, i, FileManager.default.fileExists(atPath: file.path + ".flat")))
+            }
+            let ready = got
+            await MainActor.run {
+                for (u, i, flat) in ready where self.cache.object(forKey: u as NSURL) == nil {
+                    self.cache.setObject(i, forKey: u as NSURL)
+                    if flat { self.flats.insert(u) }
+                }
+            }
+        }
+    }
+    // Where an app's banner is kept between launches; nil for anything that isn't a banner. The folder is made once.
+    nonisolated static let bannerDir: URL? = {
+        guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-banners", isDirectory: true) else { return nil }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+    nonisolated static func bannerFile(_ url: URL) -> URL? {
+        guard url.path.hasSuffix("/icon"), let q = url.query, let dir = bannerDir else { return nil }
         let name = q.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? String($0) : "_" }.joined()
         return dir.appendingPathComponent(name)
     }
@@ -89,6 +109,18 @@ final class ImageStore {
     struct Ready: @unchecked Sendable { let image: TVImage; let six: TVImage?; let sixteen: TVImage?; let flat: Bool }
     func load(_ url: URL) async -> TVImage? {
         if let i = cached(url) { return i }
+        // A banner kept on disk: read and decoded off the main thread, before going to the network.
+        if let file = Self.bannerFile(url) {
+            let kept = await Task.detached(priority: .userInitiated) { () -> (TVImage, Bool)? in
+                guard let d = try? Data(contentsOf: file), let i = Self.decode(d, maxPixels: 1400) else { return nil }
+                return (i, FileManager.default.fileExists(atPath: file.path + ".flat"))
+            }.value
+            if let k = kept {
+                cache.setObject(k.0, forKey: url as NSURL)
+                if k.1 { flats.insert(url) }
+                return k.0
+            }
+        }
         if let t = fetching[url] { return await t.value }
         let icon = url.path.hasSuffix("/icon")
         let job = Task.detached(priority: .utility) { () -> Ready? in

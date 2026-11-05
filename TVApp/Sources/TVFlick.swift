@@ -164,6 +164,9 @@ struct FlickScreen: View {
     @State private var toRemote = false
     // The tab he threw from, while the Remote comes up under the stage; put back if the throw is called off or bounced.
     @State private var tabBefore: Int?
+    @State private var restoredTab: Int?
+    // The catch has settled: the TV's glow eased off and its picture the Remote's own look.
+    @State private var caught = false
     // The ‹ goes the moment the card is lifted, with no animation: removed inside the throw's spring, its glass morphed with
     // the throw's speed into a blob over the card (r20).
     @State private var backHidden = false
@@ -347,8 +350,19 @@ struct FlickScreen: View {
             .onChange(of: choosing && !leaving, initial: true) { _, c in model.flickChoosing = c }
             .onChange(of: !choosing && !toRemote && !leaving, initial: true) { _, c in model.flickCovering = c }
             .onDisappear { model.flickChoosing = false; model.flickCovering = false }
+            // The card in the hand, the stage black over everything: the Remote comes up underneath now, so its first
+            // layout (0.3 s folded, about 0.9 s open) is paid for while nothing moves, never during the throw (r21: switched
+            // at the release, it froze the card mid-air). Back off the card's step, the page he came from comes back.
+            .onChange(of: step == .flick && arrived && !leaving && !returning, initial: true) { _, on in
+                if on { Task { try? await Task.sleep(nanoseconds: 600_000_000); prepareRemote() } }
+                else if !flown && !toRemote { backToThrownFrom() }
+            }
             // Another tab, from the side bar while choosing, leaves the page for it.
-            .onChange(of: model.tab) { _, _ in if choosing && !leaving { leave() } }
+            .onChange(of: model.tab) { _, t in
+                // Its own putting back of the page he came from isn't him picking a tab.
+                if t == restoredTab { restoredTab = nil; return }
+                if choosing && !leaving { leave() }
+            }
             .toolbarBackground(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
             .containerBackground(.clear, for: .navigation)
@@ -358,7 +372,8 @@ struct FlickScreen: View {
         // The build's recording only: what the flick is doing, so a frame can be read against the code. Top left, clear of
         // the card at rest.
         .overlay(alignment: .topLeading) {
-            if Self.pose?.hasPrefix("flick") == true {
+            // Only on the flick's own timing poses; the plain show-page shots stay clean so the page itself can be judged.
+            if Self.pose?.hasPrefix("flick-") == true || Self.pose?.hasPrefix("flickdemo") == true {
                 // Milliseconds since the release, so a frame can be read against §2.5a C4's timings.
                 TimelineView(.animation) { ctx in
                     let t = releasedAt == .distantPast ? -1 : Int(ctx.date.timeIntervalSince(releasedAt) * 1000)
@@ -635,18 +650,19 @@ struct FlickScreen: View {
         // sit level; room at the foot for the bar, so the last row can always be scrolled clear of it.
         if panes {
             FoldSplit {
-                ScrollView { bigHeading.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 84) }.topFade().summonsBar()
+                ScrollView { bigHeading.padding(.horizontal, 20).padding(.top, 36).padding(.bottom, 84) }.topFade().summonsBar()
             } right: {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) { content() }
-                        .padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 84)
+                        .padding(.horizontal, 20).padding(.top, 36).padding(.bottom, 84)
                 }
                 .topFade().summonsBar()
             }
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) { heading.padding(.bottom, 8); content() }
-                    .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 84)
+                    // Clear of the top edge and the clock, never jammed under it (r21).
+                    .padding(.horizontal, 20).padding(.top, 32).padding(.bottom, 84)
                     .frame(maxWidth: 620, alignment: .leading)
                     .frame(maxWidth: .infinity)
             }
@@ -905,7 +921,8 @@ struct FlickScreen: View {
         let lean = charge * (1 - t)
         // The rim and glow go at the landing: from then the light round the picture is its only frame (r19: the rim and the
         // light drew two frames on one picture, and the rim lagged beside it on the move).
-        let glow = toRemote || landed ? 0 : Double(1 - t)
+        // Eased off over 0.2 s from the impact (`caught`), never dropped in a frame (r21: a look-swap at the catch).
+        let glow = toRemote || caught ? 0 : Double(1 - t)
         return ZStack {
             RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.black.opacity(0.55 - 0.2 * Double(t)))
             // What the TV is showing now, so it reads as his TV rather than an empty slab. It gives way as the card comes.
@@ -923,7 +940,11 @@ struct FlickScreen: View {
             }
             // Landed: the card's own picture, in the same place at the same size, so the hand-over from the flying card is
             // invisible. No transition: a second poster scaling in, or a fade, read as two pictures.
-            if landed { landedPicture }
+            // The card's full-bleed poster becomes the Remote's poster-on-blur over the same 0.2 s, as one picture changing.
+            if landed {
+                Color.clear.overlay { artwork(fill: true) }.clipped().opacity(caught ? 0 : 1)
+                landedPicture.opacity(caught ? 1 : 0)
+            }
             // The TV starting it: the light round the picture's edge, carried across into the Remote.
             if landed && sending { LoadingRing(radius: radius).transition(.opacity) }
         }
@@ -1148,15 +1169,25 @@ struct FlickScreen: View {
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { sending = false }
         leave()
     }
+    // The Remote's tab up under the black stage, the Remote's picture kept hidden until the TV's screen lands on it.
+    func prepareRemote() {
+        guard step == .flick, arrived, !leaving, !returning, !cancelled, !flown, model.tab != 0 || tabBefore == nil else { return }
+        if model.tab == 0 && tabBefore == nil && model.flickHandoff { return }
+        tabBefore = tabBefore ?? model.tab
+        var quiet = Transaction(); quiet.disablesAnimations = true
+        withTransaction(quiet) { model.flickHandoff = true; model.tab = 0 }
+    }
     // A throw that didn't go on to the Remote puts the page he threw from back under the stage.
     func backToThrownFrom() {
         guard let b = tabBefore else { return }
+        restoredTab = b
         var quiet = Transaction(); quiet.disablesAnimations = true
         withTransaction(quiet) { model.flickHandoff = false; model.tab = b }
         tabBefore = nil
     }
     // Everything fades back to the page underneath. From here on nothing started by this screen changes the app behind.
     func leave(restoreMood: Bool = true) {
+        if !toRemote { backToThrownFrom() }
         leaving = true
         if restoreMood, let prior = priorMood { model.mood = prior }
         withAnimation(.easeOut(duration: 0.2)) { arrived = false; barShown = false }
@@ -1172,6 +1203,7 @@ struct FlickScreen: View {
         guard let o = target.origin, o.width > 10, cardFrame.width > 0,
               o.maxY > 40, o.minY < cardFrame.maxY + flickOrigin.y + 200 else { leave(); return }
         let slot = o.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
+        backToThrownFrom()
         leaving = true
         detent = 0
         if let prior = priorMood { model.mood = prior }
@@ -1188,6 +1220,10 @@ struct FlickScreen: View {
     // picture of the TV, which shows the same poster, and only then does everything else fade. The film's colour stays,
     // as it's the same film.
     func goRemote() {
+        #if os(iOS)
+        // The Remote must come up with the start already its own (r21: some launches showed no transport, light or title).
+        if Self.pose?.hasPrefix("flick") == true, model.starting == nil, !alreadyOn { HitchLog.shared.assertFailed("model.starting was nil at the hand-over") }
+        #endif
         model.tick()
         leaving = true
         model.keepMood(until: item.art)
@@ -1234,21 +1270,23 @@ struct FlickScreen: View {
             // The Remote's picture can still settle as its page lays out, so the move keeps aiming at where it is now,
             // place and size, until the spring has run its course and the picture has stopped moving. Once the screen
             // is on it, a late change eases across rather than stepping.
+            // Every change of aim is animated, never a jump mid-spring (r21: an unanimated retarget stepped the picture 25 pt),
+            // and the landing is over by 1.1 s from the release whatever happens.
             let start = Date()
+            let deadline = max(releasedAt == .distantPast ? start.addingTimeInterval(0.5) : releasedAt.addingTimeInterval(1.1), start.addingTimeInterval(0.4))
             var still = 0
-            while Date().timeIntervalSince(start) < 1.5 {
+            while Date() < deadline {
                 try? await Task.sleep(nanoseconds: 16_000_000)
-                let gone = Date().timeIntervalSince(start)
                 if let s = model.mirrorSlot, s.width > 20 {
                     let next = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
                     let moved = abs(next.minX - remoteSlot.minX) + abs(next.minY - remoteSlot.minY)
                         + abs(next.width - remoteSlot.width) + abs(next.height - remoteSlot.height) > 0.5
                     if moved {
                         still = 0
-                        if gone > 0.6 { withAnimation(.easeOut(duration: 0.15)) { remoteSlot = next } } else { remoteSlot = next }
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { remoteSlot = next }
                     } else { still += 1 }
                 }
-                if gone > 0.65 && still >= 6 { break }
+                if Date().timeIntervalSince(start) > 0.4 && still >= 4 { break }
             }
             // Landed on it: the screen gives way to the same picture underneath, and whatever of this screen is still
             // over the keys fades with it before it's taken away.
@@ -1389,7 +1427,7 @@ struct FlickScreen: View {
         let across = tvFrame.midX - cardFrame.midX - drag.width
         let vx = abs(across) > 8 ? max(-5, min(5, velocity.width / across)) : 0
         thrown += 1
-        answered = false; written = false
+        answered = false; written = false; caught = false
         withAnimation(.interpolatingSpring(duration: 0.32, bounce: 0, initialVelocity: vy), completionCriteria: .logicallyComplete) {
             flown = true; lean = 0
         } completion: { arrivedAtTV() }
@@ -1408,6 +1446,9 @@ struct FlickScreen: View {
             withAnimation(.easeOut(duration: 0.12)) { morph = true }
         }
         phase = nil; streamed = false
+        // The start is the model's from the release, on every path, so the Remote shows it from the moment it comes up:
+        // the poster on its blur with the light, never the TV's launcher behind a film that's starting (r21).
+        if !alreadyOn { beginStarting() }
         flight = Task { await start() }
     }
     // The card reaches the TV: the hit, felt and seen, then the second tick; and at 600 ms on into the Remote.
@@ -1421,7 +1462,7 @@ struct FlickScreen: View {
             // swap itself (r17: a ~140 ms stall at the impact).
             await Task.yield()
             impacts += 1
-            withAnimation(.easeOut(duration: 0.2)) { sending = true }
+            withAnimation(.easeOut(duration: 0.2)) { sending = true; caught = true }
             try? await Task.sleep(nanoseconds: 110_000_000)
             guard !cancelled else { return }
             FlickHaptic.caught()
@@ -1436,6 +1477,10 @@ struct FlickScreen: View {
             guard !cancelled, step == .flick else { return }
             handOver()
         }
+    }
+    func beginStarting() {
+        let art = screenURL?.absoluteString ?? item.art
+        model.beginStart(.init(title: item.title, art: art, line: episode.map { "S\($0.season) E\($0.episode) · \($0.name)" }, token: stream?.token), target: again)
     }
     // The request, from release to the answer. It runs on after the flick screen has closed: the start is the model's.
     func start() async {
@@ -1453,8 +1498,9 @@ struct FlickScreen: View {
         let order = order
         let early = order.0 == "play-stream"
         askedRestart = order.1["restart"] as? Bool == true
-        let art = screenURL?.absoluteString ?? item.art
-        model.beginStart(.init(title: item.title, art: art, line: episode.map { "S\($0.season) E\($0.episode) · \($0.name)" }, token: stream?.token), target: again)
+        // Normally begun at the release already (so the Remote's picture is the poster from the hand-over on); this only
+        // fills in the stream it went with.
+        if model.starting == nil { beginStarting() } else { model.starting?.token = stream?.token }
         timing.mark("request")
         written = true
         var resent = false
@@ -1523,7 +1569,7 @@ struct FlickScreen: View {
     // Whether a Stremio player is the film just sent, by its title.
     func isThisFilm(_ p: TVStatus.Session) -> Bool {
         guard let now = p.description.first, !now.isEmpty else { return false }
-        return now.localizedCaseInsensitiveContains(item.title) || item.title.localizedCaseInsensitiveContains(now)
+        return TVStatus.Session.sameName(now, item.title)
     }
     // Caught, and straight on into the Remote: the TV's screen moves onto the Remote's own picture, where the start is
     // shown until it plays. A control screen of its own was a second, worse remote (Richard, 2026-11-05: "awful").

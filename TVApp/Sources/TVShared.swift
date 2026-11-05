@@ -63,7 +63,9 @@ struct TVStatus: Decodable, Equatable {
             let tail = rest.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
             if tail.isEmpty { return true }
             if tail.count == 4, Int(tail).map({ (1900...2100).contains($0) }) == true { return true }
-            if rest.contains("(") || rest.contains("[") { return true }
+            // A bracketed note only when it's all that follows ("Heat (1995)", "The Office [US]"), never a bracket further on
+            // ("Aliens (1986)" is not "Alien"; r21).
+            if let first = rest.trimmingCharacters(in: .whitespaces).first, first == "(" || first == "[" { return true }
             return ["us", "uk", "au", "ca", "nz"].contains(tail)
         }
     }

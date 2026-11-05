@@ -69,10 +69,17 @@ final class TVModel {
         let a = s.session.flatMap { $0.pkg == "com.codex.musicwebtv" ? nil : picture(for: $0) } ?? s.music?.art
         return a?.contains("/api/tv/icon") == true ? nil : a
     }
+    // A real picture of what's playing, never the app's own banner: the backgrounds and the pictures of what's on use
+    // this (r21: the Remote's background was a blown-up STREMIO wordmark, and YouTube's picture a white banner).
+    func poster(for s: TVStatus.Session) -> String? {
+        picture(for: s).flatMap { $0.contains("/api/tv/icon") ? nil : $0 }
+    }
+    // The picture behind every page: what's on, and never a banner; with none, the last real one stays.
+    var ambienceArt: String? { nowArt.flatMap { $0.contains("/api/tv/icon") ? nil : $0 } }
     func picture(for s: TVStatus.Session) -> String? {
         if let a = s.art, !a.isEmpty { return a }
         if s.pkg == lastArtPkg, let a = lastArt, let t = lastArtTitle, let now = s.description.first,
-           now.localizedCaseInsensitiveContains(t) || t.localizedCaseInsensitiveContains(now) { return a }
+           TVStatus.Session.sameName(now, t) || TVStatus.Session.sameName(s.showName, t) { return a }
         return url("/api/tv/icon?pkg=\(s.pkg)&v=2")?.absoluteString
     }
     // The flick screen brings itself in and out, so the system's slide stays out of it. Whatever was being typed into is
@@ -150,6 +157,9 @@ final class TVModel {
     // Playing: the light finishes its lap, then the picture is the TV's own again. The yes is felt here.
     func startPlayed() {
         guard let st = starting, !st.failed, !st.played else { return }
+        // ⏯ said pause all through the start; it goes on saying so until a reading taken after this agrees, so the first
+        // status after the start (which can still say not playing) can't flip it to ▶ for a moment (r21).
+        holdPlay(true)
         // The light finishes its lap and the picture becomes the TV's own (the Remote reads `played`).
         withAnimation(.easeOut(duration: 0.3)) { starting?.played = true }
         #if canImport(UIKit)
@@ -242,6 +252,12 @@ final class TVModel {
         // the flip let go of the press and left a stale "paused" (r18).
         if let read, read.timeIntervalSince(h.at) > 3 { playHeld = nil }
     }
+    // One answer for a song's state wherever it's shown, the Remote's mini player and Playing alike (r21: one said ended,
+    // the other playing). Said to be playing but already past its end: an old report, shown stopped there.
+    func songEnded(_ m: TVStatus.Music) -> Bool {
+        m.duration > 0 && m.playing && m.position + Date().timeIntervalSince1970 * 1000 - m.sampledAt >= m.duration
+    }
+    func songPlaying(_ m: TVStatus.Music) -> Bool? { staleStatus ? nil : (songEnded(m) ? false : m.playing) }
     // Mint's song is what's on: playing, or Mint is the app in front. A film or show on the TV, playing or paused in
     // front, is never shown beside a song left over from before.
     var musicIsCurrent: Bool {
@@ -268,6 +284,13 @@ final class TVModel {
         // Open with what was last known; the live state replaces it moments later. A small file, read before the first
         // frame on purpose, so the app opens showing what it knew rather than empty.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(TVStatus.self, from: d) }
+        // The apps' banners kept from last time, decoded off the main thread now, so the Remote's tiles have them early
+        // without anything reading the disk while drawing.
+        warmBanners()
+    }
+    func warmBanners() {
+        let urls = (status?.apps ?? []).filter(\.hasIcon).compactMap { url("/api/tv/icon?pkg=\($0.pkg)&v=2") }
+        ImageStore.shared.warm(urls)
     }
     func url(_ path: String) -> URL? { URL(string: address.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) }
     func start() {

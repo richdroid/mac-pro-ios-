@@ -118,6 +118,12 @@ const tvScene = scene => {
   return JSON.stringify(v);
 };
 http.createServer((q, s) => {
+  // Frames the app took longer than 34 ms to draw, in any scene, kept for the build (r21: stalls as numbers).
+  if (q.method === 'POST' && /\/api\/tv\/hitch$/.test(q.url)) {
+    let body = ''; q.on('data', c => body += c);
+    q.on('end', () => { try { for (const h of JSON.parse(body).hitches || []) require('fs').appendFileSync('/tmp/tv-hitches.log', `${new Date(h.at).toISOString()} ${h.note ? 'ASSERT ' + h.note : h.ms + ' ms'}\n`); } catch {} s.setHeader('content-type', 'application/json'); s.end('{"ok":true}'); });
+    return;
+  }
   if (tvPose(q, s)) return;
   const scene = (q.url.match(/^\/(stremio|youtube|ending)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
@@ -461,6 +467,11 @@ function tvReal(q, s, path, query, json) {
     if (r.seeked || tvReal.known) session.duration = REAL_MS; else if (t >= 20) session.duration = CATALOGUE_MS;
     v.session = session;
     return late(r.asks % 7 === 0 ? 2000 : 300 + Math.round(Math.random() * 600), () => json(v));
+  }
+  // The series lookup takes a few seconds, as the real catalogue can, so ⏭ pressed before it's in shows its light (r21).
+  if (path === '/api/tv/stremio-meta') {
+    const eps = [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/poster.png' })));
+    return late(3000, () => json({ about: 'A made-up comedy about a made-up family.', episodes: eps }));
   }
   if (path === '/api/tv/stremio' || (path === '/api/tv/discover' && !query.get('q') && !query.get('genre'))) {
     const term = (query.get('q') || '').toLowerCase();

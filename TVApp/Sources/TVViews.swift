@@ -32,6 +32,9 @@ struct RootView: View {
     @Environment(TVModel.self) var model
     // The build's simulator shots ask for screens a launch alone can't reach.
     func poseForShots() {
+        #if os(iOS)
+        HitchLog.shared.start()
+        #endif
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
         if pose == "search" { SendDraft.shared.text = "Heat"; return }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
@@ -78,8 +81,9 @@ struct RootView: View {
         // ⏭ pressed before the show's next episode is known: the light runs round the key until it throws (r20).
         if pose == "realnext" {
             Task {
-                NextUp.shared.forget()
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                NextUp.shared.forgetAll()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
                 Transport.pressNext(model)
             }
             return
@@ -201,8 +205,8 @@ private struct StatusFollower: View {
         Color.clear
             .onChange(of: symbol, initial: true) { _, s in if s != playingSymbol { playingSymbol = s } }
             // The one picture behind every page follows what's on.
-            .task(id: model.nowArt) {
-                await AmbienceStore.shared.show(model.nowArt)
+            .task(id: model.ambienceArt) {
+                await AmbienceStore.shared.show(model.ambienceArt)
                 // A film's colour kept after its flick gives way once something else is what's on.
                 if model.moodArt != nil, !(model.videoIsCurrent && model.status?.session?.pkg == "com.stremio.one") {
                     model.moodArt = nil; model.mood = nil
@@ -280,7 +284,7 @@ struct Page<C: View>: View {
             content()
                 .underFlick()
                 .environment(\.backToTop, top)
-                .navigationDestination(for: RowRoute.self) { $0.page.underFlick() }
+                .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true) }
                 .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
@@ -565,7 +569,7 @@ struct MirrorView: View {
         // still of the screen swapped for the poster a moment later (r17).
         // Playing or paused: a paused film is as black on a capture as a playing one, and swapping to the capture on pause
         // (and back on play) made the picture jump with every press (r18).
-        if model.videoIsCurrent, let s = model.status?.session { return model.picture(for: s).flatMap(URL.init(string:)) }
+        if model.videoIsCurrent, let s = model.status?.session, let p = model.poster(for: s) { return URL(string: p) }
         return model.standInNow.flatMap(URL.init(string:))
     }
     // The picture drawn, which only moves on to a new one once it's loaded, then fades in over what was there: the
@@ -1140,7 +1144,7 @@ private struct StartingPicture: View {
                 .overlay { Color.black.opacity(start.failed ? 0.5 : 0) }
             // Not while the flick's screen is moving onto it: that picture carries its own light, and two drew a second
             // frame lagging beside the moving one (r19).
-            if !start.failed && !start.played && !model.flickHandoff { LoadingRing(radius: TVLook.card).transition(.opacity) }
+            if !start.failed && !start.played && !model.flickHandoff { LoadingRing(radius: TVLook.card) }
         }
         .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
         // Playing: the light finishes, and the picture under it is the TV's own.
@@ -1254,7 +1258,7 @@ struct MiniPlayer: View {
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel("Now playing: \(song?.title ?? music.title)")
             if song != nil { PlayKey(playing: phone.playing, size: 44) { phone.toggle() } }
-            else { PlayKey(playing: model.staleStatus ? nil : music.playing, size: 44) }
+            else { PlayKey(playing: model.songPlaying(music), size: 44) }
         }
         .padding(10).tvCard()
     }
@@ -1266,7 +1270,11 @@ struct MiniPlayer: View {
 // empty place read as a missing button (Richard, 2026-11-05: "no back button here is ridiculous").
 struct Transport: View {
     // For the build's recording: ⏭ pressed while the next episode isn't known yet.
-    @MainActor static func pressNext(_ model: TVModel) { NotificationCenter.default.post(name: ResolvingNextKey.press, object: nil) }
+    // Whichever ⏭ is up: the next episode's own key when it's known, otherwise the one still working it out.
+    @MainActor static func pressNext(_ model: TVModel) {
+        if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) }
+        else { NotificationCenter.default.post(name: ResolvingNextKey.press, object: nil) }
+    }
     @Environment(TVModel.self) var model
     @ObservedObject private var nextUp = NextUp.shared
     // No glow while typing on the Remote: it would smear through the keyboard just above.
@@ -1487,7 +1495,7 @@ struct AppsTab: View {
         .padding(.horizontal, 20).frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
     }
     var body: some View {
-        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick() }
+        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true) }
     }
     @ViewBuilder var content: some View {
         if all.isEmpty {
@@ -1767,7 +1775,7 @@ struct NowControls: View {
             if music.duration > 0 && !model.staleStatus { MusicProgress(music: music) } else { ProgressPlaceholder() }
             // The one transport, the same five as for a film: one way to play anything in this app (r17).
             // At the song's end with the TV still saying playing: an old word, shown stopped there, as a film's is (r18).
-            Transport(ended: music.duration > 0 && music.playing && music.position + Date().timeIntervalSince1970 * 1000 - music.sampledAt >= music.duration, playing: .some(model.staleStatus ? nil : music.playing))
+            Transport(ended: model.songEnded(music), playing: .some(model.songPlaying(music)))
         }
     }
 }
@@ -1919,9 +1927,10 @@ struct PlayingTab: View {
         .contentTransition(.opacity)
         .animation(.easeInOut(duration: 0.25), value: title)
     }
-    // Only when Mint isn't already the app on the TV's screen.
+    // Only when Mint isn't already the app on the TV's screen, and never for the song the TV is playing now: nothing to
+    // send that's already happening (r21).
     @ViewBuilder var showOnTV: some View {
-        if model.status?.app != "com.codex.musicwebtv" {
+        if model.status?.app != "com.codex.musicwebtv", model.nowMusic.map({ model.songPlaying($0) != true }) ?? true {
             Button { model.tick(); model.post("music-now") } label: { Label("Show on TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
         }
     }
@@ -2022,8 +2031,6 @@ struct PlayingTab: View {
     var watching: Bool { otherAppIsActive && model.status?.session != nil }
     var upNext: some View {
         VStack(alignment: .leading, spacing: 24) {
-            // Only ever shows when the phone itself is playing a song, and keeps AirPlay in reach for Siri.
-            FlickCard().padding(.horizontal, 20)
             // A show: its episodes, the one on marked Playing and the next Up next, in view, rather than a lone card
             // of the same poster again (Richard, 2026-11-05: "again looks bad").
             if model.status?.session?.pkg == "com.stremio.one", nextUp.series != nil {
@@ -2039,6 +2046,9 @@ struct PlayingTab: View {
                 }
             }
             RecentRow()
+            // Only ever shows when the phone itself is playing a song, and keeps AirPlay in reach for Siri. Last, so its
+            // empty place never pushes the episodes down below the picture's top line (r21).
+            FlickCard().padding(.horizontal, 20)
         }
         .padding(.vertical, panes ? 20 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2047,7 +2057,8 @@ struct PlayingTab: View {
         Group {
             if panes {
                 FoldSplit { ScrollView { now.padding(20) }.backToTop() } right: {
-                    ScrollView { if watching { upNext } else { send.padding(20) } }.backToTop()
+                    // The same 20 pt from the top as the picture beside it, so the two panes' first lines sit level (r21).
+                    ScrollView { if watching { upNext.padding(.top, 20) } else { send.padding(20) } }.backToTop()
                 }
             } else {
                 // The rows under a film run to the screen's edges, as rows do everywhere else.
@@ -2344,7 +2355,9 @@ struct VideoProgress: View {
         let held = model.playHeld
         let running = held?.playing ?? session.playing
         if seeker.held(for: session, at: date) == nil, live, let at = session.sampledAt {
-            if session.playing && held?.playing == false { now += max(0, held!.at.timeIntervalSince1970 * 1000 - at) }
+            // Frozen at the press: a reading taken after the press, the TV still playing on, is wound back to the press, or
+            // the fresh readings the hold asks for carried the clock on under a paused key (r21: 0:04 to 0:07).
+            if session.playing && held?.playing == false { now += held!.at.timeIntervalSince1970 * 1000 - at }
             else if running && session.playing { now += max(0, date.timeIntervalSince1970 * 1000 - at) }
             else if running, let h = held { now += max(0, date.timeIntervalSince(h.at) * 1000) }
         }
@@ -2533,14 +2546,17 @@ final class AmbienceStore: ObservableObject {
 // stack took the tab rail with it (r20).
 struct UnderFlick: ViewModifier {
     @Environment(TVModel.self) private var model
+    // A page that draws its own bar at its foot (BarPage) keeps the system's bar hidden always: set from outside to
+    // "automatic", it brought back a second title and a second ‹ beside the rail (r21).
+    var barHidden = false
     func body(content: Content) -> some View {
         let covered = model.flickChoosing || model.flickCovering
         content
             .opacity(covered ? 0 : 1)
             .animation(.easeOut(duration: 0.15), value: covered)
             #if os(iOS)
-            .toolbarVisibility(covered ? .hidden : .automatic, for: .navigationBar)
+            .toolbarVisibility(covered || barHidden ? .hidden : .automatic, for: .navigationBar)
             #endif
     }
 }
-extension View { func underFlick() -> some View { modifier(UnderFlick()) } }
+extension View { func underFlick(barHidden: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden)) } }

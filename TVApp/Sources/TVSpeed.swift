@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 // Everything that makes a flick quicker than the TV would be on its own: streams asked for before they're needed, the
 // TV made ready while the card is still in the hand, and the start followed as it happens rather than polled for.
@@ -117,3 +120,44 @@ extension TVBridge {
         return d
     }
 }
+
+// For the build's poses only: every frame that takes longer than 34 ms, with when it was, sent to the stand-in Mac, which
+// writes them to a log the build keeps. Stalls come out as numbers rather than being read off a film (r21).
+#if os(iOS)
+@MainActor
+final class HitchLog: NSObject {
+    static let shared = HitchLog()
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0
+    private var hitches: [[String: Any]] = []
+    private var flushing: Task<Void, Never>?
+    func start() {
+        guard link == nil, UserDefaults.standard.string(forKey: "pose") != nil else { return }
+        let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+    // A check a pose makes that failed, sent with the hitches so the build can say so loudly.
+    func assertFailed(_ note: String) {
+        guard UserDefaults.standard.string(forKey: "pose") != nil else { return }
+        print("ASSERT \(note)")
+        Task { _ = try? await TVBridge.post("hitch", ["hitches": [["ms": 0, "at": Date().timeIntervalSince1970 * 1000, "note": note]]], timeout: 5) }
+    }
+    @objc private func tick(_ l: CADisplayLink) {
+        defer { last = l.timestamp }
+        guard last > 0 else { return }
+        let gap = (l.timestamp - last) * 1000
+        guard gap > 34 else { return }
+        hitches.append(["ms": Int(gap), "at": Date().timeIntervalSince1970 * 1000])
+        print("HITCH \(Int(gap)) ms")
+        if flushing == nil {
+            flushing = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self else { return }
+                let batch = self.hitches; self.hitches = []; self.flushing = nil
+                if !batch.isEmpty { _ = try? await TVBridge.post("hitch", ["hitches": batch], timeout: 5) }
+            }
+        }
+    }
+}
+#endif

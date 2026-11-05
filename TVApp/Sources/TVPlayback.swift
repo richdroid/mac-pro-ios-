@@ -138,6 +138,15 @@ final class NextUp: ObservableObject {
     nonisolated static func link(_ imdb: String, _ video: String) -> String { "stremio:///detail/series/\(imdb)/" + video.replacingOccurrences(of: ":", with: "%3A") }
     // Asked again after a flick, which may have changed what's known.
     func forget() { key = "" }
+    // Everything known about the show on, dropped, so it's worked out again from nothing: the build's realnext pose, to
+    // show ⏭ pressed before the next episode is known (r21: forgetting only the key left `series` and `next` set).
+    func forgetAll() {
+        key = ""
+        if series != nil { series = nil }
+        if next != nil { next = nil }
+        if previous != nil { previous = nil }
+        Self.metas.removeAll()
+    }
     private struct SearchAnswer: Decodable { let rows: [MediaRow] }
     func follow(_ s: TVStatus?) {
         guard let p = s?.session, p.pkg == "com.stremio.one", p.description.count > 1 || p.seasonEpisode != nil else {
@@ -172,7 +181,8 @@ final class NextUp: ObservableObject {
     }
     private static func resolve(_ p: TVStatus.Session) async -> (next: MediaItem?, previous: MediaItem?, series: Series)? {
         let show = p.showName, on = p.description.count > 1 ? p.description[1] : ""
-        func same(_ t: String) -> Bool { !t.isEmpty && (show.localizedCaseInsensitiveContains(t) || t.localizedCaseInsensitiveContains(show)) }
+        // The same show by name, exactly ("You" is not "Young Sheldon"; r21).
+        func same(_ t: String) -> Bool { TVStatus.Session.sameName(show, t) }
         // Which series: one flicked from here, or one on Stremio's own Continue watching.
         var imdb: String?, title = show, art = "", known: String?
         if let r = RecentFlicks.shared.list.first(where: { $0.type == "series" && same($0.title) }) {
@@ -672,17 +682,19 @@ struct EpisodePicker: View {
 struct LoadingRing: View {
     var radius: CGFloat
     @Environment(\.accessibilityReduceMotion) private var still
-    @State private var phase: CGFloat = 0
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 2)
-            RunningEdge(radius: radius, phase: phase)
-                .stroke(TVLook.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                .shadow(color: TVLook.accent.opacity(0.7), radius: 4)
+        // 1.4 s a lap, read off one clock: every ring is at the same place in its lap, so the flick's TV handing its light to
+        // the Remote's picture is one unbroken light, never one that stops and starts again at the left (r21).
+        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: still)) { ctx in
+            let phase = still ? 0.1 : CGFloat(ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4)
+            ZStack {
+                RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 2)
+                RunningEdge(radius: radius, phase: phase)
+                    .stroke(TVLook.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .shadow(color: TVLook.accent.opacity(0.7), radius: 4)
+            }
         }
         .allowsHitTesting(false)
-        // 1.4 s a lap, the same light on the flick's TV and on the Remote's picture it moves onto.
-        .onAppear { if !still { withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { phase = 1 } } }
         .accessibilityLabel("Loading")
     }
 }
@@ -789,8 +801,16 @@ struct EpisodeSheet: View {
     var body: some View {
         // An opaque enough backdrop and its own top inset, so nothing of the page under it (the "Remote" title) shows at its
         // top edge (r20).
-        ScrollView { ShowEpisodes(titled: true, picked: close).padding(.horizontal, 20).padding(.bottom, 20).padding(.top, 32) }
-            .presentationBackground(.regularMaterial)
+        // The rows centred in the sheet, never ending well short of its right edge (r21), and a margin the scroll keeps,
+        // so the playing row brought into view never sits under the grabber.
+        ScrollView {
+            ShowEpisodes(titled: true, picked: close).padding(.horizontal, 20).padding(.bottom, 20)
+                .frame(maxWidth: 560).frame(maxWidth: .infinity)
+        }
+        .contentMargins(.top, 32, for: .scrollContent)
+        .presentationBackground(.regularMaterial)
+        // One corner shape all round, whether it's a popover or a sheet (r21: one square corner, one round).
+        .presentationCornerRadius(28)
     }
 }
 
@@ -822,7 +842,7 @@ struct PlayingVideo: View {
                     if let still, !still.isEmpty {
                         Cover(url: URL(string: still), mode: .fill) { Color.white.opacity(0.06) }
                     } else {
-                        PosterOnBlur(url: model.picture(for: session).flatMap(URL.init(string:)))
+                        PosterOnBlur(url: model.poster(for: session).flatMap(URL.init(string:)))
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

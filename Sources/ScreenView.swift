@@ -198,8 +198,11 @@ struct RemoteScreenView: View {
                 p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: w - side * 2, height: 40)
             }
             let above = max(p.keyboard.maxY, p.modRow.maxY, p.fnRow.maxY) + 10
-            let padWidth = (w * 0.62).rounded()
-            p.trackpad = CGRect(x: (w - padWidth) / 2, y: above, width: padWidth, height: max(h - bottom - 8 - above, 60))
+            // 16:10 and no wider than 72 % of the keys, as in the book posture: spare width is margin, never pad (r21: a 3.5:1
+            // slab). Height first, as the base allows; centred in what's left.
+            let room = max(h - bottom - 8 - above, 60), capW = ((w - side * 2) * 0.72).rounded()
+            let padW = min(capW, (room * 16 / 10).rounded()), padH = min(room, (padW * 10 / 16).rounded())
+            p.trackpad = CGRect(x: (w - padW) / 2, y: above + (room - padH) / 2, width: padW, height: padH)
         case .closed:
             let pic = fitWidth(w, maxHeight: h * 0.5)
             p.picture = CGRect(x: (w - pic.width) / 2, y: top, width: pic.width, height: pic.height)

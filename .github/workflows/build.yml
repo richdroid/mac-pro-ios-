@@ -356,7 +356,7 @@ jobs:
               set -- "$1" "$2" $V
               # Unfolded too, all but the slow start and the put-back (r19: cancel, failed and offline were never seen open).
               if [ -n "$2" ] && ! [[ "$3" =~ ^flick-(stage|starting|already|cancel|failed|offline)$ ]]; then set -- "$1" "$2"; continue; fi
-              curl -s http://127.0.0.1:9002/f$4/reset > /dev/null
+              curl -s http://127.0.0.1:9002/f$4/reset > /dev/null; rm -f /tmp/tv-hitches.log
               if [ "$6" = 1 ]; then xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-$3$2.mp4 > /dev/null 2>&1 & REC=$!; sleep 5; fi
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/f$4 -tab 1 -pose $3
               sleep 8; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-held$2.png
@@ -364,6 +364,12 @@ jobs:
               if [ "$6" = 1 ]; then kill -INT $REC; wait $REC; echo "$3 video$2 exit $?"; fi
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
               cp /tmp/tv-flick-sends.log dist/tv-$3-sends$2.log 2>/dev/null || echo "(nothing sent)" > dist/tv-$3-sends$2.log
+              # Every frame over 34 ms the app drew during the pose, with its time (r21).
+              { echo "== tv-$3$2"; cat /tmp/tv-hitches.log 2>/dev/null || echo "(no hitches)"; } | tee dist/tv-$3-hitches$2.log
+              if grep -q "ASSERT" dist/tv-$3-hitches$2.log; then
+                echo "::error title=tv-$3$2::$(grep ASSERT dist/tv-$3-hitches$2.log | head -1)"
+                grep ASSERT dist/tv-$3-hitches$2.log > dist/FAILED-tv-$3$2.txt
+              fi
               # Already on the TV: throwing it again must send nothing. Said loudly, without stopping the other shots.
               if [ "$3" = flick-already ] && grep -q '"what":"play-stream"' dist/tv-$3-sends$2.log; then
                 echo "::error title=flick-already$2::play-stream was posted for a film already playing"
@@ -419,11 +425,13 @@ jobs:
             fi
           }
           tv_flick() { # display, file suffix
+            rm -f /tmp/tv-hitches.log
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-flickdemo-stream$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 6
             xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/flickstream -tab 1 -pose flickdemo-stream
             sleep 22
             kill -INT $REC; wait $REC; echo "stream flick video$2 exit $?"
+            { echo "== tv-flickdemo-stream$2"; cat /tmp/tv-hitches.log 2>/dev/null || echo "(no hitches)"; } | tee dist/tv-flickdemo-stream-hitches$2.log
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             # About 3 s into the TV's 6, with the card in the TV and the dots filling.
             xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/flickstream -tab 1 -pose flickdemo-stream
