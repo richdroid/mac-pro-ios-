@@ -92,34 +92,10 @@ struct FlatStyle: ButtonStyle {
 // is scrolled under, solid black from the top of the display to the inline bar's foot, so no scrolled content shows behind
 // a title glyph, then a 24 pt fade. At rest nothing is drawn, so the portrait and first cards show whole.
 struct TopEdge: ViewModifier {
-    // The scroll views on the page that have content under the bar; open, each pane reports its own.
-    @State private var under: Set<Int> = []
+    // No bar of our own: Richard (2026-11-05) "just get rid of this top bar" — the solid black band that covered the top
+    // of the page while scrolled. Content now runs to the top edge with nothing over it, and the title floats.
     func body(content: Content) -> some View {
-        bar(content.scrollEdgeEffectHidden(true, for: .top))
-            .environment(\.topEdgeUnder) { id, on in
-                if on { under.insert(id) } else { under.remove(id) }
-            }
-            .overlay {
-                GeometryReader { g in
-                    // The page's own top is where its content rests, just under the title, large or inline. The black stops
-                    // there, fading over its last few points, so it hides what has scrolled up behind the title and never
-                    // anything still in its resting place. (Measuring insets and safe areas overshot by up to 100 pt on the
-                    // Duo, over the Mac Pro's portrait.) A page drawn from the very top under the bar gets the bar's height.
-                    let y = g.frame(in: .global).minY
-                    let foot = y > TopEdge.statusBar + 30 ? y : TopEdge.statusBar + 96
-                    let lead = g.safeAreaInsets.leading, width = g.size.width + lead + g.safeAreaInsets.trailing
-                    VStack(spacing: 0) {
-                        Color.black.frame(height: max(foot - 4, 0))
-                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 8)
-                    }
-                    .frame(width: width)
-                    .offset(x: -lead, y: -y)
-                    .opacity(under.isEmpty ? 0 : 1)
-                    .animation(Motion.fade, value: under.isEmpty)
-                }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
+        bar(content)
     }
     // The window's own top inset: the status bar, without the navigation bar a view's safe area adds.
     @MainActor static var statusBar: CGFloat {
