@@ -886,14 +886,17 @@ struct NightButton: View {
             }
             if on { Button("Day") { flip("off") } }
             Section("Screen") {
+                // Always a way back after dimming or turning it off.
+                Button("Screen bright") { model.cmd("screen", "bright", id: "remote") }
                 Button("Screen dim") { model.cmd("screen", "dim", id: "remote") }
                 Button("Screen off") { model.cmd("screen", "off", id: "remote") }
             }
         } label: {
-            Image(systemName: on ? "moon.fill" : "sun.max.fill").font(.system(size: 20, weight: .semibold))
+            // The same size and weight as its neighbours; a deep amber sun so it never reads as disabled.
+            Image(systemName: on ? "moon.fill" : "sun.max.fill").font(.system(size: 20))
                 .frame(width: 40, height: 40)
                 .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp)))
-                .foregroundStyle(on ? ChumbyPalette.hex(0xa4b7d6) : ChumbyPalette.hex(0xffc477))
+                .foregroundStyle(on ? ChumbyPalette.hex(0xa4b7d6) : ChumbyPalette.hex(0xe59a2e))
         } primaryAction: {
             flip(on ? "off" : kind)
         }

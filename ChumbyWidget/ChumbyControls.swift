@@ -54,7 +54,7 @@ struct ChumbyNightControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "ChumbyNightToggle", provider: ChumbyNightValue()) { on in
             ControlWidgetToggle("Night Mode", isOn: on, action: ChumbyNightToggleIntent()) { on in
-                Label(on ? "On" : "Off", systemImage: on ? "moon.fill" : "moon")
+                Label(on ? "Night" : "Day", systemImage: on ? "moon.fill" : "sun.max.fill")
             }
         }
         .displayName("Chumby Night Mode").description("Night mode on the Chumby, on or off.")

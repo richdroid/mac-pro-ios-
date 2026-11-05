@@ -339,7 +339,7 @@ struct RemoteBody: View {
             Grid(horizontalSpacing: 10, verticalSpacing: 10) {
                 GridRow {
                     // One night button, filled while the Chumby is in night mode; tap to switch.
-                    Button(intent: ChumbyNightToggleIntent(!entry.night)) { face(entry.night ? "moon.fill" : "moon", on: entry.night) }
+                    Button(intent: ChumbyNightToggleIntent(!entry.night)) { face(entry.night ? "moon.fill" : "sun.max.fill", on: entry.night) }
                         .buttonStyle(.plain).accessibilityLabel(entry.night ? "End night mode" : "Night mode")
                     Button(intent: ChumbyPress("next")) { face("forward.fill") }.buttonStyle(.plain).accessibilityLabel("Next widget")
                 }
