@@ -197,7 +197,12 @@ extension ChumbyState {
     var nightStyle: String? { schedule.first { $0.cmd == "night" && $0.val != "off" }?.val }
     mutating func addNap(minutes: Int) { addNap(at: Int((Date().timeIntervalSince1970 / 60).rounded(.up)) + minutes) }
     // A one-off beep named Nap, due at `at` (minutes since 1970), in the first free place.
+    // One nap at a time, from wherever it's set (app, widget, Control Center, Shortcuts): any nap still to come is replaced,
+    // and the same minute twice is a no-op, so a double press can't leave two naps ringing one after the other.
     mutating func addNap(at: Int) {
+        let now = Int(Date().timeIntervalSince1970 / 60)
+        alarms.removeAll { $0.name == "Nap" && $0.when == "once" && (Int($0.time) ?? 0) > now && $0.time != String(at) }
+        if alarms.contains(where: { $0.name == "Nap" && $0.when == "once" && $0.time == String(at) }) { return }
         var a = Alarm()
         a.name = "Nap"; a.when = "once"; a.enabled = "1"
         a.time = String(at)
@@ -206,7 +211,9 @@ extension ChumbyState {
         if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
     }
     func alarmForm() -> [(String, String)] {
-        var o: [(String, String)] = [("n", "\(alarms.count)"), ("v", "\(volume)"), ("f", "\(fade)")]
+        var o: [(String, String)] = [("n", "\(alarms.count)")]
+        if volume >= 0 { o.append(("v", "\(volume)")) }
+        o.append(("f", "\(fade)"))   // -1 is a real choice here: the Chumby's own default
         for (i, a) in alarms.enumerated() {
             o += [("\(i)_name", a.name), ("\(i)_enabled", a.enabled), ("\(i)_time", a.time), ("\(i)_when", a.when), ("\(i)_type", a.type), ("\(i)_arg", a.arg),
                   ("\(i)_param", a.param), ("\(i)_param_description", a.param_description), ("\(i)_duration", a.duration), ("\(i)_snooze", a.snooze),

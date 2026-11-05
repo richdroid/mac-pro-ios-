@@ -1743,6 +1743,8 @@ struct SoundsTab: View {
                 if mine.isEmpty && calendarSound == nil { Text("No alarms yet.").foregroundStyle(.secondary) }
                 // How loud they ring: saved the careful way, and marked here if it doesn't reach the Chumby.
                 // Named in words, so it's never mistaken for the music's volume under Now.
+                // Only once the Chumby has said how loud: a slider at a guessed value would save the guess.
+                if model.state.volume >= 0 {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Alarm volume").font(.subheadline.weight(.semibold))
                     HStack(spacing: 12) {
@@ -1755,6 +1757,7 @@ struct SoundsTab: View {
                     }
                 }
                 MarkNote(mark: "alarmVolume")
+                }
                 Picker("Fade in", selection: Binding(get: { model.state.fade }, set: { model.change(.fade($0)) })) {
                     ForEach([(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")], id: \.0) { Text($0.1).tag($0.0) }
                 }
@@ -1795,7 +1798,7 @@ struct SoundsTab: View {
             } header: { SectionHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark)) } footer: { if let scanNote { Text(scanNote) } }
         }
         .seaList()
-        .task(id: model.state.volume) { alarmVolume = Double(model.state.volume) }
+        .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
         .alert("Add a radio stream", isPresented: $addStream) {
             TextField("MP3 stream address", text: $streamURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)

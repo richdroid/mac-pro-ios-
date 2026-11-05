@@ -50,7 +50,9 @@ struct Alarm: Codable, Identifiable, Equatable {
     var id = 0     // its place in the list, so rows keep their identity across refreshes
     var name = "", enabled = "1", time = "420", when = "daily", type = "beep", arg = "Beep", param = ""
     var param_description = "Beep", duration = "30", snooze = "9", auto_dismiss = "0"
-    var action = "", action_param = "", backup = "1", backupDelay = "5"
+    // No stock backup beeper: it stops the control panel and beeps over the widgets with no alarm screen (a nap did that on
+    // 2026-11-05). His own alarms all carry backup 0; new ones and naps do too.
+    var action = "", action_param = "", backup = "0", backupDelay = "0"
     enum CodingKeys: String, CodingKey { case name, enabled, time, when, type, arg, param, param_description, duration, snooze, auto_dismiss, action, action_param, backup, backupDelay }
     init() {}
     init(from d: Decoder) throws {
@@ -173,7 +175,8 @@ struct ChumbyState: Decodable {
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: Key.self)
         now = (try? c.decodeIfPresent(Double.self, forKey: .now)) ?? nil
-        volume = try c.decodeIfPresent(Int.self, forKey: .volume) ?? 100
+        // Unknown stays unknown (-1) and is never sent, so a save can't set his alarm volume to a default 100.
+        volume = (try? c.decodeIfPresent(Int.self, forKey: .volume)) ?? -1
         fade = try c.decodeIfPresent(Int.self, forKey: .fade) ?? -1
         shuffle = try c.decodeIfPresent(Int.self, forKey: .shuffle) ?? 0
         pending = try c.decodeIfPresent(Bool.self, forKey: .pending) ?? false

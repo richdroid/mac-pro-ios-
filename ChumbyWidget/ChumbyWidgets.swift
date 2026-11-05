@@ -368,12 +368,14 @@ struct RemoteBody: View {
                     Button(intent: ChumbyPress("next")) { face("forward.fill") }.buttonStyle(.plain).accessibilityLabel("Next widget")
                 }
                 GridRow {
-                    Button(intent: ChumbyNapIntent(minutes: 20)) { face("zzz") }.buttonStyle(.plain).accessibilityLabel("20-minute nap")
-                    // Stop only while something plays; otherwise the slot goes back a widget.
+                    // No nap here: one brush of the Home Screen set a real alarm (2026-11-05). Naps stay in the app and
+                    // Control Center, where they're deliberate.
+                    Button(intent: ChumbyPress("prev")) { face("backward.fill") }.buttonStyle(.plain).accessibilityLabel("Previous widget")
+                    // Stop while something plays; otherwise the app, a tap away.
                     if entry.playing {
                         Button(intent: ChumbyStopMusicIntent()) { face("stop.fill") }.buttonStyle(.plain).accessibilityLabel("Stop music")
                     } else {
-                        Button(intent: ChumbyPress("prev")) { face("backward.fill") }.buttonStyle(.plain).accessibilityLabel("Previous widget")
+                        Link(destination: URL(string: "chumbyapp://tab/0")!) { face("arrow.up.forward.app") }.accessibilityLabel("Open Chumby")
                     }
                 }
             }
@@ -504,7 +506,7 @@ struct ChumbyRemoteWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: "ChumbyRemote", intent: ChumbyWidgetAddress.self, provider: ChumbyProvider()) { e in InSea { _ in RemoteBody(entry: e) } }
             .configurationDisplayName("Your Chumby")
-            .description("Your next alarm with Skip, night mode, the next widget and a nap, from the Home Screen.")
+            .description("Your next alarm with Skip, night mode and the widgets, from the Home Screen.")
             .supportedFamilies([.systemMedium])
     }
 }
