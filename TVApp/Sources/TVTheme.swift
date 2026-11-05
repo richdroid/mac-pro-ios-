@@ -117,10 +117,9 @@ struct Art<Content: View, Placeholder: View>: View {
     @State private var loaded: TVImage?
     var body: some View {
         Group {
-            if let i = ImageStore.shared.cached(url) ?? loaded { content(Image(tv: i)).transition(.opacity) } else { placeholder().transition(.opacity) }
+            if let i = ImageStore.shared.cached(url) ?? loaded { content(Image(tv: i)) } else { placeholder() }
         }
-        // Art that arrives after the first frame fades in over its stand-in; art already kept is there from the start.
-        .task(id: url) { if let url, ImageStore.shared.cached(url) == nil { let i = await ImageStore.shared.load(url); withAnimation(.easeOut(duration: 0.25)) { loaded = i } } }
+        .task(id: url) { if let url { loaded = await ImageStore.shared.load(url) } }
     }
 }
 

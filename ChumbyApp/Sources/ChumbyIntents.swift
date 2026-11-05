@@ -30,63 +30,9 @@ struct ChumbyPress: AppIntent {
         return .result()
     }
 }
-// The panel's own SKIP and its undo, from a widget, Control Center or Siri. The panel takes a couple of seconds to
-// confirm, so this waits (up to 4 s) for a read that shows it, keeps that read for the widgets, and refreshes them, so the
-// button never looks as if it did nothing.
-func chumbySetSkip(_ on: Bool) async throws {
-    do {
-        try await chumbyTry { api in
-            _ = try await api.post(on ? "skip" : "unskip")
-            for _ in 0..<6 {
-                try? await Task.sleep(nanoseconds: 700_000_000)
-                guard let d = try? await api.fresh("state"), let s = try? JSONDecoder().decode(ChumbyState.self, from: d) else { continue }
-                if (s.skipped != nil) == on {
-                    try? d.write(to: chumbyWidgetCache, options: .atomic)
-                    break
-                }
-            }
-        }
-    } catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
-    WidgetCenter.shared.reloadAllTimelines()
-}
-// The widgets' copy of the alarm list, kept so they can still answer "when's the next one" with no connection.
-var chumbyWidgetCache: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("widget-state.json") }
-struct ChumbySkipIntent: AppIntent {
-    static var title: LocalizedStringResource = "Skip Next Chumby Alarm"
-    static var description = IntentDescription("Lets the next alarm pass without ringing, once.")
-    func perform() async throws -> some IntentResult { try await chumbySetSkip(true); return .result() }
-}
-struct ChumbyUnskipIntent: AppIntent {
-    static var title: LocalizedStringResource = "Undo Chumby Alarm Skip"
-    static var description = IntentDescription("Lets the skipped alarm ring after all.")
-    func perform() async throws -> some IntentResult { try await chumbySetSkip(false); return .result() }
-}
-// For Control Center's toggle: on skips, off undoes.
-struct ChumbySkipToggleIntent: SetValueIntent {
-    static var title: LocalizedStringResource = "Skip Next Chumby Alarm"
-    static var isDiscoverable = false
-    @Parameter(title: "Skipped") var value: Bool
-    func perform() async throws -> some IntentResult { try await chumbySetSkip(value); return .result() }
-}
-// Night mode as one switch that shows the mode the Chumby is really in. Off also brightens the screen, as Good Morning did.
-struct ChumbyNightToggleIntent: SetValueIntent {
-    static var title: LocalizedStringResource = "Chumby Night Mode"
-    static var isDiscoverable = false
-    @Parameter(title: "Night mode") var value: Bool
-    init() {}
-    init(_ on: Bool) { value = on }
-    func perform() async throws -> some IntentResult {
-        try await chumbyTry { api in
-            try await api.cmd("night", value ? "on" : "off")
-            if !value { try await api.cmd("screen", "bright") }
-        }
-        WidgetCenter.shared.reloadAllTimelines()
-        return .result()
-    }
-}
 struct ChumbyNextIntent: AppIntent {
     static var title: LocalizedStringResource = "Next Chumby Widget"
-    static var description = IntentDescription("Moves the Chumby on to its next widget.")
+    static var description = IntentDescription("Skips to the next widget.")
     func perform() async throws -> some IntentResult { try await chumbyTry { try await $0.cmd("next") }; return .result() }
 }
 struct ChumbyGoodnightIntent: AppIntent {

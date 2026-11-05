@@ -144,15 +144,12 @@ struct MediaCard: View {
     static func band(_ width: CGFloat) -> CGFloat { width > 200 ? 82 : 62 }
     static func height(_ width: CGFloat, _ source: MediaSource) -> CGFloat { width / source.coverAspect + band(width) }
     @State private var band: Color?
-    // No cover to be had (none given, or it wouldn't load): the card draws its own, never a blank tile.
-    @State private var noArt = false
     // A cover seen before has its colour ready, so the card arrives already tinted rather than fading in.
     var shownBand: Color { band ?? ImageStore.shared.cachedBand(URL(string: item.art)) ?? CoverWait.band }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Group {
                 if let image { image.resizable().scaledToFill() }
-                else if noArt { CoverFallback(title: item.title, tint: shownBand) }
                 else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() } }
             }
                 .frame(width: width, height: width / source.coverAspect)
@@ -182,31 +179,9 @@ struct MediaCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: width > 200 ? 8 : 6, style: .continuous))
         .task(id: item.art) {
-            guard image == nil else { return }
-            guard let u = URL(string: item.art), !item.art.isEmpty else { noArt = true; return }
-            if ImageStore.shared.cached(u) == nil, await ImageStore.shared.load(u) == nil { withAnimation(.easeOut(duration: 0.25)) { noArt = true }; return }
-            if ImageStore.shared.cachedBand(u) == nil, let c = await ImageStore.shared.band(u) { band = c }
+            if let u = URL(string: item.art), ImageStore.shared.cachedBand(u) == nil, let c = await ImageStore.shared.band(u) { band = c }
         }
         .animation(.easeOut(duration: 0.25), value: band)
-    }
-}
-
-// A cover that can't be had: its title set large on a gradient of the card's own tint, like a poster, so the row never
-// shows a blank tile.
-struct CoverFallback: View {
-    let title: String
-    let tint: Color
-    var body: some View {
-        GeometryReader { g in
-            ZStack(alignment: .bottomLeading) {
-                LinearGradient(colors: [tint.opacity(0.65), Color(hex: 0x1B1530)], startPoint: .topTrailing, endPoint: .bottomLeading)
-                RadialGradient(colors: [TVLook.accent.opacity(0.18), .clear], center: .topTrailing, startRadius: 0, endRadius: g.size.width)
-                Text(title).font(.system(size: max(13, g.size.width * 0.15), weight: .bold, design: .serif))
-                    .foregroundStyle(.white.opacity(0.92)).lineLimit(4).minimumScaleFactor(0.6)
-                    .padding(g.size.width * 0.09)
-            }
-        }
-        .accessibilityHidden(true)
     }
 }
 

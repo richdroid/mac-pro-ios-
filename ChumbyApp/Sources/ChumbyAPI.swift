@@ -157,8 +157,6 @@ struct ChumbyState: Decodable {
     var skipKnown = false
     // The panel's own report of a ringing or snoozing alarm; `until` is when a snooze rings again (0 if not known).
     var ringingNow: RingReport?
-    // Whether the panel's music player is playing something, from its own report ("music": {…, playing} or null).
-    var musicPlaying = false
     // The Chumby's own clock as it answered, in seconds since 1970. Alarms ring by this clock, not the phone's.
     var now: Double?
     var chumbyNow: Date? { now.map { Date(timeIntervalSince1970: $0) } }
@@ -187,14 +185,13 @@ struct ChumbyState: Decodable {
         skipKnown = c.contains(.skipped)
         skipped = (try? c.decodeIfPresent(SkippedAlarm.self, forKey: .skipped)) ?? nil
         ringingNow = (try? c.decodeIfPresent(RingReport.self, forKey: .ringing)) ?? nil
-        musicPlaying = ((try? c.decodeIfPresent(MusicReport.self, forKey: .music)) ?? nil)?.playing ?? false
         reindex()
     }
     mutating func reindex() {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, now }
+    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, now }
 }
 
 // The panel's own SKIP, pinned to one alarm and one minute ({"name","at","when"}).
@@ -205,16 +202,6 @@ struct SkippedAlarm: Decodable, Equatable {
     var date: Date { Date(timeIntervalSince1970: at) }
 }
 
-struct MusicReport: Decodable {
-    var playing: Bool
-    init(from d: Decoder) throws {
-        let c = try d.container(keyedBy: K.self)
-        // The panel may say true/false or 1/0.
-        if let b = try? c.decode(Bool.self, forKey: .playing) { playing = b }
-        else { playing = ((try? c.decode(Int.self, forKey: .playing)) ?? 0) != 0 }
-    }
-    enum K: String, CodingKey { case playing }
-}
 struct RingReport: Decodable, Equatable {
     var state: String
     var name: String
