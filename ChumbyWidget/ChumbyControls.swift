@@ -25,27 +25,23 @@ struct ChumbyNow {
     }
 }
 // The skip control's value carries its words too, so it can say which time it skips.
-struct ChumbySkipState { var on: Bool; var label: String }
-struct ChumbySkipValue: AppIntentControlValueProvider {
+struct ChumbySkipState: Sendable { var on: Bool; var label: String }
+struct ChumbySkipValue: ControlValueProvider {
     var previewValue: ChumbySkipState { ChumbySkipState(on: false, label: "Skip 6:45 AM") }
-    func currentValue(configuration: ChumbyControlConfig) async throws -> ChumbySkipState {
+    func currentValue() async throws -> ChumbySkipState {
         let n = await ChumbyNow.read()
         return ChumbySkipState(on: n?.skipped != nil, label: n?.skipLabel ?? "Skip Alarm")
     }
 }
-struct ChumbyNightValue: AppIntentControlValueProvider {
+struct ChumbyNightValue: ControlValueProvider {
     var previewValue: Bool { false }
-    func currentValue(configuration: ChumbyControlConfig) async throws -> Bool { await ChumbyNow.read()?.night ?? false }
-}
-struct ChumbyControlConfig: ControlConfigurationIntent {
-    static var title: LocalizedStringResource = "Chumby"
-    static var isDiscoverable = false
+    func currentValue() async throws -> Bool { await ChumbyNow.read()?.night ?? false }
 }
 
 // Skip the next alarm from Control Center or the Lock Screen: on lets it pass, off lets it ring after all.
 struct ChumbySkipControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
-        AppIntentControlConfiguration(kind: "ChumbySkipControl", provider: ChumbySkipValue()) { v in
+        StaticControlConfiguration(kind: "ChumbySkipControl", provider: ChumbySkipValue()) { v in
             ControlWidgetToggle(v.label, isOn: v.on, action: ChumbySkipToggleIntent()) { on in
                 Label(on ? "Skipped" : "Skip", systemImage: on ? "moon.zzz.fill" : "forward.end.fill")
             }
@@ -56,7 +52,7 @@ struct ChumbySkipControl: ControlWidget {
 // One switch for night mode, showing the mode the Chumby is really in.
 struct ChumbyNightControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
-        AppIntentControlConfiguration(kind: "ChumbyNightToggle", provider: ChumbyNightValue()) { on in
+        StaticControlConfiguration(kind: "ChumbyNightToggle", provider: ChumbyNightValue()) { on in
             ControlWidgetToggle("Night Mode", isOn: on, action: ChumbyNightToggleIntent()) { on in
                 Label(on ? "On" : "Off", systemImage: on ? "moon.fill" : "moon")
             }

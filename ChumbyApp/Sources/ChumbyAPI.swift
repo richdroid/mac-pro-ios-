@@ -210,7 +210,8 @@ struct MusicReport: Decodable {
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: K.self)
         // The panel may say true/false or 1/0.
-        playing = (try? c.decode(Bool.self, forKey: .playing)) ?? ((try? c.decode(Int.self, forKey: .playing)) ?? 0) != 0
+        if let b = try? c.decode(Bool.self, forKey: .playing) { playing = b }
+        else { playing = ((try? c.decode(Int.self, forKey: .playing)) ?? 0) != 0 }
     }
     enum K: String, CodingKey { case playing }
 }
