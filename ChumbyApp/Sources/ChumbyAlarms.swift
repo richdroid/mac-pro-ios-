@@ -535,11 +535,15 @@ struct AlarmsTab: View {
             if !missed.isEmpty {
                 Section {
                     ForEach(missed) { m in
-                        VStack(alignment: .leading, spacing: 2) {
-                            RowNote(icon: "alarm.waves.left.and.right.fill", text: m.rang ? "Rang late" : "Missed")
-                            Text([Date(timeIntervalSince1970: m.at).formatted(.dateTime.weekday(.abbreviated).hour().minute()), m.name.hasPrefix(Alarm.calendarPrefix) ? String(m.name.dropFirst(Alarm.calendarPrefix.count)) : m.name].filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                RowNote(icon: "alarm.waves.left.and.right.fill", text: m.rang ? "Rang late" : "Missed")
+                                Text([Date(timeIntervalSince1970: m.at).formatted(.dateTime.weekday(.abbreviated).hour().minute()), m.name.hasPrefix(Alarm.calendarPrefix) ? String(m.name.dropFirst(Alarm.calendarPrefix.count)) : m.name].filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                            }
+                            Spacer(minLength: 0)
+                            // Put away with the mark beside it, never a swipe that slides the row off its card.
+                            RowRemove(label: "Dismiss", icon: "xmark.circle.fill") { withAnimation(.snappy) { dismissedRaw = (dismissed.union([m.id])).joined(separator: "\n") } }
                         }
-                        .swipeActions { Button("Dismiss") { dismissedRaw = (dismissed.union([m.id])).joined(separator: "\n") }.tint(.gray) }
                     }
                 } footer: { Text("The Chumby was frozen or off when these came due.") }
             }

@@ -234,13 +234,15 @@ jobs:
           # calendar settings, the editor sheets, a save turned down at its control, and every tab dark. The mock answers
           # these from a path in front of the address, so the shots above get the same answers as before. From 11-05: Home's
           # day/night button held halfway (nighthold), Alarms scrolled to My alarms and the nap (alarmsmine), the Add widgets
-          # picker open (chadd), and Sounds with a song playing (playing).
+          # picker open (chadd), and Sounds with a song playing (playing); Home with music playing (homeplaying) and at night
+          # (homenight).
           chumby_poses() { # display, file suffix
             for V in "ringing 0 ringing" "ringing-alarms 2 ringing" "snoozed 0 snoozed" "dead 0 dead" "dead-alarms 2 dead" \
                      "firstrun 2 slow -pose firstrun" "firstrun-home 0 slow -pose firstrun" "calsettings 2 - -pose calsettings" \
                      "calday 2 - -pose calday" "editor 2 - -pose editor" "template 2 - -pose template" "failure 2 fail -pose failure" \
                      "editornew 2 - -pose editornew" "chsync 1 live -pose chsync" "skipped 0 skipped" \
-                     "nighthold 0 - -pose nighthold" "alarmsmine 2 - -pose alarmsmine" "chadd 1 - -pose chadd" "playing 3 playing"; do
+                     "nighthold 0 - -pose nighthold" "alarmsmine 2 - -pose alarmsmine" "chadd 1 - -pose chadd" "playing 3 playing" \
+                     "homeplaying 0 playing" "homenight 0 night"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
@@ -292,8 +294,7 @@ jobs:
             fi
           }
           # The posture Richard actually holds (2026-11-05: his screenshots are the Duo open in portrait, bottom tab bar):
-          # every tab, light and dark; Home scrolled so its caption sits at the tab bar; and the lists with their scroll bars
-          # flashing, so their inset from the edge can be judged.
+          # every tab, light and dark; Home scrolled so its caption sits at the tab bar; and Home playing, at night and held.
           chumby_portrait() {
             for M in light dark; do
               xcrun simctl ui "$DEVICE" appearance $M
@@ -308,13 +309,20 @@ jobs:
               xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-pose-homebar-$M-portrait.png
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
             done
-            xcrun simctl ui "$DEVICE" appearance light
-            for T in 2 3; do
-              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T -pose indicators
-              sleep 8
-              xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-pose-indicators-$T-portrait.png
-              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            # Home's states in this posture, light and dark: music playing (the Playing card), the Chumby at night (the
+            # day/night pill lit as Night), and the pill held halfway.
+            for M in light dark; do
+              xcrun simctl ui "$DEVICE" appearance $M
+              for V in "homeplaying playing" "homenight night" "nighthold - -pose nighthold"; do
+                set -- $V
+                ADDR=http://127.0.0.1:9000; [ "$2" != "-" ] && ADDR=$ADDR/$2
+                xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab 0 "${@:3}"
+                sleep 9
+                xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-pose-$1-$M-portrait.png
+                xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+              done
             done
+            xcrun simctl ui "$DEVICE" appearance light
           }
           # ---- end Chumby app poses ----
           # ---- TV app poses (separate block) ----

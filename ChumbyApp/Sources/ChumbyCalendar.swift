@@ -403,8 +403,14 @@ struct WordsGroup: View {
     }
     var body: some View {
         DisclosureGroup(isExpanded: $open) {
-            ForEach(words, id: \.self) { Text($0) }
-                .onDelete { words.remove(atOffsets: $0) }
+            // Taken out with the mark beside it, never a swipe that slides the word off its card.
+            ForEach(words, id: \.self) { w in
+                HStack {
+                    Text(w)
+                    Spacer(minLength: 8)
+                    RowRemove(label: "Remove \(w)", icon: "xmark.circle.fill") { words.removeAll { $0 == w } }
+                }
+            }
             TextField("Add a word", text: $adding).autocorrectionDisabled().textInputAutocapitalization(.never).submitLabel(.done).onSubmit(add)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
