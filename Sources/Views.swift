@@ -399,9 +399,18 @@ struct TempDials: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: LiveStore
     let s: Status
+    @State private var width: CGFloat = 0
+    // As many across as fit, then evened out, so the last row is never one short (eight dials are 4 + 4, not 3 + 3 + 2).
+    static func columns(_ n: Int, width: CGFloat) -> Int {
+        let fit = max(Int((width + 12) / 84), 1)
+        guard n > fit else { return max(n, 1) }
+        let rows = (n + fit - 1) / fit
+        return (n + rows - 1) / rows
+    }
     var body: some View {
         let temps = store.live?.temps ?? s.temps ?? []
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 12, alignment: .top)], spacing: 16) {
+        let across = width > 0 ? Self.columns(temps.count, width: width) : 3
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: across), spacing: 16) {
             ForEach(temps) { t in
                 VStack(spacing: 6) {
                     ArcGauge(Heat.level(t.c), heat: true, ticks: 32, length: 7, width: 2.2) {
@@ -416,6 +425,7 @@ struct TempDials: View {
             }
         }
         .padding(.vertical, 6)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 
