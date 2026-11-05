@@ -1356,10 +1356,21 @@ struct SkipCard: View {
     }
     // A skip whose time has gone is over, even before the Chumby's next answer says so (a kept copy on opening, say).
     private var skipped: SkippedAlarm? { model.state.skipped.flatMap { $0.date > Date() ? $0 : nil } }
-    private func lines(_ head: String, _ at: Date, _ name: String, struck: Bool) -> some View {
+    // The time and its line stay put; only the heading changes (the old one out before the new one in), and the
+    // strike draws across the time, left to right.
+    private func lines(_ at: Date, _ name: String, struck: Bool) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(head).font(.custom("Trebuchet MS", size: 15).weight(.bold))
-            Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold)).strikethrough(struck, color: .white.opacity(0.7))
+            ZStack(alignment: .leading) {
+                if struck { Text("Skipped").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
+                else { Text("Skip next alarm").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
+            }
+            .font(.custom("Trebuchet MS", size: 15).weight(.bold))
+            Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold))
+                .overlay {
+                    Capsule().fill(.white.opacity(0.75)).frame(height: 2.5)
+                        .scaleEffect(x: struck ? 1 : 0, anchor: .leading)
+                        .animation(.easeInOut(duration: 0.25), value: struck)
+                }
             Text("\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1)
         }
         .foregroundStyle(.white)
@@ -1378,10 +1389,7 @@ struct SkipCard: View {
                     ChumbyGel(colors: Self.night, rim: 0x172447).opacity(asleep ? 1 : 0)
                     HStack(spacing: 14) {
                         SleepyOctopus(asleep: asleep, tint: .white)
-                        ZStack(alignment: .leading) {
-                            if asleep { lines("Skipped", next.0, next.1, struck: true).transition(.opacity) }
-                            else { lines("Skip next alarm", next.0, next.1, struck: false).transition(.opacity) }
-                        }
+                        lines(next.0, next.1, struck: asleep)
                         Spacer(minLength: 8)
                         Image(systemName: "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
                             .shadow(color: .black.opacity(0.18), radius: 1, y: 1)

@@ -325,6 +325,13 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/gallery-$G.png
             xcrun simctl terminate "$DEVICE" local.macpro.Gallery$G
           done
+          # The Chumby gallery's other two screens: Your Chumby in each state, then tinted and Lock Screen renders.
+          for P in 1 2; do
+            xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page $P
+            sleep 6
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/gallery-Chumby-$P.png
+            xcrun simctl terminate "$DEVICE" local.macpro.GalleryChumby
+          done
           # Unfold the Duo through Device Hub; display 3 is then live.
           # Someone else's code, built and run here, so a known version only: never whatever its latest commit is.
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)

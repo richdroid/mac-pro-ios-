@@ -582,7 +582,17 @@ struct AlarmsTab: View {
             HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) }.padding(.vertical, 6)
         } else if let n = model.nextRing() {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Next alarm").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                // A skip shows here too, with its Undo, so the time below never looks as if the skipped one vanished.
+                if let s = model.state.skipped, s.date > Date() {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(clockParts(s.date).0 + " " + clockParts(s.date).1).font(.custom("Trebuchet MS", size: 17).weight(.bold)).strikethrough().foregroundStyle(.secondary)
+                        Text("Skipped").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Button("Undo") { Task { await model.unskip() } }.font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
+                    }
+                    .padding(.bottom, 4)
+                }
+                Text(model.state.skipped.map { $0.date > Date() } == true ? "Then" : "Next alarm").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     let c = clockParts(n.at)
                     Text(c.0).font(.custom("Trebuchet MS", size: 52).weight(.bold)).monospacedDigit().contentTransition(.numericText())

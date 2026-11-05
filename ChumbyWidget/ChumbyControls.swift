@@ -2,32 +2,73 @@ import AppIntents
 import SwiftUI
 import WidgetKit
 
+// What the Chumby says right now, for the controls that show a state: the next alarm (and whether it's skipped) and night
+// mode. Read the same way the widgets read it; nil if it can't be reached, so a control never shows a guess as fact.
+struct ChumbyNow {
+    var skipped: SkippedAlarm?
+    var next: Date?
+    var night = false
+    static func read() async -> ChumbyNow? {
+        guard let both = try? await chumbyTry({ api -> (Sys, ChumbyState?) in
+            let sys = try JSONDecoder().decode(Sys.self, from: try await api.raw("sys").data)
+            let st = try? JSONDecoder().decode(ChumbyState.self, from: try await api.raw("state").data)
+            return (sys, st)
+        }) else { return nil }
+        var n = ChumbyNow(night: both.0.night == 1)
+        n.skipped = both.1?.skipped.flatMap { $0.date > Date() ? $0 : nil }
+        n.next = both.1?.nextRing()?.at
+        return n
+    }
+    var skipLabel: String {
+        if let s = skipped { return "Skipped \(s.date.formatted(date: .omitted, time: .shortened))" }
+        return next.map { "Skip \($0.formatted(date: .omitted, time: .shortened))" } ?? "Skip Alarm"
+    }
+}
+// The skip control's value carries its words too, so it can say which time it skips.
+struct ChumbySkipState { var on: Bool; var label: String }
+struct ChumbySkipValue: AppIntentControlValueProvider {
+    var previewValue: ChumbySkipState { ChumbySkipState(on: false, label: "Skip 6:45 AM") }
+    func currentValue(configuration: ChumbyControlConfig) async throws -> ChumbySkipState {
+        let n = await ChumbyNow.read()
+        return ChumbySkipState(on: n?.skipped != nil, label: n?.skipLabel ?? "Skip Alarm")
+    }
+}
+struct ChumbyNightValue: AppIntentControlValueProvider {
+    var previewValue: Bool { false }
+    func currentValue(configuration: ChumbyControlConfig) async throws -> Bool { await ChumbyNow.read()?.night ?? false }
+}
+struct ChumbyControlConfig: ControlConfigurationIntent {
+    static var title: LocalizedStringResource = "Chumby"
+    static var isDiscoverable = false
+}
+
+// Skip the next alarm from Control Center or the Lock Screen: on lets it pass, off lets it ring after all.
+struct ChumbySkipControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        AppIntentControlConfiguration(kind: "ChumbySkipControl", provider: ChumbySkipValue()) { v in
+            ControlWidgetToggle(v.label, isOn: v.on, action: ChumbySkipToggleIntent()) { on in
+                Label(on ? "Skipped" : "Skip", systemImage: on ? "moon.zzz.fill" : "forward.end.fill")
+            }
+        }
+        .displayName("Skip Chumby Alarm").description("Lets the next alarm pass without ringing, once. Tap again to undo.")
+    }
+}
+// One switch for night mode, showing the mode the Chumby is really in.
+struct ChumbyNightControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        AppIntentControlConfiguration(kind: "ChumbyNightToggle", provider: ChumbyNightValue()) { on in
+            ControlWidgetToggle("Night Mode", isOn: on, action: ChumbyNightToggleIntent()) { on in
+                Label(on ? "On" : "Off", systemImage: on ? "moon.fill" : "moon")
+            }
+        }
+        .displayName("Chumby Night Mode").description("Night mode on the Chumby, on or off.")
+    }
+}
 struct ChumbyNextControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "ChumbyNextControl") {
             ControlWidgetButton(action: ChumbyNextIntent()) { Label("Next Widget", systemImage: "forward.fill") }
-        }.displayName("Chumby Next Widget").description("Skips to the next widget.")
-    }
-}
-struct ChumbyNightControl: ControlWidget {
-    var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: "ChumbyNightControl") {
-            ControlWidgetButton(action: ChumbyGoodnightIntent()) { Label("Goodnight", systemImage: "moon.fill") }
-        }.displayName("Chumby Goodnight").description("Puts the Chumby in night mode.")
-    }
-}
-struct ChumbyMorningControl: ControlWidget {
-    var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: "ChumbyMorningControl") {
-            ControlWidgetButton(action: ChumbyMorningIntent()) { Label("Good Morning", systemImage: "sun.max.fill") }
-        }.displayName("Chumby Good Morning").description("Ends night mode and brightens the screen.")
-    }
-}
-struct ChumbyStopControl: ControlWidget {
-    var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: "ChumbyStopControl") {
-            ControlWidgetButton(action: ChumbyStopMusicIntent()) { Label("Stop Music", systemImage: "stop.fill") }
-        }.displayName("Chumby Stop Music").description("Stops whatever it’s playing.")
+        }.displayName("Chumby Next Widget").description("Moves the Chumby on to its next widget.")
     }
 }
 struct ChumbyNapControl: ControlWidget {
