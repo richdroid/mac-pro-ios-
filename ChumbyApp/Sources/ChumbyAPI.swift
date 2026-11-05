@@ -152,6 +152,9 @@ struct ChumbyState: Decodable {
     var calTpl: Alarm?
     // Whether a day the calendar wakes you keeps your repeating alarms quiet: 1 or 0. Missing on a Chumby too old for it.
     var calOverride: Int?
+    // The one alarm time skipped by hand (the panel's own SKIP), until it passes. `skipKnown` is false on a Chumby too old to skip.
+    var skipped: SkippedAlarm?
+    var skipKnown = false
     // The Chumby's own clock as it answered, in seconds since 1970. Alarms ring by this clock, not the phone's.
     var now: Double?
     var chumbyNow: Date? { now.map { Date(timeIntervalSince1970: $0) } }
@@ -177,13 +180,23 @@ struct ChumbyState: Decodable {
         missed = try c.decodeIfPresent([Missed].self, forKey: .missed) ?? []
         calTpl = (try? c.decodeIfPresent(Alarm.self, forKey: .calTpl)) ?? nil
         calOverride = (try? c.decodeIfPresent(Int.self, forKey: .calOverride)) ?? nil
+        skipKnown = c.contains(.skipped)
+        skipped = (try? c.decodeIfPresent(SkippedAlarm.self, forKey: .skipped)) ?? nil
         reindex()
     }
     mutating func reindex() {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, now }
+    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, now }
+}
+
+// The panel's own SKIP, pinned to one alarm and one minute ({"name","at","when"}).
+struct SkippedAlarm: Decodable, Equatable {
+    var name: String
+    var at: Double
+    var when: String
+    var date: Date { Date(timeIntervalSince1970: at) }
 }
 
 // ?a=chlist: per channel, [id, name, secs] rows (a "#" row names the channel) and saved [id, on, secs] edits.
@@ -316,6 +329,8 @@ extension ChumbyState {
             for _ in 0..<12 {
                 guard let d = a.nextFire(after: from) else { break }
                 if skipping && a.when != "once" && !a.isCalendar && calendarDays.contains(cal.startOfDay(for: d)) { from = d; continue }
+                // The one time skipped by hand doesn't ring either.
+                if let s = skipped, s.name == a.name, abs(d.timeIntervalSince1970 - s.at) < 60 { from = d; continue }
                 if best == nil || d < best!.at { best = (a, d) }
                 break
             }

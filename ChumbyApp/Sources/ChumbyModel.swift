@@ -553,6 +553,32 @@ final class ChumbyModel: ObservableObject {
         await task.value
         return failure
     }
+    // Skipping the next alarm uses the panel's own SKIP: no list rewrite, no restart. Shown at once here; the Chumby's own
+    // answer replaces it on the next read (it can take a couple of seconds while the panel catches up).
+    func skipNext() async {
+        guard let n = state.nextRing() else { return }
+        let before = state.skipped
+        state.skipped = SkippedAlarm(name: n.alarm.name, at: n.at.timeIntervalSince1970, when: n.alarm.when); deviceState.skipped = state.skipped
+        tick()
+        hold(4)
+        guard let why = await sendInOrder("skip", extra: "") else { await settleSkip(); return }
+        state.skipped = before; deviceState.skipped = before
+        fail("skip", "Couldn’t skip it. \(why)")
+    }
+    func unskip() async {
+        let before = state.skipped
+        state.skipped = nil; deviceState.skipped = nil
+        tick()
+        hold(4)
+        guard let why = await sendInOrder("unskip", extra: "") else { await settleSkip(); return }
+        state.skipped = before; deviceState.skipped = before
+        fail("skip", "Couldn’t undo the skip. \(why)")
+    }
+    // The panel takes a moment to confirm, so read again once it has.
+    private func settleSkip() async {
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        await loadState()
+    }
     // Calendar days keep the repeating alarms quiet. Changes at once here; goes back if the Chumby says no.
     func setCalendarOverride(_ on: Bool) async {
         let before = state.calOverride

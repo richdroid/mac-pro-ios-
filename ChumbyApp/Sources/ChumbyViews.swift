@@ -733,6 +733,7 @@ struct HomeTab: View {
                             Color.clear.frame(height: 40)
                             if model.sys.ringing != nil { RingingCard().card().padding(.bottom, 20).transition(.ringCard) }
                             remote
+                            SkipCard().padding(.bottom, 20)
                             rightNow
                             more
                         }.padding(.horizontal, 12)
@@ -744,7 +745,7 @@ struct HomeTab: View {
                     VStack(spacing: 0) {
                         stage; status
                         if model.sys.ringing != nil { RingingCard().card().padding(.top, 20).transition(.ringCard) }
-                        remote.padding(.top, 20); rightNow; about; if moreInfo { more }
+                        remote.padding(.top, 20); SkipCard().padding(.top, 20); rightNow; about; if moreInfo { more }
                     }.padding(.horizontal, 16)
                 }
             }
@@ -1326,5 +1327,57 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+// Home's big skip: the next alarm that will really ring, one tap to let it pass, and undo until it does.
+struct SkipCard: View {
+    @EnvironmentObject var model: ChumbyModel
+    @Environment(\.colorScheme) private var scheme
+    private var dark: Bool { scheme == .dark }
+    private func label(_ name: String) -> String {
+        let n = name.hasPrefix("Calendar: ") ? String(name.dropFirst(10)) : name
+        return n.isEmpty ? "Alarm" : n
+    }
+    private func when(_ d: Date) -> String { d.formatted(.dateTime.weekday(.abbreviated).hour().minute()) }
+    var body: some View {
+        if model.stateKnown && model.state.skipKnown && !model.unreachable && model.sys.ringing == nil {
+            VStack(alignment: .leading, spacing: 8) {
+                if let s = model.state.skipped {
+                    HStack(spacing: 14) {
+                        Image(systemName: "moon.zzz.fill").font(.system(size: 26)).foregroundStyle(ChumbyPalette.sub(dark))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Skipped · \(when(s.date))").font(.custom("Trebuchet MS", size: 20).weight(.bold)).foregroundStyle(ChumbyPalette.ink(dark))
+                            Text(label(s.name)).font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        Button { Task { await model.unskip() } } label: {
+                            Text("Undo").font(.custom("Trebuchet MS", size: 17).weight(.bold)).padding(.horizontal, 18).padding(.vertical, 10)
+                        }
+                        .buttonStyle(.plain).foregroundStyle(ChumbyPalette.orange).glassEffect(.regular.interactive(), in: .capsule)
+                    }
+                    .padding(18).frame(maxWidth: .infinity, alignment: .leading).card()
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                } else if let n = model.nextRing() {
+                    Button { Task { await model.skipNext() } } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "forward.end.fill").font(.system(size: 24, weight: .bold)).foregroundStyle(.white)
+                                .frame(width: 52, height: 52).background(ChumbyPalette.orange, in: Circle())
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Skip next alarm").font(.custom("Trebuchet MS", size: 21).weight(.bold)).foregroundStyle(ChumbyPalette.ink(dark))
+                                Text("\(when(n.at)) · \(label(n.alarm.name))").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(18).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).card()
+                    .accessibilityLabel("Skip the \(when(n.at)) alarm")
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                }
+                if let f = model.failed("skip") { FailNote(text: f) }
+            }
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: model.state.skipped)
+        }
     }
 }
