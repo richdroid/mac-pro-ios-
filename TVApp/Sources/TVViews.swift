@@ -75,6 +75,25 @@ struct RootView: View {
             }
             return
         }
+        // ⏭ pressed before the show's next episode is known: the light runs round the key until it throws (r20).
+        if pose == "realnext" {
+            Task {
+                NextUp.shared.forget()
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                Transport.pressNext(model)
+            }
+            return
+        }
+        // Pause, a few seconds, play: the clock must hold at the pause and carry on from where the TV stopped, not jump.
+        if pose == "realclock" {
+            Task {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                model.togglePlay(shown: model.shownPlaying(model.staleStatus ? nil : model.status?.session?.playing))
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                model.togglePlay(shown: model.shownPlaying(model.staleStatus ? nil : model.status?.session?.playing))
+            }
+            return
+        }
         if pose == "realpause" {
             Task {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -259,8 +278,9 @@ struct Page<C: View>: View {
         // and the large title can track it and fold away. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
+                .underFlick()
                 .environment(\.backToTop, top)
-                .navigationDestination(for: RowRoute.self) { $0.page }
+                .navigationDestination(for: RowRoute.self) { $0.page.underFlick() }
                 .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
@@ -268,10 +288,6 @@ struct Page<C: View>: View {
                 // (Richard, 2026-11-05). Only the Remote, which has no headings and no room to spare, keeps it in the bar.
                 .navigationBarTitleDisplayMode(alwaysInline ? .inline : .large)
         }
-        // Under a show's or stream's page laid over everything, the whole stack steps out of sight, its bar, toolbar
-        // items and pushed pages included, so nothing of it (a search pill, chips, a second back) shows beside it (r19).
-        .opacity(model.flickChoosing || model.flickCovering ? 0 : 1)
-        .animation(.easeOut(duration: 0.15), value: model.flickChoosing || model.flickCovering)
         .topShade()
         .background { Ambience() }
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
@@ -1249,6 +1265,8 @@ struct MiniPlayer: View {
 // episode and then the one before, and next is the next episode. Five keys always, in the top row's five places: an
 // empty place read as a missing button (Richard, 2026-11-05: "no back button here is ridiculous").
 struct Transport: View {
+    // For the build's recording: ⏭ pressed while the next episode isn't known yet.
+    @MainActor static func pressNext(_ model: TVModel) { NotificationCenter.default.post(name: ResolvingNextKey.press, object: nil) }
     @Environment(TVModel.self) var model
     @ObservedObject private var nextUp = NextUp.shared
     // No glow while typing on the Remote: it would smear through the keyboard just above.
@@ -1319,8 +1337,15 @@ struct ResolvingNextKey: View {
     @Environment(TVModel.self) var model
     var size: CGFloat
     @State private var busy = false
+    // The build's recording presses it the way a finger does (the realnext pose).
+    static let press = Notification.Name("ResolvingNextKey.press")
     var body: some View {
-        GlassButton(icon: "forward.end.fill", label: "Next episode", size: size) {
+        GlassButton(icon: "forward.end.fill", label: "Next episode", size: size) { go() }
+        .overlay { if busy { LoadingRing(radius: size / 2).frame(width: size, height: size).transition(.opacity) } }
+        .animation(.easeOut(duration: 0.15), value: busy)
+        .onReceive(NotificationCenter.default.publisher(for: Self.press)) { _ in go() }
+    }
+    func go() {
             guard !busy else { return }
             busy = true
             Task {
@@ -1329,9 +1354,6 @@ struct ResolvingNextKey: View {
                 if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) } else { model.key("next") }
                 busy = false
             }
-        }
-        .overlay { if busy { LoadingRing(radius: size / 2).frame(width: size, height: size).transition(.opacity) } }
-        .animation(.easeOut(duration: 0.15), value: busy)
     }
 }
 
@@ -1465,7 +1487,7 @@ struct AppsTab: View {
         .padding(.horizontal, 20).frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
     }
     var body: some View {
-        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0) }
+        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick() }
     }
     @ViewBuilder var content: some View {
         if all.isEmpty {
@@ -2281,7 +2303,8 @@ struct PlaceholderShelf: View {
         VStack(alignment: .leading, spacing: headed ? 8 : 10) {
             Capsule().fill(.white.opacity(0.12)).frame(width: 150, height: 16)
                 .frame(height: headed ? 25 : 16, alignment: .leading).padding(.leading, 20)
-            HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(0.08)).frame(width: cardWidth, height: cardHeight) } }
+            // Each waiting card in the cover's own waiting look, the light running round it (ruling 9), never a flat grey slab (r20).
+            HStack(spacing: 10) { ForEach(0..<4, id: \.self) { _ in CoverWait().frame(width: cardWidth, height: cardHeight).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous)).overlay { LoadingRing(radius: 6) } } }
                 .padding(.leading, 20)
         }
         // minWidth 0: four cards are wider than a folded column, and without it their width widened the whole page,
@@ -2326,11 +2349,11 @@ struct VideoProgress: View {
             else if running, let h = held { now += max(0, date.timeIntervalSince(h.at) * 1000) }
         }
         // Playing, the clock never steps back for a reading a few seconds behind (a stalled report repeating its last spot
-        // with a fresh time): it holds and runs on instead. A real jump back (a seek, a restart) is more than 6 s, or asked.
+        // with a fresh time): it holds where it was. It never runs on past the TV, or a real stall (buffering) would run it
+        // ahead and then jump it back (r20). A real jump back (a seek, a restart) is more than 6 s, or asked.
         let key = session.description.joined(separator: "\n")
         if running && live && seeker.held(for: session, at: date) == nil && target == nil && floor.key == key {
-            let expected = floor.pos + max(0, date.timeIntervalSince(floor.at) * 1000)
-            if now < expected && expected - now < 6000 { now = expected }
+            if now < floor.pos && floor.pos - now < 6000 { now = floor.pos }
         }
         floor.key = key; floor.pos = now; floor.at = date
         return max(0, duration > 0 ? min(now, duration) : now)
@@ -2504,3 +2527,20 @@ final class AmbienceStore: ObservableObject {
         keep(art, entry.image, entry.band)
     }
 }
+
+// Under a show's or stream's page laid over everything, each page steps out of sight and its bar goes, so nothing of it (a
+// search pill, chips, a second back) shows beside it. Per page, pushed ones included, never the whole stack: dimming the
+// stack took the tab rail with it (r20).
+struct UnderFlick: ViewModifier {
+    @Environment(TVModel.self) private var model
+    func body(content: Content) -> some View {
+        let covered = model.flickChoosing || model.flickCovering
+        content
+            .opacity(covered ? 0 : 1)
+            .animation(.easeOut(duration: 0.15), value: covered)
+            #if os(iOS)
+            .toolbarVisibility(covered ? .hidden : .automatic, for: .navigationBar)
+            #endif
+    }
+}
+extension View { func underFlick() -> some View { modifier(UnderFlick()) } }

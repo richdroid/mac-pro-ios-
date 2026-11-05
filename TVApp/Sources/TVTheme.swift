@@ -59,7 +59,23 @@ final class ImageStore {
         #endif
     }
     func cachedBand(_ url: URL?) -> Color? { url.flatMap { bands[$0] } }
-    func cached(_ url: URL?) -> TVImage? { url.flatMap { cache.object(forKey: $0 as NSURL) } }
+    func cached(_ url: URL?) -> TVImage? {
+        guard let url else { return nil }
+        if let i = cache.object(forKey: url as NSURL) { return i }
+        // The apps' banners are kept on disk too, so a cold launch draws them on its first frame rather than as empty tiles
+        // filled a second later (r20). They're small, so reading one here is cheaper than the empty frame.
+        guard let file = Self.bannerFile(url), let d = try? Data(contentsOf: file), let i = Self.decode(d, maxPixels: 1400) else { return nil }
+        if FileManager.default.fileExists(atPath: file.path + ".flat") { flats.insert(url) }
+        cache.setObject(i, forKey: url as NSURL)
+        return i
+    }
+    // Where an app's banner is kept between launches; nil for anything that isn't a banner.
+    nonisolated static func bannerFile(_ url: URL) -> URL? {
+        guard url.path.hasSuffix("/icon"), let q = url.query, let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-banners", isDirectory: true) else { return nil }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let name = q.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? String($0) : "_" }.joined()
+        return dir.appendingPathComponent(name)
+    }
     // Pictures with nothing in them, like a white logo flattened onto white: known as soon as the picture is, so a
     // banner never draws the blank first.
     private var flats: Set<URL> = []
@@ -78,6 +94,7 @@ final class ImageStore {
         let job = Task.detached(priority: .utility) { () -> Ready? in
             guard let (d, resp) = try? await URLSession.shared.data(from: url), (resp as? HTTPURLResponse)?.statusCode == 200,
                   let i = Self.decode(d, maxPixels: 1400) else { return nil }
+            if icon, let file = Self.bannerFile(url) { try? d.write(to: file, options: .atomic) }
             #if canImport(UIKit)
             // The same renderer the pages used before, at the screen's own scale, so the stretched blur looks the same.
             func shrink(_ side: Int) -> TVImage {
@@ -94,7 +111,10 @@ final class ImageStore {
         fetching[url] = nil
         guard let r else { return nil }
         // Only the apps' banners are ever blank like that, and checking every poster would cost scrolling.
-        if r.flat { flats.insert(url) }
+        if r.flat {
+            flats.insert(url)
+            if let file = Self.bannerFile(url) { FileManager.default.createFile(atPath: file.path + ".flat", contents: Data()) }
+        }
         var s: [Int: TVImage] = [:]; s[6] = r.six; s[16] = r.sixteen
         if smalls.count > 400 { smalls.removeAll(keepingCapacity: true) }
         smalls[url] = s

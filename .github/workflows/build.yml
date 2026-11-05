@@ -397,7 +397,9 @@ jobs:
             # key must change at once), through the app's pose hooks realtap, realsearch, realseries and realpause.
             TV_REAL_HOOKS=1
             if [ "${TV_REAL_HOOKS:-0}" = 1 ]; then
-              for V in "realtap 1 16" "realsearch 1 18" "realseries 3 14" "realpause 0 16"; do
+              # realnext: ⏭ pressed before the next episode is known (the light round the key); realclock: pause, 6 s, play,
+              # the clock holding and carrying on from the TV's own spot.
+              for V in "realtap 1 16" "realsearch 1 18" "realseries 3 14" "realpause 0 16" "realnext 0 14" "realclock 0 20"; do
                 set -- "$1" "$2" $V
                 real
                 xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-$3$2.mp4 > /dev/null 2>&1 & REC=$!

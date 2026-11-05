@@ -44,10 +44,27 @@ struct TVStatus: Decodable, Equatable {
             return nil
         }
         // Whether this is the show called this, by its name as the Mac or the player says it.
-        func isShow(_ title: String) -> Bool {
+        // Exactly, once case, punctuation and spaces are set aside; a longer name only when what's left is a year or a
+        // bracket, as in "Doctor Who (2005)" or "The Office US" (r20: "You" matched "Young Sheldon").
+        func isShow(_ title: String) -> Bool { Self.sameName(showName, title) }
+        static func sameName(_ x: String, _ y: String) -> Bool {
             func plain(_ t: String) -> String { t.lowercased().filter { $0.isLetter || $0.isNumber } }
-            let a = plain(showName), b = plain(title)
-            return !a.isEmpty && !b.isEmpty && (a == b || a.hasPrefix(b) || b.hasPrefix(a))
+            let a = plain(x), b = plain(y)
+            guard !a.isEmpty, !b.isEmpty else { return false }
+            if a == b { return true }
+            let (long, short) = a.count > b.count ? (x, y) : (y, x)
+            guard plain(long).hasPrefix(plain(short)) else { return false }
+            // What the longer one has after the shorter, in its own spelling: only a year or a bracketed note may differ.
+            var rest = long.lowercased()
+            for ch in short.lowercased() where ch.isLetter || ch.isNumber {
+                guard let i = rest.firstIndex(of: ch) else { return false }
+                rest = String(rest[rest.index(after: i)...])
+            }
+            let tail = rest.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            if tail.isEmpty { return true }
+            if tail.count == 4, Int(tail).map({ (1900...2100).contains($0) }) == true { return true }
+            if rest.contains("(") || rest.contains("[") { return true }
+            return ["us", "uk", "au", "ca", "nz"].contains(tail)
         }
     }
     struct App: Decodable, Identifiable, Equatable { let pkg: String; let name: String; let hasIcon: Bool; var wide: Bool?; var id: String { pkg } }

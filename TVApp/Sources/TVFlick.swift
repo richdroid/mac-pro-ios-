@@ -162,6 +162,11 @@ struct FlickScreen: View {
     @State private var returnSlot = CGRect.zero
     // Into the Remote: the screen moves onto the Remote's own picture of the TV.
     @State private var toRemote = false
+    // The tab he threw from, while the Remote comes up under the stage; put back if the throw is called off or bounced.
+    @State private var tabBefore: Int?
+    // The ‹ goes the moment the card is lifted, with no animation: removed inside the throw's spring, its glass morphed with
+    // the throw's speed into a blob over the card (r20).
+    @State private var backHidden = false
     // Set the moment the screen lands on the Remote's picture: the bar's tick turns into the Remote's eye right then.
     @State private var onRemote = false
     @State private var remoteSlot = CGRect.zero
@@ -241,7 +246,7 @@ struct FlickScreen: View {
         case .episodes: return nil
         case .streams: return isSeries ? .episodes : nil
         // At the card there's nothing left to go back to, unless the stream was picked here: then back to choose another.
-        case .flick: return picked && !flown ? .streams : nil
+        case .flick: return picked && !flown && !backHidden ? .streams : nil
         }
     }
     var next: Step? {
@@ -265,6 +270,11 @@ struct FlickScreen: View {
             // Charged at seven tenths; falling back below six tenths un-charges, silently.
             .onChange(of: progress >= 0.7) { _, now in if now && lifted { charged = true } }
             .onChange(of: progress < 0.6) { _, below in if below && !flown { charged = false } }
+            .onChange(of: lifted) { _, up in
+                guard up, !backHidden else { return }
+                var quiet = Transaction(); quiet.disablesAnimations = true
+                withTransaction(quiet) { backHidden = true }
+            }
             // The TV made ready, with what's coming, at each point he shows he means it: the show's page with its Resume,
             // the streams opening, the card in the hand with its stream, and the card lifted (§2.5a C6).
             // Nothing is prepared for what's already on the TV (r18: a prepare went out for the film already playing).
@@ -534,12 +544,8 @@ struct FlickScreen: View {
     }
     // The episode the big key would play is already what's on the TV: the key says so, and takes him to the Remote.
     func isOn(_ e: StremioEpisode) -> Bool {
-        guard let ref = item.stremioRef, !model.staleStatus, model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one" else { return false }
-        if let on = NextUp.shared.series, on.imdb == ref.imdb { return on.current == e.id }
-        // Decided from the session itself, without waiting on the series lookup (r19: folded, it offered "Resume S2 E3"
-        // for the episode already playing, and prepared it).
-        guard let se = s.seasonEpisode, s.isShow(item.title) else { return false }
-        return se.season == e.season && se.episode == e.episode
+        guard let ref = item.stremioRef else { return false }
+        return model.isOn(imdb: ref.imdb, title: item.title, episode: e.id)
     }
     // This show is what the TV's playing, but which episode isn't known yet: no key and no prepare until it is.
     var onTVUnsettled: Bool {
@@ -1093,6 +1099,7 @@ struct FlickScreen: View {
     // Let go short of a throw: back to rest, with one soft touch.
     func settle() {
         detent = 0
+        if backHidden { var quiet = Transaction(); quiet.disablesAnimations = true; withTransaction(quiet) { backHidden = false } }
         guard drag != .zero || lean != 0 else { return }
         FlickHaptic.settle()
         withAnimation(.spring(response: 0.38, dampingFraction: 0.6)) { drag = .zero; lean = 0 }
@@ -1133,12 +1140,20 @@ struct FlickScreen: View {
     // The X while it's on its way: whatever started on the TV stops, and this closes.
     func callOff() {
         cancelled = true
+        backToThrownFrom()
         flight?.cancel()
         model.clearStart()
         model.tick()
         model.post("stop-playing", ["pkg": source == .mint || target.send != nil ? "com.codex.musicwebtv" : "com.stremio.one"])
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { sending = false }
         leave()
+    }
+    // A throw that didn't go on to the Remote puts the page he threw from back under the stage.
+    func backToThrownFrom() {
+        guard let b = tabBefore else { return }
+        var quiet = Transaction(); quiet.disablesAnimations = true
+        withTransaction(quiet) { model.flickHandoff = false; model.tab = b }
+        tabBefore = nil
     }
     // Everything fades back to the page underneath. From here on nothing started by this screen changes the app behind.
     func leave(restoreMood: Bool = true) {
@@ -1185,9 +1200,9 @@ struct FlickScreen: View {
         if flickFrame.width > 0 { held = flickFrame }
         // Under the screen, so the Remote is laid out, and its picture's place known, by the time the screen moves.
         // No animation starts in this tick: laying the Remote out hitches the main thread, and swallowed the fades.
-        model.remoteArrival = Date()
-        model.flickHandoff = true
-        model.tab = 0
+        // Normally already up since the release; a hand-over by another path brings it up here.
+        if model.tab != 0 || !model.flickHandoff { model.remoteArrival = Date(); model.flickHandoff = true; model.tab = 0 }
+        tabBefore = nil
         Task {
             // The same place on two reads in a row, so the move aims at where the picture settles, not at its first layout.
             // Known already from the last visit to the Remote, the move starts at once; the loop below follows any late change.
@@ -1379,6 +1394,14 @@ struct FlickScreen: View {
             flown = true; lean = 0
         } completion: { arrivedAtTV() }
         withAnimation(.interpolatingSpring(duration: 0.40, bounce: 0, initialVelocity: vx)) { flownX = true }
+        // The Remote comes up under the black stage now, so the flight pays for laying it out (r20: switching at 600 ms
+        // froze the main thread for 0.3 s folded and 0.9 s open, and the move was late or a cut). Its picture stays hidden
+        // until the screen lands on it.
+        if model.tab != 0 || tabBefore == nil {
+            tabBefore = tabBefore ?? model.tab
+            var quiet = Transaction(); quiet.disablesAnimations = true
+            withTransaction(quiet) { model.remoteArrival = Date(); model.flickHandoff = true; model.tab = 0 }
+        }
         Task {
             try? await Task.sleep(nanoseconds: 200_000_000)
             guard flown, !cancelled else { return }
@@ -1492,10 +1515,10 @@ struct FlickScreen: View {
         guard source == .stremio, target.send == nil, let ref = item.stremioRef, model.videoIsCurrent,
               let s = model.status?.session, s.pkg == "com.stremio.one", !(nearEnd && startOver && stream != nil) else { return false }
         if ref.type == "series" {
-            guard let on = NextUp.shared.series, on.imdb == ref.imdb else { return false }
-            return (episode?.id ?? ref.video) == on.current
+            guard let v = episode?.id ?? ref.video else { return false }
+            return model.isOn(imdb: ref.imdb, title: item.title, episode: v)
         }
-        return isThisFilm(s)
+        return model.isOn(imdb: ref.imdb, title: item.title, episode: nil) && isThisFilm(s)
     }
     // Whether a Stremio player is the film just sent, by its title.
     func isThisFilm(_ p: TVStatus.Session) -> Bool {
@@ -1524,6 +1547,8 @@ struct FlickScreen: View {
     // ready in the card. Never bounced into a list.
     func failedOnStage(_ error: Error) async {
         FlickHaptic.error()
+        backToThrownFrom()
+        backHidden = false
         model.clearStart()
         drag = .zero
         let gone = error is TVBridge.Gone, stuck = error is TVBridge.DidNotStart

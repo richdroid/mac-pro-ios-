@@ -93,19 +93,25 @@ final class TVModel {
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
     // without an episode on its card still opens its page, which says "On the TV".
     func isOnTV(_ item: MediaItem, _ source: MediaSource) -> Bool {
-        // Only on a fresh reading: the status kept from the last launch said a film was on that had long finished, and a
-        // throw was swallowed as "already on" with nothing sent (r19: flick-slow and flick-putback never threw).
-        guard source == .stremio, !staleStatus, videoIsCurrent, let s = status?.session, s.pkg == "com.stremio.one", let ref = item.stremioRef else { return false }
-        if ref.type == "series" {
-            guard let v = ref.video else { return false }
-            if let on = NextUp.shared.series, on.imdb == ref.imdb { return v == on.current }
-            // Not worked out yet: the session itself says which show and episode (r19: a race offered to resume it).
-            let parts = v.split(separator: ":")
-            guard parts.count == 3, let se = s.seasonEpisode, s.isShow(item.title) else { return false }
+        guard source == .stremio, let ref = item.stremioRef else { return false }
+        if ref.type == "series" { guard let v = ref.video else { return false }; return isOn(imdb: ref.imdb, title: item.title, episode: v) }
+        return isOn(imdb: ref.imdb, title: item.title, episode: nil)
+    }
+    // The one answer to "is this what the TV's playing now", for the card's tap, the show page's key and the throw itself
+    // (r20: the throw's own check lacked both of these, and could resend an episode or swallow a film).
+    // Only on a fresh reading: the status kept from the last launch said a film was on that had long finished, and a throw
+    // was swallowed as "already on" (r19). A show's episode is the series lookup's when that's done, otherwise the session's
+    // own season and episode and show name (r19: a race offered to resume what was on). `episode` is Stremio's "tt…:s:e".
+    func isOn(imdb: String, title: String, episode: String?) -> Bool {
+        guard !staleStatus, videoIsCurrent, let s = status?.session, s.pkg == "com.stremio.one" else { return false }
+        if let episode {
+            if let on = NextUp.shared.series, on.imdb == imdb { return episode == on.current }
+            let parts = episode.split(separator: ":")
+            guard parts.count == 3, let se = s.seasonEpisode, s.isShow(title) else { return false }
             return Int(parts[1]) == se.season && Int(parts[2]) == se.episode
         }
         guard let now = s.description.first, !now.isEmpty else { return false }
-        return now.localizedCaseInsensitiveContains(item.title) || item.title.localizedCaseInsensitiveContains(now)
+        return TVStatus.Session.sameName(now, title)
     }
     func showOnRemote() {
         Keyboard.dismiss()

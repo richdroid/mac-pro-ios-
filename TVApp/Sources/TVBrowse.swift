@@ -177,7 +177,7 @@ struct MediaCard: View {
             Group {
                 if let image { image.resizable().scaledToFill() }
                 else if noArt { CoverFallback(title: item.title, tint: shownBand) }
-                else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() } }
+                else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait().overlay { LoadingRing(radius: 0) } } }
             }
                 .frame(width: width, height: width / source.coverAspect)
                 .clipped()

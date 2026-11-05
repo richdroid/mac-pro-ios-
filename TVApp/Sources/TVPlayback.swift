@@ -787,8 +787,10 @@ struct ShowEpisodes: View {
 struct EpisodeSheet: View {
     let close: () -> Void
     var body: some View {
-        ScrollView { ShowEpisodes(titled: true, picked: close).padding(20) }
-            .presentationBackground(.thinMaterial)
+        // An opaque enough backdrop and its own top inset, so nothing of the page under it (the "Remote" title) shows at its
+        // top edge (r20).
+        ScrollView { ShowEpisodes(titled: true, picked: close).padding(.horizontal, 20).padding(.bottom, 20).padding(.top, 32) }
+            .presentationBackground(.regularMaterial)
     }
 }
 
@@ -812,16 +814,19 @@ struct PlayingVideo: View {
             // One 16:9 picture, never taller than about 38 % of the page, so the title, the bar and the keys are all on the
             // first screen (r19: a portrait poster filled the page and pushed everything under the fold). The episode's
             // still fills it; otherwise the poster sits on a blur of itself, as on the Remote.
-            ZStack {
-                if let still, !still.isEmpty {
-                    Cover(url: URL(string: still), mode: .fill) { Color.white.opacity(0.06) }
-                } else {
-                    PosterOnBlur(url: model.picture(for: session).flatMap(URL.init(string:)))
+            // The 16:9 box comes first and the art fills it: a fill-mode picture sized its own container to the art's shape
+            // (r20: a portrait slab 67 % of the page tall, with the keys drawn over it).
+            Color.clear
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay {
+                    if let still, !still.isEmpty {
+                        Cover(url: URL(string: still), mode: .fill) { Color.white.opacity(0.06) }
+                    } else {
+                        PosterOnBlur(url: model.picture(for: session).flatMap(URL.init(string:)))
+                    }
                 }
-            }
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .frame(maxWidth: .infinity, maxHeight: pictureCap, alignment: .leading)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .frame(maxWidth: .infinity, maxHeight: pictureCap, alignment: .leading)
             // The page's own height, read once from the container, for the cap.
             .background {
                 Color.clear.containerRelativeFrame(.vertical) { h, _ in h }
