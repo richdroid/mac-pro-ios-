@@ -893,8 +893,8 @@ struct NightButton: View {
             }
         } label: {
             // The same size and weight as its neighbours; a deep amber sun so it never reads as disabled.
-            Image(systemName: on ? "moon.fill" : "sun.max.fill").font(.system(size: 20))
-                .frame(width: 40, height: 40)
+            Image(systemName: on ? "moon.fill" : "sun.max.fill").font(.system(size: 24, weight: .semibold))
+                .frame(width: 52, height: 52)
                 .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp)))
                 .foregroundStyle(on ? ChumbyPalette.hex(0xa4b7d6) : ChumbyPalette.hex(0xe59a2e))
         } primaryAction: {
