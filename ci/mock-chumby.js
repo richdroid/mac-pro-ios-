@@ -197,6 +197,12 @@ function chumbyScene(q, s) {
 //   /rasleep /roffline /ryoutube /rmint /ridle /repisode
 //                 The Remote's states: the TV asleep, the TV not answering, a YouTube video playing, Mint's music only,
 //                 nothing on (the home screen), and a Stremio episode part way through.
+//   /fnormal /fslow /ffail /foffline /falready
+//                 The flick's starts (tv-iphone.md §2.5a): play-stream as NDJSON with each step's time since the request
+//                 (awake 0, sent 120, player 2000, playing 3200); slow (playing at 9 s); failing (two fallbacks retried,
+//                 then failed:"start"); the TV not answering for 2 s; and the film already playing on the TV, where nothing
+//                 may be sent. Status carries starting and lastStart, prepare answers {ok, awake, fresh}, and every send is
+//                 logged to /tmp/tv-flick-sends.log (GET /<scene>/reset clears it).
 //   /real         The real bridge's quirks, not the sample's perfect answers (Richard, 2026-11-05: bugs on his TV never
 //                 showed here). A Stremio episode playing from 0:00 with no length for its first 20 s, then the catalogue's
 //                 rounded 26 min against a real 21:55 (put right by the first seek); Mint's paused song still listed beside
@@ -208,10 +214,13 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode|real)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode|real|fnormal|fslow|ffail|foffline|falready)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') return tvReal(q, s, path, query, json);
+  if (/^f(normal|slow|fail|offline|already)$/.test(scene || '')) return tvFlickStart(scene.slice(1), q, s, path, json);
+  // The prepare call's answer everywhere else too, in the bridge's own shape.
+  if (q.method === 'POST' && path === '/api/tv/prepare') { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} json({ ok: true, awake: true, fresh: !!v.token }); }); return true; }
   if (scene === 'cold' && path === '/api/tv/device') {
     return json({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 0, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 0, txRate: 0, hist: { cpu: [], mem: [], rx: [], tx: [] } });
   }
@@ -292,6 +301,66 @@ function tvPose(q, s) {
   return false;
 }
 
+// The flick scenes. The film thrown is the first in Continue watching ("Heat", a made-up sample's title already used above).
+function tvFlickStart(kind, q, s, path, json) {
+  const fs = require('fs'), now = Date.now(), LOG = '/tmp/tv-flick-sends.log';
+  if (path === '/reset') { tvFlickStart.st = null; try { fs.unlinkSync(LOG); } catch {} return json({ ok: true }); }
+  const st = tvFlickStart.st && tvFlickStart.st.kind === kind ? tvFlickStart.st : (tvFlickStart.st = { kind, sent: 0, token: '', result: '', endedAt: 0, phase: '' });
+  const log = (what, body) => fs.appendFileSync(LOG, JSON.stringify({ at: now, scene: kind, what, body }) + '\n');
+  const read = f => { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} f(v); }); return true; };
+  const film = { pkg: 'com.stremio.one', description: ['Heat'], sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' };
+  if (path === '/api/tv/status') {
+    const v = JSON.parse(tvStatus);
+    delete v.music;
+    if (kind === 'already') { v.app = 'com.stremio.one'; v.session = { ...film, playing: true, position: 1800000 }; return json(v); }
+    const t = st.sent ? now - st.sent : -1;
+    const playAt = kind === 'slow' ? 9000 : 3200;
+    if (t < 0 || (st.result && st.result !== 'ok')) v.app = 'com.google.android.tvlauncher';
+    else if (st.result === 'ok' || t >= playAt) { v.app = 'com.stremio.one'; v.session = { ...film, playing: true, position: Math.max(0, t - playAt) }; }
+    else { v.app = t >= 2000 ? 'com.stremio.one' : 'com.google.android.tvlauncher'; v.starting = { imdb: 'tt7654320', token: st.token, phase: st.phase || 'awake', since: st.sent }; }
+    if (st.result && now - st.endedAt < 30000) v.lastStart = { result: st.result, token: st.token, at: st.endedAt };
+    return json(v);
+  }
+  if (q.method === 'POST' && path === '/api/tv/prepare') return read(b => { log('prepare', b); setTimeout(() => json({ ok: true, awake: true, fresh: !!b.token }), 300); });
+  if (q.method === 'POST' && path === '/api/tv/key') return read(b => { log('key', b); json({ ok: true }); });
+  if (q.method === 'POST' && /^\/api\/tv\/(flick|open|stremio-open|film|send|mint-open|music)$/.test(path)) return read(b => { log(path.slice(8), b); json({ ok: true }); });
+  if (q.method === 'POST' && path === '/api/tv/play-stream') return read(b => {
+    log('play-stream', b);
+    const begun = Date.now(), tokens = [b.token, ...(Array.isArray(b.fallbacks) ? b.fallbacks : [])].filter(x => typeof x === 'string').slice(0, 3);
+    Object.assign(st, { sent: begun, token: tokens[0] || '', result: '', endedAt: 0, phase: 'awake' });
+    const steps = [];
+    if (kind === 'fail') {
+      // Each stream tried in turn, the next one after a failed start, then given up.
+      tokens.forEach((tok, n) => {
+        const base = n * 2000;
+        if (n) steps.push([base, { phase: 'retry', n }]);
+        if (!n) steps.push([0, { phase: 'awake' }]);
+        steps.push([base + 120, { phase: 'sent' }]);
+      });
+      steps.push([tokens.length * 2000, { error: 'That stream didn’t start on the TV', failed: 'start', token: tokens[tokens.length - 1] || '' }]);
+    } else {
+      const playAt = kind === 'slow' ? 9000 : 3200;
+      steps.push([0, { phase: 'awake' }], [120, { phase: 'sent' }], [2000, { phase: 'player' }], [playAt, { phase: 'playing' }], [playAt + 200, { ok: true, token: tokens[0] || '' }]);
+    }
+    // Not answering: not a byte for 2 s, then the start as usual.
+    const delay = kind === 'offline' ? 2000 : 0;
+    const finish = v => { if (v.ok) { st.result = 'ok'; } else if (v.error) { st.result = v.error; } if (v.ok || v.error) st.endedAt = Date.now(); if (v.phase) st.phase = v.phase; if (v.phase === 'retry') st.token = tokens[v.n] || st.token; };
+    if (!/ndjson/.test(q.headers.accept || '')) {
+      const last = steps[steps.length - 1];
+      return setTimeout(() => { steps.forEach(([, v]) => finish(v)); json(last[1]); }, delay + last[0]);
+    }
+    setTimeout(() => {
+      s.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store' });
+      steps.forEach(([at, v]) => setTimeout(() => {
+        finish(v);
+        s.write(JSON.stringify({ ...v, at: Date.now() - begun }) + '\n');
+        if (v.ok || v.error) s.end();
+      }, at));
+    }, delay);
+  });
+  return false;
+}
+
 // The /real scene. Made-up titles and pictures only: the repo is public, so nothing from his own watching.
 function tvReal(q, s, path, query, json) {
   const fs = require('fs'), now = Date.now();
@@ -339,7 +408,8 @@ function tvReal(q, s, path, query, json) {
     log('key', b);
     const k = String(b.key || '');
     // "play" is the box's play/pause key: it turns whatever is on.
-    if (/^(play|pause|playpause|play_pause|media_play_pause)$/.test(k)) r.flips.push({ at: Date.now() + 2200, playing: k === 'pause' ? false : !(r.flips.length ? r.flips[r.flips.length - 1].playing : r.playing) });
+    // "resume" is MEDIA_PLAY: it only ever plays.
+    if (/^(play|pause|playpause|play_pause|media_play_pause|resume)$/.test(k)) r.flips.push({ at: Date.now() + 2200, playing: k === 'pause' ? false : k === 'resume' ? true : !(r.flips.length ? r.flips[r.flips.length - 1].playing : r.playing) });
     json({ ok: true, r: 'sent' });
   });
   if (q.method === 'POST' && /^\/api\/tv\/player-seek(-to)?$/.test(path)) return read(b => {
@@ -352,7 +422,8 @@ function tvReal(q, s, path, query, json) {
   });
   if (q.method === 'POST' && /^\/api\/tv\/(play-stream|flick|open|prepare|stremio-open|film|send|mint-open|music)$/.test(path)) return read(b => {
     log(path.slice(8), b);
-    if (path !== '/api/tv/play-stream') return late(path === '/api/tv/prepare' ? 1200 : 800, () => json({ ok: true }));
+    if (path === '/api/tv/prepare') return late(1200, () => json({ ok: true, awake: true, fresh: !!b.token }));
+    if (path !== '/api/tv/play-stream') return late(800, () => json({ ok: true }));
     // As the real box: the episode playing is stopped and the stream starts over from 0:00 about 12 s later.
     const steps = [[800, { phase: 'awake' }], [1400, { phase: 'opening' }], [7100, { phase: 'player' }], [12000, { phase: 'playing' }], [12400, { ok: true }]];
     r.playing = false; r.pos = 0; r.posAt = Date.now(); r.seeked = false;

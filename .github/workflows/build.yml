@@ -135,7 +135,7 @@ jobs:
             done
             # With a player open on the TV: the Remote's Stremio keys, Stremio's bar on Playing, YouTube's thin one, and the
             # typing bar. The mock answers these from a path in front of the address, so the shots above don't change.
-            for V in "stremio-remote stremio 0" "stremio-playing stremio 2" "youtube-playing youtube 2" "type stremio 0 -pose type" "skip ending 2 -pose skip" "startover ending 1 -pose startover"; do
+            for V in "stremio-remote stremio 0" "stremio-playing stremio 2" "youtube-playing youtube 2" "type stremio 0 -pose type" "skip ending 2 -pose skip"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$4 -tab $5 "${@:6}"
               sleep 8
@@ -280,7 +280,7 @@ jobs:
           # (one pane scrolled and the other not, so a band under the bar would differ between them), YouTube Music's old
           # blank banner (the app must draw its own), a stream flick end to end as he does it (the mock takes about 6 s and
           # reports each step, and the status goes asleep, on, Stremio open, paused, playing), a still while it's on its way,
-          # and Now playing into the Remote. simctl records at the display's own rate, up to 60 frames a second.
+          # and the rebuilt flick's starts (tv_flickstarts). simctl records at the display's own rate, up to 60 frames a second.
           tv_poses() { # display, file suffix
             for T in 1 3 5 9; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab $T -scroll 40
@@ -307,13 +307,34 @@ jobs:
             done
             tv_real "$1" "$2"
             tv_flick "$1" "$2"
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-toremote$2.mp4 > /dev/null 2>&1 & REC=$!
-            sleep 6
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/ending -tab 1 -pose toremote
-            # Longer unfolded, where the app takes longer to come up, so the move itself is on film.
-            if [ -n "$2" ]; then sleep 18; else sleep 10; fi
-            kill -INT $REC; wait $REC; echo "to remote video$2 exit $?"
-            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            tv_flickstarts "$1" "$2"
+          }
+          # The flick as rebuilt (tv-iphone.md §2.5a), each on the mock's scripted start: the stage at rest, a normal start,
+          # a slow one (playing at 9 s), one whose stream and both fallbacks fail, the TV not answering for 2 s, the film
+          # already playing (nothing may be sent), the card put back, and a throw called off at 200 ms. The card is let go
+          # about 8 s after launch; the debug line on screen gives t= ms since release, so the 0–1.3 s after it can be
+          # found frame by frame in each film (simctl records at up to 60 frames a second). Unfolded, only the stage, a
+          # normal start and already-on, to keep the job inside its time.
+          tv_flickstarts() { # display, file suffix
+            for V in "flick-stage normal 10 0" "flick-starting normal 18 1" "flick-slow slow 24 1" "flick-failed fail 20 1" \
+                     "flick-offline offline 16 1" "flick-already already 16 1" "flick-putback normal 14 1" "flick-cancel normal 14 1"; do
+              set -- "$1" "$2" $V
+              if [ -n "$2" ] && ! [[ "$3" =~ ^flick-(stage|starting|already)$ ]]; then set -- "$1" "$2"; continue; fi
+              curl -s http://127.0.0.1:9002/f$4/reset > /dev/null
+              if [ "$6" = 1 ]; then xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-$3$2.mp4 > /dev/null 2>&1 & REC=$!; sleep 5; fi
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/f$4 -tab 1 -pose $3
+              sleep 8; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-held$2.png
+              sleep $(( $5 - 8 )); xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-end$2.png
+              if [ "$6" = 1 ]; then kill -INT $REC; wait $REC; echo "$3 video$2 exit $?"; fi
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+              cp /tmp/tv-flick-sends.log dist/tv-$3-sends$2.log 2>/dev/null || echo "(nothing sent)" > dist/tv-$3-sends$2.log
+              # Already on the TV: throwing it again must send nothing. Said loudly, without stopping the other shots.
+              if [ "$3" = flick-already ] && grep -q '"what":"play-stream"' dist/tv-$3-sends$2.log; then
+                echo "::error title=flick-already$2::play-stream was posted for a film already playing"
+                echo "play-stream was posted for a film already playing" > dist/FAILED-flick-already$2.txt
+              fi
+              set -- "$1" "$2"
+            done
           }
           # On the real bridge's answers (the mock's /real scene), not the sample's perfect ones: an episode from 0:00 whose
           # length is missing for 20 s and then rounded, Mint's paused song still listed, late status answers, play and
