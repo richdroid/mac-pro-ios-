@@ -237,9 +237,11 @@ struct RemoteScreenView: View {
             }
             var deck: CGFloat
             if kbH >= kbMin {
-                // Any room left grows the trackpad, still 16:10 and no wider than the page.
+                // Room left grows the trackpad only up to about 72 % of the keyboard's width, so it reads as a MacBook's and
+                // never outweighs the keys; anything more becomes even margin above and below the deck.
                 let spare = tall - fn - gap - kbH - padGap - padH
-                if spare > 0 { padH = min(padH + spare, (width * 10 / 16).rounded()); padW = (padH * 16 / 10).rounded() }
+                let capW = (width * 0.72).rounded()
+                if spare > 0 { padH = min(padH + spare, (capW * 10 / 16).rounded()); padW = (padH * 16 / 10).rounded() }
                 deck = fn + gap + kbH + padGap + padH
                 let y0 = head + max(tall - deck, 0) / 2
                 p.fnRow = CGRect(x: left, y: y0, width: width, height: fn)
