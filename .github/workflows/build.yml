@@ -8,7 +8,7 @@ permissions:
 jobs:
   build:
     runs-on: xcode-27
-    timeout-minutes: 85
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         # The job can write to the repo and its release; no later step, or code it builds, gets the token from disk.
@@ -305,6 +305,7 @@ jobs:
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-remote-$S$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             done
+            tv_real "$1" "$2"
             tv_flick "$1" "$2"
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-toremote$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 6
@@ -313,6 +314,47 @@ jobs:
             if [ -n "$2" ]; then sleep 18; else sleep 10; fi
             kill -INT $REC; wait $REC; echo "to remote video$2 exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # On the real bridge's answers (the mock's /real scene), not the sample's perfect ones: an episode from 0:00 whose
+          # length is missing for 20 s and then rounded, Mint's paused song still listed, late status answers, play and
+          # pause landing 2.2 s after the key, and the TV gone from 30 to 35 s. Everything sent to the TV is logged and
+          # kept beside each flow, so a flow that must not re-send can be checked (no play-stream line).
+          tv_real() { # display, file suffix
+            real() { curl -s http://127.0.0.1:9002/real/reset > /dev/null; }
+            real
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-real-remote$2.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 5
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 0
+            sleep 10; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-remote-start$2.png
+            sleep 14; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-remote-length$2.png
+            sleep 9; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-remote-offline$2.png
+            sleep 5
+            kill -INT $REC; wait $REC; echo "real remote video$2 exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            real
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 2
+            sleep 9; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-playing$2.png
+            sleep 14; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-playing-length$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # His tasks, each filmed: tap the show that's already playing in Continue watching (nothing may be sent),
+            # search and pick a result (the keyboard must go), open a series to its episodes, and pause then play (the
+            # key must change at once), through the app's pose hooks realtap, realsearch, realseries and realpause.
+            TV_REAL_HOOKS=1
+            if [ "${TV_REAL_HOOKS:-0}" = 1 ]; then
+              for V in "realtap 1 16" "realsearch 1 18" "realseries 3 14" "realpause 0 16"; do
+                set -- "$1" "$2" $V
+                real
+                xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-$3$2.mp4 > /dev/null 2>&1 & REC=$!
+                sleep 5
+                xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab $4 -pose $3
+                sleep $5
+                xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-end$2.png
+                kill -INT $REC; wait $REC; echo "$3 video$2 exit $?"
+                xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+                cp /tmp/tv-real-sends.log dist/tv-$3-sends$2.log 2>/dev/null || echo "(nothing sent)" > dist/tv-$3-sends$2.log
+                set -- "$1" "$2"
+              done
+            fi
           }
           tv_flick() { # display, file suffix
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-flickdemo-stream$2.mp4 > /dev/null 2>&1 & REC=$!

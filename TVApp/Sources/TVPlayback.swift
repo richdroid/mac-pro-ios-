@@ -114,7 +114,11 @@ final class SeekQueue: ObservableObject {
 @MainActor
 final class NextUp: ObservableObject {
     static let shared = NextUp()
+    // The show on, and the episode of it that's playing, for its episode list over the Remote and Playing.
+    struct Series: Equatable { let imdb: String, title: String, art: String, current: String }
     @Published private(set) var next: MediaItem?
+    @Published private(set) var previous: MediaItem?
+    @Published private(set) var series: Series?
     private var key = ""
     private static var metas: [String: StremioMeta] = [:]
     static func remember(_ m: StremioMeta, for imdb: String) { metas[imdb] = m }
@@ -135,21 +139,36 @@ final class NextUp: ObservableObject {
     // Asked again after a flick, which may have changed what's known.
     func forget() { key = "" }
     func follow(_ s: TVStatus?) {
-        guard let p = s?.session, p.pkg == "com.stremio.one", p.description.count > 1 else {
+        guard let p = s?.session, p.pkg == "com.stremio.one", p.description.count > 1 || p.season != nil else {
             key = ""
             if next != nil { next = nil }
+            if previous != nil { previous = nil }
+            if series != nil { series = nil }
             return
         }
-        let k = p.description.joined(separator: "\n")
+        let k = p.description.joined(separator: "\n") + "\(p.season ?? -1)/\(p.episode ?? -1)"
         guard k != key else { return }
         key = k
         Task { [weak self] in
             let found = await Self.resolve(p)
-            if let self, self.key == k, found != self.next { self.next = found }
+            guard let self, self.key == k else { return }
+            if found?.next != self.next { self.next = found?.next }
+            if found?.previous != self.previous { self.previous = found?.previous }
+            if found?.series != self.series { self.series = found?.series }
         }
     }
-    private static func resolve(_ p: TVStatus.Session) async -> MediaItem? {
-        let show = p.description[0], on = p.description[1]
+    // An episode of the show on, as a card to flick: the one after, the one before, or any picked from its list.
+    static func item(_ s: Series, _ e: StremioEpisode) -> MediaItem {
+        MediaItem(title: s.title, subtitle: "S\(e.season) E\(e.episode) · \(e.name)", art: s.art, id: link(s.imdb, e.id), kind: "series")
+    }
+    // The one before, in order, specials left out unless that's where you are.
+    static func before(_ e: StremioEpisode, in episodes: [StremioEpisode]) -> StremioEpisode? {
+        let order = episodes.filter { $0.season > 0 || e.season == 0 }.sorted { ($0.season, $0.episode) < ($1.season, $1.episode) }
+        guard let i = order.firstIndex(of: e), i > 0 else { return nil }
+        return order[i - 1]
+    }
+    private static func resolve(_ p: TVStatus.Session) async -> (next: MediaItem?, previous: MediaItem?, series: Series)? {
+        let show = p.showName, on = p.description.count > 1 ? p.description[1] : ""
         func same(_ t: String) -> Bool { !t.isEmpty && (show.localizedCaseInsensitiveContains(t) || t.localizedCaseInsensitiveContains(show)) }
         // Which series: one flicked from here, or one on Stremio's own Continue watching.
         var imdb: String?, title = show, art = "", known: String?
@@ -161,8 +180,11 @@ final class NextUp: ObservableObject {
         guard let imdb, let meta = await meta(imdb) else { return nil }
         // The episode on screen by its name in what the TV reports, the longest name that fits, else the one last sent.
         let named = meta.episodes.filter { $0.name.count > 2 && on.localizedCaseInsensitiveContains($0.name) }.max { $0.name.count < $1.name.count }
-        guard let current = named ?? meta.episodes.first(where: { $0.id == known }), let n = after(current, in: meta.episodes) else { return nil }
-        return MediaItem(title: title, subtitle: "S\(n.season) E\(n.episode) · \(n.name)", art: art, id: link(imdb, n.id), kind: "series")
+        // The Mac's own season and episode first, when it says them.
+        let said = p.season.flatMap { se in p.episode.flatMap { ep in meta.episodes.first { $0.season == se && $0.episode == ep } } }
+        guard let current = said ?? named ?? meta.episodes.first(where: { $0.id == known }) else { return nil }
+        let show = Series(imdb: imdb, title: title, art: art, current: current.id)
+        return (after(current, in: meta.episodes).map { item(show, $0) }, before(current, in: meta.episodes).map { item(show, $0) }, show)
     }
 }
 
@@ -354,11 +376,14 @@ struct ScrubBar: View {
     @Binding var scrub: Double?
     // A tick under the finger every this much.
     var tickEvery: Double
+    // The time under the finger, in a bubble that follows it while it slides.
+    var label: ((Double) -> String)? = nil
     let commit: (Double) -> Void
     @State private var across: Bool?
     var body: some View {
         GeometryReader { g in
-            let thick: CGFloat = scrub == nil ? 6 : 10
+            // A player's bar: thick enough to see from arm's length, and thicker still under the finger.
+            let thick: CGFloat = scrub == nil ? 8 : 14
             let at = { (x: CGFloat) in total * min(1, max(0, Double(x / max(g.size.width, 1)))) }
             ProgressTrack(fraction: total > 0 ? (scrub ?? value).map { $0 / total } : nil, thick: thick, fill: busy ? AnyShapeStyle(.white.opacity(0.6)) : AnyShapeStyle(TVLook.accent),
                           confirmed: total > 0 && scrub == nil ? confirmed.map { $0 / total } : nil, spinning: spinning && scrub == nil)
@@ -376,6 +401,19 @@ struct ScrubBar: View {
                         scrub = nil; across = nil
                     })
                 .onTapGesture { p in if enabled { commit(at(p.x)) } }
+                .overlay(alignment: .topLeading) {
+                    if let label, let t = scrub, total > 0 {
+                        let x = g.size.width * CGFloat(min(1, max(0, t / total)))
+                        Text(label(t)).font(.caption.monospacedDigit().weight(.semibold))
+                            .padding(.horizontal, 9).padding(.vertical, 4)
+                            .background(.black.opacity(0.55), in: Capsule())
+                            .fixedSize()
+                            .position(x: min(max(x, 28), max(g.size.width - 28, 28)), y: -14)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.15), value: scrub == nil)
         }
         .frame(height: 28)
         .sensoryFeedback(.selection, trigger: scrub.map { Int($0 / tickEvery) })
@@ -399,7 +437,7 @@ struct ProgressPlaceholder: View {
 
 // A round glass button that does something here, rather than press a key on the TV.
 struct GlassButton: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let icon: String, label: String
     var size: CGFloat = 54
     let action: () -> Void
@@ -455,4 +493,313 @@ enum RowRoute: Hashable {
         case .films(let title, let films): FilmList(title: title, films: films)
         }
     }
+}
+
+// ⏮ in Stremio, as any player does it: back to the start of the episode or film, and pressed again near the start, the
+// episode before, when there is one. A film only ever goes back to its start. Through the same seek as Start over.
+@MainActor
+enum StremioBack {
+    static func press(_ model: TVModel) {
+        guard let s = model.status?.session else { return }
+        let q = SeekQueue.shared, now = Date()
+        var at = q.held(for: s, at: now) ?? (s.position ?? 0)
+        if q.held(for: s, at: now) == nil, s.playing, let t = s.sampledAt { at += max(0, now.timeIntervalSince1970 * 1000 - t) }
+        at += q.offset(for: s)
+        if at < 10000, let prev = NextUp.shared.previous {
+            model.flick(FlickTarget(item: prev, source: .stremio, ready: true, autoplay: true))
+            return
+        }
+        // The bar is at the start the moment it's pressed, and held there until the player says where it landed.
+        q.adopt(0, for: s)
+        Task {
+            do {
+                let d = try await TVBridge.post("player-seek-to", ["ms": 0], timeout: 60)
+                if let ms = ((try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["position"] as? NSNumber)?.doubleValue { q.adopt(ms, for: s) }
+            } catch {
+                #if canImport(UIKit)
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                #endif
+                model.say("Couldn’t go back to the start")
+            }
+            await model.load()
+        }
+    }
+}
+
+// What Stremio's catalogue knows of each episode beyond the bridge's list: its own description and its running time,
+// and the show's running time for episodes without one. Asked once a show, in the background, and kept.
+@MainActor
+enum SeriesInfo {
+    struct Info { var about: [String: String] = [:], minutes: [String: Int] = [:], show: Int? }
+    private static var known: [String: Info] = [:]
+    static func cached(_ imdb: String) -> Info? { known[imdb] }
+    static func load(_ imdb: String) async -> Info? {
+        if let i = known[imdb] { return i }
+        guard let d = await TVBridge.data(URL(string: "https://v3-cinemeta.strem.io/meta/series/\(imdb).json"), timeout: 10, cached: true) else { return nil }
+        let info = await Task.detached(priority: .utility) { parse(d) }.value
+        if let info { known[imdb] = info }
+        return info
+    }
+    // "2h 3min", "123 min", "22": minutes.
+    nonisolated static func minutes(_ t: Any?) -> Int? {
+        if let n = t as? NSNumber { return n.intValue > 0 ? n.intValue : nil }
+        guard let t = t as? String else { return nil }
+        func number(before unit: String) -> Int {
+            guard let r = t.range(of: "\\d+\\s*" + unit, options: .regularExpression) else { return 0 }
+            return Int(t[r].prefix { $0.isNumber }) ?? 0
+        }
+        let h = number(before: "h"), m = number(before: "min")
+        if h + m > 0 { return h * 60 + m }
+        return Int(t.trimmingCharacters(in: .whitespaces)).flatMap { $0 > 0 ? $0 : nil }
+    }
+    nonisolated private static func parse(_ d: Data) -> Info? {
+        guard let meta = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["meta"] as? [String: Any] else { return nil }
+        var info = Info(show: minutes(meta["runtime"]))
+        for v in (meta["videos"] as? [[String: Any]]) ?? [] {
+            guard let id = v["id"] as? String else { continue }
+            if let o = (v["overview"] as? String) ?? (v["description"] as? String), !o.isEmpty { info.about[id] = o }
+            if let m = minutes(v["runtime"]) { info.minutes[id] = m }
+        }
+        return info
+    }
+}
+
+// One episode list for everywhere a show is picked from: the series page, and over the Remote and Playing while it's on.
+// Seasons as numbers after the word, then the episodes: a still, its number and name, how long it runs, a tick once
+// watched, and the bar of how far in on the one he's on. The list scrolls itself to that one.
+struct EpisodePicker: View {
+    let episodes: [StremioEpisode]
+    @Binding var season: Int
+    // The one he's on, what to call it ("Resume", "Up next", "Playing"), and how far into it.
+    let current: String?
+    let currentLabel: String
+    var progress: Double?
+    // The one after it, marked "Up next", while one is playing.
+    var after: String? = nil
+    var info: SeriesInfo.Info?
+    // The row that's on its way to the TV, with the light running round it.
+    var busy: String?
+    let choose: (StremioEpisode) -> Void
+    var seasons: [Int] { Array(Set(episodes.map(\.season))).sorted() }
+    var currentEpisode: StremioEpisode? { current.flatMap { id in episodes.first { $0.id == id } } }
+    // Before the one he's on, in order, he's seen; the one he's on once it's all but done.
+    func watched(_ e: StremioEpisode) -> Bool {
+        guard let c = currentEpisode, e.season > 0 else { return false }
+        if e == c { return currentLabel != "Playing" && (progress ?? 0) > 0.9 }
+        return (e.season, e.episode) < (c.season, c.episode)
+    }
+    var header: some View {
+        HStack(spacing: 12) {
+            Text("Season").font(.title3.weight(.bold))
+            Chips(options: seasons.map { ($0, $0 == 0 ? "Specials" : "\($0)") }, selected: $season).rowEdge()
+        }
+    }
+    func row(_ e: StremioEpisode) -> some View {
+        let on = e.id == current
+        let mins = info?.minutes[e.id] ?? info?.show
+        return Button { choose(e) } label: {
+            HStack(spacing: 12) {
+                Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
+                    .frame(width: 112, height: 63)
+                    .overlay(alignment: .bottomLeading) {
+                        // How far into it he is, as on Stremio's own cards. The still's width is fixed, so no reader.
+                        if on, let p = progress, p > 0 {
+                            ZStack(alignment: .leading) { Color.white.opacity(0.25); TVLook.accent.frame(width: 112 * min(p, 1)) }.frame(height: 3)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(e.episode). \(e.name)").font(.subheadline.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                    HStack(spacing: 6) {
+                        if on { Text(currentLabel).font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(TVLook.accent, in: Capsule()).foregroundStyle(.black) }
+                        else if e.id == after { Text("Up next").font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(.white.opacity(0.2), in: Capsule()).foregroundStyle(.white) }
+                        if let mins { Text("\(mins) min") }
+                    }
+                    .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                if watched(e) { Image(systemName: "checkmark.circle.fill").font(.body).foregroundStyle(.white.opacity(0.45)).accessibilityLabel("Watched") }
+            }
+            .padding(8)
+            .background(.white.opacity(on ? 0.14 : 0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay { if busy == e.id { LoadingRing(radius: 14) } }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressCard())
+        .disabled(busy != nil)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header.padding(.bottom, 2)
+            ForEach(episodes.filter { $0.season == season }) { e in row(e).id(e.id) }
+        }
+        .animation(.easeInOut(duration: 0.2), value: season)
+    }
+}
+
+// Something on its way: a light running round the card's whole rounded edge (Richard, 2026-11-05: "the loading like
+// light bar should go all around the card"). One stroke along the edge itself, its stretch moving round; nothing else
+// redraws, and nothing is measured.
+struct LoadingRing: View {
+    var radius: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var still
+    @State private var phase: CGFloat = 0
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 2)
+            RunningEdge(radius: radius, phase: phase)
+                .stroke(TVLook.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .shadow(color: TVLook.accent.opacity(0.7), radius: 4)
+        }
+        .allowsHitTesting(false)
+        .onAppear { if !still { withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) { phase = 1 } } }
+        .accessibilityLabel("Loading")
+    }
+}
+// A quarter of a rounded edge, starting a given way round it, carried on over the start when it runs past the end.
+struct RunningEdge: Shape {
+    var radius: CGFloat
+    var phase: CGFloat
+    var length: CGFloat = 0.24
+    var animatableData: CGFloat { get { phase } set { phase = newValue } }
+    func path(in rect: CGRect) -> Path {
+        let edge = RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect.insetBy(dx: 1.25, dy: 1.25))
+        let from = phase.truncatingRemainder(dividingBy: 1), to = from + length
+        var p = edge.trimmedPath(from: from, to: min(to, 1))
+        if to > 1 { p.addPath(edge.trimmedPath(from: 0, to: to - 1)) }
+        return p
+    }
+}
+
+// Under the picture of a show while it plays: which episode it is, and the way to the rest of them. One tap, the whole
+// line (Richard, 2026-11-05: "there should be an episode picker in the interface i just showed").
+struct EpisodesLine: View {
+    @Environment(TVModel.self) var model
+    @ObservedObject private var nextUp = NextUp.shared
+    @State private var open = false
+    var body: some View {
+        if model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one", let line = s.episodeLine, nextUp.series != nil {
+            Button { model.tick(); open = true } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "list.bullet.rectangle.portrait").foregroundStyle(TVLook.accent)
+                    Text(line).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text("Episodes").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent)
+                    Image(systemName: "chevron.up").font(.caption.weight(.bold)).foregroundStyle(TVLook.accent)
+                }
+                .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
+            }
+            .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
+            // Out of the way while a flick's screen moves onto the picture above it, like the bar.
+            .opacity(model.flickHandoff ? 0 : 1)
+            .transition(.opacity)
+            // Over the page, sized to it, not a page of its own: tap outside or pull it down and it's gone.
+            .popover(isPresented: $open, arrowEdge: .bottom) {
+                EpisodeSheet { open = false }
+                    .frame(idealWidth: 440, idealHeight: 560)
+                    .presentationCompactAdaptation(.sheet)
+                    .presentationDetents([.medium, .large])
+            }
+        }
+    }
+}
+
+// The show on the TV, its episodes, the one playing marked and in view and the next marked up next. A pick goes to the
+// TV the way the next-episode key does; the one already playing is never sent again. Inside whatever scrolls it.
+struct ShowEpisodes: View {
+    @Environment(TVModel.self) var model
+    @ObservedObject private var nextUp = NextUp.shared
+    var titled = false
+    var picked: () -> Void = {}
+    @State private var meta: StremioMeta?
+    @State private var info: SeriesInfo.Info?
+    @State private var season = 0
+    @State private var busy: String?
+    var body: some View {
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 14) {
+                if titled, let s = nextUp.series { Text(s.title).font(.title2.weight(.bold)).lineLimit(2) }
+                if let meta, let s = nextUp.series {
+                    EpisodePicker(episodes: meta.episodes, season: $season, current: s.current, currentLabel: "Playing",
+                                  after: nextUp.next?.stremioRef?.video, info: info, busy: busy) { e in
+                        guard e.id != s.current else { picked(); return }
+                        busy = e.id
+                        model.flick(FlickTarget(item: NextUp.item(s, e), source: .stremio, ready: true, autoplay: true))
+                        Task { try? await Task.sleep(nanoseconds: 250_000_000); busy = nil; picked() }
+                    }
+                } else {
+                    ForEach(0..<5, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12, thumb: true) }
+                }
+            }
+            .task(id: nextUp.series) {
+                guard let s = nextUp.series else { return }
+                info = SeriesInfo.cached(s.imdb)
+                guard let m = await NextUp.meta(s.imdb) else { return }
+                season = m.episodes.first { $0.id == s.current }?.season ?? m.episodes.first?.season ?? 0
+                meta = m
+                try? await Task.sleep(nanoseconds: 60_000_000)
+                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(s.current, anchor: .center) }
+                if info == nil { let i = await SeriesInfo.load(s.imdb); withAnimation(.easeOut(duration: 0.2)) { info = i } }
+            }
+        }
+    }
+}
+// The same, over the Remote: tap outside or pull it down and it's gone.
+struct EpisodeSheet: View {
+    let close: () -> Void
+    var body: some View {
+        ScrollView { ShowEpisodes(titled: true, picked: close).padding(20) }
+            .presentationBackground(.thinMaterial)
+    }
+}
+
+// What's on, when it's a film or a show: the episode's own still (else the poster), the show's name over the episode's,
+// what the episode is about, the bar, and the one transport. Stop is a hold on play, as on the Remote.
+struct PlayingVideo: View {
+    @Environment(TVModel.self) var model
+    @ObservedObject private var nextUp = NextUp.shared
+    @Environment(\.paneLayout) private var panes
+    let session: TVStatus.Session
+    let stale: Bool
+    let ended: Bool
+    @State private var still: String?
+    @State private var about: String?
+    var series: NextUp.Series? { session.pkg == "com.stremio.one" ? nextUp.series : nil }
+    var body: some View {
+        let name = session.showName
+        let episode = session.episodeLine
+        VStack(alignment: .leading, spacing: 14) {
+            Group {
+                if let still, !still.isEmpty {
+                    Cover(url: URL(string: still), mode: .fill) { Color.white.opacity(0.06) }
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                } else {
+                    Cover(url: model.picture(for: session).flatMap(URL.init(string:)), radius: 14) {
+                        Image(systemName: "play.tv.fill").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: 220)
+                }
+            }
+            .shadow(color: .black.opacity(0.4), radius: 16, y: 8)
+            .opacity(stale ? 0.45 : 1)
+            VStack(alignment: .leading, spacing: 3) {
+                // The show above, the episode as the title; a film is its own title.
+                if let episode, !name.isEmpty { Text(name).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1) }
+                Text(episode ?? name).font(.title2.weight(.bold)).lineLimit(2)
+                if let about { Text(about).font(.footnote).foregroundStyle(.secondary).lineLimit(panes ? 4 : 3).padding(.top, 4) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentTransition(.opacity)
+            if session.position != nil || session.pkg == "com.stremio.one" { VideoProgress(session: session, live: !stale) }
+            Transport(ended: ended).padding(.top, 2)
+        }
+        .task(id: series) {
+            guard let s = series, let m = await NextUp.meta(s.imdb), let e = m.episodes.first(where: { $0.id == s.current }) else { still = nil; about = nil; return }
+            withAnimation(.easeOut(duration: 0.25)) { still = e.thumb }
+            let info = await SeriesInfo.load(s.imdb)
+            withAnimation(.easeOut(duration: 0.25)) { about = info?.about[e.id] }
+        }
+    }
+}
 }

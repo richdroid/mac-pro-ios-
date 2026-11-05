@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 struct Film: Identifiable, Hashable {
     let slug: String, title: String, year: String, poster: String, note: String
     var imdb = ""
@@ -7,57 +10,75 @@ struct Film: Identifiable, Hashable {
     var media: MediaItem { MediaItem(title: title, subtitle: note.isEmpty ? year : note, art: poster, id: imdb, kind: "movie", slug: slug) }
 }
 
-@MainActor
-final class TVModel: ObservableObject {
-    @Published var status: TVStatus?
+// Observed property by property: a view redraws only for what it actually reads, so a status reading that changes the
+// position doesn't redraw every key and card in every tab.
+@MainActor @Observable
+final class TVModel {
+    var status: TVStatus?
     // True until the first answer since launch. Until then the status is the one kept from last time: good for laying
     // out the pages, but not for saying what's playing, where it's got to, or whether it's paused.
-    @Published var staleStatus = true
+    var staleStatus = true
     let mirrorStore = MirrorStore()
     // The TV's screen on the Remote: on unless he's turned it off, and kept that way.
-    @Published var mirrorLive = UserDefaults.standard.object(forKey: "mirrorLive") as? Bool ?? true
+    var mirrorLive = UserDefaults.standard.object(forKey: "mirrorLive") as? Bool ?? true
     #if os(iOS)
     let live = LiveMirror()
     #endif
     // Where the Remote's picture of the TV is on the display, while it's there. Not published: only read, never drawn.
-    var mirrorSlot: CGRect?
-    private var mirrorViewers = 0
+    @ObservationIgnored var mirrorSlot: CGRect?
+    @ObservationIgnored private var mirrorViewers = 0
     // The poster standing in on the Remote's picture for a film just flicked, until the TV's own word catches up.
-    @Published private(set) var standInArt: String?
-    private var standInUntil = Date.distantPast
+    private(set) var standInArt: String?
+    @ObservationIgnored private var standInUntil = Date.distantPast
     var standInNow: String? { standInUntil > Date() ? standInArt : nil }
     func standIn(_ art: String) { standInArt = art; standInUntil = Date().addingTimeInterval(30) }
     // When a flick's controls last handed over to the Remote, so its keys can settle in after the screen lands.
-    @Published var remoteArrival = Date.distantPast
+    var remoteArrival = Date.distantPast
     // When the flick's screen actually starts its move onto the Remote's picture, which the keys follow closely.
-    var remoteMoveAt = Date.distantPast
+    @ObservationIgnored var remoteMoveAt = Date.distantPast
     // While a flick's screen is moving onto the Remote's picture: that picture stays hidden under it until the screen has
     // landed, or the two showed at once, the one below peeking out under the one moving.
-    @Published var flickHandoff = false
+    var flickHandoff = false
     // A film's colour kept on the pages behind after the flick closes, until something else is playing.
-    var moodArt: String?
+    @ObservationIgnored var moodArt: String?
     func keepMood(until art: String) { moodArt = art }
-    @Published var reachable = true
-    @Published var watchlist: [Film] = []
-    @Published var friends: [Film] = []
-    @Published var recommended: [Film] = []
-    @Published var flicking: FlickTarget?
+    var reachable = true
+    var watchlist: [Film] = []
+    var friends: [Film] = []
+    var recommended: [Film] = []
+    var flicking: FlickTarget?
+    @ObservationIgnored private var lastFlick: (id: String, at: Date)?
     // The colour of wherever you are: an app's own, or whatever you've picked. Nil lets what's playing set it.
-    @Published var mood: Color?
+    var mood: Color?
     // The cover of the last thing flicked, for when the TV's player has none of its own to show.
-    @Published var lastArt: String?
-    @Published var lastArtPkg: String?
-    var lastArtTitle: String?
+    var lastArt: String?
+    var lastArtPkg: String?
+    @ObservationIgnored var lastArtTitle: String?
     // A picture for what an app is playing: its real poster if the Mac found one, else the cover of what was flicked to
     // it if that's still what's on, else the app's own banner. Never the cover of something that played before.
+    // The cover for the Dynamic Island: what's on per this reading (the poster, the thumbnail or the album), never the app's
+    // own icon, which the island draws as its glyph instead.
+    func islandArt(_ s: TVStatus) -> String? {
+        let a = s.session.flatMap { $0.pkg == "com.codex.musicwebtv" ? nil : picture(for: $0) } ?? s.music?.art
+        return a?.contains("/api/tv/icon") == true ? nil : a
+    }
     func picture(for s: TVStatus.Session) -> String? {
         if let a = s.art, !a.isEmpty { return a }
         if s.pkg == lastArtPkg, let a = lastArt, let t = lastArtTitle, let now = s.description.first,
            now.localizedCaseInsensitiveContains(t) || t.localizedCaseInsensitiveContains(now) { return a }
         return url("/api/tv/icon?pkg=\(s.pkg)&v=2")?.absoluteString
     }
-    // The flick screen brings itself in and out, so the system's slide stays out of it.
+    // The flick screen brings itself in and out, so the system's slide stays out of it. Whatever was being typed into is
+    // done with: the keyboard never stays up over what a search led to (Richard, 2026-11-05).
     func flick(_ target: FlickTarget) {
+        Keyboard.dismiss()
+        // One at a time. And a send that goes by itself (next episode, an episode picked from the list) taken twice within
+        // three seconds is the same tap, never a second start.
+        guard flicking == nil else { return }
+        if target.autoplay {
+            if let l = lastFlick, l.id == target.item.id, Date().timeIntervalSince(l.at) < 3 { return }
+            lastFlick = (target.item.id, Date())
+        }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { flicking = target }
     }
@@ -83,29 +104,60 @@ final class TVModel: ObservableObject {
     }
     // A film playing, which the TV's screenshot leaves black: it never captures protected video.
     var filmOnScreen: Bool { !staleStatus && videoIsCurrent && status?.session?.playing == true }
-    @Published var browsing: MediaSource?
-    @Published var toast: String?
-    @Published var filmsNote: String? = "Loading your films…"
+    // Opening an app's page, or going to another tab, leaves whatever field was being typed into.
+    var browsing: MediaSource? { didSet { if browsing != nil { Keyboard.dismiss() } } }
+    // Play or pause as pressed, shown at once and held over the status for a moment, as the TV takes a beat to say so.
+    // Let go as soon as the TV agrees, or after three seconds, when what it says is the truth again.
+    private(set) var playHeld: (playing: Bool, at: Date)?
+    func holdPlay(_ playing: Bool) {
+        playHeld = (playing, Date())
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if let self, let h = self.playHeld, Date().timeIntervalSince(h.at) >= 2.9 { self.playHeld = nil }
+        }
+    }
+    // What a play key should say: the press, while it's held, else what the TV reports.
+    // The TV's ⏯: the glyph flips at once, then the key goes. The Remote's button and the build's pause flow both come here.
+    func togglePlay(shown: Bool?) {
+        if let p = shown { holdPlay(!p) }
+        key("play")
+    }
+    func shownPlaying(_ reported: Bool?) -> Bool? {
+        guard let h = playHeld, Date().timeIntervalSince(h.at) < 3 else { return reported }
+        return h.playing
+    }
+    // Mint's song is what's on: playing, or Mint is the app in front. A film or show on the TV, playing or paused in
+    // front, is never shown beside a song left over from before.
+    var musicIsCurrent: Bool {
+        guard let m = nowMusic, !videoIsCurrent else { return false }
+        return m.playing || status?.app == "com.codex.musicwebtv"
+    }
+    var toast: String?
+    var filmsNote: String? = "Loading your films…"
     // Browse used to be tab 4; the apps' banners lead there now.
-    @Published var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t }()
-    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
-    private var loops: [Task<Void, Never>] = []
-    private var toastTask: Task<Void, Never>?
-    private var lastKeyAt = Date.distantPast
-    private var lastTouch = Date()
-    private var keyChain: Task<Void, Never>?
-    private var filmsLoaded = false
+    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t }() { didSet { if tab != oldValue { Keyboard.dismiss() } } }
+    var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
+    @ObservationIgnored private var loops: [Task<Void, Never>] = []
+    @ObservationIgnored private var toastTask: Task<Void, Never>?
+    @ObservationIgnored private var lastKeyAt = Date.distantPast
+    @ObservationIgnored private var lastTouch = Date()
+    @ObservationIgnored private var keyChain: Task<Void, Never>?
+    @ObservationIgnored private var filmsLoaded = false
     private static var cacheFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("tv.json") }
 
     init() {
         let stored = UserDefaults.standard.string(forKey: "address") ?? ""
         address = stored.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : stored
-        // Open with what was last known; the live state replaces it moments later.
+        // Open with what was last known; the live state replaces it moments later. A small file, read before the first
+        // frame on purpose, so the app opens showing what it knew rather than empty.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(TVStatus.self, from: d) }
     }
     func url(_ path: String) -> URL? { URL(string: address.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) }
     func start() {
         stop()
+        #if canImport(UIKit)
+        Haptics.warm()
+        #endif
         // Nobody looking, nothing polled. Status steps aside just after a key, so it never competes with one.
         loops = [
             Task { [weak self] in
@@ -172,16 +224,32 @@ final class TVModel: ObservableObject {
             #endif
         }
     }
+    // One reading at a time: the loop, a key, a tab change and a send each asked for their own, overlapping, and each
+    // could redraw. Whoever asks while one is on its way waits for that one.
+    @ObservationIgnored private var loading: Task<Void, Never>?
     func load() async {
+        if let l = loading { await l.value; return }
+        let t = Task { await reload() }
+        loading = t
+        await t.value
+        loading = nil
+    }
+    private func reload() async {
         guard let u = url("/api/tv/status") else { return }
         var r = URLRequest(url: u); r.timeoutInterval = 8; r.cachePolicy = .reloadIgnoringLocalCacheData
         guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
               let s = try? JSONDecoder().decode(TVStatus.self, from: d) else { if !Task.isCancelled { reachable = false }; return }
         if !reachable { reachable = true }
         #if os(iOS)
-        await TVIsland.sync(s)
+        await TVIsland.sync(s, art: islandArt(s))
         #endif
-        if s != status { status = s; if s.online { try? d.write(to: Self.cacheFile, options: .atomic) } }
+        if s != status {
+            status = s
+            // Kept for the next launch, written off the main thread.
+            if s.online { let file = Self.cacheFile; Task.detached(priority: .utility) { try? d.write(to: file, options: .atomic) } }
+        }
+        // The TV agrees with the press: nothing left to hold.
+        if let h = playHeld, (s.session?.playing ?? s.music?.playing) == h.playing { playHeld = nil }
         if staleStatus { staleStatus = false }
         PhonePlayer.shared.follow(s)
         NextUp.shared.follow(s)
@@ -205,7 +273,13 @@ final class TVModel: ObservableObject {
     func loadMirror(after: Date? = nil) async {
         guard let u = url("/api/tv/shot" + (after.map { "?after=\(Int($0.timeIntervalSince1970 * 1000))" } ?? "")) else { return }
         var r = URLRequest(url: u); r.timeoutInterval = 10; r.cachePolicy = .reloadIgnoringLocalCacheData
-        if let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) { mirrorStore.set(i) }
+        guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) else { return }
+        // Decoded before it's shown, not on the main thread in the frame that first draws it.
+        #if canImport(UIKit)
+        mirrorStore.set(await i.byPreparingForDisplay() ?? i)
+        #else
+        mirrorStore.set(i)
+        #endif
     }
     func loadFilms(force: Bool = false) async {
         if filmsLoaded && !force { return }
@@ -242,7 +316,7 @@ final class TVModel: ObservableObject {
     }
     func tick() {
         #if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Haptics.light.impactOccurred(); Haptics.light.prepare()
         #endif
     }
     private func request(_ path: String, _ body: [String: Any]) -> URLRequest? {
@@ -253,24 +327,22 @@ final class TVModel: ObservableObject {
         r.httpBody = try? JSONSerialization.data(withJSONObject: body)
         return r
     }
-    // Keys leave in order, one after another, so a fast swipe can't arrive scrambled.
+    // Each key leaves the moment it's pressed, numbered, and the Mac plays them in that order. Waiting for each answer
+    // before sending the next made a quick run of presses reach the TV a round trip late per press.
     func key(_ name: String, long: Bool = false, repeating: Bool = false) {
         lastKeyAt = Date(); lastTouch = Date()
         if !repeating { tick() }
         // A hold can't get ahead of the connection, so lifting your finger stops the TV promptly.
         if repeating && repeatPending { return }
-        guard var r = request("key", ["key": name, "long": long, "repeat": repeating]) else { return }
+        keySeq += 1
+        guard var r = request("key", ["key": name, "long": long, "repeat": repeating, "seq": keySeq, "session": Self.keySession]) else { return }
         r.timeoutInterval = 3
         if repeating { repeatPending = true }
-        let before = keyChain, sent = Date(), power = name == "wake" || name == "sleep"
-        keyChain = Task { [weak self] in
-            await before?.value
+        // Keys don't wait for each other, but they do wait for text still being typed, so Enter can't beat the words.
+        let typing = keyChain
+        Task { [weak self] in
+            await typing?.value
             defer { if repeating { self?.repeatPending = false } }
-            // A slow network must not replay old repeats at the TV. A deliberate press gets longer.
-            if !power && Date().timeIntervalSince(sent) > (repeating ? 1 : 4) {
-                if !repeating { self?.say("The TV didn’t get that") }
-                return
-            }
             let result = try? await URLSession.shared.data(for: r)
             if (result?.1 as? HTTPURLResponse)?.statusCode != 200, !repeating { self?.say("The TV didn’t get that") }
         }
@@ -297,8 +369,11 @@ final class TVModel: ObservableObject {
             }
         }
     }
-    private var repeatPending = false
-    private var mirrorSoon: Task<Void, Never>?
+    @ObservationIgnored private var repeatPending = false
+    // The order keys were pressed in, and which launch of the app they came from, so the Mac can put them back in order.
+    @ObservationIgnored private var keySeq = 0
+    private static let keySession = UUID().uuidString.prefix(8).description
+    @ObservationIgnored private var mirrorSoon: Task<Void, Never>?
     // Nothing is said when it works: what changes on the TV, or on the button pressed, says that. Only a failure is told.
     func post(_ path: String, _ body: [String: Any] = [:]) {
         guard let r = request(path, body) else { return }
@@ -336,4 +411,25 @@ final class MirrorStore: ObservableObject {
 final class SendDraft: ObservableObject {
     static let shared = SendDraft()
     @Published var text = ""
+    // For the build's real-data flows: ask the search field for the keyboard, and the first result found, as the
+    // field and the results grid would offer them to a finger.
+    @Published var focusRequest = 0
+    var firstResult: (item: MediaItem, source: MediaSource)?
 }
+
+// Puts the keyboard away from wherever it is, for the moments that leave a field behind: a flick, a page opened, a tab.
+enum Keyboard {
+    @MainActor static func dismiss() {
+        #if canImport(UIKit)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
+    }
+}
+
+#if canImport(UIKit)
+// Made once and kept warm, so a press buzzes the moment it lands rather than after the generator wakes up.
+@MainActor enum Haptics {
+    static let light: UIImpactFeedbackGenerator = { let g = UIImpactFeedbackGenerator(style: .light); g.prepare(); return g }()
+    static func warm() { light.prepare() }
+}
+#endif

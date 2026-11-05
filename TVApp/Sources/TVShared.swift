@@ -20,6 +20,18 @@ struct TVStatus: Decodable, Equatable {
         var position: Double?; var sampledAt: Double?; var duration: Double?; var canSeek: Bool?
         // The poster of what's really playing, when the Mac could find one by its title.
         var art: String?
+        // For an episode, said outright by the Mac: the show, which one, and its name.
+        var show: String?; var season: Int?; var episode: Int?; var episodeTitle: String?
+        // The show's name, the Mac's word first, else the first line of what the player says.
+        var showName: String { show?.isEmpty == false ? show! : description.first ?? "" }
+        // "S3 E4 · Notapusy", from the Mac's fields, else read off the player's second line. Nil for a film.
+        var episodeLine: String? {
+            if let s = season, let e = episode {
+                let t = episodeTitle ?? ""
+                return "S\(s) E\(e)" + (t.isEmpty ? "" : " · " + t)
+            }
+            return description.count > 1 ? Wording.episode(description[1]) : nil
+        }
     }
     struct App: Decodable, Identifiable, Equatable { let pkg: String; let name: String; let hasIcon: Bool; var wide: Bool?; var id: String { pkg } }
     let online: Bool

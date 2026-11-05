@@ -197,13 +197,21 @@ function chumbyScene(q, s) {
 //   /rasleep /roffline /ryoutube /rmint /ridle /repisode
 //                 The Remote's states: the TV asleep, the TV not answering, a YouTube video playing, Mint's music only,
 //                 nothing on (the home screen), and a Stremio episode part way through.
+//   /real         The real bridge's quirks, not the sample's perfect answers (Richard, 2026-11-05: bugs on his TV never
+//                 showed here). A Stremio episode playing from 0:00 with no length for its first 20 s, then the catalogue's
+//                 rounded 26 min against a real 21:55 (put right by the first seek); Mint's paused song still listed beside
+//                 it; status answers 0.3–0.9 s late, every seventh 2 s; play and pause reaching the status 2.2 s after the
+//                 key; a stream send taking about 12 s across its steps and starting the episode over; the playing show
+//                 in Continue watching; a Stremio home of short rows; and the TV not answering from 30 to 35 s in. Every
+//                 send to the TV is logged to /tmp/tv-real-sends.log, so a flow that must not re-send can be checked.
 // And /api/tv/screen-live, a short canned H.264 stream of a drawn home screen, sent at 30 frames a second, looping.
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode|real)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
+  if (scene === 'real') return tvReal(q, s, path, query, json);
   if (scene === 'cold' && path === '/api/tv/device') {
     return json({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 0, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 0, txRate: 0, hist: { cpu: [], mem: [], rx: [], tx: [] } });
   }
@@ -281,6 +289,78 @@ function tvPose(q, s) {
       return true;
     }
   }
+  return false;
+}
+
+// The /real scene. Made-up titles and pictures only: the repo is public, so nothing from his own watching.
+function tvReal(q, s, path, query, json) {
+  const fs = require('fs'), now = Date.now();
+  // CI starts each flow from the top: the episode at 0:00, no length yet, and an empty send log.
+  if (path === '/reset') { tvReal.state = null; try { fs.unlinkSync('/tmp/tv-real-sends.log'); } catch {} return json({ ok: true }); }
+  // A fresh launch (nothing asked for 15 s) starts the episode again from 0:00.
+  const r = tvReal.state && now - tvReal.state.last < 15000 ? tvReal.state
+    : (tvReal.state = { start: now, asks: 0, playing: true, pos: 0, posAt: now, seeked: false, flips: [] });
+  r.last = now;
+  const t = (now - r.start) / 1000;
+  const REAL_MS = 1315000, CATALOGUE_MS = 1560000;
+  const here = () => r.playing ? r.pos + (now - r.posAt) : r.pos;
+  // Each key reaches the status a little after it was pressed, as on the box.
+  r.flips = r.flips.filter(f => { if (now < f.at) return true; r.pos = here(); r.posAt = now; r.playing = f.playing; return false; });
+  const log = (what, body) => fs.appendFileSync('/tmp/tv-real-sends.log', JSON.stringify({ t: Math.round(t * 10) / 10, what, body }) + '\n');
+  const late = (ms, f) => { setTimeout(f, ms); return true; };
+  const read = f => { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} f(v); }); return true; };
+  const show = { title: 'Sample Show', subtitle: 'S2 E3', art: tvBase + '/poster.png', id: 'tt1234567', kind: 'series', progress: 0.1, about: 'A made-up comedy about a made-up family.' };
+  const home = { rows: [
+    { title: 'Continue watching', items: [show, { title: 'A Long Film', subtitle: '88 min left', art: tvBase + '/poster.png', id: 'tt7654321', kind: 'movie', progress: 0.3, about: 'A made-up film.' }] },
+    { title: 'Popular movies', items: ['Heat', 'Night Harbour'].map((title, n) => ({ title, subtitle: '1995 · ★ 8.3', art: tvBase + '/poster.png', id: 'tt76543' + n, kind: 'movie', about: 'A made-up film.' })) },
+    { title: 'Popular series', items: ['Sample Show', 'Quiet Valley', 'Paper Town'].map((title, n) => ({ title, subtitle: '2004 · ★ 8.7', art: tvBase + '/poster.png', id: n ? 'tt12345' + n : 'tt1234567', kind: 'series', about: 'A made-up series.' })) },
+    { title: 'New and notable', items: [{ title: 'Late Train', subtitle: '2025', art: tvBase + '/poster.png', id: 'tt7654399', kind: 'movie', about: 'A made-up film.' }] },
+  ] };
+  if (path === '/api/tv/status') {
+    r.asks++;
+    const v = JSON.parse(tvStatus);
+    if (t >= 30 && t < 35) { v.online = false; delete v.music; return late(400, () => json(v)); }
+    v.app = 'com.stremio.one';
+    // Mint's session stays listed, paused, after a film has started over it.
+    v.music = { title: 'A Paused Song', artist: 'Some Band', album: 'Some Album', art: tvBase + '/art.png', playing: false, position: 61000, duration: 214000, sampledAt: now - 600000 };
+    const session = { pkg: 'com.stremio.one', playing: r.playing, description: ['Sample Show - S02E03 - The Third One'], position: Math.max(0, Math.round(here())), sampledAt: now, canSeek: true, art: tvBase + '/poster.png', show: 'Sample Show', season: 2, episode: 3, episodeTitle: 'The Third One' };
+    if (r.seeked) session.duration = REAL_MS; else if (t >= 20) session.duration = CATALOGUE_MS;
+    v.session = session;
+    return late(r.asks % 7 === 0 ? 2000 : 300 + Math.round(Math.random() * 600), () => json(v));
+  }
+  if (path === '/api/tv/stremio' || (path === '/api/tv/discover' && !query.get('q') && !query.get('genre'))) {
+    const term = (query.get('q') || '').toLowerCase();
+    if (!term) return late(700, () => json(home));
+    const all = home.rows.flatMap(x => x.items), seen = new Set();
+    const hits = all.filter(i => i.title.toLowerCase().includes(term) && !seen.has(i.id) && seen.add(i.id));
+    return late(900, () => json({ rows: hits.length ? [{ title: 'Results', items: hits }] : [] }));
+  }
+  if (q.method === 'POST' && path === '/api/tv/key') return read(b => {
+    log('key', b);
+    const k = String(b.key || '');
+    // "play" is the box's play/pause key: it turns whatever is on.
+    if (/^(play|pause|playpause|play_pause|media_play_pause)$/.test(k)) r.flips.push({ at: Date.now() + 2200, playing: k === 'pause' ? false : !(r.flips.length ? r.flips[r.flips.length - 1].playing : r.playing) });
+    json({ ok: true, r: 'sent' });
+  });
+  if (q.method === 'POST' && /^\/api\/tv\/player-seek(-to)?$/.test(path)) return read(b => {
+    log(path.slice(8), b);
+    late(1500, () => {
+      r.pos = path.endsWith('-to') ? Math.max(0, +b.ms || 0) : Math.max(0, here() + (+b.steps || 0) * 10000); r.posAt = Date.now(); r.seeked = true;
+      if (path.endsWith('-to') && b.play) r.playing = true;
+      json({ ok: true, position: r.pos, duration: REAL_MS });
+    });
+  });
+  if (q.method === 'POST' && /^\/api\/tv\/(play-stream|flick|open|prepare|stremio-open|film|send|mint-open|music)$/.test(path)) return read(b => {
+    log(path.slice(8), b);
+    if (path !== '/api/tv/play-stream') return late(path === '/api/tv/prepare' ? 1200 : 800, () => json({ ok: true }));
+    // As the real box: the episode playing is stopped and the stream starts over from 0:00 about 12 s later.
+    const steps = [[800, { phase: 'awake' }], [1400, { phase: 'opening' }], [7100, { phase: 'player' }], [12000, { phase: 'playing' }], [12400, { ok: true }]];
+    r.playing = false; r.pos = 0; r.posAt = Date.now(); r.seeked = false;
+    setTimeout(() => { r.playing = true; r.pos = 0; r.posAt = Date.now(); }, 12000);
+    if (!/ndjson/.test(q.headers.accept || '')) return late(12400, () => json({ ok: true }));
+    s.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store' });
+    steps.forEach(([at, v]) => setTimeout(() => { s.write(JSON.stringify(v) + '\n'); if (v.ok) s.end(); }, at));
+  });
   return false;
 }
 

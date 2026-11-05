@@ -6,37 +6,83 @@ import MediaPlayer
 
 @main
 struct TVApp: App {
-    @StateObject private var model = TVModel()
+    @State private var model = TVModel()
     @Environment(\.scenePhase) private var phase
     init() {
+        // Neither is needed for the first frame, so neither holds it up.
         #if os(iOS)
         // Long-form audio is what lets the AirPlay list move the whole phone's audio, not only this app's.
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio)
+        DispatchQueue.global(qos: .userInitiated).async {
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio)
+        }
         #endif
-        TVShortcuts.updateAppShortcutParameters()
+        Task.detached(priority: .utility) { TVShortcuts.updateAppShortcutParameters() }
     }
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(model).preferredColorScheme(.dark).tint(TVLook.accent)
-                .onChange(of: phase) { _, p in if p == .active { model.start() } else { model.stop() } }
-                .onAppear { model.start() }
+            RootView().environment(model).preferredColorScheme(.dark).tint(TVLook.accent)
+                // Once, as the app comes up (initial), then on every change: not also on appear, which started it twice.
+                .onChange(of: phase, initial: true) { _, p in if p == .active { model.start() } else { model.stop() } }
                 .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t == 4 ? 1 : t } }
         }
     }
 }
 
 struct RootView: View {
-    @EnvironmentObject var model: TVModel
-    var problem: String? {
-        if !model.reachable { return "Can’t reach the Mac. Is Tailscale on?" }
-        if model.status?.online == false { return "The Mac can’t reach the TV" }
-        return nil
-    }
+    @Environment(TVModel.self) var model
     // The build's simulator shots ask for screens a launch alone can't reach.
     func poseForShots() {
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
         if pose == "search" { SendDraft.shared.text = "Heat"; return }
         if pose == "tour" || pose == "type" { return }
+        // The real-data flows (CI's /real scene): each taps through the same code a finger would.
+        if pose == "realtap" {
+            Task {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                model.tab = 1; model.browsing = .stremio
+                for _ in 0..<80 {
+                    let cw = BrowseStore.shared(.stremio).rows.first { $0.title == "Continue watching" }
+                    if let item = cw?.items.first(where: { $0.id == "tt1234567" || $0.stremioRef?.imdb == "tt1234567" }) { FlickCardButton.tap(model, item, .stremio); return }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
+            return
+        }
+        if pose == "realsearch" {
+            Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                model.tab = 1
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                SendDraft.shared.focusRequest += 1
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                SendDraft.shared.text = "Heat"
+                for _ in 0..<80 {
+                    if let r = SendDraft.shared.firstResult { try? await Task.sleep(nanoseconds: 1_200_000_000); FlickCardButton.tap(model, r.item, r.source); return }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
+            return
+        }
+        if pose == "realseries" {
+            Task {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                // A series opens on its episodes: the picker is the page's first step.
+                for _ in 0..<80 {
+                    if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.id == "tt1234567" || $0.stremioRef?.imdb == "tt1234567" }) { FlickCardButton.tap(model, item, .stremio); return }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
+            return
+        }
+        if pose == "realpause" {
+            Task {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                model.togglePlay(shown: model.shownPlaying(model.staleStatus ? nil : model.status?.session?.playing))
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                model.togglePlay(shown: model.shownPlaying(model.staleStatus ? nil : model.status?.session?.playing))
+            }
+            return
+        }
         // Three quick skips on a film near its end, caught before the TV has confirmed them.
         if pose == "skip" {
             Task {
@@ -59,10 +105,12 @@ struct RootView: View {
         }
     }
     @State private var resets: [Int: Int] = [:]
-    @State private var playingIcon: TVImage?
+    // The Playing tab's glyph, kept here only when it changes (PlayingGlyph below works it out), so a status reading
+    // never redraws the whole tab view.
+    @State private var playingSymbol = "play.circle"
     var body: some View {
         PaneReader {
-            TabView(selection: TabReset.binding($model.tab) { t in
+            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
                 // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
                 // rebuilt, so what was loaded, and the choices made on it, stay.
                 if t == 1 { model.browsing = nil; SendDraft.shared.text = "" }
@@ -70,10 +118,10 @@ struct RootView: View {
             }) {
                 Tab(value: 0) { Page(title: "Remote", alwaysInline: true, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
                 Tab(value: 1) { Page(title: "Apps", retaps: resets[1, default: 0]) { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
-                Tab(value: 2) { Page(title: "Playing", alwaysInline: true, retaps: resets[2, default: 0]) { PlayingTab() } } label: {
-                    // The cover of what's on, so the button says what's playing before it's pressed.
-                    if let i = playingIcon { Label { Text("Playing") } icon: { Image(tv: i) } }
-                    else { tabLabel("Playing", model.otherAirPlay ? "airplayaudio" : "play.circle") }
+                Tab(value: 2) { Page(title: "Playing", retaps: resets[2, default: 0]) { PlayingTab() } } label: {
+                    // What kind of thing is on, in the side bar's own glyphs: a cover or an app's banner squeezed into it
+                    // read as a clipped "YouTub" among the symbols (Richard, 2026-11-05: "makes no sense").
+                    tabLabel("Playing", playingSymbol)
                 }
                 Tab(value: 3) { Page(title: "Watch", retaps: resets[3, default: 0]) { FilmsTab() } } label: { tabLabel("Watch", "film") }
                 Tab(value: 5) { Page(title: "Status", retaps: resets[5, default: 0]) { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
@@ -89,42 +137,14 @@ struct RootView: View {
             // from the bottom, a blurred panel with a hard top edge. The flick fades its own way in and out.
             .overlay {
                 if let target = model.flicking {
-                    FlickScreen(target: target).environmentObject(model).id(target.id)
+                    FlickScreen(target: target).environment(model).id(target.id)
                 }
             }
         }
-        // Waits for the cover before changing the icon, and changes it again when the cover arrives, so the button
-        // shows the cover for as long as it's playing, not only when it happened to be ready at the last redraw.
-        // The old cover stays until the new one is ready, never the plain symbol in between, and through a flick it
-        // only goes if something else is really playing.
-        .task(id: model.nowArt) {
-            guard let art = model.nowArt, let u = URL(string: art) else { if model.flicking == nil { playingIcon = nil }; return }
-            if let i = ImageStore.shared.cached(u) { playingIcon = PlayingIcon.make(i); return }
-            if let i = await ImageStore.shared.load(u), !Task.isCancelled { playingIcon = PlayingIcon.make(i) }
-        }
-        .onChange(of: model.flicking == nil) { _, closed in if closed && model.nowArt == nil { playingIcon = nil } }
-        // The one picture behind every page follows what's on.
-        .task(id: model.nowArt) {
-            await AmbienceStore.shared.show(model.nowArt)
-            // A film's colour kept after its flick gives way once something else is what's on.
-            if model.moodArt != nil, !(model.videoIsCurrent && model.status?.session?.pkg == "com.stremio.one") {
-                model.moodArt = nil; model.mood = nil
-            }
-        }
-        .overlay(alignment: .top) {
-            if let problem {
-                // Snug to the top edge, so its foot stays clear of the title under it.
-                Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(Color.red.opacity(0.85), in: Capsule())
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if let t = model.toast {
-                Text(t).font(.subheadline.weight(.semibold)).padding(.horizontal, 18).padding(.vertical, 11)
-                    .glassEffect(.regular, in: Capsule()).padding(.bottom, 24).transition(.scale(scale: 0.9).combined(with: .opacity))
-            }
-        }
-        .animation(TVLook.press, value: model.toast)
+        // What follows the status lives in small views of its own, so only they redraw when it changes.
+        .background { StatusFollower(playingSymbol: $playingSymbol) }
+        .overlay(alignment: .top) { ProblemBanner() }
+        .overlay(alignment: .bottom) { ToastBubble() }
         .onAppear { followRequest(); poseForShots(); TabTour.run([0, 1, 2, 3, 5, 9]) { model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
         .task { await BrowseStore.shared(.stremio).load() }
@@ -134,6 +154,60 @@ struct RootView: View {
     func followRequest() {
         if FlickRequest.wantsRemote { FlickRequest.wantsRemote = false; model.tab = 0 }
         if FlickRequest.wantsAirPlay { model.tab = 2 }
+    }
+}
+
+// Works out what the whole app follows from the status (the Playing tab's glyph, the picture behind every page) without
+// RootView itself reading the status.
+private struct StatusFollower: View {
+    @Environment(TVModel.self) var model
+    @Binding var playingSymbol: String
+    // A TV for a film or show, a note for Mint, AirPlay for the phone's own sound.
+    var symbol: String {
+        if model.otherAirPlay { return "airplayaudio" }
+        if model.videoIsCurrent { return "play.tv" }
+        if model.nowMusic?.playing == true { return "music.note" }
+        return "play.circle"
+    }
+    var body: some View {
+        Color.clear
+            .onChange(of: symbol, initial: true) { _, s in if s != playingSymbol { playingSymbol = s } }
+            // The one picture behind every page follows what's on.
+            .task(id: model.nowArt) {
+                await AmbienceStore.shared.show(model.nowArt)
+                // A film's colour kept after its flick gives way once something else is what's on.
+                if model.moodArt != nil, !(model.videoIsCurrent && model.status?.session?.pkg == "com.stremio.one") {
+                    model.moodArt = nil; model.mood = nil
+                }
+            }
+            .allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+private struct ProblemBanner: View {
+    @Environment(TVModel.self) var model
+    var problem: String? {
+        if !model.reachable { return "Can’t reach the Mac. Is Tailscale on?" }
+        if model.status?.online == false { return "The Mac can’t reach the TV" }
+        return nil
+    }
+    var body: some View {
+        if let problem {
+            // Snug to the top edge, so its foot stays clear of the title under it.
+            Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 6)
+                .background(Color.red.opacity(0.85), in: Capsule())
+        }
+    }
+}
+private struct ToastBubble: View {
+    @Environment(TVModel.self) var model
+    var body: some View {
+        ZStack {
+            if let t = model.toast {
+                Text(t).font(.subheadline.weight(.semibold)).padding(.horizontal, 18).padding(.vertical, 11)
+                    .glassEffect(.regular, in: Capsule()).padding(.bottom, 24).transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
+        }
+        .animation(TVLook.press, value: model.toast)
     }
 }
 
@@ -162,7 +236,7 @@ extension View {
 
 // Each tab's frame: the art behind it, its title, and the gear.
 struct Page<C: View>: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
     let title: String
     var alwaysInline = false
@@ -181,18 +255,109 @@ struct Page<C: View>: View {
                 .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationTitle(title)
-                .navigationBarTitleDisplayMode(alwaysInline || panes ? .inline : .large)
+                // Large open as well as folded, so every page's name leads the headings under it, as in the Mac Pro app
+                // (Richard, 2026-11-05). Only the Remote, which has no headings and no room to spare, keeps it in the bar.
+                .navigationBarTitleDisplayMode(alwaysInline ? .inline : .large)
         }
         .topShade()
         .background { Ambience() }
         // A list opened from the tab closes first; once on the tab's own page, it goes to the top.
         .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
+        // A page opened from a search leaves the keyboard behind.
+        .onChange(of: path) { _, _ in Keyboard.dismiss() }
     }
+}
+
+// A page opened from a tab: its name set large as the first thing on it, leading the headings under it, and its way
+// back and its one action in a glass bar laid over the page at the foot, by the side bar, rather than loose circles
+// floating over the side bar (Richard, 2026-11-05: "maybe a like bar i can bring on top of the interface"). The bar is
+// there on arrival and at the top, steps away as he scrolls down into the page, and comes back the moment he scrolls up.
+@MainActor
+final class PageBarState: ObservableObject {
+    @Published private(set) var shown = true
+    func follow(_ old: CGFloat, _ new: CGFloat) {
+        let want: Bool? = new < 24 ? true : new - old > 6 ? false : old - new > 6 ? true : nil
+        if let want, want != shown { withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) { shown = want } }
+    }
+}
+private struct PageBarKey: EnvironmentKey { static let defaultValue: PageBarState? = nil }
+extension EnvironmentValues { var pageBar: PageBarState? { get { self[PageBarKey.self] } set { self[PageBarKey.self] = newValue } } }
+// On each scrolling part of such a page: up summons the bar, down sends it off. The bounce past either end is ignored.
+private struct SummonsBar: ViewModifier {
+    @Environment(\.pageBar) private var bar
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: CGFloat.self) { g in
+            let end = g.contentSize.height + g.contentInsets.top + g.contentInsets.bottom - g.containerSize.height
+            return min(g.contentOffset.y + g.contentInsets.top, max(end, 0))
+        } action: { old, new in bar?.follow(old, new) }
+    }
+}
+struct PageHeading: View {
+    let title: String
+    init(_ t: String) { title = t }
+    var body: some View {
+        Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2).padding(.bottom, 2)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+struct PageBar<Actions: View>: View {
+    @Environment(TVModel.self) var model
+    @Environment(\.dismiss) private var dismiss
+    @ViewBuilder let actions: () -> Actions
+    var body: some View {
+        HStack(spacing: 2) {
+            Button { model.tick(); dismiss() } label: {
+                Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).frame(width: 50, height: 50).contentShape(Rectangle())
+            }
+            .buttonStyle(PressIcon()).accessibilityLabel("Back")
+            actions()
+        }
+        .padding(.horizontal, 3)
+        .glassEffect(.regular.interactive(), in: Capsule())
+    }
+}
+// An action in the bar: its glyph and what it does, in words, so it says something on its own.
+struct PageBarAction: View {
+    @Environment(TVModel.self) var model
+    let title: String, icon: String
+    let action: () -> Void
+    var body: some View {
+        Button { model.tick(); action() } label: {
+            Label(title, systemImage: icon).font(.subheadline.weight(.semibold)).padding(.leading, 6).padding(.trailing, 14).frame(height: 50).contentShape(Rectangle())
+        }
+        .buttonStyle(PressIcon())
+    }
+}
+private struct BarPage<Actions: View>: ViewModifier {
+    @Environment(\.paneLayout) private var panes
+    @StateObject private var bar = PageBarState()
+    let actions: () -> Actions
+    func body(content: Content) -> some View {
+        content
+            .environment(\.pageBar, bar)
+            .toolbar(.hidden, for: .navigationBar)
+            .overlay(alignment: .bottomTrailing) {
+                PageBar(actions: actions)
+                    .padding(.trailing, panes ? 20 : 16).padding(.bottom, panes ? 16 : 10)
+                    .opacity(bar.shown ? 1 : 0)
+                    .offset(y: bar.shown ? 0 : 18)
+                    .scaleEffect(bar.shown ? 1 : 0.94, anchor: .bottomTrailing)
+                    .allowsHitTesting(bar.shown)
+                    .accessibilityHidden(!bar.shown)
+            }
+    }
+}
+extension View {
+    func summonsBar() -> some View { modifier(SummonsBar()) }
+    // A page opened from a tab, with its bar. The page draws its own PageHeading at the top of what scrolls.
+    func barPage<A: View>(@ViewBuilder actions: @escaping () -> A) -> some View { modifier(BarPage(actions: actions)) }
+    func barPage() -> some View { modifier(BarPage(actions: { EmptyView() })) }
 }
 
 // The TV's own settings and this app's connection, as a tab at the foot of the side bar.
 struct TVSettingsTab: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
     var retaps = 0
     @State private var path: [ManagePage] = []
@@ -236,18 +401,19 @@ struct TVSettingsTab: View {
             }
             .background { Ambience() }
             .navigationTitle("Settings")
-            // The same title as every other tab: large on the outer screen, in the bar when unfolded.
-            .navigationBarTitleDisplayMode(panes ? .inline : .large)
+            // The same title as every other tab: large, folded or open.
+            .navigationBarTitleDisplayMode(.large)
         }
     }
 }
 
 // Where the Mac is, and what it takes to reach it from away.
 struct ConnectionView: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @State private var address = ""
     var body: some View {
         Form {
+            Section { PageHeading("Connection") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
             Section {
                 TextField("Address", text: $address).autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
                     .submitLabel(.done)
@@ -256,16 +422,17 @@ struct ConnectionView: View {
         }
         .scrollContentBackground(.hidden)
         .topShade().topFade()
+        .summonsBar()
         .background { Ambience() }
         .navigationTitle("Connection")
-        .navigationBarTitleDisplayMode(.inline)
+        .barPage()
         .onAppear { address = model.address }
     }
 }
 
 // Type or paste anything: a link opens in the right app, words become a search right here.
 struct SendBar: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @ObservedObject private var draft = SendDraft.shared
     @FocusState private var focused: Bool
     static func isLink(_ text: String) -> Bool {
@@ -279,6 +446,7 @@ struct SendBar: View {
                 .contentTransition(.symbolEffect(.replace))
             TextField("Search, or send a link", text: $draft.text)
                 .focused($focused).autocorrectionDisabled().submitLabel(link ? .send : .search)
+                .onChange(of: draft.focusRequest) { _, _ in focused = true }
                 // Words are already being searched as they're typed, so Return only puts the keyboard away.
                 .onSubmit { if link { submit() } else { focused = false } }
             if draft.text.isEmpty {
@@ -330,24 +498,28 @@ struct RowHeader: View {
 }
 // The same frame for every full list: the art behind it and the rows on top.
 struct RowList<Content: View>: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let title: String
     @ViewBuilder let content: () -> Content
     var body: some View {
-        List { content().listRowBackground(Color.clear) }
+        List {
+            PageHeading(title).listRowBackground(Color.clear).listRowSeparator(.hidden)
+            content().listRowBackground(Color.clear)
+        }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .scrollDismissesKeyboard(.immediately)
+            .summonsBar()
             .topShade().topFade()
             .background { Ambience() }
-            .toolbarBackground(.hidden, for: .navigationBar)
             .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
+            .barPage()
     }
 }
 
 // MARK: - Remote
 struct MirrorView: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @ObservedObject var store: MirrorStore
     // Where it always has its place, it carries its own way to hide it, and the bar has no second one.
     var closable = false
@@ -465,7 +637,7 @@ private struct ScreenPicture: View {
 private struct KeysInScrollKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues { var keysInScroll: Bool { get { self[KeysInScrollKey.self] } set { self[KeysInScrollKey.self] = newValue } } }
 private struct PadKey<Face: View>: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @Environment(\.keysInScroll) private var inScroll
     @State private var pressed = false
     let key: String
@@ -567,15 +739,21 @@ struct GlassKey: View {
     }
 }
 struct PlayKey: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     var playing: Bool?
     var tint: Color = TVLook.accent
     var size: CGFloat = 68
     var glow = true
     // For a player on this phone rather than the TV.
     var action: (() -> Void)?
+    // The TV's own play key says what it pressed the moment it's pressed, not when the TV next reports.
+    var shown: Bool? { action == nil ? model.shownPlaying(playing) : playing }
     var body: some View {
-        Button { if let action { model.tick(); action() } else { model.key("play") } } label: {
+        let playing = shown
+        Button {
+            if let action { model.tick(); action() }
+            else { model.togglePlay(shown: playing) }
+        } label: {
             Image(systemName: playing == nil ? "playpause.fill" : playing == true ? "pause.fill" : "play.fill")
                 .font(.system(size: size * 0.36, weight: .semibold)).foregroundStyle(.black.opacity(0.85))
                 .contentTransition(.symbolEffect(.replace))
@@ -588,7 +766,7 @@ struct PlayKey: View {
 }
 
 struct RemoteTab: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @Environment(\.horizontalSizeClass) private var size
     @Environment(\.paneLayout) private var panes
     @ObservedObject private var nextUp = NextUp.shared
@@ -604,12 +782,13 @@ struct RemoteTab: View {
         if s.screen == "asleep" { return "Asleep" }
         if s.screen == "screensaver" { return "Screensaver" }
         // What's playing, by name, rather than the app it's playing in. Only while it's what's on, never one left behind.
-        if model.videoIsCurrent, let p = s.session, let title = p.description.first, !title.isEmpty { return ([title] + Self.detail(p)).joined(separator: " · ") }
+        if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty { return ([p.showName] + Self.detail(p)).joined(separator: " · ") }
         // Nothing with a name on: nothing said, rather than which app is in front.
         return ""
     }
     // After the title: which episode, if it's one. "S1 E2". How long is left is the bar's to say, right under the picture.
     static func detail(_ s: TVStatus.Session) -> [String] {
+        if let se = s.season, let ep = s.episode { return ["S\(se) E\(ep)"] }
         var out: [String] = []
         if let ep = s.description.dropFirst().lazy.map(Wording.episode).first(where: { $0.hasPrefix("S") && $0.contains(" E") }) {
             out.append(String(ep.prefix { $0 != "·" }).trimmingCharacters(in: .whitespaces))
@@ -681,33 +860,8 @@ struct RemoteTab: View {
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
         }
     }
-    // Stremio's player ignores the media keys, so with it open the jumps go through its seek bar, there's no going back a
-    // track, and next is the next episode when there is one. Every key keeps its place, so nothing shifts as it changes.
-    @ViewBuilder var transport: some View {
-        let stremio = model.status?.session?.pkg == "com.stremio.one"
-        HStack(spacing: 0) {
-            Group {
-                if stremio { Color.clear.frame(width: 54, height: 54) } else { GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: 54) }
-            }.slot()
-            Group {
-                if stremio { SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1, size: 54) } else { GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: 54) }
-            }.slot()
-            // Says which it'll do, as on the Playing tab, once the TV's word is fresh.
-            // No glow while typing: it would smear through the keyboard just above.
-            PlayKey(playing: model.staleStatus ? nil : model.status?.session?.playing, glow: !typing).slot()
-            Group {
-                if stremio { SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1, size: 54) } else { GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: 54) }
-            }.slot()
-            Group {
-                if !stremio { GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: 54) }
-                else if let next = nextUp.next {
-                    GlassButton(icon: "forward.end.fill", label: "Next episode, \(next.subtitle)", size: 54) {
-                        model.flick(FlickTarget(item: next, source: .stremio, ready: true, autoplay: true))
-                    }
-                } else { Color.clear.frame(width: 54, height: 54) }
-            }.slot()
-        }
-    }
+    // The one transport, the same as Playing's, on the top row's five places.
+    var transport: some View { Transport(glow: !typing) }
     var keysBlock: some View {
         VStack(spacing: 12) {
             // Above the keys, and up for as long as it's wanted, so typing and moving between boxes go together.
@@ -726,12 +880,13 @@ struct RemoteTab: View {
     }
     // Only when the music is what's on: a song's player beside a film's was two now-playings on one TV.
     @ViewBuilder var music: some View {
-        if !model.videoIsCurrent, let m = model.nowMusic { MiniPlayer(music: m).transition(.opacity) }
+        if model.musicIsCurrent, let m = model.nowMusic { MiniPlayer(music: m).transition(.opacity) }
     }
     func side(apps: Bool) -> some View {
         VStack(spacing: 14) {
             picture(closable: true)
             progress
+            EpisodesLine()
             music
             // Typing, the keyboard comes up over this pane's foot: the tiles and the send box step aside rather than show
             // through it.
@@ -763,7 +918,7 @@ struct RemoteTab: View {
                     // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
                     if model.mirrorLive && !typing { picture(closable: false).transition(.opacity) }
                     // Mint playing has no transport here, so its own player is the way to pause it.
-                    if !typing { progress; music }
+                    if !typing { progress; EpisodesLine(); music }
                     Group {
                         // Clear of the title above it, which the keyboard pushes the page up under.
                         pad.frame(minHeight: 150, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
@@ -793,6 +948,8 @@ struct RemoteTab: View {
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
         .onAppear { model.warmMirror() }
+        // Leaving the tab leaves the typing too, so coming back never finds the keyboard already up.
+        .onDisappear { typing = false }
         // The app tiles' banners fetched once, ahead, so the open Remote's tiles never show their stand-ins first.
         .task(id: model.status?.apps?.map(\.pkg) ?? []) {
             for a in AppsTab.watching(model.status?.apps ?? []).prefix(8) where a.hasIcon {
@@ -835,7 +992,7 @@ private struct KeysArrive: ViewModifier {
 // Typing into whatever box is focused on the TV. Each change sends only what's different: new letters as text, and as
 // many deletes as letters went. Return is the TV's Enter, and starts afresh for the next box.
 struct TypeBar: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @Binding var open: Bool
     @State private var text = ""
     // What the TV's box has been sent so far.
@@ -889,24 +1046,31 @@ struct TypeBar: View {
 }
 // Whole tiles only, as many across as fit, in up to two rows: a row running off the pane cut the last one to "YouTu".
 struct QuickApps: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @State private var width: CGFloat = 0
     var body: some View {
         let across = max(1, Int((width + TVLook.gap) / (TVLook.bannerSize.width + TVLook.gap)))
         let apps = Array(AppsTab.watching(model.status?.apps ?? []).prefix(across * 2))
-        VStack(alignment: .leading, spacing: TVLook.gap) {
-            ForEach(Array(stride(from: 0, to: apps.count, by: across)), id: \.self) { i in
-                HStack(spacing: TVLook.gap) {
-                    ForEach(apps[i..<min(i + across, apps.count)]) { Banner(app: $0) }
+        let rows = (apps.count + across - 1) / across
+        // Measured on an empty frame the pane sizes, with the tiles laid over it: measured on the tiles themselves, a
+        // third that didn't fit widened the frame to fit it, and so went on being counted, cut at the pane's edge.
+        Color.clear
+            .frame(height: CGFloat(rows) * TVLook.bannerSize.height + CGFloat(max(rows - 1, 0)) * TVLook.gap)
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .overlay(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: TVLook.gap) {
+                    ForEach(Array(stride(from: 0, to: apps.count, by: across)), id: \.self) { i in
+                        HStack(spacing: TVLook.gap) {
+                            ForEach(apps[i..<min(i + across, apps.count)]) { Banner(app: $0) }
+                        }
+                    }
                 }
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 struct MiniPlayer: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @ObservedObject private var phone = PhonePlayer.shared
     let music: TVStatus.Music
     // AirPlayed from this phone, the phone's own player says what it is and takes the press, ahead of the TV.
@@ -931,9 +1095,60 @@ struct MiniPlayer: View {
     }
 }
 
+// The five keys under whatever's playing, the same on the Remote and on Playing: back, ten back, play, ten on, next.
+// Stremio's player ignores the media keys, so with it open the jumps go through its seek bar, back is the start of the
+// episode and then the one before, and next is the next episode. Five keys always, in the top row's five places: an
+// empty place read as a missing button (Richard, 2026-11-05: "no back button here is ridiculous").
+struct Transport: View {
+    @Environment(TVModel.self) var model
+    @ObservedObject private var nextUp = NextUp.shared
+    // No glow while typing on the Remote: it would smear through the keyboard just above.
+    var glow = true
+    var size: CGFloat = 54
+    var playSize: CGFloat = 68
+    // Said to be playing but already at the end: an old report, shown as stopped there.
+    var ended = false
+    var body: some View {
+        let stremio = model.status?.session?.pkg == "com.stremio.one"
+        HStack(spacing: 0) {
+            Group {
+                if stremio { GlassButton(icon: "backward.end.fill", label: nextUp.previous.map { "Start over, or \($0.subtitle)" } ?? "Start over", size: size) { StremioBack.press(model) } }
+                else { GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: size) }
+            }.frame(maxWidth: .infinity)
+            Group {
+                if stremio { SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1, size: size) } else { GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: size) }
+            }.frame(maxWidth: .infinity)
+            // Says which it'll do, as on the Playing tab, once the TV's word is fresh.
+            // Held, it stops: the flick's own control screen is gone, and Stop went with it to here.
+            PlayKey(playing: ended ? false : model.staleStatus ? nil : model.status?.session?.playing, size: playSize, glow: glow)
+                .contextMenu {
+                    Button("Stop", systemImage: "stop.fill") {
+                        model.key(stremio ? "back" : "stop")
+                        Task { try? await Task.sleep(nanoseconds: 1_200_000_000); await model.load() }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            Group {
+                if stremio { SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1, size: size) } else { GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: size) }
+            }.frame(maxWidth: .infinity)
+            Group {
+                if !stremio { GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: size) }
+                else if let next = nextUp.next {
+                    GlassButton(icon: "forward.end.fill", label: "Next episode, \(next.subtitle)", size: size) {
+                        model.flick(FlickTarget(item: next, source: .stremio, ready: true, autoplay: true))
+                    }
+                } else {
+                    // A film, or the last episode: the key stays, dimmed, rather than leave a gap.
+                    GlassButton(icon: "forward.end.fill", label: "Nothing after this", size: size) {}.disabled(true).opacity(0.35)
+                }
+            }.frame(maxWidth: .infinity)
+        }
+    }
+}
+
 // MARK: - Apps
 struct Banner: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let app: TVStatus.App
     var browses = false
     var current: Bool { model.status?.app == app.pkg }
@@ -1014,7 +1229,7 @@ struct BannerRow: View {
     }
 }
 struct AppsTab: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
     @ObservedObject private var draft = SendDraft.shared
     // Words typed into the bar search Stremio and Mint as you type. A link is only ever sent.
@@ -1048,7 +1263,7 @@ struct AppsTab: View {
         .padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading).clipped()
     }
     var body: some View {
-        content.navigationDestination(item: $model.browsing) { AppBrowse(source: $0) }
+        content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0) }
     }
     @ViewBuilder var content: some View {
         if all.isEmpty {
@@ -1066,6 +1281,7 @@ struct AppsTab: View {
                     }
                     .padding(.vertical, 12)
                 }
+                .scrollDismissesKeyboard(.immediately)
                 .backToTop(posed: false)
             } right: {
                 // Unfolded, the other side picks up where you left off, ready to flick.
@@ -1095,6 +1311,7 @@ struct AppsTab: View {
                 .padding(.vertical, 12)
                 .animation(.snappy, value: query == nil)
             }
+            .scrollDismissesKeyboard(.immediately)
             .backToTop()
         }
     }
@@ -1103,7 +1320,7 @@ struct AppsTab: View {
 // Ten seconds back or on in Stremio. Taps add up while the TV catches up: the button in the direction it's going shows
 // how far, in seconds, until the TV's own report has it.
 struct SeekButton: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @ObservedObject private var seeker = SeekQueue.shared
     let icon: String, label: String, step: Int
     var size: CGFloat = 56
@@ -1145,7 +1362,7 @@ private struct SpinRing: View {
 
 // One row from an app's own page, on the Apps tab: where you left off in Stremio, what you last played in Mint.
 struct Shelf: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @ObservedObject var store: BrowseStore
     let title: String
     init(source: MediaSource, title: String) { store = .shared(source); self.title = title }
@@ -1200,7 +1417,7 @@ struct RoutePicker: UIViewRepresentable {
 // Flick up to send the phone to the TV. Apple Music goes straight to Mint, from anywhere.
 // Anything else opens the AirPlay list, since iOS lets only the owner of the phone choose a route.
 struct FlickCard: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     // Away from home there's nothing to AirPlay to, so AirPlay isn't offered. Sending a song by name still is.
     @ObservedObject private var reach = AirPlayReach.shared
     @State private var title = ""
@@ -1317,7 +1534,7 @@ struct FlickCard: View {
     }
 }
 struct NowControls: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let music: TVStatus.Music
     static func clock(_ ms: Double) -> String { let t = Int(max(ms, 0) / 1000); return String(format: "%d:%02d", t / 60, t % 60) }
     var body: some View {
@@ -1343,7 +1560,7 @@ struct PhoneControls: View {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 let now = min(max(scrub ?? phone.position, 0), song.duration)
                 VStack(spacing: 6) {
-                    ScrubBar(value: now, total: song.duration, scrub: $scrub, tickEvery: 10) { phone.seek(to: $0) }
+                    ScrubBar(value: now, total: song.duration, scrub: $scrub, tickEvery: 10, label: { NowControls.clock($0 * 1000) }) { phone.seek(to: $0) }
                     HStack {
                         Text(NowControls.clock(now * 1000))
                         Spacer()
@@ -1420,7 +1637,7 @@ struct ProgressTrack: View {
     }
 }
 struct PlayingTab: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
     @ObservedObject private var phone = PhonePlayer.shared
     @ObservedObject private var nextUp = NextUp.shared
@@ -1454,59 +1671,8 @@ struct PlayingTab: View {
                 NowControls(music: m)
                 showOnTV
             } else if let s = model.status?.session {
-                let appName = model.status?.apps?.first { $0.pkg == s.pkg }?.name ?? s.pkg
-                let stremio = s.pkg == "com.stremio.one"
-                // Said to be playing but already at the end: an old report, so shown as stopped there, not ticking on.
-                let ended = Self.atEnd(s)
-                let playing = stale ? nil : ended ? false : Optional(s.playing)
-                // What was flicked, or the app's own banner when the app says nothing about what it's playing. Rounded
-                // at the picture's own corners, whatever its shape.
-                Cover(url: model.picture(for: s).flatMap(URL.init(string:)), radius: 14) {
-                    Image(systemName: "play.tv.fill").font(.system(size: 54, weight: .light)).foregroundStyle(TVLook.accent)
-                }
-                .frame(maxWidth: 300, maxHeight: 190)
-                .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
-                .opacity(stale ? 0.45 : 1)
-                .padding(.top, 20)
-                // The series, then the episode under it. Paused only when it is: the play key already says playing, and
-                // which app is doing it is plumbing.
-                VStack(spacing: 3) {
-                    Text(s.description.first ?? appName).font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
-                    if s.description.count > 1 { Text(Wording.episode(s.description[1])).font(.headline).foregroundStyle(.white.opacity(0.85)).lineLimit(2).multilineTextAlignment(.center) }
-                    Text("Paused").font(.subheadline).foregroundStyle(.secondary).opacity(playing == false ? 1 : 0).animation(.easeOut(duration: 0.2), value: playing)
-                }
-                // Stremio's runs and can be moved, so its place is kept even before the running time is in.
-                if s.position != nil || stremio { VideoProgress(session: s, live: !stale).padding(.horizontal, 4) }
-                HStack(spacing: 18) {
-                    if stremio {
-                        // Its player ignores the skip keys, so the bridge moves its seek bar instead.
-                        SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1)
-                        PlayKey(playing: playing, size: 74)
-                        SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1)
-                    } else {
-                        GlassKey(icon: "gobackward.10", label: "Back 10 seconds", key: "rewind", size: 56)
-                        PlayKey(playing: playing, size: 74)
-                        GlassKey(icon: "goforward.10", label: "Forward 10 seconds", key: "forward", size: 56)
-                    }
-                }
-                .padding(.top, 6)
-                HStack(spacing: 18) {
-                    // Back closes Stremio's player and it keeps his place; anything else gets the stop key.
-                    GlassButton(icon: "stop.fill", label: "Stop", size: 50) {
-                        model.key(stremio ? "back" : "stop")
-                        Task { try? await Task.sleep(nanoseconds: 1_200_000_000); await model.load() }
-                    }
-                    if stremio, let next = nextUp.next {
-                        GlassButton(icon: "forward.end.fill", label: "Next episode, \(next.subtitle)", size: 50) {
-                            model.flick(FlickTarget(item: next, source: .stremio, ready: true, autoplay: true))
-                        }
-                    }
-                    // Stremio's own menus can't be driven from here without risking a restart, so only other apps get these keys.
-                    if !stremio {
-                        GlassKey(icon: "captions.bubble", label: "Subtitles", key: "captions", size: 50)
-                        GlassKey(icon: "waveform", label: "Audio track", key: "audiotrack", size: 50)
-                    }
-                }
+                // The one way a film or show is shown and driven, the same transport as the Remote's.
+                PlayingVideo(session: s, stale: stale, ended: Self.atEnd(s)).padding(.top, panes ? 0 : 8)
             } else {
                 ContentUnavailableView("Nothing playing", systemImage: "music.note", description: Text("Search below, or flick something from this iPhone."))
             }
@@ -1620,12 +1786,10 @@ struct PlayingTab: View {
         VStack(alignment: .leading, spacing: 24) {
             // Only ever shows when the phone itself is playing a song, and keeps AirPlay in reach for Siri.
             FlickCard().padding(.horizontal, 20)
-            if model.status?.session?.pkg == "com.stremio.one", let n = nextUp.next {
-                VStack(alignment: .leading, spacing: 0) {
-                    RowTitle("Up next")
-                    FlickCardButton(item: n, source: .stremio, width: 168, ready: true)
-                }
-                .padding(.horizontal, 20)
+            // A show: its episodes, the one on marked Playing and the next Up next, in view, rather than a lone card
+            // of the same poster again (Richard, 2026-11-05: "again looks bad").
+            if model.status?.session?.pkg == "com.stremio.one", nextUp.series != nil {
+                ShowEpisodes().padding(.horizontal, 20)
             } else if continuing.count > 1 {
                 VStack(alignment: .leading, spacing: 0) {
                     RowTitle("Continue watching").padding(.leading, 20)
@@ -1667,7 +1831,7 @@ struct PlayingTab: View {
 
 // MARK: - Films
 struct FilmCard: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let film: Film
     var body: some View {
         Button { model.tick(); model.flick(FlickTarget(item: film.media, source: .stremio)) } label: {
@@ -1696,7 +1860,7 @@ struct FilmRow: View {
     }
 }
 struct FilmList: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let title: String, films: [Film]
     var body: some View {
         RowList(title: title) {
@@ -1726,7 +1890,7 @@ struct FilmList: View {
 // Films and shows to pick from: what's on the TV's own Stremio home, Letterboxd's picks and friends, and Stremio's
 // catalogue, popular, top rated, new, by genre and by search. Every card flicks like anywhere else.
 struct FilmsTab: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     // Films or shows, kept through unfolding, which rebuilds the layout. The lists themselves live for the app's life.
     @SceneStorage("watchKind") private var kind = "movie"
     var films: BrowseStore { .discover("movie") }
@@ -1747,7 +1911,7 @@ struct FilmsTab: View {
     }
 }
 struct DiscoverColumn: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @ObservedObject var store: BrowseStore
     @Binding var kind: String
     var part = BrowseColumn.Part.all
@@ -1765,7 +1929,10 @@ struct DiscoverColumn: View {
     // What's in Continue watching isn't shown again further down. A row left with fewer than four isn't shown alone, and
     // never under another row's name, which would then say something false ("Top rated" over a friend's pick): what's
     // left of the short ones goes together at the end, as "More to watch", once each, or onto the last full row if too few.
-    var rows: [MediaRow] {
+    // Worked out when the lists change, not on every redraw of the column.
+    @State private var built: [MediaRow]?
+    var rows: [MediaRow] { built ?? computeRows() }
+    func computeRows() -> [MediaRow] {
         func key(_ i: MediaItem) -> String { i.stremioRef?.imdb ?? i.id }
         let mine = Set((continuing?.items ?? []).map(key))
         let kept = store.rows.filter { $0.title != Self.continueTitle }.compactMap { r -> MediaRow? in
@@ -1846,16 +2013,20 @@ struct DiscoverColumn: View {
             .animation(.easeInOut(duration: 0.25), value: kind)
         }
         .restsOnRows()
+        .scrollDismissesKeyboard(.immediately)
         .backToTop(posed: part != .left)
         .task { if home.rows.isEmpty { await home.load() } }
         .refreshable { await store.load(force: true) }
         .task(id: kind) { await store.load() }
+        .onChange(of: store.rows, initial: true) { _, _ in built = computeRows() }
+        .onChange(of: home.rows) { _, _ in built = computeRows() }
+        .onChange(of: store.query) { _, _ in built = computeRows() }
     }
 }
 // What was last flicked from this phone, newest first. One tap has it in the hand again, episode and best stream
 // already chosen, ready to flick.
 struct RecentRow: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @ObservedObject private var recent = RecentFlicks.shared
     var body: some View {
         // Never a row of one.
@@ -1899,7 +2070,7 @@ struct PlaceholderShelf: View {
 // Where a film or video is, ticking along while it plays. Stremio's can be slid along or tapped to jump there on the TV;
 // anything else only shows, as a thin line with nothing to catch a finger.
 struct VideoProgress: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @ObservedObject private var seeker = SeekQueue.shared
     let session: TVStatus.Session
     // False while the picture of the TV is the one kept from last time: then nothing ticks and nothing moves.
@@ -1968,7 +2139,7 @@ struct VideoProgress: View {
                 if scrubbable {
                     ScrubBar(value: known && duration > 0 ? shown : nil, total: duration, enabled: canSeek, busy: seeking,
                              confirmed: ahead && duration > 0 ? confirmed(at: ctx.date) : nil,
-                             scrub: $scrub, tickEvery: 10000) { seek(to: $0) }
+                             scrub: $scrub, tickEvery: 10000, label: clock) { seek(to: $0) }
                         .opacity(locked ? 0.4 : 1).allowsHitTesting(!locked)
                 } else {
                     ProgressTrack(fraction: known && duration > 0 ? shown / duration : nil).frame(height: 28)
@@ -2000,7 +2171,7 @@ struct VideoProgress: View {
 // Behind every page: what's on the TV, heavily blurred, washed with the colour of wherever you are. An app brings its own
 // colour, a picked film or album brings its cover's, and with nothing picked the colour comes from what's playing.
 struct Ambience: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     // One picture and colour for every page at once, so a page shows the current one the moment it appears, never
     // whatever it showed last time.
     @ObservedObject private var store = AmbienceStore.shared
@@ -2049,12 +2220,9 @@ final class AmbienceStore: ObservableObject {
         if entry == nil {
             guard let u = URL(string: art), let i = await ImageStore.shared.load(u) else { return }
             let band = await ImageStore.shared.band(u)
-            // Shrunk to a few pixels and stretched back: a heavy blur that costs nothing while scrolling.
-            #if canImport(UIKit)
-            let small = UIGraphicsImageRenderer(size: CGSize(width: 6, height: 6)).image { _ in i.draw(in: CGRect(x: 0, y: 0, width: 6, height: 6)) }
-            #else
-            let small = i
-            #endif
+            // Shrunk to a few pixels and stretched back: a heavy blur that costs nothing while scrolling. Made off the main
+            // thread with the picture itself.
+            let small = ImageStore.shared.small(u, 6) ?? i
             entry = (art, small, band)
         }
         guard let entry else { return }
@@ -2063,27 +2231,5 @@ final class AmbienceStore: ObservableObject {
         // A newer one asked for meanwhile wins.
         guard wanted == art else { return }
         withAnimation(.easeInOut(duration: 0.7)) { image = entry.image; band = entry.band; key = art }
-    }
-}
-
-// The Playing tab's icon: the cover of what's on, as a small rounded picture. The root asks for it once the cover
-// has loaded, and keeps it while that cover is what's on.
-enum PlayingIcon {
-    @MainActor static func make(_ i: TVImage) -> TVImage? {
-        #if canImport(UIKit)
-        let side: CGFloat = 26
-        let f = UIGraphicsImageRendererFormat(); f.scale = 3
-        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: f).image { _ in
-            UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: side, height: side), cornerRadius: 6).addClip()
-            // A cover fills the square. An app's wide banner (what stands in when there's no cover) is fitted whole on dark
-            // instead: cropped to the square it read "strem" and "YouTub".
-            let wide = i.size.width > i.size.height * 1.4
-            if wide { UIColor(white: 0.1, alpha: 1).setFill(); UIRectFill(CGRect(x: 0, y: 0, width: side, height: side)) }
-            let k = wide ? min(side / i.size.width, side / i.size.height) : max(side / i.size.width, side / i.size.height)
-            i.draw(in: CGRect(x: (side - i.size.width * k) / 2, y: (side - i.size.height * k) / 2, width: i.size.width * k, height: i.size.height * k))
-        }.withRenderingMode(.alwaysOriginal)
-        #else
-        return nil
-        #endif
     }
 }

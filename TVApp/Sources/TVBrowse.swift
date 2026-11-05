@@ -31,6 +31,9 @@ enum MediaSource: String, CaseIterable, Identifiable {
     }
 }
 
+// What a list request answers.
+private struct BrowseAnswer: Decodable { let rows: [MediaRow] }
+
 @MainActor
 final class BrowseStore: ObservableObject {
     let source: MediaSource
@@ -68,31 +71,41 @@ final class BrowseStore: ObservableObject {
         let q = query.trimmingCharacters(in: .whitespaces) + (genre.isEmpty ? "" : "\u{1}" + genre)
         // Recent enough to skip, though what's on the TV moves on, so never for long.
         if !force && loadedFor == q && !rows.isEmpty && Date().timeIntervalSince(loadedAt) < 60 { return }
-        struct Answer: Decodable { let rows: [MediaRow] }
         // Unfolded, both sides ask at once.
         if inFlight == q && !force { return }
         inFlight = q
         generation += 1
         let mine = generation
-        loading = true; failed = false
+        // Set only when they change: every assignment redraws every shelf that watches this store.
+        if !loading { loading = true }
+        if failed { failed = false }
         // Only the newest request gets to say it has finished.
-        defer { if mine == generation { loading = false; inFlight = nil } }
+        defer { if mine == generation { if loading { loading = false }; inFlight = nil } }
         // Its own task, so unfolding, which replaces the view that asked, doesn't cancel it for the view that's waiting.
         let address = TVBridge.url(endpoint(query.trimmingCharacters(in: .whitespaces)))
         let data = await Task { await TVBridge.data(address, timeout: 20) }.value
         // A slower, older search must not replace a newer one.
         guard q == query.trimmingCharacters(in: .whitespaces) + (genre.isEmpty ? "" : "\u{1}" + genre) else { return }
-        guard let data, let a = try? JSONDecoder().decode(Answer.self, from: data) else {
+        // Decoded and folded off the main thread: a big list took a noticeable bite out of scrolling.
+        let folds = base != nil
+        let decoded: [MediaRow]? = await Task.detached(priority: .userInitiated) {
+            guard let data, let a = try? JSONDecoder().decode(BrowseAnswer.self, from: data) else { return nil }
+            return folds ? Self.fold(Self.once(a.rows)) : a.rows
+        }.value
+        guard q == query.trimmingCharacters(in: .whitespaces) + (genre.isEmpty ? "" : "\u{1}" + genre) else { return }
+        guard let decoded else {
             // Results for some other search aren't an answer to this one.
-            if loadedFor != q { rows = []; loadedFor = nil }
-            failed = rows.isEmpty
+            if loadedFor != q { if !rows.isEmpty { rows = [] }; loadedFor = nil }
+            if failed != rows.isEmpty { failed = rows.isEmpty }
             return
         }
-        rows = base == nil ? a.rows : Self.fold(Self.once(a.rows)); loadedFor = q; loadedAt = Date()
+        // The same list again (a revisit after a minute) changes nothing on screen, so it isn't set again.
+        if decoded != rows { rows = decoded }
+        loadedFor = q; loadedAt = Date()
     }
     // Each title once on the page, in the first row it comes in. Continue watching is his own and is kept whole, but what
     // it holds isn't repeated further down.
-    static func once(_ rows: [MediaRow]) -> [MediaRow] {
+    nonisolated static func once(_ rows: [MediaRow]) -> [MediaRow] {
         var seen = Set<String>()
         return rows.compactMap { r in
             if r.title == "Continue watching" { r.items.forEach { seen.insert($0.stremioRef?.imdb ?? $0.id) }; return r }
@@ -102,7 +115,7 @@ final class BrowseStore: ObservableObject {
     }
     // A shelf of only a few is never shown on its own: its cards go to the front of the full row before it (else the
     // one after), with nothing twice. Continue watching is his own, however short.
-    static func fold(_ rows: [MediaRow]) -> [MediaRow] {
+    nonisolated static func fold(_ rows: [MediaRow]) -> [MediaRow] {
         func full(_ r: MediaRow) -> Bool { r.items.count >= 8 }
         func key(_ i: MediaItem) -> String { i.stremioRef?.imdb ?? i.id }
         var out: [MediaRow] = [], waiting: [MediaItem] = []
@@ -232,7 +245,7 @@ struct CoverWait: View {
 
 // A whole row as a list. Tapping an item opens the same flick sheet as its card.
 struct MediaList: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let row: MediaRow
     let source: MediaSource
     var body: some View {
@@ -259,7 +272,7 @@ struct MediaList: View {
 
 struct BrowseColumn: View {
     enum Part { case all, left, right }
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @ObservedObject var store: BrowseStore
     var part = Part.all
     // Unfolded, the rows take turns on each side of the fold.
@@ -269,6 +282,8 @@ struct BrowseColumn: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
+                // The app's name leads the page. Unfolded, the other side keeps its room empty, so both sides' rows start level.
+                PageHeading(store.source.name).padding(.horizontal, 20).padding(.bottom, -10).opacity(part == .right ? 0 : 1).accessibilityHidden(part == .right)
                 if part != .right { HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField(store.source.prompt, text: $store.query).autocorrectionDisabled().submitLabel(.search)
@@ -305,6 +320,9 @@ struct BrowseColumn: View {
             .padding(.vertical, 12)
         }
         .restsOnRows()
+        // Scrolling the results puts the keyboard away, as does opening one.
+        .scrollDismissesKeyboard(.immediately)
+        .summonsBar()
         .refreshable { await store.load(force: true) }
         .task { await store.load() }
     }
@@ -313,15 +331,19 @@ struct BrowseColumn: View {
 // Every card in a row, wherever it is: a press already asks for its streams, and the flick knows the tile it came
 // from, so a card put back lands on it.
 struct FlickCardButton: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let item: MediaItem
     let source: MediaSource
     let width: CGFloat
     var ready = false
     // Where the tile is, kept without redrawing anything while the row scrolls.
     @State private var place = FrameBox()
+    // What a tap on a card does; the build's real-data flows tap through here too.
+    @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil) {
+        model.flick(FlickTarget(item: item, source: source, ready: ready, origin: origin))
+    }
     var body: some View {
-        Button { model.flick(FlickTarget(item: item, source: source, ready: ready, origin: place.rect)) } label: { MediaCard(item: item, source: source, width: width) }
+        Button { Self.tap(model, item, source, ready: ready, origin: place.rect) } label: { MediaCard(item: item, source: source, width: width) }
             // A sleeping box takes seconds to bring Stremio up, so it's told the moment a finger lands, not at the throw.
             .buttonStyle(PressCard(onPress: source == .stremio ? { StreamCache.shared.prefetch(item); Prepare.arm() } : nil))
             // Outside the press's own squeeze, so the measure never moves with what it measures.
@@ -366,7 +388,7 @@ extension View {
 
 // Stremio and Mint searched together, from the bar on the Apps page. Every result flicks like a card on its own page.
 struct EverywhereSearch: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let text: String
     @StateObject private var films = BrowseStore(.stremio)
     @StateObject private var music = BrowseStore(.mint)
@@ -401,6 +423,12 @@ struct EverywhereSearch: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: films.rows.map(\.id) + music.rows.map(\.id))
         .onChange(of: text, initial: true) { _, t in
             for s in stores { s.query = t; s.searchSoon() }
+        }
+        // The first card, as the grid shows it, for the build's search flow to tap.
+        .onChange(of: films.rows.first?.items.first?.id ?? music.rows.first?.items.first?.id, initial: true) { _, _ in
+            if let r = films.rows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, films.source) }
+            else if let r = music.rows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, music.source) }
+            else { SendDraft.shared.firstResult = nil }
         }
     }
 }

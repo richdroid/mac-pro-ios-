@@ -66,7 +66,7 @@ final class DeviceStore: ObservableObject {
     @Published var failed = false
 }
 struct DeviceTab: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
     @Environment(\.scenePhase) private var phase
     @ObservedObject private var store = DeviceStore.shared

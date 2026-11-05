@@ -2,6 +2,7 @@
 import ActivityKit
 import AppIntents
 import SwiftUI
+import UIKit
 import WidgetKit
 
 private func glyph(_ app: String) -> String {
@@ -11,11 +12,29 @@ private func glyph(_ app: String) -> String {
     default: return "music.note"
     }
 }
+// The cover of what's on, carried in the activity: the poster, the video's thumbnail or the album. The glyph only until
+// the cover is there.
+private struct Cover: View {
+    let state: TVIslandAttributes.ContentState
+    var radius: CGFloat
+    var height: CGFloat
+    var body: some View {
+        if let d = state.art, let i = UIImage(data: d) {
+            Image(uiImage: i).resizable().aspectRatio(contentMode: .fill)
+                .frame(width: height * min(max(i.size.width / max(i.size.height, 1), 0.66), 1.78), height: height)
+                .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        } else {
+            Image(systemName: glyph(state.app)).font(.system(size: height * 0.5)).foregroundStyle(TVLook.accent)
+                .frame(width: height * 0.8, height: height)
+        }
+    }
+}
 private struct IslandButton: View {
     let playing: Bool
     var body: some View {
         Button(intent: TVIslandPlayPause()) {
             Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 20, weight: .semibold))
+                .contentTransition(.symbolEffect(.replace))
                 .frame(width: 46, height: 46).background(.white.opacity(0.18), in: Circle()).contentShape(Circle())
         }
         .buttonStyle(.plain).foregroundStyle(.white).accessibilityLabel(playing ? "Pause the TV" : "Play the TV")
@@ -28,43 +47,63 @@ private struct IslandText: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(state.title).font(.headline).lineLimit(1)
-            // The episode, or nothing: the app doing the playing is plumbing.
+            // The episode (or the artist), never the app doing the playing: that's plumbing.
             if !stale, !state.subtitle.isEmpty, state.subtitle != state.title, state.subtitle != state.app {
                 Text(state.subtitle).font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
             }
         }
     }
 }
+// How far in, running on its own while it plays; held still when paused; nothing when the TV doesn't say.
+private struct IslandBar: View {
+    let state: TVIslandAttributes.ContentState
+    var body: some View {
+        Group {
+            if state.playing, let a = state.start, let b = state.end, b > a {
+                ProgressView(timerInterval: a...b, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+            } else if let p = state.progress {
+                ProgressView(value: min(max(p, 0), 1))
+            }
+        }
+        .progressViewStyle(.linear).tint(TVLook.accent).labelsHidden()
+    }
+}
+private struct IslandCard: View {
+    let state: TVIslandAttributes.ContentState
+    let stale: Bool
+    var cover: CGFloat = 56
+    var body: some View {
+        HStack(spacing: 12) {
+            Cover(state: state, radius: 12, height: cover)
+            VStack(alignment: .leading, spacing: 6) {
+                IslandText(state: state, stale: stale)
+                if !stale { IslandBar(state: state) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading).opacity(stale ? 0.55 : 1)
+            if !stale { IslandButton(playing: state.playing) }
+        }
+    }
+}
 struct TVIslandWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TVIslandAttributes.self) { context in
-            HStack(spacing: 12) {
-                Image(systemName: glyph(context.state.app)).font(.title2).foregroundStyle(TVLook.accent)
-                IslandText(state: context.state, stale: context.isStale).frame(maxWidth: .infinity, alignment: .leading).opacity(context.isStale ? 0.55 : 1)
-                if !context.isStale { IslandButton(playing: context.state.playing) }
-            }
-            .padding(14)
-            .foregroundStyle(.white)
-            .activityBackgroundTint(Color(hex: 0x14181C))
-            .activitySystemActionForegroundColor(.white)
+            IslandCard(state: context.state, stale: context.isStale, cover: 64)
+                .padding(14)
+                .foregroundStyle(.white)
+                .activityBackgroundTint(Color(hex: 0x14181C))
+                .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
-                DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: glyph(context.state.app)).font(.title2).foregroundStyle(TVLook.accent).padding(.leading, 6)
-                }
-                DynamicIslandExpandedRegion(.center) {
-                    IslandText(state: context.state, stale: context.isStale).frame(maxWidth: .infinity, alignment: .leading).opacity(context.isStale ? 0.55 : 1)
-                }
-                DynamicIslandExpandedRegion(.trailing) {
-                    if !context.isStale { IslandButton(playing: context.state.playing) }
+                DynamicIslandExpandedRegion(.bottom) {
+                    IslandCard(state: context.state, stale: context.isStale).padding(.horizontal, 4)
                 }
             } compactLeading: {
-                Image(systemName: glyph(context.state.app)).foregroundStyle(TVLook.accent)
+                Cover(state: context.state, radius: 8, height: 24)
             } compactTrailing: {
                 // A play state that may be out of date isn't shown.
                 if !context.isStale { Image(systemName: context.state.playing ? "pause.fill" : "play.fill").foregroundStyle(.white) }
             } minimal: {
-                Image(systemName: context.state.playing || context.isStale ? glyph(context.state.app) : "pause.fill").foregroundStyle(TVLook.accent)
+                Cover(state: context.state, radius: 8, height: 22)
             }
             .widgetURL(URL(string: "tvremoteapp://tab/2"))
         }

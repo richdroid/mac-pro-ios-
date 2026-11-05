@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -61,26 +62,55 @@ final class ImageStore {
     // banner never draws the blank first.
     private var flats: Set<URL> = []
     func isFlat(_ url: URL?) -> Bool { url.map { flats.contains($0) } ?? false }
+    // The tiny versions the backdrops stretch (the wall's 16 by 16, the pages' 6 by 6), made with the picture.
+    private var smalls: [URL: [Int: TVImage]] = [:]
+    func small(_ url: URL, _ side: Int) -> TVImage? { smalls[url]?[side] }
+    // Everything a picture needs is done off the main thread, as it arrives: decoded straight to a size no screen here
+    // shows bigger (1400 px, the Remote's picture open at 3x), its tiny versions drawn, and a banner checked for blank.
+    // Before, full-size art was kept and shrunk or checked on the main thread while a page waited.
+    struct Ready: @unchecked Sendable { let image: TVImage; let six: TVImage?; let sixteen: TVImage?; let flat: Bool }
     func load(_ url: URL) async -> TVImage? {
         if let i = cached(url) { return i }
         if let t = fetching[url] { return await t.value }
-        let t = Task.detached(priority: .utility) { () -> TVImage? in
-            guard let (d, resp) = try? await URLSession.shared.data(from: url), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) else { return nil }
+        let icon = url.path.hasSuffix("/icon")
+        let job = Task.detached(priority: .utility) { () -> Ready? in
+            guard let (d, resp) = try? await URLSession.shared.data(from: url), (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let i = Self.decode(d, maxPixels: 1400) else { return nil }
             #if canImport(UIKit)
-            return i.preparingForDisplay() ?? i
+            // The same renderer the pages used before, at the screen's own scale, so the stretched blur looks the same.
+            func shrink(_ side: Int) -> TVImage {
+                UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in i.draw(in: CGRect(x: 0, y: 0, width: side, height: side)) }
+            }
+            return Ready(image: i, six: shrink(6), sixteen: shrink(16), flat: icon && flatPicture(i))
             #else
-            return i
+            return Ready(image: i, six: i, sixteen: i, flat: false)
             #endif
         }
+        let t = Task { await job.value?.image }
         fetching[url] = t
-        let i = await t.value
+        let r = await job.value
         fetching[url] = nil
-        if let i {
-            // Only the apps' banners are ever blank like that, and checking every poster would cost scrolling.
-            if url.path.hasSuffix("/icon"), flatPicture(i) { flats.insert(url) }
-            cache.setObject(i, forKey: url as NSURL, cost: Int(i.size.width * i.size.height) * 4)
-        }
-        return i
+        guard let r else { return nil }
+        // Only the apps' banners are ever blank like that, and checking every poster would cost scrolling.
+        if r.flat { flats.insert(url) }
+        var s: [Int: TVImage] = [:]; s[6] = r.six; s[16] = r.sixteen
+        if smalls.count > 400 { smalls.removeAll(keepingCapacity: true) }
+        smalls[url] = s
+        cache.setObject(r.image, forKey: url as NSURL, cost: Int(r.image.size.width * r.image.size.height * r.image.scale * r.image.scale) * 4)
+        return r.image
+    }
+    // Decoded at no more than `maxPixels` on its longer side, and ready to draw, so the first frame that shows it doesn't
+    // decode it on the main thread.
+    nonisolated static func decode(_ d: Data, maxPixels: Int) -> TVImage? {
+        #if canImport(UIKit)
+        guard let src = CGImageSourceCreateWithData(d as CFData, nil) else { return TVImage(data: d) }
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                                     kCGImageSourceShouldCacheImmediately: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return TVImage(data: d) }
+        return TVImage(cgImage: cg)
+        #else
+        return TVImage(data: d)
+        #endif
     }
 }
 
@@ -143,11 +173,7 @@ struct Wall: View {
         .animation(.easeOut(duration: 0.26), value: small)
         .task(id: art) {
             guard let art, let u = URL(string: art), let i = await ImageStore.shared.load(u) else { small = nil; return }
-            #if canImport(UIKit)
-            small = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 16)).image { _ in i.draw(in: CGRect(x: 0, y: 0, width: 16, height: 16)) }
-            #else
-            small = i
-            #endif
+            small = ImageStore.shared.small(u, 16) ?? i
         }
     }
 }

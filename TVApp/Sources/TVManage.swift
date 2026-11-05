@@ -48,7 +48,7 @@ final class ManageStore: ObservableObject {
 // The pages opened from Settings, as values, so tapping the tab again can close them.
 enum ManagePage: Hashable { case apps, settings, connection }
 struct TVManageSections: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     var body: some View {
         Section {
             NavigationLink(value: ManagePage.apps) { Label("Apps on the TV", systemImage: "square.grid.2x2") }.id(ManagePage.apps)
@@ -61,7 +61,7 @@ struct TVManageSections: View {
 }
 // A row that does something on the TV, drawn like the rows that open a page: the icon in the accent, the words in white.
 struct SettingsAction: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let title: String, icon: String
     let action: () -> Void
     var body: some View {
@@ -110,6 +110,7 @@ struct ManageAppsView: View {
     }
     var body: some View {
         List {
+            Section { PageHeading("Apps on the TV") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
             if let s = store.state {
                 // An app can only move within its own row on the TV, so that's how they're grouped here.
                 ForEach(rows(s), id: \.self) { row in
@@ -135,10 +136,11 @@ struct ManageAppsView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }
             }
         }
+        .summonsBar()
         .topShade().topFade()
         .navigationTitle("Apps on the TV")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { if store.state?.canArrange == true { EditButton() } }
+        // Edit sits in the page's bar, beside the way back.
+        .barPage { if store.state?.canArrange == true { EditButton().font(.subheadline.weight(.semibold)).padding(.leading, 6).padding(.trailing, 16).frame(height: 50) } }
         .refreshable { await store.load() }
         .task { await store.load() }
         // Asked from a swipe, which leaves nothing to point at, so it's a plain question in the middle.
@@ -167,6 +169,7 @@ struct ManageSettingsView: View {
     }
     var body: some View {
         Form {
+            Section { PageHeading("TV settings") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
             if let s = store.state {
                 Section {
                     pick("TV sleeps after", "sleep_after", Self.sleep)
@@ -185,9 +188,10 @@ struct ManageSettingsView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }
             }
         }
+        .summonsBar()
         .topShade().topFade()
         .navigationTitle("TV settings")
-        .navigationBarTitleDisplayMode(.inline)
+        .barPage()
         .refreshable { await store.load() }
         .task { await store.load() }
     }

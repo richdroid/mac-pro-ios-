@@ -31,9 +31,10 @@ struct StremioStream: Decodable, Identifiable, Hashable {
     var lang: String?
     var id: String { token }
     // "2.1 GB · Ready now". Where it came from is added only to tell apart two rows that would otherwise read the same.
-    func details(withSource: Bool = false) -> String {
+    var size: String? { gb.flatMap { $0 > 0 ? ($0 < 1 ? "\(Int($0 * 1024)) MB" : String(format: "%.1f GB", $0)) : nil } }
+    func details(withSource: Bool = false, size withSize: Bool = true) -> String {
         var parts: [String] = []
-        if let gb, gb > 0 { parts.append(gb < 1 ? "\(Int(gb * 1024)) MB" : String(format: "%.1f GB", gb)) }
+        if withSize, let size { parts.append(size) }
         if instant == true { parts.append("Ready now") }
         if let lang, !lang.isEmpty { parts.append(lang) }
         if withSource, !addon.isEmpty { parts.append(addon) }
@@ -67,7 +68,7 @@ extension MediaItem {
 }
 
 struct FlickScreen: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     enum Step: Int { case episodes, streams, flick, control }
     let target: FlickTarget
     @State private var step: Step
@@ -121,6 +122,8 @@ struct FlickScreen: View {
     // The episode Stremio's Continue watching is on, and how far into it.
     @State private var upNext: String?
     @State private var upNextProgress: Double?
+    // Each episode's own description and running time, from Stremio's catalogue.
+    @State private var info: SeriesInfo.Info?
     // Handed to the controls while the TV is still getting the film going, once its player is up.
     @State private var handedOver = false
     // Near the end of something, whether to start it over rather than resume at the credits, and how long it runs.
@@ -179,7 +182,9 @@ struct FlickScreen: View {
         let posed = ["lift", "flickdemo", "flickdemo-stream"].contains(Self.pose)
         // A card that already names its episode, from Continue watching or a re-flick, needs no episode picked.
         let ready = target.ready && (ref?.type == "movie" || ref?.video != nil)
-        _step = State(initialValue: ref == nil || posed || ready ? .flick : ref?.type == "series" && ref?.video == nil ? .episodes : .streams)
+        // A show always opens on its own page, its episodes there to pick from with where he is in view, even from
+        // Continue watching: going straight to one episode's streams was "so static" (Richard, 2026-11-05).
+        _step = State(initialValue: ref == nil || posed || ready ? .flick : ref?.type == "series" ? .episodes : .streams)
         // The build's shot of the controls after a flick, on a film near its end: already there, the card landed. And
         // its recording of the way from there into the Remote.
         if Self.pose == "startover" || Self.pose == "toremote" {
@@ -192,6 +197,8 @@ struct FlickScreen: View {
     var source: MediaSource { target.source }
     var isSeries: Bool { item.stremioRef?.type == "series" }
     var lifted: Bool { (touching || demoHeld) && !flown }
+    // Picking an episode or a stream, before the card is in the hand.
+    var choosing: Bool { step == .episodes || step == .streams }
     var cardY: CGFloat {
         if !arrived { return 420 }
         if hop { return -22 }
@@ -288,7 +295,20 @@ struct FlickScreen: View {
             // On the reader, outside the hold's offset, so measuring it moves nothing.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { flickFrame = $0 }
             // In with the backdrop, and out with it, rather than on the rail before anything else is there.
-            .toolbar { if barShown { bar } }
+            // On the card and after it, the X in the bar. While choosing (the show's page, the streams), back is in a
+            // glass bar at the foot by the side bar, like every other page's, never loose circles over the side bar.
+            .toolbar { if barShown && !choosing { bar } }
+            .overlay(alignment: .bottomTrailing) {
+                if choosing {
+                    Button { model.tick(); if let previous { go(previous) } else { leave() } } label: {
+                        Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).frame(width: 50, height: 50).contentShape(Circle())
+                    }
+                    .buttonStyle(PressIcon()).glassEffect(.regular.interactive(), in: Circle())
+                    .accessibilityLabel("Back")
+                    .padding(.trailing, panes ? 20 : 16).padding(.bottom, panes ? 16 : 10)
+                    .opacity(barShown ? 1 : 0)
+                }
+            }
             .toolbarBackground(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
             .containerBackground(.clear, for: .navigation)
@@ -322,6 +342,10 @@ struct FlickScreen: View {
         if Self.pose == "toremote" { Task { try? await Task.sleep(nanoseconds: 2_000_000_000); goRemote() } }
         // Side by side, so a slow description doesn't hold up the streams.
         async let details: Void = loadMeta()
+        if isSeries, let ref = item.stremioRef {
+            info = SeriesInfo.cached(ref.imdb)
+            if info == nil { Task { let i = await SeriesInfo.load(ref.imdb); withAnimation(.easeOut(duration: 0.2)) { info = i } } }
+        }
         if target.ready { await pickBest() }
         else if step == .streams && streams.isEmpty { await findStreams() }
         await details
@@ -400,33 +424,96 @@ struct FlickScreen: View {
         Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
             .shadow(color: .black.opacity(0.4), radius: 10, y: 5)
     }
-    func about(_ lines: Int) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(item.title).font(.title3.weight(.bold)).lineLimit(2)
-            if let about = meta?.about ?? item.about, !about.isEmpty {
-                Text(about).font(.footnote).foregroundStyle(.secondary).lineLimit(lines)
+    // The show's name leads; under it, once an episode's chosen, that episode, else how many seasons there are.
+    func titles(big: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(item.title).font(big ? .title.weight(.bold) : .title2.weight(.bold)).lineLimit(3)
+            if step == .streams, let e = episode {
+                Text("S\(e.season) E\(e.episode) · \(e.name)").font(.headline).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
+            } else if isSeries, case let n = seasons.filter({ $0 > 0 }).count, n > 0 {
+                Text(n == 1 ? "1 season" : "\(n) seasons").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
             }
+        }
+        .contentTransition(.opacity)
+    }
+    // What it's about: on the streams, the episode's own words, else the show's or the film's (Richard, 2026-11-05: "make
+    // the description an episode description unless not available").
+    var blurbText: String? {
+        if step == .streams, let e = episode, let o = info?.about[e.id], !o.isEmpty { return o }
+        let a = meta?.about ?? item.about
+        return a?.isEmpty == false ? a : nil
+    }
+    func blurb(_ lines: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let t = blurbText { Text(t).font(.subheadline).foregroundStyle(.secondary).lineLimit(lines).fixedSize(horizontal: false, vertical: true).contentTransition(.opacity) }
             if let slug = item.slug, !slug.isEmpty {
                 Button { model.tick(); model.post("film", ["slug": slug]); leave() } label: {
                     Label("Letterboxd", systemImage: "film")
-                }.font(.footnote.weight(.medium)).tint(TVLook.accent).padding(.top, 2)
+                }.font(.footnote.weight(.medium)).tint(TVLook.accent)
             }
         }
+        .animation(.easeOut(duration: 0.2), value: blurbText)
     }
     var heading: some View {
-        HStack(alignment: .top, spacing: 14) {
-            poster.frame(width: 74, height: 111).clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            about(4)
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
+                poster.frame(width: 74, height: 111).clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                VStack(alignment: .leading, spacing: 8) { titles(big: false); blurb(4) }
+                Spacer(minLength: 0)
+            }
+            if step == .episodes { resumeButton }
         }
     }
-    // Unfolded, the film has the left side to itself: a real poster, and room for what it's about.
+    // Unfolded, the show has the left side to itself: poster and name side by side, what it's about under them, and the
+    // one big way to carry on, so the side reads full rather than a small poster over empty space.
     var bigHeading: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            poster.frame(width: 180, height: 270).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            about(10)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .bottom, spacing: 16) {
+                poster.frame(width: 150, height: 225).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                titles(big: true)
+                Spacer(minLength: 0)
+            }
+            blurb(9)
+            if step == .episodes { resumeButton }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    // Where to carry on: the episode he's on (or the one after it if that's all but done, or the first), as one big key.
+    var resumeTarget: (episode: StremioEpisode, verb: String)? {
+        guard let all = meta?.episodes, !all.isEmpty else { return nil }
+        if let id = upNext, let e = all.first(where: { $0.id == id }) {
+            let p = upNextProgress ?? 0
+            if p > 0.9, let n = NextUp.after(e, in: all) { return (n, "Play next") }
+            return (e, p > 0 ? "Resume" : "Play")
+        }
+        return (all.first { $0.season > 0 } ?? all[0], "Play")
+    }
+    @ViewBuilder var resumeButton: some View {
+        if let t = resumeTarget {
+            let p = t.episode.id == upNext ? (upNextProgress ?? 0) : 0
+            let mins = info?.minutes[t.episode.id] ?? info?.show
+            let left = t.verb == "Resume" ? mins.map { "\(max(1, Int(Double($0) * (1 - p)))) min left" } : mins.map { "\($0) min" }
+            Button { choose(t.episode) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "play.fill").font(.system(size: 17, weight: .bold))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(t.verb) S\(t.episode.season) E\(t.episode.episode)").font(.headline)
+                        Text(([t.episode.name] + (left.map { [$0] } ?? [])).joined(separator: " · ")).font(.caption.weight(.medium)).opacity(0.7).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.black).padding(.horizontal, 20).frame(height: 58)
+                .background(TVLook.accent, in: Capsule())
+                .contentShape(Capsule())
+            }
+            .buttonStyle(PressCard())
+            .transition(.opacity)
+        }
+    }
+    // An episode picked, from its row or the big key: its streams next.
+    func choose(_ e: StremioEpisode) {
+        if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All"; picked = false; runtime = nil; startOver = true; choseOnTV = false }
+        go(.streams)
     }
     func row<L: View>(selected: Bool, action: @escaping () -> Void, @ViewBuilder label: () -> L) -> some View {
         Button(action: action) {
@@ -438,8 +525,10 @@ struct FlickScreen: View {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(TVLook.accent).transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .background(.white.opacity(selected ? 0.14 : 0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            // One row height for every plain choice on these pages, with the same corners as the episode rows.
+            .frame(minHeight: 40)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.white.opacity(selected ? 0.14 : 0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(PressCard())
@@ -447,30 +536,33 @@ struct FlickScreen: View {
     }
     // The film at the top, then the choices. Unfolded, the film one side of the fold and the choices the other.
     @ViewBuilder func page<C: View>(@ViewBuilder content: () -> C) -> some View {
+        // Both sides start at the same line, and fade under the top edge rather than run under the clock.
         if panes {
             FoldSplit {
-                ScrollView { bigHeading.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24) }
+                ScrollView { bigHeading.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24) }.topFade()
             } right: {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) { content() }
+                    VStack(alignment: .leading, spacing: 10) { content() }
                         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
                 }
+                .topFade()
             }
         } else {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) { heading; content() }
+                VStack(alignment: .leading, spacing: 10) { heading.padding(.bottom, 8); content() }
                     .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
                     .frame(maxWidth: 620, alignment: .leading)
                     .frame(maxWidth: .infinity)
             }
+            .topFade()
         }
     }
 
-    // First step of a series: which episode.
+    // First step of a series: which episode. The same list as over the Remote and on Playing.
     var episodesStep: some View {
         page {
             if seasons.isEmpty && !metaFailed {
-                ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12, thumb: true) }.padding(.top, 6)
+                ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12, thumb: true) }
             } else if seasons.isEmpty {
                 // No episode list is no reason to be stuck: the TV can still open the series.
                 Text("Couldn’t load the episodes.").font(.subheadline).foregroundStyle(.secondary).padding(.top, 8)
@@ -480,39 +572,18 @@ struct FlickScreen: View {
                     Text("Open the series on the TV").font(.subheadline.weight(.semibold))
                 }
             } else {
-                Chips(options: seasons.map { ($0, "Season \($0)") }, selected: $season).padding(.top, 6)
                 ScrollViewReader { proxy in
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach((meta?.episodes ?? []).filter { $0.season == season }) { e in
-                            episodeRow(e).id(e.id).transition(.opacity.combined(with: .offset(y: 10)))
-                        }
+                    let target = resumeTarget?.episode
+                    EpisodePicker(episodes: meta?.episodes ?? [], season: $season, current: target?.id,
+                                  currentLabel: resumeTarget?.verb == "Resume" ? "Resume" : "Up next",
+                                  progress: target?.id == upNext ? upNextProgress : nil, info: info) { choose($0) }
+                    // To where he is, as soon as that's known, and again on coming back from the streams.
+                    .onChange(of: target?.id, initial: true) { _, id in
+                        guard let id else { return }
+                        Task { try? await Task.sleep(nanoseconds: 60_000_000); withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { proxy.scrollTo(id, anchor: .center) } }
                     }
-                    // To where he is, when that's found, and again on coming back from the streams.
-                    .onChange(of: upNext) { _, id in if let id { withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { proxy.scrollTo(id, anchor: .center) } } }
-                    .onAppear { if let id = episode?.id { Task { proxy.scrollTo(id, anchor: .center) } } }
+                    .onAppear { if let id = episode?.id ?? target?.id { Task { proxy.scrollTo(id, anchor: .center) } } }
                 }
-            }
-        }
-    }
-    func episodeRow(_ e: StremioEpisode) -> some View {
-        row(selected: episode == e) {
-            if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All"; picked = false; runtime = nil; startOver = true; choseOnTV = false }
-            go(.streams)
-        } label: {
-            Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
-                .frame(width: 82, height: 46)
-                .overlay(alignment: .bottom) {
-                    // How far into it he is, as on Stremio's own cards.
-                    if e.id == upNext, let p = upNextProgress, p > 0 {
-                        GeometryReader { g in
-                            ZStack(alignment: .leading) { Color.white.opacity(0.25); TVLook.accent.frame(width: g.size.width * min(p, 1)) }
-                        }.frame(height: 3)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            VStack(alignment: .leading, spacing: 4) {
-                Text("\(e.episode). \(e.name)").font(.subheadline.weight(.medium)).lineLimit(2).multilineTextAlignment(.leading)
-                if e.id == upNext { badge("Up next") }
             }
         }
     }
@@ -522,12 +593,18 @@ struct FlickScreen: View {
     // Next: which stream, or leave that to the TV.
     var streamsStep: some View {
         page {
-            if let e = episode { Text("Season \(e.season), episode \(e.episode): \(e.name)").font(.subheadline.weight(.semibold)).padding(.top, 4) }
+            // The episode is named on the left, over its own description; here, the choice, under its heading.
+            let qualities = ["1080p", "4K", "720p", "480p"].filter { q in streams.contains { $0.quality == q } }
+            HStack(spacing: 12) {
+                Text("Streams").font(.title3.weight(.bold))
+                if qualities.count > 1 { Chips(options: (["All"] + qualities).map { ($0, $0) }, selected: $streamFilter).rowEdge() }
+            }
+            .frame(height: 36, alignment: .leading)
+            .padding(.bottom, 2)
             row(selected: choseOnTV) { stream = nil; picked = false; choseOnTV = true; go(.flick) } label: {
-                Image(systemName: "tv").foregroundStyle(TVLook.accent).frame(width: 28)
+                Image(systemName: "tv").font(.system(size: 17, weight: .semibold)).foregroundStyle(TVLook.accent).frame(width: 28)
                 Text("Choose on the TV").font(.subheadline.weight(.semibold))
             }
-            .padding(.top, 4)
             // Nearly finished: resuming would land on the credits, so starting over is offered, and chosen to begin with.
             // Not for Choose on the TV, where Stremio's own screen asks.
             if nearEnd && !choseOnTV {
@@ -539,10 +616,6 @@ struct FlickScreen: View {
             } else if noStreams {
                 Button("No streams found. Try again") { Task { await findStreams(again: true) } }
                     .font(.subheadline.weight(.medium)).tint(TVLook.accent).frame(maxWidth: .infinity).padding(.top, 22)
-            }
-            let qualities = ["1080p", "4K", "720p", "480p"].filter { q in streams.contains { $0.quality == q } }
-            if qualities.count > 1 {
-                Chips(options: (["All"] + qualities).map { ($0, $0) }, selected: $streamFilter).padding(.top, 6)
             }
             let shown = streams.filter { streamFilter == "All" || $0.quality == streamFilter }
             // Best is the top one that hasn't already failed to start.
@@ -607,10 +680,13 @@ struct FlickScreen: View {
                         Text("Didn’t start").font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(.white.opacity(0.14), in: Capsule()).foregroundStyle(.secondary)
                     }
                 }
-                let details = s.details(withSource: twin)
+                let details = s.details(withSource: twin, size: false)
                 if !details.isEmpty { Text(details).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1) }
             }
             .multilineTextAlignment(.leading)
+            Spacer(minLength: 8)
+            // How big it is, at the row's end where the eye runs to, rather than empty space.
+            if let size = s.size { Text(size).font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary) }
         }
         .disabled(failed)
         .opacity(failed ? 0.45 : 1)
@@ -928,7 +1004,7 @@ struct FlickScreen: View {
                 .opacity(big ? 1 : 0)
                 .transition(.opacity)
             }
-            if sending { TVWaiting().transition(.opacity) }
+            if sending { TVWaiting(radius: radius).transition(.opacity) }
             // Grown over the poster, only a breath of the flash: the ripple round it says it landed, without a white frame.
             TVFlash(trigger: successes).opacity(big ? 0.2 : 1)
         }
@@ -1032,8 +1108,13 @@ struct FlickScreen: View {
                 RoundedRectangle(cornerRadius: width > 200 ? 8 : 6, style: .continuous)
                     .strokeBorder(TVLook.accent.opacity(0.8 * rim), lineWidth: 1.5)
             }
-            .shadow(color: glow.opacity(0.65 * rim), radius: 4 + 14 * rim)
-            .shadow(color: .black.opacity(lifted ? 0.55 : 0.45), radius: lifted ? 30 : 18, y: lifted ? 22 : 10)
+            // The card is opaque and exactly this shape, so its shadows come from the shape: the same pixels, without
+            // working the shadow out from the card's whole picture on every frame of the drag.
+            .background {
+                RoundedRectangle(cornerRadius: width > 200 ? 8 : 6, style: .continuous).fill(.black)
+                    .shadow(color: glow.opacity(0.65 * rim), radius: 4 + 14 * rim)
+                    .shadow(color: .black.opacity(lifted ? 0.55 : 0.45), radius: lifted ? 30 : 18, y: lifted ? 22 : 10)
+            }
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: lifted)
             .rotationEffect(.degrees(returning ? 0 : lean))
             .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.62), value: lean)
@@ -1113,11 +1194,7 @@ struct FlickScreen: View {
         send(flicked: CGSize(width: -260, height: -1900))
         // The stream film goes on into the Remote the way he does, from the controls once they've settled, so the move is
         // judged from the real state rather than from a pose that starts there.
-        guard Self.pose == "flickdemo-stream" else { return }
-        for _ in 0..<150 where !(step == .control && controlsIn) { try? await Task.sleep(nanoseconds: 100_000_000) }
-        guard step == .control else { return }
-        try? await Task.sleep(nanoseconds: 2_500_000_000)
-        goRemote()
+        // It goes on into the Remote by itself once the TV has it, as it does for him.
     }
     // The X while it's on its way: whatever started on the TV stops, and this closes.
     func callOff() {
@@ -1245,14 +1322,16 @@ struct FlickScreen: View {
             meta = m
             // A card that's part way through a series starts on that episode, unless one's been picked meanwhile.
             if episode == nil { episode = m.episodes.first { $0.id == ref.video } }
-            season = episode?.season ?? m.episodes.first?.season ?? 0
+            // From Continue watching, the episode he's on is the one to resume, with how far he got.
+            if let v = ref.video, upNext == nil, m.episodes.contains(where: { $0.id == v }) { upNext = v; upNextProgress = item.progress }
+            season = resumeTarget?.episode.season ?? episode?.season ?? m.episodes.first?.season ?? 0
         }
         guard ref.type == "series", ref.video == nil else { return }
         await homeLoad.value
         let watching = home.rows.first { $0.title == "Continue watching" }?.items.first { $0.stremioRef?.imdb == ref.imdb && $0.stremioRef?.video != nil }
         guard episode == nil, step == .episodes, let watching, let e = m.episodes.first(where: { $0.id == watching.stremioRef?.video }) else { return }
         // Chosen and shown, but not gone on from: he may want another.
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { episode = e; season = e.season; upNextProgress = watching.progress; upNext = e.id }
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { episode = e; upNextProgress = watching.progress; upNext = e.id; season = resumeTarget?.episode.season ?? e.season }
     }
     // The best stream, found for him: straight to the card with it in hand, and for the next episode, thrown too.
     func pickBest() async {
@@ -1355,6 +1434,17 @@ struct FlickScreen: View {
             }
             // Thrown before the best stream was found: it goes as soon as it is.
             while pickingBest && !Task.isCancelled { try? await Task.sleep(nanoseconds: 150_000_000) }
+            // What's already on the TV is never sent again: that restarted the episode he was watching. The TV takes the
+            // card, and on into the Remote, nothing sent (Richard, 2026-11-05).
+            if alreadyOn {
+                await landing.value
+                guard !cancelled else { return }
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.6)) { sending = false; phase = nil; done = true; playingSeen = true }
+                successes += 1
+                morphing = true
+                handOver()
+                return
+            }
             let order = order
             let early = order.0 == "play-stream"
             askedRestart = order.1["restart"] as? Bool == true
@@ -1418,6 +1508,14 @@ struct FlickScreen: View {
                 timing.mark("failed"); timing.send()
                 // Called off with the X: it's already being stopped and closed.
                 if Task.isCancelled || cancelled { return }
+                // Already handed to the Remote: this screen is gone, so the no is said over the Remote.
+                if handedOver && leaving {
+                    #if canImport(UIKit)
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
+                    #endif
+                    model.say("That didn’t start on the TV")
+                    return
+                }
                 // Handed over too soon: back down into the small TV, then the no as usual.
                 if handedOver {
                     controlsIn = false
@@ -1455,6 +1553,17 @@ struct FlickScreen: View {
             if sending, step == .flick, !cancelled { handOver() }
         }
     }
+    // The very thing in the hand is what the TV is playing now: the same show and episode, or the same film, and not
+    // asked to start over.
+    var alreadyOn: Bool {
+        guard source == .stremio, target.send == nil, let ref = item.stremioRef, model.videoIsCurrent,
+              let s = model.status?.session, s.pkg == "com.stremio.one", !(nearEnd && startOver && stream != nil) else { return false }
+        if ref.type == "series" {
+            guard let on = NextUp.shared.series, on.imdb == ref.imdb else { return false }
+            return (episode?.id ?? ref.video) == on.current
+        }
+        return isThisFilm(s)
+    }
     // Whether a Stremio player is the film just sent, by its title.
     func isThisFilm(_ p: TVStatus.Session) -> Bool {
         guard let now = p.description.first, !now.isEmpty else { return false }
@@ -1467,8 +1576,10 @@ struct FlickScreen: View {
         timing.mark("handover")
         if !item.art.isEmpty { model.lastArt = item.art; model.lastArtTitle = item.title; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
         morphing = true
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { step = .control }
-        Task { try? await Task.sleep(nanoseconds: 500_000_000); await model.load() }
+        // Caught, and straight on into the Remote: the TV's screen moves onto the Remote's own picture, where the one
+        // transport, the bar and the episodes are. A control screen of its own was a second, worse remote (Richard,
+        // 2026-11-05: "awful").
+        goRemote()
     }
     func remember() {
         let video = source == .stremio && target.send == nil
@@ -1514,7 +1625,7 @@ struct FlickScreen: View {
 // The small TV's own picture before anything is thrown at it: a film's poster while one plays (a capture of it would be
 // black), else the latest still of its screen, else the cover of what's on. Nothing while it's asleep.
 private struct TVNowPicture: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @ObservedObject var store: MirrorStore
     var asleep: Bool { model.status?.screen == "asleep" }
     var poster: URL? {
@@ -1538,18 +1649,13 @@ private struct TVNowPicture: View {
     }
 }
 
-// The TV's screen while it gets going: a light running along the bottom edge.
+// The TV's screen while it gets going: the light running round its whole edge, as on any card that's loading.
 private struct TVWaiting: View {
+    var radius: CGFloat = 9
     var body: some View {
-        ZStack(alignment: .bottom) {
+        ZStack {
             Color.black.opacity(0.3)
-            GeometryReader { g in
-                Capsule()
-                    .fill(LinearGradient(colors: [.clear, TVLook.accent, .clear], startPoint: .leading, endPoint: .trailing))
-                    .frame(width: g.size.width * 0.5, height: 3)
-                    .phaseAnimator([false, true]) { c, on in c.offset(x: on ? g.size.width * 0.5 : 0) } animation: { _ in .easeInOut(duration: 0.9) }
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-            }
+            LoadingRing(radius: radius)
         }
     }
 }
@@ -1645,7 +1751,7 @@ private struct TVRipple: View {
 
 // A row of choices whose highlight slides to the one picked.
 struct Chips<T: Hashable>: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     let options: [(T, String)]
     @Binding var selected: T
     // Space before the first chip and after the last, inside the row, so a row that runs to the edge scrolls to it.
@@ -1719,7 +1825,7 @@ struct PressIcon: ButtonStyle {
 
 // An app's own things, reached from its banner.
 struct AppBrowse: View {
-    @EnvironmentObject var model: TVModel
+    @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
     let source: MediaSource
     var body: some View {
@@ -1734,12 +1840,11 @@ struct AppBrowse: View {
         .background { Ambience() }
         .onAppear { model.mood = source.mood }
         .onDisappear { if model.mood == source.mood { model.mood = nil } }
-        .toolbarBackground(.hidden, for: .navigationBar)
         .navigationTitle(source.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { model.tick(); model.post("open", ["pkg": source.pkg]) } label: { Label("Open on TV", systemImage: "tv") }
+        // Back, and the app itself on the TV, in the page's bar; not offered when it's already the app on the TV.
+        .barPage {
+            if model.status?.app != source.pkg {
+                PageBarAction(title: "Open on TV", icon: "tv") { model.post("open", ["pkg": source.pkg]) }
             }
         }
     }
