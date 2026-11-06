@@ -463,10 +463,23 @@ jobs:
               if [ -n "$2" ] && ! [[ "$3" =~ ^flick-(stage|starting|already|cancel|failed|offline)$ ]]; then set -- "$1" "$2"; continue; fi
               curl -s http://127.0.0.1:9002/f$4/reset > /dev/null; rm -f /tmp/tv-hitches.log
               if [ "$6" = 1 ]; then xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-$3$2.mp4 > /dev/null 2>&1 & REC=$!; sleep 5; fi
-              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/f$4 -tab 1 -pose $3
+              LAUNCHED=$(xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/f$4 -tab 1 -pose $3)
+              # The normal start profiled (Time Profiler, the app's main thread), from the card in the hand through the throw
+              # and the hand-over, so the stall there is named from its stacks (r29/r30: 140-224 ms, found by guessing twice).
+              if [ "$3" = flick-starting ]; then
+                PID=${LAUNCHED##*: }
+                ( sleep 4; xcrun xctrace record --template 'Time Profiler' --attach "$PID" --time-limit 12s --output /tmp/prof$2.trace > /tmp/prof$2.log 2>&1 ) &
+                PROF=$!
+              fi
               sleep 8; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-held$2.png
               sleep $(( $5 - 8 )); xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-end$2.png
               if [ "$6" = 1 ]; then kill -INT $REC; wait $REC; echo "$3 video$2 exit $?"; fi
+              if [ "$3" = flick-starting ]; then
+                wait $PROF 2>/dev/null || true
+                xcrun xctrace export --input /tmp/prof$2.trace --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' > /tmp/prof$2.xml 2>/dev/null \
+                  && python3 ci/stall-stacks.py /tmp/prof$2.xml > dist/tv-$3-stalls$2.txt 2>&1 || { echo "profile failed"; tail -5 /tmp/prof$2.log; } > dist/tv-$3-stalls$2.txt
+                rm -rf /tmp/prof$2.trace /tmp/prof$2.xml
+              fi
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
               cp /tmp/tv-flick-sends.log dist/tv-$3-sends$2.log 2>/dev/null || echo "(nothing sent)" > dist/tv-$3-sends$2.log
               # Every frame over 34 ms the app drew during the pose, with its time (r21).
