@@ -4,8 +4,8 @@ import CoreMedia
 import SwiftUI
 import UIKit
 
-// The TV's screen, live: the Mac streams it as H.264 (screenrecord's own Annex-B, 960 by 540), and the phone shows each
-// picture as it comes, a fraction of a second behind the TV. When there's no stream to be had, the still pictures
+// The TV's screen, live: the Mac streams it as H.264 (screenrecord's own Annex-B, 640 by 360), and the phone shows each
+// picture as it comes, evenly paced, a fraction of a second behind the TV. When there's no stream to be had, the still pictures
 // stand in, and the stream is tried again before long.
 @MainActor
 final class LiveMirror: ObservableObject {
@@ -29,6 +29,13 @@ final class LiveMirror: ObservableObject {
     init() {
         layer.videoGravity = .resizeAspect
         layer.backgroundColor = UIColor.clear.cgColor
+        // The layer keeps the host's own time, so each picture can be given the moment to show it (LiveFeed.paced).
+        var tb: CMTimebase?
+        if CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &tb) == noErr, let tb {
+            CMTimebaseSetTime(tb, time: CMClockGetTime(CMClockGetHostTimeClock()))
+            CMTimebaseSetRate(tb, rate: 1)
+            layer.controlTimebase = tb
+        }
     }
     func start(_ url: URL?) {
         stopping?.cancel(); stopping = nil
@@ -241,10 +248,25 @@ final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
             withUnsafeBytes(of: &length) { block.append(contentsOf: $0) }
             block.append(n)
         }
-        guard let sample = Self.sample(block, format) else { return }
+        guard let sample = Self.sample(block, format, at: paced()) else { return }
         renderer.enqueue(sample)
         if !told { told = true; picture() }
         pace()
+    }
+    // When to show this picture. The TV's pictures reach the Mac in clumps over the box's Wi-Fi (measured 2026-11-06:
+    // up to a fifth of them under 8 ms apart while scrolling), and shown as they land a clump reads as a jerk. So each is
+    // shown no sooner than a 60th of a second after the one before, but never more than 80 ms behind its arrival: past
+    // that the queue is dropped back to now, so the mirror never drifts late.
+    private var lastShow: CMTime = .invalid
+    private func paced() -> CMTime {
+        let now = CMClockGetTime(CMClockGetHostTimeClock())
+        var at = now
+        if lastShow.isValid {
+            let next = CMTimeAdd(lastShow, CMTime(value: 1, timescale: 60))
+            if CMTimeCompare(next, at) > 0 && CMTimeGetSeconds(CMTimeSubtract(next, now)) < 0.08 { at = next }
+        }
+        lastShow = at
+        return at
     }
     private func pace() {
         let t = CACurrentMediaTime()
@@ -274,7 +296,7 @@ final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         }
         return status == noErr ? out : nil
     }
-    static func sample(_ block: Data, _ format: CMVideoFormatDescription) -> CMSampleBuffer? {
+    static func sample(_ block: Data, _ format: CMVideoFormatDescription, at time: CMTime) -> CMSampleBuffer? {
         var buffer: CMBlockBuffer?
         guard CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: block.count, blockAllocator: kCFAllocatorDefault,
                                                  customBlockSource: nil, offsetToData: 0, dataLength: block.count, flags: kCMBlockBufferAssureMemoryNowFlag,
@@ -286,13 +308,10 @@ final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         guard copied == kCMBlockBufferNoErr else { return nil }
         var sample: CMSampleBuffer?
         var size = block.count
-        guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: buffer, formatDescription: format, sampleCount: 1, sampleTimingEntryCount: 0,
-                                        sampleTimingArray: nil, sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample) == noErr, let sample else { return nil }
-        // No clock to keep: each picture is shown the moment it's decoded.
-        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true), CFArrayGetCount(attachments) > 0 {
-            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
-            CFDictionarySetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(), Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
-        }
+        // Shown at its paced moment on the layer's host-time clock, rather than the instant it's decoded.
+        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: time, decodeTimeStamp: .invalid)
+        guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: buffer, formatDescription: format, sampleCount: 1, sampleTimingEntryCount: 1,
+                                        sampleTimingArray: &timing, sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample) == noErr, let sample else { return nil }
         return sample
     }
 }
