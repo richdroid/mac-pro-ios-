@@ -124,8 +124,13 @@ final class ImageStore {
         if let t = fetching[url] { return await t.value }
         let icon = url.path.hasSuffix("/icon")
         let job = Task.detached(priority: .utility) { () -> Ready? in
-            guard let (d, resp) = try? await URLSession.shared.data(from: url), (resp as? HTTPURLResponse)?.statusCode == 200,
-                  let i = Self.decode(d, maxPixels: 1400) else { return nil }
+            // Tried three times: one failed fetch left a cover waiting, its light running, for good (r29: open Watch).
+            var got: Data?
+            for wait in [0.0, 0.6, 1.8] {
+                if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+                if let (d, resp) = try? await Self.session.data(from: url), (resp as? HTTPURLResponse)?.statusCode == 200 { got = d; break }
+            }
+            guard let d = got, let i = Self.decode(d, maxPixels: 1400) else { return nil }
             if icon, let file = Self.bannerFile(url) { try? d.write(to: file, options: .atomic) }
             #if canImport(UIKit)
             // The same renderer the pages used before, at the screen's own scale, so the stretched blur looks the same.
@@ -157,6 +162,26 @@ final class ImageStore {
         #endif
         cache.setObject(r.image, forKey: url as NSURL, cost: Int(r.image.size.width * r.image.size.height * scale * scale) * 4)
         return r.image
+    }
+    // Pictures on a session of their own: on the shared one they queued behind the app's long requests to the same Mac
+    // (a start followed line by line, status), and a row of covers could sit waiting (r29: open Watch, grey for 7 s).
+    nonisolated static let session: URLSession = {
+        let c = URLSessionConfiguration.default
+        c.httpMaximumConnectionsPerHost = 8
+        c.timeoutIntervalForRequest = 15
+        return URLSession(configuration: c)
+    }()
+    // A picture shrunk to a few pixels a side, off the main thread, for a soft background with no live blur.
+    nonisolated static func shrunk(_ i: TVImage, _ side: Int) async -> TVImage? {
+        #if canImport(UIKit)
+        struct Box: @unchecked Sendable { let i: TVImage }
+        let box = Box(i: i)
+        return await Task.detached(priority: .userInitiated) { () -> Box in
+            Box(i: UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in box.i.draw(in: CGRect(x: 0, y: 0, width: side, height: side)) })
+        }.value.i
+        #else
+        return i
+        #endif
     }
     // Decoded at no more than `maxPixels` on its longer side, and ready to draw, so the first frame that shows it doesn't
     // decode it on the main thread.

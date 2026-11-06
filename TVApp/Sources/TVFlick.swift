@@ -128,6 +128,8 @@ struct FlickScreen: View {
     @State private var written = false
     // The card's picture, decoded, taken at the throw so the landed TV never waits on a fetch.
     @State private var heldImage: TVImage?
+    // Its 16 px version, the landed picture's soft background, made when the picture is first in hand.
+    @State private var softImage: TVImage?
     @State private var flight: Task<Void, Never>?
     @State private var cancelled = false
     @State private var morphing = false
@@ -368,6 +370,16 @@ struct FlickScreen: View {
                         .allowsHitTesting(pageBar.shown)
                 }
             }
+            // Open, the show's one big key sits at the left pane's foot, level with Back at the right's: the same height,
+            // the same baseline. Flowing under the blurb it landed 34 pt above Back, two bars that didn't line up (r29).
+            .overlay(alignment: .bottomLeading) {
+                if choosing && panes && step == .episodes {
+                    resumeButton(height: 50)
+                        .padding(.horizontal, 20).padding(.bottom, 16)
+                        .containerRelativeFrame(.horizontal) { w, _ in w / 2 }
+                        .opacity(barShown ? 1 : 0)
+                }
+            }
             .onChange(of: choosing && !leaving, initial: true) { _, c in model.flickChoosing = c }
             .onChange(of: !choosing && !toRemote && !leaving, initial: true) { _, c in model.flickCovering = c }
             .onDisappear { model.flickChoosing = false; model.flickCovering = false }
@@ -475,7 +487,11 @@ struct FlickScreen: View {
             }
             Color.black.opacity(step == .flick ? 0.88 : 0.6)
         }
-        .ignoresSafeArea()
+        // Edge to edge, except past the page's trailing edge beside the side bar while choosing: run on under the bar's
+        // room, it covered the rail (r20–r28). It was cut there with a clip over the whole flick screen (r29), which
+        // rendered every frame of the throw and the move offscreen: the folded stalls rose from ~60 to ~120 ms, and the
+        // open hand-off from 166 to 202 ms.
+        .ignoresSafeArea(edges: model.flickChoosing ? [.top, .bottom, .leading] : .all)
         .opacity(arrived ? 1 : 0)
         .animation(.easeOut(duration: 0.35), value: episode)
         .animation(.easeOut(duration: 0.3), value: step)
@@ -562,7 +578,7 @@ struct FlickScreen: View {
                 VStack(alignment: .leading, spacing: 8) { titles(big: false); blurb(4) }
                 Spacer(minLength: 0)
             }
-            if step == .episodes { resumeButton }
+            if step == .episodes { resumeButton() }
         }
     }
     // Unfolded, the show has the left side to itself: poster and name side by side, what it's about under them, and the
@@ -577,7 +593,6 @@ struct FlickScreen: View {
                 .containerRelativeFrame(.horizontal) { w, _ in min(w * 0.6, 300) }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             blurb(6)
-            if step == .episodes { resumeButton }
             // On the streams, the episode being chosen for: its number, name, length and what happens, so the side
             // under the poster is the episode's page, not half empty (r27).
             if step == .streams, let e = episode {
@@ -624,7 +639,7 @@ struct FlickScreen: View {
         model.tab = 0
         leave(restoreMood: false)
     }
-    @ViewBuilder var resumeButton: some View {
+    @ViewBuilder func resumeButton(height: CGFloat = 58) -> some View {
         if let t = resumeTarget, isOn(t.episode) {
             Button(action: toRemoteNow) {
                 HStack(spacing: 12) {
@@ -636,7 +651,7 @@ struct FlickScreen: View {
                     Spacer(minLength: 0)
                     Image(systemName: "av.remote").font(.system(size: 17, weight: .semibold))
                 }
-                .foregroundStyle(.white).padding(.horizontal, 20).frame(height: 58)
+                .foregroundStyle(.white).padding(.horizontal, 20).frame(height: height)
                 .glassEffect(.regular.interactive(), in: Capsule())
                 .contentShape(Capsule())
             }
@@ -656,7 +671,7 @@ struct FlickScreen: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(.black).padding(.horizontal, 20).frame(height: 58)
+                .foregroundStyle(.black).padding(.horizontal, 20).frame(height: height)
                 .background(TVLook.accent, in: Capsule())
                 .contentShape(Capsule())
             }
@@ -947,8 +962,14 @@ struct FlickScreen: View {
         if let image = target.image ?? heldImage.map({ Image(tv: $0) }) {
             ZStack {
                 Color.black.opacity(0.35)
-                // Opaque blur, edge to edge: a soft-edged one let the stage show as a grey strip round it (r27).
-                Color.clear.overlay { image.resizable().scaledToFill() }.clipped().blur(radius: 24, opaque: true).opacity(0.7)
+                // Soft, edge to edge: the picture shrunk to 16 px and stretched, made off the main thread, as the Remote's
+                // own picture does. A live blur here (radius 24, the whole TV) was first drawn in the impact's frame and
+                // redrawn every frame of the move as the picture grew: the ~200 ms stall after the impact, and the leap.
+                if let soft = softImage {
+                    Color.clear.overlay { Image(tv: soft).resizable().interpolation(.high).scaledToFill() }.clipped().opacity(0.7)
+                } else {
+                    Color.clear.overlay { image.resizable().scaledToFill() }.clipped().blur(radius: 24, opaque: true).opacity(0.7)
+                }
                 image.resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .shadow(color: .black.opacity(0.5), radius: 14, y: 6).padding(14)
             }
@@ -1003,7 +1024,7 @@ struct FlickScreen: View {
         .frame(width: slot.width, height: slot.height)
         .overlay { RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(glow * (0.3 + 0.5 * charge)), lineWidth: 1.5) }
         // It brightens as the card comes, and glows hard once the card is charged.
-        .shadow(color: TVLook.accent.opacity(glow * (charged ? 0.95 : 0.7 * charge)), radius: charged ? 34 : 10 + 18 * charge)
+        .shadow(color: TVLook.accent.opacity(glow * (charged ? 0.95 : 0.7 * charge)), radius: glow > 0 ? (charged ? 34 : 10 + 18 * charge) : 0)
         // One ripple from its edge at the impact.
         .overlay { TVRipple(trigger: impacts, big: false) }
         // It leans in to meet the card, then gives as the card hits: squashed, over, and settled.
@@ -1506,7 +1527,11 @@ struct FlickScreen: View {
         let vx = abs(across) > 8 ? max(-5, min(5, velocity.width / across)) : 0
         thrown += 1
         answered = false; written = false; caught = false
-        if target.image == nil, let u = screenURL ?? URL(string: item.art) { heldImage = ImageStore.shared.cached(u) }
+        if target.image == nil, let u = screenURL ?? URL(string: item.art) {
+            heldImage = ImageStore.shared.cached(u)
+            softImage = ImageStore.shared.small(u, 16)
+            if softImage == nil, let h = heldImage { Task { softImage = await ImageStore.shrunk(h, 16) } }
+        }
         withAnimation(.interpolatingSpring(duration: 0.32, bounce: 0, initialVelocity: vy), completionCriteria: .logicallyComplete) {
             flown = true; lean = 0
         } completion: { arrivedAtTV() }

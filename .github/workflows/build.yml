@@ -84,7 +84,10 @@ jobs:
               # Watch must have asked for Stremio's home, or Continue watching sits as grey boxes (r26).
               if [ "$T" = 3 ] && [ ! -s /tmp/tv-home-fetches.log ]; then echo "::error::Watch$2 never fetched Stremio's home"; touch dist/FAILED-tv-3$2-nohome.txt; fi
               # And must have put it on screen: asked for but dropped was r27's four grey boxes, open.
-              if [ "$T" = 3 ] && [ ! -s /tmp/tv-home-applied.log ]; then echo "::error::Watch$2 never showed Continue watching"; touch dist/FAILED-tv-3$2-norows.txt; fi
+              if [ "$T" = 3 ] && ! grep -q 'what=home' /tmp/tv-home-applied.log 2>/dev/null; then echo "::error::Watch$2 never showed Continue watching"; touch dist/FAILED-tv-3$2-norows.txt; fi
+              # And its covers must have arrived, not just the rows (r29: open, every cover grey with its light running).
+              ART=$(grep -c 'what=art' /tmp/tv-home-applied.log 2>/dev/null); ART=${ART:-0}
+              if [ "$T" = 3 ] && [ "$ART" -lt 3 ]; then echo "::error::Watch$2 showed $ART covers"; touch dist/FAILED-tv-3$2-noart.txt; fi
               xcrun simctl terminate "$DEVICE" local.macpro.TV || echo "TV tab $T was not running"
             done
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -openHistory cpu
@@ -385,7 +388,9 @@ jobs:
                 sleep 6
                 xcrun simctl io "$DEVICE" screenshot --display=3 dist/$APP-$TAB-$M-portrait.png
                 # Continue watching really on screen in the posture he holds (r28: grey boxes here, and nothing checked it).
-                if [ "$APP$TAB" = TV3 ] && [ ! -s /tmp/tv-home-applied.log ]; then echo "::error::Watch $M portrait never showed Continue watching"; touch dist/FAILED-tv-3-$M-portrait-norows.txt; fi
+                if [ "$APP$TAB" = TV3 ] && ! grep -q 'what=home' /tmp/tv-home-applied.log 2>/dev/null; then echo "::error::Watch $M portrait never showed Continue watching"; touch dist/FAILED-tv-3-$M-portrait-norows.txt; fi
+                ART=$(grep -c 'what=art' /tmp/tv-home-applied.log 2>/dev/null); ART=${ART:-0}
+                if [ "$APP$TAB" = TV3 ] && [ "$ART" -lt 3 ]; then echo "::error::Watch $M portrait showed $ART covers"; touch dist/FAILED-tv-3-$M-portrait-noart.txt; fi
                 xcrun simctl terminate "$DEVICE" local.macpro.$APP || true
               done
             done

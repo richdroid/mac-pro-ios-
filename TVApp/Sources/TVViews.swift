@@ -167,10 +167,6 @@ struct RootView: View {
                     // Measured from the screen's own edge, not inside the tab view's trailing inset, which folded is far
                     // wider than the bar (r19: an 88 pt strip of the page underneath showed between the two).
                     FlickScreen(target: target).environment(model).id(target.id)
-                        // Its backdrop ignores the safe area, and its own stack let it run on over the room left for the
-                        // side bar: beside a show's or stream's page the strip showed the backdrop and no rail (r20–r29).
-                        // Cut at its trailing edge only, so it still runs under the top, bottom and leading insets.
-                        .clipShape(TrailingCut())
                         .padding(.trailing, model.flickChoosing ? TVLook.railRoom : 0)
                         .ignoresSafeArea(.container, edges: .trailing)
                         .animation(.spring(response: 0.4, dampingFraction: 0.9), value: model.flickChoosing)
@@ -1167,15 +1163,26 @@ struct TypeBar: View {
 // portrait-on-blur, a jump at the start).
 struct PosterOnBlur: View {
     let url: URL?
+    // The poster at 16 px, stretched: the same softness with no live blur, which redrew the whole picture every frame it
+    // moved or the light ran round it.
+    @State private var soft: TVImage?
     var body: some View {
         ZStack {
             Color.black.opacity(0.35)
-            Color.clear.overlay { Art(url: url) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
-                .clipped().blur(radius: 24).opacity(0.7)
+            if let soft = soft ?? url.flatMap({ ImageStore.shared.small($0, 16) }) {
+                Color.clear.overlay { Image(tv: soft).resizable().interpolation(.high).scaledToFill() }.clipped().opacity(0.7)
+            } else {
+                Color.clear.overlay { Art(url: url) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
+                    .clipped().blur(radius: 24).opacity(0.7)
+            }
             Art(url: url) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
                 .padding(14)
+        }
+        .task(id: url) {
+            guard let url, soft == nil, ImageStore.shared.small(url, 16) == nil else { return }
+            if await ImageStore.shared.load(url) != nil { soft = ImageStore.shared.small(url, 16) }
         }
     }
 }
@@ -2674,9 +2681,4 @@ struct TabBarFade: ViewModifier {
                 }
             }
     }
-}
-
-// A clip that cuts only at a view's trailing edge: everything above, below and before it is kept.
-struct TrailingCut: Shape {
-    func path(in rect: CGRect) -> Path { Path(CGRect(x: rect.minX - 4000, y: rect.minY - 4000, width: rect.width + 4000, height: rect.height + 8000)) }
 }

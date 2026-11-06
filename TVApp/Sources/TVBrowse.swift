@@ -231,9 +231,21 @@ struct MediaCard: View {
             guard image == nil else { return }
             guard let u = URL(string: item.art), !item.art.isEmpty else { noArt = true; return }
             if ImageStore.shared.cached(u) == nil, await ImageStore.shared.load(u) == nil { withAnimation(.easeOut(duration: 0.25)) { noArt = true }; return }
+            ArtCheck.arrived()
             if ImageStore.shared.cachedBand(u) == nil, let c = await ImageStore.shared.band(u) { band = c }
         }
         .animation(.easeOut(duration: 0.25), value: band)
+    }
+}
+
+// For the build's check that covers really arrive, not just rows (r29: open Watch, rows in, every cover grey): the first
+// few covers drawn tell the sample Mac. Never sent to a real one.
+@MainActor enum ArtCheck {
+    static var told = 0
+    static func arrived() {
+        guard ["127.0.0.1", "localhost"].contains(where: { TVBridge.address.contains($0) }), told < 4 else { return }
+        told += 1
+        Task { _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=art&n=\(told)"), timeout: 3) }
     }
 }
 
