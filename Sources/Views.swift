@@ -300,6 +300,8 @@ struct Screen<Content: View>: View {
             .task {
                 // The build's shot of Status scrolled down to the dials and the disk.
                 guard tab == 0, side != .left, model.pose == "scrolled" || model.pose == "scrollfilm" else { return }
+                // A cold launch in the build's simulator takes ~10 s to show Status: wait for it, so the film shows scrolling.
+                for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 guard model.pose == "scrollfilm" else { proxy.scrollTo("temps", anchor: .top); return }
                 // The build's film of Status scrolling, down and back up twice, so scrolling is judged moving, never from
@@ -340,8 +342,12 @@ struct Screen<Content: View>: View {
             .topEdge()
             .navigationTitle(title)
             // Large open too, so the page's name leads and its section headings follow. Small in the bar, it sat under
-            // headings like "This Mac" and "Log" and read wrong (Richard, 2026-11-05).
-            .navigationBarTitleDisplayMode(.large)
+            // headings like "This Mac" and "Log" and read wrong (Richard, 2026-11-05). With two panes it's large but fixed
+            // in the bar: a large title collapses as you scroll, and scrolling one pane then slid the other up and down
+            // under his finger, "the elements on status shrink and expand like on the side" (Richard, 2026-11-06).
+            #if os(iOS)
+            .toolbarTitleDisplayMode(panes ? .inlineLarge : .large)
+            #endif
             .navigationDestination(item: tab == 0 ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
             .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0) }
         }

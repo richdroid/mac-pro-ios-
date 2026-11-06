@@ -193,7 +193,7 @@ jobs:
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/macpro-scrollfilm$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose scrollfilm
-            sleep 13
+            sleep 30
             kill -INT $REC; wait $REC; echo "macpro scrollfilm exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             # Each app's tabs in turn, filmed, to catch anything that draws in or jumps between them.
@@ -358,7 +358,7 @@ jobs:
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/macpro-scrollfilm-portrait.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose scrollfilm
-            sleep 13
+            sleep 30
             kill -INT $REC; wait $REC; echo "macpro scrollfilm portrait exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             for M in light dark; do
