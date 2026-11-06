@@ -75,8 +75,6 @@ struct ProcessesView: View {
             if chooser { Section { rowsBody(by) } } else { Section(by.title) { rowsBody(by) } }
         }
         .contentMargins(.top, 4, for: .scrollContent)
-        // The same top edge in both panes when open.
-        .scrollEdgeEffectHidden(true, for: .top)
         .scrollsUnder(by == .memory && !chooser ? 1 : 0)
         .refreshable { await load() }
     }

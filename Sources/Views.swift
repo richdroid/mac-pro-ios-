@@ -118,69 +118,42 @@ private struct TopEdgeUnderKey: EnvironmentKey { static let defaultValue: (Int, 
 extension EnvironmentValues {
     var topEdgeUnder: (Int, Bool) -> Void { get { self[TopEdgeUnderKey.self] } set { self[TopEdgeUnderKey.self] = newValue } }
 }
-// Put on each scroll view inside a top edge, so its black shows only once its content has really moved up from where it
-// rests. "At rest" is where it first settles, not where the insets say it should be: on the phone those differ by a few
-// points, and the black showed over the portrait with nothing scrolled.
+// Put on each scroll view inside a top edge. Content scrolled up under the title fades away with the system's own soft
+// scroll edge, so the title never sits on top of text and there's no bar or band (Richard, 2026-11-05: "just get rid of
+// this top bar"). It replaced a hand-made mask: kept in step with the scroll offset and the collapsing title every frame, it
+// moved under his finger and made scrolling "absolutely fucked" on his phone (2026-11-06). Nothing here changes per frame
+// now: the page is only told when its content goes under the title or comes back to rest.
 struct ScrollsUnder: ViewModifier {
     @Environment(\.topEdgeUnder) private var report
-    // Where the content rests: the scroll offset once it has settled after layout. Nil until then, and while nil nothing
-    // is masked at all.
-    @State private var rest: CGFloat?
-    @State private var now: CGFloat = 0
-    // How far the mask reaches above the scroll view's own frame (its top safe-area inset): the rest line is measured in the
-    // frame's coordinates, and the mask starts that much higher.
-    @State private var safeTop: CGFloat = 0
+    // Where the content rests (the offset once settled after layout), and the latest offset, kept outside SwiftUI's state so
+    // a scroll redraws nothing.
+    @State private var track = Track()
     @Environment(\.refresh) private var refresh
     let id: Int
-    // Content scrolled up past where it rests fades out over 24 pt as it goes under the title, so the title never sits on
-    // top of text, with no bar or band (Richard, 2026-11-05: "just get rid of this top bar"). Measured from the settled
-    // offset, never from the insets: in open portrait the insets ran far past the title and the mask hid the top 300 pt of
-    // every tab, title included, at rest (r26). At or above rest there is no mask at all.
-    var scrolled: CGFloat { rest.map { max(now - $0, 0) } ?? 0 }
+    final class Track { var rest: CGFloat?; var now: CGFloat = 0; var under = false }
     func body(content: Content) -> some View {
         content
-            .mask {
-                GeometryReader { g in
-                    if let r = rest, scrolled > 0 {
-                        // The rest line is where the content's top sits unscrolled, just under the title. Content scrolled
-                        // past it is gone, and whole again 24 pt below it, the fade coming in with the first 24 pt scrolled.
-                        // Measured on the shots: with the fade ending at the rest line, "Temperatures" still read through
-                        // "Status" at 40% (b7c8ed6); placed at the bars' safe-area foot, it cut 70 pt below the title,
-                        // half the dials gone (63a730d).
-                        let h = max(g.size.height, 1), edge = max(-r, 0) + safeTop
-                        let foot = edge + min(scrolled, 24), top = foot - 24
-                        if foot <= 0 {
-                            Color.black
-                        } else {
-                            let start = top < 0 ? Color.black.opacity(-top / 24) : Color.black.opacity(0)
-                            LinearGradient(stops: [.init(color: start, location: max(top, 0) / h), .init(color: .black, location: min(foot / h, 1))],
-                                           startPoint: .top, endPoint: .bottom)
-                        }
-                    } else {
-                        Color.black
-                    }
-                }
-                // The mask must cover the scroll view's whole frame, under the bars too: sized to the safe area, it left
-                // the large title's band unmasked-out, so in open portrait the title vanished (r27).
-                .ignoresSafeArea()
-            }
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { safeTop = $0 }
+            .scrollEdgeEffectStyle(.soft, for: .top)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
-                now = y
-                report(id, rest.map { y > $0 + 4 } ?? false)
+                track.now = y
+                guard let r = track.rest else { return }
+                let under = y > r + 4
+                if under != track.under { track.under = under; report(id, under) }
             }
             // Settled after layout: the first reading can come before the title is laid out, so wait a moment, then take it.
             .task {
                 try? await Task.sleep(nanoseconds: 400_000_000)
-                if rest == nil { rest = now }
+                if track.rest == nil { track.rest = track.now }
             }
-            // Only a stop can lower where it rests (back at the top after a bounce, say); mid-bounce it's past the top.
-            // A pull to refresh stops held down under its spinner, which isn't where it rests, so a stop that far down
-            // never counts.
+            // Only a stop can lower where it rests (back at the top after a bounce, say). A pull to refresh stops held down
+            // under its spinner, which isn't where it rests, so a stop that far down never counts.
             .onScrollPhaseChange { _, phase in
                 guard phase == .idle else { return }
-                if rest == nil { rest = now }
-                else if let r = rest, now < r, !(refresh != nil && now < r - 30) { rest = now; report(id, false) }
+                if track.rest == nil { track.rest = track.now }
+                else if let r = track.rest, track.now < r, !(refresh != nil && track.now < r - 30) {
+                    track.rest = track.now
+                    if track.under { track.under = false; report(id, false) }
+                }
             }
     }
 }
@@ -321,9 +294,6 @@ struct Screen<Content: View>: View {
             }
             // One gap between the blocks on Status, where they sit on the page's own background.
             .listSectionSpacing(tab == 0 ? .custom(28) : .default)
-            // One top edge across the whole width: open, each pane would otherwise draw its own band, and only the one
-            // that's scrolled shows it.
-            .scrollEdgeEffectHidden(true, for: .top)
             .scrollsUnder(side == .right ? 1 : 0)
             .refreshable { await model.refresh() }
             .contentMargins(.top, 4, for: .scrollContent)

@@ -231,7 +231,7 @@ struct HistoryView: View {
                 FoldSplit {
                     VStack(spacing: 14) { readout; chart.frame(maxHeight: .infinity) }.padding(20)
                 } right: {
-                    ScrollView { VStack(spacing: 14) { range; stats; processes; coverage }.padding(20) }.scrollEdgeEffectHidden(true, for: .top).scrollsUnder()
+                    ScrollView { VStack(spacing: 14) { range; stats; processes; coverage }.padding(20) }.scrollsUnder()
                 }
             } else {
                 ScrollView {
