@@ -179,7 +179,7 @@ struct RootView: View {
         .overlay(alignment: .bottom) { ToastBubble() }
         .onAppear { followRequest(); poseForShots(); TabTour.run([0, 1, 2, 3, 5, 9]) { model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
-        .task { await BrowseStore.shared(.stremio).load() }
+        .task { await BrowseStore.shared(.stremio).loadHome() }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
     }
     // Control Center and Siri can ask before this view exists, so the request waits in a flag.
@@ -830,7 +830,9 @@ struct RemoteTab: View {
     // The build's shot of the typing bar opens with it up.
     @State private var typing = UserDefaults.standard.string(forKey: "pose") == "type"
     // Arriving from a flick's controls, the pad and keys come in during the screen's move onto the picture above them.
-    @State private var keysIn = true
+    // Read only inside KeysArrive, so the keys coming in redraws them alone, not the whole Remote: as a plain @State it
+    // re-laid out both open panes mid-move, the 147–177 ms hitch at +0.72 s (r27).
+    @State private var keysGate = KeysGate()
     var state: String {
         // Not reaching it is said once, by the red note at the top; "Connecting…" under it contradicted it.
         if unreachable || !model.reachable { return "" }
@@ -1015,7 +1017,7 @@ struct RemoteTab: View {
                         .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
                 } right: {
                     VStack(spacing: 14) { pad.frame(maxHeight: .infinity); keysBlock }.padding(.horizontal, 20).padding(.bottom, 16)
-                        .modifier(KeysArrive(shown: keysIn))
+                        .modifier(KeysArrive(gate: keysGate))
                 }
             } else {
                 // Folded, the pad gets the room until the screen is asked for.
@@ -1030,7 +1032,7 @@ struct RemoteTab: View {
                         pad.frame(minHeight: 150, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
                         keysBlock
                     }
-                    .modifier(KeysArrive(shown: keysIn))
+                    .modifier(KeysArrive(gate: keysGate))
                 }
                 .padding(.horizontal, 14).padding(.bottom, 12)
             }
@@ -1065,14 +1067,14 @@ struct RemoteTab: View {
         .task(id: model.remoteArrival) {
             guard Date().timeIntervalSince(model.remoteArrival) < 1 else { return }
             var quiet = Transaction(); quiet.disablesAnimations = true
-            withTransaction(quiet) { keysIn = false }
+            withTransaction(quiet) { keysGate.shown = false }
             // Once the flick's title, poster and controls are nearly gone (they fade in 0.12 s from the move's start), so the
             // two never sit on each other, and still early enough that the picture is never alone on the backdrop. Not later
             // than a second if no move comes.
             let arrival = model.remoteArrival
             for _ in 0..<60 where model.remoteMoveAt < arrival { try? await Task.sleep(nanoseconds: 16_000_000) }
             try? await Task.sleep(nanoseconds: 70_000_000)
-            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) { keysIn = true }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) { keysGate.shown = true }
         }
     }
 }
@@ -1084,10 +1086,12 @@ private extension View {
 
 // The Remote's keys coming in: a slight grow out of a blur on the move's own spring, and a fade so short the pad's white
 // centre never sits grey on the way. Nothing in the keys is measured, so the scale moves nothing that's read.
+@Observable final class KeysGate { var shown = true }
 private struct KeysArrive: ViewModifier {
-    let shown: Bool
+    let gate: KeysGate
     func body(content: Content) -> some View {
-        content
+        let shown = gate.shown
+        return content
             .opacity(shown ? 1 : 0)
             .animation(.linear(duration: 0.08), value: shown)
             // No blur: a blur over the whole pad and its keys, animated, was most of the hitch as the flick's screen moved
@@ -2328,9 +2332,11 @@ struct DiscoverColumn: View {
         // could be lost in the relayout of unfolding, and Continue watching sat as grey boxes for good (r26). A failure
         // takes the waiting row away rather than leaving its boxes up.
         .task(id: home.rows.isEmpty) {
+            // One pane asks; both share the answer.
+            guard part != .right else { return }
             var tries = 0
             while home.rows.isEmpty && !Task.isCancelled && tries < 8 {
-                await home.load(force: tries > 0)
+                await home.loadHome()
                 if !home.rows.isEmpty { break }
                 tries += 1
                 try? await Task.sleep(nanoseconds: 2_000_000_000)

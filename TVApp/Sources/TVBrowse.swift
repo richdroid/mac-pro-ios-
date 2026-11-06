@@ -114,6 +114,31 @@ final class BrowseStore: ObservableObject {
         if decoded != rows { rows = decoded }
         loadedFor = q; loadedAt = Date()
     }
+    // Stremio's home for Continue watching: one request that every asker waits on, rather than two panes' loads cancelling
+    // each other's bookkeeping through the search guards (r27, open: the row stayed four grey boxes). Applied whenever no
+    // search or genre is up, and the mock is told, so CI fails if the row never lands.
+    private var homeTask: Task<[MediaRow]?, Never>?
+    func loadHome() async {
+        if !rows.isEmpty && loadedFor == "" && Date().timeIntervalSince(loadedAt) < 60 { return }
+        let task = homeTask ?? Task {
+            let data = await TVBridge.data(TVBridge.url(source.endpoint("")), timeout: 20)
+            return await Task.detached(priority: .userInitiated) { () -> [MediaRow]? in
+                guard let data, let a = try? JSONDecoder().decode(BrowseAnswer.self, from: data) else { return nil }
+                return a.rows
+            }.value
+        }
+        homeTask = task
+        let decoded = await task.value
+        if homeTask == task { homeTask = nil }
+        guard query.trimmingCharacters(in: .whitespaces).isEmpty && genre.isEmpty else { return }
+        guard let decoded else { if failed != rows.isEmpty { failed = rows.isEmpty }; return }
+        if failed { failed = false }
+        if decoded != rows { rows = decoded }
+        loadedFor = ""; loadedAt = Date()
+        if decoded.contains(where: { $0.title == "Continue watching" && !$0.items.isEmpty }) {
+            _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=home"), timeout: 3)
+        }
+    }
     // Each title once on the page, in the first row it comes in. Continue watching is his own and is kept whole, but what
     // it holds isn't repeated further down.
     nonisolated static func once(_ rows: [MediaRow]) -> [MediaRow] {

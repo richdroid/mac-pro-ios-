@@ -356,6 +356,9 @@ struct FlickScreen: View {
                     // capsule sat over episode 4's title).
                     PageBar(back: { if let previous { go(previous) } else { leave() } }, full: true) { EmptyView() }
                         .padding(.horizontal, panes ? 20 : 16).padding(.bottom, panes ? 16 : 10)
+                        // Open, the choices' pane only, never across the fold (r27).
+                        .containerRelativeFrame(.horizontal) { w, _ in panes ? w / 2 : w }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                         .opacity(barShown && pageBar.shown ? 1 : 0)
                         .offset(y: pageBar.shown ? 0 : 18)
                         .allowsHitTesting(pageBar.shown)
@@ -389,7 +392,8 @@ struct FlickScreen: View {
             // Only on the flick's own timing poses; the plain show-page shots stay clean so the page itself can be judged.
             if Self.pose?.hasPrefix("flick-") == true || Self.pose?.hasPrefix("flickdemo") == true {
                 // Milliseconds since the release, so a frame can be read against §2.5a C4's timings.
-                TimelineView(.animation) { ctx in
+                // Ten times a second, not every frame: redrawn per frame it cost the hand-off its own frames (r27).
+                TimelineView(.periodic(from: .now, by: 0.1)) { ctx in
                     let t = releasedAt == .distantPast ? -1 : Int(ctx.date.timeIntervalSince(releasedAt) * 1000)
                     Text("t=\(t) step \(step.rawValue) flown \(flown ? 1 : 0) landed \(landed ? 1 : 0) sending \(sending ? 1 : 0) phase \(phase ?? "-") answered \(answered ? 1 : 0)")
                         .font(.system(size: 11, design: .monospaced)).padding(6).background(.black.opacity(0.7)).foregroundStyle(.yellow)
@@ -564,6 +568,17 @@ struct FlickScreen: View {
                 Spacer(minLength: 0)
             }
             if step == .episodes { resumeButton }
+            // On the streams, the episode being chosen for: its number, name, length and what happens, so the side
+            // under the poster is the episode's page, not half empty (r27).
+            if step == .streams, let e = episode {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Season \(e.season) · Episode \(e.episode)" + (e.runtime.map { " · \($0) min" } ?? ""))
+                        .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                    Text(e.title).font(.title3.weight(.semibold)).lineLimit(2)
+                    if let o = e.overview, !o.isEmpty { Text(o).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                }
+                .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -826,7 +841,8 @@ struct FlickScreen: View {
             .multilineTextAlignment(.leading)
             Spacer(minLength: 8)
             // How big it is, at the row's end where the eye runs to, rather than empty space.
-            if let size = s.size { Text(size).font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary) }
+            // A column of its own, right-aligned, so the sizes line up down the list (r27).
+            Text(s.size ?? "").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary).frame(minWidth: 64, alignment: .trailing)
         }
         .disabled(failed)
         .opacity(failed ? 0.45 : 1)
@@ -925,7 +941,8 @@ struct FlickScreen: View {
         if let image = target.image ?? heldImage.map({ Image(tv: $0) }) {
             ZStack {
                 Color.black.opacity(0.35)
-                Color.clear.overlay { image.resizable().scaledToFill() }.clipped().blur(radius: 24).opacity(0.7)
+                // Opaque blur, edge to edge: a soft-edged one let the stage show as a grey strip round it (r27).
+                Color.clear.overlay { image.resizable().scaledToFill() }.clipped().blur(radius: 24, opaque: true).opacity(0.7)
                 image.resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .shadow(color: .black.opacity(0.5), radius: 14, y: 6).padding(14)
             }
@@ -970,10 +987,9 @@ struct FlickScreen: View {
             // Landed: the card's own picture, in the same place at the same size, so the hand-over from the flying card is
             // invisible. No transition: a second poster scaling in, or a fade, read as two pictures.
             // The card's full-bleed poster becomes the Remote's poster-on-blur over the same 0.2 s, as one picture changing.
-            if landed {
-                Color.clear.overlay { artwork(fill: true) }.clipped().opacity(caught ? 0 : 1)
-                landedPicture.opacity(caught ? 1 : 0)
-            }
+            // One look from the catch to the Remote: the framed poster on its blur, never a full-bleed poster between two
+            // framed ones (r27, open: framed → full → framed).
+            if landed { landedPicture }
             // The TV starting it: the light round the picture's edge, carried across into the Remote.
             if landed && sending { LoadingRing(radius: radius).transition(.opacity) }
         }

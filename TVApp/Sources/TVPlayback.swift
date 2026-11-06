@@ -812,7 +812,8 @@ struct EpisodeSheet: View {
                 .frame(maxWidth: 560).frame(maxWidth: .infinity)
         }
         .contentMargins(.top, 32, for: .scrollContent)
-        .presentationBackground(.regularMaterial)
+        // Opaque: the material let the Remote's title show through as a stray "F" behind its top, open (r27).
+        .presentationBackground(Color(white: 0.12))
         // One corner shape all round, whether it's a popover or a sheet (r21: one square corner, one round).
         .presentationCornerRadius(28)
     }

@@ -153,6 +153,10 @@ struct ScrollsUnder: ViewModifier {
                         Color.black
                     }
                 }
+                // The mask must cover the scroll view's whole frame, under the bars too: sized to the safe area, it left
+                // the large title's band unmasked-out, so in open portrait the title vanished (r27). Its coordinates are
+                // then the scroll view's own, which is what the rest offset is measured in.
+                .ignoresSafeArea()
             }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 now = y

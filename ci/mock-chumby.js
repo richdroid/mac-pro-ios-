@@ -149,6 +149,8 @@ http.createServer((q, s) => {
     s.setHeader('content-type', 'application/json');
     return s.end(JSON.stringify({ rows: [{ title: 'Series', items: [{ title: 'Sample Series', subtitle: '2 seasons', art: tvBase + '/poster.png', id: 'tt1234567', kind: 'series' }] }] }));
   }
+  // The app says Continue watching is on screen (r27: asked for, but never applied, open).
+  if (q.url.startsWith('/api/tv/applied')) { try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' ' + q.url + '\n'); } catch {} s.setHeader('content-type', 'application/json'); return s.end('{"ok":true}'); }
   if (q.url.startsWith('/api/tv/stremio')) {
     // Logged, so CI can assert the Watch tab really asked for Stremio's home (r26: open, Continue watching never loaded).
     try { require('fs').appendFileSync('/tmp/tv-home-fetches.log', Date.now() + ' ' + q.url + '\n'); } catch {}
@@ -183,7 +185,9 @@ http.createServer((q, s) => {
     const day = new Date(d.getFullYear(), d.getMonth(), d.getDate() - back, 9, 30);
     if (day.getDay() !== 0 && day.getDay() !== 6) continue;
     const t = day.getTime() / 1000;
-    songs.push({ t: t + 70, title: 'So What', artist: 'Miles Davis', album: 'Kind of Blue' }, { t: t + 640, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' });
+    // A different first song each morning, as Pandora plays it: the same one twice read as a duplicate tile (r27).
+    const first = songs.length ? { title: 'Freddie Freeloader', artist: 'Miles Davis', album: 'Kind of Blue' } : { title: 'So What', artist: 'Miles Davis', album: 'Kind of Blue' };
+    songs.push({ t: t + 70, ...first }, { t: t + 640, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' });
   }
   data.hist = { ok: true, songs: songs.sort((x, y) => y.t - x.t) };
 }

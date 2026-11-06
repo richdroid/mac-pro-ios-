@@ -76,12 +76,14 @@ jobs:
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || echo "Chumby tab $T was not running"
             done
             for T in 0 1 2 3 5 9; do
-              rm -f /tmp/tv-home-fetches.log
+              rm -f /tmp/tv-home-fetches.log /tmp/tv-home-applied.log
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab $T
               sleep 7
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$T$2.png
               # Watch must have asked for Stremio's home, or Continue watching sits as grey boxes (r26).
               if [ "$T" = 3 ] && [ ! -s /tmp/tv-home-fetches.log ]; then echo "::error::Watch$2 never fetched Stremio's home"; touch dist/FAILED-tv-3$2-nohome.txt; fi
+              # And must have put it on screen: asked for but dropped was r27's four grey boxes, open.
+              if [ "$T" = 3 ] && [ ! -s /tmp/tv-home-applied.log ]; then echo "::error::Watch$2 never showed Continue watching"; touch dist/FAILED-tv-3$2-norows.txt; fi
               xcrun simctl terminate "$DEVICE" local.macpro.TV || echo "TV tab $T was not running"
             done
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -openHistory cpu

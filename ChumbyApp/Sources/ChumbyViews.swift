@@ -1485,7 +1485,9 @@ struct ChannelsTab: View {
                 Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
                 if let f = model.failed("nowPlaying") { FailNote(text: f) }
             } header: {
+                // Open, as tall as the channel header across the fold, so the two panes' cards start level (r27: ~15 px apart).
                 Text("Now playing").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
+                    .frame(minHeight: wide ? 32 : 0, alignment: .bottomLeading)
             }
             // Adding, open: what's already in the channel stays in view on this side, and each add lands here live.
             if adding && wide {
@@ -1542,6 +1544,7 @@ struct ChannelsTab: View {
                     }
                 }
                 .textCase(nil)
+                .frame(minHeight: 32, alignment: .bottom)
             } footer: {
                 if model.state.shuffle == 1 { Text("Shuffle is on, so your order won’t show until you turn it off.") }
             }
