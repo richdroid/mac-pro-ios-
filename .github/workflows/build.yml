@@ -186,6 +186,13 @@ jobs:
             sleep 22
             kill -INT $REC; wait $REC; echo "macpro transitions exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            # Status scrolling down and back, filmed: scrolling is judged moving, never from one still (2026-11-06).
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/macpro-scrollfilm$2.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose scrollfilm
+            sleep 13
+            kill -INT $REC; wait $REC; echo "macpro scrollfilm exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             # Each app's tabs in turn, filmed, to catch anything that draws in or jumps between them.
             if [ -z "$2" ]; then
               for A in "TV 9002" "MacPro 9001" "Chumby 9000"; do
@@ -339,6 +346,18 @@ jobs:
           # title band is checked: a page whose top 400 px hold almost no bright pixels has lost its title under a black
           # band, as on 2026-11-05 (r26), and fails loudly.
           mac_portrait() {
+            # The first launch after unfolding shot black at 6 s (r29). Shot on its own at 8 s, to see whether a cold open is
+            # really black for him, and so it doesn't stand in for the tab shots after it.
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0; sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-cold-portrait.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            # Status scrolling, filmed in open portrait, the posture he holds.
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/macpro-scrollfilm-portrait.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose scrollfilm
+            sleep 13
+            kill -INT $REC; wait $REC; echo "macpro scrollfilm portrait exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             for M in light dark; do
               xcrun simctl ui "$DEVICE" appearance $M
               for TAB in 0 1 2 3 4 5 9; do

@@ -299,9 +299,17 @@ struct Screen<Content: View>: View {
             .contentMargins(.top, 4, for: .scrollContent)
             .task {
                 // The build's shot of Status scrolled down to the dials and the disk.
-                guard tab == 0, side != .left, model.pose == "scrolled" else { return }
+                guard tab == 0, side != .left, model.pose == "scrolled" || model.pose == "scrollfilm" else { return }
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
-                proxy.scrollTo("temps", anchor: .top)
+                guard model.pose == "scrollfilm" else { proxy.scrollTo("temps", anchor: .top); return }
+                // The build's film of Status scrolling, down and back up twice, so scrolling is judged moving, never from
+                // one still (Richard, 2026-11-06: "the scrolling is absolutely fucked").
+                for _ in 0..<2 {
+                    withAnimation(.easeInOut(duration: 1.4)) { proxy.scrollTo("temps", anchor: .top) }
+                    try? await Task.sleep(nanoseconds: 2_200_000_000)
+                    withAnimation(.easeInOut(duration: 1.4)) { proxy.scrollTo("top", anchor: .top) }
+                    try? await Task.sleep(nanoseconds: 2_200_000_000)
+                }
             }
         }
     }
@@ -588,7 +596,7 @@ struct StatusTab: View {
     // The figures, dimmed while they're only the last ones the Mac sent.
     @ViewBuilder var graphics: some View {
         let dim = model.stale ? 0.5 : 1
-        Section { LiveTiles(s: s).opacity(dim) }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+        Section { LiveTiles(s: s).opacity(dim).id(side == .right ? "top" : "tiles") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         if showTemps, let temps = s.temps, !temps.isEmpty {
             Section("Temperatures") { TempDials(s: s).opacity(dim).id("temps") }
         }
@@ -644,7 +652,7 @@ struct StatusTab: View {
     var body: some View {
         if side != .right {
             if let alerts = s.alerts, !alerts.isEmpty { AlertBanner(alerts: alerts) }
-            Section { Hero(s: s) }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
+            Section { Hero(s: s).id("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
             if showQuick { Section { QuickActions() }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
         }
         if side != .left { graphics }
