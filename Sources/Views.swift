@@ -127,9 +127,9 @@ struct ScrollsUnder: ViewModifier {
     // is masked at all.
     @State private var rest: CGFloat?
     @State private var now: CGFloat = 0
-    // How far the mask reaches above the scroll view's own frame (its top safe-area inset): the fade is placed in the frame's
-    // coordinates, then moved down by this, as the mask itself starts that much higher.
-    @State private var safeTop: CGFloat = 0
+    // Where the bars end on screen (the foot of the title), in global coordinates: the frame's top plus its top safe-area
+    // inset, which is right whether the scroll view's frame stops at the bars or runs under them.
+    @State private var barFoot: CGFloat = 0
     @Environment(\.refresh) private var refresh
     let id: Int
     // Content scrolled up past where it rests fades out over 24 pt as it goes under the title, so the title never sits on
@@ -141,10 +141,12 @@ struct ScrollsUnder: ViewModifier {
         content
             .mask {
                 GeometryReader { g in
-                    if let r = rest, scrolled > 0 {
-                        // Where the content's top rests inside this frame, and the fade riding up with the first 24 pt.
-                        let h = max(g.size.height, 1), restTop = max(-r, 0) + safeTop
-                        let foot = restTop - 24 + min(scrolled, 24), top = foot - 24
+                    if rest != nil, scrolled > 0 {
+                        // Content is gone above the title's foot and whole 24 pt below it, the fade coming in with the first
+                        // 24 pt scrolled. Placed on screen, not from offsets: the offset-based fade sat a band too high
+                        // folded, and "Temperatures" showed under "Status" (r28, b7c8ed6).
+                        let h = max(g.size.height, 1), edge = barFoot - g.frame(in: .global).minY
+                        let foot = edge + min(scrolled, 24), top = foot - 24
                         if foot <= 0 {
                             Color.black
                         } else {
@@ -157,12 +159,10 @@ struct ScrollsUnder: ViewModifier {
                     }
                 }
                 // The mask must cover the scroll view's whole frame, under the bars too: sized to the safe area, it left
-                // the large title's band unmasked-out, so in open portrait the title vanished (r27). It then starts safeTop
-                // above the frame the rest offset is measured in, so the fade is moved down by that: without it, folded
-                // Status scrolled put the fade a band too high and "Temperatures" ran under the title (r28).
+                // the large title's band unmasked-out, so in open portrait the title vanished (r27).
                 .ignoresSafeArea()
             }
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { safeTop = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top } action: { barFoot = $0 }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 now = y
                 report(id, rest.map { y > $0 + 4 } ?? false)
