@@ -288,6 +288,7 @@ struct Screen<Content: View>: View {
     func list(_ side: Side) -> some View {
         ScrollViewReader { proxy in
             List {
+                if side != .all { Section { paneTitle(side) }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden) }
                 if side != .right, Notice.shows(model) { Section { Notice() } }
                 if let s = model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
@@ -315,8 +316,19 @@ struct Screen<Content: View>: View {
             }
         }
     }
+    // With two panes the page's name is the left pane's first line, large, and the right pane keeps the same height empty
+    // so both start level. It's not the system's large title: that collapses as either pane scrolls, and scrolling one
+    // slid the other up and down (Richard, 2026-11-06: "the elements on status shrink and expand like on the side").
+    func paneTitle(_ side: Side) -> some View {
+        Text(title).font(.largeTitle.weight(.bold)).lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(side == .right ? 0 : 1)
+            .accessibilityHidden(side == .right)
+            .accessibilityAddTraits(.isHeader)
+    }
     func page(_ side: Side) -> some View {
         VStack(spacing: 12) {
+            if side != .all { paneTitle(side).padding(.leading, side == .left ? 20 : 0) }
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
                     .padding(.leading, 20)
@@ -342,12 +354,10 @@ struct Screen<Content: View>: View {
             .topEdge()
             .navigationTitle(title)
             // Large open too, so the page's name leads and its section headings follow. Small in the bar, it sat under
-            // headings like "This Mac" and "Log" and read wrong (Richard, 2026-11-05). With two panes it's large but fixed
-            // in the bar: a large title collapses as you scroll, and scrolling one pane then slid the other up and down
-            // under his finger, "the elements on status shrink and expand like on the side" (Richard, 2026-11-06).
-            #if os(iOS)
-            .toolbarTitleDisplayMode(panes ? .inlineLarge : .large)
-            #endif
+            // headings like "This Mac" and "Log" and read wrong (Richard, 2026-11-05).
+            // Two panes: no bar title at all; each pane's first line carries the name (paneTitle).
+            .navigationBarTitleDisplayMode(.large)
+            .toolbarVisibility(panes ? .hidden : .automatic, for: .navigationBar)
             .navigationDestination(item: tab == 0 ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
             .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0) }
         }
