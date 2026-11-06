@@ -350,13 +350,6 @@ struct FlickScreen: View {
             .toolbar { if barShown && !choosing && !(panes && toRemote) { bar } }
             // The X goes with the stage, folded and open: left over the side bar it swapped to the Remote's eye in one frame (r19).
             .navBarHidden(toRemote && !panes)
-            #if os(iOS)
-            // On a show's or stream's page the side bar stays, as navigation (ruling 1). Nothing in the app hides it and the
-            // page stops 76 pt short of it, yet it was gone beside every such page (r20–r28): this screen's own stack, laid
-            // over the tab view, is the one place left that can be taken as hiding it. Asked for outright while choosing;
-            // the card's step has the whole screen. Unproven: tv-streams-open and tv-realseries-end-open must show the rail.
-            .toolbarVisibility(model.flickChoosing ? .visible : .automatic, for: .tabBar)
-            #endif
             // While choosing, back is the same glass bar every page has, at the foot by the side bar, stepping away as he
             // scrolls down and back as he scrolls up; never a loose circle (r17).
             .environment(\.pageBar, pageBar)
