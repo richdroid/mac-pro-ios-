@@ -464,6 +464,12 @@ struct FlickScreen: View {
                         .scaleEffect(1.1)
                     }
                     .clipped()
+                    // Beside the side bar the strip under it is plain black, so the art's tint dies away before the page's
+                    // trailing edge rather than meeting the strip as a band of a different background (r30).
+                    .mask {
+                        LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.72), .init(color: .clear, location: 1)],
+                                       startPoint: .leading, endPoint: .trailing)
+                    }
                     .opacity(0.4)
                     .transition(.opacity)
             }

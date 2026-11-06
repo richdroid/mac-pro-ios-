@@ -749,10 +749,11 @@ struct EpisodesLine: View {
             // Over the page, sized to it, not a page of its own: tap outside or pull it down and it's gone.
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 EpisodeSheet { open = false }
-                    // Clear of the title band (about 100 pt from the top, with the arrow): it always opens upward. Only above
+                    // Clear of the title and its line under it (about 70 pt from the top, with the arrow), and over the whole
+                    // TV picture beneath, never leaving its top edge peeking out (r30): it always opens upward. Only above
                     // a line lower than 340 pt was it capped before, and open the line sits at about 330, so the list still
                     // reached the top and a sliver of "Remote" showed beside it (r29). Folded it's a sheet, where this is ignored.
-                    .frame(idealWidth: 440, idealHeight: min(560, max(220, lineTop - 112)))
+                    .frame(idealWidth: 440, idealHeight: min(560, max(220, lineTop - 92)))
                     .presentationCompactAdaptation(.sheet)
                     .presentationDetents([.medium, .large])
             }
