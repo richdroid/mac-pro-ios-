@@ -894,7 +894,9 @@ struct APIUsageSection: View {
                         .minimumScaleFactor(0.7).lineLimit(1).padding(.horizontal, 10)
                 }
                 .frame(maxWidth: 110)
-                Text("of \(Self.money(budget))").font(.footnote.weight(.medium))
+                // Spent, by Anthropic's own word: the key has stopped working until the credit renews (2026-11-06).
+                if u.outOfCredit { Text("Credit used up").font(.footnote.weight(.semibold)).foregroundStyle(.red) }
+                else { Text("of \(Self.money(budget))").font(.footnote.weight(.medium)) }
                 Text(resets).font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)

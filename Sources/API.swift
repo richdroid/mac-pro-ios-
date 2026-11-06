@@ -53,11 +53,14 @@ struct Status: Decodable {
         // "estimate" when the Mac counted it from its own sessions, without an Admin key; nil for the Admin API's figures.
         var source: String?
         var estimated: Bool { source == "estimate" }
-        enum K: String, CodingKey { case configured, error, at, today, week, month, periodStart, renewsAt, source }
+        // Anthropic has said the credit is spent ("Credit balance is too low"): the key stops working until it renews.
+        var outOfCredit = false
+        enum K: String, CodingKey { case configured, error, at, today, week, month, periodStart, renewsAt, source, outOfCredit }
         init(from d: Decoder) throws {
             guard let c = try? d.container(keyedBy: K.self) else { return }
             source = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? nil
             configured = (try? c.decodeIfPresent(Bool.self, forKey: .configured)) ?? false
+            outOfCredit = (try? c.decodeIfPresent(Bool.self, forKey: .outOfCredit)) ?? false
             error = (try? c.decodeIfPresent(String.self, forKey: .error)) ?? nil
             at = (try? c.decodeIfPresent(Double.self, forKey: .at)) ?? nil
             today = (try? c.decodeIfPresent(Spend.self, forKey: .today)) ?? nil
