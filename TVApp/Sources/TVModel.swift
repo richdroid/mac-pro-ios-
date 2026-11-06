@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -433,12 +434,22 @@ final class TVModel {
     func loadMirror(after: Date? = nil) async {
         guard let u = url("/api/tv/shot" + (after.map { "?after=\(Int($0.timeIntervalSince1970 * 1000))" } ?? "")) else { return }
         var r = URLRequest(url: u); r.timeoutInterval = 10; r.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200, let i = TVImage(data: d) else { return }
-        // Decoded before it's shown, not on the main thread in the frame that first draws it.
-        #if canImport(UIKit)
-        mirrorStore.set(await i.byPreparingForDisplay() ?? i)
-        #else
+        guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200 else { return }
+        // Decoded whole off the main thread, then handed over ready to draw. UIImage.byPreparingForDisplay, called from
+        // here, set up its decoder on the main thread, which logged an error and waited on a lock each time: about a third
+        // of a second blocked every 1.5 s while the still mirror ran (profiled 2026-11-06), the stall under the flick's
+        // catch and much of "the app is SLOW".
+        guard let i = await Task.detached(priority: .userInitiated, operation: { Self.decoded(d) }).value else { return }
         mirrorStore.set(i)
+    }
+    // A picture decoded now, on whatever thread calls this, so drawing it later costs nothing.
+    nonisolated static func decoded(_ d: Data) -> TVImage? {
+        guard let src = CGImageSourceCreateWithData(d as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return nil }
+        #if canImport(UIKit)
+        return UIImage(cgImage: cg)
+        #else
+        return NSImage(cgImage: cg, size: .zero)
         #endif
     }
     func loadFilms(force: Bool = false) async {
