@@ -19,7 +19,9 @@ for row in root.iter('row'):
         if c.tag == 'sample-time': t = int(c.text)
         elif c.tag == 'thread': th = c.get('fmt', '')
         elif c.tag == 'backtrace': bt = c
-    if t is None or bt is None or 'Main Thread' not in (th or ''): continue
+    # The main thread's name varies by Instruments version ("Main Thread 0x…", "… main-thread …"); r31's filter matched
+    # nothing. Any thread whose name says main.
+    if t is None or bt is None or 'main' not in (th or '').lower(): continue
     frames = []
     for f in bt.iter('frame'):
         f = res(f)

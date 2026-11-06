@@ -472,9 +472,8 @@ jobs:
                 PROF=$!
                 # And macOS's own sampler on the app's process, from the throw (the play-stream request reaching the sample
                 # bridge) for 1.5 s, which holds the impact and its stall: every thread's call tree, the main thread's first.
-                SENT0=$(cat /tmp/tv-flick-sends.log 2>/dev/null | grep -c play-stream || true)
-                ( for i in $(seq 1 300); do [ "$(cat /tmp/tv-flick-sends.log 2>/dev/null | grep -c play-stream)" -gt "$SENT0" ] && break; sleep 0.02; done
-                  sample "$PID" 1.5 1 -file dist/tv-$3-sample$2.txt > /dev/null 2>&1 || echo "sample failed" > dist/tv-$3-sample$2.txt ) &
+                # Started at launch + 5 s for 12 s: started at the throw, it took 3.5 s to begin and missed the stall (r31).
+                ( sleep 5; sample "$PID" 12 5 -file dist/tv-$3-sample$2.txt > /dev/null 2>&1 || echo "sample failed" > dist/tv-$3-sample$2.txt ) &
               fi
               sleep 8; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-held$2.png
               sleep $(( $5 - 8 )); xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-end$2.png
