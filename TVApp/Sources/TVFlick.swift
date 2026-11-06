@@ -1905,6 +1905,10 @@ struct AppBrowse: View {
     @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
     let source: MediaSource
+    // A row opened from its heading on this page. This page is itself pushed by an item (model.browsing), and a row pushed
+    // by value on the same stack re-pushed this page instead: "Continue watching" opened Stremio again (Richard,
+    // 2026-11-06: "it shouldnt open the same menu as the one i first accessed"). So its rows open by an item too.
+    @State private var row: RowRoute?
     var body: some View {
         Group {
             if panes {
@@ -1914,9 +1918,19 @@ struct AppBrowse: View {
             }
         }
         .topShade().topFade()
+        .environment(\.openRow, { row = $0 })
+        .navigationDestination(item: $row) { $0.page.underFlick(barHidden: true) }
         .background { Ambience() }
         .onAppear { model.mood = source.mood }
         .onDisappear { if model.mood == source.mood { model.mood = nil } }
+        // The build's shot of Stremio's first row opened from its heading ("-pose stremiorow"): its own list, not Stremio again.
+        .task {
+            guard UserDefaults.standard.string(forKey: "pose") == "stremiorow", row == nil else { return }
+            let store = BrowseStore.shared(source)
+            for _ in 0..<60 where store.rows.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if let first = store.rows.first { row = .media(first, source) }
+        }
         .navigationTitle(source.name)
         // Back, and the app itself on the TV, in the page's bar; not offered when it's already the app on the TV.
         .barPage {

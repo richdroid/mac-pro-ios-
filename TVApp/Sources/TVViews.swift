@@ -116,7 +116,7 @@ struct RootView: View {
             return
         }
         model.browsing = .stremio
-        guard pose != "browse" else { return }
+        guard pose != "browse", pose != "stremiorow" else { return }
         Task {
             // The page is loading the same list, so wait for it rather than asking again.
             for _ in 0..<40 {
@@ -531,20 +531,31 @@ struct RowTitle: View {
 
 // A row's heading: tap it to see everything in that row as one scrolling list.
 struct RowHeader: View {
+    @Environment(\.openRow) private var openRow
     let title: String
     let route: RowRoute
     var body: some View {
-        NavigationLink(value: route) {
-            HStack(spacing: 5) {
-                Text(title).font(.title3.weight(.bold))
-                Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
-            }
-            .padding(.bottom, 8)
-            .contentShape(Rectangle())
+        Group {
+            // On a page that was itself pushed by an item (an app's page), the row opens through that page (openRow);
+            // elsewhere by value on the tab's own path.
+            if let openRow { Button { openRow(route) } label: { label } }
+            else { NavigationLink(value: route) { label } }
         }
         .buttonStyle(.plain)
         .accessibilityLabel("See all of \(title)")
     }
+    var label: some View {
+        HStack(spacing: 5) {
+            Text(title).font(.title3.weight(.bold))
+            Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
+        }
+        .padding(.bottom, 8)
+        .contentShape(Rectangle())
+    }
+}
+private struct OpenRowKey: EnvironmentKey { static let defaultValue: ((RowRoute) -> Void)? = nil }
+extension EnvironmentValues {
+    var openRow: ((RowRoute) -> Void)? { get { self[OpenRowKey.self] } set { self[OpenRowKey.self] = newValue } }
 }
 // The same frame for every full list: the art behind it and the rows on top.
 struct RowList<Content: View>: View {

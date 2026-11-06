@@ -156,6 +156,11 @@ jobs:
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$POSE$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.TV || echo "TV pose $POSE was not running"
             done
+            # Stremio's first row opened from its heading: its own list, never Stremio's page again (2026-11-06).
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab 1 -pose stremiorow
+            sleep 12
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-stremiorow$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             # With a player open on the TV: the Remote's Stremio keys, Stremio's bar on Playing, YouTube's thin one, and the
             # typing bar. The mock answers these from a path in front of the address, so the shots above don't change.
             for V in "stremio-remote stremio 0" "stremio-playing stremio 2" "youtube-playing youtube 2" "type stremio 0 -pose type" "skip ending 2 -pose skip"; do
