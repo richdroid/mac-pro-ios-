@@ -323,8 +323,13 @@ final class SongArt: ObservableObject {
             var c = URLComponents(string: "https://itunes.apple.com/search")!
             c.queryItems = [.init(name: "term", value: s.artist + " " + s.title), .init(name: "entity", value: "song"), .init(name: "limit", value: "1")]
             struct R: Decodable { struct T: Decodable { let artworkUrl100: String?; let trackViewUrl: String? }; let results: [T] }
-            // Not reached: asked again next time rather than settling on no cover.
-            guard let u = c.url, let d = try? await URLSession.shared.data(from: u).0, let r = try? JSONDecoder().decode(R.self, from: d) else { asked.remove(k); return }
+            // Not reached: asked again next time rather than settling on no cover, but shown meanwhile with the octopus tile,
+            // so a song never waits off the strip for a lookup that can't happen.
+            guard let u = c.url, let d = try? await URLSession.shared.data(from: u).0, let r = try? JSONDecoder().decode(R.self, from: d) else {
+                asked.remove(k)
+                if found[k] == nil { withAnimation(.easeOut(duration: 0.2)) { found[k] = Found(image: nil, link: nil, tint: nil) } }
+                return
+            }
             var f = Found(image: nil, link: nil, tint: nil)
             if let t = r.results.first {
                 if let link = t.trackViewUrl { links[k] = link }
@@ -376,14 +381,18 @@ struct WokeUpTo: View {
         return out.reversed().prefix(8).map { ($0.song, $0.alarm) }
     }
     var body: some View {
-        let list = Self.wakings(model.songs, model.state.alarms)
+        let all = Self.wakings(model.songs, model.state.alarms)
+        // A song joins the strip only once its cover has been looked up, so a new one arrives with its art, never as a
+        // blank tile, and slides the others along in one spring rather than a frame.
+        let list = all.filter { art.found[SongArt.key($0.song)] != nil }
         if !list.isEmpty {
             Section {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        ForEach(list, id: \.song.id) { w in tile(w.song) }
+                        ForEach(list, id: \.song.id) { w in tile(w.song).transition(.opacity.combined(with: .scale(scale: 0.92))) }
                     }
                     .padding(.vertical, 4)
+                    .animation(.snappy, value: list.map(\.song.id))
                 }
                 .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
             } header: { SectionHead(icon: "sunrise.fill", text: "Woke up to", color: ChumbyPalette.sub(scheme == .dark)) }
@@ -566,13 +575,6 @@ struct AlarmsTab: View {
         .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model) }
         .refreshable { await model.loadState() }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
-        // With the tab bar along the foot (folded, or open in portrait), the page's bar sits centred just above it: Add alarm
-        // only, since a pushed page there brings its own back. Away while scrolling down, back on any scroll up.
-        .safeAreaInset(edge: .bottom) {
-            if !rail && !model.alarmsPage {
-                PageFootBar().padding(.bottom, 10).frame(maxWidth: .infinity)
-            }
-        }
         .onChange(of: wide) { _, _ in pane = .schedule }
         .onAppear {
             wake.refreshPlan()
@@ -682,7 +684,7 @@ struct AlarmsTab: View {
     var yours: some View {
         Section {
             if model.stateKnown && mine.isEmpty {
-                Text("None of your own. Tap + to add one.").foregroundStyle(.secondary)
+                Text("None of your own yet.").foregroundStyle(.secondary)
             }
             ForEach(mine, id: \.key) { a in
                 AlarmRow(clock: (a.clock, a.meridiem), title: a.name.isEmpty ? "Alarm" : a.name,
@@ -693,6 +695,15 @@ struct AlarmsTab: View {
                     MarkNote(mark: a.key)
                 }
             }
+            // The end of the card: one row, tapped anywhere, as Channels' Add widgets. Nothing floats over the page, so
+            // nothing can cover the Nap chips under it (Richard's Alarms shot, 2026-11-05).
+            Button { edit(nil) } label: {
+                Label("Add alarm", systemImage: "plus.circle.fill").font(.body.weight(.semibold))
+                    .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
+                    .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add an alarm")
         } header: { SectionHead(icon: "alarm", text: "My alarms", color: ChumbyPalette.acc(scheme == .dark)) } footer: {
             if model.state.pending { Text("The Chumby is putting your last change in place.") }
         }

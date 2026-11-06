@@ -633,7 +633,8 @@ struct EpisodePicker: View {
     var thumb: CGFloat { narrow ? 80 : 112 }
     func row(_ e: StremioEpisode) -> some View {
         let on = e.id == current
-        let mins = info?.minutes[e.id] ?? info?.show
+        let mins = info?.minutes[e.id] ?? e.runtime ?? info?.show
+        let about = info?.about[e.id] ?? e.overview
         return Button { choose(e) } label: {
             HStack(spacing: 12) {
                 Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
@@ -646,8 +647,11 @@ struct EpisodePicker: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(e.episode). \(e.name)").font(.subheadline.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                    // Whole names: up to three lines, never cut to "Fi…" (r26).
+                    Text(e.title).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
+                    // What it's about, in one line, so the row says more than its number.
+                    if let about, !about.isEmpty { Text(about).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                     HStack(spacing: 6) {
                         if on { Text(currentLabel).font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(TVLook.accent, in: Capsule()).foregroundStyle(.black) }
                         else if e.id == after { Text("Up next").font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(.white.opacity(0.2), in: Capsule()).foregroundStyle(.white) }

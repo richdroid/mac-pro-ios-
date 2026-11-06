@@ -226,10 +226,15 @@ struct TabBarFade: ViewModifier {
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { inset = $0 }
             .mask {
             GeometryReader { _ in
+                // Fades over the 18 pt above the bar's top edge, and nothing at all from that edge down, so no word reads
+                // through the bar. Only where a tab bar runs across the foot (an inset that tall); elsewhere, no mask.
+                let bar = inset > 40
                 VStack(spacing: 0) {
                     Color.black
-                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: min(Self.fade, inset))
-                    Color.clear.frame(height: max(inset - Self.fade, 0))
+                    if bar {
+                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)
+                        Color.clear.frame(height: inset)
+                    }
                 }
             }
             .ignoresSafeArea()
@@ -278,11 +283,11 @@ struct RootView: View {
             }
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
-            // With the side column, Alarms' page actions sit in one glass bar at the foot of the content column, by the rail:
-            // Add alarm, or Back with the page's title on Calendar settings or a day. Never a loose circle over the rail
-            // (Richard, 2026-11-05). Shown at the top of the page, away while scrolling down, back on any scroll up.
+            // With the side column, a page inside Alarms (Calendar settings, a day) has its Back in one glass bar at the foot of
+            // the content column, by the rail; never a loose circle over the rail (Richard, 2026-11-05). Add alarm is a row
+            // in My alarms, so the bar is only there on such a page. Away while scrolling down, back on any scroll up.
             .overlay(alignment: .bottomTrailing) {
-                if model.tab == 2 && model.railWidth >= 44 {
+                if model.tab == 2 && model.railWidth >= 44 && model.alarmsPage {
                     // The overlay keeps to the safe area, which already stops short of the side column.
                     PageFootBar()
                         .padding(.trailing, 12)
@@ -326,11 +331,6 @@ struct PageFootBar: View {
                     .padding(.horizontal, 16).frame(height: 44)
                 }
                 .accessibilityLabel("Back from \(model.alarmsPageTitle)")
-            } else {
-                Button { model.addAlarm = Date() } label: {
-                    Label("Add alarm", systemImage: "plus").font(.custom("Trebuchet MS", size: 17).weight(.bold))
-                        .padding(.horizontal, 16).frame(height: 44)
-                }
             }
         }
         .buttonStyle(.plain)
@@ -1690,7 +1690,12 @@ struct SoundsTab: View {
         default: return nil
         }
     }
-    var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && !$0.isHelper && !$0.isCalendar }.sorted { $0.localMinutes < $1.localMinutes } }
+    // His own alarms still to come, in time order: a one-off that has already gone off has nothing left to play.
+    var mine: [Alarm] {
+        let now = Int(Date().timeIntervalSince1970 / 60)
+        return model.state.alarms.filter { !$0.isPlaceholder && !$0.isHelper && !$0.isCalendar && !($0.when == "once" && (Int($0.time) ?? 0) <= now) }
+            .sorted { $0.localMinutes < $1.localMinutes }
+    }
     // How calendar alarms ring: the saved set, else how the first one rings now.
     var calendarSound: Alarm? {
         guard wake.rules.enabled || model.state.alarms.contains(where: \.isCalendar) else { return nil }
@@ -1744,6 +1749,7 @@ struct SoundsTab: View {
             WokeUpTo()
         } right: {
             Section {
+                // A row arriving with a fresher reading slides into its place rather than reshuffling the list in a frame.
                 ForEach(mine, id: \.key) { a in
                     VStack(alignment: .leading, spacing: 4) {
                         soundRow("\(a.clock) \(a.meridiem)", [a.name, a.whenUnlessNamed].filter { !$0.isEmpty }.joined(separator: " · "), a, mark: a.key) { b in
@@ -1781,6 +1787,7 @@ struct SoundsTab: View {
                 }
                 MarkNote(mark: "fade")
             } header: { SectionHead(icon: "alarm", text: "Alarms play", color: ChumbyPalette.sub(dark)) }
+            .animation(.snappy, value: mine.map(\.key))
             Section {
                 ForEach(model.state.streams, id: \.key) { s in
                     HStack(spacing: 12) {

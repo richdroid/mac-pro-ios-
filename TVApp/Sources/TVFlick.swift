@@ -24,6 +24,16 @@ struct FlickTarget: Identifiable {
 }
 struct StremioEpisode: Decodable, Identifiable, Hashable {
     let id: String, season: Int, episode: Int, name: String, thumb: String
+    // From the Mac when Stremio's meta has them; Cinemeta's (SeriesInfo) win where both exist.
+    var runtime: Int?
+    var overview: String?
+    // "3. The One…", but never "2. Episode 2: …", which says the number twice (r26).
+    var title: String {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        if n.isEmpty { return "Episode \(episode)" }
+        if n.lowercased().hasPrefix("episode \(episode)") { return n }
+        return "\(episode). \(n)"
+    }
 }
 struct StremioStream: Decodable, Identifiable, Hashable {
     let token: String, addon: String, name: String, description: String
@@ -339,10 +349,13 @@ struct FlickScreen: View {
             // While choosing, back is the same glass bar every page has, at the foot by the side bar, stepping away as he
             // scrolls down and back as he scrolls up; never a loose circle (r17).
             .environment(\.pageBar, pageBar)
-            .overlay(alignment: .bottomTrailing) {
+            .overlay(alignment: .bottom) {
                 if choosing {
-                    PageBar(back: { if let previous { go(previous) } else { leave() } }) { EmptyView() }
-                        .padding(.trailing, panes ? 20 : 16).padding(.bottom, panes ? 16 : 10)
+                    // One glass bar across the page's foot, back at its start: summoned by scrolling up, gone on the way
+                    // down, and the page's foot inset (84 pt) keeps its last row clear of it at rest (r26: a lone "Back"
+                    // capsule sat over episode 4's title).
+                    PageBar(back: { if let previous { go(previous) } else { leave() } }, full: true) { EmptyView() }
+                        .padding(.horizontal, panes ? 20 : 16).padding(.bottom, panes ? 16 : 10)
                         .opacity(barShown && pageBar.shown ? 1 : 0)
                         .offset(y: pageBar.shown ? 0 : 18)
                         .allowsHitTesting(pageBar.shown)
@@ -421,6 +434,9 @@ struct FlickScreen: View {
     // the card charges (§2.5a C2).
     func backdrop(_ size: CGSize) -> some View {
         ZStack {
+            // Opaque under everything: nothing of the page behind can read through, so that page needn't hide its own bar
+            // to stay out of sight, which took the tab rail with it (r20–r26: no rail beside a show's page).
+            Color.black
             Rectangle().fill(.ultraThinMaterial)
             if step != .flick {
                 Color.clear
@@ -655,6 +671,13 @@ struct FlickScreen: View {
         if panes {
             FoldSplit {
                 ScrollView { bigHeading.padding(.horizontal, 20).padding(.top, 36).padding(.bottom, 84) }.topFade().summonsBar()
+                    // The film's own colour, softly, behind its side: the pane reads as the film's, never half empty (r26).
+                    .background {
+                        LinearGradient(colors: [(tint ?? .white).opacity(0.32), (tint ?? .white).opacity(0.06), .clear], startPoint: .top, endPoint: .bottom)
+                            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                            .padding(.horizontal, 8).padding(.vertical, 8)
+                            .allowsHitTesting(false)
+                    }
             } right: {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) { content() }
@@ -1197,14 +1220,17 @@ struct FlickScreen: View {
         if model.tab == 0 && tabBefore == nil && model.flickHandoff { return }
         tabBefore = tabBefore ?? model.tab
         var quiet = Transaction(); quiet.disablesAnimations = true
-        withTransaction(quiet) { model.flickHandoff = true; model.tab = 0 }
+        // The film's colour goes behind the Remote now too, under the black stage, with the Remote's own first layout:
+        // done at 600 ms with the move, its redraw of the whole background hitched it (r26); left until after, the app's
+        // colour (Stremio's purple) showed beside the Remote as it came (r19).
+        withTransaction(quiet) { model.flickHandoff = true; model.tab = 0; model.keepMood(until: item.art); model.mood = tint }
     }
     // A throw that didn't go on to the Remote puts the page he threw from back under the stage.
     func backToThrownFrom() {
         guard let b = tabBefore else { return }
         restoredTab = b
         var quiet = Transaction(); quiet.disablesAnimations = true
-        withTransaction(quiet) { model.flickHandoff = false; model.tab = b }
+        withTransaction(quiet) { model.flickHandoff = false; model.tab = b; model.moodArt = nil; if let prior = priorMood { model.mood = prior } }
         tabBefore = nil
     }
     // Everything fades back to the page underneath. From here on nothing started by this screen changes the app behind.
@@ -1248,10 +1274,6 @@ struct FlickScreen: View {
         #endif
         model.tick()
         leaving = true
-        model.keepMood(until: item.art)
-        // The film's own colour goes to the Remote with the stage; the app's colour (Stremio's purple) stayed behind the
-        // Remote while it started, a band of another colour down its side (r19).
-        withAnimation(.easeOut(duration: 0.3)) { model.mood = tint }
         // The stand-in was set at the impact; the live mirror waits until the start has cleared (startPlayed), so no stale
         // launcher capture shows behind a starting film (r24).
         if model.starting == nil, !model.mirrorLive { model.setMirror(true) }
@@ -1274,7 +1296,10 @@ struct FlickScreen: View {
                 try? await Task.sleep(nanoseconds: 25_000_000)
             }
             if slot == nil { slot = seen }
-            guard let s = slot else { model.flickHandoff = false; leave(restoreMood: false); Task { await model.load() }; return }
+            guard let s = slot else {
+                model.flickHandoff = false; model.keepMood(until: item.art); model.mood = tint; handOverArt()
+                leave(restoreMood: false); Task { await model.load() }; return
+            }
             remoteSlot = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
             // A frame, so the Remote's first layout is done before anything moves.
             try? await Task.sleep(nanoseconds: 17_000_000)
@@ -1318,6 +1343,8 @@ struct FlickScreen: View {
             FlickClock.current.remoteLanded()
             withAnimation(.easeOut(duration: 0.2)) { onRemote = true; screenOut = true; fadingOut = true }
             try? await Task.sleep(nanoseconds: 230_000_000)
+            // Only now, with nothing moving: the picture he last threw, which redraws the app's pages (r26).
+            handOverArt()
             model.closeFlick()
             // Only once the move is over, so its fetch and redraw can't hitch it.
             await model.load()
@@ -1618,8 +1645,11 @@ struct FlickScreen: View {
         guard step == .flick, !handedOver else { return }
         handedOver = true
         FlickClock.current.mark("handover")
-        if !item.art.isEmpty { model.lastArt = item.art; model.lastArtTitle = item.title; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
         goRemote()
+    }
+    // The picture he last threw, for the app's pages: set once the move is over (goRemote), never during it.
+    func handOverArt() {
+        if !item.art.isEmpty { model.lastArt = item.art; model.lastArtTitle = item.title; model.lastArtPkg = source == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
     }
     func remember() {
         let video = source == .stremio && target.send == nil

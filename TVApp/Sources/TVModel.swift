@@ -38,7 +38,11 @@ final class TVModel {
     @ObservationIgnored var remoteMoveAt = Date.distantPast
     // While a flick's screen is moving onto the Remote's picture: that picture stays hidden under it until the screen has
     // landed, or the two showed at once, the one below peeking out under the one moving.
-    var flickHandoff = false
+    // Nothing on the Remote starts while a flick's screen is coming onto it (the mirror connecting, its still being
+    // fetched): any of it on the main thread during the move was a visible hitch (r26). It starts the moment the move ends.
+    var flickHandoff = false {
+        didSet { if oldValue && !flickHandoff { warmMirror(); if mirrorLive && mirrorViewers > 0 && !liveShowing { Task { await loadMirror() } } } }
+    }
     // The side bar's width, so a show's page opened over everything can leave it uncovered and in reach.
     var railWidth: CGFloat = 0
     // The flick screen is on a show's or a stream's page (not the card): the side bar stays usable, and a tab leaves it.
@@ -354,7 +358,7 @@ final class TVModel {
     // The live stream started early, as the Remote comes up, so its first picture is there by the time it's looked at.
     func warmMirror() {
         #if os(iOS)
-        if mirrorLive && !filmOnScreen { live.start(url("/api/tv/screen-live")) }
+        if mirrorLive && !filmOnScreen && !flickHandoff { live.start(url("/api/tv/screen-live")) }
         #endif
     }
     // The Remote's picture of the TV coming on and off the screen.
@@ -362,7 +366,7 @@ final class TVModel {
         mirrorViewers = max(0, mirrorViewers + (on ? 1 : -1))
         if on {
             warmMirror()
-            if mirrorLive && !liveShowing { Task { await loadMirror() } }
+            if mirrorLive && !liveShowing && !flickHandoff { Task { await loadMirror() } }
         } else if mirrorViewers == 0 {
             mirrorSlot = nil
             #if os(iOS)

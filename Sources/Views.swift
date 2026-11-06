@@ -123,46 +123,53 @@ extension EnvironmentValues {
 // points, and the black showed over the portrait with nothing scrolled.
 struct ScrollsUnder: ViewModifier {
     @Environment(\.topEdgeUnder) private var report
+    // Where the content rests: the scroll offset once it has settled after layout. Nil until then, and while nil nothing
+    // is masked at all.
     @State private var rest: CGFloat?
     @State private var now: CGFloat = 0
-    // Where the content rests inside the scroll view's own frame: the foot of the title above it.
-    @State private var inset: CGFloat = 0
     @Environment(\.refresh) private var refresh
     let id: Int
     // Content scrolled up past where it rests fades out over 24 pt as it goes under the title, so the title never sits on
-    // top of text, with no bar or band (Richard, 2026-11-05: "just get rid of this top bar"). The fade rides up with the
-    // first 24 pt of scroll, so at rest it sits wholly above the content and nothing resting is ever dimmed. One mask on
-    // the scroll view, none per row.
-    // Measured from where content rests by the insets, not from the first offset seen: on a cold launch in open portrait
-    // the first reading came before the title's layout, and the fade sat 150 pt down the page as a black band (r24).
-    var fadeFoot: CGFloat { inset - 24 + min(max(now + inset, 0), 24) }
+    // top of text, with no bar or band (Richard, 2026-11-05: "just get rid of this top bar"). Measured from the settled
+    // offset, never from the insets: in open portrait the insets ran far past the title and the mask hid the top 300 pt of
+    // every tab, title included, at rest (r26). At or above rest there is no mask at all.
+    var scrolled: CGFloat { rest.map { max(now - $0, 0) } ?? 0 }
     func body(content: Content) -> some View {
         content
             .mask {
                 GeometryReader { g in
-                    let h = max(g.size.height, 1), foot = fadeFoot, top = foot - 24
-                    if foot <= 0 {
-                        Color.black
+                    if let r = rest, scrolled > 0 {
+                        // Where the content's top rests inside this frame, and the fade riding up with the first 24 pt.
+                        let h = max(g.size.height, 1), restTop = max(-r, 0)
+                        let foot = restTop - 24 + min(scrolled, 24), top = foot - 24
+                        if foot <= 0 {
+                            Color.black
+                        } else {
+                            let start = top < 0 ? Color.black.opacity(-top / 24) : Color.black.opacity(0)
+                            LinearGradient(stops: [.init(color: start, location: max(top, 0) / h), .init(color: .black, location: min(foot / h, 1))],
+                                           startPoint: .top, endPoint: .bottom)
+                        }
                     } else {
-                        // The fade may start above the frame: then the frame's top edge is already part-way into it.
-                        let start = top < 0 ? Color.black.opacity(-top / 24) : Color.black.opacity(0)
-                        LinearGradient(stops: [.init(color: start, location: max(top, 0) / h), .init(color: .black, location: min(foot / h, 1))],
-                                       startPoint: .top, endPoint: .bottom)
+                        Color.black
                     }
                 }
             }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.top } action: { _, t in inset = t }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 now = y
-                if rest == nil { rest = y }
-                report(id, y > (rest ?? y) + 4)
+                report(id, rest.map { y > $0 + 4 } ?? false)
             }
-            // Only a stop can lower where it rests (back at the top after a bounce, say); mid-bounce it's past the top
-            // and would leave the black showing once it settled.
-            // A pull to refresh stops with the list held down under its spinner, which isn't where it rests, so a stop that
-            // far down never counts.
+            // Settled after layout: the first reading can come before the title is laid out, so wait a moment, then take it.
+            .task {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                if rest == nil { rest = now }
+            }
+            // Only a stop can lower where it rests (back at the top after a bounce, say); mid-bounce it's past the top.
+            // A pull to refresh stops held down under its spinner, which isn't where it rests, so a stop that far down
+            // never counts.
             .onScrollPhaseChange { _, phase in
-                if phase == .idle, let r = rest, now < r, !(refresh != nil && now < r - 30) { rest = now; report(id, false) }
+                guard phase == .idle else { return }
+                if rest == nil { rest = now }
+                else if let r = rest, now < r, !(refresh != nil && now < r - 30) { rest = now; report(id, false) }
             }
     }
 }
@@ -679,13 +686,20 @@ struct AppsTab: View {
         if side != .left {
             Section("Open on the Mac (\(s.apps.count))") {
                 ForEach(s.apps) { a in
-                    VStack(alignment: .leading) {
-                        Text(a.name)
-                        Text(String(format: "%.0f%% CPU · %@", a.cpu ?? 0, Format.bytes(a.mem ?? 0))).font(.footnote).foregroundStyle(.secondary)
-                    }
-                    .swipeActions {
-                        Button("Force Quit", role: .destructive) { pending = .init(app: a, force: true) }
-                        Button("Quit") { pending = .init(app: a, force: false) }.tint(.orange)
+                    // Quitting is a quiet ✕ menu at the row's end, not a swipe (no swipe-to-delete on glass cards).
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading) {
+                            Text(a.name)
+                            Text(String(format: "%.0f%% CPU · %@", a.cpu ?? 0, Format.bytes(a.mem ?? 0))).font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Menu {
+                            Button("Quit") { pending = .init(app: a, force: false) }
+                            Button("Force Quit", role: .destructive) { pending = .init(app: a, force: true) }
+                        } label: {
+                            Image(systemName: "xmark.circle").font(.title3).foregroundStyle(.tertiary).frame(width: 36, height: 36).contentShape(Rectangle())
+                        }
+                        .accessibilityLabel("Quit \(a.name)")
                     }
                 }
             }
@@ -693,8 +707,8 @@ struct AppsTab: View {
                 Menu {
                     ForEach(s.installed, id: \.self) { name in Button(name) { Task { alert = await model.run("app-open", ["name": name]) } } }
                 } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
-            } footer: { Text("Swipe an open app to quit it.") }
-            // Asked from a swipe, which leaves nothing to point at, so it's a plain question in the middle.
+            }
+            // Asked from the row's menu, so it's a plain question in the middle.
             .alert(pending.map { ($0.force ? "Force quit " : "Quit ") + $0.app.name + "?" } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
                 if let p = pending {
                     Button(p.force ? "Force Quit" : "Quit", role: .destructive) { Task { alert = await model.run(p.force ? "app-kill" : "app-quit", ["pid": p.app.pid]) } }
@@ -1496,7 +1510,8 @@ struct SeedSection: View {
             if let f = seed.fetch, f.state == "failed" { Text(f.message).font(.footnote).foregroundStyle(.red) }
             if let addFail { FailText(addFail) }
         } header: { Text("On this iPhone") } footer: {
-            Text(seed.reachable ? "Connected to the Mac over \(seed.via == "USB" ? "USB" : "Wi-Fi"). New builds install by themselves." : "Away from the Mac. Install hands the app to SideStore, which installs it from anywhere. Everything else catches up on home Wi-Fi.")
+            // Said only when it matters: away from the Mac. Connected and installing by itself needs no words.
+            if !seed.reachable { Text("Away from the Mac. Install hands the app to SideStore, which installs it from anywhere. Everything else catches up on home Wi-Fi.") }
         }
         .alert("Add from a link", isPresented: $linking) {
             TextField("https://…/app.ipa", text: $link).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()

@@ -112,7 +112,8 @@ final class ChumbyModel: ObservableObject {
     var lastHeard: Date? = UserDefaults.standard.object(forKey: "lastHeard") as? Date
     @Published var busy: (text: String, until: Date)?
     @Published var snoozedAt: Date?
-    @Published var songs: [Song] = []
+    // Every change to the history asks for its covers at once, so "Woke up to" can show a song as soon as its art is in.
+    @Published var songs: [Song] = [] { didSet { if songs != oldValue { SongArt.shared.prefetch(songs, state.alarms) } } }
     @Published var homePoke: Date?
     // The width of the side bar's column on the Duo (0 when the bars run across), and a tap on + placed in it.
     @Published var railWidth: CGFloat = 0

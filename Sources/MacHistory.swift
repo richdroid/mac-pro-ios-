@@ -346,6 +346,14 @@ struct DisplayHoldButton: View {
                 if wanted == nil { withAnimation(.easeOut(duration: 0.12)) { fill = 0 } }
             }
         })
+        // For the build's shot: the key held 0.3 s into its 0.4 s hold and frozen there, so the ring and the swell can be
+        // checked for clipping (pose "displayhold"). Nothing is sent.
+        .task {
+            guard model.pose == "displayhold" else { return }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            pressing = true
+            withAnimation(.linear(duration: 0.3)) { fill = 0.3 / Self.hold }
+        }
         // Nothing to switch while the Mac can't be reached.
         .allowsHitTesting(!model.stale)
         .accessibilityElement(children: .ignore)

@@ -54,7 +54,7 @@ struct TVManageSections: View {
             NavigationLink(value: ManagePage.apps) { Label("Apps on the TV", systemImage: "square.grid.2x2") }.id(ManagePage.apps)
             NavigationLink(value: ManagePage.settings) { Label("TV settings", systemImage: "slider.horizontal.3") }
             // The one TV setting he goes looking for, a tap away rather than two pages down.
-            SettingsAction(title: "Screensaver", icon: "photo.on.rectangle.angled") { model.post("settings-page", ["page": "screensaver"]) }
+            SettingsAction(title: "Screensaver", icon: "photo") { model.post("settings-page", ["page": "screensaver"]) }
         }
         .listRowBackground(TVLook.glassRow)
     }
@@ -66,7 +66,8 @@ struct SettingsAction: View {
     let action: () -> Void
     var body: some View {
         Button { model.tick(); action() } label: {
-            Label { Text(title).foregroundStyle(.primary) } icon: { Image(systemName: icon) }
+            // Outline, like the links beside it: a button row otherwise drew its glyph filled and larger (r26).
+            Label { Text(title).foregroundStyle(.primary) } icon: { Image(systemName: icon).symbolVariant(.none) }
         }
     }
 }

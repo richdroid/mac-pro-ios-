@@ -76,9 +76,12 @@ jobs:
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || echo "Chumby tab $T was not running"
             done
             for T in 0 1 2 3 5 9; do
+              rm -f /tmp/tv-home-fetches.log
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab $T
               sleep 7
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$T$2.png
+              # Watch must have asked for Stremio's home, or Continue watching sits as grey boxes (r26).
+              if [ "$T" = 3 ] && [ ! -s /tmp/tv-home-fetches.log ]; then echo "::error::Watch$2 never fetched Stremio's home"; touch dist/FAILED-tv-3$2-nohome.txt; fi
               xcrun simctl terminate "$DEVICE" local.macpro.TV || echo "TV tab $T was not running"
             done
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -openHistory cpu
@@ -109,7 +112,8 @@ jobs:
                      "screen-closed-landscape 9001 -tab 0 -pose screen -openScreen YES -screenPosture closedLandscape" \
                      "screen-laptop-typing 9001 -tab 0 -pose screentyping -openScreen YES -screenPosture laptop" "screen-closed-typing 9001 -tab 0 -pose screentyping -openScreen YES" \
                      "screen-zoomed 9001 -tab 0 -pose screenzoomed -openScreen YES" "screen-modlock 9001 -tab 0 -pose screenmodlock -openScreen YES" \
-                     "screen-cursor 9001 -tab 0 -pose screencursor -openScreen YES"; do
+                     "screen-cursor 9001 -tab 0 -pose screencursor -openScreen YES" \
+                     "displayhold 9001 -tab 0 -pose displayhold"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$4 "${@:5}"
               sleep 8
@@ -328,10 +332,26 @@ jobs:
           # ---- end Chumby app poses ----
           # The TV and Mac Pro apps in the posture he holds too (Duo open in portrait, the tabs a bar along the foot), every
           # tab, light and dark (r24: only TV 0 and 1 and Mac Pro 3 were shot there).
+          # Mac Pro's tabs open in portrait, light and dark, before the TV's so the time limit can't cut them off. Each shot's
+          # title band is checked: a page whose top 400 px hold almost no bright pixels has lost its title under a black
+          # band, as on 2026-11-05 (r26), and fails loudly.
+          mac_portrait() {
+            for M in light dark; do
+              xcrun simctl ui "$DEVICE" appearance $M
+              for TAB in 0 1 2 3 4 5 9; do
+                xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab $TAB
+                sleep 6
+                xcrun simctl io "$DEVICE" screenshot --display=3 dist/MacPro-$TAB-$M-portrait.png
+                xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+              done
+            done
+            xcrun simctl ui "$DEVICE" appearance light
+            python3 ci/title-check.py dist/MacPro-*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
+          }
           apps_portrait() {
             for M in light dark; do
               xcrun simctl ui "$DEVICE" appearance $M
-              for P in "TV 0 9002" "TV 1 9002" "TV 2 9002" "TV 3 9002" "TV 5 9002" "TV 9 9002" "MacPro 0 9001" "MacPro 1 9001" "MacPro 2 9001" "MacPro 3 9001" "MacPro 4 9001" "MacPro 5 9001" "MacPro 9 9001"; do
+              for P in "TV 0 9002" "TV 1 9002" "TV 2 9002" "TV 3 9002" "TV 5 9002" "TV 9 9002"; do
                 read -r APP TAB PORT <<< "$P"
                 xcrun simctl launch "$DEVICE" local.macpro.$APP -address http://127.0.0.1:$PORT -tab $TAB
                 sleep 6
@@ -547,7 +567,8 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
           pose_shots 3 "-portrait" || echo "portrait shots incomplete"
           chumby_portrait || echo "Chumby portrait shots incomplete"
-          apps_portrait || echo "TV and Mac portrait shots incomplete"
+          mac_portrait || echo "Mac Pro portrait shots incomplete"
+          apps_portrait || echo "TV portrait shots incomplete"
       - name: Collect crash reports
         if: always()
         run: |

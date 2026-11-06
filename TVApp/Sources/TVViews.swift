@@ -343,6 +343,8 @@ struct PageBar<Actions: View>: View {
     @Environment(\.dismiss) private var dismiss
     // Where back goes, for a page that isn't a pushed one (a show's page over everything); a pushed page pops.
     var back: (() -> Void)? = nil
+    // A full bar across the page's foot (a show's or stream's page), rather than a capsule hugging its controls (r26).
+    var full = false
     @ViewBuilder let actions: () -> Actions
     var body: some View {
         HStack(spacing: 2) {
@@ -357,9 +359,11 @@ struct PageBar<Actions: View>: View {
                 .frame(minWidth: 50, minHeight: 50).contentShape(Rectangle())
             }
             .buttonStyle(PressIcon()).accessibilityLabel("Back")
+            if full { Spacer(minLength: 0) }
             actions()
         }
         .padding(.horizontal, 3)
+        .frame(maxWidth: full ? .infinity : nil)
         .glassEffect(.regular.interactive(), in: Capsule())
     }
 }
@@ -591,6 +595,10 @@ struct MirrorView: View {
                 PosterOnBlur(url: film)
                 .id(film)
                 .transition(.opacity)
+            } else if let s = model.starting, !s.played {
+                // While a flicked film starts, never the TV's own picture under its poster: a launcher still read through
+                // PosterOnBlur's first frames (r26). Black until the poster's in; the TV's picture only once it plays.
+                Color.black
             } else if model.mirrorLive {
                 #if os(iOS)
                 ScreenPicture(live: model.live, store: store, art: model.nowArt)
@@ -802,7 +810,8 @@ struct PlayKey: View {
             if let action { model.tick(); action() }
             else { model.togglePlay(shown: playing) }
         } label: {
-            Image(systemName: playing == nil ? "playpause.fill" : playing == true ? "pause.fill" : "play.fill")
+            // Not knowing (offline, or nothing reported yet), the one plain play glyph rather than the two-in-one "▶︎II" (r26).
+            Image(systemName: playing == true ? "pause.fill" : "play.fill")
                 .font(.system(size: size * 0.36, weight: .semibold)).foregroundStyle(.black.opacity(0.85))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: size, height: size).background(tint, in: Circle())
@@ -833,7 +842,11 @@ struct RemoteTab: View {
         if s.screen == "asleep" { return "Asleep" }
         if s.screen == "screensaver" { return "Screensaver" }
         // What's playing, by name, rather than the app it's playing in. Only while it's what's on, never one left behind.
-        if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty { return ([p.showName] + Self.detail(p)).joined(separator: " · ") }
+        if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty {
+            // The episodes line under the picture already says "S2 E3 · …": the header has just the show (r26).
+            let lined = p.pkg == "com.stremio.one" && p.episodeLine != nil && nextUp.series != nil
+            return ([p.showName] + (lined ? [] : Self.detail(p))).joined(separator: " · ")
+        }
         // Nothing with a name on: nothing said, rather than which app is in front.
         return ""
     }
@@ -904,7 +917,8 @@ struct RemoteTab: View {
             .overlay {
                 if dark {
                     ZStack {
-                        Color.black.opacity(0.88)
+                        // Fully black: a faint last frame through it read as the TV still showing something (r26).
+                        Color.black
                         Image(systemName: unreachable ? "wifi.slash" : "moon.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55))
                     }
                     .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
@@ -1007,7 +1021,8 @@ struct RemoteTab: View {
                 // Folded, the pad gets the room until the screen is asked for.
                 VStack(spacing: 14) {
                     // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
-                    if model.mirrorLive && !typing { picture(closable: false).transition(.opacity) }
+                    // Its own eye in its top-right corner, as open (r26); the bar keeps only the way to bring it back.
+                    if model.mirrorLive && !typing { picture(closable: true).transition(.opacity) }
                     // Mint playing has no transport here, so its own player is the way to pause it.
                     if !typing { progress; episodes; music }
                     Group {
@@ -1030,9 +1045,9 @@ struct RemoteTab: View {
             // Folded, the screen goes above the pad unless he's hidden it, so the bar has the switch. Wider, it has its
             // own place and button.
             // Not while typing folded: the picture steps aside then, so its switch would do nothing.
-            if size != .regular && !typing {
+            if size != .regular && !typing && !model.mirrorLive {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { model.setMirror(!model.mirrorLive) } label: { Label(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen", systemImage: model.mirrorLive ? "eye.slash" : "eye") }
+                    Button { model.setMirror(true) } label: { Label("Show the TV’s screen", systemImage: "eye") }
                 }
             }
         }
@@ -1075,7 +1090,8 @@ private struct KeysArrive: ViewModifier {
         content
             .opacity(shown ? 1 : 0)
             .animation(.linear(duration: 0.08), value: shown)
-            .blur(radius: shown ? 0 : 6)
+            // No blur: a blur over the whole pad and its keys, animated, was most of the hitch as the flick's screen moved
+            // onto the Remote (r26). A fade and a slight grow, nothing else.
             .scaleEffect(shown ? 1 : 0.96)
     }
 }
@@ -1160,6 +1176,8 @@ private struct StartingPicture: View {
     let start: TVModel.Starting
     var body: some View {
         ZStack {
+            // Opaque from its first frame, whatever is or isn't loaded yet: nothing under it ever reads through (r26).
+            Color.black
             // Failed: dimmed to half by black over it, not by fading it, which let the picture under it show through (r19).
             PosterOnBlur(url: URL(string: start.art))
                 .overlay { Color.black.opacity(start.failed ? 0.5 : 0) }
@@ -2247,7 +2265,7 @@ struct DiscoverColumn: View {
     }
     @ViewBuilder var controls: some View {
         if let continuing { shelf(continuing).id(Self.continueTitle) }
-        else if home.rows.isEmpty && UserDefaults.standard.bool(forKey: "hadContinueWatching") {
+        else if home.rows.isEmpty && !home.failed && UserDefaults.standard.bool(forKey: "hadContinueWatching") {
             // Stremio's home not in yet, and there was a Continue watching last time: its room is kept, so it fills in
             // rather than arriving above the films and pushing them down (r18).
             PlaceholderShelf(headed: true).id(Self.continueTitle)
@@ -2302,10 +2320,22 @@ struct DiscoverColumn: View {
             .padding(.vertical, 12)
             .animation(.easeInOut(duration: 0.25), value: kind)
         }
-        .restsOnRows()
+        // No row snapping here: aligning a row to the scroll view's top as the page first filled in pulled the content up
+        // under the large title, which then opened folded on some launches and large on others (r26).
         .scrollDismissesKeyboard(.immediately)
         .backToTop(posed: part != .left)
-        .task { if home.rows.isEmpty { await home.load() } }
+        // Stremio's home, asked for here as well as at launch, and asked again until it's in: open, the launch's own ask
+        // could be lost in the relayout of unfolding, and Continue watching sat as grey boxes for good (r26). A failure
+        // takes the waiting row away rather than leaving its boxes up.
+        .task(id: home.rows.isEmpty) {
+            var tries = 0
+            while home.rows.isEmpty && !Task.isCancelled && tries < 8 {
+                await home.load(force: tries > 0)
+                if !home.rows.isEmpty { break }
+                tries += 1
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
         .refreshable { await store.load(force: true) }
         .task(id: kind) { await store.load() }
         .onChange(of: store.rows, initial: true) { _, _ in built = computeRows() }
@@ -2587,7 +2617,9 @@ struct UnderFlick: ViewModifier {
             .opacity(covered ? 0 : 1)
             .animation(.easeOut(duration: 0.15), value: covered)
             #if os(iOS)
-            .toolbarVisibility(covered || barHidden ? .hidden : .automatic, for: .navigationBar)
+            // Only a page with its own foot bar hides the system's bar. Hidden while a flick's page covered it, the tab rail
+            // went with it (r20–r26); the flick's page is opaque now, so nothing under it shows anyway.
+            .toolbarVisibility(barHidden ? .hidden : .automatic, for: .navigationBar)
             #endif
     }
 }

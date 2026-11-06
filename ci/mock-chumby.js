@@ -13,7 +13,7 @@ const data = {
     schedule: [{ time: '22:30', cmd: 'night', val: 'on' }, { time: '07:00', cmd: 'night', val: 'off' }],
     channelNames: ['Default', 'News'], widgetNames: ['Clock', 'Weather', 'X'], mine: [{ name: 'X', secs: 60 }, { name: 'NYT', secs: 45 }],
   },
-  chlist: { cur: 'A', names: [['W3', 'Moon Phase']], channels: [{ id: 'A', conf: [['W1', '1', '30'], ['W2', '0', '0']], list: [['#', 'Default'], ['W1', 'Clock', '30'], ['W2', 'Weather', '15']] }, { id: 'B', conf: [], list: [['#', 'News'], ['W4', 'NYT', '45']] }] },
+  chlist: { cur: 'A', names: [['W3', 'Moon Phase']], channels: [{ id: 'A', conf: [['W1', '1', '30'], ['W2', '0', '0'], ['W5', '1', '45']], list: [['#', 'Default'], ['W1', 'Clock', '30'], ['W2', 'Weather', '15'], ['W5', 'NYT Top Headlines', '45']] }, { id: 'B', conf: [], list: [['#', 'News'], ['W4', 'NYT', '45']] }] },
 };
 http.createServer((q, s) => {
   if (chumbyScene(q, s)) return;   // the Chumby app's poses; see the block at the end
@@ -141,7 +141,7 @@ http.createServer((q, s) => {
   }
   if (q.url.startsWith('/api/tv/streams')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ streams: [['1080p', '1080p', 3.2, ''], ['1080p', '1080p', 1.4, ''], ['4K HDR', '4K', 18.4, 'HDR'], ['720p', '720p', 0.9, '']].map(([name, quality, gb, hdr], n) => ({ token: 's' + n, addon: 'Sample addon', name, description: 'Sample.Film.2024.' + quality + '.WEB-DL.x264', quality, hdr, gb, instant: n < 3 })) })); }
   if (q.url.startsWith('/api/tv/discover')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }
-  if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/poster.png' }))) })); }
+  if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/poster.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' }))) })); }
   if (q.url.startsWith('/api/tv/recs')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ films: ['Rope', 'Match Point', 'Blue Velvet', 'Klute'].map(title => ({ title, year: '1990', slug: title.toLowerCase(), imdb: 'tt1234567', art: tvBase + '/poster.png', why: 'Because you liked Heat' })) })); }
   // A search for the show on the TV finds it, as the real catalogue would (the app looks a series up by name when its
   // rows don't carry it).
@@ -149,7 +149,11 @@ http.createServer((q, s) => {
     s.setHeader('content-type', 'application/json');
     return s.end(JSON.stringify({ rows: [{ title: 'Series', items: [{ title: 'Sample Series', subtitle: '2 seasons', art: tvBase + '/poster.png', id: 'tt1234567', kind: 'series' }] }] }));
   }
-  if (q.url.startsWith('/api/tv/stremio')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }
+  if (q.url.startsWith('/api/tv/stremio')) {
+    // Logged, so CI can assert the Watch tab really asked for Stremio's home (r26: open, Continue watching never loaded).
+    try { require('fs').appendFileSync('/tmp/tv-home-fetches.log', Date.now() + ' ' + q.url + '\n'); } catch {}
+    s.setHeader('content-type', 'application/json'); return s.end(tvStremio);
+  }
   if (q.url === '/api/tv/device-image') { s.setHeader('content-type', 'image/png'); return s.end(boxPhoto); }
   if (q.url === '/api/tv/device') { const up = [12, 18, 9, 22, 30, 14, 11, 16, 25, 19]; s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 18, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 2.4e6, txRate: 8e4, hist: { cpu: up, mem: up.map(x => x + 50), rx: up, tx: up } })); }
   // The TV's home screen, for the stage's TV and the Remote's still (shot.jpg was a photo of a Chumby).
@@ -248,7 +252,8 @@ function chumbyScene(q, s) {
     const now = Date.now() / 1000, fire = Math.floor(now / 60) - 5;
     const wake = alarm({ name: 'Wake', time: String(fire), when: 'once', type: 'audio', arg: 'pandora', param: '1', param_description: 'Morning Mix' });
     const song = Date.now() - songScene.at > 8000 ? { t: fire * 60 + 40, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' } : null;
-    return json({ ...data.state, alarms: [...data.state.alarms, wake], song });
+    // The wake-up's music is still playing, so Now and Woke up to tell the same story.
+    return json({ ...data.state, alarms: [...data.state.alarms, wake], song, music: { playing: true } });
   }
   // Pandora playing a song it started a minute and a half ago, for Sounds' Now.
   if (scene === 'playing' && a === 'state') return json({ ...data.state, music: { playing: true } });
@@ -407,6 +412,8 @@ function tvFlickStart(kind, q, s, path, json) {
   }
   if (q.method === 'POST' && path === '/api/tv/prepare') return read(b => { log('prepare', b); setTimeout(() => json({ ok: true, awake: true, fresh: !!b.token }), 300); });
   if (q.method === 'POST' && path === '/api/tv/key') return read(b => { log('key', b); json({ ok: true }); });
+  // The app's hand-off timing (frame hitches from release to landing), so the build's log has a line to read.
+  if (q.method === 'POST' && path === '/api/tv/timing') return read(b => { log('timing', b); json({ ok: true }); });
   if (q.method === 'POST' && /^\/api\/tv\/(flick|open|stremio-open|film|send|mint-open|music|stop-playing)$/.test(path)) return read(b => { log(path.slice(8), b); if (path.endsWith('stop-playing')) { st.result = 'stopped'; st.endedAt = Date.now(); } json({ ok: true }); });
   if (q.method === 'POST' && path === '/api/tv/play-stream') return read(b => {
     log('play-stream', b);
@@ -487,7 +494,7 @@ function tvReal(q, s, path, query, json) {
   }
   // The series lookup takes a few seconds, as the real catalogue can, so ⏭ pressed before it's in shows its light (r21).
   if (path === '/api/tv/stremio-meta') {
-    const eps = [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/poster.png' })));
+    const eps = [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/poster.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' })));
     return late(3000, () => json({ about: 'A made-up comedy about a made-up family.', episodes: eps }));
   }
   if (path === '/api/tv/stremio' || (path === '/api/tv/discover' && !query.get('q') && !query.get('genre'))) {
@@ -497,6 +504,7 @@ function tvReal(q, s, path, query, json) {
     const hits = all.filter(i => i.title.toLowerCase().includes(term) && !seen.has(i.id) && seen.add(i.id));
     return late(900, () => json({ rows: hits.length ? [{ title: 'Results', items: hits }] : [] }));
   }
+  if (q.method === 'POST' && path === '/api/tv/timing') return read(b => { log('timing', b); json({ ok: true }); });
   if (q.method === 'POST' && path === '/api/tv/key') return read(b => {
     log('key', b);
     const k = String(b.key || '');
