@@ -347,6 +347,11 @@ jobs:
                 xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
               done
             done
+            # Status scrolled to the dials in open portrait too: the content must fade under the title there as folded (r28).
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose scrolled
+            sleep 7
+            xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-scrolled-portrait.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             xcrun simctl ui "$DEVICE" appearance light
             python3 ci/title-check.py dist/MacPro-*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
           }
