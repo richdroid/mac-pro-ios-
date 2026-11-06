@@ -127,9 +127,9 @@ struct ScrollsUnder: ViewModifier {
     // is masked at all.
     @State private var rest: CGFloat?
     @State private var now: CGFloat = 0
-    // Where the bars end on screen (the foot of the title), in global coordinates: the frame's top plus its top safe-area
-    // inset, which is right whether the scroll view's frame stops at the bars or runs under them.
-    @State private var barFoot: CGFloat = 0
+    // How far the mask reaches above the scroll view's own frame (its top safe-area inset): the rest line is measured in the
+    // frame's coordinates, and the mask starts that much higher.
+    @State private var safeTop: CGFloat = 0
     @Environment(\.refresh) private var refresh
     let id: Int
     // Content scrolled up past where it rests fades out over 24 pt as it goes under the title, so the title never sits on
@@ -141,11 +141,13 @@ struct ScrollsUnder: ViewModifier {
         content
             .mask {
                 GeometryReader { g in
-                    if rest != nil, scrolled > 0 {
-                        // Content is gone above the title's foot and whole 24 pt below it, the fade coming in with the first
-                        // 24 pt scrolled. Placed on screen, not from offsets: the offset-based fade sat a band too high
-                        // folded, and "Temperatures" showed under "Status" (r28, b7c8ed6).
-                        let h = max(g.size.height, 1), edge = barFoot - g.frame(in: .global).minY
+                    if let r = rest, scrolled > 0 {
+                        // The rest line is where the content's top sits unscrolled, just under the title. Content scrolled
+                        // past it is gone, and whole again 24 pt below it, the fade coming in with the first 24 pt scrolled.
+                        // Measured on the shots: with the fade ending at the rest line, "Temperatures" still read through
+                        // "Status" at 40% (b7c8ed6); placed at the bars' safe-area foot, it cut 70 pt below the title,
+                        // half the dials gone (63a730d).
+                        let h = max(g.size.height, 1), edge = max(-r, 0) + safeTop
                         let foot = edge + min(scrolled, 24), top = foot - 24
                         if foot <= 0 {
                             Color.black
@@ -162,7 +164,7 @@ struct ScrollsUnder: ViewModifier {
                 // the large title's band unmasked-out, so in open portrait the title vanished (r27).
                 .ignoresSafeArea()
             }
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top } action: { barFoot = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { safeTop = $0 }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 now = y
                 report(id, rest.map { y > $0 + 4 } ?? false)
