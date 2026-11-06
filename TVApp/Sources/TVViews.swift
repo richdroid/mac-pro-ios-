@@ -2267,12 +2267,26 @@ struct DiscoverColumn: View {
             .rowEdge()
         }
     }
+    // Stremio's home not in yet, and there was a Continue watching last time: its room is kept, so it fills in rather than
+    // arriving above the films and pushing them down (r18).
+    var waitingForContinue: Bool { home.rows.isEmpty && !home.failed && UserDefaults.standard.bool(forKey: "hadContinueWatching") }
     @ViewBuilder var controls: some View {
-        if let continuing { shelf(continuing).id(Self.continueTitle) }
-        else if home.rows.isEmpty && !home.failed && UserDefaults.standard.bool(forKey: "hadContinueWatching") {
-            // Stremio's home not in yet, and there was a Continue watching last time: its room is kept, so it fills in
-            // rather than arriving above the films and pushing them down (r18).
-            PlaceholderShelf(headed: true).id(Self.continueTitle)
+        // One slot whose insides change, never two views swapped under the same id: as an if/else of a placeholder and a
+        // shelf both given this id, the lazy stack kept the placeholder it had built, and Continue watching stayed four
+        // grey boxes on every launch after the first (r26–r28: open and open portrait, where "hadContinueWatching" was
+        // already set by the folded run; folded's own first launch never showed a placeholder, so it passed).
+        if continuing != nil || waitingForContinue {
+            VStack(alignment: .leading, spacing: 0) {
+                if let continuing {
+                    shelf(continuing)
+                        // Said only from the real row on screen, so CI fails a pane still showing grey boxes, whatever the
+                        // store holds (r28: the store had the rows, the screen didn't, and the check passed).
+                        .task { _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=home&pane=\(part)"), timeout: 3) }
+                } else {
+                    PlaceholderShelf(headed: true)
+                }
+            }
+            .id(Self.continueTitle)
         }
         Picker("Kind", selection: $kind) { Text("Films").tag("movie"); Text("Shows").tag("series") }
             .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)

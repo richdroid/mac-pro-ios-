@@ -343,9 +343,20 @@ struct FlickScreen: View {
             // In with the backdrop, and out with it, rather than on the rail before anything else is there.
             // On the card and after it, the X in the bar. While choosing (the show's page, the streams), back is in a
             // glass bar at the foot by the side bar, like every other page's, never loose circles over the side bar.
-            .toolbar { if barShown && !choosing { bar } }
+            // Open, the bar's buttons go as the move starts, but the bar itself stays: hiding it there re-laid the whole
+            // screen out under the moving picture, in the move's first frame, and the open hand-off stalled ~160 ms, its
+            // light dropping out for a frame and the picture then leaping to the Remote (r27, r28). Folded keeps the tick
+            // becoming the Remote's eye, and hides the bar as before.
+            .toolbar { if barShown && !choosing && !(panes && toRemote) { bar } }
             // The X goes with the stage, folded and open: left over the side bar it swapped to the Remote's eye in one frame (r19).
-            .navBarHidden(toRemote)
+            .navBarHidden(toRemote && !panes)
+            #if os(iOS)
+            // On a show's or stream's page the side bar stays, as navigation (ruling 1). Nothing in the app hides it and the
+            // page stops 76 pt short of it, yet it was gone beside every such page (r20–r28): this screen's own stack, laid
+            // over the tab view, is the one place left that can be taken as hiding it. Asked for outright while choosing;
+            // the card's step has the whole screen. Unproven: tv-streams-open and tv-realseries-end-open must show the rail.
+            .toolbarVisibility(model.flickChoosing ? .visible : .automatic, for: .tabBar)
+            #endif
             // While choosing, back is the same glass bar every page has, at the foot by the side bar, stepping away as he
             // scrolls down and back as he scrolls up; never a loose circle (r17).
             .environment(\.pageBar, pageBar)
@@ -440,8 +451,10 @@ struct FlickScreen: View {
         ZStack {
             // Opaque under everything: nothing of the page behind can read through, so that page needn't hide its own bar
             // to stay out of sight, which took the tab rail with it (r20–r26: no rail beside a show's page).
+            // No material over it: a full-screen blur of plain black drew nothing but cost a blur pass every frame, twice
+            // the area open, where the throw ran at about 20 fps and the backdrop's fade at the move blurred the Remote
+            // coming up under it (r28).
             Color.black
-            Rectangle().fill(.ultraThinMaterial)
             if step != .flick {
                 Color.clear
                     .overlay {
@@ -556,17 +569,15 @@ struct FlickScreen: View {
     // Unfolded, the show has the left side to itself: poster and name side by side, what it's about under them, and the
     // one big way to carry on, so the side reads full rather than a small poster over empty space.
     var bigHeading: some View {
-        // The name leads, at the top line shared with the other pane; under it the poster at no more than 40 % of the
-        // pane, with what it's about beside it, so neither a giant poster nor a name squeezed into a sliver (r24).
+        // The name leads, at the top line shared with the other pane; under it the poster, big enough to be the pane's
+        // picture (60 % of it, at most 300 pt), and what it's about under that at the pane's full width. Beside a small
+        // poster, the blurb ran in a sliver and the lower half of the pane stood empty, which read as a panel (r28).
         VStack(alignment: .leading, spacing: 16) {
             titles(big: true)
-            HStack(alignment: .top, spacing: 16) {
-                poster.aspectRatio(2 / 3, contentMode: .fit)
-                    .containerRelativeFrame(.horizontal) { w, _ in min(w * 0.4, 220) }
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                blurb(10)
-                Spacer(minLength: 0)
-            }
+            poster.aspectRatio(2 / 3, contentMode: .fit)
+                .containerRelativeFrame(.horizontal) { w, _ in min(w * 0.6, 300) }
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            blurb(6)
             if step == .episodes { resumeButton }
             // On the streams, the episode being chosen for: its number, name, length and what happens, so the side
             // under the poster is the episode's page, not half empty (r27).
@@ -685,14 +696,9 @@ struct FlickScreen: View {
         // sit level; room at the foot for the bar, so the last row can always be scrolled clear of it.
         if panes {
             FoldSplit {
+                // On the page's own black, no panel behind it: a tinted card behind one side read as a block of different
+                // background, half of it empty (r28). The poster fills the side instead.
                 ScrollView { bigHeading.padding(.horizontal, 20).padding(.top, 36).padding(.bottom, 84) }.topFade().summonsBar()
-                    // The film's own colour, softly, behind its side: the pane reads as the film's, never half empty (r26).
-                    .background {
-                        LinearGradient(colors: [(tint ?? .white).opacity(0.32), (tint ?? .white).opacity(0.06), .clear], startPoint: .top, endPoint: .bottom)
-                            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-                            .padding(.horizontal, 8).padding(.vertical, 8)
-                            .allowsHitTesting(false)
-                    }
             } right: {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) { content() }
@@ -839,10 +845,11 @@ struct FlickScreen: View {
                 if !details.isEmpty { Text(details).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1) }
             }
             .multilineTextAlignment(.leading)
-            Spacer(minLength: 8)
-            // How big it is, at the row's end where the eye runs to, rather than empty space.
-            // A column of its own, right-aligned, so the sizes line up down the list (r27).
-            Text(s.size ?? "").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary).frame(minWidth: 64, alignment: .trailing)
+            // How big it is, at the row's end where the eye runs to, rather than empty space, right-aligned so the sizes
+            // line up down the list. It takes the whole rest of the row: with a spacer here as well as the row's own, the
+            // two split the room and each size sat midway, at a different place on every row (r27, r28).
+            Text(s.size ?? "").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary)
+                .frame(minWidth: 64, maxWidth: .infinity, alignment: .trailing).padding(.leading, 8)
         }
         .disabled(failed)
         .opacity(failed ? 0.45 : 1)

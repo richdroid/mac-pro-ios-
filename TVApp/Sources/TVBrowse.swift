@@ -116,7 +116,7 @@ final class BrowseStore: ObservableObject {
     }
     // Stremio's home for Continue watching: one request that every asker waits on, rather than two panes' loads cancelling
     // each other's bookkeeping through the search guards (r27, open: the row stayed four grey boxes). Applied whenever no
-    // search or genre is up, and the mock is told, so CI fails if the row never lands.
+    // search or genre is up. The mock is told by the row itself once it's on screen (DiscoverColumn), not from here.
     private var homeTask: Task<[MediaRow]?, Never>?
     func loadHome() async {
         if !rows.isEmpty && loadedFor == "" && Date().timeIntervalSince(loadedAt) < 60 { return }
@@ -135,9 +135,6 @@ final class BrowseStore: ObservableObject {
         if failed { failed = false }
         if decoded != rows { rows = decoded }
         loadedFor = ""; loadedAt = Date()
-        if decoded.contains(where: { $0.title == "Continue watching" && !$0.items.isEmpty }) {
-            _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=home"), timeout: 3)
-        }
     }
     // Each title once on the page, in the first row it comes in. Continue watching is his own and is kept whole, but what
     // it holds isn't repeated further down.

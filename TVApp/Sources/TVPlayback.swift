@@ -656,11 +656,13 @@ struct EpisodePicker: View {
                         if on { Text(currentLabel).font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(TVLook.accent, in: Capsule()).foregroundStyle(.black) }
                         else if e.id == after { Text("Up next").font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(.white.opacity(0.2), in: Capsule()).foregroundStyle(.white) }
                         if let mins { Text("\(mins) min") }
+                        // Watched, said in the line under the name rather than in a column of its own at the row's end,
+                        // which took the name's room and cut a long one short (r28: Episode 2, "…Home f…").
+                        if watched(e) { Label("Watched", systemImage: "checkmark.circle.fill").labelStyle(.titleAndIcon) }
                     }
                     .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
-                if watched(e) { Image(systemName: "checkmark.circle.fill").font(.body).foregroundStyle(.white.opacity(0.45)).accessibilityLabel("Watched") }
             }
             .padding(8)
             .background(.white.opacity(on ? 0.14 : 0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -723,6 +725,9 @@ struct EpisodesLine: View {
     @Environment(TVModel.self) var model
     @ObservedObject private var nextUp = NextUp.shared
     @State private var open = false
+    // How far down the screen the line sits, so the list above it can stop below the page's title: grown to the top, it
+    // covered "Remote" all but a sliver of its R, which read as a stray letter (r27, r28).
+    @State private var lineTop: CGFloat = 0
     var body: some View {
         if model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one", let line = s.episodeLine, nextUp.series != nil {
           Group {
@@ -737,13 +742,16 @@ struct EpisodesLine: View {
                 .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
             }
             .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { lineTop = $0 }
             // Out of the way while a flick's screen moves onto the picture above it, like the bar.
             .opacity(model.flickHandoff ? 0 : 1)
             .transition(.opacity)
             // Over the page, sized to it, not a page of its own: tap outside or pull it down and it's gone.
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 EpisodeSheet { open = false }
-                    .frame(idealWidth: 440, idealHeight: 560)
+                    // Clear of the title band (about 100 pt from the top, with the arrow) when it opens upward; folded it's a
+                    // sheet, where this ideal is ignored.
+                    .frame(idealWidth: 440, idealHeight: lineTop > 340 ? min(560, lineTop - 112) : 560)
                     .presentationCompactAdaptation(.sheet)
                     .presentationDetents([.medium, .large])
             }

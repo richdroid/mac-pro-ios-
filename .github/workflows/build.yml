@@ -360,9 +360,12 @@ jobs:
               xcrun simctl ui "$DEVICE" appearance $M
               for P in "TV 0 9002" "TV 1 9002" "TV 2 9002" "TV 3 9002" "TV 5 9002" "TV 9 9002"; do
                 read -r APP TAB PORT <<< "$P"
+                rm -f /tmp/tv-home-applied.log
                 xcrun simctl launch "$DEVICE" local.macpro.$APP -address http://127.0.0.1:$PORT -tab $TAB
                 sleep 6
                 xcrun simctl io "$DEVICE" screenshot --display=3 dist/$APP-$TAB-$M-portrait.png
+                # Continue watching really on screen in the posture he holds (r28: grey boxes here, and nothing checked it).
+                if [ "$APP$TAB" = TV3 ] && [ ! -s /tmp/tv-home-applied.log ]; then echo "::error::Watch $M portrait never showed Continue watching"; touch dist/FAILED-tv-3-$M-portrait-norows.txt; fi
                 xcrun simctl terminate "$DEVICE" local.macpro.$APP || true
               done
             done
