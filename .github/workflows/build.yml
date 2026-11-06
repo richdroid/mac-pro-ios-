@@ -570,15 +570,17 @@ jobs:
           tv_tour 3 "-open" || echo "TV tour open incomplete"
           chumby_poses 3 "-open" || echo "Chumby poses open incomplete"
           shots 3 "-open"
-          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
-          pose_shots 3 "-partial" || echo "partial shots incomplete"
-          tv_flick 3 "-partial" || echo "TV flick partial incomplete"
-          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; sleep 3
+          # Open portrait (the posture he holds) before partly folded: on 2026-11-06 the step's time ran out in the partial
+          # shots and not one portrait shot was taken.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
           pose_shots 3 "-portrait" || echo "portrait shots incomplete"
           chumby_portrait || echo "Chumby portrait shots incomplete"
           mac_portrait || echo "Mac Pro portrait shots incomplete"
           apps_portrait || echo "TV portrait shots incomplete"
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 0 || true; sleep 3
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
+          pose_shots 3 "-partial" || echo "partial shots incomplete"
+          tv_flick 3 "-partial" || echo "TV flick partial incomplete"
       - name: Collect crash reports
         if: always()
         run: |
