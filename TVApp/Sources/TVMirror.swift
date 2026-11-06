@@ -113,6 +113,11 @@ final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private var told = false
     private var finished = false
     private var quiet: DispatchWorkItem?
+    // When each picture reached the decoder, so how smoothly the mirror really moves on the phone can be measured: every
+    // 10 s the spacing is summed up and sent to the Mac's timing log, beside the Mac's own count of what the TV sent.
+    private var shownAt: [Double] = []
+    private var bytesIn = 0
+    private var since = CACurrentMediaTime()
 
     init(url: URL, renderer: AVSampleBufferVideoRenderer, picture: @escaping @Sendable () -> Void, ended: @escaping @Sendable () -> Void) {
         self.renderer = renderer; self.picture = picture; self.ended = ended
@@ -149,6 +154,7 @@ final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard !finished else { return }
         buffer.append(data)
+        bytesIn += data.count
         split(tail: false)
         // Nothing more for a moment: what's left is a whole unit, shown now rather than when the next one comes, which
         // for a still screen might be never. Long enough that a big picture still arriving isn't cut short.
@@ -238,6 +244,22 @@ final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         guard let sample = Self.sample(block, format) else { return }
         renderer.enqueue(sample)
         if !told { told = true; picture() }
+        pace()
+    }
+    private func pace() {
+        let t = CACurrentMediaTime()
+        shownAt.append(t)
+        guard t - since >= 10 else { return }
+        let gaps = zip(shownAt.dropFirst(), shownAt).map { ($0 - $1) * 1000 }.sorted()
+        let span = t - since
+        since = t
+        defer { shownAt = [t]; bytesIn = 0 }
+        guard gaps.count >= 5 else { return }
+        let at = { (q: Double) in gaps[min(gaps.count - 1, Int(Double(gaps.count) * q))].rounded() }
+        let event: [String: Any] = ["name": "mirror", "fps": (Double(gaps.count) / span * 10).rounded() / 10, "p50": at(0.5), "p95": at(0.95),
+                                    "max": gaps.last!.rounded(), "over100": gaps.filter { $0 > 100 }.count,
+                                    "bursts": gaps.filter { $0 < 8 }.count, "kbps": (Double(bytesIn) * 8 / span / 1000).rounded()]
+        Task { _ = try? await TVBridge.post("timing", ["events": [event]], timeout: 10) }
     }
     static func format(_ sps: Data, _ pps: Data) -> CMVideoFormatDescription? {
         var out: CMVideoFormatDescription?
