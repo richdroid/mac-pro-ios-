@@ -2639,6 +2639,9 @@ struct UnderFlick: ViewModifier {
         let covered = model.flickChoosing || model.flickCovering
         content
             .opacity(covered ? 0 : 1)
+            // Black under the side bar too while covered: the strip beside a show's or stream's page showed whatever lay
+            // under the faded page, a brown (28,16,10) against the page's near-black (8,5,4) edge, a band (r30).
+            .overlay { Color.black.ignoresSafeArea().opacity(covered ? 1 : 0).allowsHitTesting(false) }
             .animation(.easeOut(duration: 0.15), value: covered)
             #if os(iOS)
             // Only a page with its own foot bar hides the system's bar. Hidden while a flick's page covered it, the tab rail

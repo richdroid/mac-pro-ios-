@@ -8,7 +8,7 @@ permissions:
 jobs:
   build:
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
         # The job can write to the repo and its release; no later step, or code it builds, gets the token from disk.
@@ -48,8 +48,9 @@ jobs:
         continue-on-error: true
         # Raised from 40 for the Mac Pro state shots, about 3.5 minutes more across both displays, then to 60 for the TV
         # app's flick, tour and scrolled shots, about 6 minutes more across the three postures, then to 80 for the real-data
-        # flows and the flick's starts (r17 ran out at 65, in the Chumby open shots, before any TV open shot).
-        timeout-minutes: 88
+        # flows and the flick's starts (r17 ran out at 65, in the Chumby open shots, before any TV open shot). Then to 115:
+        # with every tab in open portrait added, 88 cut off the open stream, playing and Mac Pro shots (2026-11-06).
+        timeout-minutes: 115
         run: |
           set +x
           exec > >(tee dist/sim.log) 2>&1
