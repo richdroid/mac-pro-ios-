@@ -357,7 +357,12 @@ private struct MovingTitle: View {
 @MainActor
 final class PageBarState: ObservableObject {
     @Published private(set) var shown = true
+    // The page bringing its own place into view as it opens (a show's page scrolls to the episode playing) is not him
+    // scrolling: in its first moments the bar stays, so Back is there on arrival (2026-11-07 portrait shots: the show's
+    // page opened with no Back at all).
+    private let born = Date()
     func follow(_ old: CGFloat, _ new: CGFloat) {
+        guard Date().timeIntervalSince(born) > 1.5 else { return }
         let want: Bool? = new < 24 ? true : new - old > 6 ? false : old - new > 6 ? true : nil
         if let want, want != shown { withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) { shown = want } }
     }
