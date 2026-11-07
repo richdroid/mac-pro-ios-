@@ -36,7 +36,9 @@ struct MacProApp: App {
     // A tapped notification opens where its problem can be dealt with: a waiting session on its own page.
     private func openAlert(_ id: String) {
         AlertWatch.pending = nil
-        if id.hasPrefix("session:") { model.openSession(key: String(id.dropFirst(8))) } else { model.tab = 0 }
+        // New apps waiting while he's away: straight to Apps, where each one installs through SideStore (Richard, 2026-11-07:
+        // "a method to remotely push updates").
+        if id.hasPrefix("session:") { model.openSession(key: String(id.dropFirst(8))) } else if id == "ios:waiting" { model.tab = 1 } else { model.tab = 0 }
     }
     private func openScreenIfAsked() {
         if ScreenRequest.wanted || UserDefaults.standard.bool(forKey: "openScreen") { ScreenRequest.wanted = false; model.screenOpen = true }
