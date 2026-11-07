@@ -167,6 +167,9 @@ struct FlickScreen: View {
     // On the control screen, a way back to the start, for when it's still near the end.
     @State private var askedRestart = false
     @Environment(\.paneLayout) private var panes
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    // Open in portrait the tabs are a bar along the foot, under this page; otherwise they're the side bar beside it.
+    var tabsAtFoot: Bool { sizeClass == .regular && !panes }
     @State private var priorMood: Color??
     // Thrown sideways too, the card's way across settles on its own spring, so the flight bends.
     @State private var flownX = false
@@ -367,7 +370,7 @@ struct FlickScreen: View {
             .overlay(alignment: .bottom) {
                 // With a side bar beside the page, Back is the side bar's (Richard, 2026-11-07: "back should be on side
                 // bar"). Open in portrait the page covers the tab bar, so there it keeps its own bar at the foot.
-                if choosing && model.railWidth < 1 {
+                if choosing && tabsAtFoot {
                     // One glass bar across the page's foot, back at its start: summoned by scrolling up, gone on the way
                     // down, and the page's foot inset (84 pt) keeps its last row clear of it at rest (r26: a lone "Back"
                     // capsule sat over episode 4's title).
@@ -393,7 +396,7 @@ struct FlickScreen: View {
             }
             .onChange(of: choosing && !leaving, initial: true) { _, c in model.flickChoosing = c }
             // The side bar's Back steps back through the choosing (streams → episodes → out), as the page's own bar did.
-            .onChange(of: choosing && !leaving && model.railWidth >= 1, initial: true) { _, on in
+            .onChange(of: choosing && !leaving && !tabsAtFoot, initial: true) { _, on in
                 if on { model.pushBack(railBackID) { if let previous { go(previous) } else { leave() } } } else { model.popBack(railBackID) }
             }
             .onChange(of: !choosing && !toRemote && !leaving, initial: true) { _, c in model.flickCovering = c }

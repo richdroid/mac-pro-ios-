@@ -421,7 +421,7 @@ function tvPose(q, s) {
     q.on('close', () => { clearTimeout(wait); clearInterval(timer); });
     return true;
   }
-  if (/^r(asleep|offline|youtube|mint|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
+  if (/^r(asleep|offline|youtube|youtubebare|mint|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
     const v = JSON.parse(tvStatus), now = Date.now();
     if (scene === 'rasleep') { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'roffline') { v.online = false; delete v.session; }
