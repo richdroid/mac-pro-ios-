@@ -538,15 +538,17 @@ jobs:
             real
             # The real remote film folded only; the four task flows folded and unfolded.
             if [ -z "$2" ]; then
+            curl -s http://127.0.0.1:9002/real/hold-offline > /dev/null
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-real-remote$2.mp4 > /dev/null 2>&1 & REC=$!
             sleep 5
             xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 0
             sleep 10; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-remote-start$2.png
             sleep 14; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-remote-length$2.png
-            # The phone shows the TV gone about 37 s after launch (the mock's 30 s from its first answer, plus the late status
-            # answers): at 33 s the shot still showed it on, everything bright (r33).
+            # The TV goes at 30 s from the mock's first answer and is held gone until the shot is taken, then let back, so
+            # the film still shows it coming back (r33, r34: a timed shot missed it twice).
             sleep 14; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-remote-offline$2.png
-            sleep 3
+            curl -s http://127.0.0.1:9002/real/release > /dev/null
+            sleep 6
             kill -INT $REC; wait $REC; echo "real remote video$2 exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             real

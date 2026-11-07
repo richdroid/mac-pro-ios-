@@ -517,7 +517,11 @@ function tvFlickStart(kind, q, s, path, json) {
 function tvReal(q, s, path, query, json) {
   const fs = require('fs'), now = Date.now();
   // CI starts each flow from the top: the episode at 0:00, no length yet, and an empty send log.
-  if (path === '/reset') { tvReal.state = null; try { fs.unlinkSync('/tmp/tv-real-sends.log'); } catch {} return json({ ok: true }); }
+  if (path === '/reset') { tvReal.state = null; tvReal.hold = false; try { fs.unlinkSync('/tmp/tv-real-sends.log'); } catch {} return json({ ok: true }); }
+  // The TV, once gone at 30 s, stays gone until /release, so the build's shot of it gone never misses (r33, r34: the phone
+  // showed it gone at 37-43 s one run and 42-46 s the next, and both shots landed outside).
+  if (path === '/hold-offline') { tvReal.hold = true; return json({ ok: true }); }
+  if (path === '/release') { tvReal.hold = false; if (tvReal.state) tvReal.state.back = Date.now(); return json({ ok: true }); }
   // A fresh launch (nothing asked for 15 s) starts the episode again from 0:00.
   const r = tvReal.state && now - tvReal.state.last < 15000 ? tvReal.state
     : (tvReal.state = { start: now, asks: 0, playing: true, pos: 0, posAt: now, seeked: false, flips: [] });
@@ -540,7 +544,7 @@ function tvReal(q, s, path, query, json) {
   if (path === '/api/tv/status') {
     r.asks++;
     const v = JSON.parse(tvStatus);
-    if (t >= 30 && t < 35) { v.online = false; delete v.music; return late(400, () => json(v)); }
+    if (t >= 30 && (t < 35 || tvReal.hold) && !r.back) { v.online = false; delete v.music; return late(400, () => json(v)); }
     v.app = 'com.stremio.one';
     // Mint's session stays listed, paused, after a film has started over it.
     v.music = { title: 'A Paused Song', artist: 'Some Band', album: 'Some Album', art: tvBase + '/art.png', playing: false, position: 61000, duration: 214000, sampledAt: now - 600000 };
