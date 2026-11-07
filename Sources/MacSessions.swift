@@ -260,6 +260,7 @@ struct SessionTerminal: View {
         .animation(Motion.fade, value: waiting)
         .background(Color.black.ignoresSafeArea())
         .navigationTitle(session.name)
+        .toolbarVisibility(.visible, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(.dark)
         .sensoryFeedback(trigger: sends) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }

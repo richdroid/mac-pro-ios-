@@ -116,6 +116,7 @@ struct ProcessesView: View {
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
         .navigationTitle("Processes")
+        .toolbarVisibility(.visible, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             while !Task.isCancelled {

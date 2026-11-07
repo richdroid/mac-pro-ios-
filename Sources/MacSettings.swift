@@ -30,6 +30,12 @@ struct MacSettings: View {
         NavigationStack {
             ScrollViewReader { proxy in
             List {
+                // The page's name as its first line, going up with the page, as on every other tab.
+                Section {
+                    Text("Settings").font(.largeTitle.weight(.bold)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden)
                 // All seven in view, spread evenly across the row, never scrolled or cut off.
                 Section("Colour") {
                     HStack(spacing: 0) {
@@ -60,7 +66,7 @@ struct MacSettings: View {
                     Picker("Live figures", selection: $liveEvery) { Text("Every second").tag(1.0); Text("Every 2 seconds").tag(2.0); Text("Every 5 seconds").tag(5.0) }
                     Picker("Everything else", selection: $fullEvery) { Text("Every 10 seconds").tag(10.0); Text("Every 30 seconds").tag(30.0); Text("Every minute").tag(60.0) }
                 }
-                // The Usage tab's API dial fills against this. Picked, not typed, so there's no keyboard to get stuck with.
+                // The API dial on the Claude tab fills against this. Picked, not typed, so there's no keyboard to get stuck with.
                 Section("Claude") {
                     Picker("Monthly API budget", selection: Binding(get: { apiBudget }, set: { v in
                         if v < 0 { budgetDraft = apiBudget; customBudget = true } else { apiBudget = v }
@@ -73,13 +79,13 @@ struct MacSettings: View {
                         TextField("Dollars", value: $budgetDraft, format: .number).keyboardType(.decimalPad)
                         Button("Save") { if budgetDraft > 0 { apiBudget = budgetDraft } }
                         Button("Cancel", role: .cancel) {}
-                    } message: { Text("In dollars, for the dial on the Usage tab.") }
+                    } message: { Text("In dollars, for the API dial on the Claude tab.") }
                     .id("claude")
                 }
                 Section {
                     Picker("Open on", selection: $startTab) {
                         Text("The last tab used").tag(-1)
-                        Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("Usage").tag(3); Text("Updates").tag(4); Text("Control").tag(5)
+                        Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("Updates").tag(4); Text("Control").tag(5)
                     }
                     Toggle("Haptics", isOn: $haptics)
                     Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
@@ -103,6 +109,7 @@ struct MacSettings: View {
             // The same top edge as every other tab, rather than the system's band and hairline.
             .topEdge()
             .navigationTitle("Settings")
+            .toolbarVisibility(.hidden, for: .navigationBar)
             .sheet(isPresented: $connecting) { SignInView().environmentObject(model) }
             // New intervals take hold straight away rather than after the current wait.
             .onChange(of: liveEvery) { _, _ in model.start() }

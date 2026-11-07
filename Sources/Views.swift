@@ -17,13 +17,13 @@ struct MacProApp: App {
                     #endif
                 }
                 .onAppear {
-                    model.start(); openScreenIfAsked(); AlertWatch.shared.askOnce(); TabTour.run([0, 1, 2, 3, 4, 5, 9]) { model.tab = $0 }
+                    model.start(); openScreenIfAsked(); AlertWatch.shared.askOnce(); TabTour.run([0, 1, 2, 4, 5, 9]) { model.tab = $0 }
                     if let id = AlertWatch.pending { openAlert(id) }
                     TransitionTour.run(model)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: AlertWatch.openAlert)) { n in openAlert(n.object as? String ?? "") }
                 .onReceive(NotificationCenter.default.publisher(for: ScreenRequest.notification)) { _ in openScreenIfAsked() }
-                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
+                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.show(tab: t) } }
         }
         #if os(iOS)
         // iOS decides when, and may not for hours. The banner on Status is always current.
@@ -208,17 +208,23 @@ struct RootView: View {
                 if t == 2 { model.sessionScreen = nil }
                 resets[t, default: 0] += 1
             }) {
+                // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab. Seven in the bar along the foot
+                // (open in portrait) were squeezed, the labels nearly touching (Richard, 2026-11-07: "the bar like the
+                // elements r squished tg looks ugly").
                 Tab(value: 0) { Screen(tab: 0, title: "Status") { StatusTab($0, side: $1) }.id(key(0)) } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
                 Tab(value: 1) { Screen(tab: 1, title: "Apps") { AppsTab($0, side: $1) }.id(key(1)) } label: { tabLabel("Apps", "square.grid.2x2") }
                 Tab(value: 2) { Screen(tab: 2, title: "Claude") { ClaudeTab($0, side: $1) }.id(key(2)) } label: { tabLabel("Claude", asset: "ClaudeTab") }
-                Tab(value: 3) { Screen(tab: 3, title: "Usage") { UsageTab($0, side: $1) }.id(key(3)) } label: { tabLabel("Usage", "chart.bar") }
                 Tab(value: 4) { Screen(tab: 4, title: "Updates", listed: false) { UpgradeTab($0, side: $1) }.id(key(4)) } label: { tabLabel("Updates", "arrow.up.circle") }
                 Tab(value: 5) { Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5)) } label: { tabLabel("Control", "display") }
                 // Last, so it sits at the foot of the side bar.
                 Tab(value: 9) { MacSettings().id(resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
             }
             .tint(macBlue)
-            .onChange(of: model.tab) { _, t in UserDefaults.standard.set(t, forKey: "tab") }
+            .onChange(of: model.tab) { _, t in
+                UserDefaults.standard.set(t, forKey: "tab")
+                // A tab opens on the Mac as it is now, not as it was at the last 10-second reading.
+                Task { await model.refresh() }
+            }
         }
         .onAppear { MacPrefs.shareWithWidgets() }
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }
@@ -288,7 +294,10 @@ struct Screen<Content: View>: View {
     func list(_ side: Side) -> some View {
         ScrollViewReader { proxy in
             List {
-                if side != .all { Section { paneTitle(side) }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden) }
+                // The page's name is its first line, in one pane or two, and goes up with the page: the system's large
+                // title collapsed into the bar, and the rows ran on under it ("Open on the Mac (13)" printed behind
+                // "Apps", 2026-11-07). The TV app does the same.
+                Section { paneTitle(side).id("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden)
                 if side != .right, Notice.shows(model) { Section { Notice() } }
                 if let s = model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
@@ -296,9 +305,29 @@ struct Screen<Content: View>: View {
             // One gap between the blocks on Status, where they sit on the page's own background.
             .listSectionSpacing(tab == 0 ? .custom(28) : .default)
             .scrollsUnder(side == .right ? 1 : 0)
-            .refreshable { await model.refresh() }
+            // No pull to refresh: every figure follows the Mac by itself (each second on Status, every 10 seconds
+            // otherwise, and at once on opening a tab), so pulling only ever showed what was already there (Richard,
+            // 2026-11-07: the display key "should self update not requiring refresh which u can take the function out").
             .contentMargins(.top, 4, for: .scrollContent)
+            // Asked for the usage (the Claude widget, or an old link to the Usage tab): the Claude tab opens at it.
+            .task(id: model.usageAsked) {
+                // Once per ask, so coming back to the tab later finds it where it was left.
+                guard tab == 2, side != .left, model.usageAsked > model.usageShown else { return }
+                for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                model.usageShown = model.usageAsked
+                withAnimation(Motion.quick) { proxy.scrollTo("usage", anchor: .top) }
+            }
             .task {
+                // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
+                // apps (his 2026-11-07 screenshot), Claude to the usage.
+                guard model.pose != "scrolled" || tab == 0 else {
+                    guard side != .left, let to = [1: "open", 2: "usage"][tab] else { return }
+                    for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    proxy.scrollTo(to, anchor: .top)
+                    return
+                }
                 // The build's shot of Status scrolled down to the dials and the disk.
                 guard tab == 0, side != .left, model.pose == "scrolled" || model.pose == "scrollfilm" else { return }
                 // A cold launch in the build's simulator takes ~10 s to show Status: wait for it, so the film shows scrolling.
@@ -310,7 +339,7 @@ struct Screen<Content: View>: View {
                 for _ in 0..<2 {
                     withAnimation(.easeInOut(duration: 1.4)) { proxy.scrollTo("temps", anchor: .top) }
                     try? await Task.sleep(nanoseconds: 2_200_000_000)
-                    withAnimation(.easeInOut(duration: 1.4)) { proxy.scrollTo("top", anchor: .top) }
+                    withAnimation(.easeInOut(duration: 1.4)) { proxy.scrollTo("pagetop", anchor: .top) }
                     try? await Task.sleep(nanoseconds: 2_200_000_000)
                 }
             }
@@ -328,7 +357,7 @@ struct Screen<Content: View>: View {
     }
     func page(_ side: Side) -> some View {
         VStack(spacing: 12) {
-            if side != .all { paneTitle(side).padding(.leading, side == .left ? 20 : 0) }
+            paneTitle(side).padding(.leading, side == .right ? 0 : 20)
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
                     .padding(.leading, 20)
@@ -355,9 +384,9 @@ struct Screen<Content: View>: View {
             .navigationTitle(title)
             // Large open too, so the page's name leads and its section headings follow. Small in the bar, it sat under
             // headings like "This Mac" and "Log" and read wrong (Richard, 2026-11-05).
-            // Two panes: no bar title at all; each pane's first line carries the name (paneTitle).
+            // No bar title at all, in one pane or two: the page's first line carries the name (paneTitle).
             .navigationBarTitleDisplayMode(.large)
-            .toolbarVisibility(panes ? .hidden : .automatic, for: .navigationBar)
+            .toolbarVisibility(.hidden, for: .navigationBar)
             .navigationDestination(item: tab == 0 ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
             .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0) }
         }
@@ -679,49 +708,58 @@ struct StatusTab: View {
 
 struct AppsTab: View {
     @EnvironmentObject var model: AppModel
-    @State private var pending: PendingQuit?
+    @State private var pending: Status.App?
     @State private var alert: String?
-    struct PendingQuit: Identifiable { let app: Status.App; let force: Bool; var id: String { "\(app.pid)\(force)" } }
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
+    // Its memory, with its helpers', always; the CPU only while it's doing something, so a list of idle apps isn't a column
+    // of "0% CPU" and a busy one stands out. Megabytes under a gigabyte: a few hundred MB read as "0.1 GB" in gigabytes.
+    static func figures(_ a: Status.App) -> String {
+        let mem = Format.memory(a.mem ?? 0), cpu = a.cpu ?? 0
+        return cpu >= 1 ? "\(mem) · \(Int(cpu.rounded()))% CPU" : mem
+    }
     var body: some View {
         if side != .right {
             if let seed = s.iosApps { SeedSection(seed: seed) }
         }
         if side != .left {
-            Section("Open on the Mac (\(s.apps.count))") {
-                ForEach(s.apps) { a in
-                    // Quitting is a quiet ✕ menu at the row's end, not a swipe (no swipe-to-delete on glass cards).
+            // Only apps that are really running: an older Mac listed ones that had quit, with no figures (Calendar and
+            // Safari at 0 MB, 2026-11-07).
+            let open = s.apps.filter { $0.mem != nil }
+            Section("Open on the Mac (\(open.count))") {
+                ForEach(open) { a in
+                    // Quitting is a full-strength Quit capsule at the row's end, the same control as Update above it: a
+                    // dim grey ✕ read as unavailable though it worked (Richard, 2026-11-07: "the greyed out xs when they r
+                    // seemingly actionable r confusing and fucked"). Never a swipe (no swipe-to-delete on glass cards).
                     HStack(spacing: 12) {
                         VStack(alignment: .leading) {
                             Text(a.name)
-                            // Megabytes under a gigabyte: an app's few hundred MB read as "0.1 GB" or "0.4 GB" in gigabytes.
-                            Text(String(format: "%.0f%% CPU · %@", a.cpu ?? 0, Format.memory(a.mem ?? 0))).font(.footnote).foregroundStyle(.secondary)
+                            Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
                         }
                         Spacer(minLength: 8)
-                        Menu {
-                            Button("Quit") { pending = .init(app: a, force: false) }
-                            Button("Force Quit", role: .destructive) { pending = .init(app: a, force: true) }
-                        } label: {
-                            Image(systemName: "xmark.circle").font(.title3).foregroundStyle(.tertiary).frame(width: 36, height: 36).contentShape(Rectangle())
-                        }
-                        .accessibilityLabel("Quit \(a.name)")
+                        Button("Quit") { pending = a }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("Quit \(a.name)")
                     }
+                    // The first app is where the build's scrolled shot stops, its heading gone up under the top.
+                    .id(open.first?.id == a.id ? AnyHashable("open") : AnyHashable(a.id))
                 }
             }
             Section {
                 Menu {
-                    ForEach(s.installed, id: \.self) { name in Button(name) { Task { alert = await model.run("app-open", ["name": name]) } } }
+                    // What isn't already open, the Mac's own apps included (Terminal, Calendar and the rest).
+                    ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button(name) { Task { alert = await model.run("app-open", ["name": name]) } } }
                 } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
             }
-            // Asked from the row's menu, so it's a plain question in the middle.
-            .alert(pending.map { ($0.force ? "Force quit " : "Quit ") + $0.app.name + "?" } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
+            // One question from the row's Quit, with Force Quit beside it for an app that won't go.
+            .alert(pending.map { "Quit \($0.name)?" } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
                 if let p = pending {
-                    Button(p.force ? "Force Quit" : "Quit", role: .destructive) { Task { alert = await model.run(p.force ? "app-kill" : "app-quit", ["pid": p.app.pid]) } }
+                    Button("Quit") { Task { alert = await model.run("app-quit", ["pid": p.pid]) } }
+                    Button("Force Quit", role: .destructive) { Task { alert = await model.run("app-kill", ["pid": p.pid]) } }
                     Button("Cancel", role: .cancel) {}
                 }
-            } message: { if pending?.force == true { Text("Unsaved work is lost.") } }
+            } message: { Text("Force Quit loses unsaved work.") }
             .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
         }
     }
@@ -762,7 +800,9 @@ struct ClaudeTab: View {
             // Each session's screen read ahead, so a tap pushes a page that's already drawn.
             .task(id: s.claude.sessions.compactMap(\.key)) { await TermCache.warm(model.api, s.claude.sessions.compactMap(\.key)) }
         }
-        if side != .left {
+        // The usage: on the right pane open, between the sessions and the service folded.
+        if side != .left { UsageTab(s) }
+        if side != .right {
             Section("Claude Code") {
                 StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
                 StateRow(label: "Auto-restart", good: s.claude.keepAlive, value: s.claude.keepAlive ? "Armed" : "Off")
@@ -799,6 +839,19 @@ func resetsIn(_ ms: Double) -> String {
     return left <= 0 ? "Reset" : "Resets in " + Format.span(left)
 }
 
+// A label, a figure and a line under it: the API card's right-hand column, and the plan card's.
+struct UsageFigure: View {
+    let title: String, value: String, detail: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+            Text(value).font(.title2.weight(.semibold)).monospacedDigit()
+            Text(detail).font(.caption).foregroundStyle(.tertiary).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct UsageTab: View {
     let s: Status
     var side: Side = .all
@@ -823,15 +876,26 @@ struct UsageTab: View {
     var body: some View {
         if side != .right {
             Section {
-                // Only the limits Claude reports. It has stopped sending a 5-hour one for this plan; it shows again if that returns.
-                HStack(alignment: .top, spacing: 16) {
+                // Only the limits Claude reports. It has stopped sending a 5-hour one for this plan; it shows again if that
+                // returns. With one dial, the card is laid out as the API card under it: the dial left, this Mac's figures
+                // right, so the two read as one pair rather than a lone dial in a wide card.
+                HStack(alignment: .center, spacing: 16) {
                     if u.plan?.fiveHour != nil { limit("5 hours", u.plan?.fiveHour, u.plan?.fiveHourResets) }
                     limit("This week", u.plan?.sevenDay, u.plan?.sevenDayResets)
+                    if u.plan?.fiveHour == nil {
+                        VStack(alignment: .leading, spacing: 14) {
+                            UsageFigure(title: "Last 5 hours", value: Format.count(u.fiveHours.tokens), detail: "tokens on this Mac")
+                            UsageFigure(title: "Last 7 days", value: Format.count(u.week.tokens), detail: "tokens on this Mac")
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .padding(.vertical, 4)
             } header: { Text("Plan limits") } footer: {
-                if let p = u.plan { Text("Updated \(Format.ago(ms: p.at))") }
+                // Its age only once it's old enough to doubt: "Updated 43m ago" under a live reading read as stale (2026-11-07).
+                if let p = u.plan, let age = Format.staleAge(ms: p.at) { Text("Last read \(age)") }
             }
+            .id("usage")
             APIUsageSection(usage: s.apiUsage)
             Section("Tokens per hour, last 24 hours") {
                 VStack(alignment: .leading) {
@@ -848,10 +912,13 @@ struct UsageTab: View {
             }
         }
         if side != .left {
-            Section {
-                LabeledContent("Last 5 hours", value: Format.count(u.fiveHours.tokens))
-                LabeledContent("Last 7 days", value: Format.count(u.week.tokens))
-            } header: { Text("Tokens on this Mac") } footer: { Text("Covers Claude Code and Cowork sessions on this Mac, not claude.ai or other devices.") }
+            // With two plan dials there's no room for this Mac's figures beside them, so they're a list here instead.
+            if u.plan?.fiveHour != nil {
+                Section("Tokens on this Mac") {
+                    LabeledContent("Last 5 hours", value: Format.count(u.fiveHours.tokens))
+                    LabeledContent("Last 7 days", value: Format.count(u.week.tokens))
+                }
+            }
             if !models.isEmpty {
                 Section("By model, last 7 days") {
                     ForEach(models, id: \.key) { name, v in
@@ -874,12 +941,7 @@ struct APIUsageSection: View {
     static func money(_ v: Double) -> String { v.formatted(.currency(code: "USD").precision(.fractionLength(v >= 100 ? 0 : 2))) }
     var budget: Double { savedBudget > 0 ? savedBudget : MacPrefs.apiBudget }
     func figure(_ title: String, _ s: Status.APIUsage.Spend?) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-            Text(s.map { Self.money($0.cost) } ?? "–").font(.title2.weight(.semibold)).monospacedDigit()
-            Text("\(Format.count(s?.tokens ?? 0)) tokens").font(.caption).foregroundStyle(.tertiary).monospacedDigit()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        UsageFigure(title: title, value: s.map { Self.money($0.cost) } ?? "–", detail: "\(Format.count(s?.tokens ?? 0)) tokens")
     }
     // Until the credit renews: the Mac says when (the 19th), and older Macs fall back to the month's end.
     var resets: String {
@@ -968,11 +1030,11 @@ struct APIUsageSection: View {
             } else if let u = usage, u.estimated || !u.configured {
                 // Counted from the Mac's own sessions on the key. The Admin key is only an offer, for exact figures.
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(u.at.map { "Counted on the Mac, updated \(Format.ago(ms: $0))" } ?? "Counted on the Mac")
+                    Text(u.at.flatMap { Format.staleAge(ms: $0) }.map { "Counted on the Mac, \($0)" } ?? "Counted on the Mac")
                     Button("For exact numbers, add an Admin key") { withAnimation(Motion.quick) { model.apiSetup = true } }
                         .buttonStyle(.plain).foregroundStyle(macBlue)
                 }
-            } else if let at = usage?.at, usage?.configured == true { Text("Updated \(Format.ago(ms: at))") }
+            } else if let at = usage?.at, usage?.configured == true, let age = Format.staleAge(ms: at) { Text("Last read \(age)") }
         }
     }
 }

@@ -33,7 +33,15 @@ final class AppModel: ObservableObject {
     private var pendingSession: String?
     private var lastData: Data?
     // The tab chosen to open on in Settings, or else the one last used.
-    @Published var tab = { let d = UserDefaults.standard, start = d.object(forKey: "startTab") as? Int ?? -1; return start >= 0 ? start : d.integer(forKey: "tab") }()
+    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab
+    // Counts each ask for the usage, which lives on the Claude tab: the Claude tab scrolls to it.
+    @Published var usageAsked = AppModel.firstTab == 3 ? 1 : 0
+    var usageShown = 0
+    private static let firstTab: Int = { let d = UserDefaults.standard, start = d.object(forKey: "startTab") as? Int ?? -1; return start >= 0 ? start : d.integer(forKey: "tab") }()
+    // A tab by number, from a link or the widget. 3 was the Usage tab, which is now part of Claude.
+    func show(tab t: Int) {
+        if t == 3 { tab = 2; usageAsked += 1 } else { tab = t }
+    }
     @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); liveStore.live = nil; lastData = nil } }
 
     var api: API { API(base: URL(string: address) ?? URL(string: "https://invalid.invalid")!) }
@@ -45,6 +53,8 @@ final class AppModel: ObservableObject {
         address = saved.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : saved
         needsSignIn = address.isEmpty
         signInSheet = address.isEmpty
+        // Usage was a tab of its own until 2026-11-07; a start tab set to it opens on Claude, where it now lives.
+        if UserDefaults.standard.integer(forKey: "startTab") == 3 { UserDefaults.standard.set(2, forKey: "startTab") }
         history = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         processes = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // Show the last known state at once; fresh numbers replace it moments later.
@@ -231,6 +241,11 @@ enum Format {
         let s = Int(max(0, seconds)), d = s / 86400, h = s % 86400 / 3600, m = s % 3600 / 60
         if d > 0 { return "\(d)d \(h)h" }
         return h > 0 ? "\(h)h \(m)m" : (m > 0 ? "\(m)m" : "under 1m")
+    }
+    // How old a reading is, only once that's worth saying (half an hour): a fresh one needs no "updated just now".
+    static func staleAge(ms: Double) -> String? {
+        let s = Date().timeIntervalSince1970 - ms / 1000
+        return s < 1800 ? nil : span(s) + " ago"
     }
     static func ago(ms: Double) -> String {
         let s = Date().timeIntervalSince1970 - ms / 1000
