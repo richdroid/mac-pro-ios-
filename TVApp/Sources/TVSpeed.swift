@@ -38,7 +38,10 @@ final class StreamCache {
     func forget(type: String, imdb: String, video: String) { entries[Self.key(type, imdb, video)] = nil }
     // Pressed on a card: a film, or an episode already named, has a list worth fetching now. A series still to have
     // its episode picked doesn't.
+    // When a card was last pressed, for timing press → first stream row on the phone.
+    static var pressedAt: Date?
     func prefetch(_ item: MediaItem) {
+        Self.pressedAt = Date()
         guard let ref = item.stremioRef, ref.type == "movie" || ref.video != nil else { return }
         let k = Self.key(ref.type, ref.imdb, ref.video ?? ref.imdb)
         if let e = entries[k], Date().timeIntervalSince(e.at) < Self.fresh { return }

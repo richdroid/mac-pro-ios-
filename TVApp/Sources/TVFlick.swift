@@ -84,6 +84,7 @@ struct FlickScreen: View {
     // Its entry in the side bar's Back, while choosing.
     @State private var railBackID = UUID()
     @State private var showInfo = false
+    @State private var openedAt = Date.distantPast
     // The stream whose full description is open under its row.
     @State private var streamOpen: String?
     @Environment(TVModel.self) var model
@@ -443,6 +444,7 @@ struct FlickScreen: View {
     }
     // As the screen opens: in it comes, the colours change, and whatever the card needs is asked for.
     func opened() async {
+        openedAt = Date()
         withAnimation(.spring(response: 0.55, dampingFraction: 0.8)) { arrived = true }
         Task { try? await Task.sleep(nanoseconds: 250_000_000); withAnimation(.easeOut(duration: 0.2)) { barShown = true } }
         // The app behind takes on the picked thing's colour too, and gets its own back after: never once this has
@@ -943,6 +945,14 @@ struct FlickScreen: View {
         guard (episode?.id ?? ref.video ?? ref.imdb) == video, mine == lookups else { return }
         guard let found, !found.isEmpty else { noStreams = true; return }
         withAnimation { streams = found }
+        // How long he waited for the list, from the card's press and from this page opening, into the Mac's timing log, so
+        // the phone's own share of "the stremio streams take much too long" is measured on his phone (2026-11-07).
+        if !again, openedAt != .distantPast {
+            let now = Date()
+            var e: [String: Any] = ["name": "streams-shown", "at": now.timeIntervalSince1970 * 1000, "sinceOpen": Int(now.timeIntervalSince(openedAt) * 1000), "count": found.count]
+            if let p = StreamCache.pressedAt, now.timeIntervalSince(p) < 30 { e["sincePress"] = Int(now.timeIntervalSince(p) * 1000) }
+            Task { _ = try? await TVBridge.post("timing", ["events": [e]], timeout: 10) }
+        }
     }
 
     // Where everything on the card's step goes. The TV sits at the true centre of the screen, worked out from the whole
