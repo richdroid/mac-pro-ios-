@@ -402,8 +402,9 @@ jobs:
             xcrun simctl ui "$DEVICE" appearance light
             # The Remote's states in this posture, light only: an episode part way (the picture must be the size it is with
             # nothing on, its edges in line with the bar's), nothing on, asleep, a film with its poster, YouTube with none
-            # (no launcher frame left from before), and a stream with no picture to be had (a TV glyph, never a moon).
-            for S in repisode ridle rasleep rfilm ryoutube rstall; do
+            # (no launcher frame left from before), a stream with no picture to be had (a TV glyph, never a moon), the TV out
+            # of reach (everything that acts on it dimmed, the app tiles included) and Mint's music on its own.
+            for S in repisode ridle rasleep rfilm ryoutube rstall roffline rmint; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 0
               sleep 8
               xcrun simctl io "$DEVICE" screenshot --display=3 dist/tv-remote-$S-portrait.png
@@ -542,8 +543,10 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 0
             sleep 10; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-remote-start$2.png
             sleep 14; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-remote-length$2.png
-            sleep 9; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-remote-offline$2.png
-            sleep 5
+            # The phone shows the TV gone about 37 s after launch (the mock's 30 s from its first answer, plus the late status
+            # answers): at 33 s the shot still showed it on, everything bright (r33).
+            sleep 14; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-real-remote-offline$2.png
+            sleep 3
             kill -INT $REC; wait $REC; echo "real remote video$2 exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             real
