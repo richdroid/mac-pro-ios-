@@ -856,7 +856,7 @@ struct RemoteScreenView: View {
     @ViewBuilder private var status: some View {
         switch screen.phase {
         case .connecting: ProgressView("Connecting…").tint(.white).foregroundStyle(.white)
-        case .reconnecting:
+        case .reconnecting where screen.slowReconnect:
             VStack {
                 Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath").font(.footnote.weight(.medium)).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 6).background(.black.opacity(0.65), in: Capsule()).padding(.top, 10)
                 Spacer()

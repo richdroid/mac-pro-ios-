@@ -27,6 +27,10 @@ final class FrameBuffer {
 final class RemoteScreen: ObservableObject {
     enum Phase: Equatable { case idle, connecting, reconnecting, connected, needsLogin, failed(String) }
     @Published var phase = Phase.idle
+    // "Reconnecting…" only once a reconnect has taken over 1.5 s: coming back to the app, the picture is back within about a
+    // second and the banner flashed for nothing, and it showed while the Mac could already be used (Richard, 2026-11-06).
+    @Published private(set) var slowReconnect = false
+    private var slowTimer: Task<Void, Never>?
     // Whether there's a picture to show. The pictures themselves never pass through SwiftUI: the screen's own layer
     // takes the newest one on each display refresh (see ScreenLayer).
     @Published private(set) var hasPicture = false
@@ -111,11 +115,21 @@ final class RemoteScreen: ObservableObject {
     }
     func dropConnection() { socket?.cancel(with: .abnormalClosure, reason: nil) }
 
+    private func watchSlowReconnect() {
+        guard slowTimer == nil || slowTimer!.isCancelled else { return }
+        slowTimer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.slowTimer = nil
+            if self.phase == .reconnecting { self.slowReconnect = true }
+        }
+    }
     private func scheduleRetry() {
         guard wanted, let base else { return }
         attempts += 1
         let wait = min(Double(attempts), 5)
         phase = .reconnecting
+        watchSlowReconnect()
         retry?.cancel()
         retry = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
@@ -142,6 +156,7 @@ final class RemoteScreen: ObservableObject {
         let decoder = ScreenDecoder(socket: task, pipeline: Self.pipeline)
         self.decoder = decoder
         running = true; phase = hasPicture ? .reconnecting : .connecting
+        watchSlowReconnect()
         task.resume()
         // A connection that hasn't started the picture in 8 s is given up and tried again, rather than left waiting for
         // good: one stuck that way kept "Reconnecting…" up until the screen was closed and opened (2026-11-06).
@@ -251,6 +266,7 @@ final class RemoteScreen: ObservableObject {
             size = CGSize(width: w, height: h)
             cursor = CGPoint(x: w / 2, y: h / 2)
             phase = .connected
+            slowTimer?.cancel(); slowReconnect = false
             attempts = 0
             // Tells the bridge this end speaks its extras; it answers in a text frame. A plain RFB bridge would pass the
             // message on to the Mac, which ignores a type it doesn't know only if it never sees one, so only ask ours.
