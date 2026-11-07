@@ -36,6 +36,12 @@ struct RemoteScreenView: View {
     @Environment(\.scenePhase) private var scene
     @State private var signingIn = false
     @State private var zoom: CGFloat = 1
+    // The picture fills the space it's given, the sides cropped and the view following the pointer, rather than fitting
+    // whole with black bands above and below (Richard, 2026-11-06: "i told u to fill the top screen"). Fit is a tap away.
+    @AppStorage("screenFill") private var filling = true
+    // Only where there's a trackpad: where the picture itself is touched to click and drag, a filled (zoomed) picture
+    // would take a finger as a pan instead, so it fits whole there.
+    @State private var padLayout = false
     @State private var zoomBase: CGFloat = 1
     @State private var pan = CGSize.zero
     @State private var panBase = CGSize.zero
@@ -311,7 +317,7 @@ struct RemoteScreenView: View {
             clipButton(paste: false, compact: true)
             clipButton(paste: true, compact: true)
             toolButton("key.fill", "Sign in to the Mac", compact: true) { signingIn = true }
-            if zoomed { toolButton("arrow.down.right.and.arrow.up.left", "Fit the screen", compact: true) { fitScreen() } }
+            if zoomed || fillZoom > 1.01 { toolButton(fitIcon, fitLabel, compact: true) { fitScreen() } }
             toolButton("xmark", "Done", on: true, compact: true) { model.screenOpen = false }
         }
     }
@@ -337,7 +343,27 @@ struct RemoteScreenView: View {
         .buttonStyle(.plain).foregroundStyle(tint).accessibilityLabel(a11y).accessibilityAddTraits(on ? .isSelected : [])
     }
     var zoomed: Bool { zoom > 1.01 }
-    func fitScreen() { withAnimation(Motion.quick) { zoom = 1; pan = .zero } }
+    // The zoom that fills the space: the Mac's picture covers it edge to edge, cropped along one side.
+    var fillZoom: CGFloat {
+        guard padLayout, screen.size.width > 0, screen.size.height > 0, canvasSize.width > 0, fit > 0 else { return 1 }
+        return max(1, max(canvasSize.width / screen.size.width, canvasSize.height / screen.size.height) / fit)
+    }
+    // Filled again whenever the space or the Mac's picture changes size, with the pointer kept in view.
+    func applyFill() {
+        guard filling else { pan = clampedPan(pan); return }
+        if abs(zoom - fillZoom) > 0.001 { zoom = fillZoom }
+        pan = clampedPan(pan)
+        keepPointerInView()
+    }
+    // Fill and fit, in turn: the button shows whichever isn't on now.
+    func fitScreen() {
+        withAnimation(Motion.quick) {
+            if filling || zoom > fillZoom + 0.01 { filling = false; zoom = 1; pan = .zero }
+            else { filling = true; applyFill() }
+        }
+    }
+    var fitIcon: String { zoomed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right" }
+    var fitLabel: String { zoomed ? "Fit the whole screen" : "Fill the space" }
 
     // MARK: Clipboard
     // Copy and Paste carry text between the two clipboards. Done is a tick on the button itself, for a moment; a failure
@@ -520,8 +546,12 @@ struct RemoteScreenView: View {
             .overlay(alignment: .topLeading) { if measuring { rateBadge } }
             .overlay { if showHint, screen.hasPicture { gestureHint } }
             .clipped()
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0; pan = clampedPan(pan) }
-            .onChange(of: screen.size) { _, _ in pan = clampedPan(pan) }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0; applyFill() }
+            .onChange(of: always, initial: true) { _, a in
+                padLayout = a
+                if !a, filling, zoom > 1.001 { zoom = 1; pan = .zero } else { applyFill() }
+            }
+            .onChange(of: screen.size) { _, _ in applyFill() }
     }
     var rateBadge: some View {
         let rtt = observed.pingRTT.map { " · \(Int($0.rounded())) ms" } ?? ""
@@ -559,15 +589,17 @@ struct RemoteScreenView: View {
             zoom = next
             pan = clampedPan(CGSize(width: cx - (cx - panBase.width) * k, height: cy - (cy - panBase.height) * k))
         case .ended:
-            if zoom < 1.05 { withAnimation(Motion.quick) { zoom = 1; pan = .zero } }
+            // Let go near the fill, it settles on it; pinched out to the whole screen, the fill is off until asked for.
+            if abs(zoom - fillZoom) < 0.08 { withAnimation(Motion.quick) { filling = true; zoom = fillZoom; pan = clampedPan(pan) } }
+            else if zoom < fillZoom { filling = false; if zoom < 1.05 { withAnimation(Motion.quick) { zoom = 1; pan = .zero } } }
         }
     }
     // Two fingers tapped twice on the picture: in on that spot, or back out, as smart zoom does on a Mac.
     func smartZoom(around p: CGPoint) {
         tick(.light)
         withAnimation(Motion.quick) {
-            if zoom > 1.05 {
-                zoom = 1; pan = .zero
+            if zoom > max(1, filling ? fillZoom : 1) + 0.05 {
+                zoom = filling ? fillZoom : 1; pan = clampedPan(filling ? pan : .zero)
             } else {
                 let next: CGFloat = 2.2
                 let cx = p.x - canvasSize.width / 2, cy = p.y - canvasSize.height / 2
@@ -636,6 +668,10 @@ struct RemoteScreenView: View {
     // A touch: the pointer shows (where it isn't always shown), and comes back into view if zoomed in.
     func bump() {
         pad.lastTouch = Date().timeIntervalSinceReferenceDate
+        keepPointerInView()
+    }
+    // Zoomed or filling, the view slides so the pointer stays at least 40 pt inside it.
+    func keepPointerInView() {
         guard zoom > 1.001 else { return }
         let at = viewPoint(screen.cursor), margin: CGFloat = 40
         var next = pan
@@ -793,7 +829,7 @@ struct RemoteScreenView: View {
             MacKeyCap(label: "", icon: "delete.left", sym: MacKey.delete, keys: keys, a11y: "Delete").frame(width: 40, height: 40)
             MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return").frame(width: 40, height: 40)
             toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Show keyboard", on: typing) { typing.toggle() }
-            if zoomed { toolButton("arrow.down.right.and.arrow.up.left", "Fit the screen") { fitScreen() } }
+            if zoomed || fillZoom > 1.01 { toolButton(fitIcon, fitLabel) { fitScreen() } }
             toolButton("key.fill", "Sign in to the Mac") { signingIn = true }
             clipButton(paste: false)
             clipButton(paste: true)

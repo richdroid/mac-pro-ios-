@@ -143,6 +143,13 @@ final class RemoteScreen: ObservableObject {
         self.decoder = decoder
         running = true; phase = hasPicture ? .reconnecting : .connecting
         task.resume()
+        // A connection that hasn't started the picture in 8 s is given up and tried again, rather than left waiting for
+        // good: one stuck that way kept "Reconnecting…" up until the screen was closed and opened (2026-11-06).
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let self, self.socket === task, self.phase == .connecting || self.phase == .reconnecting else { return }
+            task.cancel(with: .abnormalClosure, reason: nil)
+        }
         Task.detached(priority: .userInitiated) { [weak self] in await Self.receiveLoop(task, decoder: decoder, owner: self) }
     }
 
