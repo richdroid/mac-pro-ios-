@@ -166,6 +166,8 @@ struct ChumbyState: Decodable {
     var ringingNow: RingReport?
     // The newest song Pandora logged (the Chumby adds it to its state), so a new one shows without reading the history.
     var song: Song?
+    // The newest alarm to start ringing, or nil (a Chumby too old to log rings has no "rang").
+    var rang: Ring?
     // Whether the panel's music player is playing something, from its own report ("music": {…, playing} or null).
     var musicPlaying = false
     // The Chumby's own clock as it answered, in seconds since 1970. Alarms ring by this clock, not the phone's.
@@ -198,6 +200,7 @@ struct ChumbyState: Decodable {
         skipped = (try? c.decodeIfPresent(SkippedAlarm.self, forKey: .skipped)) ?? nil
         ringingNow = (try? c.decodeIfPresent(RingReport.self, forKey: .ringing)) ?? nil
         song = (try? c.decodeIfPresent(Song.self, forKey: .song)) ?? nil
+        rang = (try? c.decodeIfPresent(Ring.self, forKey: .rang)) ?? nil
         musicPlaying = ((try? c.decodeIfPresent(MusicReport.self, forKey: .music)) ?? nil)?.playing ?? false
         reindex()
     }
@@ -205,7 +208,7 @@ struct ChumbyState: Decodable {
         for i in alarms.indices { alarms[i].id = i }
         for i in schedule.indices { schedule[i].id = i }
     }
-    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, song, now }
+    enum Key: String, CodingKey { case missed, volume, fade, shuffle, pending, alarms, streams, tones, channels, pandora, pandoraScan, channel, schedule, channelNames, widgetNames, mine, calTpl, calOverride, skipped, ringing, music, song, rang, now }
 }
 
 // The panel's own SKIP, pinned to one alarm and one minute ({"name","at","when"}).
@@ -228,6 +231,9 @@ struct MusicReport: Decodable {
 }
 // A song Pandora logged: in the history, and the newest one in the Chumby's own state. Here, so the widgets see it too.
 struct Song: Codable, Identifiable, Hashable { let t: Double; let title: String; let artist: String; let album: String; var id: String { "\(t)\(title)" } }
+// An alarm that started ringing, as the Chumby logs it (a=hist "rings", a=state "rang"): when, and the alarm's name. A
+// once-only calendar alarm leaves the alarm list after it fires, so "Woke up to" pairs songs with these, not the list.
+struct Ring: Codable, Hashable { let t: Double; let name: String }
 
 struct RingReport: Decodable, Equatable {
     var state: String

@@ -308,8 +308,8 @@ final class SongArt: ObservableObject {
     private var links: [String: String] { get { UserDefaults.standard.dictionary(forKey: "songLinks") as? [String: String] ?? [:] } set { UserDefaults.standard.set(newValue, forKey: "songLinks") } }
     static func key(_ s: Song) -> String { s.artist + " – " + s.title }
     // At launch and on opening Alarms, so the covers are in hand before the row ever scrolls into view.
-    func prefetch(_ songs: [Song], _ alarms: [Alarm]) {
-        for w in WokeUpTo.wakings(songs, alarms) { look(w.song) }
+    func prefetch(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring] = []) {
+        for w in WokeUpTo.wakings(songs, alarms, rings) { look(w.song) }
     }
     func look(_ s: Song) {
         let k = Self.key(s)
@@ -357,6 +357,21 @@ struct WokeUpTo: View {
     @ObservedObject private var art = SongArt.shared
     @Environment(\.openURL) private var openURL
     // For each time an alarm went off, the first song Pandora played in the 45 minutes after it.
+    // From the Chumby's own log of rings when it has one: each ring's first song within 45 minutes, named as the alarm was.
+    // A once-only calendar alarm leaves the alarm list once it fires, so pairing with the list found nothing for it (Richard,
+    // 2026-11-06: "woke up to doesnt work"). The list is the fallback for a Chumby too old to log rings.
+    static func wakings(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring]) -> [(song: Song, alarm: String)] {
+        guard !rings.isEmpty else { return wakings(songs, alarms) }
+        let byTime = songs.sorted(by: { $0.t < $1.t })
+        var out: [(song: Song, alarm: String)] = []
+        for r in rings.sorted(by: { $0.t > $1.t }) {
+            guard let s = byTime.first(where: { $0.t >= r.t && $0.t - r.t < 45 * 60 }), !out.contains(where: { $0.song == s }) else { continue }
+            let name = r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name
+            out.append((s, name.isEmpty ? "your alarm" : name))
+            if out.count == 8 { break }
+        }
+        return out
+    }
     static func wakings(_ songs: [Song], _ alarms: [Alarm]) -> [(song: Song, alarm: String)] {
         let cal = Calendar.current
         var out: [(song: Song, alarm: String, fire: Date)] = []
@@ -381,7 +396,7 @@ struct WokeUpTo: View {
         return out.reversed().prefix(8).map { ($0.song, $0.alarm) }
     }
     var body: some View {
-        let all = Self.wakings(model.songs, model.state.alarms)
+        let all = Self.wakings(model.songs, model.state.alarms, model.rings)
         // A song joins the strip only once its cover has been looked up, so a new one arrives with its art, never as a
         // blank tile, and slides the others along in one spring rather than a frame.
         let list = all.filter { art.found[SongArt.key($0.song)] != nil }

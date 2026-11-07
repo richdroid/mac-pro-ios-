@@ -113,7 +113,9 @@ final class ChumbyModel: ObservableObject {
     @Published var busy: (text: String, until: Date)?
     @Published var snoozedAt: Date?
     // Every change to the history asks for its covers at once, so "Woke up to" can show a song as soon as its art is in.
-    @Published var songs: [Song] = [] { didSet { if songs != oldValue { SongArt.shared.prefetch(songs, state.alarms) } } }
+    @Published var songs: [Song] = [] { didSet { if songs != oldValue { SongArt.shared.prefetch(songs, state.alarms, rings) } } }
+    // Every alarm that started ringing, newest first, from the Chumby's own log: what "Woke up to" pairs songs with.
+    @Published var rings: [Ring] = [] { didSet { if rings != oldValue { SongArt.shared.prefetch(songs, state.alarms, rings) } } }
     @Published var homePoke: Date?
     // The width of the side bar's column on the Duo (0 when the bars run across), and a tap on + placed in it.
     @Published var railWidth: CGFloat = 0
@@ -172,6 +174,7 @@ final class ChumbyModel: ObservableObject {
             if let d = try? Data(contentsOf: Self.cache("chlist")), let v = try? JSONDecoder().decode(ChannelList.self, from: d) { channelData = v; channelBytes = d }
             if let d = try? Data(contentsOf: Self.cache("shot")) { shot = PlatformImage(data: d) }
             if let d = try? Data(contentsOf: Self.cache("hist")), let v = try? JSONDecoder().decode([Song].self, from: d) { songs = v }
+            if let d = try? Data(contentsOf: Self.cache("rings")), let v = try? JSONDecoder().decode([Ring].self, from: d) { rings = v }
         } else { lastHeard = nil }
         CalendarWake.shared.saved = { [weak self] s in self?.adopt(s) }
     }
@@ -282,9 +285,15 @@ final class ChumbyModel: ObservableObject {
     private func took(_ s: ChumbyState) {
         // A song newer than the newest one known goes straight to "Woke up to", and into the kept copy, so the next cold
         // open shows it at once rather than the old list with the new song popping in. (No widget shows songs.)
+        // A ring just begun joins the list at once, so its song pairs as soon as it plays, without waiting for the history.
+        if let rang = s.rang, !rings.contains(rang), rang.t > (rings.first?.t ?? 0) {
+            rings.insert(rang, at: 0)
+            let keep = rings, file = Self.cache("rings")
+            Task.detached(priority: .utility) { try? JSONEncoder().encode(keep).write(to: file, options: .atomic) }
+        }
         if let new = s.song, new.t > (songs.first?.t ?? 0) {
             songs.insert(new, at: 0)
-            SongArt.shared.prefetch(songs, s.alarms)
+            SongArt.shared.prefetch(songs, s.alarms, rings)
             let keep = songs, file = Self.cache("hist")
             Task.detached(priority: .utility) { try? JSONEncoder().encode(keep).write(to: file, options: .atomic) }
         }
@@ -344,15 +353,20 @@ final class ChumbyModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: wait * 1_000_000_000)
                 guard !Task.isCancelled, let self else { return }
                 await self.loadSongs(force: true)
-                SongArt.shared.prefetch(self.songs, self.state.alarms)
+                SongArt.shared.prefetch(self.songs, self.state.alarms, self.rings)
             }
         }
     }
     func loadSongs(force: Bool = false) async {
         guard let api, Date().timeIntervalSince(histAt) > (force ? 15 : 300) else { return }
         histAt = Date()
-        struct H: Decodable { let songs: [Song] }
+        // "rings" is optional: an older Chumby's history has none, and Woke up to then falls back to the alarm list.
+        struct H: Decodable { let songs: [Song]; let rings: [Ring]? }
         guard let r = try? await fetch("hist", from: api), let h = try? JSONDecoder().decode(H.self, from: r.data) else { return }
+        if let rr = h.rings, rr != rings {
+            rings = rr
+            try? JSONEncoder().encode(rr).write(to: Self.cache("rings"), options: .atomic)
+        }
         if h.songs != songs {
             songs = h.songs
         }

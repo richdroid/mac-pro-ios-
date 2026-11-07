@@ -189,7 +189,13 @@ http.createServer((q, s) => {
     const first = songs.length ? { title: 'Freddie Freeloader', artist: 'Miles Davis', album: 'Kind of Blue' } : { title: 'So What', artist: 'Miles Davis', album: 'Kind of Blue' };
     songs.push({ t: t + 70, ...first }, { t: t + 640, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' });
   }
-  data.hist = { ok: true, songs: songs.sort((x, y) => y.t - x.t) };
+  // The Chumby's ring log: each weekend morning's ring, and a once-only calendar alarm from yesterday afternoon, which is
+  // no longer in the alarm list, with its song: Woke up to must pair it from the log (2026-11-06: "woke up to doesnt work").
+  const rings = songs.filter((x, i) => i % 2 === 0).map(x => ({ t: x.t - 70, name: 'Weekend' }));
+  const cal = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1, 14, 40).getTime() / 1000;
+  songs.push({ t: cal + 10, title: 'Save Tonight', artist: 'Eagle-Eye Cherry', album: 'Desireless' });
+  rings.push({ t: cal, name: 'Calendar: Shift' });
+  data.hist = { ok: true, songs: songs.sort((x, y) => y.t - x.t), rings: rings.sort((x, y) => y.t - x.t) };
 }
 // The live scenes keep what's saved and what's ringing, for the films of Snooze, Stop and a nap set and cancelled.
 const chumbyLive = { live: { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)) },

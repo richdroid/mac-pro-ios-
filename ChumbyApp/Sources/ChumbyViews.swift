@@ -25,8 +25,8 @@ struct ChumbyApp: App {
                     if CalendarWake.shared.rules.enabled { CalendarWake.shared.startWatching() }
                     CalendarWake.shared.syncIfDue()
                     // "Woke up to" covers, from the kept list and then the fresh one, long before Alarms is opened.
-                    SongArt.shared.prefetch(model.songs, model.state.alarms)
-                    Task { await model.loadSongs(); SongArt.shared.prefetch(model.songs, model.state.alarms) }
+                    SongArt.shared.prefetch(model.songs, model.state.alarms, model.rings)
+                    Task { await model.loadSongs(); SongArt.shared.prefetch(model.songs, model.state.alarms, model.rings) }
                     TabTour.run([0, 1, 2, 3, 4]) { model.tab = $0 }
                 }
                 .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
@@ -34,7 +34,7 @@ struct ChumbyApp: App {
                 .task(id: model.state.musicPlaying) {
                     while model.state.musicPlaying && !Task.isCancelled {
                         await model.loadSongs(force: true)
-                        SongArt.shared.prefetch(model.songs, model.state.alarms)
+                        SongArt.shared.prefetch(model.songs, model.state.alarms, model.rings)
                         try? await Task.sleep(nanoseconds: 20_000_000_000)
                     }
                 }
