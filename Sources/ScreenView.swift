@@ -200,7 +200,9 @@ struct RemoteScreenView: View {
             let c = real ?? CGRect(x: 0, y: max(deckTop - 2, h * 0.4), width: w, height: 0)
             // The whole lid is the picture's space, filled edge to edge (the picture follows the pointer), never a fitted
             // picture with black above it (Richard, 2026-11-06: "fill the top screen").
-            let lidTop: CGFloat = real == nil ? 0 : top
+            // From the very top in the laptop posture too: the band above was the status bar, and he holds the Duo folded
+            // like a MacBook with the lid as the screen (2026-11-07: "its a folding phone", "be smarter its an iPhone Duo").
+            let lidTop: CGFloat = 0
             p.picture = CGRect(x: 0, y: lidTop, width: w, height: max(c.minY - (real == nil ? 0 : air) - lidTop, 1))
             // The base: function row, the keyboard, and a trackpad centred under it like a MacBook's.
             let y0 = c.maxY + 8, base = h - bottom - 8 - y0
