@@ -1077,11 +1077,9 @@ struct AlarmEditor: View {
                     Toggle("Stop on its own", isOn: Binding(get: { alarm.auto_dismiss == "1" }, set: { alarm.auto_dismiss = $0 ? "1" : "0" }))
                 }
                 Section {
+                    // No Backup beep switch: the Chumby saves every alarm with backup 0 whatever it's sent (do_save, since
+                    // 11-05: the stock beeper killed the alarm panel), so turning it on here came back off after Save.
                     Picker("Then", selection: $after) { ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) } }
-                    Toggle("Backup beep", isOn: Binding(get: { alarm.backup == "1" }, set: { alarm.backup = $0 ? "1" : "0" }))
-                    if alarm.backup == "1" {
-                        Picker("Backup after", selection: $alarm.backupDelay) { ForEach(["1", "2", "5", "10", "15", "30"], id: \.self) { Text("\($0) min").tag($0) } }
-                    }
                 } header: { Text("Afterwards") } footer: { if calendarTemplate { Text("Applies to every alarm your calendar sets, now and later.") } }
                 if let original, !calendarTemplate { Section {
                     // The question hangs off the button that asked it, so it points at what was tapped.

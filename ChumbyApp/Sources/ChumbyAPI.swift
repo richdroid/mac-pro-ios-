@@ -51,8 +51,9 @@ struct Alarm: Codable, Identifiable, Equatable {
     var name = "", enabled = "1", time = "420", when = "daily", type = "beep", arg = "Beep", param = ""
     var param_description = "Beep", duration = "30", snooze = "9", auto_dismiss = "0"
     // No stock backup beeper: it stops the control panel and beeps over the widgets with no alarm screen (a nap did that on
-    // 2026-11-05). His own alarms all carry backup 0; new ones and naps do too.
-    var action = "", action_param = "", backup = "0", backupDelay = "0"
+    // 2026-11-05). His own alarms all carry backup 0; new ones and naps do too. The delay still has to be 1 to 120: the
+    // Chumby turns down a save with any other (do_save, "bad number"), and "0" there cost every nap and new alarm from 11-05.
+    var action = "", action_param = "", backup = "0", backupDelay = "5"
     enum CodingKeys: String, CodingKey { case name, enabled, time, when, type, arg, param, param_description, duration, snooze, auto_dismiss, action, action_param, backup, backupDelay }
     init() {}
     init(from d: Decoder) throws {

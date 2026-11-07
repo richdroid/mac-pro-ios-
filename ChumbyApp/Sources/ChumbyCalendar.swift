@@ -270,7 +270,8 @@ extension ChumbyState {
             if let settings { a.takeSettings(from: settings) }
             a.name = CalendarWake.alarmName(w); a.enabled = "1"; a.when = "once"; a.time = CalendarWake.minutes(w.wake)
             // Guessed from your own alarm, it only borrows the sound; chosen settings keep their own after-action and backup.
-            if settings == nil { a.action = ""; a.action_param = ""; a.backup = "1" }
+            // (Never the stock backup beeper: the Chumby saves backup 0 whatever it's sent.)
+            if settings == nil { a.action = ""; a.action_param = ""; a.backup = "0" }
             if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
         }
         return permit
