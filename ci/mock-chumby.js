@@ -353,7 +353,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutubebare|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; return tvReal(q, s, path, query, json); }
@@ -412,6 +412,9 @@ function tvPose(q, s) {
     const v = JSON.parse(tvStatus), now = Date.now();
     if (scene === 'rasleep') { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'roffline') { v.online = false; delete v.session; }
+    // A video the Mac hasn't found yet: no still, no length, only where it's got to (the yt-dlp search can take half a
+    // minute or miss; r35: the Playing tab showed an empty box).
+    if (scene === 'ryoutubebare') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Lil B - Gotham City [ Music Video ] [ Official ]', 'Lil B'], position: 83000, sampledAt: now, canSeek: false }; }
     if (scene === 'ryoutube') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Sample Video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 610000, canSeek: false, art: tvBase + '/api/tv/shot' }; }
     if (scene === 'rmint') { v.app = 'com.codex.musicwebtv'; delete v.session; }
     if (scene === 'ridle') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }

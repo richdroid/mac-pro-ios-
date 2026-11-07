@@ -400,6 +400,22 @@ jobs:
               done
             done
             xcrun simctl ui "$DEVICE" appearance light
+            # The Playing tab in this posture with each kind of thing on: Mint's song, a YouTube video with its still, and
+            # one the Mac hasn't found yet (r35: "spacing here is fucked", and an empty picture box).
+            for S in rmint ryoutube ryoutubebare repisode; do
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 2
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=3 dist/tv-playing-$S-portrait.png
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            done
+            # Every tab with a large title scrolled part way, so the title going up with the page is seen mid-scroll (r35:
+            # "Watch" printed over "Continue watching").
+            for T in 1 2 3 5; do
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab $T -scroll 30
+              sleep 9
+              xcrun simctl io "$DEVICE" screenshot --display=3 dist/tv-scroll-$T-portrait.png
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            done
             # The Remote's states in this posture, light only: an episode part way (the picture must be the size it is with
             # nothing on, its edges in line with the bar's), nothing on, asleep, a film with its poster, YouTube with none
             # (no launcher frame left from before), a stream with no picture to be had (a TV glyph, never a moon), the TV out
@@ -425,7 +441,7 @@ jobs:
           # reports each step, and the status goes asleep, on, Stremio open, paused, playing), a still while it's on its way,
           # and the rebuilt flick's starts (tv_flickstarts). simctl records at the display's own rate, up to 60 frames a second.
           tv_poses() { # display, file suffix
-            for T in 1 3 5 9; do
+            for T in 1 2 3 5 9; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab $T -scroll 40
               sleep 9
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-scroll-$T$2.png
@@ -443,6 +459,13 @@ jobs:
             # The Remote in each state it can be in: asleep, not answering, YouTube playing, Mint's music only, nothing on,
             # a Stremio episode part way through (its title line and the bar to move along it), a film with its poster,
             # and a stream with no picture to be had.
+            # The Playing tab folded and open with a song, a video with and without its still.
+            for S in rmint ryoutube ryoutubebare; do
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 2
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-playing-$S$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            done
             for S in rasleep roffline ryoutube rmint ridle repisode rfilm rstall; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 0
               sleep 8
