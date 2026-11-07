@@ -120,11 +120,23 @@ final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private var told = false
     private var finished = false
     private var quiet: DispatchWorkItem?
-    // When each picture reached the decoder, so how smoothly the mirror really moves on the phone can be measured: every
-    // 10 s the spacing is summed up and sent to the Mac's timing log, beside the Mac's own count of what the TV sent.
+    // When each picture is due on screen (its paced moment, not when it came in), and how long it was held for that, so
+    // how smoothly the mirror really moves on the phone can be measured: every 10 s the spacing is summed up and sent to
+    // the Mac's timing log, beside the Mac's own count of what the TV sent. Arrivals too, to see what the pacing undid.
     private var shownAt: [Double] = []
+    private var arrivedAt: [Double] = []
+    private var heldFor: [Double] = []
     private var bytesIn = 0
     private var since = CACurrentMediaTime()
+    // Joining a recording already under way, the Mac sends everything since its last key frame at once, so the decoder can
+    // build the picture: that many pictures (its x-replay-frames header) are decoded but only the last is shown. Shown as
+    // they came, it was a quick replay of the last few seconds every time the Remote came up.
+    private var replayLeft = 0
+    private var unitHidden = false
+    // When a picture was last put on screen, for LiveMirror to ask whether a key press brought one.
+    private let stampLock = NSLock()
+    private var stamp = CACurrentMediaTime()
+    var lastPicture: Double { stampLock.lock(); defer { stampLock.unlock() }; return stamp }
 
     init(url: URL, renderer: AVSampleBufferVideoRenderer, picture: @escaping @Sendable () -> Void, ended: @escaping @Sendable () -> Void) {
         self.renderer = renderer; self.picture = picture; self.ended = ended
@@ -156,6 +168,7 @@ final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         let type = http?.value(forHTTPHeaderField: "Content-Type") ?? ""
         let ok = http?.statusCode == 200 && (type.contains("h264") || type.contains("octet-stream"))
         answered = ok
+        replayLeft = max(0, Int(http?.value(forHTTPHeaderField: "x-replay-frames") ?? "") ?? 0)
         completionHandler(ok ? .allow : .cancel)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
@@ -226,7 +239,11 @@ final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
             // The first slice of a picture says so in its first bit (first_mb_in_slice is 0).
             let starts = nal.count > 1 && (nal[nal.startIndex + 1] & 0x80) != 0
             if !starts { slices = true }
-            if starts { show() }
+            if starts {
+                show()
+                // One of the catch-up pictures, unless it's the last of them.
+                if replayLeft > 0 { replayLeft -= 1; unitHidden = replayLeft > 0 } else { unitHidden = false }
+            }
             unit.append(nal)
             if first & 0x1F == 5 { unitKey = true }
             if !slices { show() }
@@ -248,40 +265,70 @@ final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
             withUnsafeBytes(of: &length) { block.append(contentsOf: $0) }
             block.append(n)
         }
-        guard let sample = Self.sample(block, format, at: paced()) else { return }
-        renderer.enqueue(sample)
-        if !told { told = true; picture() }
-        pace()
-    }
-    // When to show this picture. The TV's pictures reach the Mac in clumps over the box's Wi-Fi (measured 2026-11-06:
-    // up to a fifth of them under 8 ms apart while scrolling), and shown as they land a clump reads as a jerk. So each is
-    // shown no sooner than a 60th of a second after the one before, but never more than 80 ms behind its arrival: past
-    // that the queue is dropped back to now, so the mirror never drifts late.
-    private var lastShow: CMTime = .invalid
-    private func paced() -> CMTime {
-        let now = CMClockGetTime(CMClockGetHostTimeClock())
-        var at = now
-        if lastShow.isValid {
-            let next = CMTimeAdd(lastShow, CMTime(value: 1, timescale: 60))
-            if CMTimeCompare(next, at) > 0 && CMTimeGetSeconds(CMTimeSubtract(next, now)) < 0.08 { at = next }
+        let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+        if unitHidden {
+            // Decoded, so the pictures after it can be, but never shown; no later than anything already queued.
+            guard let sample = Self.sample(block, format, at: CMTime(seconds: max(now, lastShow), preferredTimescale: 1_000_000_000)) else { return }
+            Self.hide(sample)
+            renderer.enqueue(sample)
+            return
         }
+        let at = paced(now)
+        guard let sample = Self.sample(block, format, at: CMTime(seconds: at, preferredTimescale: 1_000_000_000)) else { return }
+        renderer.enqueue(sample)
+        stampLock.lock(); stamp = CACurrentMediaTime(); stampLock.unlock()
+        if !told { told = true; picture() }
+        pace(arrived: now, at: at)
+    }
+    // When to show this picture. The TV's pictures reach the Mac in clumps over the box's Wi-Fi (measured 2026-11-06: up to
+    // a fifth of them under 8 ms apart while scrolling), and shown as they land a clump reads as a jerk. So each is shown
+    // nearly the TV's own spacing (95 %) after the one before, learnt from how often they come, never before it arrives
+    // and never more than 70 ms after. Nearly, not all: arriving evenly, every picture is shown the moment it comes, and the
+    // mirror never creeps late. The times only ever go forward: the first version (f790188) dropped a picture that would
+    // have waited over 80 ms back to now, ahead of the ones still queued, so a clump could show out of order.
+    private var lastShow: Double = 0
+    private var lastArrival: Double = 0
+    private var period = 1.0 / 30
+    // Simulated on clumps like the measured ones (2026-11-06): gaps over 50 ms 66 as they came, 56 with f790188, 20 with
+    // these, for about 47 ms held at most (p95). A fixed 30 ms wait on top would leave almost none, for 90 ms: worth it
+    // only if the mirror is found well inside 150 ms of the TV on the phone.
+    private static let maxHold = 0.07, share = 0.95
+    private func paced(_ now: Double) -> Double {
+        if lastArrival > 0 {
+            let gap = now - lastArrival
+            // Only the gaps of a screen in motion teach the spacing; a still screen's silence says nothing about it.
+            if gap < 0.1 { period = min(1.0 / 20, max(1.0 / 60, period + (gap - period) / 8)) }
+        }
+        lastArrival = now
+        let at = max(now, min(lastShow + period * Self.share, now + Self.maxHold))
         lastShow = at
         return at
     }
-    private func pace() {
+    private func pace(arrived: Double, at: Double) {
+        shownAt.append(at); arrivedAt.append(arrived); heldFor.append((at - arrived) * 1000)
         let t = CACurrentMediaTime()
-        shownAt.append(t)
         guard t - since >= 10 else { return }
-        let gaps = zip(shownAt.dropFirst(), shownAt).map { ($0 - $1) * 1000 }.sorted()
         let span = t - since
         since = t
-        defer { shownAt = [t]; bytesIn = 0 }
+        let gaps = zip(shownAt.dropFirst(), shownAt).map { ($0 - $1) * 1000 }.sorted()
+        let inGaps = zip(arrivedAt.dropFirst(), arrivedAt).map { ($0 - $1) * 1000 }.sorted()
+        let held = heldFor.sorted()
+        defer { shownAt = [at]; arrivedAt = [arrived]; heldFor = []; bytesIn = 0 }
         guard gaps.count >= 5 else { return }
-        let at = { (q: Double) in gaps[min(gaps.count - 1, Int(Double(gaps.count) * q))].rounded() }
-        let event: [String: Any] = ["name": "mirror", "fps": (Double(gaps.count) / span * 10).rounded() / 10, "p50": at(0.5), "p95": at(0.95),
+        func q(_ a: [Double], _ f: Double) -> Double { a[min(a.count - 1, Int(Double(a.count) * f))].rounded() }
+        let event: [String: Any] = ["name": "mirror", "fps": (Double(gaps.count) / span * 10).rounded() / 10, "p50": q(gaps, 0.5), "p95": q(gaps, 0.95),
                                     "max": gaps.last!.rounded(), "over100": gaps.filter { $0 > 100 }.count,
-                                    "bursts": gaps.filter { $0 < 8 }.count, "kbps": (Double(bytesIn) * 8 / span / 1000).rounded()]
+                                    "bursts": gaps.filter { $0 < 8 }.count, "kbps": (Double(bytesIn) * 8 / span / 1000).rounded(),
+                                    "inP95": inGaps.isEmpty ? 0 : q(inGaps, 0.95), "inBursts": inGaps.filter { $0 < 8 }.count,
+                                    "heldP95": held.isEmpty ? 0 : q(held, 0.95), "heldMax": (held.last ?? 0).rounded(),
+                                    "periodMs": (period * 1000).rounded()]
         Task { _ = try? await TVBridge.post("timing", ["events": [event]], timeout: 10) }
+    }
+    // Marks a sample to be decoded and never shown.
+    static func hide(_ sample: CMSampleBuffer) {
+        guard let list = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true), CFArrayGetCount(list) > 0 else { return }
+        let dict = unsafeBitCast(CFArrayGetValueAtIndex(list, 0), to: CFMutableDictionary.self)
+        CFDictionarySetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_DoNotDisplay).toOpaque(), Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
     }
     static func format(_ sps: Data, _ pps: Data) -> CMVideoFormatDescription? {
         var out: CMVideoFormatDescription?
