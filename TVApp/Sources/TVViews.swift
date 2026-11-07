@@ -658,8 +658,13 @@ private struct ScreenPicture: View {
     @ObservedObject var store: MirrorStore
     let art: String?
     // Coming back to the Remote, the kept frame is what was on a moment ago and the stream is on its way: it isn't dimmed
-    // as old for this long, so the picture never dips and comes back.
+    // as old for this long, so the picture never dips and comes back. Only a moment ago, though: a frame from minutes
+    // back (the Remote left long since) is dimmed from the first frame, never shown bright as if it were the TV now.
     @State private var shownAt = Date()
+    func isOld(_ taken: Date, _ now: Date) -> Bool {
+        let age = now.timeIntervalSince(taken)
+        return age > 4 && (now.timeIntervalSince(shownAt) > 1.5 || age > 20)
+    }
     var body: some View {
         // The stream's own last frame, while it's newer than the latest still: what was on screen when last looked at.
         let held = !live.showing && live.heldAt.map { $0 > store.at } == true
@@ -667,7 +672,7 @@ private struct ScreenPicture: View {
             if !live.showing && !held {
                 if let m = store.image {
                     TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                        let old = ctx.date.timeIntervalSince(store.at) > 4 && ctx.date.timeIntervalSince(shownAt) > 1.5
+                        let old = isOld(store.at, ctx.date)
                         Image(tv: m).resizable().scaledToFit().opacity(old ? 0.5 : 1)
                             .overlay { if old && !live.stalled { ProgressView().tint(.white).transition(.opacity) } }
                             .animation(.easeOut(duration: 0.3), value: old)
@@ -687,7 +692,7 @@ private struct ScreenPicture: View {
             // One layer throughout, kept frame and live stream alike: swapping one for another faded the picture from
             // nothing. Old the same way a still is, once it's a few seconds old and the stream still isn't back.
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                let old = held && live.heldAt.map { ctx.date.timeIntervalSince($0) > 4 } == true && ctx.date.timeIntervalSince(shownAt) > 1.5
+                let old = held && live.heldAt.map { isOld($0, ctx.date) } == true
                 LiveMirrorLayer(mirror: live).opacity(live.showing || held ? (old ? 0.5 : 1) : 0)
                     .overlay { if old && !live.stalled { ProgressView().tint(.white).transition(.opacity) } }
                     .animation(.easeOut(duration: 0.3), value: old)
