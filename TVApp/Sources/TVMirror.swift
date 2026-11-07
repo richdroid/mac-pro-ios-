@@ -69,8 +69,27 @@ final class LiveMirror: ObservableObject {
     private func end() {
         feed?.cancel(); feed = nil
         retry?.cancel(); retry = nil
+        check?.cancel(); check = nil
         generation += 1
         if showing { heldAt = Date(); showing = false }
+    }
+    // A key was pressed on the TV. A still TV sends nothing, so silence alone can't say the stream has died, but a press
+    // answers within a fifth of a second (measured 2026-11-05, half a second for the first after a pause). Nothing within
+    // 1.5 s: the picture is no longer the TV's, so it's marked as kept rather than live (the stills take over at once) and
+    // the stream is joined afresh, which takes a tenth of a second when nothing was wrong. A frozen frame never passes
+    // for the TV while he presses keys at it.
+    private var check: Task<Void, Never>?
+    func pressed() {
+        guard showing, let feed else { return }
+        let at = CACurrentMediaTime(), gen = generation
+        check?.cancel()
+        check = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self, !Task.isCancelled, gen == self.generation, self.wanted, self.feed === feed, feed.lastPicture < at else { return }
+            self.check = nil
+            self.end()
+            self.start(nil)
+        }
     }
     private func pictured(_ gen: Int) {
         guard gen == generation else { return }

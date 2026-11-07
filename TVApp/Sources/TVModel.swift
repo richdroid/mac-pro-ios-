@@ -524,6 +524,10 @@ final class TVModel {
             let pressed = Date()
             mirrorSoon = Task { [weak self] in await self?.loadMirror(after: pressed) }
         }
+        // With it, a press that brings no new picture says the stream has stuck, and it's joined again.
+        #if os(iOS)
+        if mirrorLive && !repeating && mirrorViewers > 0 && liveShowing { live.pressed() }
+        #endif
     }
     // Typing into the TV: what was deleted, then what was added, in order with the keys around it. Nothing is dropped
     // for being late, or the box on the TV would end up different from the field on the phone.
