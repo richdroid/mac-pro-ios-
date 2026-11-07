@@ -613,9 +613,11 @@ struct MirrorView: View {
             } else if model.mirrorLive && model.filmOnScreen {
                 // A film playing with no poster to stand in (YouTube, a stream without art): the stream is stopped for it, and
                 // the frame it left was the launcher from before the film, dimmed with a spinner for as long as it played
-                // (r32 repisode and ryoutube shots). The wall's picture, blurred, and nothing claiming to be the TV's screen.
-                Color.clear.overlay { Art(url: model.ambienceArt.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
-                    .clipped().blur(radius: 26).opacity(0.55)
+                // (r32 repisode and ryoutube shots). Nor an empty box (r33: the wall's art is the poster it hasn't got, so
+                // that was always blank): the picture of what's on that there is (YouTube's, Stremio's own banner) as a
+                // poster is shown, sat on a blurred copy of itself, and nothing claiming to be the TV's screen.
+                if let art = model.nowArt.flatMap(URL.init(string:)) { PosterOnBlur(url: art).id(art).transition(.opacity) }
+                else { NoPicture() }
             } else if model.mirrorLive {
                 #if os(iOS)
                 ScreenPicture(live: model.live, store: store, art: model.nowArt)
@@ -675,7 +677,9 @@ private struct ScreenPicture: View {
         // The stream's own last frame, while it's newer than the latest still: what was on screen when last looked at.
         let held = !live.showing && live.heldAt.map { $0 > store.at } == true
         ZStack {
-            if !live.showing && !held {
+            // The still stays under the live picture until that has faded fully in over it, so the change is one picture
+            // over another, never through an empty box (r33 rjoin: the still faded out and the live one cut in after).
+            if !held && !liveIn {
                 if let m = store.image {
                     TimelineView(.periodic(from: .now, by: 1)) { ctx in
                         let old = isOld(store.at, ctx.date)
@@ -686,15 +690,17 @@ private struct ScreenPicture: View {
                 } else {
                     // Nothing yet: what's playing, blurred, with a spinner, rather than an empty box. Once the stream has had 1.5 s
                     // and no picture (a TV asleep, say), the spinner goes: the poster as it is, or a quiet moon with none.
-                    Color.clear.overlay { Art(url: art.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
-                        .clipped().blur(radius: live.stalled ? 0 : 26).opacity(live.stalled ? 0.7 : 0.5)
-                        .overlay {
-                            if !live.stalled { ProgressView().tint(.white) }
-                            // A TV, not a moon: an awake TV whose picture can't be had isn't asleep (asleep, the Remote lays
-                            // its own moon over everything).
-                            else if art == nil { Image(systemName: "tv").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55)) }
+                    // Stalled, the TV glyph alone on the dark, whatever art there is: the art drawn sharp under it read as a
+                    // washed-out banner with the glyph stuck on its wordmark, and only when the art beat the stall (r33).
+                    ZStack {
+                        if live.stalled { NoPicture() }
+                        else {
+                            Color.clear.overlay { Art(url: art.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
+                                .clipped().blur(radius: 26).opacity(0.5)
+                                .overlay { ProgressView().tint(.white) }
                         }
-                        .animation(.easeOut(duration: 0.3), value: live.stalled)
+                    }
+                    .animation(.easeOut(duration: 0.3), value: live.stalled)
                 }
             }
             // One layer throughout, kept frame and live stream alike: swapping one for another faded the picture from
@@ -707,10 +713,28 @@ private struct ScreenPicture: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: live.showing)
-        .onAppear { shownAt = Date() }
+        .onAppear { shownAt = Date(); liveIn = live.showing }
+        .task(id: live.showing) {
+            guard live.showing else { liveIn = false; return }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if !Task.isCancelled, live.showing { liveIn = true }
+        }
     }
+    // The live picture has been up long enough to have faded in over the still.
+    @State private var liveIn = false
 }
 #endif
+
+// A picture that can't be had: a TV, not a moon (an awake TV whose picture can't be had isn't asleep; asleep, the Remote
+// lays its own moon over everything).
+struct NoPicture: View {
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.25)
+            Image(systemName: "tv").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+        }
+    }
+}
 
 // One arrow or the centre of the D-pad: a press acts at once, holding repeats until you lift.
 // Set on pages that scroll. There a key waits to see it's a real press, or starting a scroll on one would press it on the TV.
@@ -869,8 +893,11 @@ struct RemoteTab: View {
         if s.screen == "screensaver" { return "Screensaver" }
         // What's playing, by name, rather than the app it's playing in. Only while it's what's on, never one left behind.
         if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty {
-            // The episodes line under the picture already says "S2 E3 · …": the header has just the show (r26).
+            // Open, the episodes line under the picture already says "S2 E3 · …": the header has just the show (r26).
+            // Folded there's no room for that line with the picture at full width (r33: squeezed to 206 pt it read
+            // "S1 E…  Episod/es"), so the header says the episode and the bar's Episodes button opens the list.
             let lined = p.pkg == "com.stremio.one" && p.episodeLine != nil && nextUp.series != nil
+            if lined && size != .regular, let line = p.episodeLine { return [p.showName, line].joined(separator: " · ") }
             return ([p.showName] + (lined ? [] : Self.detail(p))).joined(separator: " · ")
         }
         // Nothing with a name on: nothing said, rather than which app is in front.
@@ -910,11 +937,14 @@ struct RemoteTab: View {
                     StartingNote()
                 } else if model.videoIsCurrent, model.starting == nil || model.starting?.played == true, let s = model.status?.session {
                     VideoProgress(session: s, live: !model.staleStatus && !unreachable)
-                } else {
+                } else if model.starting != nil {
                     // While a flicked start is under way: the bar's place, at 40 %, with "Still starting" after 8 s under it.
                     ProgressPlaceholder().opacity(0.4)
                         .overlay(alignment: .bottom) { StartingNote().offset(y: 4) }
                 }
+                // Otherwise (connecting, or a session that isn't what's on) the place stays empty: a grey bar there claimed
+                // something it didn't know (r33).
+                Color.clear
             }
             .frame(height: Self.barSlot)
             .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1)
@@ -1018,6 +1048,14 @@ struct RemoteTab: View {
     }
     // The bar and the episode line under the picture, with their spacing: the picture is sized as if they're always there.
     static let underRoom = barSlot + 46 + 28
+    // Folded, only the bar sits under the picture (the episode is the header's, its list the bar's button).
+    static let underFolded = barSlot + 14
+    // The folded episodes button, and the list it opens: the same list the open Remote's line opens.
+    @State private var episodesOpen = false
+    var episodesShown: Bool {
+        guard model.videoIsCurrent, let s = model.status?.session else { return false }
+        return s.pkg == "com.stremio.one" && s.episodeLine != nil && nextUp.series != nil
+    }
     func side(apps: Bool) -> some View {
         PictureColumn(spacing: 14, under: Self.underRoom) {
             picture(closable: true).columnRole(.picture)
@@ -1027,7 +1065,12 @@ struct RemoteTab: View {
             // Typing, the keyboard comes up over this pane's foot: the tiles and the send box step aside rather than show
             // through it.
             if !typing {
-                if apps, model.status?.apps?.isEmpty == false { QuickApps().columnRole(.aligned) }
+                // Out of reach, the tiles can't open anything on the TV: dimmed with every other key, the ring on the app in
+                // front with them (r33: bright, Stremio's ring lit, beside a dimmed pad).
+                if apps, model.status?.apps?.isEmpty == false {
+                    QuickApps().opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
+                        .animation(.easeInOut(duration: 0.3), value: unreachable).columnRole(.aligned)
+                }
                 // Right under the tiles, not pushed to the foot with dead space above it.
                 SendBar().columnRole(.aligned)
             }
@@ -1049,16 +1092,17 @@ struct RemoteTab: View {
                         .modifier(KeysArrive(gate: keysGate))
                 }
             } else {
-                // Folded, the pad gets the room until the screen is asked for.
-                PictureColumn(spacing: 14, under: Self.underRoom) {
+                // Folded, the picture is the column's full width in every state (r33: 345 pt idle, 206 with an episode, so
+                // it shrank as a show started); the pad gives up the height, down to 110 pt while something plays.
+                PictureColumn(spacing: 14, under: Self.underFolded) {
                     // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
                     // Its own eye in its top-right corner, as open (r26); the bar keeps only the way to bring it back.
                     if model.mirrorLive && !typing { picture(closable: true).columnRole(.picture).transition(.opacity) }
                     // Mint playing has no transport here, so its own player is the way to pause it.
-                    if !typing { progress.columnRole(.under); episodes.columnRole(.under); music.columnRole(.under) }
+                    if !typing { progress.columnRole(.under); music.columnRole(.under) }
                     Group {
                         // Clear of the title above it, which the keyboard pushes the page up under.
-                        pad.frame(minHeight: 150, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
+                        pad.frame(minHeight: 110, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
                         keysBlock
                     }
                     .modifier(KeysArrive(gate: keysGate))
@@ -1066,7 +1110,9 @@ struct RemoteTab: View {
                 .padding(.horizontal, 14).padding(.bottom, 12)
             }
         }
-        .navigationSubtitle(state)
+        // Always a line under the title, blank when there's nothing to say, so "Remote" never moves as a show starts or
+        // ends (r33: 7 pt up and down with the subtitle).
+        .navigationSubtitle(state.isEmpty ? "\u{00A0}" : state)
         // The keyboard would slice the tab rail and leave half a button peeking above it, folded or open: the rail steps
         // aside while typing, and comes back with the keyboard's going.
         #if os(iOS)
@@ -1081,6 +1127,20 @@ struct RemoteTab: View {
                     Button { model.setMirror(true) } label: { Label("Show the TV’s screen", systemImage: "eye") }
                 }
             }
+            // Folded, the episode list is one tap away up here, where the open Remote has its line under the picture.
+            if size != .regular && !typing && episodesShown {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { model.tick(); episodesOpen = true } label: { Label("Episodes", systemImage: "list.bullet.rectangle.portrait") }
+                }
+            }
+        }
+        .sheet(isPresented: $episodesOpen) {
+            EpisodeSheet { episodesOpen = false }.presentationDetents([.medium, .large])
+        }
+        // The build's shot of the episodes over the folded Remote ("-pose episodes"); open, the line opens its own.
+        .task(id: episodesShown) {
+            guard size != .regular, episodesShown, UserDefaults.standard.string(forKey: "pose") == "episodes" else { return }
+            try? await Task.sleep(nanoseconds: 3_000_000_000); episodesOpen = true
         }
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
@@ -1485,8 +1545,14 @@ struct Transport: View {
             }.frame(maxWidth: .infinity)
         }
         // Failed: nothing to control but stopping, which is the held ⏯.
-        .opacity(failed ? 0.4 : 1)
+        // Connecting (nothing heard from the TV yet this launch, and no start under way): the row waits at 40 %, like the
+        // bar's place in a start, rather than a bright ▶ saying it's paused when it may be playing (r33: ▶, then ⏸ a
+        // second later).
+        .opacity(failed || connecting ? 0.4 : 1)
+        .allowsHitTesting(!connecting)
+        .animation(.easeOut(duration: 0.2), value: connecting)
     }
+    var connecting: Bool { playing == nil && starting == nil && model.staleStatus }
 }
 
 // ⏭ for an episode whose next isn't worked out yet: the light runs round the key from the press until the next one is
@@ -2596,45 +2662,47 @@ struct VideoProgress: View {
             let known = live && session.position != nil
             let ahead = scrub == nil && target == nil && seeker.offset(for: session) != 0
             // No length yet (the real bridge has none for some episodes, or for the first 20 s): only where it's got to, in
-            // the middle of the bar's place, never an empty track that looks like a bar and does nothing (r32). The bar
-            // fades in over it when the length comes.
-            if known && duration <= 0 && !seeking {
-                HStack(spacing: 6) {
-                    Text(clock(shown)).foregroundStyle(.secondary).opacity(locked ? 0.4 : 1)
-                    if let note { Text(note).foregroundStyle(TVLook.accent).contentTransition(.opacity) }
-                }
-                .font(.subheadline.monospacedDigit().weight(.medium))
-                .frame(maxWidth: .infinity)
-                .transition(.opacity)
-            } else {
-            // The same 28 pt band and the same 6 pt track either way, the track centred in it, and the times tucked up to
-            // 6 pt under the track itself rather than under the finger's room, so nothing shifts between apps.
+            // the middle of the bar's place, never an empty track that looks like a bar and does nothing (r32). Nor before the
+            // TV has said where it is (connecting): then the place is empty, not a grey bar claiming one (r33).
+            let bar = (duration > 0 || seeking) && !model.staleStatus
+            // One time label throughout: alone it sits in the middle, and when the length comes it moves to its place under
+            // the bar's start as the bar fades in, rather than one fading out as another fades in, two "0:23"s at once (r33).
             VStack(spacing: 0) {
-                if scrubbable {
-                    ScrubBar(value: known && duration > 0 ? shown : nil, total: duration, enabled: canSeek, busy: seeking,
-                             confirmed: ahead && duration > 0 ? confirmed(at: ctx.date) : nil,
-                             scrub: $scrub, tickEvery: 10000, label: clock) { seek(to: $0) }
-                        .opacity(locked ? 0.4 : 1).allowsHitTesting(!locked)
-                } else {
-                    ProgressTrack(fraction: known && duration > 0 ? shown / duration : nil).frame(height: 28)
+                Group {
+                    if scrubbable {
+                        ScrubBar(value: known && duration > 0 ? shown : nil, total: duration, enabled: canSeek, busy: seeking,
+                                 confirmed: ahead && duration > 0 ? confirmed(at: ctx.date) : nil,
+                                 scrub: $scrub, tickEvery: 10000, label: clock) { seek(to: $0) }
+                            .opacity(locked ? 0.4 : 1).allowsHitTesting(!locked && bar)
+                    } else {
+                        // The same 28 pt band and the same 6 pt track either way, the track centred in it, and the times
+                        // tucked up to 6 pt under the track itself rather than under the finger's room.
+                        ProgressTrack(fraction: known && duration > 0 ? shown / duration : nil).frame(height: 28)
+                    }
                 }
-                HStack {
-                    Text(clock(shown)).opacity(known ? (locked ? 0.4 : 1) : 0)
-                    Spacer()
-                    if seeking { Text("Moving there on the TV…").foregroundStyle(TVLook.accent) }
-                    else if let note { Text(note).foregroundStyle(TVLook.accent).contentTransition(.opacity) }
-                    Spacer()
-                    Text("-" + clock(duration - shown)).opacity(known && duration > 0 ? (locked ? 0.4 : 1) : 0)
+                .opacity(bar ? 1 : 0)
+                ZStack {
+                    HStack {
+                        Spacer()
+                        if seeking { Text("Moving there on the TV…").foregroundStyle(TVLook.accent) }
+                        else if let note { Text(note).foregroundStyle(TVLook.accent).contentTransition(.opacity) }
+                        Spacer()
+                        Text("-" + clock(duration - shown)).opacity(known && duration > 0 ? (locked ? 0.4 : 1) : 0)
+                    }
+                    Text(clock(shown))
+                        .scaleEffect(bar ? 1 : 1.25, anchor: bar ? .leading : .center)
+                        .frame(maxWidth: .infinity, alignment: bar ? .leading : .center)
+                        // Alone, level with the middle of the bar's place.
+                        .offset(y: bar ? 0 : -14)
+                        .opacity(known ? (locked ? 0.4 : 1) : 0)
                 }
                 .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
                 .padding(.top, -5)
             }
             .animation(.snappy(duration: 0.25), value: seeker.pending)
             .animation(.spring(response: 0.5, dampingFraction: 0.88), value: locked)
-            .transition(.opacity)
-            }
         }
-        .animation(.easeOut(duration: 0.3), value: duration > 0)
+        .animation(.spring(response: 0.45, dampingFraction: 0.9), value: duration > 0 && !model.staleStatus)
         // The build's shot of a drag along the bar, its bubble up ("-pose scrub"): held at 40 %, never let go.
         // Waits for the film's length (the real bridge's comes about 20 s in) rather than for the TV to allow seeking, which
         // the mock never said, so it was never shown (r18).

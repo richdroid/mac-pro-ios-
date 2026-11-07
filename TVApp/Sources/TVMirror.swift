@@ -67,6 +67,7 @@ final class LiveMirror: ObservableObject {
         }
     }
     private func end() {
+        readying?.cancel(); readying = nil
         feed?.cancel(); feed = nil
         retry?.cancel(); retry = nil
         check?.cancel(); check = nil
@@ -91,15 +92,32 @@ final class LiveMirror: ObservableObject {
             self.start(nil)
         }
     }
+    // The first picture is handed to the layer before it's decoded (a join's catch-up is decoded first, a tenth of a second
+    // or more): said to be showing then, the still under it faded out to an empty layer and the live picture cut in a
+    // fifth of a second later (r33 rjoin film: 10.92–11.10 s). So showing waits until the layer has a picture to show,
+    // half a second at most.
+    private var readying: Task<Void, Never>?
     private func pictured(_ gen: Int) {
         guard gen == generation else { return }
         failures = 0
         watchdog?.cancel(); watchdog = nil
-        if stalled { stalled = false }
-        if !showing { showing = true }
+        guard !showing, readying == nil else { return }
+        readying = Task { [weak self] in
+            for _ in 0..<30 {
+                guard let self, !Task.isCancelled, gen == self.generation else { return }
+                if self.layer.isReadyForDisplay { break }
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
+            guard let self else { return }
+            self.readying = nil
+            guard !Task.isCancelled, gen == self.generation else { return }
+            if self.stalled { self.stalled = false }
+            if !self.showing { self.showing = true }
+        }
     }
     private func ended(_ gen: Int) {
         guard gen == generation else { return }
+        readying?.cancel(); readying = nil
         feed = nil
         if showing { heldAt = Date(); showing = false }
         failures += 1
