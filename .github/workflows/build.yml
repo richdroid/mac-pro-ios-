@@ -119,7 +119,9 @@ jobs:
                      "screen-laptop-typing 9001 -tab 0 -pose screentyping -openScreen YES -screenPosture laptop" "screen-closed-typing 9001 -tab 0 -pose screentyping -openScreen YES" \
                      "screen-zoomed 9001 -tab 0 -pose screenzoomed -openScreen YES" "screen-modlock 9001 -tab 0 -pose screenmodlock -openScreen YES" \
                      "screen-cursor 9001 -tab 0 -pose screencursor -openScreen YES" \
-                     "displayhold 9001 -tab 0 -pose displayhold"; do
+                     "displayhold 9001 -tab 0 -pose displayhold" \
+                     "screen-shift 9001 -tab 0 -pose screenshift -openScreen YES" "screen-pinch 9001 -tab 0 -pose screenpinch -openScreen YES" \
+                     "apps-scrolled 9001 -tab 1 -pose scrolled" "claude-usage 9001 -tab 2 -pose scrolled"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$4 "${@:5}"
               sleep 8
@@ -376,10 +378,18 @@ jobs:
               done
             done
             # Status scrolled to the dials in open portrait too: the content must fade under the title there as folded (r28).
-            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose scrolled
-            sleep 7
-            xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-scrolled-portrait.png
-            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            # Then Apps and Claude scrolled part way, the title gone up with the page (2026-11-07: "Open on the Mac (13)"
+            # under "Apps"), the Apps tab with real-shaped data, and the Screen's symbols (⇧ on), a pinch let go zoomed in,
+            # and the laptop posture's MacBook trackpad.
+            for V in "scrolled 0 -pose scrolled" "apps-scrolled 1 -pose scrolled" "claude-usage 2 -pose scrolled" \
+                     "screen-shift 0 -pose screenshift -openScreen YES" "screen-pinch 0 -pose screenpinch -openScreen YES" \
+                     "screen-laptop 0 -pose screen -openScreen YES -screenPosture laptop" "displayhold 0 -pose displayhold"; do
+              set -- $V
+              xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab $2 "${@:3}"
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-$1-portrait.png
+              xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            done
             xcrun simctl ui "$DEVICE" appearance light
             python3 ci/title-check.py dist/MacPro-*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
           }

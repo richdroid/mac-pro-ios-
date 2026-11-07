@@ -58,6 +58,8 @@ const macMock = JSON.parse(require('fs').readFileSync(__dirname + '/mock-status.
 { // Times relative to now, so the screenshots show what a real day looks like.
   const now = Date.now(), plan = macMock.usage.plan;
   plan.at = now - 120000; plan.fiveHourResets = now + 3 * 3600e3; plan.sevenDayResets = now + 4 * 86400e3;
+  // As the real Mac reports it since November: Claude no longer sends a 5-hour limit for this plan.
+  plan.fiveHour = null; plan.fiveHourResets = null;
   macMock.iosApps.apps.forEach(a => { if (a.expires) { a.expires = now + 6 * 86400e3; a.installedAt = now - 86400e3; } });
   macMock.usage.hours.forEach((h, i, all) => { h.t = now - (all.length - 1 - i) * 3600e3; });
   macMock.claude.sessions = [
@@ -67,6 +69,17 @@ const macMock = JSON.parse(require('fs').readFileSync(__dirname + '/mock-status.
     { name: 'build', status: 'stopped', cwd: '~/code', remote: false, updated: null, key: 'build', restartable: true, stuck: false },
   ];
 }
+// The apps as the real Mac reports them (2026-11-07): most idle at 0 % CPU, each app's memory with its helpers', one busy,
+// and one that has quit with no figures (an older Mac still listed those), which the phone must leave out.
+macMock.apps = [
+  { name: 'Calendar', pid: 9, front: false },
+  { name: 'Claude', pid: 10, cpu: 0.7, mem: 1790000000 }, { name: 'Code', pid: 11, cpu: 0, mem: 1450000000 },
+  { name: 'Finder', pid: 13, cpu: 0, mem: 132000000 }, { name: 'Google Chrome', pid: 12, cpu: 14.2, mem: 2160000000 },
+  { name: 'Music', pid: 14, cpu: 0, mem: 399000000 }, { name: 'System Settings', pid: 15, cpu: 0, mem: 137000000 },
+  { name: 'Tailscale', pid: 16, cpu: 0, mem: 105000000 }, { name: 'Terminal', pid: 17, cpu: 2.4, mem: 363000000 },
+];
+macMock.installed = ['Calendar', 'Claude', 'Code', 'Finder', 'Google Chrome', 'Music', 'Safari', 'System Settings', 'Tailscale', 'Terminal', 'TextEdit', 'VLC'];
+macMock.displayOn = false;
 const macStatus = JSON.stringify(macMock);
 const macProc = (pid, name, cpu, mem, locked) => ({ pid, start: 'Fri Oct 30 23:11:35 2026', name, cpu, mem: mem * 1048576, locked });
 const macProcs = JSON.stringify({
