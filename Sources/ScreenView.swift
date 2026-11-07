@@ -192,8 +192,9 @@ struct RemoteScreenView: View {
         case .laptop:
             // The lid: the picture as wide as the display, set down on the hinge, the camera in the black above it.
             let c = fold.crease.flatMap { $0.width >= $0.height ? $0 : nil } ?? CGRect(x: 0, y: (h * 0.478).rounded(), width: w, height: 40)
-            let lid = fitWidth(w, maxHeight: max(c.minY - air - top, 1))
-            p.picture = CGRect(x: (w - lid.width) / 2, y: c.minY - air - lid.height, width: lid.width, height: lid.height)
+            // The whole lid is the picture's space, filled edge to edge (the picture follows the pointer), never a fitted
+            // picture with black above it (Richard, 2026-11-06: "fill the top screen").
+            p.picture = CGRect(x: 0, y: top, width: w, height: max(c.minY - air - top, 1))
             // The base: function row, the keyboard, and a trackpad centred under it like a MacBook's.
             let y0 = c.maxY + 8, base = h - bottom - 8 - y0
             p.fnRow = CGRect(x: side, y: y0, width: w - side * 2, height: 32)
@@ -204,11 +205,9 @@ struct RemoteScreenView: View {
                 p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: w - side * 2, height: 40)
             }
             let above = max(p.keyboard.maxY, p.modRow.maxY, p.fnRow.maxY) + 10
-            // 16:10 and no wider than 72 % of the keys, as in the book posture: spare width is margin, never pad (r21: a 3.5:1
-            // slab). Height first, as the base allows; centred in what's left.
-            let room = max(h - bottom - 8 - above, 60), capW = ((w - side * 2) * 0.72).rounded()
-            let padW = min(capW, (room * 16 / 10).rounded()), padH = min(room, (padW * 10 / 16).rounded())
-            p.trackpad = CGRect(x: (w - padW) / 2, y: above + (room - padH) / 2, width: padW, height: padH)
+            // All the base below the keys, as wide as the keys: room for two- and three-finger gestures (Richard,
+            // 2026-11-06: "the touchpad is too small to perform gestures"). It replaced a 16:10 pad capped at 72 %.
+            p.trackpad = CGRect(x: side, y: above, width: w - side * 2, height: max(h - bottom - 8 - above, 60))
         case .closed:
             let pic = fitWidth(w, maxHeight: h * 0.5)
             p.picture = CGRect(x: (w - pic.width) / 2, y: top, width: pic.width, height: pic.height)
@@ -255,7 +254,9 @@ struct RemoteScreenView: View {
                 let y0 = head + max(tall - deck, 0) / 2
                 p.fnRow = CGRect(x: left, y: y0, width: width, height: fn)
                 p.keyboard = CGRect(x: left, y: p.fnRow.maxY + gap, width: width, height: kbH)
-                p.trackpad = CGRect(x: left + (width - padW) / 2, y: p.keyboard.maxY + padGap, width: padW, height: padH)
+                // As wide as the keys and down to the margin: gestures need the room more than the pad needs MacBook
+                // proportions (2026-11-06).
+                p.trackpad = CGRect(x: left, y: p.keyboard.maxY + padGap, width: width, height: max(foot - p.keyboard.maxY - padGap, padH))
             } else {
                 // Too short for the full keyboard: the modifier and arrow row, and the trackpad takes the rest.
                 let mod: CGFloat = 40
@@ -265,7 +266,7 @@ struct RemoteScreenView: View {
                 let y0 = head + max(tall - deck, 0) / 2
                 p.fnRow = CGRect(x: left, y: y0, width: width, height: fn)
                 p.modRow = CGRect(x: left, y: p.fnRow.maxY + gap, width: width, height: mod)
-                p.trackpad = CGRect(x: left + (width - padW) / 2, y: p.modRow.maxY + padGap, width: padW, height: max(padH, 60))
+                p.trackpad = CGRect(x: left, y: p.modRow.maxY + padGap, width: width, height: max(foot - p.modRow.maxY - padGap, 60))
             }
         case .closedLandscape, .flatLandscape:
             // The dock lives in the black under the picture, never over the Mac's own Dock.
@@ -284,6 +285,10 @@ struct RemoteScreenView: View {
     @ViewBuilder func stage(_ p: ScreenPlan, area: CGSize) -> some View {
         ZStack(alignment: .topLeading) {
             place(canvas(always: p.kind != .flatLandscape && p.kind != .closedLandscape), p.picture)
+            // Where there's a trackpad, the picture is one too: a finger glides the pointer, taps click, two fingers scroll
+            // and pinch zooms, so the whole screen is the control surface, not only the pad (Richard, 2026-11-06: "more
+            // integrated control").
+            if p.kind == .laptop || p.kind == .book || p.kind == .closed { place(pictureSurface, p.picture) }
             place(functionRow, p.fnRow)
             place(MacKeyboardView(keys: keys), p.keyboard)
             place(modifierRow, p.modRow)
@@ -740,6 +745,18 @@ struct RemoteScreenView: View {
     }
 
     // MARK: Trackpad and keys
+    var pictureSurface: some View {
+        TouchSurface(
+            mode: .trackpad,
+            macWidth: screen.size.width,
+            edgeBack: !observed.pixelScrollAvailable,
+            onTrack: { track($0) },
+            onScroll: { d, step in scroll(d, step, onPicture: false) },
+            onPinch: { phase, scale, center in pinch(phase, scale, center) },
+            onSwipe: { swipe($0) }
+        )
+        .accessibilityLabel("The Mac's screen, used as a trackpad")
+    }
     var trackpad: some View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         return TouchSurface(
