@@ -610,6 +610,12 @@ struct MirrorView: View {
                 // While a flicked film starts, never the TV's own picture under its poster: a launcher still read through
                 // PosterOnBlur's first frames (r26). Black until the poster's in; the TV's picture only once it plays.
                 Color.black
+            } else if model.mirrorLive && model.filmOnScreen {
+                // A film playing with no poster to stand in (YouTube, a stream without art): the stream is stopped for it, and
+                // the frame it left was the launcher from before the film, dimmed with a spinner for as long as it played
+                // (r32 repisode and ryoutube shots). The wall's picture, blurred, and nothing claiming to be the TV's screen.
+                Color.clear.overlay { Art(url: model.ambienceArt.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
+                    .clipped().blur(radius: 26).opacity(0.55)
             } else if model.mirrorLive {
                 #if os(iOS)
                 ScreenPicture(live: model.live, store: store, art: model.nowArt)
@@ -684,7 +690,9 @@ private struct ScreenPicture: View {
                         .clipped().blur(radius: live.stalled ? 0 : 26).opacity(live.stalled ? 0.7 : 0.5)
                         .overlay {
                             if !live.stalled { ProgressView().tint(.white) }
-                            else if art == nil { Image(systemName: "moon.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55)) }
+                            // A TV, not a moon: an awake TV whose picture can't be had isn't asleep (asleep, the Remote lays
+                            // its own moon over everything).
+                            else if art == nil { Image(systemName: "tv").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55)) }
                         }
                         .animation(.easeOut(duration: 0.3), value: live.stalled)
                 }
@@ -1002,21 +1010,26 @@ struct RemoteTab: View {
             .animation(.easeInOut(duration: 0.25), value: asleep)
     }
     // Only when the music is what's on: a song's player beside a film's was two now-playings on one TV.
+    // Dimmed and out of reach with every other key while the TV can't be reached (its ▶ stayed bright and live, r32).
     @ViewBuilder var music: some View {
-        if model.musicIsCurrent, let m = model.nowMusic { MiniPlayer(music: m).transition(.opacity) }
+        if model.musicIsCurrent, let m = model.nowMusic {
+            MiniPlayer(music: m).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable).transition(.opacity)
+        }
     }
+    // The bar and the episode line under the picture, with their spacing: the picture is sized as if they're always there.
+    static let underRoom = barSlot + 46 + 28
     func side(apps: Bool) -> some View {
-        VStack(spacing: 14) {
-            picture(closable: true)
-            progress
-            episodes
-            music
+        PictureColumn(spacing: 14, under: Self.underRoom) {
+            picture(closable: true).columnRole(.picture)
+            progress.columnRole(.under)
+            episodes.columnRole(.under)
+            music.columnRole(.under)
             // Typing, the keyboard comes up over this pane's foot: the tiles and the send box step aside rather than show
             // through it.
             if !typing {
-                if apps, model.status?.apps?.isEmpty == false { QuickApps() }
+                if apps, model.status?.apps?.isEmpty == false { QuickApps().columnRole(.aligned) }
                 // Right under the tiles, not pushed to the foot with dead space above it.
-                SendBar()
+                SendBar().columnRole(.aligned)
             }
             Spacer(minLength: 0)
         }
@@ -1037,12 +1050,12 @@ struct RemoteTab: View {
                 }
             } else {
                 // Folded, the pad gets the room until the screen is asked for.
-                VStack(spacing: 14) {
+                PictureColumn(spacing: 14, under: Self.underRoom) {
                     // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
                     // Its own eye in its top-right corner, as open (r26); the bar keeps only the way to bring it back.
-                    if model.mirrorLive && !typing { picture(closable: true).transition(.opacity) }
+                    if model.mirrorLive && !typing { picture(closable: true).columnRole(.picture).transition(.opacity) }
                     // Mint playing has no transport here, so its own player is the way to pause it.
-                    if !typing { progress; episodes; music }
+                    if !typing { progress.columnRole(.under); episodes.columnRole(.under); music.columnRole(.under) }
                     Group {
                         // Clear of the title above it, which the keyboard pushes the page up under.
                         pad.frame(minHeight: 150, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
@@ -1098,6 +1111,64 @@ struct RemoteTab: View {
 private extension View {
     // One of a key row's five equal places, the key centred in it.
     func slot() -> some View { frame(maxWidth: .infinity) }
+    func columnRole(_ role: PictureColumn.Role) -> some View { layoutValue(key: PictureColumn.RoleKey.self, value: role) }
+}
+
+// The Remote's column with the TV's picture at its head. The picture is the size it has with the most under it (the bar and
+// the episode line), in every state, so it never shrinks when a show starts or grows when one ends (r32 shots, folded:
+// about 266 pt wide with nothing on, 209 with an episode); it's the column's full width whenever that fits. What sits
+// under it, and the tiles beside it open, take the picture's width, so their edges line up with it. Whatever height is
+// left goes to what can grow (the pad, a spacer), never to the picture.
+struct PictureColumn: Layout {
+    enum Role { case picture, under, aligned, other }
+    struct RoleKey: LayoutValueKey { static let defaultValue = Role.other }
+    var spacing: CGFloat = 14
+    // The most the lines under the picture take in normal use, spacing included: kept for them while they're away.
+    var under: CGFloat = 0
+    private func plan(_ width: CGFloat, _ height: CGFloat?, _ subviews: Subviews) -> (frames: [CGRect], height: CGFloat) {
+        let roles = subviews.map { $0[RoleKey.self] }
+        let lined: (Int) -> Bool = { roles[$0] == .under || roles[$0] == .aligned }
+        func measure(_ i: Int, _ w: CGFloat) -> (lo: CGFloat, hi: CGFloat) {
+            let lo = subviews[i].sizeThatFits(ProposedViewSize(width: w, height: 0)).height
+            let hi = subviews[i].sizeThatFits(ProposedViewSize(width: w, height: .infinity)).height
+            return (lo, max(lo, hi))
+        }
+        var sizes = subviews.indices.map { roles[$0] == .picture ? (lo: CGFloat(0), hi: CGFloat(0)) : measure($0, width) }
+        let shown = subviews.indices.filter { roles[$0] == .picture || sizes[$0].hi > 0 }
+        let gaps = spacing * CGFloat(max(0, shown.count - 1))
+        func fixed() -> CGFloat { shown.filter { roles[$0] != .picture }.reduce(0) { $0 + sizes[$1].lo } + gaps }
+        var pictureH: CGFloat = 0, lineW = width
+        if roles.contains(.picture) {
+            let underNow = shown.filter { roles[$0] == .under }.reduce(0) { $0 + sizes[$1].lo + spacing }
+            let full = width * 9 / 16
+            pictureH = height.map { min(full, max(0, $0 - fixed() - max(0, under - underNow))) } ?? full
+            lineW = pictureH * 16 / 9
+            for i in subviews.indices where lined(i) { sizes[i] = measure(i, lineW) }
+        }
+        let room = max(0, (height ?? 0) - fixed() - pictureH)
+        let growing = shown.filter { roles[$0] != .picture && sizes[$0].hi > sizes[$0].lo + 0.5 }
+        let share = growing.isEmpty ? 0 : room / CGFloat(growing.count)
+        var frames = Array(repeating: CGRect.zero, count: subviews.count)
+        var y: CGFloat = 0
+        for i in shown {
+            let h = roles[i] == .picture ? pictureH : sizes[i].lo + (growing.contains(i) ? min(share, sizes[i].hi - sizes[i].lo) : 0)
+            let w = roles[i] == .picture || lined(i) ? lineW : width
+            frames[i] = CGRect(x: (width - w) / 2, y: y, width: w, height: h)
+            y += h + spacing
+        }
+        for i in subviews.indices where !shown.contains(i) { frames[i] = CGRect(x: width / 2, y: y, width: 0, height: 0) }
+        return (frames, max(0, y - spacing))
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 360
+        return CGSize(width: width, height: proposal.height ?? plan(width, nil, subviews).height)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let frames = plan(bounds.width, bounds.height, subviews).frames
+        for (i, f) in frames.enumerated() {
+            subviews[i].place(at: CGPoint(x: bounds.minX + f.minX, y: bounds.minY + f.minY), anchor: .topLeading, proposal: ProposedViewSize(f.size))
+        }
+    }
 }
 
 // The Remote's keys coming in: a slight grow out of a blur on the move's own spring, and a fade so short the pad's white
@@ -2524,6 +2595,18 @@ struct VideoProgress: View {
             let now = position(at: ctx.date), shown = scrub ?? target ?? now
             let known = live && session.position != nil
             let ahead = scrub == nil && target == nil && seeker.offset(for: session) != 0
+            // No length yet (the real bridge has none for some episodes, or for the first 20 s): only where it's got to, in
+            // the middle of the bar's place, never an empty track that looks like a bar and does nothing (r32). The bar
+            // fades in over it when the length comes.
+            if known && duration <= 0 && !seeking {
+                HStack(spacing: 6) {
+                    Text(clock(shown)).foregroundStyle(.secondary).opacity(locked ? 0.4 : 1)
+                    if let note { Text(note).foregroundStyle(TVLook.accent).contentTransition(.opacity) }
+                }
+                .font(.subheadline.monospacedDigit().weight(.medium))
+                .frame(maxWidth: .infinity)
+                .transition(.opacity)
+            } else {
             // The same 28 pt band and the same 6 pt track either way, the track centred in it, and the times tucked up to
             // 6 pt under the track itself rather than under the finger's room, so nothing shifts between apps.
             VStack(spacing: 0) {
@@ -2548,7 +2631,10 @@ struct VideoProgress: View {
             }
             .animation(.snappy(duration: 0.25), value: seeker.pending)
             .animation(.spring(response: 0.5, dampingFraction: 0.88), value: locked)
+            .transition(.opacity)
+            }
         }
+        .animation(.easeOut(duration: 0.3), value: duration > 0)
         // The build's shot of a drag along the bar, its bubble up ("-pose scrub"): held at 40 %, never let go.
         // Waits for the film's length (the real bridge's comes about 20 s in) rather than for the TV to allow seeking, which
         // the mock never said, so it was never shown (r18).
