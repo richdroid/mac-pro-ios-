@@ -238,6 +238,15 @@ struct RemoteScreenView: View {
             // so it's a MacBook's own share of the keys and as tall as that shape allows.
             let pad = macPad(keys: w - side * 2, room: max(h - bottom - 8 - above, 60))
             p.trackpad = CGRect(x: ((w - pad.width) / 2).rounded(), y: above, width: pad.width, height: pad.height)
+            // Typing on the iPhone's keyboard: the Mac's keys and trackpad step aside rather than sit under it, the
+            // function row (with the keyboard's own hide key) rides on top of it, and flat open the picture takes the
+            // room above (it covered the trackpad and half the keys before, 2026-11-07).
+            if keyboard > 0 {
+                let fnY = max(h - keyboard - 8 - 32, (real?.maxY ?? 0) + 8)
+                p.fnRow = CGRect(x: side, y: fnY, width: w - side * 2, height: 32)
+                p.keyboard = .zero; p.modRow = .zero; p.trackpad = .zero
+                if real == nil { p.picture = CGRect(x: 0, y: 0, width: w, height: max(fnY - 8, 1)) }
+            }
         case .closed:
             let pic = fitWidth(w, maxHeight: h * 0.5)
             p.picture = CGRect(x: (w - pic.width) / 2, y: top, width: pic.width, height: pic.height)
@@ -628,7 +637,10 @@ struct RemoteScreenView: View {
     }
     var rateBadge: some View {
         let rtt = observed.pingRTT.map { " · \(Int($0.rounded())) ms" } ?? ""
-        return Text("\(rate.frames) fps shown · \(rate.updates) sent by the Mac · \(RemoteScreen.pipeline) in flight\(rtt) · \(observed.movesPerSecond) moves/s")
+        let t = screen.timings
+        let f = { (v: Double?) in v.map { String(format: "%.1f s", $0) } ?? "–" }
+        let first = t.map { " · \($0.deep ? 32 : 16)-bit, in \(f($0.signedIn)), first \(f($0.firstPixels)), whole \(f($0.firstPicture)), \($0.firstBytes / 1024) KB" } ?? ""
+        return Text("\(rate.frames) fps shown · \(rate.updates) sent by the Mac · \(RemoteScreen.pipeline) in flight\(rtt) · \(observed.movesPerSecond) moves/s\(first)")
             .font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(.white)
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(.black.opacity(0.7), in: Capsule())
