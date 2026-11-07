@@ -63,6 +63,10 @@ struct RemoteScreenView: View {
     @State private var pad = TrackpadBox()
     // The build's way to shoot a posture the simulator can't fold into.
     @State private var postureOverride = UserDefaults.standard.string(forKey: "screenPosture")
+    // The Duo's hinge, from its own API (iOS 27.1 onHingeChange): partly open is the laptop or book posture, fully open is
+    // flat. Nil where there's no hinge or the system doesn't say, and the fold region decides as before (Richard,
+    // 2026-11-07: "use the iphone duo api").
+    @State private var hingeFolded: Bool?
 
     enum ClipState: Equatable {
         case idle, working, done, failed(String)
@@ -82,6 +86,7 @@ struct RemoteScreenView: View {
         }
         .ignoresSafeArea()
         .background(Color.black.ignoresSafeArea())
+        .modifier(HingeReader(folded: $hingeFolded))
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
@@ -147,7 +152,7 @@ struct RemoteScreenView: View {
         #if os(iOS)
         if #available(iOS 27.1, *) {
             return Fold(crease: g.reservedRegions(kind: .division, options: .includeInactive).first?.frame,
-                        folded: !g.reservedRegions(kind: .division).isEmpty)
+                        folded: hingeFolded ?? !g.reservedRegions(kind: .division).isEmpty)
         }
         #endif
         return Fold()
@@ -2120,6 +2125,23 @@ struct EdgeClamped<Content: View>: View {
         return UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.bounds.width ?? 400
         #else
         return 10_000
+        #endif
+    }
+}
+
+// Reads the Duo's hinge and says whether it's partly open, so the Screen's posture follows the hinge itself, at once.
+struct HingeReader: ViewModifier {
+    @Binding var folded: Bool?
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 27.1, *) {
+            content.onHingeChange { _, new in
+                let now: Bool? = new.hinge.map { $0.status == .partiallyOpen }
+                if folded != now { withAnimation(RemoteScreenView.posture) { folded = now } }
+            }
+        } else { content }
+        #else
+        content
         #endif
     }
 }
