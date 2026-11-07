@@ -308,7 +308,11 @@ struct MediaList: View {
                 Button { FlickCardButton.tap(model, item, source) } label: {
                     HStack(spacing: 12) {
                         Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
-                            .frame(width: item.isYouTube ? 50 / source.coverAspect * 16 / 9 : 50, height: 50 / source.coverAspect).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            // One picture column for every row, so every title starts at the same place and the lines between
+                            // rows start together (r35: a YouTube still at its full 16:9 width pushed its text 80 pt right of
+                            // the posters', a ragged column). In a list the title says what it is; the still fills the poster's
+                            // place, its middle kept.
+                            .frame(width: 50, height: 50 / source.coverAspect).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title).font(.body.weight(.semibold)).lineLimit(2)
                             if !item.shownSubtitle.isEmpty { Text(item.shownSubtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }

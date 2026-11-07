@@ -15,6 +15,14 @@ struct Film: Identifiable, Hashable {
 // position doesn't redraw every key and card in every tab.
 @MainActor @Observable
 final class TVModel {
+    // Where Back in the side bar goes: the page on top registers its way back as it appears and takes it away as it goes,
+    // so the rail's Back is there only when there's somewhere to go back to (Richard, 2026-11-07: "back should be on side
+    // bar", "the back button behavior is awful rn").
+    struct RailBack { let id: UUID; let go: () -> Void }
+    var railBacks: [RailBack] = []
+    func pushBack(_ id: UUID, _ go: @escaping () -> Void) { railBacks.removeAll { $0.id == id }; railBacks.append(RailBack(id: id, go: go)) }
+    func popBack(_ id: UUID) { railBacks.removeAll { $0.id == id } }
+    func goBack() { tick(); railBacks.last?.go() }
     var status: TVStatus?
     // True until the first answer since launch. Until then the status is the one kept from last time: good for laying
     // out the pages, but not for saying what's playing, where it's got to, or whether it's paused.

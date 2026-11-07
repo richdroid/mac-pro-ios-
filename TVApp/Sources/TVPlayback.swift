@@ -479,11 +479,16 @@ private struct BackToTopKey: EnvironmentKey { static let defaultValue = 0 }
 extension EnvironmentValues { var backToTop: Int { get { self[BackToTopKey.self] } set { self[BackToTopKey.self] = newValue } } }
 private struct BackToTop: ViewModifier {
     @Environment(\.backToTop) private var top
+    @Environment(\.pageScroll) private var pageScroll
     var posed = true
     @State private var position = ScrollPosition(edge: .top)
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
+            // How far the page has scrolled, for its title to go up with it.
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
+                if let pageScroll, abs(pageScroll.y - y) > 0.25 { pageScroll.y = y }
+            }
             // Every tab's scrolling page takes this, so it's where the page's top fade goes too.
             .topFade()
             .onChange(of: top) { _, _ in withAnimation(.snappy) { position.scrollTo(edge: .top) } }
@@ -856,8 +861,17 @@ struct PlayingVideo: View {
                 .overlay {
                     if let still, !still.isEmpty {
                         Cover(url: URL(string: still), mode: .fill) { Color.white.opacity(0.06) }
+                    } else if let art = session.art, !art.isEmpty, session.pkg == "com.google.android.youtube.tv" {
+                        // A video's own still is already 16:9: it fills the picture.
+                        Cover(url: URL(string: art), mode: .fill) { Color.white.opacity(0.06) }
+                    } else if let poster = model.poster(for: session) {
+                        PosterOnBlur(url: URL(string: poster))
+                    } else if session.pkg != "com.stremio.one", let banner = model.picture(for: session) {
+                        // Still looking the video up (the Mac's search can take half a minute, or miss): YouTube's own banner
+                        // on a blur of itself, never an empty box (r35). Stremio's banner never stands for what's on.
+                        PosterOnBlur(url: URL(string: banner))
                     } else {
-                        PosterOnBlur(url: model.poster(for: session).flatMap(URL.init(string:)))
+                        NoPicture()
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -871,14 +885,16 @@ struct PlayingVideo: View {
             .shadow(color: .black.opacity(0.4), radius: 16, y: 8)
             .opacity(stale ? 0.45 : 1)
             VStack(alignment: .leading, spacing: 3) {
-                // The show above, the episode as the title; a film is its own title.
+                // The show above, the episode as the title; a film is its own title. A video is its own title too, its
+                // channel under it (r35: the channel was the title and the video's name the small line over it).
                 if let episode, !name.isEmpty { Text(name).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1) }
                 Text(episode ?? name).font(.title2.weight(.bold)).lineLimit(2)
+                if let channel = session.channel { Text(channel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
                 if let about { Text(about).font(.footnote).foregroundStyle(.secondary).lineLimit(panes ? 4 : 3).padding(.top, 4) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentTransition(.opacity)
-            if session.position != nil || session.pkg == "com.stremio.one" { VideoProgress(session: session, live: !stale) }
+            if session.position != nil || session.pkg == "com.stremio.one" { VideoProgress(session: session, live: !stale, alone: .leading) }
             Transport(ended: ended).padding(.top, 2)
         }
         .task(id: series) {

@@ -135,12 +135,18 @@ struct RootView: View {
     @State private var playingSymbol = "play.circle"
     var body: some View {
         PaneReader {
-            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
+            // -1 is the side bar's Back: it never becomes the tab, it takes the page on top back a step.
+            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 == -1 { model.goBack() } else { model.tab = $0 } })) { t in
                 // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
                 // rebuilt, so what was loaded, and the choices made on it, stay.
                 if t == 1 { model.browsing = nil; SendDraft.shared.text = "" }
                 resets[t, default: 0] += 1
             }) {
+                // At the top of the side bar, above the tabs, only while a page is open over a tab (Richard, 2026-11-07:
+                // "back should be on side bar", after the floating "Back" capsule sat over the list's last rows).
+                if !model.railBacks.isEmpty {
+                    Tab(value: -1) { Color.clear } label: { tabLabel("Back", "chevron.backward") }
+                }
                 Tab(value: 0) { Page(title: "Remote", alwaysInline: true, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
                 Tab(value: 1) { Page(title: "Apps", retaps: resets[1, default: 0]) { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
                 Tab(value: 2) { Page(title: "Playing", retaps: resets[2, default: 0]) { PlayingTab() } } label: {
@@ -279,14 +285,22 @@ struct Page<C: View>: View {
     @ViewBuilder let content: () -> C
     @State private var path = NavigationPath()
     @State private var top = 0
+    @State private var scrolled = PageScrollY()
     var body: some View {
-        // The art and the edge setting sit on the stack, not the page, so the page's scroll view stays the stack's root
-        // and the large title can track it and fold away. The fade itself is on each scroll view (backToTop).
+        // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
                 .underFlick()
                 .modifier(TabBarFade())
                 .environment(\.backToTop, top)
+                .environment(\.pageScroll, alwaysInline ? nil : scrolled)
+                // The page's name, large, drawn by the page and going up with what scrolls under it, so the two never sit
+                // on each other. The system's large title stayed put on the Watch tab while the rows ran up under it,
+                // "Watch" printed over "Continue watching" (Richard, 2026-11-07: "look at how the watch header interacts
+                // with the other text"): it can only follow a scroll view it finds at the page's root, and the pages'
+                // own layouts (two panes, overlays) hid it.
+                .safeAreaInset(edge: .top, spacing: 0) { if !alwaysInline { MovingTitle(title: title, scrolled: scrolled) } }
+                .toolbar(alwaysInline ? .automatic : .hidden, for: .navigationBar)
                 .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true) }
                 .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
@@ -304,6 +318,25 @@ struct Page<C: View>: View {
         .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
         // A page opened from a search leaves the keyboard behind.
         .onChange(of: path) { _, _ in Keyboard.dismiss() }
+    }
+}
+
+// How far a tab's page has scrolled, from whichever of its scroll views moved last.
+@Observable final class PageScrollY { var y: CGFloat = 0 }
+private struct PageScrollKey: EnvironmentKey { static let defaultValue: PageScrollY? = nil }
+extension EnvironmentValues { var pageScroll: PageScrollY? { get { self[PageScrollKey.self] } set { self[PageScrollKey.self] = newValue } } }
+// A tab's large title, moving up exactly as far as the page under it has scrolled and fading as it goes, as if it were
+// the page's first line. Only this redraws as the page scrolls.
+private struct MovingTitle: View {
+    let title: String
+    let scrolled: PageScrollY
+    var body: some View {
+        let y = max(0, scrolled.y)
+        PageHeading(title)
+            .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
+            .offset(y: -y)
+            .opacity(Double(max(0, 1 - y / 44)))
+            .allowsHitTesting(false)
     }
 }
 
@@ -347,11 +380,14 @@ struct PageBar<Actions: View>: View {
     var back: (() -> Void)? = nil
     // A full bar across the page's foot (a show's or stream's page), rather than a capsule hugging its controls (r26).
     var full = false
+    // Off where Back is the side bar's: the bar carries only the page's own action.
+    var showsBack = true
     @ViewBuilder let actions: () -> Actions
     var body: some View {
         HStack(spacing: 2) {
             // Alone, back says so in words, so the bar is a bar and never a loose glass circle over the page (r24).
             let alone = Actions.self == EmptyView.self
+            if showsBack {
             Button { model.tick(); if let back { back() } else { dismiss() } } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold))
@@ -361,6 +397,7 @@ struct PageBar<Actions: View>: View {
                 .frame(minWidth: 50, minHeight: 50).contentShape(Rectangle())
             }
             .buttonStyle(PressIcon()).accessibilityLabel("Back")
+            }
             if full { Spacer(minLength: 0) }
             actions()
         }
@@ -382,21 +419,30 @@ struct PageBarAction: View {
     }
 }
 private struct BarPage<Actions: View>: ViewModifier {
+    @Environment(TVModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.paneLayout) private var panes
     @StateObject private var bar = PageBarState()
+    @State private var backID = UUID()
     let actions: () -> Actions
     func body(content: Content) -> some View {
         content
             .environment(\.pageBar, bar)
             .toolbar(.hidden, for: .navigationBar)
+            // Back is the side bar's now, at its top, there while this page is (Richard, 2026-11-07: "back should be on
+            // side bar"): the floating capsule sat over the list's last rows. Only a page's own action keeps a bar here.
+            .onAppear { model.pushBack(backID) { dismiss() } }
+            .onDisappear { model.popBack(backID) }
             .overlay(alignment: .bottomTrailing) {
-                PageBar(actions: actions)
+                if Actions.self != EmptyView.self {
+                PageBar(showsBack: false, actions: actions)
                     .padding(.trailing, panes ? 20 : 16).padding(.bottom, panes ? 16 : 10)
                     .opacity(bar.shown ? 1 : 0)
                     .offset(y: bar.shown ? 0 : 18)
                     .scaleEffect(bar.shown ? 1 : 0.94, anchor: .bottomTrailing)
                     .allowsHitTesting(bar.shown)
                     .accessibilityHidden(!bar.shown)
+                }
             }
     }
 }
@@ -2001,7 +2047,7 @@ struct NowControls: View {
     let music: TVStatus.Music
     static func clock(_ ms: Double) -> String { let t = Int(max(ms, 0) / 1000); return String(format: "%d:%02d", t / 60, t % 60) }
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 10) {
             // The bar keeps its place before there's anything true to show on it.
             if music.duration > 0 && !model.staleStatus { MusicProgress(music: music) } else { ProgressPlaceholder() }
             // The one transport, the same five as for a film: one way to play anything in this app (r17).
@@ -2017,10 +2063,10 @@ struct PhoneControls: View {
     @State private var scrub: Double?
     let song: PhonePlayer.Song
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 10) {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 let now = min(max(scrub ?? phone.position, 0), song.duration)
-                VStack(spacing: 6) {
+                VStack(spacing: 0) {
                     ScrubBar(value: now, total: song.duration, scrub: $scrub, tickEvery: 10, label: { NowControls.clock($0 * 1000) }) { phone.seek(to: $0) }
                     HStack {
                         Text(NowControls.clock(now * 1000))
@@ -2028,6 +2074,7 @@ struct PhoneControls: View {
                         Text("-" + NowControls.clock((song.duration - now) * 1000))
                     }
                     .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
+                    .padding(.top, -5)
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Position")
@@ -2049,7 +2096,8 @@ struct MusicProgress: View {
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             let raw = music.playing ? music.position + ctx.date.timeIntervalSince1970 * 1000 - music.sampledAt : music.position
             let now = min(max(raw, 0), max(music.duration, 0))
-            VStack(spacing: 6) {
+            // The same 28 pt band as a film's bar, and its times tucked 6 pt under the track itself, as a film's are.
+            VStack(spacing: 0) {
                 ProgressTrack(fraction: music.duration > 0 ? now / music.duration : 0).frame(height: 28)
                 HStack {
                     Text(NowControls.clock(now))
@@ -2057,6 +2105,7 @@ struct MusicProgress: View {
                     Text("-" + NowControls.clock(music.duration - now))
                 }
                 .font(.caption.monospacedDigit().weight(.medium)).foregroundStyle(.secondary)
+                .padding(.top, -5)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -2123,15 +2172,11 @@ struct PlayingTab: View {
                 Text(a.title?.isEmpty == false ? a.title! : "From this iPhone").font(.title2.weight(.bold)).lineLimit(2).multilineTextAlignment(.center)
                 Text(a.handoff == "youtube" ? "Opened in YouTube on the TV" : a.title?.isEmpty == false ? "Playing from this iPhone" : "AirPlay").font(.subheadline).foregroundStyle(.secondary)
             } else if phone.drives, let song = phone.song, !otherAppIsActive {
-                cover(Cover(url: nil, image: phone.art, key: "phone \(song.id)") { Color.white.opacity(0.08) })
-                titles(song.title, [song.artist, song.album])
-                PhoneControls(song: song)
-                showOnTV
+                songStack(cover(Cover(url: nil, image: phone.art, key: "phone \(song.id)") { Color.white.opacity(0.08) }),
+                          titles(song.title, [song.artist, song.album]), PhoneControls(song: song))
             } else if let m = music, !otherAppIsActive {
-                cover(Cover(url: URL(string: m.art)) { Color.white.opacity(0.08) }.opacity(stale ? 0.45 : 1))
-                titles(m.title, [m.artist, m.album])
-                NowControls(music: m)
-                showOnTV
+                songStack(cover(Cover(url: URL(string: m.art)) { Color.white.opacity(0.08) }.opacity(stale ? 0.45 : 1)),
+                          titles(m.title, [m.artist, m.album]), NowControls(music: m))
             } else if let s = model.status?.session {
                 // The one way a film or show is shown and driven, the same transport as the Remote's.
                 PlayingVideo(session: s, stale: stale, ended: Self.atEnd(s)).padding(.top, panes ? 0 : 8)
@@ -2146,8 +2191,21 @@ struct PlayingTab: View {
         let ran = s.sampledAt.map { max(0, Date().timeIntervalSince1970 * 1000 - $0) } ?? 0
         return p + ran >= d
     }
+    // A song as one stack on one rhythm: the cover, 20 pt, its names, 18 pt, the bar with its times tucked under it, the
+    // keys, then "Show on TV" close under them. Richard, 2026-11-07, of the open-portrait Playing tab: "spacing here is
+    // fucked" (a small cover, a wide gap over the bar, the times 27 pt under it, and the next section 60 pt away).
+    func songStack(_ art: some View, _ names: some View, _ controls: some View) -> some View {
+        VStack(spacing: 0) {
+            art
+            names.padding(.top, 20)
+            controls.padding(.top, 18)
+            showOnTV.padding(.top, 12)
+        }
+    }
     func cover(_ c: some View) -> some View {
-        c.aspectRatio(1, contentMode: .fit).frame(maxWidth: panes ? 300 : 180)
+        // As wide as the column lets it be, up to the open pane's 300: folded, 180 left the cover a stamp in the middle of
+        // the page (r35).
+        c.aspectRatio(1, contentMode: .fit).frame(maxWidth: panes ? 300 : 280)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).shadow(color: .black.opacity(0.45), radius: 22, y: 12)
     }
     func titles(_ title: String, _ more: [String]) -> some View {
@@ -2270,7 +2328,9 @@ struct PlayingTab: View {
                 VStack(alignment: .leading, spacing: 0) {
                     RowTitle("Continue watching").padding(.leading, 20)
                     ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(alignment: .top, spacing: 10) { ForEach(continuing) { FlickCardButton(item: $0, source: .stremio, width: 124) } }
+                        // A little smaller than elsewhere: a YouTube video's wide card at 124 filled the column, its neighbour a
+                        // sliver cut at the side bar (r35). At 100 the next card shows as a card, so it reads as a row.
+                        LazyHStack(alignment: .top, spacing: 10) { ForEach(continuing) { FlickCardButton(item: $0, source: .stremio, width: 100) } }
                             .padding(.horizontal, 20)
                     }
                     .rowEdge()
@@ -2294,7 +2354,8 @@ struct PlayingTab: View {
             } else {
                 // The rows under a film run to the screen's edges, as rows do everywhere else.
                 ScrollView {
-                    VStack(spacing: 24) {
+                    // One section break between what's on and what's under it, a little more than the stack's own steps.
+                    VStack(spacing: 32) {
                         now.padding(.horizontal, 16)
                         if watching { upNext } else { send.padding(.horizontal, 16) }
                     }
@@ -2599,6 +2660,9 @@ struct VideoProgress: View {
     var note: String? = nil
     // Dimmed and out of reach until the film is really going; the note stays clear.
     var locked = false
+    // Where the time sits with no length to draw a bar for: centred under the Remote's centred picture, at the column's
+    // start on Playing, whose titles start there (r35: a lone "1:23" floating mid-page under left-set titles).
+    var alone: HorizontalAlignment = .center
     @State private var scrub: Double?
     // The spot asked for, shown until the TV is there. A newer one asked for meanwhile goes as soon as this lands.
     @State private var target: Double?
@@ -2703,8 +2767,8 @@ struct VideoProgress: View {
                         Text("-" + clock(duration - shown)).opacity(known && duration > 0 ? (locked ? 0.4 : 1) : 0)
                     }
                     Text(clock(shown))
-                        .scaleEffect(bar ? 1 : 1.25, anchor: bar ? .leading : .center)
-                        .frame(maxWidth: .infinity, alignment: bar ? .leading : .center)
+                        .scaleEffect(bar ? 1 : 1.25, anchor: bar || alone == .leading ? .leading : .center)
+                        .frame(maxWidth: .infinity, alignment: bar || alone == .leading ? .leading : .center)
                         // Alone, level with the middle of the bar's place.
                         .offset(y: bar ? 0 : -14)
                         .opacity(known ? (locked ? 0.4 : 1) : 0)

@@ -81,6 +81,8 @@ extension MediaItem {
 }
 
 struct FlickScreen: View {
+    // Its entry in the side bar's Back, while choosing.
+    @State private var railBackID = UUID()
     @Environment(TVModel.self) var model
     enum Step: Int { case episodes, streams, flick }
     let target: FlickTarget
@@ -356,7 +358,9 @@ struct FlickScreen: View {
             // scrolls down and back as he scrolls up; never a loose circle (r17).
             .environment(\.pageBar, pageBar)
             .overlay(alignment: .bottom) {
-                if choosing {
+                // With a side bar beside the page, Back is the side bar's (Richard, 2026-11-07: "back should be on side
+                // bar"). Open in portrait the page covers the tab bar, so there it keeps its own bar at the foot.
+                if choosing && model.railWidth < 1 {
                     // One glass bar across the page's foot, back at its start: summoned by scrolling up, gone on the way
                     // down, and the page's foot inset (84 pt) keeps its last row clear of it at rest (r26: a lone "Back"
                     // capsule sat over episode 4's title).
@@ -381,8 +385,12 @@ struct FlickScreen: View {
                 }
             }
             .onChange(of: choosing && !leaving, initial: true) { _, c in model.flickChoosing = c }
+            // The side bar's Back steps back through the choosing (streams → episodes → out), as the page's own bar did.
+            .onChange(of: choosing && !leaving && model.railWidth >= 1, initial: true) { _, on in
+                if on { model.pushBack(railBackID) { if let previous { go(previous) } else { leave() } } } else { model.popBack(railBackID) }
+            }
             .onChange(of: !choosing && !toRemote && !leaving, initial: true) { _, c in model.flickCovering = c }
-            .onDisappear { model.flickChoosing = false; model.flickCovering = false }
+            .onDisappear { model.flickChoosing = false; model.flickCovering = false; model.popBack(railBackID) }
             // The card in the hand, the stage black over everything: the Remote comes up underneath now, so its first
             // layout (0.3 s folded, about 0.9 s open) is paid for while nothing moves, never during the throw (r21: switched
             // at the release, it froze the card mid-air). Back off the card's step, the page he came from comes back.

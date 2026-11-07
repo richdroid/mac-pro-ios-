@@ -30,8 +30,13 @@ struct TVStatus: Decodable, Equatable {
                 let t = episodeTitle ?? ""
                 return "S\(s) E\(e)" + (t.isEmpty ? "" : " · " + t)
             }
+            // A YouTube video's second line is its channel, not an episode (r35: "Lil B" set as the title, the video's own
+            // name as the small line over it).
+            if pkg == "com.google.android.youtube.tv" { return nil }
             return description.count > 1 ? Wording.episode(description[1]) : nil
         }
+        // A YouTube video's channel, the player's second line.
+        var channel: String? { pkg == "com.google.android.youtube.tv" && description.count > 1 && !description[1].isEmpty ? description[1] : nil }
         // Which episode, from the Mac's fields, else "S02E03" or "S2 E3" anywhere in what the player says (r19: a session
         // without the fields read as a film, so ⏭ dimmed and the episode line went missing). Nil for a film.
         var seasonEpisode: (season: Int, episode: Int)? {

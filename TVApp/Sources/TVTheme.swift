@@ -274,3 +274,18 @@ struct Wall: View {
         }
     }
 }
+
+#if os(iOS)
+// A pushed page hides the navigation bar (its title is drawn on the page, Back is the side bar's), and UIKit turns the
+// swipe from the left edge off with the bar. Back on, for any page with one under it (Richard, 2026-11-07: "the back
+// button behavior is awful rn"; a swipe from the edge is the other way back every iPhone page has).
+extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
+    override open func viewDidLoad() {
+        super.viewDidLoad()
+        interactivePopGestureRecognizer?.delegate = self
+    }
+    public func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        g === interactivePopGestureRecognizer ? viewControllers.count > 1 : true
+    }
+}
+#endif
