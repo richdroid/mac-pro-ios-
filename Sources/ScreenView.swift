@@ -253,8 +253,16 @@ struct RemoteScreenView: View {
             p.fnRow = CGRect(x: side, y: p.picture.maxY + 8, width: w - side * 2, height: 32)
             p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: w - side * 2, height: 40)
             p.trackpad = CGRect(x: side, y: p.modRow.maxY + 10, width: w - side * 2, height: max(h - bottom - 8 - p.modRow.maxY - 10, 60))
-            // Typing: the system keyboard comes up over the trackpad and the modifiers and arrows ride on top of it.
-            if keyboard > 0 { p.modRow.origin.y = max(p.fnRow.maxY + 6, h - keyboard - 46) }
+            // Typing: the system keyboard comes up over the trackpad, the modifiers and arrows ride on top of it with the
+            // function row above them, and the picture fits in what's left. The modifiers sat half under the keyboard
+            // before, where it was taller than the room under the picture (2026-11-07).
+            if keyboard > 0 {
+                p.modRow.origin.y = h - keyboard - 46
+                p.fnRow.origin.y = p.modRow.minY - 6 - 32
+                let room = fitWidth(w, maxHeight: max(p.fnRow.minY - 8 - top, 60))
+                p.picture = CGRect(x: (w - room.width) / 2, y: top, width: room.width, height: room.height)
+                p.trackpad = .zero
+            }
         case .book:
             // A MacBook opened across the fold: the left page is the screen alone, as large as the page allows; the right
             // page is the base, the function row, the full keyboard and a 16:10 trackpad centred under it. Both pages keep
