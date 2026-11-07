@@ -813,15 +813,24 @@ struct RemoteScreenView: View {
             // Half the fold, never under 20 pt, plus a little air.
             let half = max(20, crease.width / 2) + 6
             HStack(spacing: 0) {
-                Group { if dockOpen { capsule { dockKeys } } }
+                Group { if dockOpen { capsule { dockKeys() } } }
                     .frame(width: max(0, crease.midX - half), alignment: .trailing)
                 Color.clear.frame(width: half * 2, height: 1)
-                capsule { dockTools }
+                capsule { dockTools() }
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(width: width)
         } else {
-            capsule { if dockOpen { dockKeys }; dockTools }
+            // One capsule across the closed display, about 870 pt with everything in it, wider than the display held
+            // sideways (about 680 pt): it ran off both edges, Done included. The clipboard and sign-in fold into one
+            // menu first; if it still doesn't fit, the row scrolls rather than cuts anything off.
+            ViewThatFits(in: .horizontal) {
+                capsule { if dockOpen { dockKeys() }; dockTools() }
+                capsule { if dockOpen { dockKeys(compact: true) }; dockTools(compact: true) }
+                ScrollView(.horizontal, showsIndicators: false) { capsule { if dockOpen { dockKeys(compact: true) }; dockTools(compact: true) } }
+                    .frame(width: width)
+            }
+            .frame(width: width)
         }
     }
     func capsule<C: View>(@ViewBuilder _ content: () -> C) -> some View {
@@ -830,10 +839,10 @@ struct RemoteScreenView: View {
             .glassEffect(.regular, in: Capsule())
     }
     // Left of the fold: ⌘ through →.
-    @ViewBuilder var dockKeys: some View {
+    @ViewBuilder func dockKeys(compact: Bool = false) -> some View {
         MacKeyCap(label: "⌘", sym: MacKey.command, keys: keys, a11y: "Command", size: 16).frame(width: 44, height: 40)
         keyButton("esc", "Escape") { keys.tap(MacKey.esc) }
-        keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() }
+        if !compact { keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() } }
         keyButton("", icon: "magnifyingglass", "Spotlight") { keys.tap(MacKey.space, with: [MacKey.command]) }
         keyButton("", icon: "rectangle.3.group", "Mission Control") { keys.tap(MacKey.up, with: [MacKey.control]) }
         ForEach([(MacKey.left, "arrow.left", "Left arrow"), (MacKey.up, "arrow.up", "Up arrow"), (MacKey.down, "arrow.down", "Down arrow"), (MacKey.right, "arrow.right", "Right arrow")], id: \.0) { k in
@@ -841,15 +850,28 @@ struct RemoteScreenView: View {
         }
     }
     // Right of the fold: ⌫ ⏎, the tools and Done.
-    @ViewBuilder var dockTools: some View {
+    @ViewBuilder func dockTools(compact: Bool = false) -> some View {
         if dockOpen {
             MacKeyCap(label: "", icon: "delete.left", sym: MacKey.delete, keys: keys, a11y: "Delete").frame(width: 40, height: 40)
             MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return").frame(width: 40, height: 40)
             toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Show keyboard", on: typing) { typing.toggle() }
-            if zoomed || fillZoom > 1.01 { toolButton(fitIcon, fitLabel) { fitScreen() } }
-            toolButton("key.fill", "Sign in to the Mac") { signingIn = true }
-            clipButton(paste: false)
-            clipButton(paste: true)
+            if !compact, zoomed || fillZoom > 1.01 { toolButton(fitIcon, fitLabel) { fitScreen() } }
+            if compact {
+                Menu {
+                    if zoomed || fillZoom > 1.01 { Button { fitScreen() } label: { Label(fitLabel, systemImage: fitIcon) } }
+                    Button { keys.switchApps() } label: { Label("Switch apps", systemImage: "square.grid.3x1.below.line.grid.1x2") }
+                    Button { copyToPhone() } label: { Label("Copy from the Mac", systemImage: "doc.on.doc") }
+                    Button { pasteFromPhone() } label: { Label("Paste on the Mac", systemImage: "doc.on.clipboard") }.disabled(!phoneHasText)
+                    Button { signingIn = true } label: { Label("Sign in to the Mac", systemImage: "key.fill") }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(Circle())
+                }
+                .foregroundStyle(.white).accessibilityLabel("Clipboard and sign-in")
+            } else {
+                toolButton("key.fill", "Sign in to the Mac") { signingIn = true }
+                clipButton(paste: false)
+                clipButton(paste: true)
+            }
         }
         Button {
             tick(.light)

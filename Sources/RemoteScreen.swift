@@ -94,10 +94,28 @@ final class RemoteScreen: ObservableObject {
             if !Task.isCancelled { self?.wanted = false; self?.disconnect() }
         }
     }
-    func enteredBackground() {
+    // Out of the app, the connection is kept for iOS's grace time so a quick trip away costs nothing, but nothing new is
+    // ever opened there: a reconnect started in the background was suspended with the app before it could answer the
+    // Mac, so the Mac woke its display for a phone that never spoke, and the session died at the bridge's first ping. His
+    // log on 2026-11-06 held 16 of those, minutes apart, all night ("down 12 up 0"), each waking the Mac's display.
+    private var inBackground = false
+    private var backgrounded: Bool {
         #if canImport(UIKit)
-        // iOS gives a little time before it suspends the network.
-        background = UIApplication.shared.beginBackgroundTask { [weak self] in self?.endBackground() }
+        return inBackground || UIApplication.shared.applicationState == .background
+        #else
+        return inBackground
+        #endif
+    }
+    func enteredBackground() {
+        inBackground = true
+        retry?.cancel()
+        #if canImport(UIKit)
+        // iOS gives a little time before it suspends the network. When it's up, the session is closed with a goodbye,
+        // so the Mac lets it go at once rather than at its next ping, and coming back opens a fresh one straight away.
+        endBackground()
+        background = UIApplication.shared.beginBackgroundTask { [weak self] in
+            Task { @MainActor in self?.leaveForNow(); self?.endBackground() }
+        }
         #endif
     }
     private func endBackground() {
@@ -105,13 +123,53 @@ final class RemoteScreen: ObservableObject {
         if background != .invalid { UIApplication.shared.endBackgroundTask(background); background = .invalid }
         #endif
     }
+    // Closes the session while the app is away, keeping the last picture to show on return.
+    private func leaveForNow() {
+        guard backgrounded else { return }
+        retry?.cancel()
+        stopMeasuring()
+        running = false
+        socket?.cancel(with: .goingAway, reason: nil)
+        socket = nil
+        if phase == .connected || phase == .connecting { phase = hasPicture ? .reconnecting : .idle }
+        // The return starts its own 1.5 s before any "Reconnecting…".
+        slowTimer?.cancel(); slowTimer = nil; slowReconnect = false
+    }
     func enteredForeground() {
+        inBackground = false
         endBackground()
         guard wanted, let base else { return }
         attempts = 0
         retry?.cancel()
         if !running || socket == nil { connect(base: base) }
-        else { request(incremental: false) }   // a stale socket shows up as a failed send, which reconnects
+        else if phase == .connected { checkAlive(); request(incremental: false) }
+    }
+    // A socket iOS killed while the app was away often takes a send without complaint, so the Mac is asked to answer a
+    // ping: no answer in 2 s and a fresh connection starts at once, with no back-off.
+    private var liveCheck: Task<Void, Never>?
+    private var answeredCheck = 0
+    private var checks = 0
+    private func checkAlive() {
+        guard let task = socket else { return }
+        checks += 1
+        let check = checks
+        task.sendPing { [weak self] error in
+            Task { @MainActor in
+                guard let self, self.socket === task else { return }
+                if error == nil { self.answeredCheck = check } else { self.reconnectNow() }
+            }
+        }
+        liveCheck?.cancel()
+        liveCheck = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, !Task.isCancelled, self.socket === task, self.answeredCheck < check else { return }
+            self.reconnectNow()
+        }
+    }
+    private func reconnectNow() {
+        guard wanted, let base, !backgrounded else { return }
+        attempts = 0
+        connect(base: base)
     }
     func dropConnection() { socket?.cancel(with: .abnormalClosure, reason: nil) }
 
@@ -126,6 +184,8 @@ final class RemoteScreen: ObservableObject {
     }
     private func scheduleRetry() {
         guard wanted, let base else { return }
+        // Away from the app the retry waits for the return (enteredForeground connects at once).
+        if backgrounded { phase = hasPicture ? .reconnecting : .idle; slowTimer?.cancel(); slowTimer = nil; slowReconnect = false; return }
         attempts += 1
         let wait = min(Double(attempts), 5)
         phase = .reconnecting
@@ -133,12 +193,15 @@ final class RemoteScreen: ObservableObject {
         retry?.cancel()
         retry = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
-            if !Task.isCancelled, self?.wanted == true { self?.connect(base: base) }
+            if !Task.isCancelled, let self, self.wanted, !self.backgrounded { self.connect(base: base) }
         }
     }
 
     func connect(base: URL) {
         retry?.cancel()
+        liveCheck?.cancel()
+        self.base = base
+        guard !backgrounded else { return }
         running = false
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
@@ -158,11 +221,13 @@ final class RemoteScreen: ObservableObject {
         running = true; phase = hasPicture ? .reconnecting : .connecting
         watchSlowReconnect()
         task.resume()
-        // A connection that hasn't started the picture in 8 s is given up and tried again, rather than left waiting for
-        // good: one stuck that way kept "Reconnecting…" up until the screen was closed and opened (2026-11-06).
+        // A connection that hasn't started the picture in 14 s is given up and tried again, rather than left waiting for
+        // good: one stuck that way kept "Reconnecting…" up until the screen was closed and opened (2026-11-06). Not
+        // sooner: waking a sleeping display and signing in takes the bridge up to about 8 s (6.9 s seen 2026-11-07), and
+        // an 8 s limit cut those off just before their picture, every time.
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
-            guard let self, self.socket === task, self.phase == .connecting || self.phase == .reconnecting else { return }
+            try? await Task.sleep(nanoseconds: 14_000_000_000)
+            guard let self, self.socket === task, !self.backgrounded, self.phase == .connecting || self.phase == .reconnecting else { return }
             task.cancel(with: .abnormalClosure, reason: nil)
         }
         Task.detached(priority: .userInitiated) { [weak self] in await Self.receiveLoop(task, decoder: decoder, owner: self) }
@@ -170,6 +235,7 @@ final class RemoteScreen: ObservableObject {
 
     func disconnect() {
         running = false
+        liveCheck?.cancel()
         stopMeasuring()
         flushTimer = nil
         socket?.cancel(with: .goingAway, reason: nil)
@@ -253,6 +319,9 @@ final class RemoteScreen: ObservableObject {
     }
 
     private func send(_ bytes: [UInt8]) {
+        // Nothing of ours goes out until the handshake is done: a touch or key sent mid-handshake landed where the bridge
+        // expected the phone's version, and the Mac ended the session at once ("mac side error … up 644", 2026-11-06).
+        guard phase == .connected else { return }
         let task = socket
         task?.send(.data(Data(bytes))) { [weak self] error in
             // A send on a socket iOS already killed fails here; the receive loop reconnects, but nudge it.
