@@ -1696,9 +1696,13 @@ struct CursorOverlay: UIViewRepresentable {
             let at = map.point(m)
             let size: CGSize, hot: CGPoint
             if let image {
-                // The Mac's cursor in its own pixels, at the picture's scale.
-                size = CGSize(width: CGFloat(image.width) * map.scale, height: CGFloat(image.height) * map.scale)
-                hot = CGPoint(x: hotspot.x * map.scale, y: hotspot.y * map.scale)
+                // The Mac's cursor at the picture's scale, but never larger than it is on the Mac itself (one Mac pixel to a
+                // point), and never more than a normal arrow: zoomed or filled, it grew with the picture, and the Mac's
+                // shake-to-find made it huge (Richard, 2026-11-06: "a huge cursor looks like shit").
+                let side = CGFloat(max(image.width, image.height, 1))
+                let k = min(map.scale, 1) * (side > 48 ? 32 / side : 1)
+                size = CGSize(width: CGFloat(image.width) * k, height: CGFloat(image.height) * k)
+                hot = CGPoint(x: hotspot.x * k, y: hotspot.y * k)
             } else {
                 size = CGSize(width: 16, height: 20); hot = CGPoint(x: 3, y: 2)
             }
