@@ -665,7 +665,7 @@ struct MirrorView: View {
 }
 #if os(iOS)
 // The TV's screen itself: the live stream once it has a picture, and until then (or without one) the latest still,
-// shown dimmed with a small spinner once it's more than a few seconds old, so an old picture never passes for now.
+// shown dimmed with the light running round it once it's more than a few seconds old, so an old picture never passes for now.
 private struct ScreenPicture: View {
     @ObservedObject var live: LiveMirror
     @ObservedObject var store: MirrorStore
@@ -689,7 +689,7 @@ private struct ScreenPicture: View {
                     TimelineView(.periodic(from: .now, by: 1)) { ctx in
                         let old = isOld(store.at, ctx.date)
                         Image(tv: m).resizable().scaledToFit().opacity(old ? 0.5 : 1)
-                            .overlay { if old && !live.stalled { ProgressView().tint(.white).transition(.opacity) } }
+                            .overlay { if old && !live.stalled { LoadingRing(radius: TVLook.card).transition(.opacity) } }
                             .animation(.easeOut(duration: 0.3), value: old)
                     }
                 } else {
@@ -702,7 +702,9 @@ private struct ScreenPicture: View {
                         else {
                             Color.clear.overlay { Art(url: art.flatMap(URL.init(string:))) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
                                 .clipped().blur(radius: 26).opacity(0.5)
-                                .overlay { ProgressView().tint(.white) }
+                                // Waiting on the TV's picture: the light running round the picture's edge, as it does round
+                                // every card that's loading and round a flick's start (tv-iphone.md ruling 9), not a spinner.
+                                .overlay { LoadingRing(radius: TVLook.card) }
                         }
                     }
                     .animation(.easeOut(duration: 0.3), value: live.stalled)
@@ -713,7 +715,7 @@ private struct ScreenPicture: View {
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 let old = held && live.heldAt.map { isOld($0, ctx.date) } == true
                 LiveMirrorLayer(mirror: live).opacity(live.showing || held ? (old ? 0.5 : 1) : 0)
-                    .overlay { if old && !live.stalled { ProgressView().tint(.white).transition(.opacity) } }
+                    .overlay { if old && !live.stalled { LoadingRing(radius: TVLook.card).transition(.opacity) } }
                     .animation(.easeOut(duration: 0.3), value: old)
             }
         }
