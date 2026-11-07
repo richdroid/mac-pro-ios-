@@ -191,10 +191,17 @@ struct RemoteScreenView: View {
         switch kind {
         case .laptop:
             // The lid: the picture as wide as the display, set down on the hinge, the camera in the black above it.
-            let c = fold.crease.flatMap { $0.width >= $0.height ? $0 : nil } ?? CGRect(x: 0, y: (h * 0.478).rounded(), width: w, height: 40)
+            // With a real hinge the lid ends at it. Flat open there's none, and an imagined one at mid-height left black above
+            // and below the picture (Richard, 2026-11-07: "still doesnt fill display"): the deck is laid from the foot up and
+            // the picture takes everything above it, from the top of the display.
+            let real = fold.crease.flatMap { $0.width >= $0.height ? $0 : nil }
+            let padWanted = max(190, (h * 0.2).rounded()), kbWanted: CGFloat = 190
+            let deckTop = h - bottom - 8 - padWanted - 10 - kbWanted - 8 - 32 - 8
+            let c = real ?? CGRect(x: 0, y: max(deckTop - 2, h * 0.4), width: w, height: 0)
             // The whole lid is the picture's space, filled edge to edge (the picture follows the pointer), never a fitted
             // picture with black above it (Richard, 2026-11-06: "fill the top screen").
-            p.picture = CGRect(x: 0, y: top, width: w, height: max(c.minY - air - top, 1))
+            let lidTop: CGFloat = real == nil ? 0 : top
+            p.picture = CGRect(x: 0, y: lidTop, width: w, height: max(c.minY - (real == nil ? 0 : air) - lidTop, 1))
             // The base: function row, the keyboard, and a trackpad centred under it like a MacBook's.
             let y0 = c.maxY + 8, base = h - bottom - 8 - y0
             p.fnRow = CGRect(x: side, y: y0, width: w - side * 2, height: 32)
