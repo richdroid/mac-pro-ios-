@@ -33,9 +33,10 @@ struct MacSettings: View {
                 // The page's name as its first line, going up with the page, as on every other tab.
                 Section {
                     Text("Settings").font(.largeTitle.weight(.bold)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, TopEdge.statusBar < 20 ? 14 : 0)
                         .accessibilityAddTraits(.isHeader)
                 }
-                .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden)
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 // All seven in view, spread evenly across the row, never scrolled or cut off.
                 Section("Colour") {
                     HStack(spacing: 0) {
@@ -107,6 +108,7 @@ struct MacSettings: View {
             }
             }
             // The same top edge as every other tab, rather than the system's band and hairline.
+            .modifier(StatusBarFade())
             .topEdge()
             .navigationTitle("Settings")
             .toolbarVisibility(.hidden, for: .navigationBar)

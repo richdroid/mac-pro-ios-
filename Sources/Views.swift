@@ -299,7 +299,8 @@ struct Screen<Content: View>: View {
                 // The page's name is its first line, in one pane or two, and goes up with the page: the system's large
                 // title collapsed into the bar, and the rows ran on under it ("Open on the Mac (13)" printed behind
                 // "Apps", 2026-11-07). The TV app does the same.
-                Section { paneTitle(side).id("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden)
+                // At the cards' edge and as far down as the system's large title sat, so nothing moved but its behaviour.
+                Section { paneTitle(side).padding(.top, TopEdge.statusBar < 20 ? 14 : 0).id("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right, Notice.shows(model) { Section { Notice() } }
                 if let s = model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
@@ -380,6 +381,7 @@ struct Screen<Content: View>: View {
                 }
             }
             .modifier(TabBarFade())
+            .modifier(StatusBarFade())
             .background(groupedBackground.ignoresSafeArea())
             // Laid over both panes at once, so open there's one edge, not one per pane.
             .topEdge()
@@ -1650,6 +1652,29 @@ struct ShareSheet: View { let url: URL; var body: some View { Text(url.lastPathC
 // Open in portrait the tabs are a bar along the foot, and the page ran on to a hard edge above it (r24). The page fades
 // out over 18 pt above the bar and is clear behind it. The inset is measured on the page itself: read in a view that
 // ignores the safe area it is always 0. Only where the foot inset is a tab bar's, not just the home indicator's.
+// Rows going up under the clock fade out just above the page's own top, so nothing reads crisp under the status bar,
+// now that no bar is drawn there. Fixed to the safe area, never moved with the scroll, so it costs a scroll nothing.
+// Only where the status bar is across the top (folded, it's in the side bar and there's nothing to fade under).
+struct StatusBarFade: ViewModifier {
+    @State private var top: CGFloat = 0
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { top = $0 }
+            .mask {
+                if top > 20 {
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: top - 12)
+                        LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
+                        Color.black
+                    }
+                    .ignoresSafeArea()
+                } else {
+                    Color.black.ignoresSafeArea()
+                }
+            }
+    }
+}
+
 struct TabBarFade: ViewModifier {
     @State private var foot: CGFloat = 0
     func body(content: Content) -> some View {
