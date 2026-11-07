@@ -145,6 +145,8 @@ struct TitleInfoSheet: View {
         .presentationCornerRadius(28)
         .task {
             guard let ref else { failed = true; return }
+            // Reading about it is the moment before choosing it: its streams are asked for now, so they're there.
+            StreamCache.shared.prefetch(item)
             if let c = TitleInfoStore.cached(ref.type, ref.imdb) { info = c; return }
             let i = await TitleInfoStore.load(ref.type, ref.imdb)
             withAnimation(.easeOut(duration: 0.25)) { info = i; failed = i == nil }

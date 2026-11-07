@@ -1,0 +1,108 @@
+name: TV app shots
+# The TV app alone, shot in every posture with open portrait (the posture Richard holds) first, then open landscape, then
+# folded. The full build's screenshot step runs out of time in the folded TV poses before it reaches the open ones
+# (2026-11-07, 3789d2f), so the TV app's own changes get this short run of their own, as the Mac Pro app has. Published to
+# the tv-latest release; the full build and its latest release are untouched.
+on:
+  push:
+    branches: [main]
+    paths: ['TVApp/**', 'Shared/**', 'TVWidget/**', 'ci/mock-chumby.js', 'ci/tv-*', 'project.yml', '.github/workflows/tv.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tv-shots
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 55
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          # One shot: name, display, wait, address, then the app's own arguments.
+          shot() {
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # Everything that changed lately, in one posture (display, suffix).
+          poses() {
+            local d=$1 x=$2
+            for T in 0 1 2 3 5 9; do shot tab$T$x $d 7 $M -tab $T; done
+            for T in 1 2 3 5; do shot scroll-$T$x $d 9 $M -tab $T -scroll 30; done
+            for S in rmint ryoutube ryoutubebare repisode; do shot playing-$S$x $d 8 $M/$S -tab 2; done
+            for S in ridle repisode rfilm ryoutube roffline; do shot remote-$S$x $d 8 $M/$S -tab 0; done
+            # Pages opened over a tab: Back is the side bar's (the bottom bar's first item, open in portrait).
+            for P in browse streams search; do shot $P$x $d 9 $M -tab 1 -pose $P; done
+            shot stremiorow$x $d 12 $M -tab 1 -pose stremiorow
+            # The Remote's search field, tapped and typed into: the Apps page's search with its results.
+            shot remotesearch$x $d 10 $M -tab 0 -pose remotesearch
+            # A show's page, on the real bridge's answers.
+            curl -s $M/real/reset > /dev/null; shot realseries-end$x $d 14 $M/real -tab 3 -pose realseries
+            # The flick's stage with the card in the hand, and the catch filmed.
+            curl -s $M/fnormal/reset > /dev/null; shot flick-stage$x $d 10 $M/fnormal -tab 1 -pose flick-stage
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-flick$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose flick-starting
+            sleep 18
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          open -a DeviceHub; sleep 10
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
+          sleep 5
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
+          # Open portrait first.
+          poses 3 -portrait
+          # Open landscape, two panes.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
+          poses 3 -open
+          # Folded, the outer display, last.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
+          poses 1 ""
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-latest >/dev/null 2>&1 || gh release create tv-latest --prerelease --title "TV app shots" --notes "The TV app's own shots and films."
+          for f in shots.zip films.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload tv-latest "$f" --clobber && break; sleep 15; done
+          done

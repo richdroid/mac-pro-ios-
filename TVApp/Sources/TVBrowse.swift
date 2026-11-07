@@ -511,7 +511,11 @@ struct EverywhereSearch: View {
         // The first card, as the grid shows it, for the build's search flow to tap.
         .onChange(of: settled ? (films.answerRows.first?.items.first?.id ?? music.answerRows.first?.items.first?.id) : nil, initial: true) { _, _ in
             if !settled { SendDraft.shared.firstResult = nil }
-            else if let r = films.answerRows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, films.source) }
+            else if let r = films.answerRows.first, let i = r.items.first {
+                SendDraft.shared.firstResult = (i, films.source)
+                // The first few films found are the likely picks: their streams asked for now, not on the tap.
+                for f in r.items.prefix(3) { StreamCache.shared.prefetch(f) }
+            }
             else if let r = music.answerRows.first, let i = r.items.first { SendDraft.shared.firstResult = (i, music.source) }
             else { SendDraft.shared.firstResult = nil }
         }

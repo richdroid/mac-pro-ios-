@@ -151,6 +151,12 @@ struct FlickScreen: View {
     // The episode Stremio's Continue watching is on, and how far into it.
     @State private var upNext: String?
     @State private var upNextProgress: Double?
+    // The episode he'll most likely carry on with: its streams asked for as soon as it's known, so choosing it finds them
+    // waiting (Richard, 2026-11-07: "the stremio streams u flick take much much too long").
+    func warmNext() {
+        guard let ref = item.stremioRef, ref.type == "series", let v = upNext else { return }
+        Task { _ = await StreamCache.shared.streams(type: "series", imdb: ref.imdb, video: v) }
+    }
     // True once the episode he's on is known (what's playing, the card, or Continue watching), so nothing is prepared for a
     // guess like S1 E1 before then.
     @State private var resumeKnown = false
@@ -970,7 +976,12 @@ struct FlickScreen: View {
         // 220 pt folded, 320 open (§2.5a C2), never more than the half it sits in leaves room for.
         let tvWidth = wide ? min(320, look.width * 0.42) : min(220, look.width * 0.56)
         let tv = CGSize(width: tvWidth, height: (tvWidth * 9 / 16).rounded())
-        let centre = CGPoint(x: look.midX, y: look.midY)
+        // Open and flat (a short, wide screen with the card in the same half), the TV at the true centre left the card
+        // squeezed under its stand and cut by the screen's foot (Richard, 2026-11-07: "when landscape unfolded the tv u r
+        // flicking to is too far down"). There it sits higher, its centre at about a third of the way down, so the card has
+        // the lower half to be held in and thrown from. Upright and folded it stays at the centre.
+        let flat = wide && hand == look
+        let centre = CGPoint(x: look.midX, y: flat ? look.minY + max(tv.height / 2 + 72, look.height * 0.34) : look.midY)
         // The card is held low in the hand, well clear of the TV's stand so a throw has a real way to travel, with its
         // title strip (at its foot) always at least 12 pt above the edge: a quarter past the edge hid the title (r17).
         var width: CGFloat = wide ? 136 : 124
@@ -1470,7 +1481,7 @@ struct FlickScreen: View {
             meta = m
             // A card that's part way through a series starts on that episode, unless one's been picked meanwhile.
             if episode == nil { episode = m.episodes.first { $0.id == ref.video } }
-            if let on { upNext = on.id; upNextProgress = on.progress }
+            if let on { upNext = on.id; upNextProgress = on.progress; warmNext() }
             season = resumeTarget?.episode.season ?? episode?.season ?? m.episodes.first?.season ?? 0
         }
         if upNext != nil || ref.type != "series" { resumeKnown = true; return }
@@ -1480,6 +1491,7 @@ struct FlickScreen: View {
         let e = rowItem.flatMap { r in m.episodes.first { $0.id == r.stremioRef?.video } ?? Self.episode(named: r.subtitle, in: m.episodes) }
         if let e, upNext == nil {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { upNextProgress = rowItem?.progress; upNext = e.id; season = resumeTarget?.episode.season ?? e.season }
+            warmNext()
         }
         resumeKnown = true
     }

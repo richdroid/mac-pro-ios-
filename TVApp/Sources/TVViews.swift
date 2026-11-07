@@ -37,6 +37,16 @@ struct RootView: View {
         #endif
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
         if pose == "search" { SendDraft.shared.text = "Heat"; return }
+        // The Remote's search field tapped, then words typed: the Apps page's search, keyboard up, results in.
+        if pose == "remotesearch" {
+            Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; model.tab = 1
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                SendDraft.shared.text = "Heat"
+            }
+            return
+        }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
         if ["tour", "type", "episodes", "scrub", "island"].contains(pose) { return }
         // The real-data flows (CI's /real scene): each taps through the same code a finger would.
@@ -547,7 +557,7 @@ struct SendBar: View {
             Image(systemName: link ? "paperplane" : "magnifyingglass").foregroundStyle(.secondary).padding(.leading, 14)
                 .contentTransition(.symbolEffect(.replace))
             if opensSearch {
-                Button { model.tick(); draft.wantsFocus = true; model.tab = 1 } label: {
+                Button { model.tick(); draft.wantsFocus = true; draft.focusRequest += 1; model.tab = 1 } label: {
                     Text(draft.text.isEmpty ? "Search, or send a link" : draft.text).foregroundStyle(draft.text.isEmpty ? .tertiary : .primary)
                         .lineLimit(1).frame(maxWidth: .infinity, minHeight: 50, alignment: .leading).contentShape(Rectangle())
                 }
@@ -555,7 +565,7 @@ struct SendBar: View {
             } else {
             TextField("Search, or send a link", text: $draft.text)
                 .focused($focused).autocorrectionDisabled().submitLabel(link ? .send : .search)
-                .onChange(of: draft.focusRequest) { _, _ in focused = true }
+                .onChange(of: draft.focusRequest) { _, _ in focused = true; draft.wantsFocus = false }
                 // Words are already being searched as they're typed, so Return only puts the keyboard away.
                 .onSubmit { if link { submit() } else { focused = false } }
                 .task {
@@ -571,7 +581,7 @@ struct SendBar: View {
                     // A copied link goes to the TV; copied words are searched here, like typed ones.
                     if let s = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
                         if Self.isLink(s) { model.send(s) } else { draft.text = s; if opensSearch { model.tab = 1 } }
-                    } else if opensSearch { draft.wantsFocus = true; model.tab = 1 } else { focused = true }
+                    } else if opensSearch { draft.wantsFocus = true; draft.focusRequest += 1; model.tab = 1 } else { focused = true }
                     #endif
                 } label: { Image(systemName: "doc.on.clipboard").frame(width: 44, height: 44) }
                 .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Use what you copied")
