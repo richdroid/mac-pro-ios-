@@ -1,5 +1,8 @@
 import Charts
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @main
 struct MacProApp: App {
@@ -200,11 +203,13 @@ struct RootView: View {
     @AppStorage("accent") private var accent = "blue"
     @AppStorage("celsius") private var celsius = false
     @State private var resets: [Int: Int] = [:]
+    @State private var barAtFoot = false
     // A new colour redraws the other tabs; Settings, where it was picked, stays put so the swatch can animate.
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
     var body: some View {
         PaneReader {
-            TabView(selection: TabReset.binding($model.tab) { t in
+            // -1 is the side bar's Back: it never becomes the tab, it takes the page on top back a step.
+            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 == -1 { model.goBack() } else { model.tab = $0 } })) { t in
                 // Back to the tab's own start: anything opened on it closes, and it's rebuilt at the top.
                 if t == 0 { model.history = nil; model.processes = nil }
                 if t == 2 { model.sessionScreen = nil }
@@ -213,13 +218,20 @@ struct RootView: View {
                 // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab. Seven in the bar along the foot
                 // (open in portrait) were squeezed, the labels nearly touching (Richard, 2026-11-07: "the bar like the
                 // elements r squished tg looks ugly").
+                // At the top of the side bar, above the tabs, only while a page is open over a tab. Along the foot (open in
+                // portrait) it's the bar's first item, and Settings steps out while it's there, so the bar keeps its six.
+                if model.pageOpen {
+                    Tab(value: -1) { Color.clear } label: { tabLabel("Back", "chevron.backward") }
+                }
                 Tab(value: 0) { Screen(tab: 0, title: "Status") { StatusTab($0, side: $1) }.id(key(0)) } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
                 Tab(value: 1) { Screen(tab: 1, title: "Apps") { AppsTab($0, side: $1) }.id(key(1)) } label: { tabLabel("Apps", "square.grid.2x2") }
                 Tab(value: 2) { Screen(tab: 2, title: "Claude") { ClaudeTab($0, side: $1) }.id(key(2)) } label: { tabLabel("Claude", asset: "ClaudeTab") }
                 Tab(value: 4) { Screen(tab: 4, title: "Updates", listed: false) { UpgradeTab($0, side: $1) }.id(key(4)) } label: { tabLabel("Updates", "arrow.up.circle") }
                 Tab(value: 5) { Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5)) } label: { tabLabel("Control", "display") }
                 // Last, so it sits at the foot of the side bar.
-                Tab(value: 9) { MacSettings().id(resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
+                if !(model.pageOpen && barAtFoot) {
+                    Tab(value: 9) { MacSettings().id(resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
+                }
             }
             .tint(macBlue)
             .onChange(of: model.tab) { _, t in
@@ -228,6 +240,8 @@ struct RootView: View {
                 Task { await model.refresh() }
             }
         }
+        // The tabs are a bar along the foot when the Duo is open in portrait, a side bar otherwise.
+        .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { $0.size.width >= 600 && $0.size.height > $0.size.width } action: { barAtFoot = $0 } }
         .onAppear { MacPrefs.shareWithWidgets() }
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }
         .onChange(of: celsius) { _, _ in MacPrefs.shareWithWidgets() }
@@ -242,6 +256,20 @@ struct RootView: View {
         }
     }
 }
+
+#if os(iOS)
+// A pushed page hides its Back (Back is the side bar's), and UIKit turns the swipe from the left edge off with it. Back
+// on, for any page with one under it: the swipe is the other way back every iPhone page has (as in the TV app).
+extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
+    override open func viewDidLoad() {
+        super.viewDidLoad()
+        interactivePopGestureRecognizer?.delegate = self
+    }
+    public func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        g === interactivePopGestureRecognizer ? viewControllers.count > 1 : true
+    }
+}
+#endif
 
 // The Mac reports some states in capitals or lower case; the app says them one way.
 func sentenceCase(_ t: String) -> String { t.prefix(1).uppercased() + t.dropFirst().lowercased() }
@@ -392,6 +420,8 @@ struct Screen<Content: View>: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbarVisibility(.hidden, for: .navigationBar)
             .navigationDestination(item: tab == 0 ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
+            // All processes, from Status itself; from a history, that page opens them over itself.
+            .navigationDestination(item: tab == 0 && model.history == nil ? $model.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0) }
             .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0) }
         }
     }
@@ -693,7 +723,10 @@ struct StatusTab: View {
         if showProcesses {
             Section("Top processes") {
                 ForEach(s.procs) { p in LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)) }
-                NavigationLink("All processes") { ProcessesView(first: .cpu) }
+                Button { model.processes = .cpu } label: {
+                    HStack { Text("All processes").foregroundStyle(.primary); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                        .contentShape(Rectangle())
+                }
             }
         }
     }
@@ -797,7 +830,14 @@ struct ClaudeTab: View {
                 ForEach(s.claude.sessions) { x in
                     let row = SessionRow(session: x, working: restarting != nil && restarting == x.key, restart: { Task { await doRestart(x) } })
                     // The whole row opens its page, on this tab's own stack, with Back where the system puts it.
-                    if row.canOpen { NavigationLink { SessionTerminal(session: x) } label: { row } } else { row }
+                    // Through the model, so the side bar's Back knows a page is open over the tab.
+                    // A tap on the row, not a button around it, so its own Restart and Start keep their taps.
+                    if row.canOpen {
+                        HStack(spacing: 8) { row; Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                            .contentShape(Rectangle())
+                            .onTapGesture { model.open(session: x) }
+                            .accessibilityAddTraits(.isButton)
+                    } else { row }
                 }
                 if let sessionNote { FailText(sessionNote) }
             }

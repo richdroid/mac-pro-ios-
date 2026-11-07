@@ -244,6 +244,8 @@ struct HistoryView: View {
         .topEdge()
         .navigationTitle(metric.title)
         .toolbarVisibility(.visible, for: .navigationBar)
+        // Back is the side bar's; the swipe from the left edge still goes back (BackSwipe).
+        .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
         .animation(.easeOut(duration: 0.2), value: hours)
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }

@@ -117,6 +117,8 @@ struct ProcessesView: View {
         .topEdge()
         .navigationTitle("Processes")
         .toolbarVisibility(.visible, for: .navigationBar)
+        // Back is the side bar's; the swipe from the left edge still goes back (BackSwipe).
+        .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             while !Task.isCancelled {

@@ -261,6 +261,8 @@ struct SessionTerminal: View {
         .background(Color.black.ignoresSafeArea())
         .navigationTitle(session.name)
         .toolbarVisibility(.visible, for: .navigationBar)
+        // Back is the side bar's; the swipe from the left edge still goes back (BackSwipe).
+        .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(.dark)
         .sensoryFeedback(trigger: sends) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
