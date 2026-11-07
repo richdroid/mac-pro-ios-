@@ -71,8 +71,8 @@ jobs:
           # remote in like the screen draws slowly").
           slowfilms() {
             local d=$1 x=$2
-            FILM_PORT=9011 film screen-slow-before$x $d 14 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoStream YES
-            FILM_PORT=9011 film screen-slow-after$x $d 14 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 16
+            FILM_PORT=9011 film screen-slow-before$x $d 22 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoStream YES
+            FILM_PORT=9011 film screen-slow-after$x $d 22 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 16
           }
           # Everything that changed, in one posture (display, suffix).
           poses() {

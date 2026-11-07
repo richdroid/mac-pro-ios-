@@ -693,18 +693,22 @@ function mockScreen(req, sock, slow = false) {
   const deflate = zlib.createDeflate();
   let zchain = Promise.resolve();
   const zrle = (px, w, h) => {
-    const parts = [];
+    // Written straight into one buffer: a Buffer per pixel took the CI runner seconds per picture.
+    const size = bpp === 32 ? 3 : 2, out = Buffer.alloc(Math.ceil(w / 64) * Math.ceil(h / 64) + w * h * size);
+    let at = 0;
+    const put = c => {
+      if (size === 3) { out[at++] = c & 255; out[at++] = (c >> 8) & 255; out[at++] = (c >> 16) & 255; }
+      else { const v = wide(c); out[at++] = v & 255; out[at++] = v >> 8; }
+    };
     for (let ty = 0; ty < h; ty += 64) for (let tx = 0; tx < w; tx += 64) {
       const tw = Math.min(64, w - tx), th = Math.min(64, h - ty), first = px[ty * w + tx];
       let solid = true;
       for (let y = 0; y < th && solid; y++) for (let x = 0; x < tw; x++) if (px[(ty + y) * w + tx + x] !== first) { solid = false; break; }
-      const cp = c => bpp === 32 ? Buffer.from([c & 255, (c >> 8) & 255, (c >> 16) & 255]) : (b => (b.writeUInt16LE(wide(c)), b))(Buffer.alloc(2));
-      if (solid) { parts.push(Buffer.from([1]), cp(first)); continue; }
-      const tile = Buffer.alloc(1 + tw * th * (bpp === 32 ? 3 : 2)); let at = 1;
-      for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) at += cp(px[(ty + y) * w + tx + x]).copy(tile, at);
-      parts.push(tile);
+      if (solid) { out[at++] = 1; put(first); continue; }
+      out[at++] = 0;
+      for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) put(px[(ty + y) * w + tx + x]);
     }
-    const input = Buffer.concat(parts);
+    const input = out.subarray(0, at);
     return new Promise(res => {
       const got = []; const take = d => got.push(d);
       deflate.on('data', take);
