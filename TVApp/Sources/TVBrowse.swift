@@ -194,6 +194,10 @@ struct MediaCard: View {
     // Room for a title on two lines and the line under it, the same on every card, so a row's cards stay even.
     static func band(_ width: CGFloat) -> CGFloat { width > 200 ? 82 : 62 }
     static func height(_ width: CGFloat, _ source: MediaSource) -> CGFloat { width / source.coverAspect + band(width) }
+    // A YouTube still is wide, so its card is: a 16:9 tile the row's cover height, the still filling it (YouTube's own stills
+    // are 16:9, so nothing is cut off), rather than a wide picture shrunk into a poster's shape.
+    var coverHeight: CGFloat { width / source.coverAspect }
+    var cardWidth: CGFloat { item.isYouTube ? (coverHeight * 16 / 9).rounded() : width }
     @State private var band: Color?
     // No cover to be had (none given, or it wouldn't load): the card draws its own, never a blank tile.
     @State private var noArt = false
@@ -204,12 +208,9 @@ struct MediaCard: View {
             Group {
                 if let image { image.resizable().scaledToFill() }
                 else if noArt { CoverFallback(title: item.title, tint: shownBand) }
-                // A YouTube still is wide; shown whole on a soft copy of itself, so the card stays the row's shape and
-                // nothing of the picture (a face, a caption) is cut off making it tall.
-                else if item.isYouTube { PosterOnBlur(url: URL(string: item.art)) }
                 else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait().overlay { LoadingRing(radius: 0) } } }
             }
-                .frame(width: width, height: width / source.coverAspect)
+                .frame(width: cardWidth, height: coverHeight)
                 .clipped()
                 .overlay(alignment: .bottom) {
                     // How far through it you are, as on the TV's own cards.
@@ -231,7 +232,7 @@ struct MediaCard: View {
             .foregroundStyle(.white)
             .padding(.horizontal, width > 200 ? 14 : 10)
             .padding(.top, width > 200 ? 10 : 7)
-            .frame(width: width, height: Self.band(width), alignment: .topLeading)
+            .frame(width: cardWidth, height: Self.band(width), alignment: .topLeading)
             .background(shownBand)
         }
         .clipShape(RoundedRectangle(cornerRadius: width > 200 ? 8 : 6, style: .continuous))
@@ -304,10 +305,10 @@ struct MediaList: View {
     var body: some View {
         RowList(title: row.title) {
             ForEach(row.items) { item in
-                Button { model.flick(FlickTarget(item: item, source: source)) } label: {
+                Button { FlickCardButton.tap(model, item, source) } label: {
                     HStack(spacing: 12) {
                         Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
-                            .frame(width: 50, height: 50 / source.coverAspect).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .frame(width: item.isYouTube ? 50 / source.coverAspect * 16 / 9 : 50, height: 50 / source.coverAspect).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title).font(.body.weight(.semibold)).lineLimit(2)
                             if !item.shownSubtitle.isEmpty { Text(item.shownSubtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }

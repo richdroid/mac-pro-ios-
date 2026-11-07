@@ -412,7 +412,7 @@ function tvPose(q, s) {
     const v = JSON.parse(tvStatus), now = Date.now();
     if (scene === 'rasleep') { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'roffline') { v.online = false; delete v.session; }
-    if (scene === 'ryoutube') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Sample Video'], position: 95000, sampledAt: now, duration: 610000, canSeek: false }; }
+    if (scene === 'ryoutube') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Sample Video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 610000, canSeek: false, art: tvBase + '/api/tv/shot' }; }
     if (scene === 'rmint') { v.app = 'com.codex.musicwebtv'; delete v.session; }
     if (scene === 'ridle') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'rjoin' || scene === 'rstall') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
