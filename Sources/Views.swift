@@ -560,7 +560,8 @@ struct QuickActions: View {
                 fails["copy"] = nil
                 Task {
                     guard let t = try? await model.api.clipboard() else { fail("copy", "Can’t reach the Mac"); return }
-                    if t.isEmpty { fail("copy", "The Mac’s clipboard is empty"); return }
+                    // The Mac only hands over text: a copied picture or file reads as nothing, so "empty" would be wrong.
+                    if t.isEmpty { fail("copy", "No text on the Mac’s clipboard"); return }
                     #if canImport(UIKit)
                     UIPasteboard.general.string = t
                     #endif
@@ -695,7 +696,8 @@ struct AppsTab: View {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading) {
                             Text(a.name)
-                            Text(String(format: "%.0f%% CPU · %@", a.cpu ?? 0, Format.bytes(a.mem ?? 0))).font(.footnote).foregroundStyle(.secondary)
+                            // Megabytes under a gigabyte: an app's few hundred MB read as "0.1 GB" or "0.4 GB" in gigabytes.
+                            Text(String(format: "%.0f%% CPU · %@", a.cpu ?? 0, Format.memory(a.mem ?? 0))).font(.footnote).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
                         Menu {
@@ -1037,6 +1039,7 @@ struct UpgradeTab: View {
     @State private var agentFail: String?
     @State private var agentPassword = ""
     @State private var confirmRun = false
+    @State private var trailingInset: CGFloat = 0
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -1063,7 +1066,23 @@ struct UpgradeTab: View {
         if t.isEmpty || ["install", "download", "patch", "running", "start", "wait", "check"].contains(where: t.contains) { return ("arrow.triangle.2.circlepath", macBlue) }
         return ("checkmark.seal.fill", .green)
     }
-    var patched: String { s.oclp.patchedFor.isEmpty ? "No root patches yet" : "Root patched for \(s.oclp.patchedFor)" }
+    // OCLP writes down the Darwin version it patched for ("25.6 (25G332)"), which under "macOS 26.7.2" read as an older
+    // macOS. The build in brackets is what says whether the patches are for the system running now.
+    var patchedBuild: String? {
+        let t = s.oclp.patchedFor
+        guard let open = t.lastIndex(of: "("), let close = t.lastIndex(of: ")"), open < close else { return nil }
+        return String(t[t.index(after: open)..<close])
+    }
+    var patchedThis: Bool { patchedBuild == s.build }
+    var patchedFor: String {
+        if s.oclp.patchedFor.isEmpty { return "None yet" }
+        if patchedThis { return "macOS \(s.macos) (\(s.build))" }
+        return patchedBuild.map { "Build \($0), not this one" } ?? s.oclp.patchedFor
+    }
+    var patched: String {
+        if s.oclp.patchedFor.isEmpty { return "No root patches yet" }
+        return patchedThis ? "Root patched for this macOS" : "Root patched for build \(patchedBuild ?? s.oclp.patchedFor)"
+    }
     var summary: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
@@ -1100,7 +1119,8 @@ struct UpgradeTab: View {
         if s.agentStale {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Update service improvements").font(.subheadline.weight(.semibold))
-                Text("A newer version of the update service is ready. Your password is used once.").font(.footnote).foregroundStyle(.secondary)
+                // Also the helper that finds this iPhone again on Wi-Fi, when the Mac has never had it.
+                Text("New versions of the Mac’s background helpers are ready to install. Your password is used once.").font(.footnote).foregroundStyle(.secondary)
                 HStack {
                     SecureField("Mac password", text: $agentPassword).textFieldStyle(.roundedBorder)
                     Button("Apply") {
@@ -1120,7 +1140,7 @@ struct UpgradeTab: View {
     // The facts behind the summary, as rows, where the open Duo has the room for them.
     var facts: some View {
         VStack(spacing: 0) {
-            ForEach(Array([("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", s.oclp.patchedFor.isEmpty ? "None yet" : s.oclp.patchedFor), ("Patched", s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)].enumerated()), id: \.offset) { i, row in
+            ForEach(Array([("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", patchedFor),("Patched", s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)].enumerated()), id: \.offset) { i, row in
                 if i > 0 { Divider().padding(.leading, 16) }
                 LabeledContent(row.0, value: row.1).padding(.horizontal, 16).padding(.vertical, 12)
             }
@@ -1139,8 +1159,11 @@ struct UpgradeTab: View {
                 agent
                 VStack(alignment: .leading, spacing: 8) { header("Log"); UpdateLog(log: s.upgrade.log) }
             }
-            .padding(.leading, 20).padding(.bottom, 12)
+            // With the side bar beside the page, the cards end at its edge, as the list cards do. Open in portrait the tabs
+            // are along the foot and nothing is there: the cards ran into the display's edge and lost their right corners.
+            .padding(.leading, 20).padding(.trailing, trailingInset > 20 ? 0 : 20).padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { trailingInset = $0 }
         case .left:
             // A header of its own, like the log's beside it, so both panes' first cards start on one line. It stays put
             // while the cards under it scroll.

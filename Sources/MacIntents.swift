@@ -40,7 +40,7 @@ enum MacBridge {
     }
     static func summary(_ s: Brief) -> String {
         var parts = ["CPU \(s.cpu.total)%", String(format: "memory %.1f of %.0f GB", s.mem.used / 1_073_741_824, s.mem.total / 1_073_741_824)]
-        if let t = s.temps?.first(where: { $0.name == "CPU" }) ?? s.temps?.max(by: { $0.c < $1.c }) { parts.append("\(Int((t.c * 9 / 5 + 32).rounded())) °F") }
+        if let t = s.temps?.first(where: { $0.name == "CPU" }) ?? s.temps?.max(by: { $0.c < $1.c }) { parts.append("\(Heat.shown(t.c)) °\(MacPrefs.celsius ? "C" : "F")") }  // in the unit chosen in Settings
         parts.append("up \(uptime(s.uptime))")
         return parts.joined(separator: ", ") + "."
     }
