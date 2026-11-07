@@ -9,6 +9,9 @@ struct MediaItem: Decodable, Identifiable, Hashable {
     var about: String?
     var progress: Double?
     var slug: String?
+    // A YouTube video (kind "youtube", id its video id): the second to start it from, where he left off on the TV.
+    var resume: Int?
+    var isYouTube: Bool { kind == "youtube" }
 }
 struct MediaRow: Decodable, Identifiable, Hashable {
     let title: String, items: [MediaItem]
@@ -27,7 +30,9 @@ enum MediaSource: String, CaseIterable, Identifiable {
     var cardWidth: CGFloat { self == .mint ? 150 : 124 }
     func endpoint(_ q: String) -> String {
         let term = q.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
-        return "/api/tv/\(rawValue)" + (q.isEmpty ? "" : "?q=\(term)")
+        // Stremio's home is asked for with YouTube's unfinished videos in Continue watching: only a build that can open
+        // a YouTube card asks (yt=1), so the Mac never hands an older one a card it would throw at Stremio.
+        return "/api/tv/\(rawValue)" + (q.isEmpty ? (self == .stremio ? "?yt=1" : "") : "?q=\(term)")
     }
 }
 
@@ -76,7 +81,7 @@ final class BrowseStore: ObservableObject {
     func endpoint(_ q: String) -> String {
         guard let base else { return source.endpoint(q) }
         let enc = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "" }
-        return base + (q.isEmpty ? "" : "&q=" + enc(q)) + (genre.isEmpty ? "" : "&genre=" + enc(genre))
+        return base + "&yt=1" + (q.isEmpty ? "" : "&q=" + enc(q)) + (genre.isEmpty ? "" : "&genre=" + enc(genre))
     }
     func load(force: Bool = false) async {
         let q = query.trimmingCharacters(in: .whitespaces) + (genre.isEmpty ? "" : "\u{1}" + genre)
@@ -199,6 +204,9 @@ struct MediaCard: View {
             Group {
                 if let image { image.resizable().scaledToFill() }
                 else if noArt { CoverFallback(title: item.title, tint: shownBand) }
+                // A YouTube still is wide; shown whole on a soft copy of itself, so the card stays the row's shape and
+                // nothing of the picture (a face, a caption) is cut off making it tall.
+                else if item.isYouTube { PosterOnBlur(url: URL(string: item.art)) }
                 else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait().overlay { LoadingRing(radius: 0) } } }
             }
                 .frame(width: width, height: width / source.coverAspect)
@@ -386,12 +394,13 @@ struct FlickCardButton: View {
     // What a tap on a card does; the build's real-data flows tap through here too.
     @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil) {
         if model.isOnTV(item, source) { model.showOnRemote(); return }
+        if item.isYouTube { model.openYouTube(item); return }
         model.flick(FlickTarget(item: item, source: source, ready: ready, origin: origin))
     }
     var body: some View {
         Button { Self.tap(model, item, source, ready: ready, origin: place.rect) } label: { MediaCard(item: item, source: source, width: width) }
             // A sleeping box takes seconds to bring Stremio up, so it's told the moment a finger lands, not at the throw.
-            .buttonStyle(PressCard(onPress: source == .stremio && !model.isOnTV(item, source) ? { StreamCache.shared.prefetch(item); Prepare.arm() } : nil))
+            .buttonStyle(PressCard(onPress: source == .stremio && !item.isYouTube && !model.isOnTV(item, source) ? { StreamCache.shared.prefetch(item); Prepare.arm() } : nil))
             // Outside the press's own squeeze, so the measure never moves with what it measures.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")

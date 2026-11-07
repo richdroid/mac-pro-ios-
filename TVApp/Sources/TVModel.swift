@@ -105,6 +105,10 @@ final class TVModel {
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
     // without an episode on its card still opens its page, which says "On the TV".
     func isOnTV(_ item: MediaItem, _ source: MediaSource) -> Bool {
+        if item.isYouTube {
+            guard !staleStatus, videoIsCurrent, let s = status?.session, s.pkg == "com.google.android.youtube.tv", let now = s.description.first else { return false }
+            return TVStatus.Session.sameName(now, item.title)
+        }
         guard source == .stremio, let ref = item.stremioRef else { return false }
         if ref.type == "series" { guard let v = ref.video else { return false }; return isOn(imdb: ref.imdb, title: item.title, episode: v) }
         return isOn(imdb: ref.imdb, title: item.title, episode: nil)
@@ -124,6 +128,14 @@ final class TVModel {
         }
         guard let now = s.description.first, !now.isEmpty else { return false }
         return TVStatus.Session.sameName(now, title)
+    }
+    // A YouTube card from Continue watching: the video opens in YouTube on the TV where he left it, the way a pasted link
+    // does, and the Remote comes up to show it. Under half a minute in isn't worth resuming: it starts from the top.
+    func openYouTube(_ item: MediaItem) {
+        Keyboard.dismiss()
+        let at = item.resume ?? 0
+        send("https://www.youtube.com/watch?v=\(item.id)" + (at >= 30 ? "&t=\(at)" : ""))
+        tab = 0
     }
     func showOnRemote() {
         Keyboard.dismiss()

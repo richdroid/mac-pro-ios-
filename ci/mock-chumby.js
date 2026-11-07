@@ -135,7 +135,10 @@ const tvFilms = JSON.stringify({ signedIn: true,
   watchlist: ['Dirty Harry', 'Chinatown', 'Heat', 'Alien', 'Ran', 'Klute', 'Thief', 'Le Samourai'].map(t => film(t, { friends_count: '4', friends_rating_avg: '3.5' })),
   friends: ['Battle Heater', 'Paris, Texas', 'Ran', 'Vertigo', 'Stalker', 'Tampopo', 'Ikiru', 'Paris, Texas'].map(t => film(t, { friend_name: 'a friend', rating: '4.0' })) });
 const tvMint = JSON.stringify({ rows: ['Recently played', 'Made for you', 'New releases'].map(title => ({ title, items: ['Sample Album', 'Another Album', 'Third Album', 'Fourth Album'].map(t => ({ title: t, subtitle: 'Sample Artist', art: tvBase + '/art.png', id: 'https://music.apple.com/us/album/' + title + t, kind: 'album' })) })) });
-const tvStremio = JSON.stringify({ rows: ['Continue watching', 'Popular movies', 'Popular series'].map(title => ({ title, items: ['Heat', 'Alien', 'Chinatown', 'Thief', 'Collateral', 'Ronin', 'Sorcerer'].map((t, n) => ({ title: t, subtitle: title === 'Continue watching' ? `Continue · ${85 - 11 * n}m left` : '1995 · ★ 8.3', art: tvBase + '/poster.png', id: (title === 'Popular series' ? 'tt123456' : 'tt765432') + n, kind: title === 'Popular series' ? 'series' : 'movie', progress: title === 'Continue watching' ? +(1 - (85 - 11 * n) / 170).toFixed(3) : t === 'Alien' ? 0.4 : undefined, about: 'A sample description of the film.' })) })) });
+// Continue watching leads with a YouTube video left half-watched on the TV, as the Mac sends it (kind youtube, a wide still,
+// the second to resume from), ahead of Stremio's own.
+const tvYouTubeCard = { title: 'A sample video that goes on a bit', subtitle: '1 h 20 min left · Sample Channel', art: tvBase + '/api/tv/shot', id: 'dQw4w9WgXcQ', kind: 'youtube', resume: 754, progress: 0.4 };
+const tvStremio = JSON.stringify({ rows: ['Continue watching', 'Popular movies', 'Popular series'].map(title => ({ title, items: [...(title === 'Continue watching' ? [tvYouTubeCard] : []), ...['Heat', 'Alien', 'Chinatown', 'Thief', 'Collateral', 'Ronin', 'Sorcerer'].map((t, n) => ({ title: t, subtitle: title === 'Continue watching' ? `Continue · ${85 - 11 * n}m left` : '1995 · ★ 8.3', art: tvBase + '/poster.png', id: (title === 'Popular series' ? 'tt123456' : 'tt765432') + n, kind: title === 'Popular series' ? 'series' : 'movie', progress: title === 'Continue watching' ? +(1 - (85 - 11 * n) / 170).toFixed(3) : t === 'Alien' ? 0.4 : undefined, about: 'A sample description of the film.' }))] })) });
 // A TV with a player open, for the shots of what the app shows then. Asked for by putting /stremio or /youtube in front
 // of the address, so every other shot gets the same answers as before.
 const tvScene = scene => {
@@ -143,7 +146,8 @@ const tvScene = scene => {
   if (scene === 'stremio') { v.app = 'com.stremio.one'; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Sample Series', 'S1E2 Episode 2'], position: 1260000, sampledAt: now, duration: 3480000, canSeek: true, art: tvBase + '/poster.png' }; }
   // A film nearly over, for Start over and for skips still on their way.
   if (scene === 'ending') { v.app = 'com.stremio.one'; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Heat'], position: 7600000, sampledAt: now, duration: 8000000, canSeek: true, art: tvBase + '/poster.png' }; }
-  if (scene === 'youtube') { v.app = 'com.google.android.youtube.tv'; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['A sample video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 600000, canSeek: false }; }
+  // The Mac looks a YouTube video up by its title and sends its still as the session's art, and its length.
+  if (scene === 'youtube') { v.app = 'com.google.android.youtube.tv'; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['A sample video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 600000, canSeek: false, art: tvBase + '/api/tv/shot' }; }
   return JSON.stringify(v);
 };
 http.createServer((q, s) => {
