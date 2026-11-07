@@ -317,7 +317,10 @@ final class TVModel {
                     // Its control screen keeps itself current.
                     if let self, self.flicking == nil, Date().timeIntervalSince(self.lastKeyAt) > 1.5 { await self.load() }
                     // What's playing changes under you, so the Playing tab keeps closer watch.
-                    try? await Task.sleep(nanoseconds: self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
+                    // The Remote shows play/pause and what's on: every second there, as a check costs the bridge 20-400 ms
+                    // (Richard, 2026-11-07: "playing and not playing dont update fast enough", "doesnt update based on
+                    // whats on screen" at 5 s).
+                    try? await Task.sleep(nanoseconds: self?.tab == 0 ? 1_000_000_000 : self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
                 }
             },
             // Still pictures, only while the screen is on show and the live stream isn't. Never switched off by itself
