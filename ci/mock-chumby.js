@@ -286,6 +286,11 @@ function chumbyScene(q, s) {
 //   /rasleep /roffline /ryoutube /rmint /ridle /repisode
 //                 The Remote's states: the TV asleep, the TV not answering, a YouTube video playing, Mint's music only,
 //                 nothing on (the home screen), and a Stremio episode part way through.
+//   /rfilm /rjoin /rstall
+//                 The live picture's own states: a Stremio film playing with its poster (the stream stops for it); joining
+//                 a recording under way, as the bridge does it (headers at once, then after 1.2 s everything since the last
+//                 key frame in one write, counted in x-replay-frames, then 30 a second), on the home screen; and a
+//                 stream that answers and never sends a picture, with no still to be had either, on the home screen.
 //   /fnormal /fslow /ffail /foffline /falready /fbridgeon /fjoined
 //                 The flick's starts (tv-iphone.md §2.5a): play-stream as NDJSON with each step's time since the request
 //                 (awake 0, sent 120, player 2000, playing 3200); slow (playing at 9 s); failing (two fallbacks retried,
@@ -304,7 +309,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode|realscrub|real|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; return tvReal(q, s, path, query, json); }
@@ -332,6 +337,9 @@ function tvPose(q, s) {
     const tones = [[[200, 60, 40], [40, 20, 90]], [[30, 150, 110], [10, 40, 60]], [[230, 190, 60], [120, 30, 120]]][+path[4]];
     s.setHeader('content-type', 'image/png'); s.end(png(300, 300, tones[0], tones[1])); return true;
   }
+  // No picture to be had: the stream answers and stays silent, and no still comes either.
+  if (scene === 'rstall' && path === '/api/tv/screen-live') { s.writeHead(200, { 'content-type': 'video/h264', 'cache-control': 'no-store' }); s.flushHeaders(); return true; }
+  if (scene === 'rstall' && path === '/api/tv/shot') { s.writeHead(503); s.end(); return true; }
   if (path === '/api/tv/screen-live') {
     // Cut into pictures at each slice that starts one, and sent a picture every 33 ms, over and over.
     if (!tvPose.units) {
@@ -347,19 +355,24 @@ function tvPose(q, s) {
       if (pending.length) units.push(Buffer.concat(pending));
       tvPose.units = units;
     }
-    s.writeHead(200, { 'content-type': 'video/h264', 'cache-control': 'no-store' });
-    let n = 0;
-    const timer = setInterval(() => { s.write(tvPose.units[n % tvPose.units.length]); n++; }, 33);
-    q.on('close', () => clearInterval(timer));
+    // Joining: the catch-up the bridge sends a viewer arriving mid-recording, all at once, then the live pictures.
+    const replay = scene === 'rjoin' ? Math.min(60, tvPose.units.length) : 0;
+    s.writeHead(200, { 'content-type': 'video/h264', 'cache-control': 'no-store', 'x-replay-frames': String(replay) });
+    let n = 0, timer = null;
+    const go = () => { timer = setInterval(() => { s.write(tvPose.units[n % tvPose.units.length]); n++; }, 33); };
+    const wait = replay ? setTimeout(() => { s.write(Buffer.concat(tvPose.units.slice(0, replay))); n = replay; go(); }, 1200) : (go(), null);
+    q.on('close', () => { clearTimeout(wait); clearInterval(timer); });
     return true;
   }
-  if (/^r(asleep|offline|youtube|mint|idle|episode)$/.test(scene || '') && path === '/api/tv/status') {
+  if (/^r(asleep|offline|youtube|mint|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
     const v = JSON.parse(tvStatus), now = Date.now();
     if (scene === 'rasleep') { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'roffline') { v.online = false; delete v.session; }
     if (scene === 'ryoutube') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Sample Video'], position: 95000, sampledAt: now, duration: 610000, canSeek: false }; }
     if (scene === 'rmint') { v.app = 'com.codex.musicwebtv'; delete v.session; }
     if (scene === 'ridle') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
+    if (scene === 'rjoin' || scene === 'rstall') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
+    if (scene === 'rfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; }
     if (scene === 'repisode') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Sample Series', 'S1E2 Episode Two'], position: 1260000, sampledAt: now, duration: 3480000, canSeek: true }; }
     return json(v);
   }

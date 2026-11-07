@@ -400,6 +400,22 @@ jobs:
               done
             done
             xcrun simctl ui "$DEVICE" appearance light
+            # The Remote's states in this posture, light only: an episode part way (the picture must be the size it is with
+            # nothing on, its edges in line with the bar's), nothing on, asleep, a film with its poster, YouTube with none
+            # (no launcher frame left from before), and a stream with no picture to be had (a TV glyph, never a moon).
+            for S in repisode ridle rasleep rfilm ryoutube rstall; do
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 0
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=3 dist/tv-remote-$S-portrait.png
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            done
+            # Joining a recording under way, filmed: the catch-up arrives 1.2 s in and must never show as a replay.
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/tv-remote-rjoin-portrait.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/rjoin -tab 0
+            sleep 8
+            kill -INT $REC; wait $REC; echo "rjoin film exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
           }
           # ---- TV app poses (separate block) ----
           # What Richard found on his phone on 2026-11-03, filmed or shot so it can't pass unseen again: pages scrolled 40 pt
@@ -424,8 +440,9 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-cold-status$2.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             # The Remote in each state it can be in: asleep, not answering, YouTube playing, Mint's music only, nothing on,
-            # and a Stremio episode part way through (its title line and the bar to move along it).
-            for S in rasleep roffline ryoutube rmint ridle repisode; do
+            # a Stremio episode part way through (its title line and the bar to move along it), a film with its poster,
+            # and a stream with no picture to be had.
+            for S in rasleep roffline ryoutube rmint ridle repisode rfilm rstall; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 0
               sleep 8
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-remote-$S$2.png
