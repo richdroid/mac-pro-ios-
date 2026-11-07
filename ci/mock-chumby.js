@@ -1,11 +1,13 @@
 // Sample Chumby answers so the cloud build can screenshot every tab without a real device.
 const http = require('http');
-const alarm = (o) => ({ name: '', enabled: '1', time: '420', when: 'weekday', type: 'beep', arg: 'Beep', param: '', param_description: 'Beep', duration: '30', snooze: '9', auto_dismiss: '0', action: '', action_param: '', backup: '1', backupDelay: '5', ...o });
+const alarm = (o) => ({ name: '', enabled: '1', time: '420', when: 'weekday', type: 'beep', arg: 'Beep', param: '', param_description: 'Beep', duration: '30', snooze: '9', auto_dismiss: '0', action: '', action_param: '', backup: '0', backupDelay: '5', ...o });
 const data = {
   tok: { t: 'test' },
-  sys: { ok: true, up: 291000, memFree: 22000, memTotal: 62000, pspFree: 3100, load: 0.42, wifi: 71, vol: 40, shuffle: 0, airplayOn: true, chan: 'Default', cp: '1.7.3', lock: '', wall: 1, tw: ['NASA', 'BBCBreaking'] },
+  // Every key the real a=sys and a=state carry (chalarm.c do_sys, do_state), so the build reads what the phone reads.
+  sys: { ok: true, up: 291000, memFree: 22000, memTotal: 62000, night: 0, cached: 18000, buffers: 3600, tmpUsed: 4000, playerRss: 12000, procs: 44, pspFree: 3100, load: 0.42, wifi: 71, vol: 40, shuffle: 0, airplayOn: true, chan: 'Default', cp: '2.8.87b3', lock: '', wall: 1, ring: '', nap: 0, resets: 0, resetAt: 0, tw: ['NASA', 'BBCBreaking'], twopts: 'new 0 0 0', roms: [] },
   state: {
-    ok: true, volume: 80, fade: 30, pending: false, shuffle: 0, channel: 'Default', skipped: null,
+    ok: true, local: '', volume: 80, fade: 30, next: 0, pending: false, shuffle: 0, channel: 'Default', skipped: null,
+    ringing: null, music: null, song: null, rang: null, missed: [], calOverride: 1, calTpl: null, pandoraLast: '',
     alarms: [alarm({ name: 'Work', time: '405' }), alarm({ name: 'Weekend', time: '570', when: 'weekend', enabled: '0', type: 'audio', arg: 'directurl', param_description: 'Jazz Radio' })],
     streams: [{ id: 's1', name: 'Jazz Radio', url: 'http://example.com/jazz.mp3', mimetype: 'audio/mpeg' }],
     tones: ['Beep', 'Bells', 'Chime'], channels: [{ id: 'A', name: 'Default' }, { id: 'B', name: 'News' }],
@@ -15,9 +17,36 @@ const data = {
   },
   chlist: { cur: 'A', names: [['W3', 'Moon Phase']], channels: [{ id: 'A', conf: [['W1', '1', '30'], ['W2', '0', '0'], ['W5', '1', '45']], list: [['#', 'Default'], ['W1', 'Clock', '30'], ['W2', 'Weather', '15'], ['W5', 'NYT Top Headlines', '45']] }, { id: 'B', conf: [], list: [['#', 'News'], ['W4', 'NYT', '45']] }] },
 };
+// The Chumby's clock, as a=state gives it: "now" in seconds and "local" as its wall time.
+const clockNow = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return { now: Math.floor(d / 1000), local: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}` }; };
+const stateNow = v => ({ ...v, ...clockNow() });
+// What the real do_save turns down, so a save the Chumby would refuse fails here too (a backupDelay of 0 cost every nap
+// from 11-05 while the build saw nothing). Returns the Chumby's own error, or null.
+const ALARM_KEYS = ['name', 'enabled', 'time', 'when', 'type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss', 'action', 'action_param', 'backup', 'backupDelay'];
+function saveProblem(f) {
+  const n = +f.get('n');
+  if (!/^\d+$/.test(f.get('n') || '') || n > 16) return 'bad count';
+  const range = { enabled: [0, 1], duration: [-1, 1440], snooze: [1, 120], auto_dismiss: [0, 1], backup: [0, 1], backupDelay: [1, 120], time: [0, 2e9] };
+  for (let i = 0; i < n; i++) {
+    if (!['once', 'daily', 'weekday', 'weekend', 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].includes(f.get(i + '_when'))) return 'bad choice';
+    if (!['none', 'beep', 'audio', 'widget'].includes(f.get(i + '_type')) || !['', 'profile', 'nightmode', 'power', 'bright'].includes(f.get(i + '_action') || '')) return 'bad choice';
+    for (const [k, [lo, hi]] of Object.entries(range)) {
+      const v = f.get(i + '_' + k) || '';
+      if (!/^-?\d+$/.test(v) || +v < lo || +v > hi) return 'bad number';
+    }
+    if (f.get(i + '_when') !== 'once' && +f.get(i + '_time') > 1439) return 'bad time';
+  }
+  return null;
+}
 http.createServer((q, s) => {
   if (chumbyScene(q, s)) return;   // the Chumby app's poses; see the block at the end
   const a = new URL(q.url, 'http://x').searchParams.get('a');
+  if (a === 'save' && q.method === 'POST') {
+    let body = ''; q.on('data', c => body += c);
+    q.on('end', () => { const why = saveProblem(new URLSearchParams(body)); s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(why ? { ok: false, error: why } : { ok: true })); });
+    return;
+  }
+  if (a === 'state') { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(stateNow(data.state))); return; }
   if (a === 'shot') { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); return; }
   if (a === 'cat') { s.end('<a href="/guide/AB-1/category"><img alt="Clocks"></a>'); return; }
   if (q.method === 'POST') { s.end('{"ok":true}'); return; }
@@ -233,8 +262,10 @@ function chumbyScene(q, s) {
         // A channel chosen in the app stays chosen, so Now playing doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
         if (a === 'save') {
-          const keys = ['name', 'enabled', 'time', 'when', 'type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss', 'action', 'action_param', 'backup', 'backupDelay'];
-          live.state.alarms = Array.from({ length: +f.get('n') || 0 }, (_, i) => Object.fromEntries(keys.map(k => [k, f.get(i + '_' + k) || ''])));
+          const why = saveProblem(f);
+          if (why) return json({ ok: false, error: why });
+          // As the Chumby keeps it: never the stock backup beeper.
+          live.state.alarms = Array.from({ length: +f.get('n') || 0 }, (_, i) => ({ ...Object.fromEntries(ALARM_KEYS.map(k => [k, f.get(i + '_' + k) || ''])), backup: '0' }));
           live.state.volume = +f.get('v'); live.state.fade = +f.get('f');
         }
         json({ ok: true });
@@ -242,7 +273,7 @@ function chumbyScene(q, s) {
       return true;
     }
     if (a === 'sys') return json(live.sys);
-    if (a === 'state') return json(live.state);
+    if (a === 'state') return json(stateNow(live.state));
     return false;
   }
   if (scene === 'slow') {
@@ -254,7 +285,10 @@ function chumbyScene(q, s) {
   // Work rings with Beep, so that's what the card says.
   if (scene === 'ringing' && a === 'sys') return json({ ...data.sys, ring: 'r\tWork\tBeep' });
   if (scene === 'snoozed' && a === 'sys') return json({ ...data.sys, ring: 's\tWork\tBeep' });
-  if (scene === 'skipped' && a === 'state') return json({ ...data.state, skipped: nextWork() });
+  if (scene === 'skipped' && a === 'state') return json({ ...stateNow(data.state), skipped: nextWork() });
+  // The panel's own report of the ring in a=state too, as the real one gives it beside a=sys "ring".
+  if (scene === 'ringing' && a === 'state') return json({ ...stateNow(data.state), ringing: { state: 'ringing', name: 'Work', sound: 'Beep', until: 0 } });
+  if (scene === 'snoozed' && a === 'state') return json({ ...stateNow(data.state), ringing: { state: 'snoozing', name: 'Work', sound: 'Beep', until: 0 } });
   // A Pandora wake-up 5 minutes ago with no song logged yet; 8 s into the scene the Chumby's state names the first song,
   // so "Woke up to" (Sounds) must gain its tile live.
   if (scene === 'songchange' && a === 'state') {
@@ -263,10 +297,10 @@ function chumbyScene(q, s) {
     const wake = alarm({ name: 'Wake', time: String(fire), when: 'once', type: 'audio', arg: 'pandora', param: '1', param_description: 'Morning Mix' });
     const song = Date.now() - songScene.at > 8000 ? { t: fire * 60 + 40, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' } : null;
     // The wake-up's music is still playing, so Now and Woke up to tell the same story.
-    return json({ ...data.state, alarms: [...data.state.alarms, wake], song, music: { playing: true } });
+    return json({ ...stateNow(data.state), alarms: [...data.state.alarms, wake], song, music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
   }
   // Pandora playing a song it started a minute and a half ago, for Sounds' Now.
-  if (scene === 'playing' && a === 'state') return json({ ...data.state, music: { playing: true } });
+  if (scene === 'playing' && a === 'state') return json({ ...stateNow(data.state), music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
   // Night mode on, for Home's day/night pill lit as Night.
   if (scene === 'night' && a === 'sys') return json({ ...data.sys, night: 1 });
   if (scene === 'playing' && a === 'hist') return json({ ok: true, songs: [{ t: Date.now() / 1000 - 90, title: 'Blue in Green', artist: 'Miles Davis', album: 'Kind of Blue' }, ...data.hist.songs] });
