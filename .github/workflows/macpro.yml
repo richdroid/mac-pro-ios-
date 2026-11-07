@@ -1,0 +1,121 @@
+name: Mac Pro app shots
+# The Mac Pro app alone, shot in every posture with open portrait (the posture Richard holds) first. The full build's
+# screenshot step ran out of time in the TV app's poses before it reached open portrait (2026-11-07, 4555275), so the
+# Mac Pro app's own changes get this short run of their own. Published to the macpro-latest release; the full build and
+# its latest release are untouched.
+on:
+  push:
+    branches: [main]
+    paths: ['Sources/**', 'Shared/**', 'Widget/**', 'Assets.xcassets/**', 'ci/mock-chumby.js', 'ci/title-check.py', 'project.yml', '.github/workflows/macpro.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: macpro-shots
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Mac Pro launch glow
+        run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          node ci/mock-chumby.js &
+          sleep 2
+          # One shot: name, display, wait, then the app's own arguments.
+          shot() {
+            local name=$1 display=$2 wait=$3; shift 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # One film: name, display, length, then the app's own arguments.
+          film() {
+            local name=$1 display=$2 length=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $length
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # Everything that changed, in one posture (display, suffix).
+          poses() {
+            local d=$1 x=$2
+            for T in 0 1 2 4 5 9; do shot tab$T$x $d 7 -tab $T; done
+            shot apps-scrolled$x $d 9 -tab 1 -pose scrolled
+            shot claude-usage$x $d 9 -tab 2 -pose scrolled
+            shot usage-link$x $d 9 -tab 3
+            shot scrolled$x $d 9 -tab 0 -pose scrolled
+            shot displayhold$x $d 8 -tab 0 -pose displayhold
+            shot screen$x $d 8 -tab 0 -pose screen -openScreen YES
+            shot screenhint$x $d 8 -tab 0 -pose screenhint -openScreen YES
+            shot screen-shift$x $d 8 -tab 0 -pose screenshift -openScreen YES
+            shot screen-pinch$x $d 9 -tab 0 -pose screenpinch -openScreen YES
+            shot screen-typing$x $d 8 -tab 0 -pose screentyping -openScreen YES
+          }
+          # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          open -a DeviceHub; sleep 10
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
+          sleep 5
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
+          # Open portrait first.
+          poses 3 -portrait
+          shot screen-laptop-portrait 3 8 -tab 0 -pose screen -openScreen YES -screenPosture laptop
+          shot screen-laptop-typing-portrait 3 8 -tab 0 -pose screentyping -openScreen YES -screenPosture laptop
+          # Scrolling judged moving (the title now goes up with the page), and the tabs in turn, coming back to each.
+          film scrollfilm-portrait 3 30 -tab 0 -pose scrollfilm
+          film tour-portrait 3 26 -tab 0 -pose tour
+          python3 ci/title-check.py dist/macpro-tab*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
+          # Open landscape, two panes.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
+          for T in 0 1 2; do shot tab$T-open 3 7 -tab $T; done
+          shot screen-open 3 8 -tab 0 -pose screen -openScreen YES
+          shot screen-book-open 3 8 -tab 0 -pose screen -openScreen YES -screenPosture book
+          # Partly folded.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
+          shot screen-partial 3 8 -tab 0 -pose screen -openScreen YES
+          # Folded, the outer display, last.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
+          poses 1 ""
+          film scrollfilm 1 30 -tab 0 -pose scrollfilm
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view macpro-latest >/dev/null 2>&1 || gh release create macpro-latest --prerelease --title "Mac Pro app shots" --notes "The Mac Pro app's own shots and films."
+          for f in shots.zip films.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload macpro-latest "$f" --clobber && break; sleep 15; done
+          done
