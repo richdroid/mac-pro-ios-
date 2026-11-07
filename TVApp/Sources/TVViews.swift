@@ -196,6 +196,8 @@ private struct StatusFollower: View {
     @Binding var playingSymbol: String
     // A TV for a film or show, a note for Mint, AirPlay for the phone's own sound.
     var symbol: String {
+        // Not from the status kept from last time: it flipped to Mint's note on opening and back a second later (r34).
+        if model.staleStatus { return playingSymbol }
         if model.otherAirPlay { return "airplayaudio" }
         if model.videoIsCurrent { return "play.tv" }
         if model.nowMusic?.playing == true { return "music.note" }
@@ -616,8 +618,11 @@ struct MirrorView: View {
                 // (r32 repisode and ryoutube shots). Nor an empty box (r33: the wall's art is the poster it hasn't got, so
                 // that was always blank): the picture of what's on that there is (YouTube's, Stremio's own banner) as a
                 // poster is shown, sat on a blurred copy of itself, and nothing claiming to be the TV's screen.
-                if let art = model.nowArt.flatMap(URL.init(string:)) { PosterOnBlur(url: art).id(art).transition(.opacity) }
-                else { NoPicture() }
+                // Never Stremio's own banner, though: the app doing the work isn't what he's watching (r34: its logo filled the
+                // picture for an episode with no poster). YouTube's banner is, near enough.
+                if model.status?.session?.pkg != "com.stremio.one", let art = model.nowArt.flatMap(URL.init(string:)) {
+                    PosterOnBlur(url: art).id(art).transition(.opacity)
+                } else { NoPicture() }
             } else if model.mirrorLive {
                 #if os(iOS)
                 ScreenPicture(live: model.live, store: store, art: model.nowArt)
@@ -1041,8 +1046,11 @@ struct RemoteTab: View {
     }
     // Only when the music is what's on: a song's player beside a film's was two now-playings on one TV.
     // Dimmed and out of reach with every other key while the TV can't be reached (its ▶ stayed bright and live, r32).
+    // Not from the status kept from last time: opening, the cached song's player showed under "Connecting…" and went a
+    // moment later, the send bar jumping up after it (r34). It comes in with the TV's first answer, if it's on.
+    var musicShown: Bool { !model.staleStatus && model.musicIsCurrent }
     @ViewBuilder var music: some View {
-        if model.musicIsCurrent, let m = model.nowMusic {
+        if musicShown, let m = model.nowMusic {
             MiniPlayer(music: m).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable).transition(.opacity)
         }
     }
@@ -1076,6 +1084,7 @@ struct RemoteTab: View {
             }
             Spacer(minLength: 0)
         }
+        .animation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
         .padding(.horizontal, 20).padding(.bottom, 16)
     }
     var body: some View {
@@ -1107,6 +1116,7 @@ struct RemoteTab: View {
                     }
                     .modifier(KeysArrive(gate: keysGate))
                 }
+                .animation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
                 .padding(.horizontal, 14).padding(.bottom, 12)
             }
         }
@@ -1550,7 +1560,8 @@ struct Transport: View {
         // second later).
         .opacity(failed || connecting ? 0.4 : 1)
         .allowsHitTesting(!connecting)
-        .animation(.easeOut(duration: 0.2), value: connecting)
+        // Coming up only once ⏯ has swapped to what the TV said: as one, the bright ▶ showed for a frame before ⏸ (r34).
+        .animation(.easeOut(duration: 0.2).delay(connecting ? 0 : 0.3), value: connecting)
     }
     var connecting: Bool { playing == nil && starting == nil && model.staleStatus }
 }
