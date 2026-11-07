@@ -54,15 +54,25 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
-          # One film: name, display, length, then the app's own arguments.
+          # One film: name, display, length, then the app's own arguments. FILM_PORT picks the stand-in Mac (9011 is the
+          # one behind his link's speed).
           film() {
             local name=$1 display=$2 length=$3; shift 3
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9001} "$@"
             sleep $length
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # Opening the Mac's screen on his link (358 KB/s), the way it was (32-bit, shown only once whole) and the way it
+          # is (16-bit, filling in as it arrives), with the timings on screen (Richard, 2026-11-07: "takes too long to
+          # remote in like the screen draws slowly").
+          slowfilms() {
+            local d=$1 x=$2
+            FILM_PORT=9011 film screen-slow-before$x $d 14 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoStream YES
+            FILM_PORT=9011 film screen-slow-after$x $d 14 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 16
           }
           # Everything that changed, in one posture (display, suffix).
           poses() {
@@ -78,6 +88,9 @@ jobs:
             shot screen-shift$x $d 8 -tab 0 -pose screenshift -openScreen YES
             shot screen-pinch$x $d 9 -tab 0 -pose screenpinch -openScreen YES
             shot screen-typing$x $d 8 -tab 0 -pose screentyping -openScreen YES
+            # A page open over a tab, Back the side bar's first item (along the foot open in portrait, Settings out).
+            shot session$x $d 9 -tab 2 -pose session
+            shot history$x $d 8 -tab 0 -openHistory cpu
           }
           # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
@@ -85,7 +98,8 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
           sleep 5
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
-          # Open portrait first.
+          # Open portrait first, the slow-link films before anything else.
+          slowfilms 3 -portrait
           poses 3 -portrait
           shot screen-laptop-portrait 3 8 -tab 0 -pose screen -openScreen YES -screenPosture laptop
           shot screen-laptop-typing-portrait 3 8 -tab 0 -pose screentyping -openScreen YES -screenPosture laptop
@@ -104,6 +118,7 @@ jobs:
           # Folded, the outer display, last.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
           poses 1 ""
+          slowfilms 1 ""
           film scrollfilm 1 30 -tab 0 -pose scrollfilm
           ls dist
       - name: Publish

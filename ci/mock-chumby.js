@@ -86,7 +86,9 @@ const macProcs = JSON.stringify({
   cpu: [macProc(40, 'Google Chrome Helper', 84, 610, null), macProc(41, 'WindowServer', 22, 240, 'System process'), macProc(42, 'Claude Code', 12, 690, 'Claude session'), macProc(43, 'Music', 6, 380, null), macProc(44, 'node', 3, 310, 'The dashboard'), macProc(45, 'Tailscale', 2, 118, 'Keeps remote access')],
   mem: [macProc(42, 'Claude Code', 12, 690, 'Claude session'), macProc(40, 'Google Chrome Helper', 84, 610, null), macProc(46, 'mediaanalysisd', 0, 490, 'System process'), macProc(43, 'Music', 6, 380, null), macProc(44, 'node', 3, 310, 'The dashboard'), macProc(47, 'Code Helper', 1, 290, null)],
 });
-http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); s.end(q.url === '/api/status' ? macStatus : q.url === '/api/procs' ? macProcs : '{}'); }).listen(9001, '127.0.0.1').on('upgrade', mockScreen);
+http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); s.end(q.url === '/api/status' ? macStatus : q.url === '/api/procs' ? macProcs : '{}'); }).listen(9001, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
+http.createServer((q, s) => { s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
 http.createServer((q, s) => { s.statusCode = 401; s.setHeader('content-type', 'application/json'); s.end('{"error":"Sign in to the Mac Pro."}'); }).listen(9003, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
@@ -621,7 +623,10 @@ function tvReal(q, s, path, query, json) {
 // remote screen: the bridge's handshake, then a page of lyrics that scrolls a little every 16 ms, sent as raw pixels.
 // Every answer is held back 45 ms, about a trip over Tailscale, so asking for one picture at a time shows what it costs.
 // It logs how many pictures a second it sends.
-function mockScreen(req, sock) {
+// A stand-in for the Mac's Screen Sharing. The app's pixel format is honoured (32-bit BGRX or 16-bit 5-6-5). With
+// `slow`, it behaves as the real Mac does over his link (2026-11-07): the whole screen as one ZRLE rectangle, a busy
+// wallpaper so it's about as big as the Mac's, and everything sent at 358 KB/s, the speed his sessions showed.
+function mockScreen(req, sock, slow = false) {
   const key = req.headers['sec-websocket-key'];
   if (!key || !req.url.startsWith('/novnc/ws/vnc')) return sock.destroy();
   const accept = require('crypto').createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
@@ -634,38 +639,98 @@ function mockScreen(req, sock) {
       : Buffer.concat([Buffer.from([0x82, 127, 0, 0, 0, 0]), (b => (b.writeUInt32BE(n), b))(Buffer.alloc(4))]);
     if (!sock.destroyed) { sock.write(head); sock.write(data); }
   };
-  const later = data => setTimeout(() => frame(data), LAG);
-  // BGRX, as the app asks for: 32 bits, little-endian, red at 16.
-  const px = (r, g, b) => { const p = Buffer.alloc(4); p.writeUInt32LE((r << 16) | (g << 8) | b); return p; };
-  const bg = px(28, 22, 44), bright = px(235, 235, 245), dim = px(120, 110, 150), side = px(18, 18, 22);
+  // Slow: bytes leave at 358 KB/s, in 20 ms slices, as a link that speed would deliver them.
+  const RATE = 358000, outbox = [];
+  const pump = slow ? setInterval(() => {
+    let budget = RATE / 50;
+    while (budget > 0 && outbox.length) {
+      const b = outbox[0];
+      if (b.length <= budget) { outbox.shift(); budget -= b.length; frame(b); }
+      else { frame(b.subarray(0, budget)); outbox[0] = b.subarray(budget); budget = 0; }
+    }
+  }, 20) : null;
+  const later = data => setTimeout(() => (slow ? outbox.push(data) : frame(data)), LAG);
+  // Colours as 0xRRGGBB, put in the app's pixel format when sent.
+  let bpp = 32;
+  const bg = 0x1c162c, bright = 0xebebf5, dim = 0x786e96, side = 0x121216;
   const band = { x: 240, y: 120, w: 800, h: 560 };
+  // The wallpaper of the slow stand-in: noise in 2 × 2 blocks over a gradient, which deflates about as well as a
+  // real desktop does.
+  const wall = (X, Y) => {
+    let n = (X * 73856093) ^ (Y * 19349663); n = Math.imul(n ^ (n >>> 13), 1274126177); n ^= n >>> 16;
+    const t = Y / H;
+    const r = 205 + (t * 30 | 0) + (n & 15), g = 120 + (t * 40 | 0) + ((n >> 4) & 31), b = 175 + ((n >> 9) & 31);
+    return (Math.min(r, 255) << 16) | (Math.min(g, 255) << 8) | Math.min(b, 255);
+  };
   const paint = (x0, y0, w, h, scroll) => {
-    const out = Buffer.alloc(w * h * 4);
+    const out = new Uint32Array(w * h);
     for (let y = 0; y < h; y++) {
-      const Y = y0 + y, row = y * w * 4;
-      if (Y < band.y || Y >= band.y + band.h) { out.fill(side, row, row + w * 4); continue; }
-      out.fill(bg, row, row + w * 4);
+      const Y = y0 + y, row = y * w;
+      if (Y < band.y || Y >= band.y + band.h) {
+        if (slow) for (let x = 0; x < w; x++) out[row + x] = wall(x0 + x, Y); else out.fill(side, row, row + w);
+        continue;
+      }
+      out.fill(bg, row, row + w);
+      if (slow) for (let x = 0; x < w; x++) { const X = x0 + x; if (X < band.x || X >= band.x + band.w) out[row + x] = wall(X, Y); }
       // A line every 56 px, 22 px tall and of varying length; the one in the middle bright, the rest dim.
       const v = Y - band.y + scroll, k = Math.floor(v / 56);
       if (v % 56 >= 22) continue;
       const len = 260 + ((k * 137) % 420), mid = Math.abs(Y - (band.y + band.h / 2)) < 30;
       const from = Math.max(x0, band.x + 40), to = Math.min(x0 + w, band.x + 40 + len);
-      if (to > from) out.fill(mid ? bright : dim, row + (from - x0) * 4, row + (to - x0) * 4);
+      if (to > from) out.fill(mid ? bright : dim, row + (from - x0), row + (to - x0));
     }
     return out;
+  };
+  const wide = c => ((((c >> 19) & 31) << 11) | (((c >> 10) & 63) << 5) | ((c >> 3) & 31));
+  // Raw pixels: 4 bytes BGRX, or 2 bytes 5-6-5, little-endian.
+  const raw = px => {
+    const out = Buffer.alloc(px.length * (bpp / 8));
+    if (bpp === 32) px.forEach((c, i) => out.writeUInt32LE(c, i * 4)); else px.forEach((c, i) => out.writeUInt16LE(wide(c), i * 2));
+    return out;
+  };
+  // ZRLE: 64-pixel tiles, solid where they're one colour, raw otherwise, in compact pixels (3 bytes, or 2), through one
+  // deflate stream for the whole connection.
+  const deflate = zlib.createDeflate();
+  let zchain = Promise.resolve();
+  const zrle = (px, w, h) => {
+    const parts = [];
+    for (let ty = 0; ty < h; ty += 64) for (let tx = 0; tx < w; tx += 64) {
+      const tw = Math.min(64, w - tx), th = Math.min(64, h - ty), first = px[ty * w + tx];
+      let solid = true;
+      for (let y = 0; y < th && solid; y++) for (let x = 0; x < tw; x++) if (px[(ty + y) * w + tx + x] !== first) { solid = false; break; }
+      const cp = c => bpp === 32 ? Buffer.from([c & 255, (c >> 8) & 255, (c >> 16) & 255]) : (b => (b.writeUInt16LE(wide(c)), b))(Buffer.alloc(2));
+      if (solid) { parts.push(Buffer.from([1]), cp(first)); continue; }
+      const tile = Buffer.alloc(1 + tw * th * (bpp === 32 ? 3 : 2)); let at = 1;
+      for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) at += cp(px[(ty + y) * w + tx + x]).copy(tile, at);
+      parts.push(tile);
+    }
+    const input = Buffer.concat(parts);
+    return new Promise(res => {
+      const got = []; const take = d => got.push(d);
+      deflate.on('data', take);
+      deflate.write(input);
+      deflate.flush(zlib.constants.Z_SYNC_FLUSH, () => { deflate.off('data', take); res(Buffer.concat(got)); });
+    });
   };
   const update = (x, y, w, h, scroll) => {
     const head = Buffer.alloc(16);
     head.writeUInt16BE(1, 2);
-    head.writeUInt16BE(x, 4); head.writeUInt16BE(y, 6); head.writeUInt16BE(w, 8); head.writeUInt16BE(h, 10); head.writeInt32BE(0, 12);
-    return Buffer.concat([head, paint(x, y, w, h, scroll)]);
+    head.writeUInt16BE(x, 4); head.writeUInt16BE(y, 6); head.writeUInt16BE(w, 8); head.writeUInt16BE(h, 10);
+    const px = paint(x, y, w, h, scroll);
+    if (!slow) { head.writeInt32BE(0, 12); later(Buffer.concat([head, raw(px)])); return; }
+    head.writeInt32BE(16, 12);
+    zchain = zchain.then(() => zrle(px, w, h)).then(z => {
+      const len = Buffer.alloc(4); len.writeUInt32BE(z.length);
+      later(Buffer.concat([head, len, z]));
+    });
   };
   let stage = 0, pending = 0, scroll = 0, sent = -1, count = 0, buf = Buffer.alloc(0), msgs = Buffer.alloc(0);
   // Like a real server: an answer goes out when there's a request waiting and the page has moved since the last one.
-  const answer = () => { if (pending > 0 && sent !== scroll) { pending--; sent = scroll; count++; later(update(band.x, band.y, band.w, band.h, scroll)); } };
-  const tick = setInterval(() => { scroll += 3; answer(); }, 16);
+  // Slow, the page holds still: a moving page there would only queue behind the first picture, as on the real link.
+  const answer = () => { if (pending > 0 && sent !== scroll) { pending--; sent = scroll; count++; update(band.x, band.y, band.w, band.h, scroll); } };
+  const tick = setInterval(() => { if (!slow) scroll += 3; answer(); }, 16);
   const report = setInterval(() => { if (count) console.log(`mock screen: ${Math.round(count / 2)} pictures a second`); count = 0; }, 2000);
-  const stop = () => { clearInterval(tick); clearInterval(report); sock.destroy(); };
+  const stop = () => { clearInterval(tick); clearInterval(report); if (pump) clearInterval(pump); sock.destroy(); };
   sock.on('close', stop); sock.on('error', stop);
   later(Buffer.from('RFB 003.008\n'));
   const fromApp = d => {
@@ -689,8 +754,9 @@ function mockScreen(req, sock) {
         : t === 6 ? (msgs.length >= 8 ? 8 + msgs.readUInt32BE(4) : 8) : 1;
       if (msgs.length < need) return;
       const m = msgs.subarray(0, need); msgs = msgs.subarray(need);
+      if (t === 0) bpp = m[4] === 16 ? 16 : 32;
       if (t === 3) {
-        if (m[1] === 0) { count++; sent = scroll; later(update(0, 0, W, H, scroll)); }
+        if (m[1] === 0) { count++; sent = scroll; update(0, 0, W, H, scroll); }
         else { pending++; answer(); }
       }
     }
