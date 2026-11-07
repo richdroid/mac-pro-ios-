@@ -1704,7 +1704,7 @@ struct CursorOverlay: UIViewRepresentable {
                 let k: CGFloat = 1.12
                 let pts: [CGPoint] = [(2, 2), (2, 19.5), (6.4, 15.3), (9.4, 22.4), (12.3, 21.2), (9.4, 14.3), (15.4, 14.3)].map { CGPoint(x: $0.0 * k, y: $0.1 * k) }
                 let path = UIBezierPath(); path.move(to: pts[0]); pts.dropFirst().forEach { path.addLine(to: $0) }; path.close()
-                path.lineJoin = .round
+                path.lineJoinStyle = .round
                 UIColor.white.setStroke(); path.lineWidth = 2.6; path.stroke()
                 UIColor.black.setFill(); path.fill()
             }.cgImage
