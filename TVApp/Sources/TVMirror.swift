@@ -1,0 +1,429 @@
+#if os(iOS)
+import AVFoundation
+import CoreMedia
+import SwiftUI
+import UIKit
+
+// The TV's screen, live: the Mac streams it as H.264 (screenrecord's own Annex-B, 640 by 360), and the phone shows each
+// picture as it comes, evenly paced, a fraction of a second behind the TV. When there's no stream to be had, the still pictures
+// stand in, and the stream is tried again before long.
+@MainActor
+final class LiveMirror: ObservableObject {
+    // A picture has come through, and the stream is still open.
+    @Published private(set) var showing = false
+    // When the stream last had a picture, set as it closes: the layer keeps that last frame, so coming back to the Remote
+    // shows it at once, marked as old, rather than an older still.
+    @Published private(set) var heldAt: Date?
+    // Asked for, and no picture within 1.5 s: a TV asleep, or a Mac with nothing to stream. Nothing on screen waits on it
+    // from then (no endless spinner); it clears the moment a picture comes.
+    @Published private(set) var stalled = false
+    private var watchdog: Task<Void, Never>?
+    let layer = AVSampleBufferDisplayLayer()
+    private var feed: LiveFeed?
+    private var url: URL?
+    private var wanted = false
+    private var generation = 0
+    private var failures = 0
+    private var stopping: Task<Void, Never>?
+    private var retry: Task<Void, Never>?
+    init() {
+        layer.videoGravity = .resizeAspect
+        layer.backgroundColor = UIColor.clear.cgColor
+        // The layer keeps the host's own time, so each picture can be given the moment to show it (LiveFeed.paced).
+        var tb: CMTimebase?
+        if CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &tb) == noErr, let tb {
+            CMTimebaseSetTime(tb, time: CMClockGetTime(CMClockGetHostTimeClock()))
+            CMTimebaseSetRate(tb, rate: 1)
+            layer.controlTimebase = tb
+        }
+    }
+    func start(_ url: URL?) {
+        stopping?.cancel(); stopping = nil
+        wanted = true
+        if let url { self.url = url }
+        guard feed == nil, retry == nil, let address = self.url else { return }
+        generation += 1
+        let gen = generation
+        if !showing {
+            watchdog?.cancel()
+            watchdog = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard let self, !Task.isCancelled, gen == self.generation || self.feed == nil, !self.showing else { return }
+                if !self.stalled { self.stalled = true }
+            }
+        }
+        feed = LiveFeed(url: address, renderer: layer.sampleBufferRenderer,
+                        picture: { [weak self] in Task { @MainActor in self?.pictured(gen) } },
+                        ended: { [weak self] in Task { @MainActor in self?.ended(gen) } })
+    }
+    // Nobody looking: closed, after a moment's grace so a quick look elsewhere doesn't start it all over.
+    func stop(after delay: TimeInterval = 0) {
+        wanted = false
+        stopping?.cancel()
+        stopping = Task { [weak self] in
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            guard let self, !Task.isCancelled, !self.wanted else { return }
+            self.end()
+        }
+    }
+    private func end() {
+        readying?.cancel(); readying = nil
+        feed?.cancel(); feed = nil
+        retry?.cancel(); retry = nil
+        check?.cancel(); check = nil
+        generation += 1
+        if showing { heldAt = Date(); showing = false }
+    }
+    // A key was pressed on the TV. A still TV sends nothing, so silence alone can't say the stream has died, but a press
+    // answers within a fifth of a second (measured 2026-11-05, half a second for the first after a pause). Nothing within
+    // 1.5 s: the picture is no longer the TV's, so it's marked as kept rather than live (the stills take over at once) and
+    // the stream is joined afresh, which takes a tenth of a second when nothing was wrong. A frozen frame never passes
+    // for the TV while he presses keys at it.
+    private var check: Task<Void, Never>?
+    func pressed() {
+        guard showing, let feed else { return }
+        let at = CACurrentMediaTime(), gen = generation
+        check?.cancel()
+        check = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self, !Task.isCancelled, gen == self.generation, self.wanted, self.feed === feed, feed.lastPicture < at else { return }
+            self.check = nil
+            self.end()
+            self.start(nil)
+        }
+    }
+    // The first picture is handed to the layer before it's decoded (a join's catch-up is decoded first, a tenth of a second
+    // or more): said to be showing then, the still under it faded out to an empty layer and the live picture cut in a
+    // fifth of a second later (r33 rjoin film: 10.92–11.10 s). So showing waits until the layer has a picture to show,
+    // half a second at most.
+    private var readying: Task<Void, Never>?
+    private func pictured(_ gen: Int) {
+        guard gen == generation else { return }
+        failures = 0
+        watchdog?.cancel(); watchdog = nil
+        guard !showing, readying == nil else { return }
+        readying = Task { [weak self] in
+            for _ in 0..<30 {
+                guard let self, !Task.isCancelled, gen == self.generation else { return }
+                if self.layer.isReadyForDisplay { break }
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
+            guard let self else { return }
+            self.readying = nil
+            guard !Task.isCancelled, gen == self.generation else { return }
+            if self.stalled { self.stalled = false }
+            if !self.showing { self.showing = true }
+        }
+    }
+    private func ended(_ gen: Int) {
+        guard gen == generation else { return }
+        readying?.cancel(); readying = nil
+        feed = nil
+        if showing { heldAt = Date(); showing = false }
+        failures += 1
+        guard wanted else { return }
+        // Again soon, backing off while the Mac has no stream to give, as an older one won't.
+        let wait = min(30, 1.5 * Double(failures))
+        retry = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.retry = nil
+            if self.wanted { self.start(nil) }
+        }
+    }
+}
+
+// One stream from the Mac, read as it arrives, cut at its start codes into NAL units, gathered into pictures, and
+// handed to the display layer to show at once. Everything here runs on its own queue.
+final class LiveFeed: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let queue = DispatchQueue(label: "tv.mirror.feed")
+    private var session: URLSession?
+    private var task: URLSessionDataTask?
+    private let renderer: AVSampleBufferVideoRenderer
+    private let picture: @Sendable () -> Void
+    private let ended: @Sendable () -> Void
+    private var buffer = Data()
+    private var sps: Data?, pps: Data?
+    private var format: CMVideoFormatDescription?
+    // The picture being gathered, and whether it starts a run (an IDR), which is where showing can begin.
+    private var unit: [Data] = []
+    private var unitKey = false
+    private var sawKey = false
+    // Most streams send each picture as one slice; one that doesn't has its slices gathered first.
+    private var slices = false
+    private var answered = false
+    // The Mac marks the end of each picture with a delimiter: then nothing is ever guessed whole from a pause.
+    private var delimited = false
+    private var told = false
+    private var finished = false
+    private var quiet: DispatchWorkItem?
+    // When each picture is due on screen (its paced moment, not when it came in), and how long it was held for that, so
+    // how smoothly the mirror really moves on the phone can be measured: every 10 s the spacing is summed up and sent to
+    // the Mac's timing log, beside the Mac's own count of what the TV sent. Arrivals too, to see what the pacing undid.
+    private var shownAt: [Double] = []
+    private var arrivedAt: [Double] = []
+    private var heldFor: [Double] = []
+    private var bytesIn = 0
+    private var since = CACurrentMediaTime()
+    // Joining a recording already under way, the Mac sends everything since its last key frame at once, so the decoder can
+    // build the picture: that many pictures (its x-replay-frames header) are decoded but only the last is shown. Shown as
+    // they came, it was a quick replay of the last few seconds every time the Remote came up.
+    private var replayLeft = 0
+    private var unitHidden = false
+    // When a picture was last put on screen, for LiveMirror to ask whether a key press brought one.
+    private let stampLock = NSLock()
+    private var stamp = CACurrentMediaTime()
+    var lastPicture: Double { stampLock.lock(); defer { stampLock.unlock() }; return stamp }
+
+    init(url: URL, renderer: AVSampleBufferVideoRenderer, picture: @escaping @Sendable () -> Void, ended: @escaping @Sendable () -> Void) {
+        self.renderer = renderer; self.picture = picture; self.ended = ended
+        super.init()
+        let ops = OperationQueue(); ops.maxConcurrentOperationCount = 1; ops.underlyingQueue = queue
+        let config = URLSessionConfiguration.ephemeral
+        // A still TV sends nothing for as long as it's still, so silence is never taken as the end.
+        config.timeoutIntervalForRequest = 3600
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let s = URLSession(configuration: config, delegate: self, delegateQueue: ops)
+        session = s
+        var r = URLRequest(url: url)
+        r.setValue("video/h264", forHTTPHeaderField: "Accept")
+        task = s.dataTask(with: r)
+        task?.resume()
+        // An answer at all, soon, or it's not there to have.
+        queue.asyncAfter(deadline: .now() + 6) { [weak self] in
+            guard let self, !self.answered, !self.finished else { return }
+            self.task?.cancel()
+        }
+    }
+    func cancel() {
+        queue.async { self.finished = true; self.quiet?.cancel() }
+        task?.cancel()
+        session?.invalidateAndCancel()
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        let http = response as? HTTPURLResponse
+        let type = http?.value(forHTTPHeaderField: "Content-Type") ?? ""
+        let ok = http?.statusCode == 200 && (type.contains("h264") || type.contains("octet-stream"))
+        answered = ok
+        replayLeft = max(0, Int(http?.value(forHTTPHeaderField: "x-replay-frames") ?? "") ?? 0)
+        completionHandler(ok ? .allow : .cancel)
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard !finished else { return }
+        buffer.append(data)
+        bytesIn += data.count
+        split(tail: false)
+        // Nothing more for a moment: what's left is a whole unit, shown now rather than when the next one comes, which
+        // for a still screen might be never. Long enough that a big picture still arriving isn't cut short.
+        guard !delimited else { return }
+        quiet?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.split(tail: true) }
+        quiet = w
+        queue.asyncAfter(deadline: .now() + 0.1, execute: w)
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard !finished else { return }
+        quiet?.cancel()
+        // Whatever came last is whole now: shown, so the last picture before the end isn't lost.
+        if answered { split(tail: true) }
+        finished = true
+        session.finishTasksAndInvalidate()
+        ended()
+    }
+    // Cuts the stream at each 00 00 01 (or 00 00 00 01). Every unit but the last is whole; the last is too once the
+    // stream has gone quiet.
+    private func split(tail: Bool) {
+        guard !finished, !buffer.isEmpty else { return }
+        var cuts: [(at: Int, length: Int)] = []
+        buffer.withUnsafeBytes { raw in
+            let p = raw.bindMemory(to: UInt8.self)
+            let n = p.count
+            var i = 0
+            while i + 3 <= n {
+                if p[i] == 0 && p[i + 1] == 0 {
+                    if p[i + 2] == 1 { cuts.append((i, 3)); i += 3; continue }
+                    if i + 4 <= n && p[i + 2] == 0 && p[i + 3] == 1 { cuts.append((i, 4)); i += 4; continue }
+                }
+                i += 1
+            }
+        }
+        guard let last = cuts.last else {
+            // No start code in all this: not a stream to follow.
+            if buffer.count > 2_000_000 { buffer.removeAll() }
+            return
+        }
+        let base = buffer.startIndex
+        for k in cuts.indices {
+            let from = cuts[k].at + cuts[k].length
+            let to = k + 1 < cuts.count ? cuts[k + 1].at : (tail ? buffer.count : -1)
+            if to < 0 { break }
+            if to > from { take(buffer.subdata(in: (base + from)..<(base + to))) }
+        }
+        if tail { buffer.removeAll(keepingCapacity: true); if slices { show() } }
+        else { buffer.removeSubrange(base..<(base + last.at)) }
+    }
+    private func take(_ nal: Data) {
+        var nal = nal
+        // Zero bytes padding the end of a unit belong to no one.
+        while nal.count > 1, nal.last == 0 { nal.removeLast() }
+        guard let first = nal.first else { return }
+        switch first & 0x1F {
+        case 7: if sps != nal { sps = nal; format = nil }
+        case 8: if pps != nal { pps = nal; format = nil }
+        // A delimiter between pictures.
+        case 9: delimited = true; show()
+        case 1, 5:
+            // The first slice of a picture says so in its first bit (first_mb_in_slice is 0).
+            let starts = nal.count > 1 && (nal[nal.startIndex + 1] & 0x80) != 0
+            if !starts { slices = true }
+            if starts {
+                show()
+                // One of the catch-up pictures, unless it's the last of them.
+                if replayLeft > 0 { replayLeft -= 1; unitHidden = replayLeft > 0 } else { unitHidden = false }
+            }
+            unit.append(nal)
+            if first & 0x1F == 5 { unitKey = true }
+            if !slices { show() }
+        default: break
+        }
+    }
+    // The gathered picture, in the length-prefixed form the decoder takes, to be shown as soon as it's decoded.
+    private func show() {
+        defer { unit.removeAll(keepingCapacity: true); unitKey = false }
+        guard !unit.isEmpty else { return }
+        if format == nil, let sps, let pps { format = Self.format(sps, pps) }
+        guard let format else { return }
+        // After a hiccup the decoder starts again from the next whole picture.
+        if renderer.status == .failed || renderer.requiresFlushToResumeDecoding { renderer.flush(); sawKey = false }
+        if !sawKey { guard unitKey else { return }; sawKey = true }
+        var block = Data()
+        for n in unit {
+            var length = UInt32(n.count).bigEndian
+            withUnsafeBytes(of: &length) { block.append(contentsOf: $0) }
+            block.append(n)
+        }
+        let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+        if unitHidden {
+            // Decoded, so the pictures after it can be, but never shown; no later than anything already queued.
+            guard let sample = Self.sample(block, format, at: CMTime(seconds: max(now, lastShow), preferredTimescale: 1_000_000_000)) else { return }
+            Self.hide(sample)
+            renderer.enqueue(sample)
+            return
+        }
+        let at = paced(now)
+        guard let sample = Self.sample(block, format, at: CMTime(seconds: at, preferredTimescale: 1_000_000_000)) else { return }
+        renderer.enqueue(sample)
+        stampLock.lock(); stamp = CACurrentMediaTime(); stampLock.unlock()
+        if !told { told = true; picture() }
+        pace(arrived: now, at: at)
+    }
+    // When to show this picture. The TV's pictures reach the Mac in clumps over the box's Wi-Fi (measured 2026-11-06: up to
+    // a fifth of them under 8 ms apart while scrolling), and shown as they land a clump reads as a jerk. So each is shown
+    // nearly the TV's own spacing (95 %) after the one before, learnt from how often they come, never before it arrives
+    // and never more than 70 ms after. Nearly, not all: arriving evenly, every picture is shown the moment it comes, and the
+    // mirror never creeps late. The times only ever go forward: the first version (f790188) dropped a picture that would
+    // have waited over 80 ms back to now, ahead of the ones still queued, so a clump could show out of order.
+    private var lastShow: Double = 0
+    private var lastArrival: Double = 0
+    private var period = 1.0 / 30
+    // Simulated on clumps like the measured ones (2026-11-06): gaps over 50 ms 66 as they came, 56 with f790188, 20 with
+    // these, for about 47 ms held at most (p95). A fixed 30 ms wait on top would leave almost none, for 90 ms: worth it
+    // only if the mirror is found well inside 150 ms of the TV on the phone.
+    private static let maxHold = 0.07, share = 0.95
+    private func paced(_ now: Double) -> Double {
+        if lastArrival > 0 {
+            let gap = now - lastArrival
+            // Only the gaps of a screen in motion teach the spacing; a still screen's silence says nothing about it.
+            if gap < 0.1 { period = min(1.0 / 20, max(1.0 / 60, period + (gap - period) / 8)) }
+        }
+        lastArrival = now
+        let at = max(now, min(lastShow + period * Self.share, now + Self.maxHold))
+        lastShow = at
+        return at
+    }
+    private func pace(arrived: Double, at: Double) {
+        shownAt.append(at); arrivedAt.append(arrived); heldFor.append((at - arrived) * 1000)
+        let t = CACurrentMediaTime()
+        guard t - since >= 10 else { return }
+        let span = t - since
+        since = t
+        let gaps = zip(shownAt.dropFirst(), shownAt).map { ($0 - $1) * 1000 }.sorted()
+        let inGaps = zip(arrivedAt.dropFirst(), arrivedAt).map { ($0 - $1) * 1000 }.sorted()
+        let held = heldFor.sorted()
+        defer { shownAt = [at]; arrivedAt = [arrived]; heldFor = []; bytesIn = 0 }
+        guard gaps.count >= 5 else { return }
+        func q(_ a: [Double], _ f: Double) -> Double { a[min(a.count - 1, Int(Double(a.count) * f))].rounded() }
+        let event: [String: Any] = ["name": "mirror", "fps": (Double(gaps.count) / span * 10).rounded() / 10, "p50": q(gaps, 0.5), "p95": q(gaps, 0.95),
+                                    "max": gaps.last!.rounded(), "over100": gaps.filter { $0 > 100 }.count,
+                                    "bursts": gaps.filter { $0 < 8 }.count, "kbps": (Double(bytesIn) * 8 / span / 1000).rounded(),
+                                    "inP95": inGaps.isEmpty ? 0 : q(inGaps, 0.95), "inBursts": inGaps.filter { $0 < 8 }.count,
+                                    "heldP95": held.isEmpty ? 0 : q(held, 0.95), "heldMax": (held.last ?? 0).rounded(),
+                                    "periodMs": (period * 1000).rounded()]
+        Task { _ = try? await TVBridge.post("timing", ["events": [event]], timeout: 10) }
+    }
+    // Marks a sample to be decoded and never shown.
+    static func hide(_ sample: CMSampleBuffer) {
+        guard let list = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true), CFArrayGetCount(list) > 0 else { return }
+        let dict = unsafeBitCast(CFArrayGetValueAtIndex(list, 0), to: CFMutableDictionary.self)
+        CFDictionarySetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_DoNotDisplay).toOpaque(), Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+    }
+    static func format(_ sps: Data, _ pps: Data) -> CMVideoFormatDescription? {
+        var out: CMVideoFormatDescription?
+        let status = sps.withUnsafeBytes { (s: UnsafeRawBufferPointer) -> OSStatus in
+            pps.withUnsafeBytes { (p: UnsafeRawBufferPointer) -> OSStatus in
+                guard let sp = s.bindMemory(to: UInt8.self).baseAddress, let pp = p.bindMemory(to: UInt8.self).baseAddress else { return -1 }
+                let pointers: [UnsafePointer<UInt8>] = [sp, pp]
+                let sizes: [Int] = [sps.count, pps.count]
+                return CMVideoFormatDescriptionCreateFromH264ParameterSets(allocator: kCFAllocatorDefault, parameterSetCount: 2, parameterSetPointers: pointers,
+                                                                           parameterSetSizes: sizes, nalUnitHeaderLength: 4, formatDescriptionOut: &out)
+            }
+        }
+        return status == noErr ? out : nil
+    }
+    static func sample(_ block: Data, _ format: CMVideoFormatDescription, at time: CMTime) -> CMSampleBuffer? {
+        var buffer: CMBlockBuffer?
+        guard CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: block.count, blockAllocator: kCFAllocatorDefault,
+                                                 customBlockSource: nil, offsetToData: 0, dataLength: block.count, flags: kCMBlockBufferAssureMemoryNowFlag,
+                                                 blockBufferOut: &buffer) == kCMBlockBufferNoErr, let buffer else { return nil }
+        let copied = block.withUnsafeBytes { raw -> OSStatus in
+            guard let base = raw.baseAddress else { return -1 }
+            return CMBlockBufferReplaceDataBytes(with: base, blockBuffer: buffer, offsetIntoDestination: 0, dataLength: block.count)
+        }
+        guard copied == kCMBlockBufferNoErr else { return nil }
+        var sample: CMSampleBuffer?
+        var size = block.count
+        // Shown at its paced moment on the layer's host-time clock, rather than the instant it's decoded.
+        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: time, decodeTimeStamp: .invalid)
+        guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: buffer, formatDescription: format, sampleCount: 1, sampleTimingEntryCount: 1,
+                                        sampleTimingArray: &timing, sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample) == noErr, let sample else { return nil }
+        return sample
+    }
+}
+
+// The live picture's layer, in a view SwiftUI can place. The one layer moves to whichever view shows it.
+struct LiveMirrorLayer: UIViewRepresentable {
+    let mirror: LiveMirror
+    func makeUIView(context: Context) -> Host {
+        let v = Host()
+        v.isUserInteractionEnabled = false
+        v.attach(mirror.layer)
+        return v
+    }
+    func updateUIView(_ v: Host, context: Context) { v.attach(mirror.layer) }
+    final class Host: UIView {
+        private weak var hosted: CALayer?
+        func attach(_ l: CALayer) {
+            if l.superlayer !== layer { l.removeFromSuperlayer(); layer.addSublayer(l) }
+            hosted = l
+            setNeedsLayout()
+        }
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            guard let hosted, hosted.superlayer === layer else { return }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            hosted.frame = bounds
+            CATransaction.commit()
+        }
+    }
+}
+#endif
