@@ -537,23 +537,41 @@ struct SendBar: View {
         let t = text.trimmingCharacters(in: .whitespaces)
         return t.contains("://") || t.lowercased().hasPrefix("www.") || (!t.contains(" ") && t.contains(".") && t.contains("/"))
     }
+    // On the Remote: the field opens the search where its results are, the Apps page, with the keyboard up. Typed into on
+    // the Remote it searched nothing there, and the keyboard squeezed the pad and keys into half circles (Richard,
+    // 2026-11-07: "lol when search for whatever").
+    var opensSearch = false
     var link: Bool { Self.isLink(draft.text) }
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: link ? "paperplane" : "magnifyingglass").foregroundStyle(.secondary).padding(.leading, 14)
                 .contentTransition(.symbolEffect(.replace))
+            if opensSearch {
+                Button { model.tick(); draft.wantsFocus = true; model.tab = 1 } label: {
+                    Text(draft.text.isEmpty ? "Search, or send a link" : draft.text).foregroundStyle(draft.text.isEmpty ? .tertiary : .primary)
+                        .lineLimit(1).frame(maxWidth: .infinity, minHeight: 50, alignment: .leading).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).accessibilityLabel("Search, or send a link")
+            } else {
             TextField("Search, or send a link", text: $draft.text)
                 .focused($focused).autocorrectionDisabled().submitLabel(link ? .send : .search)
                 .onChange(of: draft.focusRequest) { _, _ in focused = true }
                 // Words are already being searched as they're typed, so Return only puts the keyboard away.
                 .onSubmit { if link { submit() } else { focused = false } }
+                .task {
+                    guard draft.wantsFocus else { return }
+                    draft.wantsFocus = false
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    focused = true
+                }
+            }
             if draft.text.isEmpty {
                 Button {
                     #if canImport(UIKit)
                     // A copied link goes to the TV; copied words are searched here, like typed ones.
                     if let s = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-                        if Self.isLink(s) { model.send(s) } else { draft.text = s }
-                    } else { focused = true }
+                        if Self.isLink(s) { model.send(s) } else { draft.text = s; if opensSearch { model.tab = 1 } }
+                    } else if opensSearch { draft.wantsFocus = true; model.tab = 1 } else { focused = true }
                     #endif
                 } label: { Image(systemName: "doc.on.clipboard").frame(width: 44, height: 44) }
                 .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Use what you copied")
@@ -1128,7 +1146,7 @@ struct RemoteTab: View {
                         .animation(.easeInOut(duration: 0.3), value: unreachable).columnRole(.aligned)
                 }
                 // Right under the tiles, not pushed to the foot with dead space above it.
-                SendBar().columnRole(.aligned)
+                SendBar(opensSearch: true).columnRole(.aligned)
             }
             Spacer(minLength: 0)
         }
@@ -2551,7 +2569,7 @@ struct DiscoverColumn: View {
             }), inset: 20)
             .rowEdge()
         }
-        if store.query.isEmpty { RecentRow() }
+        if store.query.isEmpty { RecentRow(kind: kind) }
         if store.rows.isEmpty {
             Group {
                 if store.loading { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } }
@@ -2606,19 +2624,28 @@ struct DiscoverColumn: View {
 struct RecentRow: View {
     @Environment(TVModel.self) var model
     @ObservedObject private var recent = RecentFlicks.shared
+    // On Watch, only the kind the switch is on (Richard, 2026-11-07: "recently flicked should change based on if i choose
+    // show or movie"). Nil elsewhere: everything.
+    var kind: String? = nil
+    var list: [RecentFlick] {
+        guard let kind else { return recent.list }
+        return recent.list.filter { ($0.item.stremioRef?.type ?? ($0.item.kind == "series" ? "series" : "movie")) == kind }
+    }
     var body: some View {
         // Never a row of one.
-        if recent.list.count > 1 {
+        if list.count > 1 {
             VStack(alignment: .leading, spacing: 0) {
                 RowTitle("Recently flicked").padding(.leading, 20)
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 10) {
-                        ForEach(recent.list) { f in FlickCardButton(item: f.item, source: .stremio, width: 124, ready: true) }
+                        ForEach(list) { f in FlickCardButton(item: f.item, source: .stremio, width: 124, ready: true) }
                     }
                     .padding(.horizontal, 20)
                 }
                 .rowEdge()
             }
+            .id(kind ?? "all")
+            .transition(.opacity)
         }
     }
 }

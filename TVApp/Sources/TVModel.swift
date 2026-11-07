@@ -612,6 +612,8 @@ final class SendDraft: ObservableObject {
     // For the build's real-data flows: ask the search field for the keyboard, and the first result found, as the
     // field and the results grid would offer them to a finger.
     @Published var focusRequest = 0
+    // Asked for from the Remote: the Apps page's field takes the keyboard as it comes up.
+    var wantsFocus = false
     var firstResult: (item: MediaItem, source: MediaSource)?
 }
 

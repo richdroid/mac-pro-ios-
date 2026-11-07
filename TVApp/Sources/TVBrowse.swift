@@ -396,6 +396,9 @@ struct FlickCardButton: View {
     var ready = false
     // Where the tile is, kept without redrawing anything while the row scrolls.
     @State private var place = FrameBox()
+    @State private var showInfo = false
+    // A film or show from Stremio's catalogue has its details a tap away, on the "i" at the picture's corner.
+    var hasInfo: Bool { source == .stremio && !item.isYouTube && item.stremioRef != nil }
     // What a tap on a card does; the build's real-data flows tap through here too.
     @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil) {
         if model.isOnTV(item, source) { model.showOnRemote(); return }
@@ -409,6 +412,8 @@ struct FlickCardButton: View {
             // Outside the press's own squeeze, so the measure never moves with what it measures.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
+            .overlay(alignment: .topTrailing) { if hasInfo { InfoBadge { model.tick(); showInfo = true } } }
+            .sheet(isPresented: $showInfo) { TitleInfoSheet(item: item, source: source) }
     }
 }
 final class FrameBox { var rect: CGRect? }

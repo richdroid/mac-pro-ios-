@@ -83,6 +83,9 @@ extension MediaItem {
 struct FlickScreen: View {
     // Its entry in the side bar's Back, while choosing.
     @State private var railBackID = UUID()
+    @State private var showInfo = false
+    // The stream whose full description is open under its row.
+    @State private var streamOpen: String?
     @Environment(TVModel.self) var model
     enum Step: Int { case episodes, streams, flick }
     let target: FlickTarget
@@ -156,7 +159,9 @@ struct FlickScreen: View {
     // Handed to the controls while the TV is still getting the film going, once its player is up.
     @State private var handedOver = false
     // Near the end of something, whether to start it over rather than resume at the credits, and how long it runs.
-    @State private var startOver = true
+    // Start over or carry on, as chosen; unchosen, a nearly-finished one starts over and anything else carries on.
+    @State private var startOverChoice: Bool?
+    var startOver: Bool { startOverChoice ?? nearEnd }
     @State private var runtime: Double?
     @State private var choseOnTV = false
     // On the control screen, a way back to the start, for when it's still near the end.
@@ -199,6 +204,8 @@ struct FlickScreen: View {
     var flickOrigin: CGPoint { (held ?? flickFrame).origin }
     // The picked thing's own colour, which floods in a little while the card is held.
     @State private var tint: Color?
+    // The catch's sparks: the card's own colour beside the accent.
+    var sparkTint: Color { tint ?? .white }
     // The TV taking a breath as its player comes up.
     // When the Mac said the film is playing: the play key says so at once, before the TV's own status catches up.
     @State private var playedAt: Date?
@@ -571,12 +578,20 @@ struct FlickScreen: View {
     func blurb(_ lines: Int) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let t = blurbText { Text(t).font(.subheadline).foregroundStyle(.secondary).lineLimit(lines).fixedSize(horizontal: false, vertical: true).contentTransition(.opacity) }
-            if let slug = item.slug, !slug.isEmpty {
-                Button { model.tick(); model.post("film", ["slug": slug]); leave() } label: {
-                    Label("Letterboxd", systemImage: "film")
-                }.font(.footnote.weight(.medium)).tint(TVLook.accent)
+            HStack(spacing: 18) {
+                // Everything about it, before choosing (Richard, 2026-11-07: "an i to see full details of each before i flick").
+                if item.stremioRef != nil {
+                    Button { model.tick(); showInfo = true } label: { Label("Details", systemImage: "info.circle") }
+                        .font(.footnote.weight(.semibold)).tint(TVLook.accent)
+                }
+                if let slug = item.slug, !slug.isEmpty {
+                    Button { model.tick(); model.post("film", ["slug": slug]); leave() } label: {
+                        Label("Letterboxd", systemImage: "film")
+                    }.font(.footnote.weight(.medium)).tint(TVLook.accent)
+                }
             }
         }
+        .sheet(isPresented: $showInfo) { TitleInfoSheet(item: item, source: source, fromFlick: true) }
         .animation(.easeOut(duration: 0.2), value: blurbText)
     }
     var heading: some View {
@@ -689,7 +704,7 @@ struct FlickScreen: View {
     }
     // An episode picked, from its row or the big key: its streams next.
     func choose(_ e: StremioEpisode) {
-        if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All"; picked = false; runtime = nil; startOver = true; choseOnTV = false }
+        if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All"; picked = false; runtime = nil; startOverChoice = nil; choseOnTV = false }
         go(.streams)
     }
     func row<L: View>(selected: Bool, action: @escaping () -> Void, @ViewBuilder label: () -> L) -> some View {
@@ -790,8 +805,10 @@ struct FlickScreen: View {
             }
             // Nearly finished: resuming would land on the credits, so starting over is offered, and chosen to begin with.
             // Not for Choose on the TV, where Stremio's own screen asks.
-            if nearEnd && !choseOnTV {
-                Chips(options: [(false, resumeLabel), (true, "Start over")], selected: $startOver).padding(.top, 6)
+            // Where it'll start, and the other way, whenever he's been in it before: from the card, else from Stremio's own
+            // Continue watching (Richard, 2026-11-07: "obv when i flick it should start from where i was").
+            if hasResume && !choseOnTV {
+                Chips(options: [(false, resumeLabel), (true, "Start over")], selected: Binding(get: { startOver }, set: { startOverChoice = $0 })).padding(.top, 6)
             }
             if findingStreams && streams.isEmpty {
                 Text("Asking your addons…").font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
@@ -820,21 +837,32 @@ struct FlickScreen: View {
     var savedProgress: Double? {
         guard let ref = item.stremioRef else { return nil }
         if ref.type == "series", let e = episode {
-            if e.id == ref.video { return item.progress }
-            return e.id == upNext ? upNextProgress : nil
+            if e.id == ref.video, let p = item.progress { return p }
+            if e.id == upNext, let p = upNextProgress { return p }
+            return continuing(ref.imdb, e.id)
         }
-        return item.progress
+        return item.progress ?? continuing(ref.imdb, nil)
     }
+    // Where Stremio's own Continue watching has him in this film, or this episode of this show.
+    func continuing(_ imdb: String, _ video: String?) -> Double? {
+        let row = BrowseStore.shared(.stremio).rows.first { $0.title == "Continue watching" }
+        for i in row?.items ?? [] {
+            guard let r = i.stremioRef, r.imdb == imdb, let p = i.progress else { continue }
+            if video == nil || r.video == video { return p }
+        }
+        return nil
+    }
+    var hasResume: Bool { (savedProgress ?? 0) > 0.01 && (savedProgress ?? 0) < 0.99 }
     var nearEnd: Bool { (savedProgress ?? 0) > 0.9 }
     var resumeLabel: String {
         guard let runtime, let p = savedProgress else { return "Resume" }
-        // Running time times progress is only an estimate, so to the minute.
-        let m = Int(runtime * p / 60000)
-        return "Resume at " + (m >= 60 ? String(format: "%d:%02d", m / 60, m % 60) : "\(m) min")
+        // Running time times progress: "Resumes at 42:10", "Resumes at 1:12:05".
+        let s = Int(runtime * p / 1000)
+        return "Resumes at " + (s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60))
     }
     // The running time, for the Resume chip's time: from Stremio's own catalogue, the episode's if it has one.
     func loadRuntime() async {
-        guard runtime == nil, nearEnd, let ref = item.stremioRef,
+        guard runtime == nil, hasResume, let ref = item.stremioRef,
               let d = await TVBridge.data(URL(string: "https://v3-cinemeta.strem.io/meta/\(ref.type)/\(ref.imdb).json"), timeout: 10, cached: true),
               let meta = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["meta"] as? [String: Any] else { return }
         let video = episode?.id ?? ref.video
@@ -865,6 +893,12 @@ struct FlickScreen: View {
                 }
                 let details = s.details(withSource: twin, size: false)
                 if !details.isEmpty { Text(details).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1) }
+                // Everything the addon says about it (the file, the source, the size, the codec), when its "i" is open.
+                if streamOpen == s.id {
+                    Text([s.addon, s.name, s.description].filter { !$0.isEmpty }.joined(separator: "\n"))
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
+                }
             }
             .multilineTextAlignment(.leading)
             // How big it is, at the row's end where the eye runs to, rather than empty space, right-aligned so the sizes
@@ -875,6 +909,15 @@ struct FlickScreen: View {
         }
         .disabled(failed)
         .opacity(failed ? 0.45 : 1)
+        // Its details, opened in place: the row's own tap still picks it.
+        .overlay(alignment: .topTrailing) {
+            Button { model.tick(); withAnimation(.snappy) { streamOpen = streamOpen == s.id ? nil : s.id } } label: {
+                Image(systemName: streamOpen == s.id ? "info.circle.fill" : "info.circle").font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(TVLook.accent).frame(width: 36, height: 30).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).accessibilityLabel("Stream details")
+            .offset(x: 4, y: -6)
+        }
     }
     func findStreams(again: Bool = false) async {
         guard let ref = item.stremioRef else { return }
@@ -1035,6 +1078,10 @@ struct FlickScreen: View {
         .shadow(color: TVLook.accent.opacity(glow * (charged ? 0.95 : 0.7 * charge)), radius: glow > 0 ? (charged ? 34 : 10 + 18 * charge) : 0)
         // One ripple from its edge at the impact.
         .overlay { TVRipple(trigger: impacts, big: false) }
+        // And a burst of light off its edges, the card's colours and the accent, flung out and falling away: the catch
+        // should feel like a catch (Richard, 2026-11-07: "flick screen isnt superfluous enough and whimsical enough not
+        // enough flair").
+        .overlay { TVSparks(trigger: impacts, tint: sparkTint) }
         // It leans in to meet the card, then gives as the card hits: squashed, over, and settled.
         .scaleEffect(1 + 0.09 * lean)
         .keyframeAnimator(initialValue: CGFloat(1), trigger: impacts) { c, s in c.scaleEffect(s) } keyframes: { _ in
@@ -1492,12 +1539,13 @@ struct FlickScreen: View {
             // so one that won't start is replaced on the Mac without coming back to the phone (§2.5a C8).
             var body: [String: Any] = ["token": stream.token, "imdb": ref.imdb]
             if ref.type == "series", let video = episode?.id ?? ref.video { body["video"] = video }
-            if nearEnd && startOver { body["restart"] = true }
+            if hasResume && startOver { body["restart"] = true }
             // Where he was in it, as a share of its length, so the Mac can make sure it opens there and not at 0:00 (r24:
             // "85 min left" opened at 0:08). Not for a start over.
             else {
-                let p = ref.type == "series" ? ((episode?.id ?? ref.video) == upNext ? upNextProgress : nil) : item.progress
-                if let p, p > 0.01, p < 0.97 { body["resume"] = (p * 1000).rounded() / 1000 }
+                // From the card, else from Stremio's own Continue watching, so a pick from search, Recently flicked or a
+                // rec carries on where he was too.
+                if let p = savedProgress, p > 0.01, p < 0.97 { body["resume"] = (p * 1000).rounded() / 1000 }
             }
             let spare = streams.filter { $0.token != stream.token && !failedTokens.contains($0.token) }.prefix(2).map(\.token)
             if !spare.isEmpty { body["fallbacks"] = Array(spare) }
@@ -1807,6 +1855,68 @@ private func between(_ a: CGRect, _ b: CGRect, _ t: CGFloat) -> CGRect {
 }
 
 // Rings going out from the TV each time something lands on it.
+// Sparks thrown off the TV's edge at the catch: a ring of small lights flying out on their own curves, spinning a little,
+// shrinking and fading as they fall. Laid out once from a fixed pattern, so every catch looks alike and nothing is
+// measured while it moves.
+private struct TVSparks: View {
+    let trigger: Int
+    var tint: Color
+    static let count = 18
+    var body: some View {
+        GeometryReader { g in
+            ZStack {
+                ForEach(0..<Self.count, id: \.self) { i in
+                    OneSpark(i: i, count: Self.count, box: g.size, trigger: trigger, tint: tint)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+private struct OneSpark: View {
+    let i: Int, count: Int
+    let box: CGSize
+    let trigger: Int
+    let tint: Color
+    struct Spark { var t: CGFloat = 0 }
+    var angle: Double { Double(i) / Double(count) * 2 * .pi + (i.isMultiple(of: 2) ? 0.12 : -0.08) }
+    var reach: CGFloat { CGFloat(0.62 + 0.22 * Double((i * 7) % 5) / 4) }
+    var start: CGPoint { CGPoint(x: box.width / 2 + CGFloat(cos(angle)) * box.width / 2, y: box.height / 2 + CGFloat(sin(angle)) * box.height / 2) }
+    var end: CGPoint {
+        let dx = CGFloat(cos(angle)) * box.width / 2 * (1 + reach * 0.55)
+        let dy = CGFloat(sin(angle)) * box.height / 2 * (1 + reach)
+        return CGPoint(x: box.width / 2 + dx, y: box.height / 2 + dy + 26)
+    }
+    var colour: Color { i % 2 == 0 ? TVLook.accent : tint }
+    @ViewBuilder var mark: some View {
+        if i % 3 == 0 { Image(systemName: "sparkle").font(.system(size: 12, weight: .bold)) }
+        else { Circle().frame(width: 4.5, height: 4.5) }
+    }
+    func placed(_ c: some View, _ t: CGFloat) -> some View {
+        let p0 = start, p1 = end
+        let x: CGFloat = p0.x + (p1.x - p0.x) * t
+        let y: CGFloat = p0.y + (p1.y - p0.y) * t + 18 * t * t
+        let live = t > 0 && t < 1
+        let scale: CGFloat = live ? 1.2 - 0.9 * t : 0.01
+        let fade: Double = live ? Double(1 - t * t) : 0
+        return c.position(x: x, y: y).scaleEffect(scale).rotationEffect(.degrees(Double(t) * 160)).opacity(fade)
+    }
+    var body: some View {
+        let delay: Double = 0.02 + Double(i % 4) * 0.025
+        mark
+            .foregroundStyle(colour)
+            .shadow(color: colour.opacity(0.9), radius: 4)
+            .keyframeAnimator(initialValue: Spark(), trigger: trigger) { c, s in placed(c, s.t) } keyframes: { _ in
+                KeyframeTrack(\.t) {
+                    LinearKeyframe(0, duration: 0.001)
+                    LinearKeyframe(0.001, duration: delay)
+                    CubicKeyframe(0.75, duration: 0.32)
+                    CubicKeyframe(1, duration: 0.38)
+                }
+            }
+    }
+}
 private struct TVRipple: View {
     let trigger: Int
     // On the grown screen the same rings would reach far past it, so they stay close.
