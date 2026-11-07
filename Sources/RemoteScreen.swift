@@ -68,6 +68,25 @@ final class RemoteScreen: ObservableObject {
     static var pipeline: Int { let v = UserDefaults.standard.integer(forKey: "screenPipeline"); return v > 0 ? min(v, 8) : 4 }
     // Pictures the Mac has sent on this connection, for the measuring overlay.
     var updates: Int { decoder?.snapshot().1 ?? 0 }
+    // How long this connection took to sign in, show something and show the whole picture, for the measuring badge.
+    var timings: ScreenTimings? { decoder?.timings() }
+    // 32-bit colour when the link last measured fast enough that the whole first picture took under about half a
+    // second at full colour (3 MB/s); 16-bit otherwise, and always until a link has been measured. The build can force
+    // either with "screenDepth" (16 or 32).
+    static var deepColour: Bool {
+        let forced = UserDefaults.standard.integer(forKey: "screenDepth")
+        if forced == 16 || forced == 32 { return forced == 32 }
+        return UserDefaults.standard.double(forKey: "screenLinkSpeed") >= 3_000_000
+    }
+    // Keeps the link speed the first picture measured, for the next connection's choice of colour.
+    private func remember(_ t: ScreenTimings) {
+        guard let speed = t.throughput, !rememberedSpeed else { return }
+        rememberedSpeed = true
+        UserDefaults.standard.set(speed, forKey: "screenLinkSpeed")
+        let f = { (v: Double?) in v.map { String(format: "%.2f s", $0) } ?? "–" }
+        print("screen: \(t.deep ? 32 : 16)-bit, signed in \(f(t.signedIn)), first pixels \(f(t.firstPixels)), whole picture \(f(t.firstPicture)), \(t.firstBytes) bytes, \(Int(speed / 1024)) KB/s")
+    }
+    private var rememberedSpeed = false
     private var base: URL?
     private var wanted = false          // someone wants the screen, so a drop means reconnect
     private var attempts = 0
@@ -216,9 +235,11 @@ final class RemoteScreen: ObservableObject {
         let task = URLSession.shared.webSocketTask(with: request)
         task.maximumMessageSize = 32 << 20
         socket = task
-        let decoder = ScreenDecoder(socket: task, pipeline: Self.pipeline)
+        // Full colour only where the last picture came in fast (home Wi-Fi); otherwise 16-bit, less than half the bytes.
+        // The new connection starts from the last picture, so it fills in over it, never over black.
+        let decoder = ScreenDecoder(socket: task, pipeline: Self.pipeline, deep: Self.deepColour, seed: hasPicture ? self.decoder?.snapshot().0 : nil)
         self.decoder = decoder
-        running = true; phase = hasPicture ? .reconnecting : .connecting
+        running = true; rememberedSpeed = false; phase = hasPicture ? .reconnecting : .connecting
         watchSlowReconnect()
         task.resume()
         // A connection that hasn't started the picture in 14 s is given up and tried again, rather than left waiting for
@@ -247,7 +268,7 @@ final class RemoteScreen: ObservableObject {
     // decoder's count, which the display link picks up; the main thread hears only of a change of state.
     nonisolated private static func receiveLoop(_ task: URLSessionWebSocketTask, decoder: ScreenDecoder, owner screen: RemoteScreen?) async {
         weak var owner = screen
-        var told = false
+        var told = false, toldWhole = false
         while true {
             let data: Data
             do {
@@ -267,8 +288,11 @@ final class RemoteScreen: ObservableObject {
             let events = decoder.feed(data)
             let state = events.filter { !$0.isDrawing }
             let firstPicture = !told && events.contains { $0.isDrawing }
-            if !state.isEmpty || firstPicture {
+            // And once more when the first picture is whole (the first may only have been its top), for its timing.
+            let whole = !toldWhole && decoder.timings().firstPicture != nil
+            if !state.isEmpty || firstPicture || whole {
                 if firstPicture { told = true }
+                if whole { toldWhole = true }
                 guard let owner, await owner.handle(task, events: state, drew: told) else { return }
             }
             if decoder.stopped { return }
@@ -283,6 +307,7 @@ final class RemoteScreen: ObservableObject {
         // "Reconnecting…" stayed up over a live, working screen (Richard, 2026-11-07: "reconnecting still shows when im
         // connected").
         if drew {
+            if let t = decoder?.timings(), t.firstPicture != nil { remember(t) }
             if phase == .reconnecting || phase == .connecting { phase = .connected }
             if slowReconnect || slowTimer != nil { slowTimer?.cancel(); slowTimer = nil; slowReconnect = false }
         }
@@ -615,11 +640,33 @@ enum ScreenEvent {
 // Which picture the layer is showing: the connection it came from and its number on that connection.
 struct ScreenLayerMark { var source: ObjectIdentifier?; var generation = 0 }
 
+// Timings for one connection, in seconds from when it was opened, and the first full picture's size on the wire. For
+// the measuring badge and the build's log: Richard, 2026-11-07, "takes too long to remote in like the screen draws slowly".
+struct ScreenTimings: Sendable {
+    var signedIn: Double?          // the Mac's first words (its ServerInit) reached the phone
+    var firstPixels: Double?       // the first part of the picture was on screen
+    var firstPicture: Double?      // the whole first picture was
+    var firstBytes = 0             // what the first picture cost on the wire
+    var deep = true                // 32-bit colour (or 16-bit)
+    var throughput: Double?        // bytes a second while the first picture streamed in
+}
+
 // The Mac's side of the connection: reads the RFB stream, inflates ZRLE and paints the picture's memory. Only ever used
 // by one message at a time, in order, from the receive loop, and never from the main thread.
+//  - Colour: 16-bit unless the last connection showed a fast link. Apple's Screen Sharing sends the whole screen as one
+//    ZRLE rectangle; 16-bit made the first one 0.77 MB against 1.82 MB at 32-bit on his Mac (2026-11-07), and on the
+//    ~350 KB/s link his sessions showed that is 2.2 s against 5.2 s. It ignores Tight and JPEG, and an 8-bit format.
+//  - Streaming: a rectangle is inflated and drawn tile by tile as its bytes arrive, and a big one is shown as it fills
+//    in, top down, rather than only once its last byte is in.
+//  - A reconnect starts from the last picture, so what's still to come is the old picture, never black.
 final class ScreenDecoder: @unchecked Sendable {
     let socket: URLSessionWebSocketTask
     private let pipeline: Int
+    // 4 bytes a pixel (32-bit, 3 on the wire in ZRLE) or 2 (16-bit, 5-6-5).
+    let deep: Bool
+    private var bytesPerPixel: Int { deep ? 4 : 2 }
+    private var cpixel: Int { deep ? 3 : 2 }
+    private let seed: FrameBuffer?
     private(set) var frame = FrameBuffer(width: 0, height: 0) { didSet { lock.lock(); shared = frame; lock.unlock() } }
     // What the main thread reads: the memory and how many pictures it has held, only ever swapped together, under the lock.
     private let lock = NSLock()
@@ -648,6 +695,16 @@ final class ScreenDecoder: @unchecked Sendable {
         if ready.count > Self.queued { ready.removeFirst(ready.count - Self.queued) }
         lock.unlock()
     }
+    // MARK: Timings
+    private let opened = CFAbsoluteTimeGetCurrent()
+    private var times = ScreenTimings()
+    private var firstStreamStart: Double?
+    func timings() -> ScreenTimings { lock.lock(); defer { lock.unlock() }; return times }
+    private func mark(_ set: (inout ScreenTimings, Double) -> Void) {
+        let t = CFAbsoluteTimeGetCurrent() - opened
+        lock.lock(); set(&times, t); lock.unlock()
+    }
+
     var stopped: Bool { stage == .stopped }
     private var buffer = Data()
     private var inflater = ZRLEInflater()
@@ -655,11 +712,15 @@ final class ScreenDecoder: @unchecked Sendable {
     private enum Stage { case version, security, result, serverInit, messages, stopped }
     private var stage = Stage.version
     private var events: [ScreenEvent] = []
-    init(socket: URLSessionWebSocketTask, pipeline: Int = 4) { self.socket = socket; self.pipeline = max(1, pipeline) }
+    init(socket: URLSessionWebSocketTask, pipeline: Int = 4, deep: Bool = true, seed: FrameBuffer? = nil) {
+        self.socket = socket; self.pipeline = max(1, pipeline); self.deep = deep; self.seed = seed
+        times.deep = deep
+    }
     func feed(_ data: Data) -> [ScreenEvent] {
         events = []
         guard stage != .stopped else { return [] }
         buffer.append(data)
+        if countingFirst { firstUpdateBytes += data.count }
         parse()
         return events
     }
@@ -668,9 +729,10 @@ final class ScreenDecoder: @unchecked Sendable {
     private func take(_ n: Int) -> Data? {
         guard buffer.count >= n else { return nil }
         let out = Data(buffer.prefix(n))
-        buffer = Data(buffer.dropFirst(n))
+        drop(n)
         return out
     }
+    private func drop(_ n: Int) { buffer.removeFirst(n); if buffer.isEmpty { buffer = Data() } }
     private func request(incremental: Bool) {
         send([3, incremental ? 1 : 0, 0, 0, 0, 0, UInt8(width >> 8), UInt8(width & 255), UInt8(height >> 8), UInt8(height & 255)])
     }
@@ -699,10 +761,15 @@ final class ScreenDecoder: @unchecked Sendable {
                 let nameLength = be32(buffer, 20)
                 guard let head = take(24 + nameLength) else { return }
                 width = be16(head, 0); height = be16(head, 2)
-                frame = FrameBuffer(width: width, height: height)
-                // 32-bit little-endian BGRA. ZRLE first, moved areas next, raw as the fallback, being told of a resize,
-                // and the pointer's own picture (Cursor, -239), so the phone draws it where the finger is with no wait.
-                send([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0])
+                let fresh = FrameBuffer(width: width, height: height)
+                if let seed, seed.width == width, seed.height == height { memcpy(fresh.bytes, seed.bytes, fresh.size) }
+                frame = fresh
+                mark { $0.signedIn = $1 }
+                // 32-bit little-endian BGRX, or 16-bit little-endian 5-6-5. ZRLE first, moved areas next, raw as the
+                // fallback, being told of a resize, and the pointer's own picture (Cursor, -239), so the phone draws it
+                // where the finger is with no wait.
+                send(deep ? [0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]
+                          : [0, 0, 0, 0, 16, 16, 0, 1, 0, 31, 0, 63, 0, 31, 11, 5, 0, 0, 0, 0])
                 send([2, 0, 0, 5,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33,  255, 255, 255, 17])
                 // The whole picture first, then a few requests already waiting, so each change on the Mac is sent as
                 // it happens instead of a round trip after the last one arrived.
@@ -711,9 +778,17 @@ final class ScreenDecoder: @unchecked Sendable {
                 stage = .messages
                 events.append(.opened(width, height))
             case .messages:
+                if inUpdate { if !continueUpdate() { return }; continue }
                 guard let type = buffer.first else { return }
                 switch type {
-                case 0: if !readUpdate() { return }
+                case 0:
+                    guard buffer.count >= 4 else { return }
+                    rectsLeft = be16(buffer, 2)
+                    // The first picture is counted from the first update until the whole screen has been painted once
+                    // (the Mac may send the pointer, or nothing, before it).
+                    if !sawFirstUpdate { sawFirstUpdate = true; countingFirst = true; firstUpdateBytes = buffer.count; firstStreamStart = CFAbsoluteTimeGetCurrent() }
+                    drop(4)
+                    inUpdate = true; painted = false; resized = false; empty = rectsLeft == 0
                 case 1:
                     guard buffer.count >= 6 else { return }
                     let n = be16(buffer, 4)
@@ -728,84 +803,253 @@ final class ScreenDecoder: @unchecked Sendable {
         }
     }
 
-    private func readUpdate() -> Bool {
-        guard buffer.count >= 4 else { return false }
-        let count = be16(buffer, 2)
-        // Nothing is touched until the whole update has arrived.
-        var at = 4
-        for _ in 0..<count {
-            guard buffer.count >= at + 12 else { return false }
-            let w = be16(buffer, at + 4), h = be16(buffer, at + 6), encoding = Int32(truncatingIfNeeded: be32(buffer, at + 8))
-            at += 12
-            switch encoding {
-            case 0: at += w * h * 4
-            case 1: at += 4
-            case 16:
-                guard buffer.count >= at + 4 else { return false }
-                at += 4 + be32(buffer, at)
-            case -223: break
-            case -239: at += w * h * 4 + (w + 7) / 8 * h
-            default: fail("Unexpected screen data."); return false
+    // MARK: Updates, read as they arrive
+    private var inUpdate = false, rectsLeft = 0, painted = false, resized = false, empty = false
+    private var sawFirstUpdate = false, countingFirst = false, firstUpdateBytes = 0, paintedArea = 0, wholeSeen = false
+    private var bigStart: (Double, Int)?
+    // The ZRLE rectangle being streamed: where it is, how much of its compressed data is still to come, which tile is
+    // next, and what's been inflated but not yet drawn.
+    private struct Streaming { var x, y, w, h: Int; var left: Int; var tileX = 0, tileY = 0 }
+    private var streaming: Streaming?
+    private var inflated: [UInt8] = []
+    private var inflatedAt = 0
+    private var lastShown = 0.0
+    private var shownRows = 0
+
+    // Reads as much of the current update as has arrived. False when it needs more.
+    private func continueUpdate() -> Bool {
+        while rectsLeft > 0 {
+            if streaming != nil {
+                guard streamZRLE() else { return false }
+                continue
             }
-            guard buffer.count >= at else { return false }
-        }
-        var read = 4
-        var resized = false, painted = false
-        for _ in 0..<count {
-            let x = be16(buffer, read), y = be16(buffer, read + 2), w = be16(buffer, read + 4), h = be16(buffer, read + 6)
-            let encoding = Int32(truncatingIfNeeded: be32(buffer, read + 8))
-            read += 12
+            guard buffer.count >= 12 else { return false }
+            let x = be16(buffer, 0), y = be16(buffer, 2), w = be16(buffer, 4), h = be16(buffer, 6)
+            let encoding = Int32(truncatingIfNeeded: be32(buffer, 8))
             switch encoding {
-            case -239:
-                // The pointer's picture, x and y being its hotspot: BGRA pixels, then a bitmask of which ones show.
-                let length = w * h * 4, maskRow = (w + 7) / 8
-                let image = buffer.withUnsafeBytes { src in Self.cursorImage(src.baseAddress! + read, mask: src.baseAddress! + read + length, w: w, h: h, maskRow: maskRow) }
-                events.append(.cursor(image, CGPoint(x: x, y: y)))
-                read += length + maskRow * h
+            case 16:
+                guard buffer.count >= 16 else { return false }
+                let length = be32(buffer, 12)
+                guard x + w <= width, y + h <= height else { fail("Unexpected screen data."); return false }
+                drop(16)
+                painted = true; paintedArea += w * h
+                streaming = Streaming(x: x, y: y, w: w, h: h, left: length)
+                // The link's speed, from the first big rectangle streaming in: its bytes over the time they took.
+                if countingFirst, w * h >= width * height / 4 { bigStart = (CFAbsoluteTimeGetCurrent(), length) }
+                inflated.removeAll(keepingCapacity: true); inflatedAt = 0; shownRows = 0
             case 0:
-                painted = true
-                let offset = read
+                let length = w * h * bytesPerPixel
+                guard buffer.count >= 12 + length else { return false }
+                painted = true; paintedArea += w * h
+                if w * h >= width * height * 3 / 4 { wholeSeen = true }
                 buffer.withUnsafeBytes { src in
+                    let from = src.baseAddress! + 12
                     for row in 0..<h where y + row < height && x + w <= width {
-                        memcpy(frame.bytes + ((y + row) * width + x) * 4, src.baseAddress! + offset + row * w * 4, w * 4)
+                        let line = frame.bytes.assumingMemoryBound(to: UInt32.self) + (y + row) * width + x
+                        if deep { memcpy(line, from + row * w * 4, w * 4) }
+                        else { let p = (from + row * w * 2).assumingMemoryBound(to: UInt8.self); for col in 0..<w { line[col] = Self.wide(p[col * 2], p[col * 2 + 1]) } }
                     }
                 }
-                read += w * h * 4
+                drop(12 + length); rectsLeft -= 1
             case 1:
+                guard buffer.count >= 16 else { return false }
                 painted = true
-                copyRect(fromX: be16(buffer, read), fromY: be16(buffer, read + 2), x: x, y: y, w: w, h: h)
-                read += 4
-            case 16:
-                painted = true
-                let length = be32(buffer, read)
-                let offset = read + 4
-                let ok = buffer.withUnsafeBytes { src -> Bool in
-                    guard let pixels = inflater.inflate(src.baseAddress! + offset, count: length) else { return false }
-                    return drawZRLE(pixels, x: x, y: y, w: w, h: h)
-                }
-                guard ok else { fail("Unexpected screen data."); return false }
-                read = offset + length
-            default:
+                copyRect(fromX: be16(buffer, 12), fromY: be16(buffer, 14), x: x, y: y, w: w, h: h)
+                drop(16); rectsLeft -= 1
+            case -239:
+                // The pointer's picture, x and y being its hotspot: pixels, then a bitmask of which ones show.
+                let length = w * h * bytesPerPixel, maskRow = (w + 7) / 8
+                guard buffer.count >= 12 + length + maskRow * h else { return false }
+                let image = buffer.withUnsafeBytes { src in Self.cursorImage(src.baseAddress! + 12, mask: src.baseAddress! + 12 + length, w: w, h: h, maskRow: maskRow, deep: deep) }
+                events.append(.cursor(image, CGPoint(x: x, y: y)))
+                drop(12 + length + maskRow * h); rectsLeft -= 1
+            case -223:
                 // The Mac changed resolution: a new picture follows.
                 width = w; height = h
                 frame = FrameBuffer(width: width, height: height)
                 events.append(.resized(w, h))
                 resized = true
+                drop(12); rectsLeft -= 1
+            default:
+                fail("Unexpected screen data."); return false
             }
         }
-        buffer = Data(buffer.dropFirst(read))
+        // The whole update is in.
+        inUpdate = false
         // An update that only changed the pointer's picture leaves the screen's picture as it was.
-        if painted || resized || count == 0 {
+        if painted || resized || empty {
             finished()
             events.append(.drew)
+            if countingFirst, painted { mark { t, now in if t.firstPixels == nil { t.firstPixels = now } } }
+            // Whole once the full-screen answer is in: with requests already waiting, the Mac answers small changes (the
+            // menu bar, its "being controlled" notice) before the whole screen, so painted area alone said whole too soon.
+            if countingFirst, wholeSeen || paintedArea >= width * height * 3 {
+                countingFirst = false
+                let bytes = firstUpdateBytes - buffer.count, began = firstStreamStart
+                mark { t, now in
+                    t.firstPicture = now; t.firstBytes = bytes
+                    if t.throughput == nil, let began { t.throughput = Double(bytes) / max(CFAbsoluteTimeGetCurrent() - began, 0.001) }
+                }
+            }
         }
         // One answered, one more asked for, so the same number always wait. After a resize the whole new picture.
         request(incremental: !resized)
         return true
     }
-    // BGRA (our pixel format) and a 1-bit mask, most significant bit first, into an image with real transparency.
-    // An empty one (0 × 0) means the Mac hides its pointer.
-    static func cursorImage(_ pixels: UnsafeRawPointer, mask: UnsafeRawPointer, w: Int, h: Int, maskRow: Int) -> CGImage? {
+
+    // Inflates what has arrived of the current ZRLE rectangle and draws every tile that's complete. False when it needs more.
+    private func streamZRLE() -> Bool {
+        guard var s = streaming else { return true }
+        let n = min(buffer.count, s.left)
+        if n > 0 {
+            let ok = buffer.withUnsafeBytes { src -> Bool in
+                guard let out = inflater.inflate(src.baseAddress!, count: n) else { return false }
+                inflated.append(contentsOf: out)
+                return true
+            }
+            guard ok else { fail("Unexpected screen data."); return false }
+            drop(n); s.left -= n
+        }
+        let result = inflated.withUnsafeBufferPointer { drawTiles($0, &s) }
+        if result == .bad { fail("Unexpected screen data."); return false }
+        // Drawn data is let go now and then, not on every tile.
+        if inflatedAt > 1 << 18 { inflated.removeFirst(inflatedAt); inflatedAt = 0 }
+        let done = s.tileY >= s.h
+        if done {
+            guard s.left == 0 else { fail("Unexpected screen data."); return false }
+            streaming = nil; rectsLeft -= 1
+            if s.w * s.h >= width * height * 3 / 4 { wholeSeen = true }
+            if let big = bigStart {
+                bigStart = nil
+                let span = CFAbsoluteTimeGetCurrent() - big.0
+                lock.lock(); times.throughput = Double(big.1) / max(span, 0.001); lock.unlock()
+            }
+            return true
+        }
+        if s.left == 0 { fail("Unexpected screen data."); return false }
+        streaming = s
+        // A big rectangle (the first picture, a page scrolled on a slow link) is shown as it fills in, about 15 times a
+        // second, rather than all at once after its last byte.
+        if Self.progressive, s.w * s.h >= width * height / 4, s.tileY > shownRows {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastShown >= 0.066 {
+                lastShown = now; shownRows = s.tileY
+                finished()
+                events.append(.drew)
+                if countingFirst { mark { t, at in if t.firstPixels == nil { t.firstPixels = at } } }
+            }
+        }
+        return false
+    }
+
+    // The build's way to film the old behaviour beside the new: "screenNoStream" shows a picture only once it's whole.
+    static let progressive = !UserDefaults.standard.bool(forKey: "screenNoStream")
+    private enum TileResult { case drew, needMore, bad }
+    // ZRLE: 64-pixel tiles in reading order, each solid, raw, palette or run-length, in compact pixels (3-byte blue,
+    // green, red at 32-bit; 2-byte 5-6-5 at 16-bit). Draws every complete tile from where it left off; a tile whose data
+    // isn't all in yet is drawn again from its start next time.
+    private func drawTiles(_ data: UnsafeBufferPointer<UInt8>, _ s: inout Streaming) -> TileResult {
+        while s.tileY < s.h {
+            let th = min(64, s.h - s.tileY), tw = min(64, s.w - s.tileX)
+            var at = inflatedAt
+            switch drawTile(data, at: &at, x: s.x + s.tileX, y: s.y + s.tileY, tw: tw, th: th) {
+            case .bad: return .bad
+            case .needMore: return .needMore
+            case .drew:
+                inflatedAt = at
+                s.tileX += tw
+                if s.tileX >= s.w { s.tileX = 0; s.tileY += th }
+            }
+        }
+        return .drew
+    }
+    private func drawTile(_ data: UnsafeBufferPointer<UInt8>, at: inout Int, x: Int, y: Int, tw: Int, th: Int) -> TileResult {
+        let out = frame.bytes.assumingMemoryBound(to: UInt32.self)
+        let end = data.count, size = cpixel, deep = self.deep
+        @inline(__always) func color(_ i: Int) -> UInt32 {
+            deep ? UInt32(data[i]) | UInt32(data[i + 1]) << 8 | UInt32(data[i + 2]) << 16 | 0xff00_0000 : Self.wide(data[i], data[i + 1])
+        }
+        guard at < end else { return .needMore }
+        let kind = Int(data[at]); at += 1
+        let origin = y * width + x
+        let total = tw * th
+        switch kind {
+        case 0:
+            // Row by row, without a division per pixel: these are most of a picture that's moving.
+            guard at + total * size <= end else { return .needMore }
+            for row in 0..<th {
+                let line = out + origin + row * width
+                for col in 0..<tw { line[col] = color(at); at += size }
+            }
+        case 1:
+            guard at + size <= end else { return .needMore }
+            let c = color(at); at += size
+            for row in 0..<th { (out + origin + row * width).update(repeating: c, count: tw) }
+        case 2...16:
+            guard at + kind * size <= end else { return .needMore }
+            var palette = [UInt32](); palette.reserveCapacity(kind)
+            for _ in 0..<kind { palette.append(color(at)); at += size }
+            let bits = kind == 2 ? 1 : kind <= 4 ? 2 : 4
+            let rowBytes = (tw * bits + 7) / 8
+            guard at + rowBytes * th <= end else { return .needMore }
+            for row in 0..<th {
+                var byte = 0, left = 0
+                for col in 0..<tw {
+                    if left == 0 { byte = Int(data[at]); at += 1; left = 8 }
+                    left -= bits
+                    let index = (byte >> left) & ((1 << bits) - 1)
+                    guard index < kind else { return .bad }
+                    out[origin + row * width + col] = palette[index]
+                }
+            }
+        case 128, 130...255:
+            var palette = [UInt32]()
+            if kind != 128 {
+                guard at + (kind - 128) * size <= end else { return .needMore }
+                for _ in 0..<(kind - 128) { palette.append(color(at)); at += size }
+            }
+            var i = 0, col = 0
+            var line = out + origin
+            @inline(__always) func put(_ c: UInt32) {
+                line[col] = c; col += 1; i += 1
+                if col == tw { col = 0; line += width }
+            }
+            while i < total {
+                var c: UInt32, run = 1
+                if kind == 128 {
+                    guard at + size <= end else { return .needMore }
+                    c = color(at); at += size
+                } else {
+                    guard at < end else { return .needMore }
+                    let v = Int(data[at]); at += 1
+                    guard v & 127 < palette.count else { return .bad }
+                    c = palette[v & 127]
+                    if v & 128 == 0 { put(c); continue }
+                }
+                // A run's length is 1 plus every following byte, up to and including the first under 255.
+                while true {
+                    guard at < end else { return .needMore }
+                    let more = Int(data[at]); at += 1
+                    run += more
+                    if more != 255 { break }
+                }
+                guard i + run <= total else { return .bad }
+                for _ in 0..<run { put(c) }
+            }
+        default: return .bad
+        }
+        return .drew
+    }
+    // A 16-bit 5-6-5 pixel (little-endian) as the 32-bit BGRX the picture is kept in, from a table made once.
+    private static let fiveSixFive: [UInt32] = (0..<65536).map { v in
+        let r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31
+        return UInt32((b << 3 | b >> 2) | (g << 2 | g >> 4) << 8 | (r << 3 | r >> 2) << 16) | 0xff00_0000
+    }
+    @inline(__always) static func wide(_ lo: UInt8, _ hi: UInt8) -> UInt32 { fiveSixFive[Int(lo) | Int(hi) << 8] }
+
+    // The pointer's pixels (our pixel format) and a 1-bit mask, most significant bit first, into an image with real
+    // transparency. An empty one (0 × 0) means the Mac hides its pointer.
+    static func cursorImage(_ pixels: UnsafeRawPointer, mask: UnsafeRawPointer, w: Int, h: Int, maskRow: Int, deep: Bool = true) -> CGImage? {
         guard w > 0, h > 0 else { return nil }
         var out = [UInt8](repeating: 0, count: w * h * 4)
         let px = pixels.assumingMemoryBound(to: UInt8.self), mk = mask.assumingMemoryBound(to: UInt8.self)
@@ -814,7 +1058,12 @@ final class ScreenDecoder: @unchecked Sendable {
                 let shows = mk[row * maskRow + col / 8] & (0x80 >> UInt8(col % 8)) != 0
                 guard shows else { continue }
                 let i = (row * w + col) * 4
-                out[i] = px[i + 2]; out[i + 1] = px[i + 1]; out[i + 2] = px[i]; out[i + 3] = 255
+                if deep { out[i] = px[i + 2]; out[i + 1] = px[i + 1]; out[i + 2] = px[i] }
+                else {
+                    let c = wide(px[(row * w + col) * 2], px[(row * w + col) * 2 + 1])
+                    out[i] = UInt8((c >> 16) & 255); out[i + 1] = UInt8((c >> 8) & 255); out[i + 2] = UInt8(c & 255)
+                }
+                out[i + 3] = 255
             }
         }
         guard let provider = CGDataProvider(data: Data(out) as CFData) else { return nil }
@@ -830,89 +1079,4 @@ final class ScreenDecoder: @unchecked Sendable {
             memmove(frame.bytes + ((y + row) * width + x) * 4, frame.bytes + ((fromY + row) * width + fromX) * 4, w * 4)
         }
     }
-    // ZRLE: 64-pixel tiles in reading order, each solid, raw, palette or run-length, in 3-byte blue, green, red.
-    private func drawZRLE(_ data: UnsafeBufferPointer<UInt8>, x: Int, y: Int, w: Int, h: Int) -> Bool {
-        guard x + w <= width, y + h <= height else { return false }
-        let out = frame.bytes.assumingMemoryBound(to: UInt32.self)
-        var at = 0
-        let end = data.count
-        func pixel() -> UInt32? {
-            guard at + 3 <= end else { return nil }
-            defer { at += 3 }
-            return UInt32(data[at]) | UInt32(data[at + 1]) << 8 | UInt32(data[at + 2]) << 16 | 0xff00_0000
-        }
-        var tileY = 0
-        while tileY < h {
-            let th = min(64, h - tileY)
-            var tileX = 0
-            while tileX < w {
-                let tw = min(64, w - tileX)
-                guard at < end else { return false }
-                let kind = Int(data[at]); at += 1
-                let origin = (y + tileY) * width + x + tileX
-                let total = tw * th
-                func put(_ i: Int, _ c: UInt32) { out[origin + (i / tw) * width + i % tw] = c }
-                switch kind {
-                case 0:
-                    // Row by row, without a division per pixel: these are most of a picture that's moving.
-                    guard at + total * 3 <= end else { return false }
-                    for row in 0..<th {
-                        let line = out + origin + row * width
-                        for col in 0..<tw {
-                            line[col] = UInt32(data[at]) | UInt32(data[at + 1]) << 8 | UInt32(data[at + 2]) << 16 | 0xff00_0000
-                            at += 3
-                        }
-                    }
-                case 1:
-                    guard let c = pixel() else { return false }
-                    for row in 0..<th { (out + origin + row * width).update(repeating: c, count: tw) }
-                case 2...16:
-                    var palette = [UInt32](); palette.reserveCapacity(kind)
-                    for _ in 0..<kind { guard let c = pixel() else { return false }; palette.append(c) }
-                    let bits = kind == 2 ? 1 : kind <= 4 ? 2 : 4
-                    for row in 0..<th {
-                        var byte = 0, left = 0
-                        for col in 0..<tw {
-                            if left == 0 { guard at < end else { return false }; byte = Int(data[at]); at += 1; left = 8 }
-                            left -= bits
-                            let index = (byte >> left) & ((1 << bits) - 1)
-                            guard index < kind else { return false }
-                            out[origin + row * width + col] = palette[index]
-                        }
-                    }
-                case 128, 130...255:
-                    var palette = [UInt32]()
-                    if kind != 128 { for _ in 0..<(kind - 128) { guard let c = pixel() else { return false }; palette.append(c) } }
-                    var i = 0
-                    while i < total {
-                        var color: UInt32, run = 1
-                        if kind == 128 {
-                            guard let c = pixel() else { return false }
-                            color = c
-                        } else {
-                            guard at < end else { return false }
-                            let v = Int(data[at]); at += 1
-                            guard v & 127 < palette.count else { return false }
-                            color = palette[v & 127]
-                            if v & 128 == 0 { put(i, color); i += 1; continue }
-                        }
-                        // A run's length is 1 plus every following byte, up to and including the first under 255.
-                        while true {
-                            guard at < end else { return false }
-                            let more = Int(data[at]); at += 1
-                            run += more
-                            if more != 255 { break }
-                        }
-                        guard i + run <= total else { return false }
-                        for _ in 0..<run { put(i, color); i += 1 }
-                    }
-                default: return false
-                }
-                tileX += tw
-            }
-            tileY += th
-        }
-        return true
-    }
-
 }
