@@ -243,6 +243,7 @@ struct HistoryView: View {
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
         .navigationTitle(metric.title)
+        .toolbarVisibility(.visible, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .animation(.easeOut(duration: 0.2), value: hours)
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }
@@ -279,6 +280,7 @@ struct NowDot: View {
 // glyph and its fill say which way it is; a tap on its own only wiggles it and says "Hold" in place.
 struct DisplayHoldButton: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var store: LiveStore
     @State private var pressing = false
     @State private var fill: CGFloat = 0
     @State private var wanted: Bool?    // what was asked for, until the Mac agrees
@@ -286,7 +288,9 @@ struct DisplayHoldButton: View {
     @State private var hint = false
     @State private var wiggles = 0
     @State private var failure: String?
-    var isOn: Bool { wanted ?? model.status?.displayOn ?? (model.status?.screen != "display off") }
+    // What was just asked for, briefly; otherwise the Mac's own state, read every second, then every 10 seconds.
+    var reported: Bool? { store.live?.displayOn ?? model.status?.displayOn }
+    var isOn: Bool { wanted ?? reported ?? (model.status?.screen != "display off") }
     static let hold = 0.4, settle = 0.12
     var body: some View {
         // Dimmed in its own colours while the Mac can't be reached: an opacity laid over it from outside didn't reach
@@ -389,11 +393,9 @@ struct DisplayHoldButton: View {
                 if failure == problem { withAnimation(Motion.quick) { failure = nil } }
                 return
             }
-            // The Mac takes a moment to change and to report it.
-            for _ in 0..<4 where model.status?.displayOn != next {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                await model.refresh()
-            }
+            // The Mac takes a moment to change and to report it: held for at most 6 s, then the Mac's word stands, whatever
+            // it is, so the key never keeps a wish that didn't happen.
+            for _ in 0..<12 where reported != next { try? await Task.sleep(nanoseconds: 500_000_000) }
             wanted = nil
         }
     }

@@ -99,6 +99,9 @@ struct Status: Decodable {
 // The numbers that change every second.
 struct LiveStatus: Decodable, Equatable {
     let uptime: Double; let load: [Double]; let cpu: Status.CPU; let mem: Status.Memory; let net: Status.Network; let hist: Status.History; let temps: [Status.Temp]?
+    // The display's real state each second, so the Display key follows the Mac by itself (Richard, 2026-11-07: "should
+    // self update not requiring refresh").
+    var displayOn: Bool?
 }
 // Compared, so a reading that's the same as the last one doesn't redraw the live tiles.
 extension Status.CPU: Equatable {}
