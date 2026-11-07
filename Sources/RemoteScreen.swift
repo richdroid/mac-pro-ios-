@@ -279,6 +279,13 @@ final class RemoteScreen: ObservableObject {
         guard running, socket === task else { return false }
         for e in events { apply(e) }
         if drew, !hasPicture { hasPicture = true }
+        // A picture from this connection is the proof it's up: whatever the handshake's events said, the banner goes.
+        // "Reconnecting…" stayed up over a live, working screen (Richard, 2026-11-07: "reconnecting still shows when im
+        // connected").
+        if drew {
+            if phase == .reconnecting || phase == .connecting { phase = .connected }
+            if slowReconnect || slowTimer != nil { slowTimer?.cancel(); slowTimer = nil; slowReconnect = false }
+        }
         return running && socket === task
     }
     // {"pixelScroll":true} when the bridge's input helper can post smooth scrolls. False once this socket isn't wanted.
