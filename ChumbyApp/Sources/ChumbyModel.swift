@@ -320,6 +320,10 @@ final class ChumbyModel: ObservableObject {
         if let w = skipWanted {
             if shown.skipped == w.skipped || Date() > w.until { skipWanted = nil } else { shown.skipped = w.skipped }
         }
+        // A channel just chosen stays shown until the Chumby reports it, or 20 s pass: a switch takes the panel longer than
+        // the 5 s hold, and the old channel came back in between, so the switcher looked like it hadn't worked (Richard,
+        // 2026-11-07: "channel switcher in home screen is buggy or doesnt work").
+        if let c = chosenChannel, Date().timeIntervalSince(c.at) < 20, shown.channel != c.name { shown.channel = c.name }
         state = shown
     }
     private var skipWanted: (skipped: SkippedAlarm?, until: Date)?

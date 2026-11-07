@@ -785,9 +785,14 @@ struct HomeTab: View {
     // the model's, so the Channels editor moves to it as well.
     var channelName: String { !model.state.channel.isEmpty ? model.state.channel : model.sys.chan }
     var channelRow: some View {
+        // Buttons, not a picker: a picker sends nothing when the one tapped is the one it thinks is on, and with a stale
+        // reading that was the channel he wanted, so the tap did nothing. Every tap goes to the Chumby; the tick marks
+        // the one showing.
         Menu {
-            Picker("Channel", selection: Binding(get: { channelName }, set: { model.playChannel($0, id: "homeChannel") })) {
-                ForEach(model.state.channelNames, id: \.self) { Text($0).tag($0) }
+            ForEach(model.state.channelNames, id: \.self) { name in
+                Button { model.playChannel(name, id: "homeChannel") } label: {
+                    if name == channelName { Label(name, systemImage: "checkmark") } else { Text(name) }
+                }
             }
         } label: {
             HStack(spacing: 14) {
