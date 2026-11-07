@@ -469,6 +469,10 @@ struct AlarmsTab: View {
     @State private var posed = false
     @AppStorage("missedDismissed") private var dismissedRaw = ""
     struct EditTarget: Identifiable { let alarm: Alarm?; var id: String { alarm?.key ?? "new" } }
+    // Each editor grows out of the row that opened it and shrinks back into it, the iOS zoom, rather than a sheet rising
+    // from the foot with no tie to what was tapped (Richard, 2026-11-07: "the animation to edit like the calendar alarm
+    // sucks").
+    @Namespace private var editNS
     struct DayTarget: Identifiable { let id: String }
 
     var dismissed: Set<String> { Set(dismissedRaw.split(separator: "\n").map(String.init)) }
@@ -585,9 +589,9 @@ struct AlarmsTab: View {
         .animation(.snappy, value: model.napDue)
         .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
         // Pushed only with the bars across, where the system's own Back is used.
-        .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !rail }, set: { model.alarmsPage = $0 })) { CalendarWakeSettings() }
-        .sheet(item: $editing) { t in AlarmEditor(original: t.alarm).environmentObject(model) }
-        .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model) }
+        .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !rail }, set: { model.alarmsPage = $0 })) { CalendarWakeSettings().zoomed(from: "calendar", in: editNS) }
+        .sheet(item: $editing) { t in AlarmEditor(original: t.alarm).environmentObject(model).zoomed(from: t.id, in: editNS) }
+        .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model).zoomed(from: d.id, in: editNS) }
         .refreshable { await model.loadState() }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
         .onChange(of: wide) { _, _ in pane = .schedule }
@@ -709,6 +713,7 @@ struct AlarmsTab: View {
                          toggle: Binding(get: { a.isOn }, set: { model.change(.toggle(a, $0)) })) {
                     MarkNote(mark: a.key)
                 }
+                .zoomSource(a.key, in: editNS)
             }
             // The end of the card: one row, tapped anywhere, as Channels' Add widgets. Nothing floats over the page, so
             // nothing can cover the Nap chips under it (Richard's Alarms shot, 2026-11-05).
@@ -719,6 +724,7 @@ struct AlarmsTab: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Add an alarm")
+            .zoomSource("new", in: editNS)
         } header: { SectionHead(icon: "alarm", text: "My alarms", color: ChumbyPalette.acc(scheme == .dark)) } footer: {
             if model.state.pending { Text("The Chumby is putting your last change in place.") }
         }
@@ -742,6 +748,7 @@ struct AlarmsTab: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("Opens calendar settings")
+        .zoomSource("calendar", in: editNS)
         .listRowBackground(wide && pane == .settings ? AnyView(ChumbyPalette.cal(scheme == .dark).opacity(0.18)) : AnyView(GlassRow()))
     }
     var calendar: some View {
@@ -770,6 +777,7 @@ struct AlarmsTab: View {
                         }
                         if status == .stillOn && !wake.running && !wake.queued { RowNote(icon: "exclamationmark.circle.fill", text: "Still on the Chumby; it’ll ring") }
                     }
+                    .zoomSource(item.key, in: editNS)
                 }
             } else if wake.rules.enabled {
                 Text("Chumby can’t see your calendar, so these can’t follow it.").foregroundStyle(.secondary)
@@ -1135,5 +1143,23 @@ struct AlarmEditor: View {
             saving = false
             if let why { problem = why } else { finish() }
         }
+    }
+}
+
+// The iOS zoom between a row and what it opens: the row is the source, the sheet or page grows out of it.
+extension View {
+    @ViewBuilder func zoomSource(_ id: String, in ns: Namespace.ID) -> some View {
+        #if os(iOS)
+        matchedTransitionSource(id: id, in: ns)
+        #else
+        self
+        #endif
+    }
+    @ViewBuilder func zoomed(from id: String, in ns: Namespace.ID) -> some View {
+        #if os(iOS)
+        navigationTransition(.zoom(sourceID: id, in: ns))
+        #else
+        self
+        #endif
     }
 }

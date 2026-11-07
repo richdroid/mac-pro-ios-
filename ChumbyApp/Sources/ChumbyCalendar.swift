@@ -555,6 +555,7 @@ struct CalendarSoundRow: View {
     var autoOpen = false
     @State private var editing = false
     @State private var opened = false
+    @Namespace private var editNS
     var body: some View {
         let r = wake.ringsWith(model.state)
         Button { if let openTemplate { openTemplate() } else { editing = true } } label: {
@@ -571,7 +572,8 @@ struct CalendarSoundRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: $editing) { AlarmEditor(calendarTemplate: true).environmentObject(model) }
+        .zoomSource("template", in: editNS)
+        .sheet(isPresented: $editing) { AlarmEditor(calendarTemplate: true).environmentObject(model).zoomed(from: "template", in: editNS) }
         .onAppear { if autoOpen && !opened && openTemplate == nil { opened = true; editing = true } }
     }
 }
