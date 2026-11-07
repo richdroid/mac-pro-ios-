@@ -194,7 +194,9 @@ struct RemoteScreenView: View {
             // With a real hinge the lid ends at it. Flat open there's none, and an imagined one at mid-height left black above
             // and below the picture (Richard, 2026-11-07: "still doesnt fill display"): the deck is laid from the foot up and
             // the picture takes everything above it, from the top of the display.
-            let real = fold.crease.flatMap { $0.width >= $0.height ? $0 : nil }
+            // Only a hinge that's actually bent: lying flat, the inactive crease still reports, and the picture stopped at it
+            // as if half open (2026-11-07: "it should react to how its folded").
+            let real = fold.folded ? fold.crease.flatMap { $0.width >= $0.height ? $0 : nil } : nil
             let padWanted = max(190, (h * 0.2).rounded()), kbWanted: CGFloat = 190
             let deckTop = h - bottom - 8 - padWanted - 10 - kbWanted - 8 - 32 - 8
             let c = real ?? CGRect(x: 0, y: max(deckTop - 2, h * 0.4), width: w, height: 0)
