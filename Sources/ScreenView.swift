@@ -10,6 +10,15 @@ enum MacKey {
     static let left: UInt32 = 0xff51, up: UInt32 = 0xff52, right: UInt32 = 0xff53, down: UInt32 = 0xff54
     static let space: UInt32 = 0x20, f4: UInt32 = 0xffc1, f11: UInt32 = 0xffc8
     static let modifiers: Set<UInt32> = [command, option, control, shift]
+    // What each key types with ⇧, as printed on a MacBook's keys: the symbols over the numbers and punctuation, capitals
+    // over the letters. Sent as the symbol itself with ⇧ held, as every VNC client does, so @ arrives as @ (Richard,
+    // 2026-11-07: "the keyboard should have the ability to use special characters and such like @").
+    static let shifted: [UInt32: UInt32] = {
+        var m: [UInt32: UInt32] = [:]
+        for (a, b) in zip("`1234567890-=[]\\;',./".unicodeScalars, "~!@#$%^&*()_+{}|:\"<>?".unicodeScalars) { m[a.value] = b.value }
+        for c in UnicodeScalar("a").value...UnicodeScalar("z").value { m[c] = c - 32 }
+        return m
+    }()
 }
 
 // A Mac trackpad's own gestures, as the phone's surfaces recognise them.
@@ -58,6 +67,7 @@ struct RemoteScreenView: View {
     // Checked without reading the clipboard, so no paste prompt appears just for opening the screen.
     @State private var phoneHasText = true
     @AppStorage("screenGesturesSeen") private var gesturesSeen = false
+    @AppStorage("screenRightClickLearned") private var rightClickLearned = false
     @State private var rate = (frames: 0, updates: 0)
     // Touch bookkeeping that changes on every sample, kept out of SwiftUI's state so a moving finger never rebuilds the view.
     @State private var pad = TrackpadBox()
@@ -99,11 +109,13 @@ struct RemoteScreenView: View {
                 screen.showSample()
                 Task { try? await Task.sleep(nanoseconds: 1_500_000_000); zoom = 2.2; pan = clampedPan(.zero) }
             case "screenmodlock": screen.showSample(); keys.demoLatches()
+            case "screenshift": screen.showSample(); keys.demoShift()
             case "screencursor":
                 screen.showSample()
                 pad.lastTouch = .greatestFiniteMagnitude
                 Task { try? await Task.sleep(nanoseconds: 1_500_000_000); screen.moveCoalesced(to: CGPoint(x: screen.size.width * 0.42, y: screen.size.height * 0.38)) }
             case "screentrace": screen.showSample(); ScreenTrace.write()
+            case "screenpinch": screen.showSample(); pinchDemo()
             case "screenclip":
                 screen.showSample()
                 copyState = .done; pasteState = .failed("Couldn’t reach the Mac")
@@ -202,7 +214,7 @@ struct RemoteScreenView: View {
             // Only a hinge that's actually bent: lying flat, the inactive crease still reports, and the picture stopped at it
             // as if half open (2026-11-07: "it should react to how its folded").
             let real = fold.folded ? fold.crease.flatMap { $0.width >= $0.height ? $0 : nil } : nil
-            let padWanted = max(190, (h * 0.2).rounded()), kbWanted: CGFloat = 190
+            let padWanted = macPad(keys: w - side * 2, room: .infinity).height, kbWanted: CGFloat = 190
             let deckTop = h - bottom - 8 - padWanted - 10 - kbWanted - 8 - 32 - 8
             let c = real ?? CGRect(x: 0, y: max(deckTop - 2, h * 0.4), width: w, height: 0)
             // The whole lid is the picture's space, filled edge to edge (the picture follows the pointer), never a fitted
@@ -221,9 +233,11 @@ struct RemoteScreenView: View {
                 p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: w - side * 2, height: 40)
             }
             let above = max(p.keyboard.maxY, p.modRow.maxY, p.fnRow.maxY) + 10
-            // All the base below the keys, as wide as the keys: room for two- and three-finger gestures (Richard,
-            // 2026-11-06: "the touchpad is too small to perform gestures"). It replaced a 16:10 pad capped at 72 %.
-            p.trackpad = CGRect(x: side, y: above, width: w - side * 2, height: max(h - bottom - 8 - above, 60))
+            // A MacBook's trackpad, centred under the keys with palm rest either side: as wide as the keys was "way too
+            // wide" (Richard, 2026-11-07), and the 16:10 pad at a fixed 72 % before it too small for gestures (2026-11-06),
+            // so it's a MacBook's own share of the keys and as tall as that shape allows.
+            let pad = macPad(keys: w - side * 2, room: max(h - bottom - 8 - above, 60))
+            p.trackpad = CGRect(x: ((w - pad.width) / 2).rounded(), y: above, width: pad.width, height: pad.height)
         case .closed:
             let pic = fitWidth(w, maxHeight: h * 0.5)
             p.picture = CGRect(x: (w - pic.width) / 2, y: top, width: pic.width, height: pic.height)
@@ -298,6 +312,16 @@ struct RemoteScreenView: View {
         return p
     }
 
+    // A MacBook Pro 14's trackpad against its keyboard: about 54 % of the keys' width, 1.56 wide to 1 high. Where the base
+    // is too short for that height, it keeps the height there is and widens to keep the room for gestures, never past
+    // 72 % of the keys.
+    static func macPad(keys: CGFloat, room: CGFloat) -> CGSize {
+        let w = (keys * 0.54).rounded(), hgt = (w / 1.56).rounded()
+        if hgt <= room { return CGSize(width: w, height: hgt) }
+        let short = max(room, 60)
+        return CGSize(width: min((keys * 0.72).rounded(), max((short * 1.56).rounded(), w)), height: short)
+    }
+
     @ViewBuilder func stage(_ p: ScreenPlan, area: CGSize) -> some View {
         ZStack(alignment: .topLeading) {
             place(canvas(always: p.kind != .flatLandscape && p.kind != .closedLandscape), p.picture)
@@ -305,6 +329,9 @@ struct RemoteScreenView: View {
             // and pinch zooms, so the whole screen is the control surface, not only the pad (Richard, 2026-11-06: "more
             // integrated control").
             if p.kind == .laptop || p.kind == .book || p.kind == .closed { place(pictureSurface, p.picture) }
+            // The first-use card sits over the picture's touch surface, so its Got it can be pressed: under it, the picture
+            // took the tap as a click on the Mac and the card could never be put away.
+            if showHint, screen.hasPicture { place(gestureHint, p.picture) }
             place(functionRow, p.fnRow)
             place(MacKeyboardView(keys: keys), p.keyboard)
             place(modifierRow, p.modRow)
@@ -330,7 +357,10 @@ struct RemoteScreenView: View {
         HStack(spacing: 5) {
             fnKey("esc", nil, "Escape") { keys.tap(MacKey.esc) }
             fnKey("", "rectangle.3.group", "Mission Control") { keys.tap(MacKey.up, with: [MacKey.control]) }
-            fnKey("", "macwindow", "App Exposé") { keys.tap(MacKey.down, with: [MacKey.control]) }
+            // Terminal, opened on the Mac. A window glyph here sent App Exposé, which he read as Terminal and got every window
+            // instead (Richard, 2026-11-07: "terminal button works like show all windows button"). App Exposé is still
+            // three fingers down.
+            fnKey("", "apple.terminal", "Open Terminal") { openTerminal() }
             fnKey("", "magnifyingglass", "Spotlight") { keys.tap(MacKey.space, with: [MacKey.command]) }
             fnKey("", "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() }
             Spacer(minLength: 6)
@@ -351,6 +381,28 @@ struct RemoteScreenView: View {
             .frame(minWidth: 30, maxWidth: 44, minHeight: 32).contentShape(Rectangle())
         }
         .buttonStyle(MacKeyStyle()).accessibilityLabel(a11y)
+    }
+    // The Mac opens it by name; a Mac that can't (an older dashboard) gets it through Spotlight, as he'd type it.
+    func openTerminal() {
+        let api = model.api
+        Task {
+            do { try await api.action("app-open", ["name": "Terminal"]) } catch {
+                keys.tap(MacKey.space, with: [MacKey.command])
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                typeText("Terminal\n")
+            }
+        }
+    }
+    // The build's check of a pinch on the picture: two fingers spreading from the middle to 1.8 times, then let go, so the
+    // shot shows the picture zoomed in and staying there (pose "screenpinch").
+    func pinchDemo() {
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            let c = CGPoint(x: canvasSize.width * 0.35, y: canvasSize.height * 0.4)
+            pinch(.began, 1, c)
+            for i in 1...20 { pinch(.changed, 1 + 0.8 * CGFloat(i) / 20, c); try? await Task.sleep(nanoseconds: 16_000_000) }
+            pinch(.ended, 1.8, c)
+        }
     }
     // A round tool on a dark glass, the size of the row it sits in.
     func toolButton(_ icon: String, _ a11y: String, on: Bool = false, tint: Color = .white, compact: Bool = false, action: @escaping () -> Void) -> some View {
@@ -546,6 +598,7 @@ struct RemoteScreenView: View {
                     },
                     onTwoFingerTap: { p in
                         bump()
+                        learnedRightClick()
                         screen.click(x: Int(macPoint(p).x), y: Int(macPoint(p).y), right: true)
                         keys.consume()
                         tick(.medium)
@@ -565,7 +618,6 @@ struct RemoteScreenView: View {
             }
             .overlay { status }
             .overlay(alignment: .topLeading) { if measuring { rateBadge } }
-            .overlay { if showHint, screen.hasPicture { gestureHint } }
             .clipped()
             .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0; applyFill() }
             .onChange(of: always, initial: true) { _, a in
@@ -682,7 +734,7 @@ struct RemoteScreenView: View {
             bump(); screen.hold(down)
             if !down { keys.consume() }
         case .rightClick:
-            bump(); screen.clickHere(right: true); keys.consume()
+            bump(); learnedRightClick(); screen.clickHere(right: true); keys.consume()
         case .haptic(let h): tick(h)
         }
     }
@@ -704,6 +756,7 @@ struct RemoteScreenView: View {
         if abs(clamped.width - pan.width) > 0.5 || abs(clamped.height - pan.height) > 0.5 { pan = clamped }
     }
     func tick(_ style: ScreenHaptic) { ScreenHaptics.play(style) }
+    func learnedRightClick() { if !rightClickLearned, model.pose.isEmpty { withAnimation(Motion.fade) { rightClickLearned = true } } }
 
     // MARK: First use
     // Once, the first time the screen opens: what the fingers do, in the Mac's own words. Gone for good on Got it.
@@ -786,6 +839,20 @@ struct RemoteScreenView: View {
             onSwipe: { swipe($0) }
         )
         .background(Color.clear.glassEffect(.regular.tint(.white.opacity(0.04)), in: shape))
+        // Until the first right click, the trackpad says how, quietly, in its middle (Richard, 2026-11-07: "idk how u do
+        // right clicking"). It goes for good the first time two fingers tap, here or on the picture.
+        .overlay {
+            if !rightClickLearned, !showHint {
+                VStack(spacing: 6) {
+                    Image(systemName: "hand.tap").font(.system(size: 20, weight: .regular))
+                    Text("Tap with two fingers to right-click").font(.footnote.weight(.medium)).multilineTextAlignment(.center)
+                }
+                .foregroundStyle(.white.opacity(0.42))
+                .padding(12)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        }
         // A hairline of light along its top edge, as on the aluminium.
         .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.22), .white.opacity(0.03)], startPoint: .top, endPoint: .bottom), lineWidth: 1).allowsHitTesting(false))
         .clipShape(shape)
@@ -1034,7 +1101,12 @@ enum ScreenHaptics {
     let screen: RemoteScreen
     private var pressing: [UInt32: (was: Latch?, used: Bool)] = [:]
     private var tapped: [UInt32: Date] = [:]
-    private var keyMods: [UInt32: [UInt32]] = [:]
+    private var keyMods: [UInt32: (mods: [UInt32], sent: UInt32)] = [:]
+    // A held key types again and again, as a Mac's does: after 0.42 s, about 18 a second, until the finger lifts (Richard,
+    // 2026-11-07: "i should be able to press a key and have it repeat ... like delete key"). The Mac's Screen Sharing
+    // doesn't repeat a key held from afar, so the phone does, as the key going up and down again under the held modifiers.
+    private var repeats: [UInt32: Task<Void, Never>] = [:]
+    static let repeatDelay: UInt64 = 420_000_000, repeatEvery: UInt64 = 55_000_000
     // ⌘ held down by ⌘Tab while the app switcher is open; let go when he's done browsing.
     private var switching = false
     private var switcherClose: Task<Void, Never>?
@@ -1052,15 +1124,28 @@ enum ScreenHaptics {
         used()
         if switching, sym != MacKey.tab { closeSwitcher() }
         let mods = screen.heldModifiers
+        // ⇧ alone gives the key's upper symbol; with ⌘, ⌥ or ⌃ too it's a shortcut, which goes by the key itself.
+        let shortcut = mods.contains { $0 == MacKey.command || $0 == MacKey.option || $0 == MacKey.control }
+        let sent = mods.contains(MacKey.shift) && !shortcut ? MacKey.shifted[sym] ?? sym : sym
         for m in mods { screen.keyDown(m) }
-        screen.keyDown(sym)
-        keyMods[sym] = mods
+        screen.keyDown(sent)
+        keyMods[sym] = (mods, sent)
+        repeats[sym]?.cancel()
+        repeats[sym] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.repeatDelay)
+            while !Task.isCancelled {
+                guard let self, self.keyMods[sym] != nil else { return }
+                self.screen.keyUp(sent); self.screen.keyDown(sent)
+                try? await Task.sleep(nanoseconds: Self.repeatEvery)
+            }
+        }
     }
     func release(_ sym: UInt32) {
         if MacKey.modifiers.contains(sym) { releaseModifier(sym); return }
-        guard let mods = keyMods.removeValue(forKey: sym) else { return }
-        screen.keyUp(sym)
-        for m in mods.reversed() { screen.keyUp(m) }
+        repeats.removeValue(forKey: sym)?.cancel()
+        guard let held = keyMods.removeValue(forKey: sym) else { return }
+        screen.keyUp(held.sent)
+        for m in held.mods.reversed() { screen.keyUp(m) }
         consume()
     }
     private func releaseModifier(_ m: UInt32) {
@@ -1122,13 +1207,17 @@ enum ScreenHaptics {
     }
     // Nothing stays down on the Mac once the screen goes away.
     func releaseAll() {
-        for (sym, mods) in keyMods { screen.keyUp(sym); for m in mods.reversed() { screen.keyUp(m) } }
+        for t in repeats.values { t.cancel() }
+        repeats = [:]
+        for (_, held) in keyMods { screen.keyUp(held.sent); for m in held.mods.reversed() { screen.keyUp(m) } }
         keyMods = [:]; pressing = [:]
         closeSwitcher()
         latched = [:]; sync()
     }
     // For the build's shot: ⌘ locked and ⇧ held for one key.
     func demoLatches() { latched = [MacKey.command: .locked, MacKey.shift: .once]; sync() }
+    // For the build's shot of the symbols: ⇧ held for one key.
+    func demoShift() { latched = [MacKey.shift: .once]; sync() }
 }
 
 // One key: down on touch-down, up on lift, and up if the touch is cancelled or the key goes away.
@@ -1139,12 +1228,23 @@ struct MacKeyCap: View {
     @ObservedObject var keys: MacKeyboard
     let a11y: String
     var size: CGFloat = 13
+    // The symbol ⇧ gives, printed over the key's own as on a MacBook; with ⇧ on it's the one that reads.
+    var alt: String? = nil
     @GestureState private var pressing = false
     var body: some View {
         let latch = keys.latched[sym]
         let lit = latch != nil && MacKey.modifiers.contains(sym)
         Group {
             if let icon { Image(systemName: icon).font(.system(size: size, weight: .semibold)) }
+            else if let alt {
+                let up = keys.shifted
+                VStack(spacing: 0) {
+                    Text(alt).font(.system(size: up ? size : size * 0.72, weight: .semibold)).opacity(up ? 1 : 0.55)
+                    Text(label).font(.system(size: up ? size * 0.72 : size, weight: .semibold)).opacity(up ? 0.55 : 1)
+                }
+                .lineLimit(1).minimumScaleFactor(0.6)
+                .animation(Motion.fade, value: up)
+            }
             else { Text(keys.shifted && label.count == 1 ? label.uppercased() : label).font(.system(size: size, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.6) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1169,6 +1269,11 @@ struct MacKeyCap: View {
 struct MacKeyboardView: View {
     @ObservedObject var keys: MacKeyboard
     struct K { var label: String; var sym: UInt32; var weight: CGFloat = 1; var icon: String? = nil; var a11y: String? = nil }
+    // The printed upper symbol for a key that has one besides its capital.
+    static func alt(_ sym: UInt32) -> String? {
+        guard let up = MacKey.shifted[sym], !(0x61...0x7a).contains(sym), let u = UnicodeScalar(up) else { return nil }
+        return String(Character(u))
+    }
     static func chars(_ s: String) -> [K] { s.map { K(label: String($0), sym: $0.unicodeScalars.first!.value) } }
     static let rows: [[K]] = [
         chars("`1234567890-=") + [K(label: "", sym: MacKey.delete, weight: 1.5, icon: "delete.left", a11y: "Delete")],
@@ -1186,7 +1291,8 @@ struct MacKeyboardView: View {
         }
     }
     func cap(_ k: K, width: CGFloat) -> some View {
-        MacKeyCap(label: k.label, icon: k.icon, sym: k.sym, keys: keys, a11y: k.a11y ?? k.label, size: k.label.count > 1 ? 11 : 15)
+        MacKeyCap(label: k.label, icon: k.icon, sym: k.sym, keys: keys, a11y: k.a11y ?? k.label, size: k.label.count > 1 ? 11 : 15,
+                  alt: k.icon == nil && k.label.count == 1 ? Self.alt(k.sym) : nil)
             .frame(width: max(width, 0))
     }
     func row(_ ks: [K], width: CGFloat, gap: CGFloat) -> some View {
