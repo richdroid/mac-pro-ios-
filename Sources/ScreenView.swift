@@ -1694,11 +1694,20 @@ struct CursorOverlay: UIViewRepresentable {
         weak var pad: TrackpadBox?
         private let pointer = CALayer()
         private var hideTimer: Timer?
+        // The Mac's own arrow, black with its white edge, for when the Mac hasn't sent its pointer's picture yet (it only
+        // sends one when the shape changes). Drawn, not a symbol: a white SF arrow wasn't the Mac's (Richard, 2026-11-07:
+        // "i want the mac cursor maybe bigger but not that monstrosity").
+        static let arrowSize = CGSize(width: 19, height: 28), arrowHot = CGPoint(x: 2.5, y: 2.5)
         private static let arrow: CGImage? = {
-            // A symbol is drawn, not a bitmap, so it's drawn once into one.
-            let config = UIImage.SymbolConfiguration(pointSize: 20, weight: .regular)
-            guard let symbol = UIImage(systemName: "cursorarrow", withConfiguration: config)?.withTintColor(.white, renderingMode: .alwaysOriginal) else { return nil }
-            return UIGraphicsImageRenderer(size: symbol.size).image { _ in symbol.draw(at: .zero) }.cgImage
+            let f = UIGraphicsImageRendererFormat(); f.scale = 3
+            return UIGraphicsImageRenderer(size: arrowSize, format: f).image { ctx in
+                let k: CGFloat = 1.12
+                let pts: [CGPoint] = [(2, 2), (2, 19.5), (6.4, 15.3), (9.4, 22.4), (12.3, 21.2), (9.4, 14.3), (15.4, 14.3)].map { CGPoint(x: $0.0 * k, y: $0.1 * k) }
+                let path = UIBezierPath(); path.move(to: pts[0]); pts.dropFirst().forEach { path.addLine(to: $0) }; path.close()
+                path.lineJoin = .round
+                UIColor.white.setStroke(); path.lineWidth = 2.6; path.stroke()
+                UIColor.black.setFill(); path.fill()
+            }.cgImage
         }()
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -1714,6 +1723,8 @@ struct CursorOverlay: UIViewRepresentable {
             pointer.contents = image ?? Self.arrow
             CATransaction.commit()
         }
+        // Mac pixels to points for the pointer: the picture's own scale, half again larger, between 0.55 and 1.
+        var pointerScale: CGFloat { min(1, max(0.55, map.scale * 1.5)) }
         func place(_ m: CGPoint) {
             let at = map.point(m)
             let size: CGSize, hot: CGPoint
@@ -1721,12 +1732,15 @@ struct CursorOverlay: UIViewRepresentable {
                 // The Mac's cursor at the picture's scale, but never larger than it is on the Mac itself (one Mac pixel to a
                 // point), and never more than a normal arrow: zoomed or filled, it grew with the picture, and the Mac's
                 // shake-to-find made it huge (Richard, 2026-11-06: "a huge cursor looks like shit").
+                // In proportion to the picture, as the Mac draws it, but half again larger so it reads on a phone, and
+                // never more than the Mac's own size: an oversized one (shake-to-find) is brought back to a normal arrow's.
                 let side = CGFloat(max(image.width, image.height, 1))
-                let k = min(map.scale, 1) * (side > 48 ? 32 / side : 1)
+                let k = pointerScale * (side > 48 ? 26 / side : 1)
                 size = CGSize(width: CGFloat(image.width) * k, height: CGFloat(image.height) * k)
                 hot = CGPoint(x: hotspot.x * k, y: hotspot.y * k)
             } else {
-                size = CGSize(width: 16, height: 20); hot = CGPoint(x: 3, y: 2)
+                let k = pointerScale
+                size = CGSize(width: Self.arrowSize.width * k, height: Self.arrowSize.height * k); hot = CGPoint(x: Self.arrowHot.x * k, y: Self.arrowHot.y * k)
             }
             CATransaction.begin(); CATransaction.setDisableActions(true)
             pointer.frame = CGRect(x: at.x - hot.x, y: at.y - hot.y, width: size.width, height: size.height)
