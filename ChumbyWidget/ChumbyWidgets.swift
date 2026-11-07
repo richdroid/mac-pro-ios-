@@ -102,7 +102,9 @@ struct ChumbyProvider: AppIntentTimelineProvider {
                 if e.reachable, let want = chumbyNightWanted() { e.sys.night = want ? 1 : 0 }
                 if e.reachable { try? Data().write(to: Self.seenFile) }
             } catch ChumbyError.deviceDown { e.deviceDown = true; continue } catch { continue }
-            if e.reachable, let r = try? await api.raw("state"),
+            // The Mac's copy of the alarms can be many minutes old by the time a widget asks (a skip made on the Chumby, say),
+            // so an old one is asked for again rather than drawn as it is.
+            if e.reachable, let r = try? await api.recent("state"),
                (try? JSONSerialization.jsonObject(with: r.data) as? [String: Any])?["ok"] as? Bool == true,
                let st = try? JSONDecoder().decode(ChumbyState.self, from: r.data) {
                 state = st

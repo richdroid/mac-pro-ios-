@@ -10,8 +10,10 @@ struct ChumbyNow {
     var night = false
     static func read() async -> ChumbyNow? {
         guard let both = try? await chumbyTry({ api -> (Sys, ChumbyState?) in
-            let sys = try JSONDecoder().decode(Sys.self, from: try await api.raw("sys").data)
-            let st = try? JSONDecoder().decode(ChumbyState.self, from: try await api.raw("state").data)
+            // Not the Mac's old copy as it stands: Control Center asks after a quiet spell, and a skip or night mode set on
+            // the Chumby itself would show the state from before it.
+            let sys = try JSONDecoder().decode(Sys.self, from: try await api.recent("sys").data)
+            let st = try? JSONDecoder().decode(ChumbyState.self, from: try await api.recent("state").data)
             return (sys, st)
         }) else { return nil }
         var n = ChumbyNow(night: chumbyNightWanted() ?? (both.0.night == 1))

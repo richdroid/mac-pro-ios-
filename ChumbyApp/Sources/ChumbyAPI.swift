@@ -281,6 +281,17 @@ actor ChumbyAPI {
     }
     // The Mac keeps answering with its last copy while the Chumby is frozen, and that copy can be hours old.
     // It fetches a new one on being asked, so give it a moment; a Chumby that can't supply one is down.
+    // For the widgets and controls, which read after a quiet spell: the Mac's copy can then be many minutes old (a=state
+    // came back 21 minutes old on 2026-11-07 while a=sys was 2 s old), and asking is what starts its refresh. So an old
+    // copy is asked for again a couple of times, and the newest one had is used either way, never an error for its age.
+    func recent(_ action: String) async throws -> (data: Data, age: Double) {
+        var r = try await raw(action)
+        for _ in 0..<3 where r.age >= 30 {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            if let n = try? await raw(action), n.age < r.age { r = n }
+        }
+        return r
+    }
     func fresh(_ action: String) async throws -> Data {
         var r = try await raw(action)
         for _ in 0..<4 where r.age >= 30 {
