@@ -265,7 +265,7 @@ struct UpdatesSection: View {
             HStack(spacing: 14) {
                 AppIcon(app: a, size: 58)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(a.name).font(.headline).lineLimit(1).minimumScaleFactor(0.8)
+                    Text(a.name).font(.headline)
                     // Folded, the column between the icon and the capsule is about 150 pt: each line fits whole, shrinking a
                     // little rather than being cut off.
                     Text(Self.when(a)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
@@ -275,6 +275,8 @@ struct UpdatesSection: View {
                         Text("On home Wi-Fi").font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                     }
                 }
+                // As tall as its lines, so a third line never shrinks the others; only a narrow column scales them.
+                .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 button(a)
             }
