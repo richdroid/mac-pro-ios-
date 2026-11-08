@@ -261,9 +261,9 @@ struct UpdatesSection: View {
     }
 
     func row(_ a: Status.SeedApp) -> some View {
-        Button { model.appHistory = a.file } label: { rowBody(a) }
-            // The app's row opens its Version History, as on the App Store; Update and "more" keep their own taps.
-            .buttonStyle(RowPressStyle())
+        // The app's row opens its Version History, as on the App Store; Update and "more" keep their own taps. The
+        // system's button style in the list, so the press is the row's own highlight inside the card's corners.
+        Button { model.appHistory = a.file } label: { rowBody(a).foregroundStyle(.primary) }
             .accessibilityHint("Opens its version history")
     }
     func rowBody(_ a: Status.SeedApp) -> some View {
@@ -516,7 +516,8 @@ struct VersionHistoryView: View {
         Group {
             // Open flat, the App Store's app page across the two panes: the app and what's new in its newest build on the
             // left, every build on the right, so no line runs across the fold (designer HOLD, CI ac93e14).
-            if panes { FoldSplit { pane(header: true, showBuilds: false) } right: { pane(header: false, showBuilds: true) } }
+            // The right pane goes on from the build after it, so the newest never shows twice side by side.
+            if panes { FoldSplit { pane(header: true, showBuilds: false) } right: { pane(header: false, showBuilds: true, afterNewest: true) } }
             else { pane(header: true, showBuilds: true) }
         }
         .background(groupedBackground.ignoresSafeArea())
@@ -526,7 +527,7 @@ struct VersionHistoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
     }
-    private func pane(header: Bool, showBuilds: Bool) -> some View {
+    private func pane(header: Bool, showBuilds: Bool, afterNewest: Bool = false) -> some View {
         List {
             if header, let app {
                 Section {
@@ -558,7 +559,7 @@ struct VersionHistoryView: View {
                 if let builds {
                     if builds.isEmpty { Text("No builds yet").foregroundStyle(.secondary) }
                     let here = app.flatMap { Self.hereBuild(Self.phoneBuild($0), in: builds) }
-                    ForEach(builds) { entry($0, here: $0.build == here).id($0.id) }
+                    ForEach(afterNewest ? Array(builds.dropFirst()) : builds) { entry($0, here: $0.build == here).id($0.id) }
                 } else if let failed {
                     // Something he can do about it: ask again.
                     Button { self.failed = nil; Task { await load() } } label: {

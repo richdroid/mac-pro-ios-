@@ -24,6 +24,9 @@ struct MacProApp: App {
                     model.start(); openScreenIfAsked(); AlertWatch.shared.askOnce(); TabTour.run([0, 1, 2, 4, 5, 9]) { model.tab = $0 }
                     if let id = AlertWatch.pending { openAlert(id) }
                     TransitionTour.run(model)
+                    #if DEBUG && canImport(UIKit)
+                    FrameLog.shared.start()
+                    #endif
                 }
                 .onReceive(NotificationCenter.default.publisher(for: AlertWatch.openAlert)) { n in openAlert(n.object as? String ?? "") }
                 .onReceive(NotificationCenter.default.publisher(for: ScreenRequest.notification)) { _ in openScreenIfAsked() }
@@ -199,17 +202,6 @@ enum Motion {
 }
 
 // A card that gives under the finger, as system rows highlight.
-// A list row that opens a page: a grey wash over the whole row while it's pressed, as a stock row shows, so a tap is
-// seen to land (designer HOLD 2026-11-08: Apps' rows opened Version History with no sign of the press). Buttons inside
-// the row keep their own taps.
-struct RowPressStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .contentShape(Rectangle())
-            .background(Color.white.opacity(configuration.isPressed ? 0.10 : 0).padding(.horizontal, -24).padding(.vertical, -14))
-    }
-}
-
 struct PressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -1688,10 +1680,13 @@ struct SeedSection: View {
                     }
                     Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
+                // In its own colours, not the button's tint: the row reads as a row, its press is the list's.
+                .foregroundStyle(.primary)
                 }
                 // The App Store's way: the app's row opens its page, Version History (Richard, 2026-11-08: "duos
-                // changelogs in mac pro app"). Its own buttons keep their taps.
-                .buttonStyle(RowPressStyle())
+                // changelogs in mac pro app"). Its own buttons keep their taps. The system's style, so the press is
+                // the list's own row highlight, inside the card's corners (a wash of our own stuck out square past
+                // them; designer HOLD 2026-11-08).
                 .accessibilityHint("Opens its version history")
             }
             Menu {

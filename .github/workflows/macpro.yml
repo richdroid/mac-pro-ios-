@@ -36,7 +36,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 45
+        timeout-minutes: 60
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -78,12 +78,13 @@ jobs:
           # A page flung with real touches through DeviceHub (devicehubctl drag): quick flicks down to its end, a slow pull
           # past the end and let go, flicks back up and a pull past the top, so the fling and the spring-back are judged
           # moving, never from a scripted scroll. name, display, x, low y, high y (fractions of the screen, 0 to 1), then the app's own arguments.
+          # FILM_PORT picks the stand-in Mac.
           swipefilm() {
             local name=$1 display=$2 x=$3 lo=$4 hi=$5; shift 5
             local D=/tmp/dh/.build/release/devicehubctl
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9001} "$@"
             sleep 10
             for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x $lo $x $hi 0.12 || echo "drag failed"; sleep 1.4; done
             $D "$DEVICE" drag $x $lo $x $hi 0.9 || true; sleep 2.5
@@ -91,6 +92,37 @@ jobs:
             $D "$DEVICE" drag $x $hi $x $lo 0.9 || true; sleep 2.5
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
             kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            framelog $name
+          }
+          # The frame meter's log from the last run with -frameLog YES (Caches/frame-log.txt: frames, late frames and the
+          # worst gap every 2 s), copied out as a .log so it's published with the build's logs.
+          framelog() {
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0
+            [ -f "$c/Library/Caches/frame-log.txt" ] && mv "$c/Library/Caches/frame-log.txt" dist/macpro-$1-frames.log && tail -1 dist/macpro-$1-frames.log || true
+          }
+          # A shot with a finger held on the screen: name, display, wait, x, y (fractions), then the app's own arguments.
+          # The hold starts after the wait and the shot is taken 1 s into it, so a row is seen pressed.
+          holdshot() {
+            local name=$1 display=$2 wait=$3 x=$4 y=$5; shift 5
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            /tmp/dh/.build/release/devicehubctl "$DEVICE" touch $x $y 3 & HOLD=$!
+            sleep 1
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            wait $HOLD || echo "hold failed"
+            sleep 1
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-after.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # A shot taken after a tap: name, display, wait, x, y (fractions), then the app's own arguments.
+          tapshot() {
+            local name=$1 display=$2 wait=$3 x=$4 y=$5; shift 5
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            /tmp/dh/.build/release/devicehubctl "$DEVICE" touch $x $y 0.08 || echo "tap failed"
+            sleep 1.5
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
           # Everything that changed, in one posture (display, suffix).
@@ -130,13 +162,20 @@ jobs:
           poses 3 -portrait
           shot screen-laptop-portrait 3 8 -tab 0 -pose screen -openScreen YES -screenPosture laptop
           shot screen-laptop-typing-portrait 3 8 -tab 0 -pose screentyping -openScreen YES -screenPosture laptop
+          # An app's row on Apps pressed (On this iPhone, and an update's row): the list's own highlight, inside the card's
+          # corners; the -after shot is the page it opened. Then the Update capsule tapped on its own: the row's page must
+          # not open from it.
+          holdshot rowpress-portrait 3 8 0.5 0.47 -tab 1
+          holdshot updatepress-portrait 3 8 0.3 0.33 -tab 1 -pose otaready
+          tapshot updatetap-portrait 3 8 0.88 0.265 -tab 1 -pose otaready
           # Scrolling judged moving (the title now goes up with the page), and the tabs in turn, coming back to each.
           film scrollfilm-portrait 3 30 -tab 0 -pose scrollfilm
           film tour-portrait 3 26 -tab 0 -pose tour
-          swipefilm versionsfling-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm
+          # Each with the frame meter on, so a page's smoothness is counted in the app, not read off the recorder.
+          swipefilm versionsfling-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -frameLog YES
           # Status and Apps flung the same way: the spring-back he says still snaps (2026-11-08: "the bounch back issie still happwns").
-          swipefilm statusfling-portrait 3 0.5 0.8 0.28 -tab 0
-          swipefilm appsfling-portrait 3 0.5 0.8 0.28 -tab 1
+          swipefilm statusfling-portrait 3 0.5 0.8 0.28 -tab 0 -frameLog YES
+          swipefilm appsfling-portrait 3 0.5 0.8 0.28 -tab 1 -frameLog YES
           python3 ci/title-check.py dist/macpro-tab*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
