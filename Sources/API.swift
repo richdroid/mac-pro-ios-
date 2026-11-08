@@ -33,6 +33,9 @@ struct Status: Decodable {
     struct SeedApp: Decodable, Identifiable {
         let file: String; let name: String; let version: String; let build: String; let phoneBuild: String
         let installedAt: Double; let expires: Double; let state: String; let message: String; let own: Bool
+        // The itms-services link of a copy signed for this iPhone, which installs over the air from anywhere on Tailscale.
+        // Empty or missing (an older Mac) when there's none.
+        var ota: String?
         var id: String { file.isEmpty ? name : file }
     }
     struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let fetch: Fetch?; let apps: [SeedApp] }
@@ -86,7 +89,7 @@ struct Status: Decodable {
     var displayOn: Bool?
     var temps: [Temp]?
     let services: [Service]?
-    let iosApps: SeedStatus?
+    var iosApps: SeedStatus?
     var alerts: [Alert]?
     // Null until the Mac's first read.
     var apiUsage: APIUsage?

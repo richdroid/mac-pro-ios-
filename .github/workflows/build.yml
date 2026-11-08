@@ -126,7 +126,8 @@ jobs:
                      "screen-cursor 9001 -tab 0 -pose screencursor -openScreen YES" \
                      "displayhold 9001 -tab 0 -pose displayhold" \
                      "screen-shift 9001 -tab 0 -pose screenshift -openScreen YES" "screen-pinch 9001 -tab 0 -pose screenpinch -openScreen YES" \
-                     "apps-scrolled 9001 -tab 1 -pose scrolled" "claude-usage 9001 -tab 2 -pose scrolled"; do
+                     "apps-scrolled 9001 -tab 1 -pose scrolled" "claude-usage 9001 -tab 2 -pose scrolled" \
+                     "otaready 9001 -tab 1 -pose otaready" "otaoffer 9001 -tab 1 -pose otaoffer"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$4 "${@:5}"
               sleep 8
@@ -385,10 +386,12 @@ jobs:
             # Status scrolled to the dials in open portrait too: the content must fade under the title there as folded (r28).
             # Then Apps and Claude scrolled part way, the title gone up with the page (2026-11-07: "Open on the Mac (13)"
             # under "Apps"), the Apps tab with real-shaped data, and the Screen's symbols (⇧ on), a pinch let go zoomed in,
-            # and the laptop posture's MacBook trackpad.
+            # and the laptop posture's MacBook trackpad. Then Apps away from home with two updates ready over the air, and
+            # the offer of them as the app opens.
             for V in "scrolled 0 -pose scrolled" "apps-scrolled 1 -pose scrolled" "claude-usage 2 -pose scrolled" \
                      "screen-shift 0 -pose screenshift -openScreen YES" "screen-pinch 0 -pose screenpinch -openScreen YES" \
-                     "screen-laptop 0 -pose screen -openScreen YES -screenPosture laptop" "displayhold 0 -pose displayhold"; do
+                     "screen-laptop 0 -pose screen -openScreen YES -screenPosture laptop" "displayhold 0 -pose displayhold" \
+                     "otaready 1 -pose otaready" "otaoffer 1 -pose otaoffer"; do
               set -- $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab $2 "${@:3}"
               sleep 8

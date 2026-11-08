@@ -78,6 +78,8 @@ struct AlertBanner: View {
                         Button {
                             // A session waiting on a question opens straight onto its page, on the Claude tab.
                             if a.id.hasPrefix("session:") { model.openSession(key: String(a.id.dropFirst(8))) }
+                            // Updates waiting while he's away: Apps, and the install starts there.
+                            else if a.id == OTAInstaller.alertID { model.tab = 1; OTAInstaller.shared.wanted = true }
                             else if let m = a.metric.flatMap(HistoryMetric.named) { model.history = m } else { model.tab = 5 }
                         } label: { row(a) }
                         .buttonStyle(.plain)
@@ -122,7 +124,12 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
 
     private var enabled: Bool { UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true }
 
-    func install() { center.delegate = self }
+    // The waiting-updates notification carries Install, which opens the app and starts them, as tapping it does.
+    func install() {
+        center.delegate = self
+        let install = UNNotificationAction(identifier: "install", title: "Install", options: [.foreground], icon: UNNotificationActionIcon(systemImageName: "arrow.down.circle"))
+        center.setNotificationCategories([UNNotificationCategory(identifier: OTAInstaller.alertID, actions: [install], intentIdentifiers: [], options: [])])
+    }
 
     @discardableResult func ask() async -> Bool {
         UserDefaults.standard.set(true, forKey: Self.askedKey)
@@ -170,17 +177,28 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
         if !over.isEmpty { center.removeDeliveredNotifications(withIdentifiers: over) }
 
         guard notify, !fresh.isEmpty else { return }
+        // Updates waiting are news of their own, with Install on them, never folded into "needs attention".
+        if let o = fresh.first(where: { $0.id == OTAInstaller.alertID }) {
+            let content = UNMutableNotificationContent()
+            content.sound = .default
+            content.title = o.title
+            content.body = o.shownDetail
+            content.categoryIdentifier = OTAInstaller.alertID
+            try? await center.add(UNNotificationRequest(identifier: o.id, content: content, trigger: nil))
+        }
+        let rest = fresh.filter { $0.id != OTAInstaller.alertID }
+        guard !rest.isEmpty else { return }
         let content = UNMutableNotificationContent()
         content.sound = .default
         // Several things going wrong together is one piece of news.
-        if fresh.count == 1 {
-            content.title = fresh[0].title
-            content.body = fresh[0].shownDetail
+        if rest.count == 1 {
+            content.title = rest[0].title
+            content.body = rest[0].shownDetail
         } else {
             content.title = "Mac Pro needs attention"
-            content.body = fresh.map(\.title).joined(separator: ", ")
+            content.body = rest.map(\.title).joined(separator: ", ")
         }
-        try? await center.add(UNNotificationRequest(identifier: fresh.count == 1 ? fresh[0].id : "several", content: content, trigger: nil))
+        try? await center.add(UNNotificationRequest(identifier: rest.count == 1 ? rest[0].id : "several", content: content, trigger: nil))
     }
 
     #if os(iOS)
@@ -192,11 +210,12 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
     }
     #endif
 
-    // Tapping a notification opens where it can be acted on: a waiting session on its own page, anything else on Status,
-    // where the banner is.
+    // Tapping a notification opens where it can be acted on: a waiting session on its own page, waiting updates on Apps
+    // with their install started (tapped or its Install), anything else on Status, where the banner is.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
         let id = response.notification.request.identifier
-        UserDefaults.standard.set(id.hasPrefix("session:") ? 2 : 0, forKey: "tab")
+        UserDefaults.standard.set(id.hasPrefix("session:") ? 2 : id == OTAInstaller.alertID ? 1 : 0, forKey: "tab")
+        if id == OTAInstaller.alertID { Task { @MainActor in OTAInstaller.shared.wanted = true } }
         // Kept too, in case the tap launched the app and nothing is listening yet.
         Self.pending = id
         DispatchQueue.main.async { NotificationCenter.default.post(name: Self.openAlert, object: id) }

@@ -83,6 +83,7 @@ struct MacSettings: View {
                     } message: { Text("In dollars, for the API dial on the Claude tab.") }
                     .id("claude")
                 }
+                OTASettings()
                 Section {
                     Picker("Open on", selection: $startTab) {
                         Text("The last tab used").tag(-1)

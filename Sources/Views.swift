@@ -12,6 +12,7 @@ struct MacProApp: App {
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(model).environmentObject(model.liveStore)
+                .otaOffer(model)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in
                     if p == .active { model.start() } else { model.stop() }
@@ -39,8 +40,8 @@ struct MacProApp: App {
     // A tapped notification opens where its problem can be dealt with: a waiting session on its own page.
     private func openAlert(_ id: String) {
         AlertWatch.pending = nil
-        // New apps waiting while he's away: straight to Apps, where each one installs through SideStore (Richard, 2026-11-07:
-        // "a method to remotely push updates").
+        // New apps waiting while he's away: straight to Apps, where the waiting ones start installing over the air (Richard,
+        // 2026-11-07: "a method to remotely push updates").
         if id.hasPrefix("session:") { model.openSession(key: String(id.dropFirst(8))) } else if id == "ios:waiting" { model.tab = 1 } else { model.tab = 0 }
     }
     private func openScreenIfAsked() {
@@ -1575,6 +1576,7 @@ struct SeedSection: View {
     @State private var rowFail: [String: String] = [:]
     @State private var addFail: String?
     @State private var shareFile: ShareFile?
+    @ObservedObject private var ota = OTAInstaller.shared
     struct ShareFile: Identifiable { let url: URL; let app: String; var id: URL { url } }
 
     // Away from home, the Mac can't reach this iPhone, so SideStore installs it from here.
@@ -1590,8 +1592,12 @@ struct SeedSection: View {
         a.expires > 0 ? Int(ceil((a.expires / 1000 - Date().timeIntervalSince1970) / 86400)) : nil
     }
     func label(_ a: Status.SeedApp) -> (String, Color) {
+        // This app, already at the build the Mac still thinks is waiting (it can't see the phone away from home).
+        if OTAInstaller.isThisApp(a), a.build == OTAInstaller.thisBuild, ["waiting", "update"].contains(a.state) { return ("Up to date", .green) }
         switch a.state {
         case "installing": return ("Installing…", .blue)
+        case "waiting" where otaLink(a) != nil:
+            return ota.wasOpened(a) ? ("Build \(a.build) sent to this iPhone", .secondary) : ("Update ready: build \(a.build)", .blue)
         case "waiting": return ("Build \(a.build) ready. Installs on home Wi-Fi.", .blue)
         case "failed": return ("Install failed", .red)
         case "missing": return ("Not on this iPhone", .orange)
@@ -1603,6 +1609,12 @@ struct SeedSection: View {
             return ("Up to date", .green)
         }
     }
+    // A newer build signed for this iPhone installs over the air, at home or away: the Mac's link, opened here.
+    func otaLink(_ a: Status.SeedApp) -> URL? {
+        guard a.own, ["waiting", "update"].contains(a.state), let s = a.ota, !s.isEmpty,
+              !(OTAInstaller.isThisApp(a) && a.build == OTAInstaller.thisBuild) else { return nil }
+        return URL(string: s)
+    }
     // Renewal is automatic, so a button only when something needs doing.
     func needsHand(_ a: Status.SeedApp) -> Bool {
         if ["missing", "update", "failed"].contains(a.state) { return true }
@@ -1610,6 +1622,9 @@ struct SeedSection: View {
         return false
     }
     var body: some View {
+        // More than one waiting: all of them in one go, above the list. Kept up while a run goes, as each drops out.
+        let pending = ota.pending(model.status)
+        if pending.count > 1 || ota.queue.count > 1 { OTAAllCard(apps: pending) }
         Section {
             ForEach(seed.apps) { a in
                 let l = label(a)
@@ -1623,7 +1638,15 @@ struct SeedSection: View {
                         if let f = rowFail[a.id] { Text(f).font(.caption2).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
                     }
                     Spacer()
-                    if handing == a.file { ProgressView() }
+                    if handing == a.file || ota.current?.file == a.id { ProgressView() }
+                    else if otaLink(a) != nil {
+                        // The way in now: a filled capsule, the one thing on the row to tap. SideStore only without a link.
+                        Button("Install") { ota.install([a]) }
+                            .font(.body.weight(.semibold))
+                            .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
+                            .disabled(ota.running)
+                            .accessibilityLabel("Install \(a.name) build \(a.build)")
+                    }
                     else if a.own, needsHand(a) {
                         Button(seed.reachable ? (a.state == "missing" ? "Install" : a.state == "update" ? "Update" : "Renew") : "Via SideStore") {
                             rowFail[a.id] = nil
@@ -1646,8 +1669,13 @@ struct SeedSection: View {
             if let f = seed.fetch, f.state == "failed" { Text(f.message).font(.footnote).foregroundStyle(.red) }
             if let addFail { FailText(addFail) }
         } header: { Text("On this iPhone") } footer: {
-            // Said only when it matters: away from the Mac. Connected and installing by itself needs no words.
-            if !seed.reachable { Text("Away from the Mac. Install hands the app to SideStore, which installs it from anywhere. Everything else catches up on home Wi-Fi.") }
+            // Said only when it matters. Connected and installing by itself needs no words; an update signed for this
+            // iPhone installs over the air wherever it is; without one, away from home, SideStore is the way.
+            if seed.apps.contains(where: { otaLink($0) != nil }) {
+                Text("Updates install over the air from anywhere on Tailscale. Tap Install, then Install again when iOS asks.")
+            } else if !seed.reachable {
+                Text("Away from the Mac. Install hands the app to SideStore, which installs it from anywhere. Everything else catches up on home Wi-Fi.")
+            }
         }
         .alert("Add from a link", isPresented: $linking) {
             TextField("https://…/app.ipa", text: $link).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()

@@ -223,6 +223,16 @@ final class AppModel: ObservableObject {
         case "api-live", "api-sheet": s.apiUsage = .sample
         case "api-estimate": s.apiUsage = .estimateSample
         case "longlog": s.upgrade = Status.Upgrade.longSample
+        // Away from home with two of his apps rebuilt and signed for this iPhone: both install over the air, with the card
+        // to install them together ("otaoffer" also has the offer sheet up, as the app opens).
+        case "otaready", "otaoffer":
+            let mine = Int(OTAInstaller.thisBuild) ?? 12
+            func link(_ n: String) -> String { "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac-pro.example.ts.net%2Fota%2F\(n).plist" }
+            let apps = [
+                Status.SeedApp(file: "MacPro.ipa", name: "Mac Pro", version: "1.0", build: "\(mine + 1)", phoneBuild: "\(mine)", installedAt: 1, expires: 4102444800000, state: "waiting", message: "", own: true, ota: link("MacPro")),
+                Status.SeedApp(file: "Chumby.ipa", name: "Chumby", version: "1.0", build: "12", phoneBuild: "11", installedAt: 1, expires: 4102444800000, state: "waiting", message: "", own: true, ota: link("Chumby")),
+            ]
+            s.iosApps = Status.SeedStatus(reachable: false, via: "", checkedAt: 1, seeding: "", fetch: nil, apps: apps + (s.iosApps?.apps ?? []).filter { !$0.own })
         default: break
         }
     }
