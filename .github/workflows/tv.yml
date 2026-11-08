@@ -12,7 +12,9 @@ permissions:
   contents: write
 concurrency:
   group: tv-shots
-  cancel-in-progress: true
+  # The running job always finishes; a newer push only replaces one still waiting (6787444's posture films were lost
+  # to a push mid-run).
+  cancel-in-progress: false
 jobs:
   shots:
     runs-on: xcode-27
