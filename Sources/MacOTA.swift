@@ -266,8 +266,11 @@ struct UpdatesSection: View {
                 AppIcon(app: a, size: 58)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(a.name).font(.headline)
-                    Text(Self.when(a) + (Self.link(a) == nil && !seed.reachable && a.state != "installing" ? " · on home Wi-Fi" : ""))
-                        .font(.subheadline).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
+                    Text(Self.when(a)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                    // Why its capsule is dimmed, on a line of its own so it's never cut off folded.
+                    if Self.link(a) == nil && !seed.reachable && a.state != "installing" {
+                        Text("Installs on home Wi-Fi").font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 8)
                 button(a)
