@@ -229,8 +229,12 @@ final class AppModel: ObservableObject {
             let mine = Int(OTAInstaller.thisBuild) ?? 12
             func link(_ n: String) -> String { "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac-pro.example.ts.net%2Fota%2F\(n).plist" }
             let apps = [
-                Status.SeedApp(file: "MacPro.ipa", name: "Mac Pro", version: "1.0", build: "\(mine + 1)", phoneBuild: "\(mine)", installedAt: 1, expires: 4102444800000, state: "waiting", message: "", own: true, ota: link("MacPro")),
-                Status.SeedApp(file: "Chumby.ipa", name: "Chumby", version: "1.0", build: "12", phoneBuild: "11", installedAt: 1, expires: 4102444800000, state: "waiting", message: "", own: true, ota: link("Chumby")),
+                Status.SeedApp(file: "MacPro.ipa", name: "Mac Pro", version: "1.0", build: "\(mine + 1)", phoneBuild: "\(mine)", installedAt: 1, expires: 4102444800000, state: "waiting", message: "", own: true, ota: link("MacPro"),
+                               notes: ["Screen: the posture follows the Duo's own hinge, partly open as a laptop, fully open flat", "Screen: symbols on the keys and @ reaches the Mac, held keys repeat, a MacBook-shaped trackpad", "Updates have their own place at the top of Apps, with a count on the tab", "Status: the Display key follows the Mac's display every second"],
+                               builtAt: Date().timeIntervalSince1970 * 1000 - 3_600_000, icon: "/ios/icon/MacPro.ipa"),
+                Status.SeedApp(file: "Chumby.ipa", name: "Chumby", version: "1.0", build: "12", phoneBuild: "11", installedAt: 1, expires: 4102444800000, state: "waiting", message: "", own: true, ota: link("Chumby"),
+                               notes: ["A calendar day can have its own sound and snooze", "The next alarm can ring later or with another sound just this once"],
+                               builtAt: Date().timeIntervalSince1970 * 1000 - 90_000_000, icon: "/ios/icon/Chumby.ipa"),
             ]
             s.iosApps = Status.SeedStatus(reachable: false, via: "", checkedAt: 1, seeding: "", fetch: nil, apps: apps + (s.iosApps?.apps ?? []).filter { !$0.own })
         default: break

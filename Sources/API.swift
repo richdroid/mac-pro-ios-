@@ -36,6 +36,11 @@ struct Status: Decodable {
         // The itms-services link of a copy signed for this iPhone, which installs over the air from anywhere on Tailscale.
         // Empty or missing (an older Mac) when there's none.
         var ota: String?
+        // What's new in the waiting build (the app's own changes since the one on the phone), when it was built (ms), and
+        // where the Mac serves its icon. Missing from an older Mac.
+        var notes: [String]?
+        var builtAt: Double?
+        var icon: String?
         var id: String { file.isEmpty ? name : file }
     }
     struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let fetch: Fetch?; let apps: [SeedApp] }
@@ -212,6 +217,14 @@ struct API {
         let (data, response) = try await session.upload(for: r, fromFile: file)
         if (response as? HTTPURLResponse)?.statusCode == 200 { return }
         throw APIError.message((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String ?? "The Mac refused that file.")
+    }
+
+    // A small file from the Mac, such as an app's icon.
+    func data(_ path: String) async throws -> Data {
+        var r = request(path); r.timeoutInterval = 15
+        let (d, resp) = try await session.data(for: r)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return d
     }
 
     // Fetches an app from the Mac, so this iPhone can hand it to SideStore when it's away from home.

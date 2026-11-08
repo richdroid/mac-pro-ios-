@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -114,7 +115,7 @@ struct OTAOffer: ViewModifier {
     @ObservedObject var model: AppModel
     @ObservedObject private var ota = OTAInstaller.shared
     @Environment(\.scenePhase) private var phase
-    @AppStorage(OTAInstaller.offerKey) private var offerOn = true
+    @AppStorage(OTAInstaller.offerKey) private var offerOn = false
 
     // Changes when there's something new to offer or the Mac first answers.
     private var trigger: String {
@@ -211,49 +212,189 @@ struct OTAOfferSheet: View {
     }
 }
 
-// At the top of the iPhone's apps when more than one update is waiting: all of them in one go.
-struct OTAAllCard: View {
+// The top of the Apps tab, the App Store's way: each app with a newer build, its icon, when it was built, an Update
+// capsule, and what's new in it; Update All above when there's more than one (Richard, 2026-11-07: "the updates should
+// be in the apps tab ... redesign that around it", the count a badge on the tab "exactly like app store").
+struct UpdatesSection: View {
+    @EnvironmentObject var model: AppModel
     @ObservedObject private var ota = OTAInstaller.shared
-    let apps: [Status.SeedApp]
-    var body: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    Image(systemName: "arrow.down.circle.fill").font(.system(size: 34)).foregroundStyle(.white, macBlue)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(ota.running ? "Installing updates" : "\(apps.count) updates ready").font(.headline)
-                        Text(apps.map(\.name).formatted(.list(type: .and))).font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
-                Button { if !ota.running { ota.install(apps) } } label: {
-                    HStack(spacing: 8) {
-                        if let c = ota.current {
-                            ProgressView().tint(.white)
-                            Text("\(c.name), \(ota.step + 1) of \(ota.queue.count)")
-                        } else {
-                            Text("Install all updates")
-                        }
-                    }
-                    .font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
-                Text(ota.running ? "Tap Install each time iOS asks." : "Over the air from the Mac. iOS asks to install each one in turn.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 6)
+    let seed: Status.SeedStatus
+    @State private var fails: [String: String] = [:]
+
+    // Everything of his with a newer build than the phone's, whether it can go over the air now or only on home Wi-Fi.
+    static func updates(_ seed: Status.SeedStatus) -> [Status.SeedApp] {
+        seed.apps.filter { a in
+            guard a.own, ["waiting", "update", "installing"].contains(a.state) else { return false }
+            return !(OTAInstaller.isThisApp(a) && a.build == OTAInstaller.thisBuild)
         }
-        .listRowBackground(macBlue.opacity(0.16))
+    }
+    static func link(_ a: Status.SeedApp) -> URL? { (a.ota ?? "").isEmpty ? nil : URL(string: a.ota!) }
+
+    var body: some View {
+        let ups = Self.updates(seed)
+        let ready = ups.filter { Self.link($0) != nil }
+        Section {
+            if ups.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.title3)
+                    Text("All your apps are up to date").foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+            }
+            ForEach(ups) { a in row(a) }
+        } header: {
+            HStack(alignment: .firstTextBaseline) {
+                Text(ups.count > 1 ? "\(ups.count) Updates" : "Updates").font(.title3.weight(.bold)).foregroundStyle(.primary)
+                Spacer()
+                if ready.count > 1 {
+                    Button(ota.running ? "Updating…" : "Update All") { ota.install(ready) }
+                        .font(.body.weight(.semibold)).tint(macBlue)
+                        .disabled(ota.running)
+                }
+            }
+            .textCase(nil)
+            .padding(.bottom, 2)
+        } footer: {
+            if !ready.isEmpty { Text("Installs over the air from anywhere on Tailscale. Tap Install when iOS asks.") }
+        }
+    }
+
+    func row(_ a: Status.SeedApp) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 14) {
+                AppIcon(app: a, size: 58)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(a.name).font(.headline)
+                    Text(Self.when(a)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                }
+                Spacer(minLength: 8)
+                button(a)
+            }
+            if let f = fails[a.id] { Text(f).font(.footnote).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+            if let notes = a.notes, !notes.isEmpty { WhatsNew(notes: notes) }
+        }
+        .padding(.vertical, 6)
+    }
+
+    @ViewBuilder func button(_ a: Status.SeedApp) -> some View {
+        if a.state == "installing" || ota.current?.file == a.id {
+            ProgressView().controlSize(.regular).frame(width: 84)
+        } else if Self.link(a) != nil {
+            Button { ota.install([a]) } label: {
+                Text("Update").font(.subheadline.weight(.bold)).frame(minWidth: 62)
+            }
+            .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
+            .disabled(ota.running)
+            .accessibilityLabel("Update \(a.name) to build \(a.build)")
+        } else if seed.reachable {
+            // At home, before the Mac has a copy signed ahead: the Mac installs it over Wi-Fi.
+            Button {
+                fails[a.id] = nil
+                Task { fails[a.id] = await model.run("ios-seed", ["file": a.file]) }
+            } label: { Text("Update").font(.subheadline.weight(.bold)).frame(minWidth: 62) }
+            .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
+            .disabled(!seed.seeding.isEmpty)
+        } else {
+            Text("On home Wi-Fi").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+        }
+    }
+
+    // "Build 178 · Today", as the App Store dates each update.
+    static func when(_ a: Status.SeedApp) -> String {
+        var parts = ["Build \(a.build)"]
+        if let ms = a.builtAt, ms > 0 {
+            let d = Date(timeIntervalSince1970: ms / 1000), cal = Calendar.current
+            parts.append(cal.isDateInToday(d) ? "Today" : cal.isDateInYesterday(d) ? "Yesterday" : d.formatted(.dateTime.month(.abbreviated).day()))
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+// What's new, three lines and "more", like the App Store's; opened, one line per change.
+struct WhatsNew: View {
+    let notes: [String]
+    @State private var open = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if open {
+                ForEach(Array(notes.enumerated()), id: \.offset) { _, n in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("•").foregroundStyle(.secondary)
+                        Text(n).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } else {
+                Text(notes.joined(separator: "\n")).lineLimit(3)
+            }
+            Button(open ? "less" : "more") { withAnimation(.snappy) { open.toggle() } }
+                .font(.subheadline.weight(.semibold)).tint(macBlue).buttonStyle(.plain).foregroundStyle(macBlue)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .font(.subheadline)
+    }
+}
+
+// An app's own icon, fetched once from the Mac; until then (or for an app the Mac has no package of) a plain tile.
+struct AppIcon: View {
+    @EnvironmentObject var model: AppModel
+    let app: Status.SeedApp
+    var size: CGFloat = 58
+    @State private var image: Image?
+    private var key: String { (app.icon ?? "") + "@" + app.build }
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
+        ZStack {
+            if let image { image.resizable().interpolation(.high).scaledToFill() }
+            else {
+                LinearGradient(colors: [Color(white: 0.32), Color(white: 0.18)], startPoint: .top, endPoint: .bottom)
+                Image(systemName: Self.symbol(app.name)).font(.system(size: size * 0.42, weight: .medium)).foregroundStyle(.white.opacity(0.85))
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+        .accessibilityHidden(true)
+        .task(id: key) {
+            if let known = IconCache.images[key] { image = known; return }
+            guard let path = app.icon, !path.isEmpty, let d = try? await model.api.data(path), let i = IconCache.make(d) else { return }
+            IconCache.images[key] = i
+            image = i
+        }
+    }
+    static func symbol(_ name: String) -> String {
+        switch name { case "Mac Pro": "macpro.gen2.fill"; case "TV": "tv.fill"; case "Chumby": "alarm.fill"; default: "app.fill" }
+    }
+}
+
+@MainActor
+enum IconCache {
+    static var images: [String: Image] = [:]
+    static func make(_ d: Data) -> Image? {
+        #if canImport(UIKit)
+        return UIImage(data: d).map { Image(uiImage: $0) }
+        #else
+        return nil
+        #endif
     }
 }
 
 // In Settings: whether the app offers waiting updates as it opens.
 struct OTASettings: View {
-    @AppStorage(OTAInstaller.offerKey) private var offer = true
+    @AppStorage(OTAInstaller.offerKey) private var offer = false
     var body: some View {
         Section {
-            Toggle("Offer updates when I open the app", isOn: $offer)
+            Toggle("Also ask when I open the app", isOn: $offer)
         } header: { Text("App updates") } footer: {
-            Text("When the Mac has a new build of one of your apps, it’s offered as the app opens, and installs over the air from anywhere on Tailscale.")
+            Text("New builds of your apps show as a number on the Apps tab and on the app’s icon, and install over the air from anywhere on Tailscale.")
         }
+    }
+}
+
+// The count on the app's home-screen icon: the updates waiting, nothing else.
+enum AppBadge {
+    static func set(_ n: Int) {
+        #if canImport(UIKit)
+        UNUserNotificationCenter.current().setBadgeCount(n) { _ in }
+        #endif
     }
 }

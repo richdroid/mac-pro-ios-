@@ -205,6 +205,8 @@ struct RootView: View {
     @AppStorage("celsius") private var celsius = false
     @State private var resets: [Int: Int] = [:]
     @State private var barAtFoot = false
+    @ObservedObject private var ota = OTAInstaller.shared
+    private var updateCount: Int { model.status?.iosApps.map { UpdatesSection.updates($0).count } ?? 0 }
     // A new colour redraws the other tabs; Settings, where it was picked, stays put so the swatch can animate.
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
     var body: some View {
@@ -226,6 +228,8 @@ struct RootView: View {
                 }
                 Tab(value: 0) { Screen(tab: 0, title: "Status") { StatusTab($0, side: $1) }.id(key(0)) } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
                 Tab(value: 1) { Screen(tab: 1, title: "Apps") { AppsTab($0, side: $1) }.id(key(1)) } label: { tabLabel("Apps", "square.grid.2x2") }
+                    // The updates waiting, as a number on the tab, the App Store's way.
+                    .badge(updateCount)
                 Tab(value: 2) { Screen(tab: 2, title: "Claude") { ClaudeTab($0, side: $1) }.id(key(2)) } label: { tabLabel("Claude", asset: "ClaudeTab") }
                 Tab(value: 4) { Screen(tab: 4, title: "Updates", listed: false) { UpgradeTab($0, side: $1) }.id(key(4)) } label: { tabLabel("Updates", "arrow.up.circle") }
                 Tab(value: 5) { Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5)) } label: { tabLabel("Control", "display") }
@@ -243,7 +247,9 @@ struct RootView: View {
         }
         // The tabs are a bar along the foot when the Duo is open in portrait, a side bar otherwise.
         .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { $0.size.width >= 600 && $0.size.height > $0.size.width } action: { barAtFoot = $0 } }
-        .onAppear { MacPrefs.shareWithWidgets() }
+        .onAppear { MacPrefs.shareWithWidgets(); AppBadge.set(updateCount) }
+        // And on the app's icon on the home screen, like the App Store's.
+        .onChange(of: updateCount) { _, n in AppBadge.set(n) }
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }
         .onChange(of: celsius) { _, _ in MacPrefs.shareWithWidgets() }
         .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
@@ -539,7 +545,7 @@ struct Hero: View {
                 .accessibilityLabel("Mac Pro, Late 2013")
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
-            HeroChips(alerts: s.alerts ?? [], offline: model.stale, route: model.route, pulse: model.pulse).padding(.top, 9)
+            HeroChips(alerts: (s.alerts ?? []).filter { $0.id != OTAInstaller.alertID }, offline: model.stale, route: model.route, pulse: model.pulse).padding(.top, 9)
         }
         .frame(maxWidth: .infinity)
     }
@@ -735,7 +741,8 @@ struct StatusTab: View {
     // them, and the figures on the right, where they're all in view at once.
     var body: some View {
         if side != .right {
-            if let alerts = s.alerts, !alerts.isEmpty { AlertBanner(alerts: alerts) }
+            // Updates waiting are the number on the Apps tab, not a problem with the Mac.
+            if let alerts = s.alerts?.filter({ $0.id != OTAInstaller.alertID }), !alerts.isEmpty { AlertBanner(alerts: alerts) }
             Section { Hero(s: s).id("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
             if showQuick { Section { QuickActions() }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
         }
@@ -759,7 +766,8 @@ struct AppsTab: View {
     }
     var body: some View {
         if side != .right {
-            if let seed = s.iosApps { SeedSection(seed: seed) }
+            // Updates first, as in the App Store, then what's on the iPhone.
+            if let seed = s.iosApps { UpdatesSection(seed: seed); SeedSection(seed: seed) }
         }
         if side != .left {
             // Only apps that are really running: an older Mac listed ones that had quit, with no figures (Calendar and
@@ -1622,13 +1630,13 @@ struct SeedSection: View {
         return false
     }
     var body: some View {
-        // More than one waiting: all of them in one go, above the list. Kept up while a run goes, as each drops out.
-        let pending = ota.pending(model.status)
-        if pending.count > 1 || ota.queue.count > 1 { OTAAllCard(apps: pending) }
+        // Updates have their own section above, App Store style; here, what's on the iPhone.
+        let ups = Set(UpdatesSection.updates(seed).map(\.id))
         Section {
-            ForEach(seed.apps) { a in
+            ForEach(seed.apps.filter { !ups.contains($0.id) }) { a in
                 let l = label(a)
-                HStack {
+                HStack(spacing: 12) {
+                    AppIcon(app: a, size: 40)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(a.name)
                         Text(l.0).font(.footnote).foregroundStyle(l.1)
@@ -1671,9 +1679,7 @@ struct SeedSection: View {
         } header: { Text("On this iPhone") } footer: {
             // Said only when it matters. Connected and installing by itself needs no words; an update signed for this
             // iPhone installs over the air wherever it is; without one, away from home, SideStore is the way.
-            if seed.apps.contains(where: { otaLink($0) != nil }) {
-                Text("Updates install over the air from anywhere on Tailscale. Tap Install, then Install again when iOS asks.")
-            } else if !seed.reachable {
+            if !seed.reachable, seed.apps.contains(where: { $0.own && needsHand($0) && otaLink($0) == nil }) {
                 Text("Away from the Mac. Install hands the app to SideStore, which installs it from anywhere. Everything else catches up on home Wi-Fi.")
             }
         }
