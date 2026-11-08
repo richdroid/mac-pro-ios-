@@ -43,7 +43,13 @@ func chumbySetSkip(_ on: Bool) async throws {
                 guard s.skipped.map({ $0.date > Date() }) != true, let n = s.nextRing() else { return }
                 _ = try await api.post("skip", extra: "&name=" + ChumbyAPI.enc(n.alarm.name) + "&at=\(Int((n.at.timeIntervalSince1970 / 60).rounded()))")
             } else {
+                // A "just this once" standing behind the skip goes back the app's way (ChumbyModel.undoJustOnce): the skip
+                // taken back first, so the usual ring is on again, then its one-off removed. Never neither.
+                let s = try JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state"))
                 _ = try await api.post("unskip")
+                if let j = s.justOnce(), j.pinned, j.canUndo {
+                    _ = try await AlarmWriter.shared.edit(api, permit: SavePermit(userOff: [j.alarm.key])) { st in st.alarms.removeAll { $0.key == j.alarm.key } }
+                }
             }
             for _ in 0..<6 {
                 try? await Task.sleep(nanoseconds: 700_000_000)

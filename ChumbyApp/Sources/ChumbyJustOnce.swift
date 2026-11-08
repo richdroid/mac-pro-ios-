@@ -14,49 +14,7 @@ import SwiftUI
 // change the sound.
 // The Chumby holds only one skip at a time: a new one replaces it, earlier or later. So starting one while another skip
 // is set says so first, and then takes the old one back properly (its one-off removed, so its alarm rings as usual).
-enum JustOnce {
-    static let suffix = " (just this once)"
-    // How far after the usual time it may go: never past the next morning's.
-    static let longest = 12 * 60
-    static func isOne(_ a: Alarm) -> Bool { a.when == "once" && a.name.hasSuffix(suffix) }
-    static func name(for a: Alarm) -> String {
-        let base = a.isCalendar ? String(a.name.dropFirst(Alarm.calendarPrefix.count)) : a.name.isEmpty ? "\(a.clock) \(a.meridiem) alarm" : a.name
-        return String(base.prefix(40)).trimmingCharacters(in: .whitespaces) + suffix
-    }
-}
-
-// A "just this once" on the Chumby, and how it stands: the alarm it replaces, that alarm's usual ring, and whether the
-// Chumby's one skip is on that ring.
-struct JustOnceNow {
-    var alarm: Alarm
-    var at: Date
-    var original: Alarm?
-    var usual: Date?
-    var pinned: Bool
-    var skip: SkippedAlarm?
-    // The skip it stands behind, when that's where the Chumby's skip is.
-    var replaces: SkippedAlarm? { pinned ? skip : nil }
-    // Removing it leaves the usual alarm to ring (skip taken back first, when it's pinned), as long as that's still ahead.
-    var canUndo: Bool { usual.map { $0 > Date() } ?? false }
-    // Not standing behind its skip: the usual one rings as well (the skip moved elsewhere), or it's alone because the
-    // usual one has gone (turned off, deleted, its calendar day dropped).
-    var orphan: Bool { !pinned && (usual == nil || usual! > Date()) }
-}
-
-extension ChumbyState {
-    // The first "just this once" still to ring.
-    func justOnce(now: Date = Date()) -> JustOnceNow? {
-        guard let (one, at) = alarms.filter({ JustOnce.isOne($0) && $0.isOn }).compactMap({ a in a.nextFire(after: now).map { (a, $0) } }).min(by: { $0.1 < $1.1 }) else { return nil }
-        // The alarm it stands in for: same name before the suffix, with a ring in the 12 hours up to it.
-        let from = at.addingTimeInterval(-Double(JustOnce.longest * 60) - 60)
-        let candidates = alarms.filter { !JustOnce.isOne($0) && JustOnce.name(for: $0) == one.name }
-            .compactMap { a in ring(of: a, after: from, skip: false).flatMap { $0 <= at ? (a, $0) : nil } }
-        let best = candidates.max { $0.1 < $1.1 }
-        let skip = skipped.flatMap { $0.date > now ? $0 : nil }
-        let pinned = best.map { b in skip.map { $0.name == b.0.name && abs($0.date.timeIntervalSince(b.1)) < 60 } ?? false } ?? false
-        return JustOnceNow(alarm: one, at: at, original: best?.0, usual: best?.1, pinned: pinned, skip: skip)
-    }
-}
+// JustOnce, JustOnceNow and ChumbyState.justOnce() live in ChumbyAPI.swift, which the widgets compile too.
 
 extension ChumbyModel {
     // What the Chumby's one skip is on now, said for the warning before something replaces it, or nil with none set.

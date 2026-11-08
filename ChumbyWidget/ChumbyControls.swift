@@ -6,6 +6,8 @@ import WidgetKit
 // mode. Read the same way the widgets read it; nil if it can't be reached, so a control never shows a guess as fact.
 struct ChumbyNow {
     var skipped: SkippedAlarm?
+    // A "just this once" standing behind that skip: the alarm moved for one ring, said as such, never as a skip.
+    var moved: JustOnceNow?
     var next: Date?
     var night = false
     static func read() async -> ChumbyNow? {
@@ -18,21 +20,23 @@ struct ChumbyNow {
         }) else { return nil }
         var n = ChumbyNow(night: chumbyNightWanted() ?? (both.0.night == 1))
         n.skipped = both.1?.skipped.flatMap { $0.date > Date() ? $0 : nil }
+        n.moved = both.1?.justOnce().flatMap { $0.pinned ? $0 : nil }
         n.next = both.1?.nextRing()?.at
         return n
     }
     var skipLabel: String {
+        if let m = moved { return "Just this once \(m.at.formatted(date: .omitted, time: .shortened))" }
         if let s = skipped { return "Skipped \(s.date.formatted(date: .omitted, time: .shortened))" }
         return next.map { "Skip \($0.formatted(date: .omitted, time: .shortened))" } ?? "Skip Alarm"
     }
 }
 // The skip control's value carries its words too, so it can say which time it skips.
-struct ChumbySkipState: Sendable { var on: Bool; var label: String }
+struct ChumbySkipState: Sendable { var on: Bool; var label: String; var moved = false }
 struct ChumbySkipValue: ControlValueProvider {
     var previewValue: ChumbySkipState { ChumbySkipState(on: false, label: "Skip 6:45 AM") }
     func currentValue() async throws -> ChumbySkipState {
         let n = await ChumbyNow.read()
-        return ChumbySkipState(on: n?.skipped != nil, label: n?.skipLabel ?? "Skip Alarm")
+        return ChumbySkipState(on: n?.skipped != nil, label: n?.skipLabel ?? "Skip Alarm", moved: n?.moved != nil)
     }
 }
 struct ChumbyNightValue: ControlValueProvider {
@@ -45,7 +49,7 @@ struct ChumbySkipControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "ChumbySkipControl", provider: ChumbySkipValue()) { v in
             ControlWidgetToggle(v.label, isOn: v.on, action: ChumbySkipToggleIntent()) { on in
-                Label(on ? "Skipped" : "Skip", systemImage: on ? "moon.zzz.fill" : "forward.end.fill")
+                Label(on ? (v.moved ? "Just this once" : "Skipped") : "Skip", systemImage: on ? (v.moved ? "clock.arrow.circlepath" : "moon.zzz.fill") : "forward.end.fill")
             }
         }
         .displayName("Skip Chumby Alarm").description("Lets the next alarm pass without ringing, once. Tap again to undo.")

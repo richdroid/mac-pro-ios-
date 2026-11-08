@@ -17,6 +17,12 @@ struct ChumbyEntry: TimelineEntry {
     var nextAt: Date?
     // The one alarm skipped by hand, while it's still to come; `nextAlarm` is then the one that will really ring after it.
     var skipped: SkippedAlarm?
+    // A "just this once" standing behind that skip: the alarm moved for one ring, never shown as a skip (Richard,
+    // 2026-11-08: "i dont like that it shows as a skip"). `nextAlarm` is then its one-off.
+    var moved: JustOnceNow?
+    // A skip to show as a skip: not one a "just this once" stands behind.
+    var plainSkip: SkippedAlarm? { moved == nil ? skipped : nil }
+    var usualText: String? { moved?.usual.map(Self.clock) }
     // Whether the Chumby says its music player is playing, so Stop only shows when there's something to stop.
     var playing = false
     var night: Bool { sys.night == 1 }
@@ -37,13 +43,17 @@ struct ChumbyEntry: TimelineEntry {
         if cal.isDateInTomorrow(at) { return "Tomorrow" }
         return at.formatted(.dateTime.weekday(.wide))
     }
-    // "Today · Work": the day and the alarm's own name, the way Home's Skip says it.
+    // "Today · Work": the day and the alarm's own name, the way Home's Skip says it; moved for one ring, the usual time too.
     var whenLine: String {
         guard let a = nextAlarm else { return whenText }
         let n = Self.label(a.name)
-        return n.isEmpty ? whenText : "\(whenText) · \(n)"
+        return (n.isEmpty ? whenText : "\(whenText) · \(n)") + (usualText.map { " · usually \($0)" } ?? "")
     }
-    static func label(_ name: String) -> String { name.hasPrefix("Calendar: ") ? String(name.dropFirst(10)) : name }
+    static func label(_ name: String) -> String {
+        var n = name.hasPrefix("Calendar: ") ? String(name.dropFirst(10)) : name
+        if n.hasSuffix(JustOnce.suffix) { n = String(n.dropLast(JustOnce.suffix.count)) }
+        return n
+    }
     static func clock(_ d: Date) -> String { d.formatted(date: .omitted, time: .shortened) }
     // Short, for "then Thu 6:45".
     static func then(_ d: Date) -> String {
@@ -69,6 +79,7 @@ struct ChumbyProvider: AppIntentTimelineProvider {
                 var e = ChumbyEntry(date: m, reachable: first.reachable, sys: first.sys, alarmsKnown: true, deviceDown: first.deviceDown, lastSeen: first.lastSeen)
                 if let n = Self.next(state, after: m) { e.nextAlarm = n.alarm; e.nextAt = n.at }
                 e.skipped = first.skipped.flatMap { $0.date > m ? $0 : nil }
+                e.moved = state.justOnce(now: m).flatMap { $0.pinned ? $0 : nil }
                 e.playing = first.playing
                 entries.append(e)
             }
@@ -119,6 +130,7 @@ struct ChumbyProvider: AppIntentTimelineProvider {
             e.alarmsKnown = true
             if let n = Self.next(state, after: e.date) { e.nextAlarm = n.alarm; e.nextAt = n.at }
             e.skipped = state.skipped.flatMap { $0.date > e.date ? $0 : nil }
+            e.moved = state.justOnce(now: e.date).flatMap { $0.pinned ? $0 : nil }
             e.playing = e.reachable && state.musicPlaying
         }
         return (e, state)
@@ -160,13 +172,16 @@ struct SkipButton: View {
     var full: Bool { mode == .fullColor }
     var body: some View {
         if entry.skipped != nil {
+            // Undo for a skip; "Back to 6:45 AM" for an alarm moved just this once (the same intent: it takes the
+            // app's undoJustOnce path when a just-once stands behind the skip).
             Button(intent: ChumbyUnskipIntent()) {
-                Text("Undo").font(.trebuchet(15, .bold)).foregroundStyle(full ? ChumbyPalette.hex(0x1f2f5c) : .white)
+                Text(entry.usualText.map { "Back to \($0)" } ?? "Undo").font(.trebuchet(15, .bold)).foregroundStyle(full ? ChumbyPalette.hex(0x1f2f5c) : .white)
+                    .lineLimit(1).minimumScaleFactor(0.8)
                     .widgetAccentable(!full)
                     .frame(maxWidth: .infinity, minHeight: height)
                     .background(full ? AnyShapeStyle(.white) : AnyShapeStyle(.white.opacity(0.22)), in: Capsule())
             }
-            .buttonStyle(.plain).invalidatableContent().accessibilityLabel("Undo the skip")
+            .buttonStyle(.plain).invalidatableContent().accessibilityLabel(entry.usualText.map { "Back to the usual \($0) alarm" } ?? "Undo the skip")
         } else if entry.nextAt != nil {
             Button(intent: ChumbySkipIntent()) {
                 Label("Skip", systemImage: "forward.end.fill").font(.trebuchet(15, .bold)).foregroundStyle(.white)
@@ -230,8 +245,8 @@ struct AlarmBody: View {
                 AccessoryWidgetBackground()
                 VStack(spacing: 0) {
                     // Skipped: the octopus asleep and the skipped time struck through.
-                    OctopusMark(color: .white, blink: entry.skipped == nil ? 1 : 0.08).frame(width: 20, height: 15)
-                    if let s = entry.skipped {
+                    OctopusMark(color: .white, blink: entry.plainSkip == nil ? 1 : 0.08).frame(width: 20, height: 15)
+                    if let s = entry.plainSkip {
                         ClockText(date: s.date, big: 15, small: 0, struck: true).minimumScaleFactor(0.6)
                     } else {
                         Text(clock?.0 ?? (entry.alarmsKnown ? "–" : "?")).font(.trebuchet(15, .bold)).minimumScaleFactor(0.6)
@@ -239,19 +254,25 @@ struct AlarmBody: View {
                 }
             }
         case .accessoryInline:
-            if let s = entry.skipped {
+            if let s = entry.plainSkip {
                 Text("Skipped \(ChumbyEntry.clock(s.date))")
+            } else if entry.moved != nil, let at = entry.nextAt {
+                Text("Just this once \(ChumbyEntry.clock(at))" + (entry.usualText.map { " · usually \($0)" } ?? ""))
             } else {
                 Text(clock.map { "\($0.0) \($0.1)" + (entry.nextAlarm.map { ChumbyEntry.label($0.name) }.map { $0.isEmpty ? "" : " · \($0)" } ?? "") } ?? noAlarm)
             }
         case .accessoryRectangular:
             HStack(spacing: 7) {
-                OctopusMark(color: .white, blink: entry.skipped == nil ? 1 : 0.08).frame(width: 30, height: 24)
+                OctopusMark(color: .white, blink: entry.plainSkip == nil ? 1 : 0.08).frame(width: 30, height: 24)
                 VStack(alignment: .leading, spacing: 0) {
-                    if let s = entry.skipped {
+                    if let s = entry.plainSkip {
                         Text("Skipped").font(.trebuchet(12, .bold)).lineLimit(1)
                         Text(ChumbyEntry.clock(s.date)).font(.trebuchet(19, .bold)).strikethrough().lineLimit(1).minimumScaleFactor(0.7)
                         if let at = entry.nextAt { Text("then \(ChumbyEntry.then(at))").font(.trebuchet(12)).lineLimit(1) }
+                    } else if entry.moved != nil, let at = entry.nextAt {
+                        Text("Just this once").font(.trebuchet(12, .bold)).lineLimit(1)
+                        Text(ChumbyEntry.clock(at)).font(.trebuchet(19, .bold)).lineLimit(1).minimumScaleFactor(0.7)
+                        if let u = entry.usualText { Text("usually \(u)").font(.trebuchet(12)).lineLimit(1) }
                     } else {
                         Text(clock.map { "\($0.0) \($0.1)" } ?? noAlarm).font(.trebuchet(19, .bold)).lineLimit(1).minimumScaleFactor(0.7)
                         if entry.nextAt != nil { Text(entry.whenLine).font(.trebuchet(12)).lineLimit(1) }
@@ -259,7 +280,7 @@ struct AlarmBody: View {
                 }
             }
         default:
-            if let s = entry.skipped {
+            if let s = entry.plainSkip {
                 // Skipped: the octopus asleep, the time struck through, what rings instead, and Undo.
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top) {
@@ -274,8 +295,13 @@ struct AlarmBody: View {
                     if entry.reachable { SkipButton(entry: entry, height: 30) }
                 }
             } else if let c = clock, entry.nextAt != nil {
+                // Moved just this once, the octopus is awake and the new time leads, with "Just this once" where
+                // "Skipped" would sit; the usual time is in the line under it, and the button says "Back to 6:45 AM".
                 VStack(alignment: .leading, spacing: 0) {
-                    Octo(faded: !entry.reachable).frame(width: 46, height: 34)
+                    HStack(alignment: .top) {
+                        Octo(faded: !entry.reachable).frame(width: 46, height: 34)
+                        if entry.moved != nil { Spacer(); Text("Just this once").font(.trebuchet(13, .bold)).opacity(0.85).lineLimit(1).minimumScaleFactor(0.8) }
+                    }
                     Spacer(minLength: 0)
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
                         Text(c.0).font(.trebuchet(34, .bold)).minimumScaleFactor(0.6).monospacedDigit()
@@ -339,12 +365,13 @@ struct RemoteBody: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 0) {
-                Octo(faded: !entry.reachable, blink: entry.skipped != nil || entry.night ? 0.08 : 1).frame(width: 46, height: 34)
+                Octo(faded: !entry.reachable, blink: entry.plainSkip != nil || entry.night ? 0.08 : 1).frame(width: 46, height: 34)
                 Spacer(minLength: 2)
-                if let s = entry.skipped {
+                if let s = entry.plainSkip {
                     ClockText(date: s.date, big: 26, small: 13, struck: true)
                     Text(entry.nextAt.map { "Skipped · then \(ChumbyEntry.then($0))" } ?? "Skipped").font(.trebuchet(13)).lineLimit(1).minimumScaleFactor(0.8)
                 } else if let a = entry.nextAlarm, entry.nextAt != nil {
+                    if entry.moved != nil { Text("Just this once").font(.trebuchet(12, .bold)).opacity(0.85).lineLimit(1) }
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
                         Text(a.clock).font(.trebuchet(26, .bold)).monospacedDigit().minimumScaleFactor(0.7)
                         Text(a.meridiem).font(.trebuchet(13, .bold))
