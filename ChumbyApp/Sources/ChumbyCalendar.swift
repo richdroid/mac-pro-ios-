@@ -15,7 +15,7 @@ final class CalendarWake: ObservableObject {
     static let refreshID = "local.macpro.Chumby.calendar"
     nonisolated static let prefix = Alarm.calendarPrefix
     // The build's simulator shots, which have no calendar, show a sample plan in these.
-    static let samplePoses: Set<String> = ["calendar", "calsettings", "calday", "caldayedit", "caldayown", "template", "alarmsdemo"]
+    static let samplePoses: Set<String> = ["calendar", "calsettings", "calday", "caldayedit", "caldayown", "template", "alarmsdemo", "calonce"]
     static var sample: Bool { samplePoses.contains(ChumbyModel.pose) }
     let store = EKEventStore()
     // A change here updates the Chumby a moment later, wherever it was made, so nothing waits for a page to close.
@@ -310,6 +310,25 @@ extension ChumbyState {
             if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
         }
         return permit
+    }
+}
+
+extension CalendarWake {
+    // "Just this once" for a calendar day: the day's own time, and its own sound when it differs from what the Chumby
+    // holds for it, saved by the calendar's own update, so the day's one alarm moves in one save. CalendarKeep counts an
+    // edited day as the user's call, and the save carries force=1 for the old time it drops, which the Chumby accepts
+    // for a calendar alarm due today. Nil once it's on the Chumby; otherwise why not (the update's own note).
+    func moveDay(_ item: PlannedWake, to at: Date, settings: Alarm, current: Alarm?) async -> String? {
+        guard at < item.start else { return "Pick a time before it starts." }
+        guard at.timeIntervalSinceNow >= 120 else { return "That’s too soon to set. Pick a later time." }
+        func sound(_ a: Alarm) -> String { [a.type, a.arg, a.param, a.param_description, a.duration, a.snooze, a.auto_dismiss, a.action, a.action_param].joined(separator: "\u{1}") }
+        var e = rules.dayEdits[item.key] ?? DayEdit()
+        e.wakeAt = at.timeIntervalSince1970
+        if let current, sound(settings) != sound(current) { var own = e.own ?? Alarm(); own.takeSettings(from: settings); e.own = own }
+        rules.dayEdits[item.key] = e
+        note = nil
+        _ = await sync()
+        return note
     }
 }
 

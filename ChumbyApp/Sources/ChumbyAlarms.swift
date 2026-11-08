@@ -471,7 +471,9 @@ struct AlarmsTab: View {
 
     var dismissed: Set<String> { Set(dismissedRaw.split(separator: "\n").map(String.init)) }
     var missed: [ChumbyState.Missed] { model.state.missed.filter { Date().timeIntervalSince1970 - $0.at < 86400 && !dismissed.contains($0.id) }.suffix(3).reversed().map { $0 } }
-    var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" }.sorted { $0.localMinutes < $1.localMinutes } }
+    // A "just this once" standing in for one of these is told on that alarm's row, never listed as an alarm of its own.
+    var folded: String? { model.state.justOnce().flatMap { $0.original != nil ? $0.alarm.key : nil } }
+    var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" && $0.key != folded }.sorted { $0.localMinutes < $1.localMinutes } }
     var paneShown: Pane { wide ? pane : .schedule }
     // Pages that bring their own title row (editor, day) have none from here.
     var rightTitle: String? {
@@ -580,6 +582,8 @@ struct AlarmsTab: View {
                     wake.rules.dayEdits[w.key] = DayEdit(own: own)
                     openDay(w.key)
                 }
+            // A calendar day moved for that day alone by "just this once": its own time, 25 minutes later than usual.
+            case "calonce": if let w = wake.plan.first { wake.rules.dayEdits[w.key] = DayEdit(wakeAt: w.wake.addingTimeInterval(25 * 60).timeIntervalSince1970) }
             case "editor": edit(mine.first ?? Alarm())
             case "editornew": edit(nil)
             // His own alarms and the nap brought on screen, folded, for their shot.
@@ -618,25 +622,28 @@ struct AlarmsTab: View {
         if !model.stateKnown {
             HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) }.padding(.vertical, 6)
         } else if let n = model.nextRing() {
-            let fromCalendar = n.alarm.isCalendar
+            // A "just this once" standing behind the Chumby's skip is that alarm moved for one ring, never a skip: the
+            // moved time leads, the usual one is said in words, and "Back to 6:45 AM" takes it back (Richard,
+            // 2026-11-08: "i dont like that it shows as a skip").
+            let moved = model.state.justOnce().flatMap { $0.pinned && $0.alarm.key == n.alarm.key ? $0 : nil }
+            let shownAlarm = moved?.original ?? n.alarm
+            let fromCalendar = shownAlarm.isCalendar
             let skippedNow = model.state.skipped.map { $0.date > Date() } == true
             VStack(alignment: .leading, spacing: 3) {
-                // A skip shows here too, with its Undo, so the time below never looks as if the skipped one vanished.
-                if let s = model.state.skipped, s.date > Date() {
-                    // Behind a "just this once", Undo takes both back: the usual time rings again and the one-off goes.
-                    let moved = model.state.justOnce().flatMap { $0.replaces != nil ? $0.at : nil }
+                // A plain skip shows here too, with its Undo, so the time below never looks as if the skipped one vanished.
+                if moved == nil, let s = model.state.skipped, s.date > Date() {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(clockParts(s.date).0 + " " + clockParts(s.date).1).font(.custom("Trebuchet MS", size: 17).weight(.bold)).strikethrough().foregroundStyle(.secondary)
-                        Text(moved != nil ? "Later, just this once" : "Skipped").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
+                        Text("Skipped").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
                         Spacer(minLength: 8)
-                        Button("Undo") { Task { if moved != nil { if let why = await model.undoJustOnce() { model.fail("skip", why) } } else { await model.unskip() } } }
+                        Button("Undo") { Task { await model.unskip() } }
                             .font(.subheadline.weight(.semibold)).foregroundStyle(.tint).buttonStyle(.borderless)
                     }
                     .padding(.bottom, 4)
                 }
                 // What kind it is, in that kind's colour, the same glyph as its row below.
                 SectionHead(icon: fromCalendar ? "calendar" : "alarm.fill",
-                            text: (skippedNow ? "Then" : "Next alarm") + " · " + { let k = kindWord(n.alarm); return k.prefix(1).uppercased() + k.dropFirst() }(),
+                            text: (skippedNow && moved == nil ? "Then" : "Next alarm") + " · " + { let k = kindWord(shownAlarm); return k.prefix(1).uppercased() + k.dropFirst() }(),
                             color: fromCalendar ? ChumbyPalette.cal(scheme == .dark) : ChumbyPalette.acc(scheme == .dark))
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     let c = clockParts(n.at)
@@ -646,10 +653,22 @@ struct AlarmsTab: View {
                     Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
                 }
                 HStack(alignment: .center, spacing: 10) {
-                    Text("\(dayWord(n.at)) · \(alarmLabel(n.alarm).capitalizedFirst)").foregroundStyle(.secondary).lineLimit(1).contentTransition(.numericText())
+                    Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst)" + (moved?.usual.map { " · just this once (usually \($0.formatted(date: .omitted, time: .shortened)))" } ?? ""))
+                        .foregroundStyle(.secondary).lineLimit(2).contentTransition(.numericText())
                     Spacer(minLength: 8)
-                    // The one thing he'd reach for here: let it pass. Only on a Chumby that can skip, and not twice.
-                    if model.state.skipKnown && !skippedNow && model.sys.ringing == nil {
+                    if let moved, let u = moved.usual {
+                        // Back to the usual: the skip taken back and the one-off removed, in that order (undoJustOnce).
+                        Button {
+                            skipping = true
+                            Task { if let why = await model.undoJustOnce() { model.fail("skip", why) }; skipping = false }
+                        } label: {
+                            Group { if skipping { ProgressView() } else { Text("Back to \(u.formatted(date: .omitted, time: .shortened))") } }
+                                .font(.subheadline.weight(.semibold)).lineLimit(1).frame(minHeight: 30).padding(.horizontal, 4)
+                        }
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .accessibilityLabel("Back to the usual \(u.formatted(date: .omitted, time: .shortened)) alarm")
+                    } else if model.state.skipKnown && !skippedNow && model.sys.ringing == nil {
+                        // The one thing he'd reach for here: let it pass. Only on a Chumby that can skip, and not twice.
                         Button {
                             skipping = true
                             Task { await model.skipNext(); skipping = false }
@@ -708,6 +727,11 @@ struct AlarmsTab: View {
                     if JustOnce.isOne(a), let j = model.state.justOnce(), j.alarm.key == a.key {
                         if let r = j.replaces { RowNote(icon: "clock.arrow.circlepath", text: "In place of the \(r.date.formatted(date: .omitted, time: .shortened)), just this once", color: .secondary) }
                         else if j.orphan, let u = j.usual { RowNote(icon: "exclamationmark.circle.fill", text: "The usual \(u.formatted(date: .omitted, time: .shortened)) isn’t skipped, so both ring") }
+                    }
+                    // Its one ring moved or changed, said here on the alarm it belongs to (the one-off isn't listed).
+                    if let j = model.state.justOnce(), j.original?.key == a.key {
+                        if j.pinned { RowNote(icon: "clock.arrow.circlepath", text: "Just this once: \(dayWord(j.at).lowercased()) at \(j.at.formatted(date: .omitted, time: .shortened)), \(j.alarm.soundText)", color: .secondary) }
+                        else if j.orphan, let u = j.usual { RowNote(icon: "exclamationmark.circle.fill", text: "Both will ring: \(u.formatted(date: .omitted, time: .shortened)) and the one-off at \(j.at.formatted(date: .omitted, time: .shortened))") }
                     }
                     MarkNote(mark: a.key)
                 }
@@ -1142,7 +1166,16 @@ struct AlarmEditor: View {
                 } header: { Text("Afterwards") } footer: { if calendarTemplate { Text("Applies to every alarm your calendar sets, now and later.") } }
                 // One of his repeating alarms: later or another sound for its next ring only (the Chumby's skip is pinned by name,
                 // so it needn't be the next alarm to ring).
-                if let original, !calendarTemplate, original.when != "once", original.isOn {
+                if let original, !calendarTemplate, original.when != "once", original.isOn,
+                   let j = model.state.justOnce(), j.original?.key == original.key, j.pinned, let u = j.usual {
+                    Section {
+                        RowNote(icon: "clock.arrow.circlepath", text: "Rings \(dayWord(j.at).lowercased()) at \(j.at.formatted(date: .omitted, time: .shortened)) with \(j.alarm.soundText), then as usual.", color: .secondary)
+                        Button("Back to \(u.formatted(date: .omitted, time: .shortened))") {
+                            saving = true; problem = nil
+                            Task { let why = await model.undoJustOnce(); saving = false; if let why { problem = why } else { finish() } }
+                        }.foregroundStyle(.tint).disabled(saving)
+                    } header: { Text("Just this once") }
+                } else if let original, !calendarTemplate, original.when != "once", original.isOn {
                     switch model.justOnceOffer(for: original) {
                     case .hidden: EmptyView()
                     case .note(let why): Section { Text(why).font(.subheadline).foregroundStyle(.secondary) } header: { Text("Just this once") }

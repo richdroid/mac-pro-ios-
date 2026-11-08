@@ -86,7 +86,8 @@ extension ChumbyModel {
         }
         if let r = sys.ringing, r.name == target.alarm.name { return .note("It’s ringing now. Snooze or stop it on the card above.") }
         if target.at.timeIntervalSinceNow < 180 { return .note("It’s about to ring, so it can’t be changed now. Snooze it when it does.") }
-        return .ok(alarm: target.alarm, due: target.at, warning: pinWarning)
+        // A calendar day moves its own alarm (moveDay): no skip is involved, so nothing is replaced.
+        return .ok(alarm: target.alarm, due: target.at, warning: target.alarm.isCalendar ? nil : pinWarning)
     }
 
     // Puts `original`'s ring at `due` at `at` with `settings` (its sound, length and snooze), for that ring only. With
@@ -98,6 +99,15 @@ extension ChumbyModel {
         tick()
         let late = at.timeIntervalSince(due)
         guard late >= 0, late <= Double(JustOnce.longest * 60) else { return "Pick a time from \(due.formatted(date: .omitted, time: .shortened)), on the same night." }
+        // A calendar day is one alarm of its own already: that day's time (and sound) simply change, through the
+        // calendar's own update, in one save. No skip, no second alarm, nothing for the panel's reload to lose (11-08:
+        // his "just this once" on the shift's alarm went through the skip path and came back with an error).
+        if original.isCalendar {
+            let wake = CalendarWake.shared
+            func day() -> PlannedWake? { wake.plan.first { CalendarWake.alarmName($0) == original.name && abs($0.wake.timeIntervalSince(due)) < 60 } }
+            if day() == nil { wake.refreshPlan() }     // from Home before Alarms has been opened, the plan may not be worked out yet
+            if let item = day() { return await wake.moveDay(item, to: at, settings: settings, current: deviceState.alarms.first { $0.key == original.key }) }
+        }
         // Fresh from the Chumby: that ring is still ahead and not about to ring, and what the one skip is on now.
         var old: JustOnceNow?
         do {
@@ -125,6 +135,8 @@ extension ChumbyModel {
             _ = await save(.delete(off))
             return why
         }
+        // The two saves just sent the panel back to its list; it answers no skip until that's in. Wait for it.
+        await waitForPanel()
         // 3. The usual ring skipped, checked against the Chumby's own answer.
         if let why = await skipFor(original, due: due) {
             // Couldn't: take the one-off away again, so it's as it was rather than ringing twice.
@@ -138,18 +150,32 @@ extension ChumbyModel {
         }
         return nil
     }
+    // After a save the panel re-reads its list (a=state says "pending" until the hook has it in, apply.sh), and its
+    // hook answers no skip request until then. A skip asked for straight after the one-off's two saves went
+    // unconfirmed within the few seconds allowed, was taken back, and the one-off with it (11-08).
+    private func waitForPanel() async {
+        guard let api else { return }
+        for _ in 0..<20 {
+            if let s = try? JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state")), !s.pending { return }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+    }
     // The Chumby's skip, pinned to that ring, or why not. One that landed elsewhere is taken back at once.
     private func skipFor(_ original: Alarm, due: Date) async -> String? {
-        if let why = await skip(original, at: due) { return why }
         guard let api else { return "No Chumby address set." }
-        // Read straight from the Chumby, since the list shown keeps the skip it asked for for a few seconds.
-        for _ in 0..<3 {
-            if let s = try? JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state")), let k = s.skipped {
+        // The Chumby's clock before asking, so a copy from before the request (the relay keeps one for a while) is
+        // never read as its answer.
+        let asked = (try? JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state")))?.chumbyNow
+        if let why = await skip(original, at: due) { return why }
+        // Read again until the panel has answered: its poll runs every 2 s once its list is in, and the relay's copy
+        // follows a little behind. Up to half a minute, not a few seconds.
+        for _ in 0..<15 {
+            if let s = try? JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state")), asked.map({ a in s.chumbyNow.map { $0 > a } ?? true }) ?? true, let k = s.skipped {
                 if k.name == original.name && abs(k.date.timeIntervalSince(due)) < 60 { return nil }
                 await unskip()
                 return "The Chumby skipped another alarm, so that skip was taken back."
             }
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
         await unskip()
         return "The Chumby didn’t confirm the skip."
@@ -270,7 +296,7 @@ struct JustOnceSheet: View {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
                     ToolbarItem(placement: .confirmationAction) {
                         if saving { ProgressView() } else {
-                            Button("Set") { if model.pinWarning != nil { confirm = true } else { save(replacing: false) } }.fontWeight(.semibold)
+                            Button("Set") { if !original.isCalendar, model.pinWarning != nil { confirm = true } else { save(replacing: false) } }.fontWeight(.semibold)
                                 .confirmationDialog(model.pinWarning ?? "", isPresented: $confirm, titleVisibility: .visible) {
                                     Button("Replace and set") { save(replacing: true) }
                                 }
@@ -287,11 +313,12 @@ struct JustOnceSheet: View {
         .tint(ChumbyPalette.acc(scheme == .dark))
     }
     @ViewBuilder var sections: some View {
-        if saving || problem != nil || model.pinWarning != nil {
+        let warning = original.isCalendar ? nil : model.pinWarning
+        if saving || problem != nil || warning != nil {
             Section {
                 if saving { HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) } }
                 if let problem { FailNote(text: problem) }
-                if let w = model.pinWarning, !saving { RowNote(icon: "exclamationmark.circle.fill", text: w) }
+                if let w = warning, !saving { RowNote(icon: "exclamationmark.circle.fill", text: w) }
             }
         }
         Section {
@@ -332,7 +359,8 @@ struct JustOnceSheet: View {
         } header: { Text("When") }
         Section("Sound") { SoundRows(choice: $sound, alarm: $alarm) }
         Section {} footer: {
-            Text("The usual \(due.formatted(date: .omitted, time: .shortened)) is skipped and this rings in its place. It repeats as usual after.")
+            Text(original.isCalendar ? "That day’s alarm moves to \(at.formatted(date: .omitted, time: .shortened)). The other days are as they were."
+                 : "The usual \(due.formatted(date: .omitted, time: .shortened)) is skipped and this rings in its place. It repeats as usual after.")
         }
     }
     func load() {

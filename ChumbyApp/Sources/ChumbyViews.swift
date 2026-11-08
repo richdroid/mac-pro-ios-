@@ -2131,7 +2131,11 @@ struct SkipCard: View {
     @State private var lastAsked: Bool?
     private var pending: Bool { inflight > 0 }
     // The skip that a "just this once" stands behind: undone, both go (the usual time rings again, the one-off is removed).
-    private var moved: Date? { model.state.justOnce().flatMap { $0.replaces != nil ? $0.at : nil } }
+    // On the card it's that alarm moved for one ring, never a skip: the day gel, the new time, the usual one in words,
+    // and "Back to 6:45 AM" (Richard, 2026-11-08: "i dont like that it shows as a skip").
+    private var movedOne: JustOnceNow? { model.state.justOnce().flatMap { $0.pinned ? $0 : nil } }
+    private var moved: Date? { movedOne?.at }
+    private var usual: Date? { movedOne?.usual }
     private func send(_ skip: Bool) {
         // The same ask twice in a row (two taps on Undo) is one ask.
         if pending && lastAsked == skip { return }
@@ -2153,8 +2157,8 @@ struct SkipCard: View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 7) {
                 ZStack(alignment: .leading) {
-                    if struck { Text(moved != nil ? "Later, just this once" : "Skipped").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
-                    else { Text("Skip next alarm").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
+                    if struck { Text("Skipped").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
+                    else { Text(moved != nil ? "Just this once" : "Skip next alarm").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
                 }
                 .font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
                 if pending { ProgressView().controlSize(.mini).tint(.white.opacity(0.85)).transition(.opacity) }
@@ -2162,19 +2166,21 @@ struct SkipCard: View {
             Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold))
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .overlay { StrikeLine(progress: struck ? 1 : 0) }
-            Text("\(day(at)) · \(label(name))" + (struck ? moved.map { " · now \(time($0))" } ?? "" : "")).font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
+            Text("\(day(at)) · \(label(name))" + (moved != nil ? usual.map { " · usually \(time($0))" } ?? "" : "")).font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
         }
         .foregroundStyle(.white)
     }
     var body: some View {
-        if model.stateKnown && model.state.skipKnown && !model.unreachable && model.sys.ringing == nil, let next = skipped.map({ ($0.date, $0.name) }) ?? model.nextRing().map({ ($0.at, $0.alarm.name) }) {
-            let asleep = shown ?? (skipped != nil)
+        if model.stateKnown && model.state.skipKnown && !model.unreachable && model.sys.ringing == nil,
+           let next = movedOne.flatMap({ j in j.original.map { (j.at, $0.name) } }) ?? skipped.map({ ($0.date, $0.name) }) ?? model.nextRing().map({ ($0.at, $0.alarm.name) }) {
+            // Moved for one ring, the card stays awake: it isn't a skip.
+            let asleep = (shown ?? (skipped != nil)) && moved == nil
             VStack(alignment: .leading, spacing: 8) {
                 // One slab that only changes colour, night laid over day, so it never thins to the sea between states;
                 // only what's written on it crossfades.
                 // Awake, the whole slab is the button; asleep it does nothing, and only Undo (laid on it, not inside it)
                 // answers.
-                Button { if !asleep && !pending { send(true) } } label: {
+                Button { if !asleep && !pending && moved == nil { send(true) } } label: {
                 ZStack {
                     ChumbyGel(colors: Self.day, rim: 0x1f4589)
                     ChumbyGel(colors: Self.night, rim: 0x172447).opacity(asleep ? 1 : 0)
@@ -2184,27 +2190,28 @@ struct SkipCard: View {
                         Spacer(minLength: 8)
                         Image(systemName: "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
                             .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
-                            .opacity(asleep ? 0 : 1)
-                            // Room for Undo, which sits over this end of the slab.
-                            .frame(minWidth: asleep ? 92 : 0, alignment: .trailing)
+                            .opacity(asleep || moved != nil ? 0 : 1)
+                            // Room for Undo, or for "Back to 6:45 AM", which sits over this end of the slab.
+                            .frame(minWidth: moved != nil ? 128 : asleep ? 92 : 0, alignment: .trailing)
                     }
                     .padding(.horizontal, 18).padding(.vertical, 16)
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                 }
-                .buttonStyle(GelPress(enabled: !asleep))
-                .disabled(asleep)
-                .accessibilityLabel(asleep ? "Skipped, \(time(next.0)) alarm" : "Skip the \(time(next.0)) alarm, \(day(next.0))")
+                .buttonStyle(GelPress(enabled: !asleep && moved == nil))
+                .disabled(asleep || moved != nil)
+                .accessibilityLabel(moved != nil ? "Just this once, \(time(next.0)) alarm" : asleep ? "Skipped, \(time(next.0)) alarm" : "Skip the \(time(next.0)) alarm, \(day(next.0))")
                 .overlay(alignment: .trailing) {
-                    if asleep {
+                    if asleep || moved != nil {
                         Button { send(false) } label: {
-                            Text("Undo").font(.custom("Trebuchet MS", size: 18).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
-                                .padding(.horizontal, 20).padding(.vertical, 11)
+                            Text(moved != nil ? "Back to \(usual.map(time) ?? "usual")" : "Undo").font(.custom("Trebuchet MS", size: moved != nil ? 16 : 18).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
+                                .lineLimit(1).minimumScaleFactor(0.8)
+                                .padding(.horizontal, moved != nil ? 14 : 20).padding(.vertical, 11)
                                 .background(.white, in: Capsule())
                         }
                         .buttonStyle(GelPress())
                         .padding(.trailing, 18)
-                        .accessibilityLabel(moved != nil ? "Undo just this once, so the \(time(next.0)) alarm rings as usual" : "Undo the skip, so the \(time(next.0)) alarm rings")
+                        .accessibilityLabel(moved != nil ? "Back to the usual \(usual.map(time) ?? "") alarm" : "Undo the skip, so the \(time(next.0)) alarm rings")
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                     }
                 }
