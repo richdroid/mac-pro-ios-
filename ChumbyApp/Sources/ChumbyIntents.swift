@@ -36,7 +36,15 @@ struct ChumbyPress: AppIntent {
 func chumbySetSkip(_ on: Bool) async throws {
     do {
         try await chumbyTry { api in
-            _ = try await api.post(on ? "skip" : "unskip")
+            if on {
+                // Pinned by name to the ring the app shows as next (chumby 2c90cc9), and never over a skip already set: the
+                // Chumby holds one, and replacing it would bring back an alarm (or a "just this once" pair) skipped on purpose.
+                let s = try JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state"))
+                guard s.skipped.map({ $0.date > Date() }) != true, let n = s.nextRing() else { return }
+                _ = try await api.post("skip", extra: "&name=" + ChumbyAPI.enc(n.alarm.name) + "&at=\(Int((n.at.timeIntervalSince1970 / 60).rounded()))")
+            } else {
+                _ = try await api.post("unskip")
+            }
             for _ in 0..<6 {
                 try? await Task.sleep(nanoseconds: 700_000_000)
                 guard let d = try? await api.fresh("state"), let s = try? JSONDecoder().decode(ChumbyState.self, from: d) else { continue }
@@ -218,6 +226,8 @@ extension ChumbyState {
             o += [("\(i)_name", a.name), ("\(i)_enabled", a.enabled), ("\(i)_time", a.time), ("\(i)_when", a.when), ("\(i)_type", a.type), ("\(i)_arg", a.arg),
                   ("\(i)_param", a.param), ("\(i)_param_description", a.param_description), ("\(i)_duration", a.duration), ("\(i)_snooze", a.snooze),
                   ("\(i)_auto_dismiss", a.auto_dismiss), ("\(i)_action", a.action), ("\(i)_action_param", a.action_param), ("\(i)_backup", a.backup), ("\(i)_backupDelay", a.backupDelay)]
+            // A calendar day with its own sound says so on every save, or the Chumby puts the shared set back on it.
+            if a.isOwn { o.append(("\(i)_own", "1")) }
         }
         return o
     }

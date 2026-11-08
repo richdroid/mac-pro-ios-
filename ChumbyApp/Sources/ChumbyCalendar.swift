@@ -15,7 +15,7 @@ final class CalendarWake: ObservableObject {
     static let refreshID = "local.macpro.Chumby.calendar"
     nonisolated static let prefix = Alarm.calendarPrefix
     // The build's simulator shots, which have no calendar, show a sample plan in these.
-    static let samplePoses: Set<String> = ["calendar", "calsettings", "calday", "caldayedit", "template"]
+    static let samplePoses: Set<String> = ["calendar", "calsettings", "calday", "caldayedit", "caldayown", "template"]
     static var sample: Bool { samplePoses.contains(ChumbyModel.pose) }
     let store = EKEventStore()
     // A change here updates the Chumby a moment later, wherever it was made, so nothing waits for a page to close.
@@ -91,6 +91,7 @@ final class CalendarWake: ObservableObject {
                     plan[i].wake = Date(timeIntervalSince1970: at); plan[i].lead = Int((w.start.timeIntervalSince(plan[i].wake) / 60).rounded()); plan[i].exact = true
                 }
                 plan[i].label = rules.dayEdits[k]?.label.flatMap { $0.isEmpty ? nil : $0 }
+                plan[i].own = rules.dayEdits[k]?.own
                 plan[i].custom = rules.edited(k)
             }
             return
@@ -266,9 +267,15 @@ extension ChumbyState {
     mutating func applyCalendar(_ wakes: [PlannedWake], settings: Alarm? = nil, keep: CalendarKeep? = nil) -> SavePermit {
         var permit = SavePermit(calendarOnly: true)
         let mine = alarms.filter { $0.isCalendar }
-        let have = Set(mine.filter { $0.isOn }.map { $0.time + $0.name })
+        // A day with its own sound counts as different until the Chumby holds exactly that sound, marked as its own.
+        func sound(_ a: Alarm) -> String { [a.type, a.arg, a.param, a.param_description, a.duration, a.snooze, a.auto_dismiss, a.action, a.action_param].joined(separator: "\u{1}") }
+        let have = Set(mine.filter { $0.isOn }.map { $0.time + $0.name + ($0.isOwn ? "\u{2}" + sound($0) : "") })
+        let wanted = wakes.map { w -> String in
+            var own = Alarm(); if let o = w.own { own.takeSettings(from: o) }
+            return CalendarWake.minutes(w.wake) + CalendarWake.alarmName(w) + (w.own != nil ? "\u{2}" + sound(own) : "")
+        }
+        if have == Set(wanted) && mine.filter({ !$0.isOn }).isEmpty { return permit }
         let want = Set(wakes.map { CalendarWake.minutes($0.wake) + CalendarWake.alarmName($0) })
-        if have == want && mine.filter({ !$0.isOn }).isEmpty { return permit }
         // By the Chumby's clock, since that's the one it rings by.
         let clock = chumbyNow ?? Date()
         var held: [Alarm] = []
@@ -298,6 +305,8 @@ extension ChumbyState {
             // Guessed from your own alarm, it only borrows the sound; chosen settings keep their own after-action and backup.
             // (Never the stock backup beeper: the Chumby saves backup 0 whatever it's sent.)
             if settings == nil { a.action = ""; a.action_param = ""; a.backup = "0" }
+            // That day's own sound and snooze, kept by the Chumby because it's marked as its own.
+            if let o = w.own { a.takeSettings(from: o); a.backup = "0"; if a.backupDelay.isEmpty || a.backupDelay == "0" { a.backupDelay = "5" }; a.own = "1" } else { a.own = "" }
             if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
         }
         return permit
@@ -483,8 +492,10 @@ struct CalendarDaySheet: View {
     @State private var openedAt = Date()
     @State private var labelText = ""
     @State private var problem: String?
-    @State private var justOnce = false
     @State private var undoing = false
+    @State private var ownSound = SoundChoice()
+    @State private var ownAlarm = Alarm()
+    @State private var ownBase: SoundChoice?
     let key: String
     // Set when it fills the open Duo's right pane, or the folded content column, instead of being a sheet.
     var close: (() -> Void)?
@@ -513,14 +524,11 @@ struct CalendarDaySheet: View {
         problem = nil
         setEdit { $0.wakeAt = t.timeIntervalSince1970 }
     }
-    // That day's alarm as the Chumby holds it, once it's there.
-    func onChumby(_ item: PlannedWake) -> Alarm? {
-        model.deviceState.alarms.first { $0.isOn && $0.name == CalendarWake.alarmName(item) && $0.time == CalendarWake.minutes(item.wake) }
-    }
     func useUsual(_ item: PlannedWake) {
         wake.rules.leadOverrides[key] = nil
         wake.rules.dayEdits[key] = nil
         labelText = ""; problem = nil
+        loadOwn()
         if model.state.justOnce(for: item) != nil { undo() }
     }
     func undo() {
@@ -579,39 +587,51 @@ struct CalendarDaySheet: View {
             Text("That day is no longer on your calendar.").foregroundStyle(.secondary).background { foot }
         }
     }
-    // Another sound or snooze for this day: a "just this once" beside the calendar's alarm (see JustOnce), which the
-    // Chumby can only do for the next alarm to ring, so a later day says when it can.
+    // That day's own sound and snooze, or the shared set. Its own is sent marked as its own (I_own=1), which the Chumby
+    // keeps for that alarm alone, on any day. A "just this once" set from Home for this day shows here too, with Undo.
+    var shared: Alarm { model.state.calTpl ?? wake.storedSettings ?? model.state.alarms.first { $0.isCalendar && !$0.isOwn } ?? Alarm() }
+    func loadOwn() {
+        ownAlarm = edit.own ?? shared
+        ownSound = SoundChoice(ownAlarm, state: model.state, stations: model.pandoraStations)
+        ownBase = ownSound
+    }
+    func commitOwn() {
+        guard edit.own != nil else { return }
+        var a = Alarm()
+        a.takeSettings(from: ownAlarm)
+        // The sound is only rewritten once it's been changed here, so opening a day never alters what it plays.
+        if ownSound != ownBase, let why = ownSound.apply(to: &a, state: model.state, stations: model.pandoraStations) { problem = why.errorDescription; return }
+        if a != edit.own { setEdit { $0.own = a } }
+    }
     @ViewBuilder func soundSection(_ item: PlannedWake) -> some View {
         Section {
+            Picker("Sound", selection: Binding(get: { edit.own != nil }, set: { on in
+                if on { var a = Alarm(); a.takeSettings(from: shared); setEdit { $0.own = a } } else { setEdit { $0.own = nil } }
+                loadOwn()
+            })) {
+                Text("Same as the others").tag(false); Text("Its own").tag(true)
+            }
+            .pickerStyle(.segmented)
+            if edit.own != nil {
+                SoundRows(choice: $ownSound, alarm: $ownAlarm)
+            } else {
+                let r = wake.ringsWith(model.state)
+                LabeledContent("Plays", value: r.sound).lineLimit(1)
+                if let z = r.snooze { LabeledContent("Snooze", value: "\(z) min") }
+            }
             if let j = model.state.justOnce(for: item) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(j.alarm.soundText) · \(j.at.formatted(date: .omitted, time: .shortened))")
-                        Text("Snooze \(j.alarm.snooze) min, just this once").font(.subheadline).foregroundStyle(.secondary)
+                        Text("Just this once, in place of the usual time").font(.subheadline).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
                     if undoing { ProgressView() } else { Button("Undo") { undo() }.font(.subheadline.weight(.semibold)).foregroundStyle(.tint).buttonStyle(.borderless) }
                 }
-            } else if let a = onChumby(item), !item.skipped, model.justOnceBlock(for: a) == nil {
-                Button { justOnce = true } label: {
-                    HStack {
-                        Text("Another sound or snooze").foregroundStyle(.tint)
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .sheet(isPresented: $justOnce) { JustOnceSheet(original: a, due: item.wake, later: 1).environmentObject(model) }
-            } else {
-                let r = wake.ringsWith(model.state)
-                LabeledContent("Sound", value: r.sound).lineLimit(1)
             }
-        } header: { Text("Sound for this day") } footer: {
-            if model.state.justOnce(for: item) == nil && !item.skipped && !(onChumby(item).map { model.justOnceBlock(for: $0) == nil } ?? false) {
-                Text("Another sound or snooze for this day can be picked once it’s the next alarm to ring.")
-            }
-        }
+        } header: { Text("Sound for this day") }
+        .onChange(of: ownSound) { _, _ in commitOwn() }
+        .onChange(of: ownAlarm) { _, _ in commitOwn() }
     }
     // Folded, where the last row ends, so the sheet can stop just under it. onGeometryChange reports the first layout too,
     // which onScrollGeometryChange never did, so the sheet used to stay at its first guess.
@@ -637,7 +657,7 @@ struct CalendarDaySheet: View {
                 PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
                 sections
             }
-            .onAppear { labelText = edit.label ?? "" }
+            .onAppear { labelText = edit.label ?? ""; loadOwn() }
             .onDisappear { commitLabel() }
         } else {
             NavigationStack {
@@ -646,7 +666,7 @@ struct CalendarDaySheet: View {
                 List { sections.listRowBackground(GlassRow()) }
                 .coordinateSpace(.named("daySheet"))
                 .seaList().background { SeaBackground().ignoresSafeArea() }
-                .onAppear { openedAt = Date(); labelText = edit.label ?? "" }
+                .onAppear { openedAt = Date(); labelText = edit.label ?? ""; loadOwn() }
                 .onDisappear { commitLabel() }
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -678,7 +698,7 @@ extension CalendarWake {
     // update will borrow from your own alarm, and saying whose.
     func ringsWith(_ s: ChumbyState) -> (sound: String, snooze: String?) {
         if let t = s.calTpl ?? storedSettings { return (t.soundText, t.snooze) }
-        if let c = s.alarms.first(where: { $0.isCalendar }) { return (c.soundText, c.snooze) }
+        if let c = s.alarms.first(where: { $0.isCalendar && !$0.isOwn }) { return (c.soundText, c.snooze) }
         let real = s.alarms.filter { !$0.isCalendar && !$0.isPlaceholder && !$0.isHelper }
         if let a = real.first(where: { $0.isOn && $0.when != "once" }) ?? real.first(where: { $0.type == "audio" }) ?? real.first {
             return ("\(a.soundText) · same as \(alarmLabel(a))", a.snooze)

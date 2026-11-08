@@ -1,6 +1,6 @@
 // Sample Chumby answers so the cloud build can screenshot every tab without a real device.
 const http = require('http');
-const alarm = (o) => ({ name: '', enabled: '1', time: '420', when: 'weekday', type: 'beep', arg: 'Beep', param: '', param_description: 'Beep', duration: '30', snooze: '9', auto_dismiss: '0', action: '', action_param: '', backup: '0', backupDelay: '5', ...o });
+const alarm = (o) => ({ name: '', enabled: '1', time: '420', when: 'weekday', type: 'beep', arg: 'Beep', param: '', param_description: 'Beep', duration: '30', snooze: '9', auto_dismiss: '0', action: '', action_param: '', backup: '0', backupDelay: '5', own: '', ...o });
 const data = {
   tok: { t: 'test' },
   // Every key the real a=sys and a=state carry (chalarm.c do_sys, do_state), so the build reads what the phone reads.
@@ -22,7 +22,7 @@ const clockNow = () => { const d = new Date(), p = n => String(n).padStart(2, '0
 const stateNow = v => ({ ...v, ...clockNow() });
 // What the real do_save turns down, so a save the Chumby would refuse fails here too (a backupDelay of 0 cost every nap
 // from 11-05 while the build saw nothing). Returns the Chumby's own error, or null.
-const ALARM_KEYS = ['name', 'enabled', 'time', 'when', 'type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss', 'action', 'action_param', 'backup', 'backupDelay'];
+const ALARM_KEYS = ['name', 'enabled', 'time', 'when', 'type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss', 'action', 'action_param', 'backup', 'backupDelay', 'own'];
 // As of 510ac74 a missing or odd backupDelay is written as the stock 5, never refused; text over its length or with a
 // control character is "bad text"; tpl must name an alarm in the list.
 const TEXT_MAX = { name: 64, arg: 64, param: 1024, param_description: 128, action_param: 64 };
@@ -267,20 +267,44 @@ function nextWork() {
   }
 }
 const songScene = { at: 0 };
+// An alarm's next ring at or after `from` (ms), as the panel works it out, or null.
+function nextRing(a, from) {
+  if (a.enabled !== '1') return null;
+  if (a.when === 'once') { const t = +a.time * 60000; return t >= from ? t : null; }
+  const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'], d0 = new Date(from);
+  for (let i = 0; i < 9; i++) {
+    const d = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() + i, Math.floor(+a.time / 60), +a.time % 60), w = d.getDay();
+    if (d.getTime() < from) continue;
+    if (a.when === 'daily' || (a.when === 'weekday' && w > 0 && w < 6) || (a.when === 'weekend' && (w === 0 || w === 6)) || a.when === days[w]) return d.getTime();
+  }
+  return null;
+}
+// The skip a=skip name=&at= leaves: that alarm's next ring, if it's at or after `at` (epoch minutes; now when 0).
+function pinned(state, name, at) {
+  const from = Math.max(Date.now(), at * 60000);
+  for (const a of state.alarms) {
+    if (a.name !== name) continue;
+    const t = nextRing(a, Date.now());
+    if (t !== null && t >= from - 59999) return { name, at: Math.floor(t / 60000) * 60, when: a.when };
+  }
+  return null;
+}
 // What do_save writes, given the list it held: never the stock backup beeper; every "Calendar: " alarm with the shared
-// calendar set (tpl=I makes alarm I's the set); one copy per name, repeat and time (the one that's on, then the later);
+// calendar set (tpl=I makes alarm I's the set) unless sent with I_own=1, which keeps what was sent and comes back with
+// own="1" (chumby 2c90cc9; every other alarm reads own=""); one copy per name, repeat and time (the one that's on, then the later);
 // and Rick's newest_wins: an alarm that's on and wasn't in the saved list (by name|when|time) turns every other alarm
 // off, Calendar, Catch-up and Nap alarms apart. So switching on one already in the list is a plain toggle.
 const TPL_KEYS = ['type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss', 'action', 'action_param', 'backup', 'backupDelay'];
 function kept(state, f) {
   const n = +f.get('n') || 0, sent = Array.from({ length: n }, (_, i) => Object.fromEntries(ALARM_KEYS.map(k => [k, f.get(i + '_' + k) || ''])));
   const isCal = a => a.name.startsWith('Calendar: '), helper = a => a.name === 'Catch-up' || a.name === 'Nap', key = a => a.name + '|' + a.when + '|' + a.time;
-  if (f.has('tpl')) state.calTpl = { ...Object.fromEntries(TPL_KEYS.map(k => [k, sent[+f.get('tpl')][k]])), name: '', enabled: '', time: '', when: '' };
+  if (f.has('tpl')) state.calTpl = { ...Object.fromEntries(TPL_KEYS.map(k => [k, sent[+f.get('tpl')][k]])), name: '', enabled: '', time: '', when: '', own: '' };
   const old = new Set(state.alarms.map(key)), counts = a => a.enabled === '1' && !helper(a) && !isCal(a);
   const added = sent.map(a => counts(a) && !old.has(key(a)));
   const any = added.some(Boolean);
   const out = sent.map((a, i) => {
-    const b = { ...a, ...(isCal(a) && state.calTpl ? Object.fromEntries(TPL_KEYS.map(k => [k, state.calTpl[k]])) : {}), backup: '0' };
+    const own = isCal(a) && a.own === '1';
+    const b = { ...a, ...(isCal(a) && !own && state.calTpl ? Object.fromEntries(TPL_KEYS.map(k => [k, state.calTpl[k]])) : {}), backup: '0', own: own ? '1' : '' };
     if (!/^\d+$/.test(b.backupDelay) || +b.backupDelay > 120) b.backupDelay = '5';
     if (any && counts(a) && !added[i]) b.enabled = '0';
     return b;
@@ -305,8 +329,17 @@ function chumbyScene(q, s) {
         const qs = new URL(q.url, 'http://x').searchParams, f = new URLSearchParams(body);
         if (a === 'cmd' && qs.get('c') === 'ringsnooze') live.sys.ring = live.sys.ring.replace(/^r/, 's');
         if (a === 'cmd' && qs.get('c') === 'ringoff') live.sys.ring = '';
-        // The panel's own skip, as the Chumby answers it.
-        if (a === 'skip') { live.state.skipped = nextWork(); return json({ ok: true, pending: false, skipped: live.state.skipped }); }
+        // The panel's own skip, as the Chumby answers it: pinned by name (and the ring at or after `at`, epoch minutes)
+        // since chumby 2c90cc9, an unknown name leaving no skip; without a name, the next Work. One pin only: a new skip
+        // replaces it. (The hook's same-minute rule, a second copy due that minute skipped too, applies only to a copy
+        // with the same name; the mock never rings, so there's nothing more to it here.)
+        if (a === 'skip') {
+          const name = qs.get('name');
+          if (name !== null && (name.length > 64 || /[\x00-\x1f]/.test(name))) return json({ ok: false, error: 'bad name' });
+          if (qs.get('at') !== null && !/^\d+$/.test(qs.get('at'))) return json({ ok: false, error: 'bad at' });
+          live.state.skipped = name ? pinned(live.state, name, +(qs.get('at') || 0)) : nextWork();
+          return json({ ok: true, pending: false, skipped: live.state.skipped });
+        }
         if (a === 'unskip') { live.state.skipped = null; return json({ ok: true, pending: false, skipped: null }); }
         // A channel chosen in the app stays chosen, so Now playing doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }

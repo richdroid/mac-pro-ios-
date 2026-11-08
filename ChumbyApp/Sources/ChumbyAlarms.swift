@@ -609,6 +609,18 @@ struct AlarmsTab: View {
                     wake.rules.dayEdits[w.key] = DayEdit(wakeAt: w.wake.addingTimeInterval(-25 * 60).timeIntervalSince1970, label: "Early start")
                     openDay(w.key)
                 }
+            // A day with its own sound: the mock's radio station and a 15-minute snooze, the other days on the shared set.
+            case "caldayown":
+                // Once the mock's list (with its radio station) has come in.
+                Task {
+                    for _ in 0..<30 where model.state.streams.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
+                    guard let w = wake.plan.first else { return }
+                    var own = Alarm(); own.snooze = "15"
+                    var radio = SoundChoice(); radio.kind = "stream"
+                    _ = radio.apply(to: &own, state: model.state, stations: model.pandoraStations)
+                    wake.rules.dayEdits[w.key] = DayEdit(own: own)
+                    openDay(w.key)
+                }
             case "editor": edit(mine.first ?? Alarm())
             case "editornew": edit(nil)
             // His own alarms and the nap brought on screen, folded, for their shot.
@@ -722,12 +734,13 @@ struct AlarmsTab: View {
                          tap: { edit(a) },
                          toggle: Binding(get: { a.isOn }, set: { on in
                              // Switching off a "just this once" puts the usual time back, never leaving both quiet.
-                             if !on, JustOnce.isOne(a), let j = model.state.justOnce(), j.alarm.key == a.key, j.replaces != nil {
+                             if !on, JustOnce.isOne(a), let j = model.state.justOnce(), j.alarm.key == a.key, j.canUndo {
                                  Task { if let why = await model.undoJustOnce() { model.fail("skip", why) } }
                              } else { model.change(.toggle(a, on)) }
                          })) {
-                    if JustOnce.isOne(a), let r = model.state.justOnce()?.replaces, model.state.justOnce()?.alarm.key == a.key {
-                        RowNote(icon: "clock.arrow.circlepath", text: "In place of the \(r.date.formatted(date: .omitted, time: .shortened)), just this once", color: .secondary)
+                    if JustOnce.isOne(a), let j = model.state.justOnce(), j.alarm.key == a.key {
+                        if let r = j.replaces { RowNote(icon: "clock.arrow.circlepath", text: "In place of the \(r.date.formatted(date: .omitted, time: .shortened)), just this once", color: .secondary) }
+                        else if j.orphan, let u = j.usual { RowNote(icon: "exclamationmark.circle.fill", text: "The usual \(u.formatted(date: .omitted, time: .shortened)) isn’t skipped, so both ring") }
                     }
                     MarkNote(mark: a.key)
                 }
@@ -787,6 +800,8 @@ struct AlarmsTab: View {
                         // What that day does differently, said where the day is.
                         if let j = model.state.justOnce(for: item) {
                             RowNote(icon: "clock.arrow.circlepath", text: "\(j.alarm.soundText) · \(j.at.formatted(date: .omitted, time: .shortened)) (just this once)", color: ChumbyPalette.cal(scheme == .dark))
+                        } else if let o = item.own {
+                            RowNote(icon: "pencil", text: "\(o.soundText) · \(item.wake.formatted(date: .omitted, time: .shortened)) (just this day)", color: ChumbyPalette.cal(scheme == .dark))
                         } else if item.custom {
                             RowNote(icon: "pencil", text: item.label != nil && !item.exact && wake.rules.leadOverrides[item.key] == nil ? "Label just for this day" : "Just this day", color: ChumbyPalette.cal(scheme == .dark))
                         }
@@ -1144,24 +1159,28 @@ struct AlarmEditor: View {
                     // 11-05: the stock beeper killed the alarm panel), so turning it on here came back off after Save.
                     Picker("Then", selection: $after) { ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) } }
                 } header: { Text("Afterwards") } footer: { if calendarTemplate { Text("Applies to every alarm your calendar sets, now and later.") } }
-                // One of his repeating alarms: later or another sound for its next ring only, when that's the next ring.
-                if let original, !calendarTemplate, original.when != "once", original.isOn, let block = Optional(model.justOnceBlock(for: original)), block != .hidden {
-                    Section {
-                        if case .note(let why) = block { Text(why).font(.subheadline).foregroundStyle(.secondary) }
-                        else if let n = model.nextRing() {
+                // One of his repeating alarms: later or another sound for its next ring only (the Chumby's skip is pinned by name,
+                // so it needn't be the next alarm to ring).
+                if let original, !calendarTemplate, original.when != "once", original.isOn {
+                    switch model.justOnceOffer(for: original) {
+                    case .hidden: EmptyView()
+                    case .note(let why): Section { Text(why).font(.subheadline).foregroundStyle(.secondary) } header: { Text("Just this once") }
+                    case .ok(_, let due, let warning):
+                        Section {
                             Button { justOnce = true } label: {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Later or another sound, just this once").foregroundStyle(.tint)
-                                    Text("\(dayWord(n.at)) at \(n.at.formatted(date: .omitted, time: .shortened)) only. It repeats as usual after.").font(.subheadline).foregroundStyle(.secondary)
+                                    Text("\(dayWord(due)) at \(due.formatted(date: .omitted, time: .shortened)) only. It repeats as usual after.").font(.subheadline).foregroundStyle(.secondary)
                                 }
                             }
-                            .sheet(isPresented: $justOnce) { JustOnceSheet(original: original, due: n.at).environmentObject(model) }
-                        }
-                    } header: { Text("Just this once") }
+                            .sheet(isPresented: $justOnce) { JustOnceSheet(original: original, due: due).environmentObject(model) }
+                            if let warning { RowNote(icon: "exclamationmark.circle.fill", text: warning) }
+                        } header: { Text("Just this once") }
+                    }
                 }
                 // A "just this once" goes back to the usual time rather than just going: deleting it alone would leave the
                 // usual one skipped, and neither would ring.
-                if let original, !calendarTemplate, JustOnce.isOne(original), let j = model.state.justOnce(), j.alarm.key == original.key, j.replaces != nil { Section {
+                if let original, !calendarTemplate, JustOnce.isOne(original), let j = model.state.justOnce(), j.alarm.key == original.key, j.canUndo { Section {
                     Button("Back to the usual time") {
                         saving = true; problem = nil
                         Task { let why = await model.undoJustOnce(); saving = false; if let why { problem = why } else { finish() } }
@@ -1181,7 +1200,7 @@ struct AlarmEditor: View {
     func load() {
         if calendarTemplate {
             // The saved set if there is one, else how the first calendar alarm rings now.
-            if let t = model.state.calTpl ?? CalendarWake.shared.storedSettings ?? model.state.alarms.first(where: { $0.isCalendar }) { alarm = t }
+            if let t = model.state.calTpl ?? CalendarWake.shared.storedSettings ?? model.state.alarms.first(where: { $0.isCalendar && !$0.isOwn }) { alarm = t }
         } else if let original { alarm = original }
         // The build's shot of a new alarm being set for a new time, so "Saving turns off …" can be seen.
         if original == nil && !calendarTemplate && ChumbyModel.pose == "editornew" { alarm.time = "330"; alarm.when = "weekday" }

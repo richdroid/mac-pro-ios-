@@ -49,19 +49,21 @@ struct WakeRules: Codable, Equatable {
 }
 // What one calendar day changes for itself alone. The day's key holds the event's start, so if the event moves, the edit
 // is left behind with the old time and the day goes back to the usual settings, as a lead set for that day does.
-// Sound and snooze aren't here: the Chumby gives every "Calendar: " alarm the one shared set (chalarm.c pick()), so a
-// different sound for one day is a "just this once" alarm beside it (JustOnce), which the device keeps as sent.
 struct DayEdit: Codable, Equatable {
     // An exact wake-up time (seconds since 1970) in place of "how long before".
     var wakeAt: Double?
     // Shown on the Chumby in place of the event's title, after "Calendar: ".
     var label: String?
-    var isEmpty: Bool { wakeAt == nil && (label ?? "").isEmpty }
-    init(wakeAt: Double? = nil, label: String? = nil) { self.wakeAt = wakeAt; self.label = label }
+    // That day's own sound, length, snooze and stop, in place of the shared calendar set: only those settings of the
+    // alarm are used (Alarm.takeSettings). Sent with I_own=1, which the Chumby keeps (chumby 2c90cc9).
+    var own: Alarm?
+    var isEmpty: Bool { wakeAt == nil && (label ?? "").isEmpty && own == nil }
+    init(wakeAt: Double? = nil, label: String? = nil, own: Alarm? = nil) { self.wakeAt = wakeAt; self.label = label; self.own = own }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         wakeAt = try c.decodeIfPresent(Double.self, forKey: .wakeAt)
         label = try c.decodeIfPresent(String.self, forKey: .label)
+        own = try? c.decodeIfPresent(Alarm.self, forKey: .own)
     }
 }
 struct PlannedWake: Identifiable, Equatable {
@@ -76,6 +78,7 @@ struct PlannedWake: Identifiable, Equatable {
     var custom = false          // its lead, time or label was set for this day alone
     var exact = false           // rings at a time set for this day, not "how long before"
     var label: String?          // this day's own label, in place of the title on the Chumby
+    var own: Alarm?             // this day's own sound and snooze (DayEdit.own), in place of the shared set
     var shown: String { label ?? title }
     var id: String { key }
 }
@@ -135,6 +138,7 @@ enum WakePlanner {
             item.custom = r.edited(item.key)
             item.exact = wake.timeIntervalSince1970 == edit?.wakeAt
             if let l = edit?.label?.trimmingCharacters(in: .whitespaces), !l.isEmpty { item.label = l }
+            item.own = edit?.own
             // Worth saying if the night before leaves little sleep.
             if let i = usable.indices.last(where: { usable[$0].end <= wake && days[$0] < day }) {
                 let before = usable[i]

@@ -566,7 +566,8 @@ final class ChumbyModel: ObservableObject {
         guard let t = heldCalendar, let api else { return nil }
         do {
             let r = try await AlarmWriter.shared.edit(api, quiet: true, force: true, template: { $0.alarms.contains { $0.isCalendar } }, permit: SavePermit()) { (s: inout ChumbyState) -> Void in
-                for i in s.alarms.indices where s.alarms[i].isCalendar { s.alarms[i].takeSettings(from: t) }
+                // A day with its own sound keeps it; the Chumby leaves those alone too.
+                for i in s.alarms.indices where s.alarms[i].isCalendar && !s.alarms[i].isOwn { s.alarms[i].takeSettings(from: t) }
             }
             heldCalendar = nil; calendarWaiting = false
             landed(r, mark: nil)
@@ -619,17 +620,24 @@ final class ChumbyModel: ObservableObject {
     }
     // Skipping the next alarm uses the panel's own SKIP: no list rewrite, no restart. Shown at once here; the Chumby's own
     // answer replaces it on the next read (it can take a couple of seconds while the panel catches up).
+    // Named, so the Chumby pins the skip to the ring shown here, not to whichever it thinks comes first (chumby 2c90cc9).
     func skipNext() async {
         guard let n = state.nextRing() else { return }
+        if let why = await skip(n.alarm, at: n.at) { fail("skip", why) }
+    }
+    // The Chumby's skip, pinned to this alarm's ring at `at` (a=skip name=&at=, epoch minutes). There's only ever one pin:
+    // this replaces any other. Nil once it's asked for; otherwise why not. The Chumby's own answer replaces the guess.
+    func skip(_ a: Alarm, at: Date) async -> String? {
         let before = state.skipped
-        state.skipped = SkippedAlarm(name: n.alarm.name, at: n.at.timeIntervalSince1970, when: n.alarm.when); deviceState.skipped = state.skipped
+        state.skipped = SkippedAlarm(name: a.name, at: at.timeIntervalSince1970, when: a.when); deviceState.skipped = state.skipped
         skipWanted = (state.skipped, Date().addingTimeInterval(10))
         tick()
         hold(4)
-        guard let why = await sendInOrder("skip", extra: "") else { await settleSkip(); return }
+        let minute = Int((at.timeIntervalSince1970 / 60).rounded())
+        guard let why = await sendInOrder("skip", extra: "&name=" + ChumbyAPI.enc(a.name) + "&at=\(minute)") else { await settleSkip(); return nil }
         skipWanted = nil
         state.skipped = before; deviceState.skipped = before
-        fail("skip", "Couldn’t skip it. \(why)")
+        return "Couldn’t skip it. \(why)"
     }
     func unskip() async {
         let before = state.skipped

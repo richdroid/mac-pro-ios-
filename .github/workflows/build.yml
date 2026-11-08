@@ -268,14 +268,15 @@ jobs:
           # day/night button held halfway (nighthold), Alarms scrolled to My alarms and the nap (alarmsmine), the Add widgets
           # picker open (chadd), and Sounds with a song playing (playing); Home with music playing (homeplaying) and at night
           # (homenight). From 11-07: a calendar day with its own time and label (caldayedit), and the next alarm's "just this
-          # once" sheet open from Home (justonce).
+          # once" sheet open from Home (justonce), and a calendar day with its own sound and snooze (caldayown).
           chumby_poses() { # display, file suffix
             for V in "ringing 0 ringing" "ringing-alarms 2 ringing" "snoozed 0 snoozed" "dead 0 dead" "dead-alarms 2 dead" \
                      "firstrun 2 slow -pose firstrun" "firstrun-home 0 slow -pose firstrun" "calsettings 2 - -pose calsettings" \
                      "calday 2 - -pose calday" "editor 2 - -pose editor" "template 2 - -pose template" "failure 2 fail -pose failure" \
                      "editornew 2 - -pose editornew" "chsync 1 live -pose chsync" "skipped 0 skipped" \
                      "nighthold 0 - -pose nighthold" "alarmsmine 2 - -pose alarmsmine" "chadd 1 - -pose chadd" "playing 3 playing" \
-                     "homeplaying 0 playing" "homenight 0 night" "caldayedit 2 - -pose caldayedit" "justonce 0 - -pose justonce"; do
+                     "homeplaying 0 playing" "homenight 0 night" "caldayedit 2 - -pose caldayedit" "justonce 0 - -pose justonce" \
+                     "caldayown 2 - -pose caldayown"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"

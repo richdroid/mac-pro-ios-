@@ -54,7 +54,12 @@ struct Alarm: Codable, Identifiable, Equatable {
     // 2026-11-05). His own alarms all carry backup 0; new ones and naps do too. The delay still has to be 1 to 120: the
     // Chumby turns down a save with any other (do_save, "bad number"), and "0" there cost every nap and new alarm from 11-05.
     var action = "", action_param = "", backup = "0", backupDelay = "5"
-    enum CodingKeys: String, CodingKey { case name, enabled, time, when, type, arg, param, param_description, duration, snooze, auto_dismiss, action, action_param, backup, backupDelay }
+    // "1" on a calendar alarm that keeps its own sound, snooze and length rather than the shared calendar set (chumby
+    // 2c90cc9: saved with I_own=1, read back as own="1"). Every save that carries it must send it again, or the Chumby
+    // puts the shared set back, which alarmForm does from this.
+    var own = ""
+    var isOwn: Bool { own == "1" && isCalendar }
+    enum CodingKeys: String, CodingKey { case name, enabled, time, when, type, arg, param, param_description, duration, snooze, auto_dismiss, action, action_param, backup, backupDelay, own }
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -63,6 +68,7 @@ struct Alarm: Codable, Identifiable, Equatable {
         type = try s(.type, "beep"); arg = try s(.arg, ""); param = try s(.param, ""); param_description = try s(.param_description, "")
         duration = try s(.duration, "30"); snooze = try s(.snooze, "9"); auto_dismiss = try s(.auto_dismiss, "0")
         action = try s(.action, ""); action_param = try s(.action_param, ""); backup = try s(.backup, "1"); backupDelay = try s(.backupDelay, "5")
+        own = try s(.own, "")
     }
     var isPlaceholder: Bool { enabled == "0" && time == "0" && name.isEmpty && type == "beep" }
     static let calendarPrefix = "Calendar: "
@@ -372,24 +378,30 @@ extension ChumbyState {
     // The next alarm that will really ring. On a day a calendar alarm is on, the Chumby keeps repeating alarms quiet unless
     // that's switched off (calOverride 0), so they're passed over for that day (the panel hook's chCalSkip).
     func nextRing(after now: Date = Date()) -> (alarm: Alarm, at: Date)? {
+        var best: (alarm: Alarm, at: Date)?
+        for a in alarms {
+            if let d = ring(of: a, after: now), best == nil || d < best!.at { best = (a, d) }
+        }
+        return best
+    }
+    // When this one alarm will really ring next: calendar days passed over for a repeating alarm (as above), and the
+    // time skipped by hand too unless `skip` is false.
+    func ring(of a: Alarm, after now: Date = Date(), skip: Bool = true) -> Date? {
+        guard a.isOn else { return nil }
         let cal = Calendar.current
         let skipping = (calOverride ?? 0) != 0
         let calendarDays = Set(alarms.filter { $0.isOn && $0.when == "once" && $0.isCalendar }.compactMap { a in
             Double(a.time).map { cal.startOfDay(for: Date(timeIntervalSince1970: $0 * 60)) }
         })
-        var best: (alarm: Alarm, at: Date)?
-        for a in alarms where a.isOn {
-            var from = now
-            for _ in 0..<12 {
-                guard let d = a.nextFire(after: from) else { break }
-                if skipping && a.when != "once" && !a.isCalendar && calendarDays.contains(cal.startOfDay(for: d)) { from = d; continue }
-                // The one time skipped by hand doesn't ring either.
-                if let s = skipped, s.name == a.name, abs(d.timeIntervalSince1970 - s.at) < 60 { from = d; continue }
-                if best == nil || d < best!.at { best = (a, d) }
-                break
-            }
+        var from = now
+        for _ in 0..<12 {
+            guard let d = a.nextFire(after: from) else { return nil }
+            if skipping && a.when != "once" && !a.isCalendar && calendarDays.contains(cal.startOfDay(for: d)) { from = d; continue }
+            // The one time skipped by hand doesn't ring either.
+            if skip, let s = skipped, s.name == a.name, abs(d.timeIntervalSince1970 - s.at) < 60 { from = d; continue }
+            return d
         }
-        return best
+        return nil
     }
     // A one-off or nap whose time is truly behind it by the Chumby's own clock (`chumby`, from its state), with two hours to
     // spare for any snooze. Without the Chumby's clock nothing counts as expired. The Chumby clears its own Catch-up.
@@ -459,14 +471,15 @@ actor AlarmWriter {
         guard s.alarms.count <= ChumbyState.maxAlarms else { throw ChumbyError.message(AlarmWriter.fullText) }
         let forceKeep = try check(saved: saved, sending: s.alarms, permit: permit, clock: s.chumbyNow ?? Date())
         var form = s.alarmForm()
-        if asTemplate, let first = s.alarms.firstIndex(where: { $0.isCalendar }) { form.append(("tpl", "\(first)")) }
+        // Never a day with its own sound: the shared set comes from an alarm that has it.
+        if asTemplate, let first = s.alarms.firstIndex(where: { $0.isCalendar && !$0.isOwn }) { form.append(("tpl", "\(first)")) }
         // The Chumby keeps any calendar wake due within 24 h that a save drops (chalarm.c, 11-04), unless told this one is meant.
         if forceKeep { form.append(("force", "1")) }
         do { try await api.post("save", body: ChumbyAPI.form(form)) }
         catch ChumbyError.message(let m) where m.contains("token") { try await api.post("save", body: ChumbyAPI.form(form)) }
         // What the Chumby now holds, as it will read back: anything it switched off, off here too.
         for i in ChumbyState.switchedOff(saved: saved, sending: s.alarms) { s.alarms[i].enabled = "0" }
-        if asTemplate, let first = s.alarms.first(where: { $0.isCalendar }) { s.calTpl = first }
+        if asTemplate, let first = s.alarms.first(where: { $0.isCalendar && !$0.isOwn }) { s.calTpl = first }
         s.reindex()
         return Result(state: s, saved: true)
     }
