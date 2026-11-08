@@ -278,7 +278,11 @@ struct JustOnceSheet: View {
                     }
                 }
                 .interactiveDismissDisabled(saving)
-                .onAppear { if !loaded { load(); loaded = true } }
+                .onAppear {
+                    if !loaded { load(); loaded = true }
+                    // For the shot: Set pressed with the Chumby's one skip already on another alarm.
+                    if ChumbyModel.pose == "reskip" { Task { try? await Task.sleep(nanoseconds: 1_500_000_000); if model.pinWarning != nil { confirm = true } } }
+                }
         }
         .tint(ChumbyPalette.acc(scheme == .dark))
     }

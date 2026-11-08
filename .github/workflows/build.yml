@@ -268,7 +268,9 @@ jobs:
           # day/night button held halfway (nighthold), Alarms scrolled to My alarms and the nap (alarmsmine), the Add widgets
           # picker open (chadd), and Sounds with a song playing (playing); Home with music playing (homeplaying) and at night
           # (homenight). From 11-07: a calendar day with its own time and label (caldayedit), and the next alarm's "just this
-          # once" sheet open from Home (justonce), and a calendar day with its own sound and snooze (caldayown).
+          # once" sheet open from Home (justonce), and a calendar day with its own sound and snooze (caldayown). From the
+          # 11-07 review: an alarm's "just this once" Set while the Chumby's one skip is on another alarm, the warning and
+          # its dialog (reskip); and a one-off whose skip has moved, so both would ring, on Home and Alarms (orphan).
           chumby_poses() { # display, file suffix
             for V in "ringing 0 ringing" "ringing-alarms 2 ringing" "snoozed 0 snoozed" "dead 0 dead" "dead-alarms 2 dead" \
                      "firstrun 2 slow -pose firstrun" "firstrun-home 0 slow -pose firstrun" "calsettings 2 - -pose calsettings" \
@@ -276,7 +278,7 @@ jobs:
                      "editornew 2 - -pose editornew" "chsync 1 live -pose chsync" "skipped 0 skipped" \
                      "nighthold 0 - -pose nighthold" "alarmsmine 2 - -pose alarmsmine" "chadd 1 - -pose chadd" "playing 3 playing" \
                      "homeplaying 0 playing" "homenight 0 night" "caldayedit 2 - -pose caldayedit" "justonce 0 - -pose justonce" \
-                     "caldayown 2 - -pose caldayown"; do
+                     "caldayown 2 - -pose caldayown" "reskip 2 skipped -pose reskip" "orphan 0 orphan" "orphan-alarms 2 orphan"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
@@ -316,7 +318,9 @@ jobs:
               # added and ticked, and on Done the list scrolls to it and it glows.
               # skipdemo: Home's Skip next alarm tapped, then Undo.
               # songchange: Sounds open while a wake-up's first song arrives in the Chumby's state; "Woke up to" gains it live.
-              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 20" "chdemo 1 live 12" "skipdemo 0 live 20" "songchange 3 songchange 16"; do
+              # alarmsdemo also opens a calendar day and an alarm's editor, each in and out, so their zoom is on film.
+              # homechdemo: News chosen on Home's channel capsule, then Channels, whose editor has followed it.
+              for V in "ringdemo 0 liveringing 14" "alarmsdemo 2 live 27" "chdemo 1 live 12" "skipdemo 0 live 20" "songchange 3 songchange 16" "homechdemo 0 live 12"; do
                 set -- "$1" "$2" $V
                 xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-$3.mp4 > /dev/null 2>&1 & REC=$!
                 sleep 5
@@ -342,6 +346,18 @@ jobs:
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 0 -pose homebar
               sleep 9
               xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-pose-homebar-$M-portrait.png
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
+            # The 11-07 states in this posture too (light): a calendar day, one with its own time and label, one with its own
+            # sound, the "just this once" sheet, Home skipped, Alarms at My alarms and the nap, and Calendar settings.
+            xcrun simctl ui "$DEVICE" appearance light
+            for V in "calday 2 - -pose calday" "caldayedit 2 - -pose caldayedit" "caldayown 2 - -pose caldayown" "justonce 0 - -pose justonce" \
+                     "skipped 0 skipped" "alarmsmine 2 - -pose alarmsmine" "calsettings 2 - -pose calsettings"; do
+              set -- $V
+              ADDR=http://127.0.0.1:9000; [ "$3" != "-" ] && ADDR=$ADDR/$3
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $2 "${@:4}"
+              sleep 9
+              xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-pose-$1-portrait.png
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
             done
             # Home's states in this posture, light and dark: music playing (the Playing card), the Chumby at night (the

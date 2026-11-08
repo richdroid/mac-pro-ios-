@@ -155,7 +155,7 @@ extension View {
     func card(_ radius: CGFloat = 26) -> some View { modifier(CardFill(radius: radius)) }
     func glass(_ radius: CGFloat = 26) -> some View { self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous)) }
     func glassCircle() -> some View { self.glassEffect(.regular.interactive(), in: Circle()) }
-    func seaList() -> some View { self.scrollContentBackground(.hidden).listSectionSpacing(14).roomyIndicators().modifier(SummonsBar()) }
+    func seaList() -> some View { self.scrollContentBackground(.hidden).listSectionSpacing(14).roomyIndicators() }
     // No scroll bars in any Chumby list or scroll. Inset 7 pt they only hung as a grey line against the cards, by the rail
     // (Richard, 2026-11-05: "the scroll bar is too close to the screen for my eyes", then "the scroll bar dude"); the pages
     // are short and their content shows where you are.
@@ -265,14 +265,23 @@ struct RootView: View {
             ZStack {
                 // The sea's own base colour under everything, so the first frame matches the launch screen.
                 ChumbyPalette.sea(scheme == .dark)[0].ignoresSafeArea()
-                // The Duo's side column (clock, Wi-Fi and the tab bar) is the trailing safe area; + goes in it on Alarms.
+                // The Duo's side column (clock, Wi-Fi and the tab bar) is the trailing safe area: with it, pages over Alarms zoom in.
                 Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { model.railWidth = $0 }
-                TabView(selection: TabReset.binding($model.tab) { t in
+                // -1 is the side bar's Back: it never becomes the tab, it closes the page open over Alarms.
+                TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 == -1 { model.alarmsPage = false } else { model.tab = $0 } })) { t in
                     resets[t, default: 0] += 1
                     if t == 2 { model.alarmsPage = false }
                     // Home again: the octopus answers, as it does to a tap.
                     if t == 0 { model.homePoke = Date() }
                 }) {
+                    // Back is the side bar's first item, above the tabs, only while a page (Calendar settings, a day) is
+                    // open over Alarms, as the TV and Mac Pro apps have it (Richard, 2026-11-07: "back should be on side
+                    // bar"); with the bar along the foot it's that bar's first item. Never a capsule floating over the
+                    // page's last rows. It comes with the page, not before it: by the rail the page zooms in, and Back
+                    // shows as the zoom starts.
+                    if model.tab == 2 && (model.railWidth >= 44 ? model.alarmsPageShown : model.alarmsPage) {
+                        Tab(value: -1) { Color.clear } label: { tabLabel("Back", "chevron.backward") }
+                    }
                     Tab(value: 0) { NavigationStack { HomeTab().tabPage(0, model) }.id(resets[0, default: 0]) } label: { tabLabel("my chumby", asset: "OctoTab", fit: 34) }
                     Tab(value: 1) { NavigationStack { ChannelsTab().tabPage(1, model) }.id(resets[1, default: 0]) } label: { tabLabel("channels", "tv") }
                     Tab(value: 2) { NavigationStack { AlarmsTab().tabPage(2, model) }.id(resets[2, default: 0]) } label: { tabLabel("alarms", "alarm") }
@@ -283,64 +292,8 @@ struct RootView: View {
             }
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
-            // With the side column, a page inside Alarms (Calendar settings, a day) has its Back in one glass bar at the foot of
-            // the content column, by the rail; never a loose circle over the rail (Richard, 2026-11-05). Add alarm is a row
-            // in My alarms, so the bar is only there on such a page. Away while scrolling down, back on any scroll up.
-            .overlay(alignment: .bottomTrailing) {
-                if model.tab == 2 && model.railWidth >= 44 && model.alarmsPage {
-                    // The overlay keeps to the safe area, which already stops short of the side column.
-                    PageFootBar()
-                        .padding(.trailing, 12)
-                        .padding(.bottom, 12)
-                }
-            }
         }
         .sheet(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
-    }
-}
-// Shown or put away by the page's own scrolling: away once he scrolls down past the top, back on any scroll up.
-@MainActor final class PageBar: ObservableObject {
-    static let shared = PageBar()
-    @Published var shown = true
-}
-struct SummonsBar: ViewModifier {
-    @State private var last: CGFloat = 0
-    func body(content: Content) -> some View {
-        content.onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
-            let bar = PageBar.shared
-            if y < 24 { if !bar.shown { withAnimation(.snappy) { bar.shown = true } } }
-            else if y > last + 6 { if bar.shown { withAnimation(.snappy) { bar.shown = false } } }
-            else if y < last - 6 { if !bar.shown { withAnimation(.snappy) { bar.shown = true } } }
-            if abs(y - last) > 6 || y < 24 { last = y }
-        }
-    }
-}
-// Alarms' one bar of page actions, in the page's glass and ink.
-struct PageFootBar: View {
-    @EnvironmentObject var model: ChumbyModel
-    @ObservedObject private var bar = PageBar.shared
-    @Environment(\.colorScheme) private var scheme
-    var body: some View {
-        HStack(spacing: 10) {
-            if model.alarmsPage {
-                Button { model.alarmsPage = false } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
-                        Text(model.alarmsPageTitle).font(.custom("Trebuchet MS", size: 17).weight(.bold)).lineLimit(1)
-                    }
-                    .padding(.horizontal, 16).frame(height: 44)
-                }
-                .accessibilityLabel("Back from \(model.alarmsPageTitle)")
-            }
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
-        .glassEffect(.regular.interactive(), in: .capsule)
-        .opacity(bar.shown ? 1 : 0).offset(y: bar.shown ? 0 : 20)
-        .allowsHitTesting(bar.shown)
-        .animation(.snappy(duration: 0.25), value: model.alarmsPage)
-        .onChange(of: model.alarmsPage) { _, _ in bar.shown = true }
-        .onAppear { bar.shown = true }
     }
 }
 // "Offline · last seen 7:12" as a row under a page's title, never floating over the list; a tap says what to do.
@@ -627,6 +580,15 @@ struct HomeTab: View {
             .onAppear {
                 if model.unreachable && goneAt == nil { goneAt = Date().addingTimeInterval(-5) }
                 if let p = model.homePoke, Date().timeIntervalSince(p) < 1.5 { poke() }
+                // For the build's film: News chosen on Home's channel capsule (as its menu does it), then over to
+                // Channels, whose editor has followed the choice.
+                if ChumbyModel.pose == "homechdemo" && !demoed {
+                    demoed = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 3_000_000_000); model.playChannel("News", id: "homeChannel")
+                        try? await Task.sleep(nanoseconds: 3_500_000_000); model.tab = 1
+                    }
+                }
                 // For the build's film: the alarm rings, is snoozed, then stopped.
                 if ChumbyModel.pose == "ringdemo" && !demoed {
                     demoed = true
@@ -784,6 +746,9 @@ struct HomeTab: View {
     // The channel the Chumby is showing, named as one (Channels calls it that too), and changed right here. The choice is
     // the model's, so the Channels editor moves to it as well.
     var channelName: String { !model.state.channel.isEmpty ? model.state.channel : model.sys.chan }
+    // Named only from a recent reading, or his own tap: the kept copy can be from last night, when the Chumby's own
+    // schedule had another channel up, and a name that then changes in front of him reads as the switcher failing.
+    var channelSettled: Bool { model.stateConfirmed || model.chosenChannel != nil }
     var channelRow: some View {
         // Buttons, not a picker: a picker sends nothing when the one tapped is the one it thinks is on, and with a stale
         // reading that was the channel he wanted, so the tap did nothing. Every tap goes to the Chumby; the tick marks
@@ -802,6 +767,8 @@ struct HomeTab: View {
                     Text(channelName.isEmpty ? "Choose one" : channelName).font(.custom("Trebuchet MS", size: 19).weight(.bold))
                         .foregroundStyle(ChumbyPalette.ink(dark)).lineLimit(1)
                         .contentTransition(.opacity)
+                        .opacity(channelSettled ? 1 : 0)
+                        .animation(.easeIn(duration: 0.25), value: channelSettled)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark))
@@ -2129,31 +2096,49 @@ struct SkipCard: View {
     // What the card shows, moved in one explicit transaction so the colour, the heading and the strike change together
     // (left to the model's change, the slab and strike cut in a single frame).
     @State private var shown: Bool?
-    // Between the tap and the Chumby's answer: a spinner where the button's mark is, never two labels on top of each other.
-    @State private var pending = false
+    // Between a tap and the Chumby's answer: the card shows what was asked for at once (the model does), and a small
+    // mark beside the heading says the Chumby is still being told; the controls themselves never turn into a spinner.
+    // Undo is there the moment it's skipped, so he never waits to take it back. Taps are sent in the order he made
+    // them: an Undo tapped while the skip is still on its way goes after it, so the Chumby is never left skipped by an
+    // undo that got there first. The model puts the state back if the Chumby refuses, so a skip it wouldn't take comes
+    // back visibly, with the reason under the card.
+    @State private var inflight = 0
+    @State private var queue: Task<Void, Never>?
+    @State private var lastAsked: Bool?
+    private var pending: Bool { inflight > 0 }
     // The skip that a "just this once" stands behind: undone, both go (the usual time rings again, the one-off is removed).
     private var moved: Date? { model.state.justOnce().flatMap { $0.replaces != nil ? $0.at : nil } }
     private func send(_ skip: Bool) {
-        pending = true
-        Task {
+        // The same ask twice in a row (two taps on Undo) is one ask.
+        if pending && lastAsked == skip { return }
+        lastAsked = skip
+        inflight += 1
+        let before = queue
+        queue = Task {
+            await before?.value
             if skip { await model.skipNext() }
             else if moved != nil { if let why = await model.undoJustOnce() { model.fail("skip", why) } }
             else { await model.unskip() }
-            pending = false
+            inflight -= 1
         }
     }
     // The time and its line stay put; only the heading changes (the old one out before the new one in), and the
-    // strike draws across the time, left to right.
+    // strike draws across the time, left to right. The time never wraps: in a narrow pane (open, beside Undo) it
+    // shrinks a little, and the day line gives way before it (2026-11-07: "6:45 A / M" open in landscape).
     private func lines(_ at: Date, _ name: String, struck: Bool) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            ZStack(alignment: .leading) {
-                if struck { Text(moved != nil ? "Later, just this once" : "Skipped").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
-                else { Text("Skip next alarm").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
+            HStack(spacing: 7) {
+                ZStack(alignment: .leading) {
+                    if struck { Text(moved != nil ? "Later, just this once" : "Skipped").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
+                    else { Text("Skip next alarm").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
+                }
+                .font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
+                if pending { ProgressView().controlSize(.mini).tint(.white.opacity(0.85)).transition(.opacity) }
             }
-            .font(.custom("Trebuchet MS", size: 15).weight(.bold))
             Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold))
+                .lineLimit(1).minimumScaleFactor(0.7)
                 .overlay { StrikeLine(progress: struck ? 1 : 0) }
-            Text("\(day(at)) · \(label(name))" + (struck ? moved.map { " · now \(time($0))" } ?? "" : "")).font(.custom("Trebuchet MS", size: 14)).lineLimit(1)
+            Text("\(day(at)) · \(label(name))" + (struck ? moved.map { " · now \(time($0))" } ?? "" : "")).font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
         }
         .foregroundStyle(.white)
     }
@@ -2173,16 +2158,11 @@ struct SkipCard: View {
                         SleepyOctopus(asleep: asleep, tint: .white)
                         lines(next.0, next.1, struck: asleep)
                         Spacer(minLength: 8)
-                        ZStack(alignment: .trailing) {
-                            if pending { ProgressView().tint(.white).transition(.opacity) }
-                            else {
-                                Image(systemName: "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
-                                    .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
-                                    .opacity(asleep ? 0 : 1)
-                            }
-                        }
-                        // Room for Undo, which sits over this end of the slab.
-                        .frame(minWidth: asleep ? 92 : 0, alignment: .trailing)
+                        Image(systemName: "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
+                            .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
+                            .opacity(asleep ? 0 : 1)
+                            // Room for Undo, which sits over this end of the slab.
+                            .frame(minWidth: asleep ? 92 : 0, alignment: .trailing)
                     }
                     .padding(.horizontal, 18).padding(.vertical, 16)
                 }
@@ -2192,7 +2172,7 @@ struct SkipCard: View {
                 .disabled(asleep)
                 .accessibilityLabel(asleep ? "Skipped, \(time(next.0)) alarm" : "Skip the \(time(next.0)) alarm, \(day(next.0))")
                 .overlay(alignment: .trailing) {
-                    if asleep && !pending {
+                    if asleep {
                         Button { send(false) } label: {
                             Text("Undo").font(.custom("Trebuchet MS", size: 18).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
                                 .padding(.horizontal, 20).padding(.vertical, 11)

@@ -436,7 +436,8 @@ struct WokeUpTo: View {
                     }
                 }
                 .frame(width: 112, height: 112).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                // Two lines, kept even for a short one, so the tiles' artist and time lines stay level across the row.
+                Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(2, reservesSpace: true).multilineTextAlignment(.leading)
                 Text(s.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                 Text(Date(timeIntervalSince1970: s.t).formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.footnote).foregroundStyle(.secondary)
             }
@@ -449,11 +450,6 @@ struct WokeUpTo: View {
 }
 
 // MARK: - Alarms
-// Everything left of a view's trailing edge, reaching far past its other three.
-struct TrailingEdge: Shape {
-    func path(in r: CGRect) -> Path { Path(CGRect(x: r.minX - 4000, y: r.minY - 4000, width: r.width + 4000, height: r.height + 8000)) }
-}
-
 struct AlarmsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
@@ -495,17 +491,31 @@ struct AlarmsTab: View {
         if wide { show(.day(k)) } else if rail {
             dayPage = k
             model.alarmsPageTitle = wake.plan.first { $0.key == k }.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "That day"
+            anchor(for: k)
             model.alarmsPage = true
         } else { day = DayTarget(id: k) }
     }
-    func openSettings() { if wide { show(.settings) } else { dayPage = nil; model.alarmsPageTitle = "Calendar settings"; model.alarmsPage = true } }
+    func openSettings() { if wide { show(.settings) } else { dayPage = nil; model.alarmsPageTitle = "Calendar settings"; anchor(for: "calendar"); model.alarmsPage = true } }
     @State private var dayPage: String?
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
     @State private var scrollTo: String?
     // With the Duo's side column, Calendar settings (or a calendar day) is a page swapped in inside this tab, never a push: a push
-    // carried the rail off with the page. The list fades under it, kept as it was, so coming back finds it where it was left.
+    // carried the rail off with the page. It grows out of the row that opened it and shrinks back into it, the iOS zoom
+    // (Richard, 2026-11-07: "the animation in chumby app to edit like the calendar alarm sucks" about a slide); the list
+    // fades under it, kept as it was, so coming back finds it where it was left. The page is put in the tree a frame
+    // before it starts to grow, so every row's switch and stepper is drawn from the zoom's first frame, not after it lands.
     var rail: Bool { model.railWidth >= 44 }
+    // The page in the tree, and the page grown to full size; the row it grew from, as a point in this tab's frame.
+    @State private var pageMounted = false
+    @State private var pageShown = false
+    @State private var zoomAnchor: UnitPoint = .center
+    @State private var tabFrame: CGRect = .zero
+    static let zoom = Animation.spring(duration: 0.42, bounce: 0.12)
+    func anchor(for id: String) {
+        guard let r = ZoomFrames.shared.frames[id], tabFrame.width > 0 else { zoomAnchor = .center; return }
+        zoomAnchor = UnitPoint(x: min(max((r.midX - tabFrame.minX) / tabFrame.width, 0), 1), y: min(max((r.midY - tabFrame.minY) / tabFrame.height, 0), 1))
+    }
     var body: some View {
         let swapped = rail && model.alarmsPage
         ZStack {
@@ -513,36 +523,50 @@ struct AlarmsTab: View {
             ScrollViewReader { proxy in
                 page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
             }
-            // Gone in the slide's first third going out, so the incoming page's rows never pass over its words; coming home
-            // it starts back once the leaving page is a little way off, and is nearly whole as that page clears.
-            .opacity(swapped ? 0 : 1)
-            .animation(swapped ? .easeOut(duration: Self.slide / 3) : .easeOut(duration: Self.slide * 0.6).delay(Self.slide * 0.15), value: swapped)
-            .allowsHitTesting(!swapped).accessibilityHidden(swapped)
-            // Only the incoming page is cut, at the rail's edge, by a frame that stays put while the page moves inside it,
-            // so the pages still run under the top and bottom bars. It brings no sea of its own: the tab's stays as it is.
-            ZStack {
-                if swapped {
-                    Group {
-                        if let k = dayPage {
-                            List { CalendarDaySheet(key: k, close: { model.alarmsPage = false }, done: false).listRowBackground(GlassRow()) }
-                                .seaList()
-                        } else {
-                            CalendarWakeSettings(ownSea: false)
-                        }
+            // Fades as the page grows over it, back as the page shrinks away.
+            .opacity(pageShown ? 0 : 1)
+            .allowsHitTesting(!pageMounted).accessibilityHidden(pageMounted)
+            // It brings no sea of its own: the tab's stays as it is.
+            if pageMounted {
+                Group {
+                    if let k = dayPage {
+                        List { CalendarDaySheet(key: k, close: { model.alarmsPage = false }, done: false).listRowBackground(GlassRow()) }
+                            .seaList()
+                    } else {
+                        CalendarWakeSettings(ownSea: false)
                     }
-                        // A swipe in from the left edge goes back, as it would from a pushed page.
-                        .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { g in
-                            if g.startLocation.x < 40 && g.translation.width > 80 && abs(g.translation.height) < g.translation.width { model.alarmsPage = false }
-                        })
-                        .transition(.move(edge: .trailing))
+                }
+                // A swipe in from the left edge goes back, as it would from a pushed page.
+                .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { g in
+                    if g.startLocation.x < 40 && g.translation.width > 80 && abs(g.translation.height) < g.translation.width { model.alarmsPage = false }
+                })
+                .clipShape(RoundedRectangle(cornerRadius: pageShown ? 0 : 28, style: .continuous))
+                .scaleEffect(pageShown ? 1 : 0.1, anchor: zoomAnchor)
+                .opacity(pageShown ? 1 : 0)
+                .allowsHitTesting(pageShown)
+            }
+        }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { tabFrame = $0 }
+        .onChange(of: swapped) { _, on in
+            if on {
+                pageMounted = true
+                // Drawn once at its small size, then grown: the zoom's first frame already holds the whole page.
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 16_000_000)
+                    guard model.alarmsPage else { return }
+                    model.alarmsPageShown = true
+                    withAnimation(Self.zoom) { pageShown = true }
+                }
+            } else {
+                model.alarmsPageShown = false
+                withAnimation(Self.zoom) { pageShown = false }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 450_000_000)
+                    if !model.alarmsPage { pageMounted = false; dayPage = nil }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipShape(TrailingEdge())
-            .animation(.snappy(duration: Self.slide), value: swapped)
         }
     }
-    static let slide = 0.35
     // Folded, top to bottom as he uses it: what rings next (with Skip), then the calendar's alarms, then his own, then a
     // nap. Open, the calendar's sit under the hero on the left and his own and the nap on the right, so both panes carry
     // weight. The two kinds never look alike: the calendar's have a coral page-of-a-calendar tile and say which event and
@@ -573,11 +597,13 @@ struct AlarmsTab: View {
                 } footer: { Text("The Chumby was frozen or off when these came due.") }
             }
             calendar
+            // Open, with no calendar list under the hero, the nap sits here so neither pane is mostly empty.
+            if wide && !calendarListed { nap }
         } right: {
             switch paneShown {
             case .schedule:
                 yours
-                Section { NapChips().id("nap") } header: { SectionHead(icon: "zzz", text: "Nap", color: ChumbyPalette.sub(scheme == .dark)) }
+                if !(wide && !calendarListed) { nap }
             case .settings: CalendarSettingsSections()
             case .editor(let a): AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new")
             case .day(let k): CalendarDaySheet(key: k, close: { show(.schedule) }).id(k)
@@ -589,7 +615,14 @@ struct AlarmsTab: View {
         .animation(.snappy, value: model.napDue)
         .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
         // Pushed only with the bars across, where the system's own Back is used.
-        .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !rail }, set: { model.alarmsPage = $0 })) { CalendarWakeSettings().zoomed(from: "calendar", in: editNS) }
+        .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !rail }, set: { model.alarmsPage = $0 })) {
+            // Back is the foot bar's first item there (RootView), never also the system's at the top; the edge swipe stays.
+            CalendarWakeSettings().zoomed(from: "calendar", in: editNS)
+                .navigationBarBackButtonHidden(true)
+                .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { g in
+                    if g.startLocation.x < 40 && g.translation.width > 80 && abs(g.translation.height) < g.translation.width { model.alarmsPage = false }
+                })
+        }
         .sheet(item: $editing) { t in AlarmEditor(original: t.alarm).environmentObject(model).zoomed(from: t.id, in: editNS) }
         .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model).zoomed(from: d.id, in: editNS) }
         .refreshable { await model.loadState() }
@@ -630,12 +663,20 @@ struct AlarmsTab: View {
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
                     if let a = mine.first { model.change(.toggle(a, !a.isOn)) }
                 }
+            // Opens the alarm's editor, then its "just this once" sheet and the warning that Set would replace the skip
+            // already set (the mock's skipped scene), for the shot.
+            case "reskip": if let a = mine.first { edit(a) }
             case "alarmsdemo":
-                // For the build's film: Settings in and out, then down to the nap, where a 10-minute nap is started,
-                // counts down for a while and is called off, all on screen.
+                // For the build's film: Settings in and out, then a calendar day and an alarm's editor each in and out (the
+                // zoom from their rows), then down to the nap, where a 10-minute nap is started, counts down for a while
+                // and is called off, all on screen.
                 Task {
                     try? await Task.sleep(nanoseconds: 2_000_000_000); openSettings()
                     try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { model.alarmsPage = false }
+                    try? await Task.sleep(nanoseconds: 1_200_000_000); if let k = wake.plan.first?.key { openDay(k) }
+                    try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { model.alarmsPage = false; day = nil }
+                    try? await Task.sleep(nanoseconds: 1_200_000_000); if let a = mine.first { edit(a) }
+                    try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { editing = nil }
                     try? await Task.sleep(nanoseconds: 1_200_000_000); scrollTo = "nap"
                     try? await Task.sleep(nanoseconds: 1_200_000_000); UserDefaults.standard.set(10, forKey: "napLength"); await model.nap(10)
                     try? await Task.sleep(nanoseconds: 4_500_000_000); await model.cancelNap()
@@ -761,6 +802,8 @@ struct AlarmsTab: View {
         }
     }
 
+    var nap: some View { Section { NapChips().id("nap") } header: { SectionHead(icon: "zzz", text: "Nap", color: ChumbyPalette.sub(scheme == .dark)) } }
+    var calendarListed: Bool { wake.rules.enabled && wake.allowed && !wake.plan.isEmpty }
     // The rule first, said plainly, and changed only as a rule; then the alarms it has set, checked against what the
     // Chumby really holds. A row opens that day, which is also changed only as "how long before".
     var ruleRow: some View {
@@ -791,7 +834,7 @@ struct AlarmsTab: View {
                     // Only against a recent reading, and never in the build's sample, which has no Chumby behind it.
                     let status = model.stateConfirmed && !CalendarWake.sample ? wake.onDevice(item, in: model.deviceState) : .set
                     AlarmRow(clock: clockParts(item.wake), title: item.shown,
-                             detail: "\(item.start.formatted(date: .omitted, time: .shortened)) · \(item.exact ? "set time" : leadText(item.lead) + " before")",
+                             detail: "\(item.start.formatted(date: .omitted, time: .shortened)) · \(item.exact ? "set for this day" : leadText(item.lead) + " before")",
                              on: !item.skipped,
                              tile: AnyView(AlarmTile(calendarDay: item.wake, on: !item.skipped)),
                              oneLine: true,
@@ -1174,6 +1217,7 @@ struct AlarmEditor: View {
                                 }
                             }
                             .sheet(isPresented: $justOnce) { JustOnceSheet(original: original, due: due).environmentObject(model) }
+                            .onAppear { if ChumbyModel.pose == "reskip" { Task { try? await Task.sleep(nanoseconds: 1_200_000_000); justOnce = true } } }
                             if let warning { RowNote(icon: "exclamationmark.circle.fill", text: warning) }
                         } header: { Text("Just this once") }
                     }
@@ -1241,10 +1285,16 @@ struct AlarmEditor: View {
 }
 
 // The iOS zoom between a row and what it opens: the row is the source, the sheet or page grows out of it.
+// Where each row is on screen, for the page that grows out of it by the rail. Not published: nothing redraws for it.
+@MainActor final class ZoomFrames {
+    static let shared = ZoomFrames()
+    var frames: [String: CGRect] = [:]
+}
 extension View {
     @ViewBuilder func zoomSource(_ id: String, in ns: Namespace.ID) -> some View {
         #if os(iOS)
         matchedTransitionSource(id: id, in: ns)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ZoomFrames.shared.frames[id] = $0 }
         #else
         self
         #endif

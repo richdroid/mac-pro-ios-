@@ -318,7 +318,7 @@ function chumbyScene(q, s) {
   // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
   const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan)\//);
   if (!m) return false;
   const scene = m[1];
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
@@ -369,6 +369,12 @@ function chumbyScene(q, s) {
   if (scene === 'ringing' && a === 'sys') return json({ ...data.sys, ring: 'r\tWork\tBeep' });
   if (scene === 'snoozed' && a === 'sys') return json({ ...data.sys, ring: 's\tWork\tBeep' });
   if (scene === 'skipped' && a === 'state') return json({ ...stateNow(data.state), skipped: nextWork() });
+  // A "just this once" for Work, ten minutes after its usual ring, with the Chumby's skip no longer on that ring: both
+  // would ring, which the app says plainly with the two ways back.
+  if (scene === 'orphan' && a === 'state') {
+    const w = nextWork();
+    return json({ ...stateNow(data.state), skipped: null, alarms: [...data.state.alarms, alarm({ name: 'Work (just this once)', when: 'once', time: String(Math.floor(w.at / 60) + 10), backupDelay: '5' })] });
+  }
   // The panel's own report of the ring in a=state too, as the real one gives it beside a=sys "ring".
   if (scene === 'ringing' && a === 'state') return json({ ...stateNow(data.state), ringing: { state: 'ringing', name: 'Work', sound: 'Beep', until: 0 } });
   if (scene === 'snoozed' && a === 'state') return json({ ...stateNow(data.state), ringing: { state: 'snoozing', name: 'Work', sound: 'Beep', until: 0 } });
