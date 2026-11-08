@@ -98,7 +98,7 @@ jobs:
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M "$@"
             sleep 10
-            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x $lo $x $hi 0.12 || echo "drag failed"; sleep 1.4; done
+            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x $lo $x $hi 0.12 || echo "drag failed: $($D "$DEVICE" drag $x $lo $x $hi 0.12 2>&1 | tail -1)"; sleep 1.4; done
             $D "$DEVICE" drag $x $lo $x $hi 0.9 || true; sleep 2.5
             for i in 1 2 3 4 5 6 7; do $D "$DEVICE" drag $x $hi $x $lo 0.12 || true; sleep 1.4; done
             $D "$DEVICE" drag $x $hi $x $lo 0.9 || true; sleep 2.5
@@ -114,14 +114,20 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
           # Open portrait first.
           poses 3 -portrait
-          for T in 1 2 3; do swipefilm fling$T-portrait 3 330 780 260 -tab $T; done
+          # Positions are fractions of the screenshot (0 to 1), not points: points failed every drag (ca86a09).
+          # Watch (tab 3) and the Stremio and Continue watching pages, the long ones; Apps for its view-aligned right pane.
+          swipefilm fling3-portrait 3 0.5 0.8 0.25 -tab 3
+          swipefilm flingbrowse-portrait 3 0.5 0.8 0.25 -tab 1 -pose browse
+          swipefilm flingrow-portrait 3 0.5 0.8 0.25 -tab 1 -pose stremiorow
+          swipefilm fling1-portrait 3 0.5 0.8 0.25 -tab 1
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -open
           # Folded, the outer display, last.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
           poses 1 ""
-          for T in 1 3; do swipefilm fling$T 1 230 560 180 -tab $T; done
+          swipefilm fling3 1 0.5 0.8 0.25 -tab 3
+          swipefilm flingbrowse 1 0.5 0.8 0.25 -tab 1 -pose browse
           ls dist
       - name: Publish
         if: always()
