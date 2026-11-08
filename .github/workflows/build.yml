@@ -129,7 +129,7 @@ jobs:
                      "displayhold 9001 -tab 0 -pose displayhold" \
                      "screen-shift 9001 -tab 0 -pose screenshift -openScreen YES" "screen-pinch 9001 -tab 0 -pose screenpinch -openScreen YES" \
                      "apps-scrolled 9001 -tab 1 -pose scrolled" "claude-usage 9001 -tab 2 -pose scrolled" \
-                     "otaready 9001 -tab 1 -pose otaready" "otaoffer 9001 -tab 1 -pose otaoffer" "otasent 9001 -tab 1 -pose otasent" "uptodate 9001 -tab 1 -pose uptodate" "otahome 9001 -tab 1 -pose otahome" "tab4-macos 9001 -tab 4"; do
+                     "otaready 9001 -tab 1 -pose otaready" "otaoffer 9001 -tab 1 -pose otaoffer" "otasent 9001 -tab 1 -pose otasent" "uptodate 9001 -tab 1 -pose uptodate" "otahome 9001 -tab 1 -pose otahome" "history 9001 -tab 1 -pose history" "tab4-macos 9001 -tab 4"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$4 "${@:5}"
               sleep 8
@@ -270,7 +270,9 @@ jobs:
           # (homenight). From 11-07: a calendar day with its own time and label (caldayedit), and the next alarm's "just this
           # once" sheet open from Home (justonce), and a calendar day with its own sound and snooze (caldayown). From the
           # 11-07 review: an alarm's "just this once" Set while the Chumby's one skip is on another alarm, the warning and
-          # its dialog (reskip); and a one-off whose skip has moved, so both would ring, on Home and Alarms (orphan).
+          # its dialog (reskip); and a one-off whose skip has moved, so both would ring, on Home and Alarms (orphan). From
+          # 11-08: Work moved for one ring by "just this once", on Home and Alarms (moved), and a calendar day moved for
+          # that day (calonce).
           chumby_poses() { # display, file suffix
             for V in "ringing 0 ringing" "ringing-alarms 2 ringing" "snoozed 0 snoozed" "dead 0 dead" "dead-alarms 2 dead" \
                      "firstrun 2 slow -pose firstrun" "firstrun-home 0 slow -pose firstrun" "calsettings 2 - -pose calsettings" \
@@ -278,7 +280,8 @@ jobs:
                      "editornew 2 - -pose editornew" "chsync 1 live -pose chsync" "skipped 0 skipped" \
                      "nighthold 0 - -pose nighthold" "alarmsmine 2 - -pose alarmsmine" "chadd 1 - -pose chadd" "playing 3 playing" \
                      "homeplaying 0 playing" "homenight 0 night" "caldayedit 2 - -pose caldayedit" "justonce 0 - -pose justonce" \
-                     "caldayown 2 - -pose caldayown" "reskip 2 skipped -pose reskip" "orphan 0 orphan" "orphan-alarms 2 orphan"; do
+                     "caldayown 2 - -pose caldayown" "reskip 2 skipped -pose reskip" "orphan 0 orphan" "orphan-alarms 2 orphan" \
+                     "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
@@ -352,7 +355,8 @@ jobs:
             # sound, the "just this once" sheet, Home skipped, Alarms at My alarms and the nap, and Calendar settings.
             xcrun simctl ui "$DEVICE" appearance light
             for V in "calday 2 - -pose calday" "caldayedit 2 - -pose caldayedit" "caldayown 2 - -pose caldayown" "justonce 0 - -pose justonce" \
-                     "skipped 0 skipped" "alarmsmine 2 - -pose alarmsmine" "calsettings 2 - -pose calsettings"; do
+                     "skipped 0 skipped" "alarmsmine 2 - -pose alarmsmine" "calsettings 2 - -pose calsettings" \
+                     "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce"; do
               set -- $V
               ADDR=http://127.0.0.1:9000; [ "$3" != "-" ] && ADDR=$ADDR/$3
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $2 "${@:4}"
@@ -411,7 +415,7 @@ jobs:
             for V in "scrolled 0 -pose scrolled" "apps-scrolled 1 -pose scrolled" "claude-usage 2 -pose scrolled" \
                      "screen-shift 0 -pose screenshift -openScreen YES" "screen-pinch 0 -pose screenpinch -openScreen YES" \
                      "screen-laptop 0 -pose screen -openScreen YES -screenPosture laptop" "displayhold 0 -pose displayhold" \
-                     "otaready 1 -pose otaready" "otaoffer 1 -pose otaoffer" "otasent 1 -pose otasent" "uptodate 1 -pose uptodate" "otahome 1 -pose otahome"; do
+                     "otaready 1 -pose otaready" "otaoffer 1 -pose otaoffer" "otasent 1 -pose otasent" "uptodate 1 -pose uptodate" "otahome 1 -pose otahome" "history 1 -pose history"; do
               set -- $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab $2 "${@:3}"
               sleep 8

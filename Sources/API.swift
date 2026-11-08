@@ -175,6 +175,15 @@ struct API {
         return try JSONDecoder().decode(Answer.self, from: data).points
     }
 
+    // One of his apps' finished builds, newest first, with what changed in each: the Apps tab's Version History.
+    func history(_ file: String) async throws -> [BuildNotes] {
+        struct Answer: Decodable { let builds: [BuildNotes] }
+        let term = file.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? file
+        let (data, response) = try await session.data(for: request("/api/ios-history?file=\(term)"))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(Answer.self, from: data).builds
+    }
+
     func statusData() async throws -> Data {
         let (data, response) = try await session.data(for: request("/api/status"))
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0

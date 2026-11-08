@@ -96,7 +96,11 @@ const macProcs = JSON.stringify({
 });
 // His apps' own icons for the Apps tab, from the repo's icon sets.
 const appIcon = (q, s) => { const f = { 'MacPro.ipa': 'Assets.xcassets', 'Chumby.ipa': 'ChumbyApp/Assets.xcassets', 'TV.ipa': 'TVApp/Assets.xcassets' }[decodeURIComponent(q.url.slice('/ios/icon/'.length))]; try { const png = require('fs').readFileSync(require('path').join(__dirname, '..', f, 'AppIcon.appiconset/icon.png')); s.setHeader('content-type', 'image/png'); s.end(png); } catch { s.statusCode = 404; s.end(); } };
-http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); s.end(q.url === '/api/status' ? macStatus : q.url === '/api/procs' ? macProcs : '{}'); }).listen(9001, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/ios-history')) { const now = Date.now(), h = 3600000; return s.end(JSON.stringify({ builds: [
+    { build: '12', at: now - 2 * h, notes: ['A calendar day can have its own sound and snooze', 'The next alarm can ring later or with another sound just this once'] },
+    { build: '11', at: now - 26 * h, notes: ['Back works like every other Duo app, at the top of the side bar', 'Pulling a page past its end springs back smoothly', 'Home shows the Playing card only while something is playing'] },
+    { build: '9', at: now - 50 * h, notes: ['Alarms open with a zoom from their row and keep the title where the tab has it'] },
+    { build: '7', at: now - 98 * h, notes: ['Smaller fixes and polish'] }] })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); s.end(q.url === '/api/status' ? macStatus : q.url === '/api/procs' ? macProcs : '{}'); }).listen(9001, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
@@ -318,7 +322,7 @@ function chumbyScene(q, s) {
   // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
   const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved)\//);
   if (!m) return false;
   const scene = m[1];
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
@@ -369,6 +373,12 @@ function chumbyScene(q, s) {
   if (scene === 'ringing' && a === 'sys') return json({ ...data.sys, ring: 'r\tWork\tBeep' });
   if (scene === 'snoozed' && a === 'sys') return json({ ...data.sys, ring: 's\tWork\tBeep' });
   if (scene === 'skipped' && a === 'state') return json({ ...stateNow(data.state), skipped: nextWork() });
+  // Work moved for one ring by "just this once": its one-off ten minutes after the usual time, the Chumby's skip pinned
+  // to the usual ring.
+  if (scene === 'moved' && a === 'state') {
+    const w = nextWork();
+    return json({ ...stateNow(data.state), skipped: w, alarms: [...data.state.alarms, alarm({ name: 'Work (just this once)', when: 'once', time: String(Math.floor(w.at / 60) + 10), backupDelay: '5' })] });
+  }
   // A "just this once" for Work, ten minutes after its usual ring, with the Chumby's skip no longer on that ring: both
   // would ring, which the app says plainly with the two ways back.
   if (scene === 'orphan' && a === 'state') {

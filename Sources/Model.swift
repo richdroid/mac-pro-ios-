@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
     @Published var history: HistoryMetric?  // kept here so unfolding doesn't close it
     @Published var processes: ProcessSort?
     @Published var sessionScreen: Status.Session?  // a session's own screen, on the Claude tab's stack
+    @Published var appHistory: String?  // the package (TV.ipa) whose Version History is open on the Apps tab's stack
+    private var posedHistory = false
     private var pendingSession: String?
     private var lastData: Data?
     // The tab chosen to open on in Settings, or else the one last used.
@@ -210,6 +212,8 @@ final class AppModel: ObservableObject {
             Self.applyPose(pose, to: &fresh)
             // The build's shot of a session's own page, opened as from the Claude tab.
             if pose == "session", sessionScreen == nil { pendingSession = "chumby"; tab = 2 }
+            // The build's shot of an app's Version History, opened as from the Apps tab.
+            if pose == "history", !posedHistory { posedHistory = true; tab = 1; appHistory = "Chumby.ipa" }
             if parks { heldStatus = fresh; return }
             apply(fresh)
         } catch APIError.signInNeeded {

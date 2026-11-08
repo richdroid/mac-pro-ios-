@@ -447,3 +447,148 @@ enum AppBadge {
         #endif
     }
 }
+
+// One finished build of an app and what changed in it, from the Mac's copy of the code.
+struct BuildNotes: Decodable, Identifiable, Equatable {
+    let build: String; let at: Double; let notes: [String]
+    var id: String { build }
+}
+
+// Under Apps, each of his apps' Version History, the App Store's way (Richard, 2026-11-08: "duos changelogs in mac pro
+// app"): one row per app, with the build this iPhone has, opening every build and what changed in it.
+struct VersionHistorySection: View {
+    @EnvironmentObject var model: AppModel
+    let seed: Status.SeedStatus
+    var body: some View {
+        let mine = seed.apps.filter { $0.own && !$0.file.isEmpty }
+        if !mine.isEmpty {
+            Section("Version History") {
+                ForEach(mine) { a in
+                    Button { model.appHistory = a.file } label: {
+                        HStack(spacing: 12) {
+                            AppIcon(app: a, size: 40)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(a.name).foregroundStyle(.primary)
+                                Text(VersionHistoryView.onPhoneLine(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(a.name) version history")
+                }
+            }
+        }
+    }
+}
+
+// Every finished build that changed the app, newest first: its number, when, and what changed, the one on this iPhone
+// marked. Pushed on the Apps tab's stack, with the system's own Back (the Duo's way, 2026-11-08 ruling).
+struct VersionHistoryView: View {
+    @EnvironmentObject var model: AppModel
+    let file: String
+    @State private var builds: [BuildNotes]?
+    @State private var failed = false
+    // Kept for the visit, so opening it again shows the list at once while the Mac is asked again.
+    @MainActor static var known: [String: [BuildNotes]] = [:]
+
+    private var app: Status.SeedApp? { model.status?.iosApps?.apps.first { $0.file == file } }
+
+    // The build on this iPhone: this app knows its own; for the others, what the Mac last saw on the phone.
+    static func phoneBuild(_ a: Status.SeedApp) -> String {
+        if OTAInstaller.isThisApp(a) { return OTAInstaller.thisBuild }
+        if !a.phoneBuild.isEmpty { return a.phoneBuild }
+        return a.state == "current" ? a.build : ""
+    }
+    static func onPhoneLine(_ a: Status.SeedApp) -> String {
+        let b = phoneBuild(a)
+        return b.isEmpty ? "Not on this iPhone" : "Build \(b) on this iPhone"
+    }
+    // "Today, 10:16 AM", "Yesterday, 9:50 PM", "Nov 6": several builds can land in a day.
+    static func when(_ ms: Double) -> String {
+        let d = Date(timeIntervalSince1970: ms / 1000), cal = Calendar.current
+        let time = d.formatted(date: .omitted, time: .shortened)
+        if cal.isDateInToday(d) { return "Today, \(time)" }
+        if cal.isDateInYesterday(d) { return "Yesterday, \(time)" }
+        return d.formatted(.dateTime.month(.abbreviated).day())
+    }
+
+    var body: some View {
+        List {
+            if let app {
+                Section {
+                    HStack(spacing: 14) {
+                        AppIcon(app: app, size: 58)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(app.name).font(.title3.weight(.bold))
+                            Text(Self.onPhoneLine(app)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            Section("Version History") {
+                if let builds {
+                    if builds.isEmpty { Text("No builds yet").foregroundStyle(.secondary) }
+                    ForEach(builds) { entry($0) }
+                } else if failed {
+                    Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark").foregroundStyle(.secondary)
+                } else {
+                    HStack { ProgressView(); Text("Loading…").foregroundStyle(.secondary) }
+                }
+            }
+        }
+        .contentMargins(.top, 4, for: .scrollContent)
+        .scrollsUnder()
+        .background(groupedBackground.ignoresSafeArea())
+        .topEdge()
+        .navigationTitle("Version History")
+        .toolbarVisibility(.visible, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            if builds == nil { builds = Self.known[file] }
+            await load()
+        }
+    }
+
+    func entry(_ b: BuildNotes) -> some View {
+        let here = app.map { Self.phoneBuild($0) == b.build } ?? false
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Build \(b.build)").font(.headline).monospacedDigit()
+                if here {
+                    Text("On this iPhone").font(.caption.weight(.semibold)).foregroundStyle(.green)
+                        .padding(.horizontal, 8).padding(.vertical, 2)
+                        .background(.green.opacity(0.15), in: Capsule())
+                }
+                Spacer(minLength: 8)
+                Text(Self.when(b.at)).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(b.notes.enumerated()), id: \.offset) { _, n in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("•").foregroundStyle(.secondary)
+                        Text(n).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .font(.subheadline)
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+
+    func load() async {
+        do {
+            let got = try await model.api.history(file)
+            Self.known[file] = got
+            if got != builds { builds = got }
+            failed = false
+        }
+        catch is CancellationError {}
+        catch { failed = builds == nil }
+    }
+}

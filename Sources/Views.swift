@@ -439,6 +439,7 @@ struct Screen<Content: View>: View {
             // All processes, from Status itself; from a history, that page opens them over itself.
             .navigationDestination(item: tab == 0 && model.history == nil ? $model.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0) }
             .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0) }
+            .navigationDestination(item: tab == 1 ? $model.appHistory : Binding<String?>.constant(nil)) { VersionHistoryView(file: $0) }
         }
     }
 }
@@ -776,7 +777,7 @@ struct AppsTab: View {
     var body: some View {
         if side != .right {
             // Updates first, as in the App Store, then what's on the iPhone.
-            if let seed = s.iosApps { UpdatesSection(seed: seed); SeedSection(seed: seed) }
+            if let seed = s.iosApps { UpdatesSection(seed: seed); SeedSection(seed: seed); VersionHistorySection(seed: seed) }
         }
         if side != .left {
             // Only apps that are really running: an older Mac listed ones that had quit, with no figures (Calendar and

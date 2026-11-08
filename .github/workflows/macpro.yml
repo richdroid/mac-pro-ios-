@@ -85,6 +85,8 @@ jobs:
             shot otasent$x $d 9 -tab 1 -pose otasent
             shot uptodate$x $d 9 -tab 1 -pose uptodate
             shot otahome$x $d 9 -tab 1 -pose otahome
+            # Each app's Version History, opened from the Apps tab (Richard, 2026-11-08: "duos changelogs in mac pro app").
+            shot history$x $d 9 -tab 1 -pose history
             shot claude-usage$x $d 9 -tab 2 -pose scrolled
             shot usage-link$x $d 9 -tab 3
             shot scrolled$x $d 9 -tab 0 -pose scrolled
