@@ -311,7 +311,11 @@ final class TVModel {
     // Mint's song is what's on: playing, or Mint is the app in front. A film or show on the TV, playing or paused in
     // front, is never shown beside a song left over from before.
     var musicIsCurrent: Bool {
-        guard let m = nowMusic, !videoIsCurrent else { return false }
+        // A film the flick has sent is what's on from the throw, even while the TV's status still says the song: with
+        // both, the Remote's picture had the song's player and the film's bar under it at once, open in portrait, and
+        // shrank mid-move for the bar, so the flick's picture landed 14 % wider than it (the review of e35ddbc). Mint's
+        // mini player shows only when Mint is what's playing (ruling 6, 2026-11-05).
+        guard let m = nowMusic, !videoIsCurrent, starting == nil else { return false }
         return m.playing || status?.app == "com.codex.musicwebtv"
     }
     var toast: String?

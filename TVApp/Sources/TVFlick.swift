@@ -1490,18 +1490,23 @@ struct FlickScreen: View {
             let start = Date()
             let deadline = max(releasedAt == .distantPast ? start.addingTimeInterval(0.5) : releasedAt.addingTimeInterval(1.1), start.addingTimeInterval(0.4))
             var still = 0
-            while Date() < deadline {
+            // When the aim last changed: a re-aim eases over 0.3 s, so the swap waits for it (up to 0.3 s past the
+            // deadline), never cutting from a picture still easing to the one it was easing towards (the review of
+            // e35ddbc, open in portrait: the Remote's picture shrank as the film's bar came in under it, the aim followed,
+            // and the swap came 60 ms later with the moving picture still 14 % wider than the one it landed on).
+            var aimedAt = start
+            while Date() < deadline || Date().timeIntervalSince(aimedAt) < 0.3 && Date() < deadline.addingTimeInterval(0.3) {
                 try? await Task.sleep(nanoseconds: 16_000_000)
                 if let s = model.mirrorSlot, s.width > 20 {
                     let next = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
                     let moved = abs(next.minX - remoteSlot.minX) + abs(next.minY - remoteSlot.minY)
                         + abs(next.width - remoteSlot.width) + abs(next.height - remoteSlot.height) > 0.5
                     if moved {
-                        still = 0
+                        still = 0; aimedAt = Date()
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { remoteSlot = next }
                     } else { still += 1 }
                 }
-                if Date().timeIntervalSince(start) > 0.4 && still >= 4 { break }
+                if Date().timeIntervalSince(start) > 0.4 && still >= 4 && Date().timeIntervalSince(aimedAt) >= 0.3 { break }
             }
             // Landed on it: in one frame the Remote's own picture comes in underneath as this screen's goes, the same
             // poster on the same ground with the same light at the same point of its lap, so nothing fades over anything
