@@ -50,6 +50,8 @@ struct RootView: View {
         }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
         if ["tour", "type", "episodes", "scrub", "island"].contains(pose) { return }
+        // A title's details page, pushed over Stremio's page (AppBrowse opens it once the rows are in).
+        if pose == "details" { model.tab = 1; model.browsing = .stremio; return }
         // The real-data flows (CI's /real scene): each taps through the same code a finger would.
         if pose == "realtap" {
             Task {

@@ -53,22 +53,27 @@ enum TitleInfoStore {
 // The small "i" on a card's corner. Its own button, so it never also flicks the card.
 struct InfoBadge: View {
     let action: () -> Void
+    static var mark: some View {
+        Image(systemName: "info").font(.system(size: 12, weight: .bold))
+            .frame(width: 26, height: 26)
+            .glassEffect(.regular.interactive(), in: Circle())
+            // A finger's room around the small mark.
+            .padding(6).contentShape(Rectangle())
+    }
     var body: some View {
-        Button(action: action) {
-            Image(systemName: "info").font(.system(size: 12, weight: .bold))
-                .frame(width: 26, height: 26)
-                .glassEffect(.regular.interactive(), in: Circle())
-                // A finger's room around the small mark.
-                .padding(6).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Details")
+        Button(action: action) { Self.mark }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Details")
     }
 }
 
-// The details, in a sheet over whatever it was opened from. Its one big key carries on to choosing and flicking, so
-// reading about it is never a dead end.
-struct TitleInfoSheet: View {
+// The details, as a page pushed over whatever it was opened from, with the system's own Back at the top of the side strip
+// (folded and open flat) or the top bar (open upright), the way the Duo lays it out (Richard, 2026-11-08: "looks fucked
+// doesnt go edge to edge and no back button", on the sheet this was). The wide picture runs edge to edge under the clock
+// and the strip, as the HIG lets a header span the full width while what scrolls stays inset. Its one big key sits in
+// the page's foot inset, so nothing scrolls under it (the season chips sat under it before), and carries on to choosing
+// and flicking, so reading about it is never a dead end.
+struct TitleInfoPage: View {
     @Environment(TVModel.self) var model
     @Environment(\.dismiss) private var dismiss
     let item: MediaItem
@@ -114,22 +119,27 @@ struct TitleInfoSheet: View {
                                         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                                     }
                                 }
+                                .padding(.horizontal, 22)
                             }
+                            // The chips' row runs to the page's edges like every row, its padding inside it.
+                            .padding(.horizontal, -22)
                         }
                     }
                 }
                 .padding(.horizontal, 22)
                 .animation(.easeOut(duration: 0.25), value: info == nil)
             }
-            .padding(.bottom, fromFlick ? 24 : 96)
+            .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
-        .overlay(alignment: .bottom) {
+        // The key in the page's foot inset: the page scrolls above it, never under it.
+        .safeAreaInset(edge: .bottom) {
             if !fromFlick {
                 Button {
-                    model.tick(); dismiss()
-                    // Once the sheet is away, so the flick's screen opens over the page, not under a closing sheet.
-                    Task { try? await Task.sleep(nanoseconds: 350_000_000); FlickCardButton.tap(model, item, source) }
+                    model.tick()
+                    // The flick's screen opens over everything, so this page can go back under it at once.
+                    FlickCardButton.tap(model, item, source)
+                    dismiss()
                 } label: {
                     Label(ref?.type == "series" ? "Choose an episode" : "Choose a stream", systemImage: "play.fill")
                         .font(.headline).foregroundStyle(.black.opacity(0.85))
@@ -137,12 +147,13 @@ struct TitleInfoSheet: View {
                         .background(TVLook.accent, in: Capsule())
                 }
                 .buttonStyle(PressCard())
-                .padding(.horizontal, 22).padding(.bottom, 18)
+                .padding(.horizontal, 22).padding(.top, 8).padding(.bottom, 12)
             }
         }
-        .presentationDetents([.large])
-        .presentationBackground(.ultraThinMaterial)
-        .presentationCornerRadius(28)
+        .background { Ambience() }
+        // No title in the bar: the name is set large in the page. The bar keeps its Back.
+        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .task {
             guard let ref else { failed = true; return }
             // Reading about it is the moment before choosing it: its streams are asked for now, so they're there.
@@ -152,15 +163,18 @@ struct TitleInfoSheet: View {
             withAnimation(.easeOut(duration: 0.25)) { info = i; failed = i == nil }
         }
     }
-    // The wide picture across the top, the poster sat on it, both fading into the sheet.
+    // The wide picture across the top, edge to edge under the clock and the side strip, no taller than 360 pt open; the
+    // poster sat on it, both fading into the page.
     var header: some View {
         ZStack(alignment: .bottomLeading) {
             Color.clear.aspectRatio(16 / 9, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: 360)
                 .overlay {
                     Art(url: URL(string: info?.background ?? item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.06) }
                 }
                 .clipped()
                 .mask(LinearGradient(colors: [.black, .black, .black.opacity(0)], startPoint: .top, endPoint: .bottom))
+                .ignoresSafeArea(edges: [.top, .horizontal])
             Art(url: URL(string: info?.poster ?? item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
                 .frame(width: 84, height: 126).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .shadow(color: .black.opacity(0.5), radius: 14, y: 6)

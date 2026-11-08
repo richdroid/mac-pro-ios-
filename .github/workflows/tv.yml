@@ -64,6 +64,10 @@ jobs:
             # Pages opened over a tab: Back is the side bar's (the bottom bar's first item, open in portrait).
             for P in browse streams; do shot $P$x $d 9 $M -tab 1 -pose $P; done
             shot stremiorow$x $d 12 $M -tab 1 -pose stremiorow
+            # A title's details, pushed with the system's Back, its picture edge to edge under the strip, the key in the foot
+            # inset with the season chips clear above it (Richard, 2026-11-08: "looks fucked doesnt go edge to edge and no
+            # back button").
+            shot details$x $d 13 $M -tab 1 -pose details
             # Searching, with the keyboard up and the tab bar away for it: words typed into the Apps page, and the Remote's
             # search field tapped and typed into, which opens the same page. A simulator's first keyboard takes seconds to
             # come up, so the first search shot of a posture is thrown away and taken again (the review of 9c34a08: no

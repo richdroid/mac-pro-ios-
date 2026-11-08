@@ -545,10 +545,14 @@ extension View { func poseScroll() -> some View { modifier(PoseScrolled()) } }
 enum RowRoute: Hashable {
     case media(MediaRow, MediaSource)
     case films(String, [Film])
+    // A title's details, pushed like any page, with the system's Back (Richard, 2026-11-08, folded, a show's details:
+    // "looks fucked doesnt go edge to edge and no back button"; it was a sheet, drawn as an inset card with no Back).
+    case info(MediaItem, MediaSource)
     @ViewBuilder var page: some View {
         switch self {
         case .media(let row, let source): MediaList(row: row, source: source)
         case .films(let title, let films): FilmList(title: title, films: films)
+        case .info(let item, let source): TitleInfoPage(item: item, source: source)
         }
     }
 }

@@ -578,7 +578,7 @@ struct FlickScreen: View {
                 }
             }
         }
-        .sheet(isPresented: $showInfo) { TitleInfoSheet(item: item, source: source, fromFlick: true) }
+        .navigationDestination(isPresented: $showInfo) { TitleInfoPage(item: item, source: source, fromFlick: true) }
         .animation(.easeOut(duration: 0.2), value: blurbText)
     }
     var heading: some View {
@@ -2184,13 +2184,17 @@ struct AppBrowse: View {
         .background { Ambience() }
         .onAppear { model.mood = source.mood }
         .onDisappear { if model.mood == source.mood { model.mood = nil } }
-        // The build's shot of Stremio's first row opened from its heading ("-pose stremiorow"): its own list, not Stremio again.
+        // The build's shots: Stremio's first row opened from its heading ("-pose stremiorow"), its own list, not Stremio
+        // again; and a title's details page ("-pose details"), pushed with the system's Back, edge to edge.
         .task {
-            guard UserDefaults.standard.string(forKey: "pose") == "stremiorow", row == nil else { return }
+            let pose = UserDefaults.standard.string(forKey: "pose")
+            guard pose == "stremiorow" || pose == "details", row == nil else { return }
             let store = BrowseStore.shared(source)
             for _ in 0..<60 where store.rows.isEmpty { try? await Task.sleep(nanoseconds: 100_000_000) }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
-            if let first = store.rows.first { row = .media(first, source) }
+            if pose == "details" {
+                if let item = store.rows.flatMap(\.items).first(where: { $0.stremioRef != nil && !$0.isYouTube }) { row = .info(item, source) }
+            } else if let first = store.rows.first { row = .media(first, source) }
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
         // The app itself on the TV, in the page's bar; not offered when it's already the app on the TV.

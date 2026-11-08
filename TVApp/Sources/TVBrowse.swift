@@ -398,7 +398,7 @@ struct FlickCardButton: View {
     var ready = false
     // Where the tile is, kept without redrawing anything while the row scrolls.
     @State private var place = FrameBox()
-    @State private var showInfo = false
+    @Environment(\.openRow) private var openRow
     // A film or show from Stremio's catalogue has its details a tap away, on the "i" at the picture's corner.
     var hasInfo: Bool { source == .stremio && !item.isYouTube && item.stremioRef != nil }
     // What a tap on a card does; the build's real-data flows tap through here too.
@@ -414,8 +414,15 @@ struct FlickCardButton: View {
             // Outside the press's own squeeze, so the measure never moves with what it measures.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
-            .overlay(alignment: .topTrailing) { if hasInfo { InfoBadge { model.tick(); showInfo = true } } }
-            .sheet(isPresented: $showInfo) { TitleInfoSheet(item: item, source: source) }
+            // The details are a pushed page with the system's Back, never a sheet (2026-11-08: the sheet sat inset with a
+            // rounded corner and no Back, folded). On a page pushed by an item (an app's page) it opens through that
+            // page's own route, as its rows do; elsewhere by value on the tab's path.
+            .overlay(alignment: .topTrailing) {
+                if hasInfo {
+                    if let openRow { InfoBadge { model.tick(); openRow(.info(item, source)) } }
+                    else { NavigationLink(value: RowRoute.info(item, source)) { InfoBadge.mark }.buttonStyle(.plain).accessibilityLabel("Details").simultaneousGesture(TapGesture().onEnded { model.tick() }) }
+                }
+            }
             // A show he's part way through (Continue watching's tiles carry how far): its episodes asked for as the tile
             // comes on screen, so its page opens on them rather than on grey rows.
             .onAppear { if source == .stremio, item.progress != nil { NextUp.prefetch(item) } }
