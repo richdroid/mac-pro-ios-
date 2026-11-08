@@ -967,10 +967,9 @@ struct FlickScreen: View {
         }
     }
 
-    // Where everything on the card's step goes. The TV sits at the true centre of the screen, worked out from the whole
-    // display rather than the space left by the bars, so a side bar or the time never pushes it aside, folded, open or
-    // flat. Partly folded, it's the centre of the half being looked at, and the card sits at the foot of the half in the
-    // hand. Nothing here depends on the two-pane layout, which can change under the flick.
+    // Where everything on the card's step goes. The TV sits high, centred across the whole display rather than the space
+    // left by the bars, so a side bar never pushes it aside, folded, open or flat. Partly folded, it's at the top of the
+    // half being looked at, and the card sits at the foot of the half in the hand. Nothing here depends on the two-pane layout, which can change under the flick.
     struct Stage {
         var centre: CGPoint, tv: CGSize, cardX: CGFloat, cardTop: CGFloat, cardWidth: CGFloat, floor: CGFloat, wide: Bool
         var tvTop: CGFloat { centre.y - tv.height / 2 }
@@ -998,12 +997,12 @@ struct FlickScreen: View {
         // 220 pt folded, 320 open (§2.5a C2), never more than the half it sits in leaves room for.
         let tvWidth = wide ? min(320, look.width * 0.42) : min(220, look.width * 0.56)
         let tv = CGSize(width: tvWidth, height: (tvWidth * 9 / 16).rounded())
-        // Open and flat (a short, wide screen with the card in the same half), the TV at the true centre left the card
-        // squeezed under its stand and cut by the screen's foot (Richard, 2026-11-07: "when landscape unfolded the tv u r
-        // flicking to is too far down"). There it sits higher, its centre at about a third of the way down, so the card has
-        // the lower half to be held in and thrown from. Upright and folded it stays at the centre.
-        let flat = wide && hand == look
-        let centre = CGPoint(x: look.midX, y: flat ? look.minY + max(tv.height / 2 + 72, look.height * 0.34) : look.midY)
+        // High, near the top, in every posture, like his real TV across the room with the card low under his thumb
+        // (Richard, 2026-11-07 evening: "tv on flick is too low with should feel like im flicking directly to my actual
+        // tv"). Its top 72 pt under the top of the safe area (inside the first 12 % of it), leaving just room for the line
+        // above it. This replaces the true centre (11-03) and the third of the way down (11-07 afternoon).
+        let safeTop = max(look.minY, 0)
+        let centre = CGPoint(x: look.midX, y: safeTop + 72 + tv.height / 2)
         // The card is held low in the hand, well clear of the TV's stand so a throw has a real way to travel, with its
         // title strip (at its foot) always at least 12 pt above the edge: a quarter past the edge hid the title (r17).
         var width: CGFloat = wide ? 136 : 124
