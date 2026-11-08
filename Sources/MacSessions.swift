@@ -261,8 +261,9 @@ struct SessionTerminal: View {
         .background(Color.black.ignoresSafeArea())
         .navigationTitle(session.name)
         .toolbarVisibility(.visible, for: .navigationBar)
-        // Back is the side bar's; the swipe from the left edge still goes back (BackSwipe).
-        .navigationBarBackButtonHidden(true)
+        // The system's own Back: on the Duo it lays out at the top of the side strip, along the top open in portrait, and
+        // the edge swipe goes with it (Apple's HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the back
+        // button is retarded and not iphone duo standard").
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(.dark)
         .sensoryFeedback(trigger: sends) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }

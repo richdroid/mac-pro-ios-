@@ -223,15 +223,13 @@ struct RootView: View {
     @AppStorage("accent") private var accent = "blue"
     @AppStorage("celsius") private var celsius = false
     @State private var resets: [Int: Int] = [:]
-    @State private var barAtFoot = false
     @ObservedObject private var ota = OTAInstaller.shared
     private var updateCount: Int { model.status?.iosApps.map { UpdatesSection.updates($0).count } ?? 0 }
     // A new colour redraws the other tabs; Settings, where it was picked, stays put so the swatch can animate.
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
     var body: some View {
         PaneReader {
-            // -1 is the side bar's Back: it never becomes the tab, it takes the page on top back a step.
-            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 == -1 { model.goBack() } else { model.tab = $0 } })) { t in
+            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
                 // Back to the tab's own start: anything opened on it closes, and it's rebuilt at the top.
                 if t == 0 { model.history = nil; model.processes = nil }
                 if t == 2 { model.sessionScreen = nil }
@@ -240,11 +238,6 @@ struct RootView: View {
                 // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab. Seven in the bar along the foot
                 // (open in portrait) were squeezed, the labels nearly touching (Richard, 2026-11-07: "the bar like the
                 // elements r squished tg looks ugly").
-                // At the top of the side bar, above the tabs, only while a page is open over a tab. Along the foot (open in
-                // portrait) it's the bar's first item, and Settings steps out while it's there, so the bar keeps its six.
-                if model.pageOpen {
-                    Tab(value: -1) { Color.clear } label: { tabLabel("Back", "chevron.backward") }
-                }
                 Tab(value: 0) { Screen(tab: 0, title: "Status") { StatusTab($0, side: $1) }.id(key(0)) } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
                 Tab(value: 1) { Screen(tab: 1, title: "Apps") { AppsTab($0, side: $1) }.id(key(1)) } label: { tabLabel("Apps", "square.grid.2x2") }
                     // The updates waiting, as a number on the tab, the App Store's way.
@@ -254,9 +247,7 @@ struct RootView: View {
                 Tab(value: 4) { Screen(tab: 4, title: "macOS", listed: false) { UpgradeTab($0, side: $1) }.id(key(4)) } label: { tabLabel("macOS", "arrow.up.circle") }
                 Tab(value: 5) { Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5)) } label: { tabLabel("Control", "display") }
                 // Last, so it sits at the foot of the side bar.
-                if !(model.pageOpen && barAtFoot) {
-                    Tab(value: 9) { MacSettings().id(resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
-                }
+                Tab(value: 9) { MacSettings().id(resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
             }
             .tint(macBlue)
             .onChange(of: model.tab) { _, t in
@@ -265,8 +256,6 @@ struct RootView: View {
                 Task { await model.refresh() }
             }
         }
-        // The tabs are a bar along the foot when the Duo is open in portrait, a side bar otherwise.
-        .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { $0.size.width >= 600 && $0.size.height > $0.size.width } action: { barAtFoot = $0 } }
         .onAppear { MacPrefs.shareWithWidgets(); AppBadge.set(updateCount) }
         // And on the app's icon on the home screen, like the App Store's.
         .onChange(of: updateCount) { _, n in AppBadge.set(n) }

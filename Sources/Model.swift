@@ -77,16 +77,6 @@ final class AppModel: ObservableObject {
         return "local network"
     }
 
-    // A page open over the current tab (a history, the processes, a session), so the side bar shows Back. Back is the
-    // side bar's, as in the TV app (Richard, 2026-11-07: "back should be on side bar").
-    var pageOpen: Bool { (tab == 0 && (history != nil || processes != nil)) || (tab == 2 && sessionScreen != nil) }
-    func goBack() {
-        switch tab {
-        case 0: if processes != nil { processes = nil } else { history = nil }
-        case 2: sessionScreen = nil
-        default: break
-        }
-    }
     // A session's page, from its row: its text read ahead for a moment at most, so the page arrives drawn.
     func open(session s: Status.Session) {
         guard let key = s.key else { return }
