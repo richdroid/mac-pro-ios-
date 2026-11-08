@@ -84,6 +84,7 @@ jobs:
             shot otaready$x $d 9 -tab 1 -pose otaready
             shot otasent$x $d 9 -tab 1 -pose otasent
             shot uptodate$x $d 9 -tab 1 -pose uptodate
+            shot otahome$x $d 9 -tab 1 -pose otahome
             shot claude-usage$x $d 9 -tab 2 -pose scrolled
             shot usage-link$x $d 9 -tab 3
             shot scrolled$x $d 9 -tab 0 -pose scrolled

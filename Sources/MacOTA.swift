@@ -350,8 +350,8 @@ struct WhatsNew: View {
                         if more {
                             Button { withAnimation(.snappy) { open = true } } label: {
                                 Text("more").fontWeight(.semibold).foregroundStyle(macBlue)
-                                    .padding(.leading, 28)
-                                    .background(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: Color(white: 0.11), location: 0.45)], startPoint: .leading, endPoint: .trailing))
+                                    .padding(.leading, 40)
+                                    .background(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: Color(white: 0.11), location: 0.5)], startPoint: .leading, endPoint: .trailing))
                             }
                             .buttonStyle(.plain)
                         }

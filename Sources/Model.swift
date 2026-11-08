@@ -234,7 +234,7 @@ final class AppModel: ObservableObject {
                 }
                 s.iosApps = Status.SeedStatus(reachable: seed.reachable, via: seed.via, checkedAt: seed.checkedAt, seeding: "", fetch: seed.fetch, apps: apps)
             }
-        case "otaready", "otaoffer", "otasent":
+        case "otaready", "otaoffer", "otasent", "otahome":
             let mine = Int(OTAInstaller.thisBuild) ?? 12
             func link(_ n: String) -> String { "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac-pro.example.ts.net%2Fota%2F\(n).plist" }
             let apps = [
@@ -247,6 +247,12 @@ final class AppModel: ObservableObject {
             ]
             s.iosApps = Status.SeedStatus(reachable: false, via: "", checkedAt: 1, seeding: "", fetch: nil, apps: apps + (s.iosApps?.apps ?? []).filter { !$0.own })
             // "otasent": Chumby's update already sent to this iPhone over the air, as after he tapped it at work.
+            // "otahome": away, with Chumby's new build not yet signed for this iPhone: its capsule dimmed, "on home Wi-Fi".
+            if pose == "otahome", let seed = s.iosApps {
+                s.iosApps = Status.SeedStatus(reachable: false, via: "", checkedAt: 1, seeding: "", fetch: nil, apps: seed.apps.map { a in
+                    a.file == "Chumby.ipa" ? Status.SeedApp(file: a.file, name: a.name, version: a.version, build: a.build, phoneBuild: "", installedAt: a.installedAt, expires: a.expires, state: "waiting", message: "", own: true, ota: nil, notes: a.notes, builtAt: a.builtAt, icon: a.icon) : a
+                })
+            }
             if pose == "otasent" { UserDefaults.standard.set(["Chumby.ipa": "12"], forKey: "otaOpened") }
             else { UserDefaults.standard.removeObject(forKey: "otaOpened") }
         default: break
