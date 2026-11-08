@@ -1633,7 +1633,9 @@ struct SeedSection: View {
         // Updates have their own section above, App Store style; here, what's on the iPhone.
         let ups = Set(UpdatesSection.updates(seed).map(\.id))
         Section {
-            ForEach(seed.apps.filter { !ups.contains($0.id) }) { a in
+            // Only his own apps: one installed some other way (SideStore) has no package on the Mac, so no real icon and
+            // nothing the Mac can do for it; a blank tile in its place is a placeholder (designer HOLD, 2026-11-07).
+            ForEach(seed.apps.filter { $0.own && !ups.contains($0.id) }) { a in
                 let l = label(a)
                 HStack(spacing: 12) {
                     AppIcon(app: a, size: 40)
