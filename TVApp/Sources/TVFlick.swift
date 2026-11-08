@@ -1745,7 +1745,7 @@ struct FlickScreen: View {
                 remember()
                 flicksDone += 1
                 // An answer with no "playing" line (an old Mac, or a send that isn't a stream) is the yes.
-                model.startPlayed()
+                if ownsStart || model.startingTarget == nil { model.startPlayed() }
                 FlickClock.current.mark("answer"); FlickClock.current.finished()
                 return
             } catch {
@@ -1764,15 +1764,20 @@ struct FlickScreen: View {
                 // Still on the stage (no answer at all): the card comes back. On the Remote: the poster dims, with one
                 // way on.
                 if !handedOver { answered = true; await failedOnStage(error); return }
-                model.startFailed(tokens: Array(failedTokens))
+                if ownsStart { model.startFailed(tokens: Array(failedTokens)) }
                 return
             }
         }
     }
-    // A step of the start, as the Mac reports it: the model's, so the Remote follows it after this screen has closed.
+    // A step of the start, as the Mac reports it: the model's, so the Remote follows it after this screen has closed. Only
+    // while the start is still this flick's: a second flick (the next episode, one picked from the list) begins its own,
+    // and the first's request runs on in the background; its "playing" marked the second's start as played before the TV
+    // had it, so the Remote showed live keys and a bar for a film not yet on (2026-11-08, "the remote is still fucked").
+    var ownsStart: Bool { model.startingTarget?.id == target.id }
     func took(_ p: String) {
         FlickClock.current.mark("phase-" + p)
         phase = p
+        guard ownsStart else { return }
         model.startPhase(p)
         if p == "playing" {
             FlickClock.current.mark("playing")

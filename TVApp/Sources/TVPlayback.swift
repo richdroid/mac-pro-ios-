@@ -773,7 +773,23 @@ struct EpisodesLine: View {
     // covered "Remote" all but a sliver of its R, which read as a stray letter (r27, r28).
     @State private var lineTop: CGFloat = 0
     var body: some View {
-        if model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one", let line = s.episodeLine, nextUp.series != nil {
+        // A start under way: its own episode, read from the start, never the one still reported from before it (2026-11-08:
+        // the next episode thrown, and the line under its poster still named the last one until the TV caught up). The
+        // picker waits for the TV's word on the new show.
+        if let st = model.starting, !st.played {
+            if let line = st.line {
+                HStack(spacing: 10) {
+                    Image(systemName: "list.bullet.rectangle.portrait").foregroundStyle(.secondary)
+                    Text(line).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Spacer(minLength: 8)
+                }
+                .padding(.horizontal, 16).frame(height: 46)
+                .glassEffect(.regular, in: Capsule())
+                .opacity(model.flickHandoff ? 0 : 0.7)
+                .transition(.opacity)
+                .accessibilityLabel("Starting \(line)")
+            }
+        } else if model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one", let line = s.episodeLine, nextUp.series != nil {
           Group {
             Button { model.tick(); open = true } label: {
                 // Where the whole line doesn't fit (folded, beside the side bar), the word "Episodes" gives way before the

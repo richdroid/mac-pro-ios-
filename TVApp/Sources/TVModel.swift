@@ -97,6 +97,13 @@ final class TVModel {
         // three seconds is the same tap, never a second start.
         // One being taken down after landing on the Remote (retireFlick) doesn't count.
         guard flicking == nil || flickRetired else { return }
+        // The very thing a start is already under way for (the card tapped again, the same episode picked again while the
+        // TV brings it up): straight to the Remote, where the start is shown; never a second send (2026-11-08).
+        if let st = starting, !st.failed, !st.played, let t = startingTarget, !target.streamsFirst, target.send == nil,
+           t.item.stremioRef?.imdb == target.item.stremioRef?.imdb, t.item.stremioRef?.video == target.item.stremioRef?.video,
+           target.item.stremioRef != nil {
+            tick(); tab = 0; return
+        }
         if target.autoplay {
             if let l = lastFlick, l.id == target.item.id, Date().timeIntervalSince(l.at) < 3 { return }
             lastFlick = (target.item.id, Date())
@@ -192,7 +199,10 @@ final class TVModel {
     }
     // Playing: the light finishes its lap, then the picture is the TV's own again. The yes is felt here.
     func startPlayed() {
-        guard let st = starting, !st.failed, !st.played else { return }
+        // A start the phone gave up on (its line of news cut, the app put away mid-start) can still play on the TV: the
+        // TV's word wins, and the dimmed poster with "Choose another" goes (2026-11-08: a film playing under a failed start).
+        guard let st = starting, !st.played else { return }
+        if st.failed { starting?.failed = false }
         // ⏯ said pause all through the start; it goes on saying so until a reading taken after this agrees, so the first
         // status after the start (which can still say not playing) can't flip it to ▶ for a moment (r21).
         holdPlay(true)
@@ -476,6 +486,18 @@ final class TVModel {
             if starting != nil, let last = s.lastStart, last.token == nil || last.token == starting?.token {
                 if last.result == "playing" || last.result == "ok" { startPlayed() }
                 else if last.result == "failed" { startFailed(tokens: [last.token].compactMap { $0 }) }
+            }
+            // And the TV's own session: the thing being started is what's playing, read after the start began (the same
+            // show's episode, or the film by name), so a start whose news never came still ends when the TV has it.
+            if let st = starting, !st.played, let sess = s.session, sess.pkg == "com.stremio.one", sess.playing,
+               (sess.sampledAt ?? 0) / 1000 > st.since.timeIntervalSince1970 + 1 {
+                let sameTitle = TVStatus.Session.sameName(sess.showName, st.title) || sess.description.first.map { TVStatus.Session.sameName($0, st.title) } == true
+                let sameEpisode: Bool = {
+                    guard let line = st.line else { return sess.seasonEpisode == nil }
+                    guard let se = sess.seasonEpisode else { return false }
+                    return line.hasPrefix("S\(se.season) E\(se.episode)")
+                }()
+                if sameTitle && sameEpisode { startPlayed() }
             }
             // Kept for the next launch, written off the main thread.
             if s.online { let file = Self.cacheFile; Task.detached(priority: .utility) { try? d.write(to: file, options: .atomic) } }
