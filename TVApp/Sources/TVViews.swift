@@ -146,18 +146,12 @@ struct RootView: View {
     @State private var playingSymbol = "play.circle"
     var body: some View {
         PaneReader {
-            // -1 is the side bar's Back: it never becomes the tab, it takes the page on top back a step.
-            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 == -1 { model.goBack() } else { model.tab = $0 } })) { t in
+            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
                 // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
                 // rebuilt, so what was loaded, and the choices made on it, stay.
                 if t == 1 { model.browsing = nil; SendDraft.shared.text = "" }
                 resets[t, default: 0] += 1
             }) {
-                // At the top of the side bar, above the tabs, only while a page is open over a tab (Richard, 2026-11-07:
-                // "back should be on side bar", after the floating "Back" capsule sat over the list's last rows).
-                if !model.railBacks.isEmpty {
-                    Tab(value: -1) { Color.clear } label: { tabLabel("Back", "chevron.backward") }
-                }
                 Tab(value: 0) { Page(title: "Remote", alwaysInline: true, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
                 Tab(value: 1) { Page(title: "Apps", retaps: resets[1, default: 0]) { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
                 Tab(value: 2) { Page(title: "Playing", retaps: resets[2, default: 0]) { PlayingTab() } } label: {
@@ -411,6 +405,37 @@ private struct SummonsBar: ViewModifier {
             let end = g.contentSize.height + g.contentInsets.top + g.contentInsets.bottom - g.containerSize.height
             return min(g.contentOffset.y + g.contentInsets.top, max(end, 0))
         } action: { old, new in bar?.follow(old, new) }
+        .modifier(ScrollMoving())
+    }
+}
+// Every scrolling page says when it's moving (BackToTop and SummonsBar carry this): the TV's polled status waits while
+// one is, so no row changes height under a page pulled past its end, which snaps the page back in one move instead of
+// letting it spring (Richard, 2026-11-08: "it doesnt bounce back naturally its like a sudden move back", in all apps).
+struct ScrollMoving: ViewModifier {
+    @State private var id = UUID()
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+            .onScrollPhaseChange { _, phase in ScrollHold.set(id, moving: phase != .idle) }
+            .onDisappear { ScrollHold.set(id, moving: false) }
+        #else
+        content
+        #endif
+    }
+}
+// Which pages are moving right now. Only the polled status waits while any is, never more than 4 s at a stretch: his own
+// presses, and every load they ask for, go straight through (TVModel).
+@MainActor
+enum ScrollHold {
+    private static var moving: Set<UUID> = []
+    private static var since = Date.distantPast
+    static var onRelease: (() -> Void)?
+    static var holding: Bool { !moving.isEmpty && Date().timeIntervalSince(since) < 4 }
+    static func set(_ id: UUID, moving now: Bool) {
+        let was = !moving.isEmpty
+        if now { moving.insert(id) } else { moving.remove(id) }
+        if !was && !moving.isEmpty { since = Date() }
+        if was && moving.isEmpty { onRelease?() }
     }
 }
 struct PageHeading: View {
@@ -469,19 +494,19 @@ struct PageBarAction: View {
 }
 private struct BarPage<Actions: View>: ViewModifier {
     @Environment(TVModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.paneLayout) private var panes
     @StateObject private var bar = PageBarState()
-    @State private var backID = UUID()
     let actions: () -> Actions
     func body(content: Content) -> some View {
         content
             .environment(\.pageBar, bar)
-            .toolbar(.hidden, for: .navigationBar)
-            // Back is the side bar's now, at its top, there while this page is (Richard, 2026-11-07: "back should be on
-            // side bar"): the floating capsule sat over the list's last rows. Only a page's own action keeps a bar here.
-            .onAppear { model.pushBack(backID) { dismiss() } }
-            .onDisappear { model.popBack(backID) }
+            // The system's own Back, laid out by iOS the Duo's way: at the top of the side strip folded and open in
+            // landscape, in the top bar open in portrait, with the edge swipe (Apple's HIG for iPhone Duo, "Vertical
+            // controls"; Richard, 2026-11-08: "the back button is retarded and not iphone duo standard"). The hand-made
+            // Back tab in the side bar and the foot capsule before it are gone. The page draws its own large heading, so
+            // the bar carries no title of its own. Only a page's own action (Open on TV, Edit) keeps a small bar at the foot.
+            .toolbar(.visible, for: .navigationBar)
+            .navigationTitle("")
             .overlay(alignment: .bottomTrailing) {
                 if Actions.self != EmptyView.self {
                 PageBar(showsBack: false, actions: actions)
@@ -3012,8 +3037,8 @@ final class AmbienceStore: ObservableObject {
 // stack took the tab rail with it (r20).
 struct UnderFlick: ViewModifier {
     @Environment(TVModel.self) private var model
-    // A page that draws its own bar at its foot (BarPage) keeps the system's bar hidden always: set from outside to
-    // "automatic", it brought back a second title and a second ‹ beside the rail (r21).
+    // A page pushed over a tab that draws its own large heading: the system's bar stays, for its Back (the Duo's own,
+    // 2026-11-08), but carries no title, so the heading isn't printed twice.
     var barHidden = false
     func body(content: Content) -> some View {
         let covered = model.flickChoosing || model.flickCovering
@@ -3023,11 +3048,17 @@ struct UnderFlick: ViewModifier {
             // under the faded page, a brown (28,16,10) against the page's near-black (8,5,4) edge, a band (r30).
             .overlay { Color.black.ignoresSafeArea().opacity(covered ? 1 : 0).allowsHitTesting(false) }
             .animation(.easeOut(duration: 0.15), value: covered)
+            .modifier(Untitled(on: barHidden))
             #if os(iOS)
-            // Only a page with its own foot bar hides the system's bar. Hidden while a flick's page covered it, the tab rail
-            // went with it (r20–r26); the flick's page is opaque now, so nothing under it shows anyway.
-            .toolbarVisibility(barHidden ? .hidden : .automatic, for: .navigationBar)
+            .toolbarVisibility(barHidden ? .visible : .automatic, for: .navigationBar)
             #endif
+    }
+}
+// The bar's title emptied for a page that draws its own heading; off, whatever the page set stands.
+private struct Untitled: ViewModifier {
+    let on: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if on { content.navigationTitle("") } else { content }
     }
 }
 extension View { func underFlick(barHidden: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden)) } }

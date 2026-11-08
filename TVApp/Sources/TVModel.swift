@@ -15,14 +15,6 @@ struct Film: Identifiable, Hashable {
 // position doesn't redraw every key and card in every tab.
 @MainActor @Observable
 final class TVModel {
-    // Where Back in the side bar goes: the page on top registers its way back as it appears and takes it away as it goes,
-    // so the rail's Back is there only when there's somewhere to go back to (Richard, 2026-11-07: "back should be on side
-    // bar", "the back button behavior is awful rn").
-    struct RailBack { let id: UUID; let go: () -> Void }
-    var railBacks: [RailBack] = []
-    func pushBack(_ id: UUID, _ go: @escaping () -> Void) { railBacks.removeAll { $0.id == id }; railBacks.append(RailBack(id: id, go: go)) }
-    func popBack(_ id: UUID) { railBacks.removeAll { $0.id == id } }
-    func goBack() { tick(); railBacks.last?.go() }
     var status: TVStatus?
     // True until the first answer since launch. Until then the status is the one kept from last time: good for laying
     // out the pages, but not for saying what's playing, where it's got to, or whether it's paused.
@@ -341,6 +333,16 @@ final class TVModel {
         // The apps' banners kept from last time, decoded off the main thread now, so the Remote's tiles have them early
         // without anything reading the disk while drawing.
         warmBanners()
+        ScrollHold.onRelease = { [weak self] in self?.releaseHeld() }
+    }
+    // A polled status that came in while a page was moving under his finger, put on screen the moment it settles: a row
+    // changing height under a page pulled past its end snaps it back instead of letting it spring (2026-11-08). Only
+    // the poll waits; a load his own press asked for goes straight through, and so does the Remote's live state.
+    @ObservationIgnored private var heldStatus: (data: Data, status: TVStatus)?
+    private func releaseHeld() {
+        guard let h = heldStatus else { return }
+        heldStatus = nil
+        publish(h.status, data: h.data)
     }
     func warmBanners() {
         let urls = (status?.apps ?? []).filter(\.hasIcon).compactMap { url("/api/tv/icon?pkg=\($0.pkg)&v=2") }
@@ -358,7 +360,7 @@ final class TVModel {
                 while !Task.isCancelled {
                     // Not while a flick is up: every refresh redraws the pages behind it, which shows as stutter in the flick.
                     // Its control screen keeps itself current.
-                    if let self, self.flicking == nil || self.flickRetired, Date().timeIntervalSince(self.lastKeyAt) > 1.5 { await self.load() }
+                    if let self, self.flicking == nil || self.flickRetired, Date().timeIntervalSince(self.lastKeyAt) > 1.5 { await self.load(polled: true) }
                     // What's playing changes under you, so the Playing tab keeps closer watch.
                     // The Remote shows play/pause and what's on: every second there, as a check costs the bridge 20-400 ms
                     // (Richard, 2026-11-07: "playing and not playing dont update fast enough", "doesnt update based on
@@ -426,14 +428,14 @@ final class TVModel {
     @ObservationIgnored private var loading: Task<Void, Never>?
     // The last answer's bytes, so an unchanged answer is neither decoded nor compared field by field.
     @ObservationIgnored private var lastStatusBytes: Data?
-    func load() async {
+    func load(polled: Bool = false) async {
         if let l = loading { await l.value; return }
-        let t = Task { await reload() }
+        let t = Task { await reload(polled: polled) }
         loading = t
         await t.value
         loading = nil
     }
-    private func reload() async {
+    private func reload(polled: Bool = false) async {
         guard let u = url("/api/tv/status") else { return }
         var r = URLRequest(url: u); r.timeoutInterval = 8; r.cachePolicy = .reloadIgnoringLocalCacheData
         guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200 else { if !Task.isCancelled { reachable = false }; return }
@@ -447,11 +449,18 @@ final class TVModel {
             }
             s = fresh
         }
-        lastStatusBytes = d
         if !reachable { reachable = true }
         #if os(iOS)
         await TVIsland.sync(s, art: islandArt(s))
         #endif
+        // Polled while a page is moving: kept until it settles (releaseHeld), so nothing changes height under his finger.
+        if polled, !unchanged, s != status, ScrollHold.holding { heldStatus = (d, s); return }
+        heldStatus = nil
+        publish(s, data: d)
+    }
+    private func publish(_ s: TVStatus, data d: Data) {
+        let unchanged = d == lastStatusBytes && status != nil
+        lastStatusBytes = d
         if !unchanged && s != status {
             status = s
             // Every app's banner fetched once, as soon as the list first comes, so the Apps tab and the Remote's tiles

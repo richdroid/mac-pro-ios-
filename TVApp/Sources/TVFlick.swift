@@ -82,7 +82,6 @@ extension MediaItem {
 
 struct FlickScreen: View {
     // Its entry in the side bar's Back, while choosing.
-    @State private var railBackID = UUID()
     @State private var showInfo = false
     @State private var openedAt = Date.distantPast
     // The stream whose full description is open under its row.
@@ -179,8 +178,6 @@ struct FlickScreen: View {
     @State private var askedRestart = false
     @Environment(\.paneLayout) private var panes
     @Environment(\.horizontalSizeClass) private var sizeClass
-    // Open in portrait the tabs are a bar along the foot, under this page; otherwise they're the side bar beside it.
-    var tabsAtFoot: Bool { sizeClass == .regular && !panes }
     @State private var priorMood: Color??
     // Thrown sideways too, the card's way across settles on its own spring, so the flight bends.
     @State private var flownX = false
@@ -372,15 +369,13 @@ struct FlickScreen: View {
             // On the reader, outside the hold's offset, so measuring it moves nothing.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { flickFrame = $0 }
             // In with the backdrop, and out with it, rather than on the rail before anything else is there.
-            // On the card and after it, the X in the bar (the side bar's pill, folded and open). The bar's buttons go as
-            // the move starts, in every posture, and the bar itself stays: hiding it re-laid the whole screen out under
-            // the moving picture in the move's first frame, and the picture leapt to the Remote instead of moving (r27,
-            // r28 open; the review of 9c34a08 found the same one-frame jump folded and in portrait, where the bar was
-            // still being hidden for the move). The Remote's eye is on its picture now, so nothing here becomes it.
-            // Open in portrait there's no side bar: the stage covers the tab bar (the Remote comes up under the stage
-            // 0.6 s in, and a bar left in view would show its tab change), so the same ‹ and X sit in the system's bar
-            // along the foot, where the tab bar was. While choosing, the tab bar stays and its Back is the way back.
-            .toolbar { if barShown && !choosing && !toRemote { if tabsAtFoot { footBar } else { bar } } }
+            // Back and Close are the system's own navigation items, laid out by iOS the Duo's way (the top of the side
+            // strip folded and open in landscape, the top bar open in portrait): Back a step through the choosing, X to
+            // close, or to call a throw off (Apple's HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the
+            // back button is retarded and not iphone duo standard"). The hand-made Back tab, foot bar and pill are gone.
+            // The bar's items go as the move starts, in every posture, and the bar itself stays: hiding it re-laid the
+            // whole screen out under the moving picture in the move's first frame (r27, r28; the review of 9c34a08).
+            .toolbar { if barShown && !toRemote { bar } }
             .environment(\.pageBar, pageBar)
             // Open, the show's one big key sits at the left pane's foot, level with Back at the right's: the same height,
             // the same baseline. Flowing under the blurb it landed 34 pt above Back, two bars that didn't line up (r29).
@@ -393,15 +388,8 @@ struct FlickScreen: View {
                 }
             }
             .onChange(of: choosing && !leaving, initial: true) { _, c in model.flickChoosing = c }
-            // The side bar's Back steps back through the choosing (streams → episodes → out), as the page's own bar did.
-            // Open in portrait the tab bar along the foot stays under the show's page and the streams, and its Back is
-            // the way back there too (Richard, 2026-11-07: "back should be on side bar"; the review of 9c34a08: a "‹ Back"
-            // foot bar on those pages instead, with Back in the bottom bar one page earlier).
-            .onChange(of: choosing && !leaving, initial: true) { _, on in
-                if on { model.pushBack(railBackID) { if let previous { go(previous) } else { leave() } } } else { model.popBack(railBackID) }
-            }
             .onChange(of: !choosing && !toRemote && !leaving, initial: true) { _, c in model.flickCovering = c }
-            .onDisappear { model.flickChoosing = false; model.flickCovering = false; model.popBack(railBackID) }
+            .onDisappear { model.flickChoosing = false; model.flickCovering = false }
             // The card in the hand, the stage black over everything: the Remote comes up underneath now, so its first
             // layout (0.3 s folded, about 0.9 s open) is paid for while nothing moves, never during the throw (r21: switched
             // at the release, it froze the card mid-air). Back off the card's step, the page he came from comes back.
@@ -527,20 +515,6 @@ struct FlickScreen: View {
             .opacity(arrived && !toRemote ? 1 : 0)
     }
 
-    // Open in portrait: the same ‹ and X in the system's bar along the foot of the stage, where the tab bar is on every
-    // other page, never at the top (Richard, 2026-11-02: "controls r hidden at top").
-    @ToolbarContentBuilder var footBar: some ToolbarContent {
-        #if os(iOS)
-        // One group, so the two keep to one glass pill under the card rather than one at each corner.
-        ToolbarItemGroup(placement: .bottomBar) {
-            if let previous { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
-            let stops = flown
-            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : "Close", systemImage: "xmark") }
-        }
-        #else
-        bar
-        #endif
-    }
     @ToolbarContentBuilder var bar: some ToolbarContent {
         if let previous {
             ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
@@ -968,9 +942,6 @@ struct FlickScreen: View {
         let ins = g.safeAreaInsets
         let screen = CGRect(x: -ins.leading, y: -ins.top, width: g.size.width + ins.leading + ins.trailing, height: g.size.height + ins.top + ins.bottom)
         var look = screen, hand = screen
-        // Open in portrait the ‹ and X sit in the system's bar along the foot: the card waits above it, never under it
-        // (the review of e59620e: the bar sat over the card's title strip).
-        if tabsAtFoot { hand.size.height -= max(ins.bottom, TVLook.footRoom) }
         #if os(iOS)
         if #available(iOS 27.1, *), let crease = g.reservedRegions(kind: .division).first?.frame, crease.width > 0 || crease.height > 0 {
             if crease.height >= crease.width {
