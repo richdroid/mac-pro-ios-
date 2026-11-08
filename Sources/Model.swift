@@ -213,7 +213,7 @@ final class AppModel: ObservableObject {
             // The build's shot of a session's own page, opened as from the Claude tab.
             if pose == "session", sessionScreen == nil { pendingSession = "chumby"; tab = 2 }
             // The build's shot of an app's Version History, opened as from the Apps tab.
-            if pose == "versions", !posedHistory { posedHistory = true; tab = 1; appHistory = "Chumby.ipa" }
+            if pose == "versions", !posedHistory { posedHistory = true; tab = 1; appHistory = "TV.ipa" }
             if parks { heldStatus = fresh; return }
             apply(fresh)
         } catch APIError.signInNeeded {

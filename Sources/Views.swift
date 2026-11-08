@@ -368,10 +368,8 @@ struct Screen<Content: View>: View {
             .task {
                 // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
-                guard !["scrolled", "versionsrow"].contains(model.pose) || tab == 0 else {
-                    // "versionsrow": Apps with its Version History rows at the top, on the pane that has them.
-                    let rows = model.pose == "versionsrow"
-                    guard side != (rows ? .right : .left), let to = (rows ? [1: "versions"] : [1: "open", 2: "usage"])[tab] else { return }
+                guard model.pose != "scrolled" || tab == 0 else {
+                    guard side != .left, let to = [1: "open", 2: "usage"][tab] else { return }
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     proxy.scrollTo(to, anchor: .top)
@@ -779,7 +777,7 @@ struct AppsTab: View {
     var body: some View {
         if side != .right {
             // Updates first, as in the App Store, then what's on the iPhone.
-            if let seed = s.iosApps { UpdatesSection(seed: seed); SeedSection(seed: seed); VersionHistorySection(seed: seed) }
+            if let seed = s.iosApps { UpdatesSection(seed: seed); SeedSection(seed: seed) }
         }
         if side != .left {
             // Only apps that are really running: an older Mac listed ones that had quit, with no figures (Calendar and
@@ -1676,7 +1674,13 @@ struct SeedSection: View {
                             else { handOff(a.file, row: a.id) }
                         }.buttonStyle(.bordered).disabled(!seed.seeding.isEmpty || handing != nil)
                     }
+                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
+                // The App Store's way: the app's row opens its page, Version History (Richard, 2026-11-08: "duos
+                // changelogs in mac pro app"). Its own buttons keep their taps.
+                .contentShape(Rectangle())
+                .onTapGesture { model.appHistory = a.file }
+                .accessibilityAction(named: "Version History") { model.appHistory = a.file }
             }
             Menu {
                 Button { picking = true } label: { Label("From Files", systemImage: "folder") }

@@ -284,6 +284,10 @@ struct UpdatesSection: View {
             if let notes = a.notes, !notes.isEmpty { WhatsNew(notes: notes) }
         }
         .padding(.vertical, 6)
+        // The app's row opens its Version History, as on the App Store; Update and "more" keep their own taps.
+        .contentShape(Rectangle())
+        .onTapGesture { model.appHistory = a.file }
+        .accessibilityAction(named: "Version History") { model.appHistory = a.file }
     }
 
     @ViewBuilder func button(_ a: Status.SeedApp) -> some View {
@@ -449,59 +453,48 @@ enum AppBadge {
 }
 
 // One finished build of an app and what changed in it, from the Mac's copy of the code.
-struct BuildNotes: Decodable, Identifiable, Equatable {
+struct BuildNotes: Codable, Identifiable, Equatable {
     let build: String; let at: Double; let notes: [String]
     var id: String { build }
-}
-
-// Under Apps, each of his apps' Version History, the App Store's way (Richard, 2026-11-08: "duos changelogs in mac pro
-// app"): one row per app, with the build this iPhone has, opening every build and what changed in it.
-struct VersionHistorySection: View {
-    @EnvironmentObject var model: AppModel
-    let seed: Status.SeedStatus
-    var body: some View {
-        let mine = seed.apps.filter { $0.own && !$0.file.isEmpty }
-        if !mine.isEmpty {
-            Section("Version History") {
-                ForEach(mine) { a in
-                    Button { model.appHistory = a.file } label: {
-                        HStack(spacing: 12) {
-                            AppIcon(app: a, size: 40)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(a.name).foregroundStyle(.primary)
-                                Text(VersionHistoryView.onPhoneLine(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
-                            }
-                            Spacer(minLength: 8)
-                            Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(a.name) version history")
-                    .id(a.id == mine.first?.id ? AnyHashable("versions") : AnyHashable("versions-" + a.id))
-                }
-            }
-        }
-    }
 }
 
 // Every finished build that changed the app, newest first: its number, when, and what changed, the one on this iPhone
 // marked. Pushed on the Apps tab's stack, with the system's own Back (the Duo's way, 2026-11-08 ruling).
 struct VersionHistoryView: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var ota = OTAInstaller.shared
     let file: String
     @State private var builds: [BuildNotes]?
-    @State private var failed = false
-    // Kept for the visit, so opening it again shows the list at once while the Mac is asked again.
-    @MainActor static var known: [String: [BuildNotes]] = [:]
+    @State private var failed: String?
+    // Kept on the phone, so opening it again (or after a relaunch) shows the list from its first frame while the Mac is
+    // asked again; never a "Loading…" row that swaps out in front of him.
+    @MainActor static var known: [String: [BuildNotes]] = {
+        guard let d = try? Data(contentsOf: knownFile) else { return [:] }
+        return (try? JSONDecoder().decode([String: [BuildNotes]].self, from: d)) ?? [:]
+    }()
+    private static var knownFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("version-history.json") }
+
+    init(file: String) {
+        self.file = file
+        _builds = State(initialValue: Self.known[file])
+    }
 
     private var app: Status.SeedApp? { model.status?.iosApps?.apps.first { $0.file == file } }
 
     // The build on this iPhone: this app knows its own; for the others, what the Mac last saw on the phone.
+    // What the Mac sees on the phone first, so the page says what the On this iPhone row says; away from home this app
+    // still knows its own.
     static func phoneBuild(_ a: Status.SeedApp) -> String {
-        if OTAInstaller.isThisApp(a) { return OTAInstaller.thisBuild }
         if !a.phoneBuild.isEmpty { return a.phoneBuild }
+        if OTAInstaller.isThisApp(a) { return OTAInstaller.thisBuild }
         return a.state == "current" ? a.build : ""
+    }
+    // The entry marked "On this iPhone": the phone's own build, or, when that build changed nothing in this app (so it
+    // isn't listed), the newest listed build before it, whose changes are the ones he has.
+    static func hereBuild(_ phone: String, in builds: [BuildNotes]) -> String? {
+        if builds.contains(where: { $0.build == phone }) { return phone }
+        guard let p = Int(phone) else { return nil }
+        return builds.compactMap { Int($0.build) }.filter { $0 <= p }.max().map(String.init)
     }
     static func onPhoneLine(_ a: Status.SeedApp) -> String {
         let b = phoneBuild(a)
@@ -526,17 +519,38 @@ struct VersionHistoryView: View {
                             Text(app.name).font(.title3.weight(.bold))
                             Text(Self.onPhoneLine(app)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
                         }
-                        Spacer(minLength: 0)
+                        Spacer(minLength: 8)
+                        // A newer build ready for this iPhone: Update, as on the app's App Store page.
+                        if let seed = model.status?.iosApps, UpdatesSection.updates(seed).contains(where: { $0.id == app.id }), UpdatesSection.link(app) != nil {
+                            if ota.current?.file == app.id { ProgressView().frame(width: 84) }
+                            else {
+                                Button { ota.install([app]) } label: { Text("Update").font(.subheadline.weight(.bold)) }
+                                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
+                                    .disabled(ota.running)
+                                    .accessibilityLabel("Update \(app.name) to build \(app.build)")
+                            }
+                        }
                     }
                     .padding(.vertical, 4)
                 }
             }
-            Section("Version History") {
+            // The bar already says Version History; the builds follow the app without a heading saying it again.
+            Section {
                 if let builds {
                     if builds.isEmpty { Text("No builds yet").foregroundStyle(.secondary) }
-                    ForEach(builds) { entry($0) }
-                } else if failed {
-                    Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark").foregroundStyle(.secondary)
+                    let here = app.flatMap { Self.hereBuild(Self.phoneBuild($0), in: builds) }
+                    ForEach(builds) { entry($0, here: $0.build == here) }
+                } else if let failed {
+                    // Something he can do about it: ask again.
+                    Button { self.failed = nil; Task { await load() } } label: {
+                        HStack {
+                            Text(failed).foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            Text("Try Again").fontWeight(.semibold).foregroundStyle(macBlue)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 } else {
                     HStack { ProgressView(); Text("Loading…").foregroundStyle(.secondary) }
                 }
@@ -549,21 +563,20 @@ struct VersionHistoryView: View {
         .navigationTitle("Version History")
         .toolbarVisibility(.visible, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
-        .task {
-            if builds == nil { builds = Self.known[file] }
-            await load()
-        }
+        .task { await load() }
     }
 
-    func entry(_ b: BuildNotes) -> some View {
-        let here = app.map { Self.phoneBuild($0) == b.build } ?? false
-        return VStack(alignment: .leading, spacing: 8) {
+    func entry(_ b: BuildNotes, here: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("Build \(b.build)").font(.headline).monospacedDigit()
                 if here {
+                    // The capsule's height is drawn, not laid out: its padding in the row's height made that one row a
+                    // fraction of a pixel taller, and the list showed a black hairline across the card under it (open
+                    // portrait, CI 09a29be).
                     Text("On this iPhone").font(.caption.weight(.semibold)).foregroundStyle(.green)
-                        .padding(.horizontal, 8).padding(.vertical, 2)
-                        .background(.green.opacity(0.15), in: Capsule())
+                        .padding(.horizontal, 8)
+                        .background(Capsule().fill(.green.opacity(0.15)).padding(.vertical, -2))
                 }
                 Spacer(minLength: 8)
                 Text(Self.when(b.at)).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
@@ -585,11 +598,21 @@ struct VersionHistoryView: View {
     func load() async {
         do {
             let got = try await model.api.history(file)
-            Self.known[file] = got
+            failed = nil
             if got != builds { builds = got }
-            failed = false
+            if got != Self.known[file] {
+                Self.known[file] = got
+                let all = Self.known, to = Self.knownFile
+                Task.detached(priority: .utility) { try? JSONEncoder().encode(all).write(to: to, options: .atomic) }
+            }
         }
         catch is CancellationError {}
-        catch { failed = builds == nil }
+        catch let e as URLError where e.code == .cancelled {}
+        catch {
+            // A list already here stays; with none, say why: no answer at all is the Mac, an answer that isn't the list
+            // is the Mac not having it right now.
+            guard builds == nil else { return }
+            failed = error is URLError ? "Can’t reach the Mac" : "The Mac couldn’t read the history"
+        }
     }
 }
