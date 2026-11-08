@@ -423,11 +423,15 @@ jobs:
             xcrun simctl ui "$DEVICE" appearance light
             # The Playing tab in this posture with each kind of thing on: Mint's song, a YouTube video with its still, and
             # one the Mac hasn't found yet (r35: "spacing here is fucked", and an empty picture box).
+            # Each shot must be of its own scene: the mock logs whose status was asked for (review of dfd490e: the video
+            # with no still showed Mint's Sample Song, the sample's own status).
             for S in rmint ryoutube ryoutubebare repisode; do
+              rm -f /tmp/tv-scene-status.log
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 2
               sleep 8
               xcrun simctl io "$DEVICE" screenshot --display=3 dist/tv-playing-$S-portrait.png
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+              if ! grep -qx "$S" /tmp/tv-scene-status.log 2>/dev/null; then echo "::error::Playing $S portrait never asked for its scene's status"; touch dist/FAILED-tv-playing-$S-portrait-scene.txt; fi
             done
             # Every tab with a large title scrolled part way, so the title going up with the page is seen mid-scroll (r35:
             # "Watch" printed over "Continue watching").
@@ -520,7 +524,9 @@ jobs:
           # already playing (nothing may be sent), the card put back, and a throw called off at 200 ms. The card is let go
           # about 8 s after launch; the debug line on screen gives t= ms since release, so the 0–1.3 s after it can be
           # found frame by frame in each film (simctl records at up to 60 frames a second). Unfolded, only the stage, a
-          # normal start and already-on, to keep the job inside its time.
+          # normal start and already-on, to keep the job inside its time. Open in portrait, the posture he holds, the stage
+          # and a normal start, both filmed, with their hitches and sends, and not profiled (review of dfd490e: no flick
+          # had ever been seen there).
           tv_flickstarts() { # display, file suffix
             for V in "flick-stage normal 10 0" "flick-starting normal 18 1" "flick-slow slow 24 1" "flick-failed fail 20 1" \
                      "flick-offline offline 16 1" "flick-already already 16 1" "flick-putback normal 14 1" "flick-cancel normal 14 1" \
@@ -528,12 +534,14 @@ jobs:
               set -- "$1" "$2" $V
               # Unfolded too, all but the slow start and the put-back (r19: cancel, failed and offline were never seen open).
               if [ -n "$2" ] && ! [[ "$3" =~ ^flick-(stage|starting|already|cancel|failed|offline)$ ]]; then set -- "$1" "$2"; continue; fi
+              if [ "$2" = -portrait ] && ! [[ "$3" =~ ^flick-(stage|starting)$ ]]; then set -- "$1" "$2"; continue; fi
+              [ "$2" = -portrait ] && set -- "$1" "$2" "$3" "$4" "$5" 1
               curl -s http://127.0.0.1:9002/f$4/reset > /dev/null; rm -f /tmp/tv-hitches.log
               if [ "$6" = 1 ]; then xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/tv-$3$2.mp4 > /dev/null 2>&1 & REC=$!; sleep 5; fi
               LAUNCHED=$(xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/f$4 -tab 1 -pose $3)
               # The normal start profiled (Time Profiler, the app's main thread), from the card in the hand through the throw
               # and the hand-over, so the stall there is named from its stacks (r29/r30: 140-224 ms, found by guessing twice).
-              if [ "$3" = flick-starting ]; then
+              if [ "$3" = flick-starting ] && [ "$2" != -portrait ]; then
                 PID=${LAUNCHED##*: }
                 ( sleep 4; xcrun xctrace record --template 'Time Profiler' --device "$DEVICE" --attach "$PID" --time-limit 12s --output /tmp/prof$2.trace > /tmp/prof$2.log 2>&1 ) &
                 PROF=$!
@@ -545,7 +553,7 @@ jobs:
               sleep 8; xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-held$2.png
               sleep $(( $5 - 8 )); xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-end$2.png
               if [ "$6" = 1 ]; then kill -INT $REC; wait $REC; echo "$3 video$2 exit $?"; fi
-              if [ "$3" = flick-starting ]; then
+              if [ "$3" = flick-starting ] && [ "$2" != -portrait ]; then
                 wait $PROF 2>/dev/null || true
                 xcrun xctrace export --input /tmp/prof$2.trace --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' > /tmp/prof$2.xml 2>/dev/null \
                   && python3 ci/stall-stacks.py /tmp/prof$2.xml > dist/tv-$3-stalls$2.txt 2>&1 || { echo "profile failed"; tail -5 /tmp/prof$2.log; } > dist/tv-$3-stalls$2.txt
@@ -680,6 +688,7 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
           mac_portrait || echo "Mac Pro portrait shots incomplete"
           apps_portrait || echo "TV portrait shots incomplete"
+          tv_flickstarts 3 "-portrait" || echo "TV flick portrait incomplete"
           chumby_portrait || echo "Chumby portrait shots incomplete"
           pose_shots 3 "-portrait" || echo "portrait shots incomplete"
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
