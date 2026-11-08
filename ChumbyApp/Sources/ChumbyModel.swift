@@ -121,12 +121,13 @@ final class ChumbyModel: ObservableObject {
     @Published var railWidth: CGFloat = 0
     @Published var addAlarm: Date?
     // Folded, Calendar settings pushed inside Alarms. Kept here so its Back can sit in the rail, outside the page that slides.
-    @Published var alarmsPage = false
+    // A page opening over Alarms gets anything parked at once (see parks).
+    @Published var alarmsPage = false { didSet { if alarmsPage { releaseHeld() } } }
     // The page shown in place of Alarms ("Calendar settings", or the day's name), for its bar's title.
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []
     private var failureClear: Task<Void, Never>?
-    var editingAlarm = false { didSet { if !editingAlarm, let s = heldAdopt { heldAdopt = nil; adopt(s) } } }
+    var editingAlarm = false { didSet { if editingAlarm { releaseHeld() } else if let s = heldAdopt { heldAdopt = nil; adopt(s) } } }
     private var heldAdopt: ChumbyState?
     var unreachable: Bool { offline || dead }
     var seenAt: Date? { dead ? (lastSeen ?? lastHeard) : lastHeard }
@@ -186,6 +187,11 @@ final class ChumbyModel: ObservableObject {
     private var heldChannels: (data: Data, list: ChannelList)?
     private var heldSongs: History?
     private struct History: Decodable { let songs: [Song]; let rings: [Ring]? }
+    // Only a settled page with something already on it is worth protecting: never before a recent reading has
+    // confirmed what's shown (a List reports a settling phase as it opens, which parked the Mac Pro app's first reading;
+    // Home's channel name and Playing card wait on stateConfirmed), and never while Calendar settings, a day or an
+    // editor is open over Alarms, since they're waiting on it.
+    private var parks: Bool { ScrollHold.holding && stateConfirmed && !alarmsPage && !editingAlarm }
     private func releaseHeld() {
         if let h = heldSys { heldSys = nil; if var v = try? JSONDecoder().decode(Sys.self, from: h.data) { if !h.fresh { v.ring = sys.ring }; applySys(v, data: h.data, fresh: h.fresh) } }
         if let h = heldState { heldState = nil; if Date() >= stateHold { applyState(h.state, data: h.data, recent: h.recent) } }
@@ -250,7 +256,7 @@ final class ChumbyModel: ObservableObject {
             if !fresh { s.ring = sys.ring }
             // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
             // snoozing or ending never waits.
-            if ScrollHold.holding, s.ringing == sys.ringing { heldSys = (r.data, fresh); return }
+            if parks, s.ringing == sys.ringing { heldSys = (r.data, fresh); return }
             applySys(s, data: r.data, fresh: fresh)
         } catch is CancellationError {
         } catch ChumbyError.deviceDown {
@@ -299,7 +305,7 @@ final class ChumbyModel: ObservableObject {
         if r.data == stateBytes { if recent, !stateConfirmed { stateConfirmed = true }; return }
         guard Date() >= stateHold, let s = try? JSONDecoder().decode(ChumbyState.self, from: r.data) else { return }
         // Not while a page is moving (see releaseHeld). The ring is sys's, which never waits.
-        if ScrollHold.holding { heldState = (r.data, s, recent); return }
+        if parks { heldState = (r.data, s, recent); return }
         applyState(s, data: r.data, recent: recent)
     }
     private func applyState(_ s: ChumbyState, data: Data, recent: Bool) {
@@ -356,7 +362,7 @@ final class ChumbyModel: ObservableObject {
     private var skipWanted: (skipped: SkippedAlarm?, until: Date)?
     func loadChannels() async {
         guard let api, let r = try? await fetch("chlist", from: api), r.data != channelBytes, let c = try? JSONDecoder().decode(ChannelList.self, from: r.data) else { return }
-        if ScrollHold.holding { heldChannels = (r.data, c); return }
+        if parks { heldChannels = (r.data, c); return }
         applyChannels(c, data: r.data)
     }
     private func applyChannels(_ c: ChannelList, data: Data) {
@@ -397,7 +403,7 @@ final class ChumbyModel: ObservableObject {
         histAt = Date()
         // "rings" is optional: an older Chumby's history has none, and Woke up to then falls back to the alarm list.
         guard let r = try? await fetch("hist", from: api), let h = try? JSONDecoder().decode(History.self, from: r.data) else { return }
-        if ScrollHold.holding { heldSongs = h; return }
+        if parks { heldSongs = h; return }
         applySongs(h)
     }
     private func applySongs(_ h: History) {
