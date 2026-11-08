@@ -77,7 +77,7 @@ jobs:
           }
           # A page flung with real touches through DeviceHub (devicehubctl drag): quick flicks down to its end, a slow pull
           # past the end and let go, flicks back up and a pull past the top, so the fling and the spring-back are judged
-          # moving, never from a scripted scroll. name, display, x, low y, high y, then the app's own arguments.
+          # moving, never from a scripted scroll. name, display, x, low y, high y (fractions of the screen, 0 to 1), then the app's own arguments.
           swipefilm() {
             local name=$1 display=$2 x=$3 lo=$4 hi=$5; shift 5
             local D=/tmp/dh/.build/release/devicehubctl
@@ -133,10 +133,10 @@ jobs:
           # Scrolling judged moving (the title now goes up with the page), and the tabs in turn, coming back to each.
           film scrollfilm-portrait 3 30 -tab 0 -pose scrollfilm
           film tour-portrait 3 26 -tab 0 -pose tour
-          swipefilm versionsfling-portrait 3 330 780 260 -tab 1 -pose versionsfilm
+          swipefilm versionsfling-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm
           # Status and Apps flung the same way: the spring-back he says still snaps (2026-11-08: "the bounch back issie still happwns").
-          swipefilm statusfling-portrait 3 330 780 260 -tab 0
-          swipefilm appsfling-portrait 3 330 780 260 -tab 1
+          swipefilm statusfling-portrait 3 0.5 0.8 0.28 -tab 0
+          swipefilm appsfling-portrait 3 0.5 0.8 0.28 -tab 1
           python3 ci/title-check.py dist/macpro-tab*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
@@ -152,7 +152,7 @@ jobs:
           poses 1 ""
           slowfilms 1 ""
           film scrollfilm 1 30 -tab 0 -pose scrollfilm
-          swipefilm versionsfling 1 230 560 180 -tab 1 -pose versionsfilm
+          swipefilm versionsfling 1 0.45 0.8 0.28 -tab 1 -pose versionsfilm
           ls dist
       - name: Publish
         if: always()
