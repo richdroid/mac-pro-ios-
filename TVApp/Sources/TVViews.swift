@@ -614,7 +614,6 @@ struct SendBar: View {
             TextField("Search, or send a link", text: $draft.text)
                 .focused($focused).autocorrectionDisabled().submitLabel(link ? .send : .search)
                 .hidesTabBar(while: focused, "send")
-                .onChange(of: draft.focusRequest) { _, _ in focused = true; draft.wantsFocus = false }
                 // For the build's shots: whether the field took the keyboard, and when it let it go, in the mock's log,
                 // so a search shot with no keyboard can be read (the field never focused, or lost it) rather than guessed.
                 .onChange(of: focused) { _, on in
@@ -622,7 +621,11 @@ struct SendBar: View {
                 }
                 // Words are already being searched as they're typed, so Return only puts the keyboard away.
                 .onSubmit { if link { submit() } else { focused = false } }
-                .task {
+                // Asked for from the Remote's field (or a pose): the keyboard comes up once this page is on screen, whether
+                // the page is built fresh for it or was built earlier and is only now shown. One task keyed on the request
+                // does both; an `onChange` on the request was missed when the page sat built but hidden in its tab
+                // (cb0319c's run: no focus at all from the Remote's field, open in portrait).
+                .task(id: draft.focusRequest) {
                     guard draft.wantsFocus else { return }
                     draft.wantsFocus = false
                     try? await Task.sleep(nanoseconds: 350_000_000)

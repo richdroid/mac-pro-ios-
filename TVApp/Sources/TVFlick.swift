@@ -195,8 +195,10 @@ struct FlickScreen: View {
     // Put back: the card goes down onto the tile it came from as everything else fades.
     @State private var returning = false
     @State private var returnSlot = CGRect.zero
-    // Into the Remote: the screen moves onto the Remote's own picture of the TV.
+    // Into the Remote: the screen moves onto the Remote's own picture of the TV. `moveT` is the move itself, 0 at the
+    // stage's TV and 1 on the Remote's picture, run on goRemote's spring.
     @State private var toRemote = false
+    @State private var moveT: CGFloat = 0
     // The tab he threw from, while the Remote comes up under the stage; put back if the throw is called off or bounced.
     @State private var tabBefore: Int?
     @State private var restoredTab: Int?
@@ -1116,11 +1118,13 @@ struct FlickScreen: View {
             // One look from the catch to the Remote: the framed poster on its blur, never a full-bleed poster between two
             // framed ones (r27, open: framed → full → framed).
             if landed { landedPicture }
-            // The TV starting it: the light round the picture's edge, carried across into the Remote.
-            if landed && sending { LoadingRing(radius: radius).transition(.opacity) }
         }
-        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .frame(width: slot.width, height: slot.height)
+        // Its shape, its size, its place and its lean on the way to the Remote come from `moveT`, through modifiers that
+        // interpolate for themselves (as the card's own MorphFrame does): the plain frame, offset and clip modifiers never
+        // took the hand-over's spring (9c34a08, e59620e, cb0319c: a jump, or a 0.12 s slide borrowed from the stage's
+        // fade), whichever transaction they were changed in. The TV starting it: the light round the picture's edge,
+        // drawn on the same shape, carried across into the Remote.
+        .modifier(MoveFrame(t: moveT, from: tvFrame, to: remoteSlot, radiusFrom: 9, radiusTo: TVLook.card, ring: landed && sending))
         .overlay { RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(glow * (0.3 + 0.5 * charge)), lineWidth: 1.5) }
         // It brightens as the card comes, and glows hard once the card is charged.
         .shadow(color: TVLook.accent.opacity(glow * (charged ? 0.95 : 0.7 * charge)), radius: glow > 0 ? (charged ? 34 : 10 + 18 * charge) : 0)
@@ -1131,14 +1135,14 @@ struct FlickScreen: View {
         // enough flair").
         .overlay { TVSparks(trigger: impacts, tint: sparkTint) }
         // It leans in to meet the card, then gives as the card hits: squashed, over, and settled.
-        .scaleEffect(1 + (Self.leanScale - 1) * lean)
+        .modifier(MoveScale(t: moveT, lean: charge, leanScale: Self.leanScale))
         .keyframeAnimator(initialValue: CGFloat(1), trigger: impacts) { c, s in c.scaleEffect(s) } keyframes: { _ in
             CubicKeyframe(0.95, duration: 0.07)
             CubicKeyframe(1.03, duration: 0.12)
             SpringKeyframe(1, duration: 0.45, spring: Spring(response: 0.35, dampingRatio: 0.55))
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: charge)
-        .offset(x: slot.minX, y: slot.minY)
+        .modifier(MoveOffset(t: moveT, from: tvFrame, to: remoteSlot))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // Nothing until its place is known, so it never starts from a corner.
         .opacity(slot == .zero ? 0 : 1)
@@ -1477,7 +1481,7 @@ struct FlickScreen: View {
             // update with it and the picture crossed to the Remote in three frames (the review of e59620e, all postures).
             // The stage gone in 0.12 s, before the keys come, so the two never overlap.
             withAnimation(.easeOut(duration: 0.12)) { arrived = false }
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { toRemote = true }
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { toRemote = true; moveT = 1 }
             // The Remote's picture can still settle as its page lays out, so the move keeps aiming at where it is now,
             // place and size, until the spring has run its course and the picture has stopped moving. Once the screen
             // is on it, a late change eases across rather than stepping.
@@ -1926,10 +1930,13 @@ struct TVPhaseDots: View {
 // TV's size as it arrives.
 private enum Becoming {
     static func shape(_ p: CGFloat) -> CGFloat {
-        let x = min(max((p - 0.3) / 0.7, 0), 1)
+        let x = min(max((p - 0.2) / 0.8, 0), 1)
         return x * x * (3 - 2 * x)
     }
-    static func picture(_ p: CGFloat) -> CGFloat { min(max((p - 0.3) / 0.02, 0), 1) }
+    // At a fifth of the way: the frame the picture's new size is laid out in comes one frame after the offset's, so on the
+    // fastest throw (the hand to the TV in two frames) the cut at a third still showed the card at the TV for a frame
+    // (cb0319c's open and portrait films).
+    static func picture(_ p: CGFloat) -> CGFloat { min(max((p - 0.2) / 0.02, 0), 1) }
 }
 private struct MorphFrame: ViewModifier, Animatable {
     var scale: CGFloat
@@ -1955,6 +1962,50 @@ private struct CardFade: ViewModifier, Animatable {
     var amount: CGFloat
     var animatableData: CGFloat { get { amount } set { amount = newValue } }
     func body(content: Content) -> some View { content.opacity(1 - Becoming.picture(amount)) }
+}
+// The TV's screen on its way to the Remote's picture: shape and size (with the light round its edge), lean, and place,
+// each from the one number `t` and the two rects, interpolated here so the move is theirs whatever transaction the
+// state changed in. The target rect is animatable too, so a late re-aim eases rather than steps.
+private func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
+private struct MoveFrame: ViewModifier, Animatable {
+    var t: CGFloat
+    let from: CGRect
+    var to: CGRect
+    let radiusFrom: CGFloat, radiusTo: CGFloat
+    let ring: Bool
+    var animatableData: AnimatablePair<CGFloat, CGRect.AnimatableData> {
+        get { AnimatablePair(t, to.animatableData) }
+        set { t = newValue.first; to.animatableData = newValue.second }
+    }
+    func body(content: Content) -> some View {
+        let p = min(max(t, 0), 1), r = lerp(radiusFrom, radiusTo, p)
+        let w = max(0, lerp(from.width, to.width, p)), h = max(0, lerp(from.height, to.height, p))
+        content
+            .clipShape(RoundedRectangle(cornerRadius: r, style: .continuous))
+            .frame(width: w, height: h)
+            .overlay { if ring { LoadingRing(radius: r).transition(.opacity) } }
+    }
+}
+private struct MoveScale: ViewModifier, Animatable {
+    var t: CGFloat
+    let lean: CGFloat, leanScale: CGFloat
+    var animatableData: CGFloat { get { t } set { t = newValue } }
+    func body(content: Content) -> some View {
+        content.scaleEffect(1 + (leanScale - 1) * lean * (1 - min(max(t, 0), 1)))
+    }
+}
+private struct MoveOffset: ViewModifier, Animatable {
+    var t: CGFloat
+    let from: CGRect
+    var to: CGRect
+    var animatableData: AnimatablePair<CGFloat, CGRect.AnimatableData> {
+        get { AnimatablePair(t, to.animatableData) }
+        set { t = newValue.first; to.animatableData = newValue.second }
+    }
+    func body(content: Content) -> some View {
+        let p = min(max(t, 0), 1)
+        content.offset(x: lerp(from.minX, to.minX, p), y: lerp(from.minY, to.minY, p))
+    }
 }
 private func between(_ a: CGRect, _ b: CGRect, _ t: CGFloat) -> CGRect {
     CGRect(x: a.minX + (b.minX - a.minX) * t, y: a.minY + (b.minY - a.minY) * t,
