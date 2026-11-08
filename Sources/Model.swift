@@ -198,6 +198,7 @@ final class AppModel: ObservableObject {
             // The build's shot of a session's own page, opened as from the Claude tab.
             if pose == "session", sessionScreen == nil { pendingSession = "chumby"; tab = 2 }
             status = fresh
+            IconCache.prefetch(fresh, api: api)
             openPending()
             // Status's histories read ahead, so a tile opens onto a drawn chart.
             if tab == 0 { let api = api; Task { await TrendCache.prefetch(api, fresh) } }
@@ -225,7 +226,15 @@ final class AppModel: ObservableObject {
         case "longlog": s.upgrade = Status.Upgrade.longSample
         // Away from home with two of his apps rebuilt and signed for this iPhone: both install over the air, with the card
         // to install them together ("otaoffer" also has the offer sheet up, as the app opens).
-        case "otaready", "otaoffer":
+        // Every one of his apps already at the Mac's build: the Updates section says so.
+        case "uptodate":
+            if let seed = s.iosApps {
+                let apps = seed.apps.map { a in
+                    a.own ? Status.SeedApp(file: a.file, name: a.name, version: a.version, build: a.build, phoneBuild: a.build, installedAt: a.installedAt, expires: a.expires, state: "current", message: "", own: true, ota: a.ota, icon: a.icon) : a
+                }
+                s.iosApps = Status.SeedStatus(reachable: seed.reachable, via: seed.via, checkedAt: seed.checkedAt, seeding: "", fetch: seed.fetch, apps: apps)
+            }
+        case "otaready", "otaoffer", "otasent":
             let mine = Int(OTAInstaller.thisBuild) ?? 12
             func link(_ n: String) -> String { "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac-pro.example.ts.net%2Fota%2F\(n).plist" }
             let apps = [
@@ -237,6 +246,9 @@ final class AppModel: ObservableObject {
                                builtAt: Date().timeIntervalSince1970 * 1000 - 90_000_000, icon: "/ios/icon/Chumby.ipa"),
             ]
             s.iosApps = Status.SeedStatus(reachable: false, via: "", checkedAt: 1, seeding: "", fetch: nil, apps: apps + (s.iosApps?.apps ?? []).filter { !$0.own })
+            // "otasent": Chumby's update already sent to this iPhone over the air, as after he tapped it at work.
+            if pose == "otasent" { UserDefaults.standard.set(["Chumby.ipa": "12"], forKey: "otaOpened") }
+            else { UserDefaults.standard.removeObject(forKey: "otaOpened") }
         default: break
         }
     }

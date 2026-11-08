@@ -149,7 +149,7 @@ struct OTAOffer: ViewModifier {
             return
         }
         // The build's shots show the offer only in its own pose, so it isn't over the others.
-        guard offerOn, model.pose.isEmpty || model.pose == "otaoffer" else { return }
+        guard offerOn || model.pose == "otaoffer", model.pose.isEmpty || model.pose == "otaoffer" else { return }
         let apps = ota.pending(model.status)
         // Its pose is shot in several postures one after another, each a fresh launch that must show it.
         guard !apps.isEmpty, !ota.offering, !ota.offeredThisVisit, ota.offerDue(apps) || model.pose == "otaoffer",
@@ -222,9 +222,12 @@ struct UpdatesSection: View {
     @State private var fails: [String: String] = [:]
 
     // Everything of his with a newer build than the phone's, whether it can go over the air now or only on home Wi-Fi.
-    static func updates(_ seed: Status.SeedStatus) -> [Status.SeedApp] {
+    // One already sent to this iPhone over the air is done as far as he's concerned: away from home the Mac can't see the
+    // phone to know, and "Update" on it all shift would ask him to do again what he did (designer HOLD, 2026-11-07).
+    @MainActor static func updates(_ seed: Status.SeedStatus) -> [Status.SeedApp] {
         seed.apps.filter { a in
             guard a.own, ["waiting", "update", "installing"].contains(a.state) else { return false }
+            if a.state != "installing", link(a) != nil, OTAInstaller.shared.wasOpened(a) { return false }
             return !(OTAInstaller.isThisApp(a) && a.build == OTAInstaller.thisBuild)
         }
     }
@@ -254,8 +257,6 @@ struct UpdatesSection: View {
             }
             .textCase(nil)
             .padding(.bottom, 2)
-        } footer: {
-            if !ready.isEmpty { Text("Installs over the air from anywhere on Tailscale. Tap Install when iOS asks.") }
         }
     }
 
@@ -265,7 +266,8 @@ struct UpdatesSection: View {
                 AppIcon(app: a, size: 58)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(a.name).font(.headline)
-                    Text(Self.when(a)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                    Text(Self.when(a) + (Self.link(a) == nil && !seed.reachable && a.state != "installing" ? " · on home Wi-Fi" : ""))
+                        .font(.subheadline).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
                 }
                 Spacer(minLength: 8)
                 button(a)
@@ -295,7 +297,11 @@ struct UpdatesSection: View {
             .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
             .disabled(!seed.seeding.isEmpty)
         } else {
-            Text("On home Wi-Fi").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+            // No copy signed ahead yet, away from home: the capsule is there, dimmed, and the row says when it goes.
+            Text("Update").font(.subheadline.weight(.bold)).frame(minWidth: 62)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(.white.opacity(0.08), in: Capsule()).foregroundStyle(.secondary)
+                .accessibilityLabel("\(a.name) updates on home Wi-Fi")
         }
     }
 
@@ -310,25 +316,47 @@ struct UpdatesSection: View {
     }
 }
 
-// What's new, three lines and "more", like the App Store's; opened, one line per change.
+// What's new, three lines with "more" at the end of the third like the App Store's, only when there is more; opened,
+// one line per change.
 struct WhatsNew: View {
     let notes: [String]
     @State private var open = false
+    @State private var shown: CGFloat = 0
+    @State private var whole: CGFloat = 0
+    private var more: Bool { whole > shown + 1 }
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        Group {
             if open {
-                ForEach(Array(notes.enumerated()), id: \.offset) { _, n in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("•").foregroundStyle(.secondary)
-                        Text(n).fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(notes.enumerated()), id: \.offset) { _, n in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text("•").foregroundStyle(.secondary)
+                            Text(n).fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
+                .transition(.opacity)
             } else {
-                Text(notes.joined(separator: "\n")).lineLimit(3)
+                let text = notes.joined(separator: "\n")
+                Text(text).lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shown = $0 }
+                    // The whole text, unclipped and unseen, to know whether three lines hold it.
+                    .background(alignment: .topLeading) {
+                        Text(text).fixedSize(horizontal: false, vertical: true).hidden()
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { whole = $0 }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if more {
+                            Button { withAnimation(.snappy) { open = true } } label: {
+                                Text("more").fontWeight(.semibold).foregroundStyle(macBlue)
+                                    .padding(.leading, 28)
+                                    .background(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: Color(white: 0.11), location: 0.45)], startPoint: .leading, endPoint: .trailing))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
             }
-            Button(open ? "less" : "more") { withAnimation(.snappy) { open.toggle() } }
-                .font(.subheadline.weight(.semibold)).tint(macBlue).buttonStyle(.plain).foregroundStyle(macBlue)
-                .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .font(.subheadline)
     }
@@ -340,15 +368,13 @@ struct AppIcon: View {
     let app: Status.SeedApp
     var size: CGFloat = 58
     @State private var image: Image?
-    private var key: String { (app.icon ?? "") + "@" + app.build }
+    private var key: String { IconCache.key(app) }
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
         ZStack {
-            if let image { image.resizable().interpolation(.high).scaledToFill() }
-            else {
-                LinearGradient(colors: [Color(white: 0.32), Color(white: 0.18)], startPoint: .top, endPoint: .bottom)
-                Image(systemName: Self.symbol(app.name)).font(.system(size: size * 0.42, weight: .medium)).foregroundStyle(.white.opacity(0.85))
-            }
+            // Until its icon is here, a plain square in the icon's place, never a stand-in picture; then it fades in.
+            Color(white: 0.2)
+            if let image { image.resizable().interpolation(.high).scaledToFill().transition(.opacity) }
         }
         .frame(width: size, height: size)
         .clipShape(shape)
@@ -356,19 +382,25 @@ struct AppIcon: View {
         .accessibilityHidden(true)
         .task(id: key) {
             if let known = IconCache.images[key] { image = known; return }
-            guard let path = app.icon, !path.isEmpty, let d = try? await model.api.data(path), let i = IconCache.make(d) else { return }
-            IconCache.images[key] = i
-            image = i
+            guard let i = await IconCache.fetch(app, api: model.api) else { return }
+            withAnimation(.easeOut(duration: 0.25)) { image = i }
         }
-    }
-    static func symbol(_ name: String) -> String {
-        switch name { case "Mac Pro": "macpro.gen2.fill"; case "TV": "tv.fill"; case "Chumby": "alarm.fill"; default: "app.fill" }
     }
 }
 
 @MainActor
 enum IconCache {
     static var images: [String: Image] = [:]
+    static func key(_ a: Status.SeedApp) -> String { (a.icon ?? "") + "@" + a.build }
+    static func fetch(_ a: Status.SeedApp, api: API) async -> Image? {
+        guard let path = a.icon, !path.isEmpty, let d = try? await api.data(path), let i = make(d) else { return nil }
+        images[key(a)] = i
+        return i
+    }
+    // As soon as a status names his apps, so the Apps tab opens with their icons already there over a slow link.
+    static func prefetch(_ s: Status?, api: API) {
+        for a in s?.iosApps?.apps ?? [] where a.own && images[key(a)] == nil { Task { _ = await fetch(a, api: api) } }
+    }
     static func make(_ d: Data) -> Image? {
         #if canImport(UIKit)
         return UIImage(data: d).map { Image(uiImage: $0) }
@@ -394,7 +426,16 @@ struct OTASettings: View {
 enum AppBadge {
     static func set(_ n: Int) {
         #if canImport(UIKit)
-        UNUserNotificationCenter.current().setBadgeCount(n) { _ in }
+        // The icon's number needs leave to badge, asked once, the first time there's one to show; never in the build's
+        // shots, which launch with an address and shouldn't have a prompt over them.
+        let shots = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["address"] != nil
+        Task {
+            let c = UNUserNotificationCenter.current()
+            if n > 0, !shots, await c.notificationSettings().authorizationStatus == .notDetermined {
+                _ = try? await c.requestAuthorization(options: [.badge, .alert, .sound])
+            }
+            try? await c.setBadgeCount(n)
+        }
         #endif
     }
 }

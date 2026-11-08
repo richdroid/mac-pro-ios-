@@ -231,7 +231,8 @@ struct RootView: View {
                     // The updates waiting, as a number on the tab, the App Store's way.
                     .badge(updateCount)
                 Tab(value: 2) { Screen(tab: 2, title: "Claude") { ClaudeTab($0, side: $1) }.id(key(2)) } label: { tabLabel("Claude", asset: "ClaudeTab") }
-                Tab(value: 4) { Screen(tab: 4, title: "Updates", listed: false) { UpgradeTab($0, side: $1) }.id(key(4)) } label: { tabLabel("Updates", "arrow.up.circle") }
+                // "macOS", not "Updates": the Mac's own system updates, kept apart from his apps' updates in Apps (designer, 2026-11-07).
+                Tab(value: 4) { Screen(tab: 4, title: "macOS", listed: false) { UpgradeTab($0, side: $1) }.id(key(4)) } label: { tabLabel("macOS", "arrow.up.circle") }
                 Tab(value: 5) { Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5)) } label: { tabLabel("Control", "display") }
                 // Last, so it sits at the foot of the side bar.
                 if !(model.pageOpen && barAtFoot) {
@@ -1649,7 +1650,7 @@ struct SeedSection: View {
                     }
                     Spacer()
                     if handing == a.file || ota.current?.file == a.id { ProgressView() }
-                    else if otaLink(a) != nil {
+                    else if otaLink(a) != nil, !ota.wasOpened(a) {
                         // The way in now: a filled capsule, the one thing on the row to tap. SideStore only without a link.
                         Button("Install") { ota.install([a]) }
                             .font(.body.weight(.semibold))
