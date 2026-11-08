@@ -136,7 +136,7 @@ struct ScrollsUnder: ViewModifier {
     @State private var track = Track()
     @Environment(\.refresh) private var refresh
     let id: Int
-    final class Track { var rest: CGFloat?; var now: CGFloat = 0; var under = false }
+    final class Track { var rest: CGFloat?; var now: CGFloat = 0; var under = false; let id = UUID() }
     func body(content: Content) -> some View {
         content
             .scrollEdgeEffectStyle(.soft, for: .top)
@@ -153,7 +153,12 @@ struct ScrollsUnder: ViewModifier {
             }
             // Only a stop can lower where it rests (back at the top after a bounce, say). A pull to refresh stops held down
             // under its spinner, which isn't where it rests, so a stop that far down never counts.
+            // While it moves (finger down, flung, bouncing back from either end) the Mac's readings wait, and land when it
+            // settles: a row changing height mid-bounce made the page snap back instead of springing (Richard, 2026-11-08:
+            // "it doesnt bounce back naturally its like a sudden move back").
+            .onDisappear { ScrollHold.set(track.id, moving: false) }
             .onScrollPhaseChange { _, phase in
+                ScrollHold.set(track.id, moving: phase != .idle)
                 guard phase == .idle else { return }
                 if track.rest == nil { track.rest = track.now }
                 else if let r = track.rest, track.now < r, !(refresh != nil && track.now < r - 30) {
@@ -161,6 +166,20 @@ struct ScrollsUnder: ViewModifier {
                     if track.under { track.under = false; report(id, false) }
                 }
             }
+    }
+}
+// Which pages are moving right now. Readings from the Mac wait while any is, never more than 4 s at a stretch.
+@MainActor
+enum ScrollHold {
+    private static var moving: Set<UUID> = []
+    private static var since = Date.distantPast
+    static var onRelease: (() -> Void)?
+    static var holding: Bool { !moving.isEmpty && Date().timeIntervalSince(since) < 4 }
+    static func set(_ id: UUID, moving now: Bool) {
+        let was = !moving.isEmpty
+        if now { moving.insert(id) } else { moving.remove(id) }
+        if !was && !moving.isEmpty { since = Date() }
+        if was && moving.isEmpty { onRelease?() }
     }
 }
 extension View {

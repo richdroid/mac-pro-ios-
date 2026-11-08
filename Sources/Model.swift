@@ -110,8 +110,17 @@ final class AppModel: ObservableObject {
 
     private static var cacheFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("status.json") }
 
+    // What came in while a page was moving, put on screen the moment it settles.
+    private var heldStatus: Status?
+    private var heldLive: LiveStatus?
+    private func releaseHeld() {
+        if let s = heldStatus { heldStatus = nil; status = s; IconCache.prefetch(s, api: api); openPending(); AlertWatch.shared.sawInForeground(s.alerts ?? []) }
+        if let l = heldLive { heldLive = nil; if liveStore.live != l { liveStore.live = l } }
+    }
+
     func start() {
         stop()
+        ScrollHold.onRelease = { [weak self] in self?.releaseHeld() }
         // One answer per build is all the Mac needs.
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
         if UserDefaults.standard.string(forKey: "hotProbedBuild") != build {
@@ -168,6 +177,8 @@ final class AppModel: ObservableObject {
             if liveStore.live != nil, !Task.isCancelled { liveStore.live = nil }
             return
         }
+        // Not while a page is moving under his finger: a row changing height mid-bounce snaps the page back.
+        if ScrollHold.holding { heldLive = l; return }
         if liveStore.live != l { liveStore.live = l }
     }
 
@@ -197,6 +208,7 @@ final class AppModel: ObservableObject {
             Self.applyPose(pose, to: &fresh)
             // The build's shot of a session's own page, opened as from the Claude tab.
             if pose == "session", sessionScreen == nil { pendingSession = "chumby"; tab = 2 }
+            if ScrollHold.holding { heldStatus = fresh; return }
             status = fresh
             IconCache.prefetch(fresh, api: api)
             openPending()
