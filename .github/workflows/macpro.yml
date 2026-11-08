@@ -78,7 +78,7 @@ jobs:
           # A page flung with real touches through DeviceHub (devicehubctl drag): quick flicks down to its end, a slow pull
           # past the end and let go, flicks back up and a pull past the top, so the fling and the spring-back are judged
           # moving, never from a scripted scroll. name, display, x, low y, high y (fractions of the screen, 0 to 1), then the app's own arguments.
-          # FILM_PORT picks the stand-in Mac.
+          # FILM_PORT picks the stand-in Mac (9021 is the one whose readings change every second).
           swipefilm() {
             local name=$1 display=$2 x=$3 lo=$4 hi=$5; shift 5
             local D=/tmp/dh/.build/release/devicehubctl
@@ -176,6 +176,11 @@ jobs:
           # Status and Apps flung the same way: the spring-back he says still snaps (2026-11-08: "the bounch back issie still happwns").
           swipefilm statusfling-portrait 3 0.5 0.8 0.28 -tab 0 -frameLog YES
           swipefilm appsfling-portrait 3 0.5 0.8 0.28 -tab 1 -frameLog YES
+          # The same flings against the Mac whose readings change every second, asked for every second, so readings land
+          # as the finger lifts and while the page springs back, as on his phone (the still Mac above never changes a row).
+          FILM_PORT=9021 swipefilm statusbounce-portrait 3 0.5 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
+          FILM_PORT=9021 swipefilm appsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -fullEvery 1 -frameLog YES
+          FILM_PORT=9021 swipefilm versionsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -fullEvery 1 -frameLog YES
           python3 ci/title-check.py dist/macpro-tab*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5

@@ -96,7 +96,28 @@ const macProcs = JSON.stringify({
 });
 // His apps' own icons for the Apps tab, from the repo's icon sets.
 const appIcon = (q, s) => { const f = { 'MacPro.ipa': 'Assets.xcassets', 'Chumby.ipa': 'ChumbyApp/Assets.xcassets', 'TV.ipa': 'TVApp/Assets.xcassets' }[decodeURIComponent(q.url.slice('/ios/icon/'.length))]; try { const png = require('fs').readFileSync(require('path').join(__dirname, '..', f, 'AppIcon.appiconset/icon.png')); s.setHeader('content-type', 'image/png'); s.end(png); } catch { s.statusCode = 404; s.end(); } };
-http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/ios-history')) { const file = new URL(q.url, 'http://x').searchParams.get('file'), now = Date.now(), told = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', 'whats-new.json'), 'utf8'))[file] || {}; return s.end(JSON.stringify({ builds: Object.keys(told).sort((x, y) => y - x).map((b, i) => ({ build: b, at: now - (i < 3 ? (2 + 3 * i) : 26 + 20 * i) * 3600000, notes: told[b] })) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); s.end(q.url === '/api/status' ? macStatus : q.url === '/api/procs' ? macProcs : '{}'); }).listen(9001, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// The Mac's routes, for the still Mac (9001) and the one whose figures move (9021).
+const macRoutes = (q, s, status, live) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); return { t: now - (1440 - i) * 60000, v: Math.max(1, v), peak: Math.min(100, v + 12) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/ios-history')) { const file = new URL(q.url, 'http://x').searchParams.get('file'), now = Date.now(), told = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', 'whats-new.json'), 'utf8'))[file] || {}; return s.end(JSON.stringify({ builds: Object.keys(told).sort((x, y) => y - x).map((b, i) => ({ build: b, at: now - (i < 3 ? (2 + 3 * i) : 26 + 20 * i) * 3600000, notes: told[b] })) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); if (q.url === '/api/live' && live) return s.end(live()); s.end(q.url === '/api/status' ? status() : q.url === '/api/procs' ? macProcs : '{}'); };
+http.createServer((q, s) => macRoutes(q, s, () => macStatus)).listen(9001, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// The same Mac with its readings changing every second, as the real one's do, for the films of a page pulled past
+// its end and let go while readings land (Richard, 2026-11-08: "it doesnt bounce back naturally its like a sudden move
+// back"): the CPU and memory figures, the history lines, a reading that's seldom there, and an app that comes and goes
+// in Open on the Mac, so rows change height. Only on its own port: every other shot keeps the still Mac.
+const liveMac = () => {
+  const n = Math.floor(Date.now() / 1000), m = JSON.parse(macStatus);
+  m.cpu.total = 8 + (n * 7) % 41; m.cpu.per = m.cpu.per.map((v, i) => 3 + ((n * 13 + i * 5) % 57));
+  m.mem.used = 1.2e10 + ((n * 11) % 23) * 2e8;
+  m.load = [0.8 + (n % 9) / 4, 1.1, 0.9];
+  m.net.rxRate = 20000 + ((n * 17) % 61) * 3000; m.net.txRate = 4000 + ((n * 5) % 13) * 900;
+  for (const k of Object.keys(m.hist)) { const h = m.hist[k]; h.push(h[(n + k.length) % h.length] * (0.7 + (n % 5) / 8)); h.shift(); }
+  m.temps.forEach((t, i) => { t.c = Math.round(t.c + ((n * (i + 3)) % 7) - 3); });
+  if (n % 2) m.apps.push({ name: 'TextEdit', pid: 18, cpu: 0, mem: 88000000 });
+  if (n % 3 === 0) m.apps.splice(m.apps.findIndex(a => a.name === 'Music'), 1);
+  return m;
+};
+const liveMacStatus = () => JSON.stringify(liveMac());
+const liveMacLive = () => { const m = liveMac(); return JSON.stringify({ uptime: m.uptime, load: m.load, cpu: m.cpu, mem: m.mem, net: m.net, hist: m.hist, temps: m.temps, displayOn: m.displayOn }); };
+http.createServer((q, s) => macRoutes(q, s, liveMacStatus, liveMacLive)).listen(9021, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
