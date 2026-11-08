@@ -571,9 +571,14 @@ jobs:
               sleep $(( $5 - 8 )); xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-$3-end$2.png
               if [ "$6" = 1 ]; then kill -INT $REC; wait $REC; echo "$3 video$2 exit $?"; fi
               if [ "$3" = flick-starting ] && [ "$2" != -portrait ]; then
-                wait $PROF 2>/dev/null || true
-                xcrun xctrace export --input /tmp/prof$2.trace --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' > /tmp/prof$2.xml 2>/dev/null \
-                  && python3 ci/stall-stacks.py /tmp/prof$2.xml > dist/tv-$3-stalls$2.txt 2>&1 || { echo "profile failed"; tail -5 /tmp/prof$2.log; } > dist/tv-$3-stalls$2.txt
+                # Never waited on for long: a profiler that didn't stop held the step until its time ran out, cutting off every
+                # open and open-portrait shot after it (builds 204 and 205). 40 s at most, then it's ended.
+                for _ in $(seq 1 40); do kill -0 $PROF 2>/dev/null || break; sleep 1; done
+                kill $PROF 2>/dev/null; pkill -f "xctrace record" 2>/dev/null || true
+                ( xcrun xctrace export --input /tmp/prof$2.trace --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' > /tmp/prof$2.xml 2>/dev/null ) & EXP=$!
+                for _ in $(seq 1 60); do kill -0 $EXP 2>/dev/null || break; sleep 1; done
+                kill $EXP 2>/dev/null; pkill -f "xctrace export" 2>/dev/null || true
+                { [ -s /tmp/prof$2.xml ] && python3 ci/stall-stacks.py /tmp/prof$2.xml > dist/tv-$3-stalls$2.txt 2>&1; } || { echo "profile failed or timed out"; tail -5 /tmp/prof$2.log; } > dist/tv-$3-stalls$2.txt
                 rm -rf /tmp/prof$2.trace /tmp/prof$2.xml
               fi
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
