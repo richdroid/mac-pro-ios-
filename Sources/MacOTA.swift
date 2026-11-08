@@ -265,11 +265,14 @@ struct UpdatesSection: View {
             HStack(spacing: 14) {
                 AppIcon(app: a, size: 58)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(a.name).font(.headline)
+                    Text(a.name).font(.headline).lineLimit(1).minimumScaleFactor(0.8)
+                    // Folded, the column between the icon and the capsule is about 150 pt: each line fits whole, shrinking a
+                    // little rather than being cut off.
                     Text(Self.when(a)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
-                    // Why its capsule is dimmed, on a line of its own so it's never cut off folded.
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                    // Why its capsule is dimmed, on a line of its own.
                     if Self.link(a) == nil && !seed.reachable && a.state != "installing" {
-                        Text("Installs on home Wi-Fi").font(.footnote).foregroundStyle(.secondary)
+                        Text("On home Wi-Fi").font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                     }
                 }
                 Spacer(minLength: 8)
@@ -286,7 +289,7 @@ struct UpdatesSection: View {
             ProgressView().controlSize(.regular).frame(width: 84)
         } else if Self.link(a) != nil {
             Button { ota.install([a]) } label: {
-                Text("Update").font(.subheadline.weight(.bold)).frame(minWidth: 62)
+                Text("Update").font(.subheadline.weight(.bold))
             }
             .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
             .disabled(ota.running)
@@ -296,12 +299,12 @@ struct UpdatesSection: View {
             Button {
                 fails[a.id] = nil
                 Task { fails[a.id] = await model.run("ios-seed", ["file": a.file]) }
-            } label: { Text("Update").font(.subheadline.weight(.bold)).frame(minWidth: 62) }
+            } label: { Text("Update").font(.subheadline.weight(.bold)) }
             .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
             .disabled(!seed.seeding.isEmpty)
         } else {
             // No copy signed ahead yet, away from home: the capsule is there, dimmed, and the row says when it goes.
-            Text("Update").font(.subheadline.weight(.bold)).frame(minWidth: 62)
+            Text("Update").font(.subheadline.weight(.bold))
                 .padding(.horizontal, 12).padding(.vertical, 7)
                 .background(.white.opacity(0.08), in: Capsule()).foregroundStyle(.secondary)
                 .accessibilityLabel("\(a.name) updates on home Wi-Fi")
