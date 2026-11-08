@@ -454,7 +454,8 @@ final class TVModel {
         await TVIsland.sync(s, art: islandArt(s))
         #endif
         // Polled while a page is moving: kept until it settles (releaseHeld), so nothing changes height under his finger.
-        if polled, !unchanged, s != status, ScrollHold.holding { heldStatus = (d, s); return }
+        // Never the first answer since launch (every page is waiting on it), and never one with nothing shown yet.
+        if polled, !unchanged, !staleStatus, status != nil, s != status, ScrollHold.holding { heldStatus = (d, s); return }
         heldStatus = nil
         publish(s, data: d)
     }

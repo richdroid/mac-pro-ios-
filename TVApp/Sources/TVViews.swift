@@ -506,7 +506,10 @@ private struct BarPage<Actions: View>: ViewModifier {
             // Back tab in the side bar and the foot capsule before it are gone. The page draws its own large heading, so
             // the bar carries no title of its own. Only a page's own action (Open on TV, Edit) keeps a small bar at the foot.
             .toolbar(.visible, for: .navigationBar)
-            .navigationTitle("")
+            // The page's own title stays set, for the Back label of anything pushed over it, but the bar doesn't draw it:
+            // an empty title set out here lost to the page's own, and the system printed "Continue watching" large above
+            // the page's own heading (c2db3e9's run, every posture).
+            .toolbar(removing: .title)
             .overlay(alignment: .bottomTrailing) {
                 if Actions.self != EmptyView.self {
                 PageBar(showsBack: false, actions: actions)
@@ -653,8 +656,14 @@ struct SendBar: View {
                 .task(id: draft.focusRequest) {
                     guard draft.wantsFocus else { return }
                     draft.wantsFocus = false
-                    try? await Task.sleep(nanoseconds: 350_000_000)
-                    focused = true
+                    // Asked for again if the tab change under it took the focus straight back (open in portrait the
+                    // keyboard came up on some runs and not others: cb0319c's and c2db3e9's missed, the two between had it).
+                    for _ in 0..<3 {
+                        try? await Task.sleep(nanoseconds: 350_000_000)
+                        focused = true
+                        try? await Task.sleep(nanoseconds: 450_000_000)
+                        if focused { break }
+                    }
                 }
             }
             if draft.text.isEmpty {
@@ -3058,7 +3067,7 @@ struct UnderFlick: ViewModifier {
 private struct Untitled: ViewModifier {
     let on: Bool
     @ViewBuilder func body(content: Content) -> some View {
-        if on { content.navigationTitle("") } else { content }
+        if on { content.toolbar(removing: .title) } else { content }
     }
 }
 extension View { func underFlick(barHidden: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden)) } }
