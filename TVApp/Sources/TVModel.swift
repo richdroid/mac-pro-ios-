@@ -313,7 +313,9 @@ final class TVModel {
     var toast: String?
     var filmsNote: String? = "Loading your films…"
     // Browse used to be tab 4; the apps' banners lead there now.
-    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t }() { didSet { if tab != oldValue { Keyboard.dismiss() } } }
+    // Changing tab puts the keyboard away, except when the change is for a search field about to take it (the Remote's
+    // field opening the Apps page): resigning the responder in the same turn raced the field's own focus.
+    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t }() { didSet { if tab != oldValue, !SendDraft.shared.wantsFocus { Keyboard.dismiss() } } }
     var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var toastTask: Task<Void, Never>?

@@ -139,7 +139,7 @@ struct ManageAppsView: View {
         }
         .summonsBar()
         .topShade().topFade()
-        .navigationTitle("Apps on the TV")
+        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
         // Edit sits in the page's bar, beside the way back.
         .barPage { if store.state?.canArrange == true { EditButton().font(.subheadline.weight(.semibold)).padding(.leading, 6).padding(.trailing, 16).frame(height: 50) } }
         .refreshable { await store.load() }
@@ -191,7 +191,7 @@ struct ManageSettingsView: View {
         }
         .summonsBar()
         .topShade().topFade()
-        .navigationTitle("TV settings")
+        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
         .barPage()
         .refreshable { await store.load() }
         .task { await store.load() }

@@ -506,10 +506,10 @@ private struct BarPage<Actions: View>: ViewModifier {
             // Back tab in the side bar and the foot capsule before it are gone. The page draws its own large heading, so
             // the bar carries no title of its own. Only a page's own action (Open on TV, Edit) keeps a small bar at the foot.
             .toolbar(.visible, for: .navigationBar)
-            // The page's own title stays set, for the Back label of anything pushed over it, but the bar doesn't draw it:
-            // an empty title set out here lost to the page's own, and the system printed "Continue watching" large above
-            // the page's own heading (c2db3e9's run, every posture).
-            .toolbar(removing: .title)
+            // The bar draws no title: each page sets its own to "" where it wins (the heading is drawn in the content). A
+            // title emptied here, or removed with toolbar(removing: .title), lost to the page's, and the system printed
+            // "Continue watching" above the page's heading a second time (c2db3e9's and bff5ee8's runs, every posture).
+            .navigationBarTitleDisplayMode(.inline)
             .overlay(alignment: .bottomTrailing) {
                 if Actions.self != EmptyView.self {
                 PageBar(showsBack: false, actions: actions)
@@ -608,7 +608,9 @@ struct ConnectionView: View {
         .topShade().topFade()
         .summonsBar()
         .background { Ambience() }
-        .navigationTitle("Connection")
+        // No title in the bar: the page draws its own large heading, and the system printed the title above it a second
+        // time (c2db3e9's and bff5ee8's runs; emptied from outside, the page's own won). Back over this page reads "Back".
+        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
         .barPage()
         .onAppear { address = model.address }
     }
@@ -655,15 +657,18 @@ struct SendBar: View {
                 // (cb0319c's run: no focus at all from the Remote's field, open in portrait).
                 .task(id: draft.focusRequest) {
                     guard draft.wantsFocus else { return }
-                    draft.wantsFocus = false
-                    // Asked for again if the tab change under it took the focus straight back (open in portrait the
-                    // keyboard came up on some runs and not others: cb0319c's and c2db3e9's missed, the two between had it).
-                    for _ in 0..<3 {
-                        try? await Task.sleep(nanoseconds: 350_000_000)
+                    // Asked for until the field has it, up to about four seconds, and the request is spent only then: if this
+                    // field goes away first (the page rebuilt under the tab change), the next one carries on with it. Open in
+                    // portrait the keyboard came up on some runs and not others (three of five missed, from the Remote's
+                    // field to the Apps page), the same path his tap takes.
+                    for _ in 0..<10 {
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        if Task.isCancelled { return }
                         focused = true
-                        try? await Task.sleep(nanoseconds: 450_000_000)
-                        if focused { break }
+                        try? await Task.sleep(nanoseconds: 120_000_000)
+                        if focused { draft.wantsFocus = false; return }
                     }
+                    draft.wantsFocus = false
                 }
             }
             if draft.text.isEmpty {
@@ -740,7 +745,7 @@ struct RowList<Content: View>: View {
             .summonsBar()
             .topShade().topFade()
             .background { Ambience() }
-            .navigationTitle(title)
+            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
             .barPage()
     }
 }
@@ -3067,7 +3072,7 @@ struct UnderFlick: ViewModifier {
 private struct Untitled: ViewModifier {
     let on: Bool
     @ViewBuilder func body(content: Content) -> some View {
-        if on { content.toolbar(removing: .title) } else { content }
+        if on { content.navigationTitle("").navigationBarTitleDisplayMode(.inline) } else { content }
     }
 }
 extension View { func underFlick(barHidden: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden)) } }

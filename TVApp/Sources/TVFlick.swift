@@ -2187,8 +2187,8 @@ struct AppBrowse: View {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             if let first = store.rows.first { row = .media(first, source) }
         }
-        .navigationTitle(source.name)
-        // Back, and the app itself on the TV, in the page's bar; not offered when it's already the app on the TV.
+        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        // The app itself on the TV, in the page's bar; not offered when it's already the app on the TV.
         .barPage {
             if model.status?.app != source.pkg {
                 PageBarAction(title: "Open on TV", icon: "tv") { model.post("open", ["pkg": source.pkg]) }
