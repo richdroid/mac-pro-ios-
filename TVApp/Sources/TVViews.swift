@@ -36,7 +36,8 @@ struct RootView: View {
         HitchLog.shared.start()
         #endif
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
-        if pose == "search" { SendDraft.shared.text = "Heat"; return }
+        // Words typed into the Apps page's search: the keyboard up, as it is when he types them.
+        if pose == "search" { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; SendDraft.shared.text = "Heat"; return }
         // The Remote's search field tapped, then words typed: the Apps page's search, keyboard up, results in.
         if pose == "remotesearch" {
             Task {
@@ -182,10 +183,7 @@ struct RootView: View {
                     // and the throw have the whole screen.
                     // Measured from the screen's own edge, not inside the tab view's trailing inset, which folded is far
                     // wider than the bar (r19: an 88 pt strip of the page underneath showed between the two).
-                    FlickScreen(target: target).environment(model).id(target.id)
-                        .padding(.trailing, model.flickChoosing ? TVLook.railRoom : 0)
-                        .ignoresSafeArea(.container, edges: .trailing)
-                        .animation(.spring(response: 0.4, dampingFraction: 0.9), value: model.flickChoosing)
+                    FlickHost(target: target)
                         // Landed on the Remote, it waits out of sight and out of touch's way to be taken down (retireFlick).
                         .opacity(model.flickRetired ? 0 : 1)
                         .allowsHitTesting(!model.flickRetired)
@@ -287,6 +285,28 @@ extension View {
     func topFade() -> some View { modifier(TopFade()) }
 }
 
+// The flick's screen over the tabs, stopping short of whichever bar holds Back: the side bar while choosing (folded and
+// open), and open in portrait the tab bar along the foot, for the whole flick, so its Back is the one way back from the
+// show's page, the streams and the stage (Richard, 2026-11-07: "back should be on side bar"; the review of 9c34a08:
+// a "‹ Back" foot bar and a pill at the top of the stage there instead). Under the stage the pages are black, so the bar
+// is the only thing beside it.
+private struct FlickHost: View {
+    @Environment(TVModel.self) var model
+    @Environment(\.horizontalSizeClass) private var size
+    @Environment(\.paneLayout) private var panes
+    let target: FlickTarget
+    var body: some View {
+        let foot = size == .regular && !panes
+        FlickScreen(target: target).environment(model).id(target.id)
+            // Measured from the screen's own edge, not inside the tab view's trailing inset, which folded is far wider
+            // than the bar (r19: an 88 pt strip of the page underneath showed between the two).
+            .padding(.trailing, model.flickChoosing && !foot ? TVLook.railRoom : 0)
+            .padding(.bottom, foot ? model.footBarRoom : 0)
+            .ignoresSafeArea(.container, edges: foot ? [.trailing, .bottom] : .trailing)
+            .animation(.spring(response: 0.4, dampingFraction: 0.9), value: model.flickChoosing)
+    }
+}
+
 // Each tab's frame: the art behind it, its title, and the gear.
 struct Page<C: View>: View {
     @Environment(TVModel.self) var model
@@ -328,6 +348,8 @@ struct Page<C: View>: View {
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
         // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
         .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
+        // And how tall the bar along the foot is, open in portrait, for the flick's screen to stop short of it.
+        .background { Color.clear.ignoresSafeArea(.keyboard).onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.bottom, 140) } action: { h in if abs(model.footBarRoom - h) > 0.5 { model.footBarRoom = h } } }
         // A list opened from the tab closes first; once on the tab's own page, it goes to the top.
         .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
         // A page opened from a search leaves the keyboard behind.
@@ -1195,6 +1217,8 @@ struct RemoteTab: View {
     // The bar and the episode line under the picture, with their spacing: the picture is sized as if they're always there,
     // folded and open.
     static let underRoom = barSlot + 46 + 28
+    // The transport row and the keys' spacing above it: folded it sits in the picture's column, and only while something's on.
+    static let transportRoom: CGFloat = 68 + 12
     func side(apps: Bool) -> some View {
         PictureColumn(spacing: 14, under: Self.underRoom) {
             picture(closable: true).columnRole(.picture)
@@ -1235,8 +1259,10 @@ struct RemoteTab: View {
                 // Folded, the picture is one size in every state (r33: 345 pt idle, 206 with an episode, so it shrank as a
                 // show started): sized, as open, for the bar and the episode line under it, which sits there as open does
                 // rather than as a loose glass circle over the side bar (review of dfd490e: Episodes and the eye floated
-                // there). The pad gives up the height, down to 110 pt while something plays.
-                PictureColumn(spacing: 14, under: Self.underRoom) {
+                // there). The pad gives up the height, down to 110 pt while something plays. The transport row is in this
+                // column too, so its room is kept as well while nothing is on (the review of 9c34a08: 343 pt idle, 275 pt
+                // with anything on, the picture shrinking the moment a show started).
+                PictureColumn(spacing: 14, under: Self.underRoom + Self.transportRoom) {
                     // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
                     // Always there, as open: hidden, it shows what's on blurred behind its own "Show the TV's screen", and
                     // a long press on it has the same, so nothing for it is left in the bar.
@@ -1433,19 +1459,28 @@ struct PosterOnBlur: View {
     // The poster at 16 px, stretched: the same softness with no live blur, which redrew the whole picture every frame it
     // moved or the light ran round it.
     @State private var soft: TVImage?
+    // A picture as wide as the screen it's in (a video's still, 16:9) fills it; only a poster sits framed on its blur.
+    // Framed, a 16:9 still sat inset in a 16:9 box with a blur of itself round it, a letterbox of itself (the review of
+    // 9c34a08, the Remote with YouTube on).
+    static func isWide(_ image: TVImage) -> Bool { image.size.width > image.size.height * 1.3 }
+    var wide: Bool { ImageStore.shared.cached(url).map(Self.isWide) ?? false }
     var body: some View {
         ZStack {
             Color.black.opacity(0.35)
-            if let soft = soft ?? url.flatMap({ ImageStore.shared.small($0, 16) }) {
-                Color.clear.overlay { Image(tv: soft).resizable().interpolation(.high).scaledToFill() }.clipped().opacity(0.7)
+            if wide {
+                Color.clear.overlay { Art(url: url) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }.clipped()
             } else {
-                Color.clear.overlay { Art(url: url) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
-                    .clipped().blur(radius: 24).opacity(0.7)
+                if let soft = soft ?? url.flatMap({ ImageStore.shared.small($0, 16) }) {
+                    Color.clear.overlay { Image(tv: soft).resizable().interpolation(.high).scaledToFill() }.clipped().opacity(0.7)
+                } else {
+                    Color.clear.overlay { Art(url: url) { $0.resizable().scaledToFill() } placeholder: { Color.clear } }
+                        .clipped().blur(radius: 24).opacity(0.7)
+                }
+                Art(url: url) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
+                    .padding(14)
             }
-            Art(url: url) { $0.resizable().scaledToFit() } placeholder: { Color.clear }
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
-                .padding(14)
         }
         .task(id: url) {
             guard let url, soft == nil, ImageStore.shared.small(url, 16) == nil else { return }

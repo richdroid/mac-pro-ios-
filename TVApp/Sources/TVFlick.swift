@@ -127,6 +127,10 @@ struct FlickScreen: View {
     // and whether the Mac has said anything yet.
     @State private var thrown = 0
     @State private var morph = false
+    // How far the flying card has become the TV's picture: 0 a card, 1 the picture, run on the flight's own spring so the
+    // two can't come apart (the review of 9c34a08: on a 200 ms clock, the card reached the TV at ~110 ms still a card
+    // with its title strip, sat in the bezel with dark sides for up to four frames, then swapped to the picture at once).
+    @State private var becoming: CGFloat = 0
     @State private var releasedAt = Date.distantPast
     @StateObject private var pageBar = PageBarState()
     @State private var answered = false
@@ -366,35 +370,14 @@ struct FlickScreen: View {
             // On the reader, outside the hold's offset, so measuring it moves nothing.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { flickFrame = $0 }
             // In with the backdrop, and out with it, rather than on the rail before anything else is there.
-            // On the card and after it, the X in the bar. While choosing (the show's page, the streams), back is in a
-            // glass bar at the foot by the side bar, like every other page's, never loose circles over the side bar.
-            // Open, the bar's buttons go as the move starts, but the bar itself stays: hiding it there re-laid the whole
-            // screen out under the moving picture, in the move's first frame, and the open hand-off stalled ~160 ms, its
-            // light dropping out for a frame and the picture then leaping to the Remote (r27, r28). Folded keeps the tick
-            // becoming the Remote's eye, and hides the bar as before.
-            .toolbar { if barShown && !choosing && !(panes && toRemote) { bar } }
-            // The X goes with the stage, folded and open: left over the side bar it swapped to the Remote's eye in one frame (r19).
-            .navBarHidden(toRemote && !panes)
-            // While choosing, back is the same glass bar every page has, at the foot by the side bar, stepping away as he
-            // scrolls down and back as he scrolls up; never a loose circle (r17).
+            // On the card and after it, the X in the bar (the side bar's pill, folded and open). The bar's buttons go as
+            // the move starts, in every posture, and the bar itself stays: hiding it re-laid the whole screen out under
+            // the moving picture in the move's first frame, and the picture leapt to the Remote instead of moving (r27,
+            // r28 open; the review of 9c34a08 found the same one-frame jump folded and in portrait, where the bar was
+            // still being hidden for the move). The Remote's eye is on its picture now, so nothing here becomes it.
+            // Open in portrait there's no side bar: Back in the bottom bar does the pill's work, so there's no X at all.
+            .toolbar { if barShown && !choosing && !toRemote && !tabsAtFoot { bar } }
             .environment(\.pageBar, pageBar)
-            .overlay(alignment: .bottom) {
-                // With a side bar beside the page, Back is the side bar's (Richard, 2026-11-07: "back should be on side
-                // bar"). Open in portrait the page covers the tab bar, so there it keeps its own bar at the foot.
-                if choosing && tabsAtFoot {
-                    // One glass bar across the page's foot, back at its start: summoned by scrolling up, gone on the way
-                    // down, and the page's foot inset (84 pt) keeps its last row clear of it at rest (r26: a lone "Back"
-                    // capsule sat over episode 4's title).
-                    PageBar(back: { if let previous { go(previous) } else { leave() } }, full: true) { EmptyView() }
-                        .padding(.horizontal, panes ? 20 : 16).padding(.bottom, panes ? 16 : 10)
-                        // Open, the choices' pane only, never across the fold (r27).
-                        .containerRelativeFrame(.horizontal) { w, _ in panes ? w / 2 : w }
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .opacity(barShown && pageBar.shown ? 1 : 0)
-                        .offset(y: pageBar.shown ? 0 : 18)
-                        .allowsHitTesting(pageBar.shown)
-                }
-            }
             // Open, the show's one big key sits at the left pane's foot, level with Back at the right's: the same height,
             // the same baseline. Flowing under the blurb it landed 34 pt above Back, two bars that didn't line up (r29).
             .overlay(alignment: .bottomLeading) {
@@ -407,8 +390,13 @@ struct FlickScreen: View {
             }
             .onChange(of: choosing && !leaving, initial: true) { _, c in model.flickChoosing = c }
             // The side bar's Back steps back through the choosing (streams → episodes → out), as the page's own bar did.
-            .onChange(of: choosing && !leaving && !tabsAtFoot, initial: true) { _, on in
-                if on { model.pushBack(railBackID) { if let previous { go(previous) } else { leave() } } } else { model.popBack(railBackID) }
+            // Open in portrait the tab bar along the foot stays under the whole flick, and its Back is the only way back
+            // (Richard, 2026-11-07: "back should be on side bar"; the review of 9c34a08: a "‹ Back" foot bar on the streams
+            // and show pages, an X and ‹ pill at the top of the stage, and Back in the bottom bar one page earlier, three
+            // homes in one flow). There it stays through the stage too, as the pill's ‹ and X: back a step, out, or, once
+            // the card has left the hand, calling the throw off.
+            .onChange(of: (choosing || (tabsAtFoot && step == .flick && !toRemote)) && !leaving, initial: true) { _, on in
+                if on { model.pushBack(railBackID) { if flown { callOff() } else if let previous { go(previous) } else { leave() } } } else { model.popBack(railBackID) }
             }
             .onChange(of: !choosing && !toRemote && !leaving, initial: true) { _, c in model.flickCovering = c }
             .onDisappear { model.flickChoosing = false; model.flickCovering = false; model.popBack(railBackID) }
@@ -419,11 +407,12 @@ struct FlickScreen: View {
                 if on { Task { try? await Task.sleep(nanoseconds: 600_000_000); prepareRemote() } }
                 else if !flown && !toRemote { backToThrownFrom() }
             }
-            // Another tab, from the side bar while choosing, leaves the page for it.
+            // Another tab, from the side bar while choosing (or from the bottom bar under the stage, open in portrait),
+            // leaves the page for it.
             .onChange(of: model.tab) { _, t in
                 // Its own putting back of the page he came from isn't him picking a tab.
                 if t == restoredTab { restoredTab = nil; return }
-                if choosing && !leaving { leave() }
+                if (choosing || (tabsAtFoot && step == .flick && !flown && !toRemote)) && !leaving { leave() }
             }
             .toolbarBackground(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
@@ -544,26 +533,10 @@ struct FlickScreen: View {
             ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right") } }
         }
         ToolbarItem(placement: .cancellationAction) {
-            // While the card is on its way or held in the TV, the X calls it off.
+            // While the card is on its way or held in the TV, the X calls it off. It goes with the rest of the bar as the
+            // move to the Remote starts; the Remote's eye is on its own picture.
             let stops = flown
-            // Going to the Remote folded, the tick becomes the Remote's own eye in the same place, so the bar never swaps in
-            // a frame. Unfolded the Remote has no bar button, and the tick just fades with the screen.
-            let eye = onRemote && !stops && !panes ? (model.mirrorLive ? "eye.slash" : "eye") : nil
-            Button { stops ? callOff() : leave() } label: {
-                // Both glyphs always drawn, one crossfading into the other: a symbol swap here cut in one frame, as the bar
-                // rebuilds its item rather than animating it.
-                Label {
-                    Text(stops ? "Stop" : "Close")
-                } icon: {
-                    ZStack {
-                        Image(systemName: "xmark")
-                            .opacity(eye == nil ? 1 : 0).scaleEffect(eye == nil ? 1 : 0.6)
-                        Image(systemName: eye ?? (model.mirrorLive ? "eye.slash" : "eye"))
-                            .opacity(eye == nil ? 0 : 1).scaleEffect(eye == nil ? 0.6 : 1)
-                    }
-                    .animation(.easeInOut(duration: 0.2), value: eye == nil)
-                }
-            }
+            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : "Close", systemImage: "xmark") }
         }
     }
 
@@ -929,18 +902,17 @@ struct FlickScreen: View {
             // two split the room and each size sat midway, at a different place on every row (r27, r28).
             Text(s.size ?? "").font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary)
                 .frame(minWidth: 64, maxWidth: .infinity, alignment: .trailing).padding(.leading, 8)
+            // Its details, opened in place: the row's own tap still picks it. At the row's end, centred with the rest of
+            // the row like every other control in these lists (the review of 9c34a08: jammed into the row's top corner
+            // above the size, 4 pt from its edge).
+            Button { model.tick(); withAnimation(.snappy) { streamOpen = streamOpen == s.id ? nil : s.id } } label: {
+                Image(systemName: streamOpen == s.id ? "info.circle.fill" : "info.circle").font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(TVLook.accent).frame(width: 36, height: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).accessibilityLabel("Stream details")
         }
         .disabled(failed)
         .opacity(failed ? 0.45 : 1)
-        // Its details, opened in place: the row's own tap still picks it.
-        .overlay(alignment: .topTrailing) {
-            Button { model.tick(); withAnimation(.snappy) { streamOpen = streamOpen == s.id ? nil : s.id } } label: {
-                Image(systemName: streamOpen == s.id ? "info.circle.fill" : "info.circle").font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(TVLook.accent).frame(width: 36, height: 30).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).accessibilityLabel("Stream details")
-            .offset(x: 4, y: -6)
-        }
     }
     func findStreams(again: Bool = false) async {
         guard let ref = item.stremioRef else { return }
@@ -1052,8 +1024,14 @@ struct FlickScreen: View {
         if let image = target.image ?? heldImage.map({ Image(tv: $0) }) {
             ZStack {
                 softGround
-                image.resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .shadow(color: .black.opacity(0.5), radius: 14, y: 6).padding(14)
+                // A wide picture (a video's still) fills the screen as the Remote's PosterOnBlur fills with one; only a
+                // poster sits framed on its blur.
+                if heldImage.map(PosterOnBlur.isWide) ?? false {
+                    Color.clear.overlay { image.resizable().scaledToFill() }.clipped()
+                } else {
+                    image.resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .shadow(color: .black.opacity(0.5), radius: 14, y: 6).padding(14)
+                }
             }
         } else {
             ZStack { softGround; PosterOnBlur(url: URL(string: screenURL?.absoluteString ?? item.art)) }
@@ -1221,21 +1199,20 @@ struct FlickScreen: View {
             }
             // The light round the card while its stream is still being found: it can't go until it has one.
             .overlay { if pickingBest && !flown { LoadingRing(radius: radius).transition(.opacity) } }
-            // The card itself goes in the frame its picture covers it whole, so only the one picture flies on: the card's
-            // poster, title and chip above and below a landscape picture were three pictures at once (dfd490e
-            // tv-flick-starting, 17.90 s).
-            .opacity(morph ? 0 : 1).animation(nil, value: morph)
-            // The card's own picture, growing into the TV's screen in the last part of the flight. It covers the card
-            // whole from its first frame (no fade of either, so never two translucent pictures at once). Its size is
-            // worked out every frame against the card's scale as it is then, so on screen it runs from the card's size to
-            // the TV's leant-in screen and never past it: sized against the scale the flight ends at, it showed a third
-            // bigger than the TV for 130 ms, then snapped back as the TV took over (17.92–18.07 s).
+            // The card itself goes as its picture takes over, a short crossfade a third of the way into the flight, so
+            // only the one picture flies on: the card's poster, title and chip above and below a landscape picture were
+            // three pictures at once (dfd490e tv-flick-starting, 17.90 s). Both follow `becoming`, which runs on the
+            // flight's own spring, so however fast the throw the card is the picture before it reaches the TV.
+            .modifier(CardFade(amount: becoming))
+            // The card's own picture, growing into the TV's screen over the rest of the flight. Its size is worked out
+            // every frame against the card's scale as it is then, so on screen it runs from the card's size to the TV's
+            // leant-in screen and never past it: sized against the scale the flight ends at, it showed a third bigger
+            // than the TV for 130 ms, then snapped back as the TV took over (17.92–18.07 s).
             .overlay {
                 landedPicture
-                    .modifier(MorphFrame(scale: size, amount: morph ? 1 : 0, card: cardFrame.size, cardRadius: radius,
+                    .modifier(MorphFrame(scale: size, amount: becoming, card: cardFrame.size, cardRadius: radius,
                                          tv: CGSize(width: tvFrame.width * Self.leanScale, height: tvFrame.height * Self.leanScale),
                                          tvRadius: 9 * Self.leanScale))
-                    .opacity(morph ? 1 : 0).animation(nil, value: morph)
                     .allowsHitTesting(false)
             }
             // The card is opaque and exactly this shape, so its shadows come from the shape. Lifted, it rises off the
@@ -1467,8 +1444,11 @@ struct FlickScreen: View {
             // One update, so the controls can't be gone a frame before the screen starts to move. The bar's ✓ stays to the
             // end and fades with the rest of this screen: taken off now, it left an empty glass circle behind.
             model.remoteMoveAt = Date()
-            // Settled by 1.2 s from the release (§2.5a): the move starts by about 0.5 s and runs about 0.6 s.
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
+            // Settled by 1.2 s from the release (§2.5a C4): the move starts at 0.6 s and runs on a 0.5 s spring. Nothing
+            // else changes in this update: the bar's buttons went with `toRemote` and the bar itself stays, in every
+            // posture, so no layout pass can swallow the spring's frames (the review of 9c34a08: folded and in portrait
+            // the picture stood still through the stage's fade and leapt to the Remote in one frame).
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) {
                 toRemote = true
                 // The stage gone in 0.12 s, before the keys come, so the two never overlap.
                 withAnimation(.easeOut(duration: 0.12)) { arrived = false }
@@ -1494,13 +1474,16 @@ struct FlickScreen: View {
                 }
                 if Date().timeIntervalSince(start) > 0.4 && still >= 4 { break }
             }
-            // Landed on it: the screen gives way to the same picture underneath, and whatever of this screen is still
-            // over the keys fades with it before it's taken away.
-            // The picture underneath back first, unanimated, so the screen fades onto it, not onto the backdrop.
-            model.flickHandoff = false
+            // Landed on it: in one frame the Remote's own picture comes in underneath as this screen's goes, the same
+            // poster on the same ground with the same light at the same point of its lap, so nothing fades over anything
+            // and nothing is drawn twice (the review of 9c34a08: two rings of different sizes for three frames folded,
+            // and a one-frame dip of the picture in portrait, as the two were crossfaded and then the screen taken down).
+            // What's left of this screen (nothing in sight) fades, and it's taken down once the Remote has settled.
             FlickClock.current.remoteLanded()
-            withAnimation(.easeOut(duration: 0.2)) { onRemote = true; screenOut = true; fadingOut = true }
-            try? await Task.sleep(nanoseconds: 230_000_000)
+            var swap = Transaction(); swap.disablesAnimations = true
+            withTransaction(swap) { model.flickHandoff = false; onRemote = true; screenOut = true }
+            withAnimation(.easeOut(duration: 0.25)) { fadingOut = true }
+            try? await Task.sleep(nanoseconds: 300_000_000)
             // Only now, with nothing moving: the picture he last threw, which redraws the app's pages (r26).
             handOverArt()
             // Hidden now, and taken down once the Remote has settled, not in the same moment as everything else.
@@ -1654,8 +1637,12 @@ struct FlickScreen: View {
             softImage = ImageStore.shared.small(u, 16)
             if softImage == nil, let h = heldImage { Task { softImage = await ImageStore.shrunk(h, 16) } }
         }
+        // The card becomes the picture on the same spring as its flight (`becoming`), never on a clock of its own: by the
+        // time it reaches the TV it is the TV's picture, at the TV's size, so the impact swaps nothing but the view
+        // drawing it. The rim, the glow and the shadow go with the throw.
+        morph = true
         withAnimation(.interpolatingSpring(duration: 0.32, bounce: 0, initialVelocity: vy), completionCriteria: .logicallyComplete) {
-            flown = true; lean = 0
+            flown = true; lean = 0; becoming = 1
         } completion: { arrivedAtTV() }
         withAnimation(.interpolatingSpring(duration: 0.40, bounce: 0, initialVelocity: vx)) { flownX = true }
         // The Remote comes up under the black stage now, so the flight pays for laying it out (r20: switching at 600 ms
@@ -1665,11 +1652,6 @@ struct FlickScreen: View {
             tabBefore = tabBefore ?? model.tab
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { model.remoteArrival = Date(); model.flickHandoff = true; model.tab = 0 }
-        }
-        Task {
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            guard flown, !cancelled else { return }
-            withAnimation(.easeOut(duration: 0.12)) { morph = true }
         }
         phase = nil; streamed = false
         // The start becomes the model's a frame after the impact (arrivedAtTV), not on the release frame: the Remote laid out
@@ -1841,7 +1823,7 @@ struct FlickScreen: View {
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { landed = false }
         withAnimation(.spring(response: 0.55, dampingFraction: 0.66)) {
-            sending = false; phase = nil; flown = false; flownX = false; morph = false; playingSeen = false
+            sending = false; phase = nil; flown = false; flownX = false; morph = false; becoming = 0; playingSeen = false
             note = gone ? "That stream has gone" : stuck ? "That stream didn’t start" : "The TV didn’t get that"
         }
         try? await Task.sleep(nanoseconds: 380_000_000)
@@ -1918,6 +1900,16 @@ private struct Moving<C: View>: View, Animatable {
 // The flying card's picture, sized inside the card's own scale: `scale` is the card's scale as it is in this frame (the
 // same animation drives both) and `amount` how far it has turned from the card into the TV's screen, so on screen it
 // runs from the card's size to `tv`, whatever the card's scale is doing on its way.
+// The card turning into the TV's picture, from one number that runs with the flight (0 in the hand, 1 at the TV). The
+// card stays a card for the first third of the way, then crosses into its picture over the next sixth, and the picture's
+// frame grows from the card's to the TV's over the rest, eased, so it's the TV's size as it arrives.
+private enum Becoming {
+    static func shape(_ p: CGFloat) -> CGFloat {
+        let x = min(max((p - 0.3) / 0.7, 0), 1)
+        return x * x * (3 - 2 * x)
+    }
+    static func picture(_ p: CGFloat) -> CGFloat { min(max((p - 0.3) / 0.15, 0), 1) }
+}
 private struct MorphFrame: ViewModifier, Animatable {
     var scale: CGFloat
     var amount: CGFloat
@@ -1930,11 +1922,18 @@ private struct MorphFrame: ViewModifier, Animatable {
         set { scale = newValue.first; amount = newValue.second }
     }
     func body(content: Content) -> some View {
-        let s = max(scale, 0.01), a = min(max(amount, 0), 1)
+        let s = max(scale, 0.01), a = Becoming.shape(amount)
         return content
             .frame(width: max(0, card.width * (1 - a) + tv.width * a / s), height: max(0, card.height * (1 - a) + tv.height * a / s))
             .clipShape(RoundedRectangle(cornerRadius: max(0, cardRadius * (1 - a) + tvRadius * a / s), style: .continuous))
+            .opacity(Becoming.picture(amount))
     }
+}
+// The card's own face going as its picture comes, on the same number.
+private struct CardFade: ViewModifier, Animatable {
+    var amount: CGFloat
+    var animatableData: CGFloat { get { amount } set { amount = newValue } }
+    func body(content: Content) -> some View { content.opacity(1 - Becoming.picture(amount)) }
 }
 private func between(_ a: CGRect, _ b: CGRect, _ t: CGFloat) -> CGRect {
     CGRect(x: a.minX + (b.minX - a.minX) * t, y: a.minY + (b.minY - a.minY) * t,
@@ -2143,15 +2142,5 @@ struct AppBrowse: View {
                 PageBarAction(title: "Open on TV", icon: "tv") { model.post("open", ["pkg": source.pkg]) }
             }
         }
-    }
-}
-
-extension View {
-    @ViewBuilder func navBarHidden(_ hidden: Bool) -> some View {
-        #if os(iOS)
-        toolbarVisibility(hidden ? .hidden : .automatic, for: .navigationBar)
-        #else
-        self
-        #endif
     }
 }

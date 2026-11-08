@@ -54,6 +54,8 @@ final class TVModel {
     }
     // The side bar's width, so a show's page opened over everything can leave it uncovered and in reach.
     var railWidth: CGFloat = 0
+    // The tab bar's room along the foot, open in portrait, so the flick's screen leaves it uncovered too.
+    var footBarRoom: CGFloat = 0
     // The flick screen is on a show's or a stream's page (not the card): the side bar stays usable, and a tab leaves it.
     var flickChoosing = false
     // The flick's stage is up over a page (not yet moving onto the Remote): the page steps out of sight under it, so its
