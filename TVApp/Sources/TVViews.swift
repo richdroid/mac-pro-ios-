@@ -2605,12 +2605,13 @@ struct DiscoverColumn: View {
                     .transition(.opacity)
                 }
             }
-            .scrollTargetLayout()
             .padding(.vertical, 12)
             .animation(.easeInOut(duration: 0.25), value: kind)
         }
         // No row snapping here: aligning a row to the scroll view's top as the page first filled in pulled the content up
-        // under the large title, which then opened folded on some launches and large on others (r26).
+        // under the large title, which then opened folded on some launches and large on others (r26). Nor a scroll target
+        // layout: with one, the page rested with its first row at the top, past the stack's 12 pt top padding, so "Watch"
+        // sat 12 pt above every other tab's title, faded, and folded cut off at the screen's top (d7c64e6 tv-3, TV-3).
         .scrollDismissesKeyboard(.immediately)
         .backToTop(posed: part != .left)
         // Stremio's home, asked for here as well as at launch, and asked again until it's in: open, the launch's own ask
@@ -2952,11 +2953,17 @@ extension View { func underFlick(barHidden: Bool = false) -> some View { modifie
 // read through it). The page fades out over 18 pt above the bar and is clear behind it. The inset is measured on the
 // page itself; read inside a view that ignores the safe area it was always 0, and the fade did nothing (the Chumby's).
 // Only where the foot inset is a tab bar's, not just the home indicator's.
+// Never the keyboard's inset: counted, it faded out everything above the keyboard, and the Remote's keys were cut to half
+// circles while typing folded (d7c64e6 tv-type; Richard, 2026-11-07: "the keys cut to half circles"). Measured on a layer
+// that ignores the keyboard, so only a tab bar's foot counts.
 struct TabBarFade: ViewModifier {
     @State private var foot: CGFloat = 0
     func body(content: Content) -> some View {
         content
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { foot = $0 }
+            .background {
+                Color.clear.ignoresSafeArea(.keyboard)
+                    .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { foot = $0 }
+            }
             .mask {
                 if foot > 40 {
                     VStack(spacing: 0) {

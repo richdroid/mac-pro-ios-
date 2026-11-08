@@ -320,6 +320,10 @@ struct FlickScreen: View {
                 if let id, video, step == .episodes, let t = resumeTarget, !isOn(t.episode) { Prepare.arm(prepareBody(for: id)) }
             }
             .task { await opened() }
+            // The picture the TV catches (an episode's still, which the card itself never showed), fetched and shrunk while
+            // the card is in the hand, so at the throw it's in memory with its soft version: fetched only then, the TV's
+            // screen drew empty, its sides black, in the catch's frame (d7c64e6 tv-flick-starting, 17.90 s).
+            .task(id: screenURL) { if let u = screenURL { _ = await ImageStore.shared.load(u) } }
     }
     // Picked up, a third of the way, charged, and the hit on the TV: the whole set while the card is in the hand. The
     // caught tick follows the impact by 120 ms (in `arrivedAtTV`).
