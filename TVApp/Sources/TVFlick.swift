@@ -1128,8 +1128,9 @@ struct FlickScreen: View {
         .overlay { RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(glow * (0.3 + 0.5 * charge)), lineWidth: 1.5) }
         // It brightens as the card comes, and glows hard once the card is charged.
         .shadow(color: TVLook.accent.opacity(glow * (charged ? 0.95 : 0.7 * charge)), radius: glow > 0 ? (charged ? 34 : 10 + 18 * charge) : 0)
-        // One ripple from its edge at the impact.
-        .overlay { TVRipple(trigger: impacts, big: false) }
+        // One ripple from its edge at the impact, and none at all once the screen is on its way to the Remote: the picture
+        // moves as one picture with its light, nothing else round it.
+        .overlay { if !toRemote { TVRipple(trigger: impacts, big: false) } }
         // And a burst of light off its edges, the card's colours and the accent, flung out and falling away: the catch
         // should feel like a catch (Richard, 2026-11-07: "flick screen isnt superfluous enough and whimsical enough not
         // enough flair").
@@ -2085,30 +2086,28 @@ private struct OneSpark: View {
             }
     }
 }
+// One ring, out from the TV's edge and gone within a quarter second (§2.5a C4), so it is over before the screen moves to
+// the Remote at 600 ms. Two waves over 0.75 s rode the move as two full outlines round the picture, a bigger one and
+// one hugging it, in every posture (the reviews of 12bb646 and 2754db4, read as the picture lagging its frame).
 private struct TVRipple: View {
     let trigger: Int
-    // On the grown screen the same rings would reach far past it, so they stay close.
+    // On the grown screen the same ring would reach far past it, so it stays close.
     var big = false
     struct Wave { var scale: CGFloat = 1; var opacity: Double = 0 }
     var body: some View {
-        ZStack {
-            ForEach(0..<2, id: \.self) { i in
-                RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2 - CGFloat(i) * 0.6)
-                    .keyframeAnimator(initialValue: Wave(), trigger: trigger) { c, w in c.scaleEffect(w.scale).opacity(w.opacity) } keyframes: { _ in
-                        KeyframeTrack(\.scale) {
-                            LinearKeyframe(1, duration: 0.01 + Double(i) * 0.13)
-                            // Never past a quarter again the TV's size, so they stay clear of the line under it.
-                            CubicKeyframe(big ? 1.08 + CGFloat(i) * 0.04 : 1.16 + CGFloat(i) * 0.09, duration: 0.75)
-                        }
-                        KeyframeTrack(\.opacity) {
-                            LinearKeyframe(0, duration: 0.01 + Double(i) * 0.13)
-                            LinearKeyframe(0.9 - Double(i) * 0.3, duration: 0.02)
-                            CubicKeyframe(0, duration: 0.74)
-                        }
-                    }
+        RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2)
+            .keyframeAnimator(initialValue: Wave(), trigger: trigger) { c, w in c.scaleEffect(w.scale).opacity(w.opacity) } keyframes: { _ in
+                KeyframeTrack(\.scale) {
+                    LinearKeyframe(1, duration: 0.01)
+                    CubicKeyframe(big ? 1.12 : 1.3, duration: 0.25)
+                }
+                KeyframeTrack(\.opacity) {
+                    LinearKeyframe(0, duration: 0.01)
+                    LinearKeyframe(0.6, duration: 0.02)
+                    CubicKeyframe(0, duration: 0.23)
+                }
             }
-        }
-        .allowsHitTesting(false)
+            .allowsHitTesting(false)
     }
 }
 
