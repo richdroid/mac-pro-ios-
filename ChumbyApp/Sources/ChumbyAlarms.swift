@@ -528,18 +528,23 @@ struct AlarmsTab: View {
             .allowsHitTesting(!pageMounted).accessibilityHidden(pageMounted)
             // It brings no sea of its own: the tab's stays as it is.
             if pageMounted {
-                Group {
-                    if let k = dayPage {
-                        List { CalendarDaySheet(key: k, close: { model.alarmsPage = false }, done: false).listRowBackground(GlassRow()) }
-                            .seaList()
-                    } else {
-                        CalendarWakeSettings(ownSea: false)
+                // The zoom's clip, scale and fade go on a frame around the page, never on the list itself: clipped, a
+                // list no longer runs under the top edge, and its title sat 33 pt lower than the tab's (build 185).
+                ZStack {
+                    Group {
+                        if let k = dayPage {
+                            List { CalendarDaySheet(key: k, close: { model.alarmsPage = false }, done: false).listRowBackground(GlassRow()) }
+                                .seaList()
+                        } else {
+                            CalendarWakeSettings(ownSea: false)
+                        }
                     }
+                    // A swipe in from the left edge goes back, as it would from a pushed page.
+                    .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { g in
+                        if g.startLocation.x < 40 && g.translation.width > 80 && abs(g.translation.height) < g.translation.width { model.alarmsPage = false }
+                    })
                 }
-                // A swipe in from the left edge goes back, as it would from a pushed page.
-                .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { g in
-                    if g.startLocation.x < 40 && g.translation.width > 80 && abs(g.translation.height) < g.translation.width { model.alarmsPage = false }
-                })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: pageShown ? 0 : 28, style: .continuous))
                 .scaleEffect(pageShown ? 1 : 0.1, anchor: zoomAnchor)
                 .opacity(pageShown ? 1 : 0)
@@ -554,8 +559,10 @@ struct AlarmsTab: View {
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 16_000_000)
                     guard model.alarmsPage else { return }
-                    model.alarmsPageShown = true
                     withAnimation(Self.zoom) { pageShown = true }
+                    // Back once the page can be seen (it starts near clear), not two frames before it (build 185).
+                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    if model.alarmsPage { model.alarmsPageShown = true }
                 }
             } else {
                 model.alarmsPageShown = false
@@ -1141,10 +1148,11 @@ struct AlarmEditor: View {
                     }
                     .foregroundStyle(.tint)
                 }
-                .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true }
+                .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
                 .onDisappear { model.editingAlarm = false }
                 sections
             }
+            .sheet(isPresented: $justOnce) { justOnceSheet }
         } else {
             NavigationStack {
                 Form { sections.listRowBackground(GlassRow()) }
@@ -1158,10 +1166,21 @@ struct AlarmEditor: View {
                     }
                 }
                 .interactiveDismissDisabled(saving)
-                .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true }
+                .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
                 .onDisappear { model.editingAlarm = false }
+                .sheet(isPresented: $justOnce) { justOnceSheet }
             }
         }
+    }
+    // "Just this once" for this alarm's next ring, presented by the editor itself (the row that opens it sits far down a
+    // lazy form, so a sheet of the row's own isn't there until it's been scrolled to).
+    @ViewBuilder var justOnceSheet: some View {
+        if let original, case .ok(_, let due, _) = model.justOnceOffer(for: original) { JustOnceSheet(original: original, due: due).environmentObject(model) }
+    }
+    // For the shot: the sheet, and in it Set with the Chumby's one skip already on another alarm.
+    func posedJustOnce() {
+        guard ChumbyModel.pose == "reskip", original != nil else { return }
+        Task { try? await Task.sleep(nanoseconds: 1_200_000_000); justOnce = true }
     }
     func finish() { stopTest(); if let close { close() } else { dismiss() } }
 
@@ -1216,8 +1235,6 @@ struct AlarmEditor: View {
                                     Text("\(dayWord(due)) at \(due.formatted(date: .omitted, time: .shortened)) only. It repeats as usual after.").font(.subheadline).foregroundStyle(.secondary)
                                 }
                             }
-                            .sheet(isPresented: $justOnce) { JustOnceSheet(original: original, due: due).environmentObject(model) }
-                            .onAppear { if ChumbyModel.pose == "reskip" { Task { try? await Task.sleep(nanoseconds: 1_200_000_000); justOnce = true } } }
                             if let warning { RowNote(icon: "exclamationmark.circle.fill", text: warning) }
                         } header: { Text("Just this once") }
                     }

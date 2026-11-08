@@ -785,7 +785,9 @@ struct HomeTab: View {
     // What it's playing, only while it plays: the same panel as Sounds' Now, with Stop and the volume. With nothing playing
     // there's nothing here to stop or turn down, so it isn't here; the volume always lives in Sounds.
     @ViewBuilder var playing: some View {
-        if model.state.musicPlaying && !model.unreachable {
+        // Only from a recent reading: the kept copy can say music was playing when the app was last open, and a Playing
+        // card that shows for a beat and then goes reads as the app settling in front of him (build 185's film).
+        if model.state.musicPlaying && !model.unreachable && model.stateConfirmed {
             NowPlaying(tab: 0, failID: "homeVolume")
                 .padding(.horizontal, 18).padding(.vertical, 10)
                 .card()

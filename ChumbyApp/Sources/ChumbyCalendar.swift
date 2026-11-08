@@ -15,7 +15,7 @@ final class CalendarWake: ObservableObject {
     static let refreshID = "local.macpro.Chumby.calendar"
     nonisolated static let prefix = Alarm.calendarPrefix
     // The build's simulator shots, which have no calendar, show a sample plan in these.
-    static let samplePoses: Set<String> = ["calendar", "calsettings", "calday", "caldayedit", "caldayown", "template"]
+    static let samplePoses: Set<String> = ["calendar", "calsettings", "calday", "caldayedit", "caldayown", "template", "alarmsdemo"]
     static var sample: Bool { samplePoses.contains(ChumbyModel.pose) }
     let store = EKEventStore()
     // A change here updates the Chumby a moment later, wherever it was made, so nothing waits for a page to close.
