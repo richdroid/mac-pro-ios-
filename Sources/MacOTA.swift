@@ -261,6 +261,12 @@ struct UpdatesSection: View {
     }
 
     func row(_ a: Status.SeedApp) -> some View {
+        Button { model.appHistory = a.file } label: { rowBody(a) }
+            // The app's row opens its Version History, as on the App Store; Update and "more" keep their own taps.
+            .buttonStyle(RowPressStyle())
+            .accessibilityHint("Opens its version history")
+    }
+    func rowBody(_ a: Status.SeedApp) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 14) {
                 AppIcon(app: a, size: 58)
@@ -284,10 +290,6 @@ struct UpdatesSection: View {
             if let notes = a.notes, !notes.isEmpty { WhatsNew(notes: notes) }
         }
         .padding(.vertical, 6)
-        // The app's row opens its Version History, as on the App Store; Update and "more" keep their own taps.
-        .contentShape(Rectangle())
-        .onTapGesture { model.appHistory = a.file }
-        .accessibilityAction(named: "Version History") { model.appHistory = a.file }
     }
 
     @ViewBuilder func button(_ a: Status.SeedApp) -> some View {
@@ -509,46 +511,49 @@ struct VersionHistoryView: View {
         return d.formatted(.dateTime.month(.abbreviated).day())
     }
 
+    @Environment(\.paneLayout) private var panes
     var body: some View {
-        ScrollViewReader { proxy in list.task(id: builds?.count ?? 0) { await film(proxy) } }
-    }
-    // The build's film of this page moving, down to its last build and back twice, so its scrolling is judged moving.
-    private func film(_ proxy: ScrollViewProxy) async {
-        guard model.pose == "versionsfilm", let first = builds?.first?.id, let last = builds?.last?.id else { return }
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
-        for _ in 0..<2 {
-            withAnimation(.easeInOut(duration: 2.4)) { proxy.scrollTo(last, anchor: .bottom) }
-            try? await Task.sleep(nanoseconds: 3_400_000_000)
-            withAnimation(.easeInOut(duration: 2.4)) { proxy.scrollTo(first, anchor: .top) }
-            try? await Task.sleep(nanoseconds: 3_400_000_000)
+        Group {
+            // Open flat, the App Store's app page across the two panes: the app and what's new in its newest build on the
+            // left, every build on the right, so no line runs across the fold (designer HOLD, CI ac93e14).
+            if panes { FoldSplit { pane(header: true, showBuilds: false) } right: { pane(header: false, showBuilds: true) } }
+            else { pane(header: true, showBuilds: true) }
         }
+        .background(groupedBackground.ignoresSafeArea())
+        .topEdge()
+        .navigationTitle("Version History")
+        .toolbarVisibility(.visible, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await load() }
     }
-    private var list: some View {
+    private func pane(header: Bool, showBuilds: Bool) -> some View {
         List {
-            if let app {
+            if header, let app {
                 Section {
-                    HStack(spacing: 14) {
-                        AppIcon(app: app, size: 58)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(app.name).font(.title3.weight(.bold))
-                            Text(Self.onPhoneLine(app)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                    // Beside the name when the line fits whole; folded, "Build 11 on this iPhone" wrapped to two lines
+                    // beside Update (CI ac93e14), so there Update goes under the name, as on the App Store's app page.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 14) {
+                            AppIcon(app: app, size: 58)
+                            names(app).fixedSize(horizontal: true, vertical: false)
+                            Spacer(minLength: 8)
+                            update(app)
                         }
-                        Spacer(minLength: 8)
-                        // A newer build ready for this iPhone: Update, as on the app's App Store page.
-                        if let seed = model.status?.iosApps, UpdatesSection.updates(seed).contains(where: { $0.id == app.id }), UpdatesSection.link(app) != nil {
-                            if ota.current?.file == app.id { ProgressView().frame(width: 84) }
-                            else {
-                                Button { ota.install([app]) } label: { Text("Update").font(.subheadline.weight(.bold)) }
-                                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
-                                    .disabled(ota.running)
-                                    .accessibilityLabel("Update \(app.name) to build \(app.build)")
-                            }
+                        HStack(alignment: .top, spacing: 14) {
+                            AppIcon(app: app, size: 58)
+                            VStack(alignment: .leading, spacing: 10) { names(app); update(app) }
+                            Spacer(minLength: 0)
                         }
                     }
                     .padding(.vertical, 4)
                 }
             }
+            if header, !showBuilds, let builds, let newest = builds.first {
+                let here = app.flatMap { Self.hereBuild(Self.phoneBuild($0), in: builds) }
+                Section("What’s New") { entry(newest, here: newest.build == here) }
+            }
             // The bar already says Version History; the builds follow the app without a heading saying it again.
+            if showBuilds {
             Section {
                 if let builds {
                     if builds.isEmpty { Text("No builds yet").foregroundStyle(.secondary) }
@@ -569,18 +574,35 @@ struct VersionHistoryView: View {
                     HStack { ProgressView(); Text("Loading…").foregroundStyle(.secondary) }
                 }
             }
+            }
         }
         .contentMargins(.top, 4, for: .scrollContent)
+        // At the end of the list the card's foot rests clear of the fade above the tab bar, ending on its rounded corners
+        // as Apps does, not dissolving into it (CI ac93e14's film, open upright).
+        .contentMargins(.bottom, 24, for: .scrollContent)
         .scrollsUnder()
         // Open upright the tab bar floats over the page's foot; the notes fade out above it, as on Apps itself, instead of
         // reading on either side of it (Richard, 2026-11-05: "fade page content out under the tab bar").
         .modifier(TabBarFade())
-        .background(groupedBackground.ignoresSafeArea())
-        .topEdge()
-        .navigationTitle("Version History")
-        .toolbarVisibility(.visible, for: .navigationBar)
-        .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
+    }
+
+    func names(_ app: Status.SeedApp) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(app.name).font(.title3.weight(.bold))
+            Text(Self.onPhoneLine(app)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+    // A newer build ready for this iPhone: Update, as on the app's App Store page.
+    @ViewBuilder func update(_ app: Status.SeedApp) -> some View {
+        if let seed = model.status?.iosApps, UpdatesSection.updates(seed).contains(where: { $0.id == app.id }), UpdatesSection.link(app) != nil {
+            if ota.current?.file == app.id { ProgressView().frame(width: 84) }
+            else {
+                Button { ota.install([app]) } label: { Text("Update").font(.subheadline.weight(.bold)) }
+                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
+                    .disabled(ota.running)
+                    .accessibilityLabel("Update \(app.name) to build \(app.build)")
+            }
+        }
     }
 
     func entry(_ b: BuildNotes, here: Bool) -> some View {

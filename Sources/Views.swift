@@ -199,6 +199,17 @@ enum Motion {
 }
 
 // A card that gives under the finger, as system rows highlight.
+// A list row that opens a page: a grey wash over the whole row while it's pressed, as a stock row shows, so a tap is
+// seen to land (designer HOLD 2026-11-08: Apps' rows opened Version History with no sign of the press). Buttons inside
+// the row keep their own taps.
+struct RowPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .background(Color.white.opacity(configuration.isPressed ? 0.10 : 0).padding(.horizontal, -24).padding(.vertical, -14))
+    }
+}
+
 struct PressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -1647,6 +1658,7 @@ struct SeedSection: View {
             // nothing the Mac can do for it; a blank tile in its place is a placeholder (designer HOLD, 2026-11-07).
             ForEach(seed.apps.filter { $0.own && !ups.contains($0.id) }) { a in
                 let l = label(a)
+                Button { model.appHistory = a.file } label: {
                 HStack(spacing: 12) {
                     AppIcon(app: a, size: 40)
                     VStack(alignment: .leading, spacing: 2) {
@@ -1676,11 +1688,11 @@ struct SeedSection: View {
                     }
                     Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
+                }
                 // The App Store's way: the app's row opens its page, Version History (Richard, 2026-11-08: "duos
                 // changelogs in mac pro app"). Its own buttons keep their taps.
-                .contentShape(Rectangle())
-                .onTapGesture { model.appHistory = a.file }
-                .accessibilityAction(named: "Version History") { model.appHistory = a.file }
+                .buttonStyle(RowPressStyle())
+                .accessibilityHint("Opens its version history")
             }
             Menu {
                 Button { picking = true } label: { Label("From Files", systemImage: "folder") }
