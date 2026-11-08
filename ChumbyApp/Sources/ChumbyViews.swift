@@ -2131,10 +2131,14 @@ struct SkipCard: View {
     @State private var shown: Bool?
     // Between the tap and the Chumby's answer: a spinner where the button's mark is, never two labels on top of each other.
     @State private var pending = false
+    // The skip that a "just this once" stands behind: undone, both go (the usual time rings again, the one-off is removed).
+    private var moved: Date? { model.state.justOnce().flatMap { $0.replaces != nil ? $0.at : nil } }
     private func send(_ skip: Bool) {
         pending = true
         Task {
-            if skip { await model.skipNext() } else { await model.unskip() }
+            if skip { await model.skipNext() }
+            else if moved != nil { if let why = await model.undoJustOnce() { model.fail("skip", why) } }
+            else { await model.unskip() }
             pending = false
         }
     }
@@ -2143,13 +2147,13 @@ struct SkipCard: View {
     private func lines(_ at: Date, _ name: String, struck: Bool) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             ZStack(alignment: .leading) {
-                if struck { Text("Skipped").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
+                if struck { Text(moved != nil ? "Later, just this once" : "Skipped").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
                 else { Text("Skip next alarm").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
             }
             .font(.custom("Trebuchet MS", size: 15).weight(.bold))
             Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold))
                 .overlay { StrikeLine(progress: struck ? 1 : 0) }
-            Text("\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1)
+            Text("\(day(at)) · \(label(name))" + (struck ? moved.map { " · now \(time($0))" } ?? "" : "")).font(.custom("Trebuchet MS", size: 14)).lineLimit(1)
         }
         .foregroundStyle(.white)
     }
@@ -2196,11 +2200,13 @@ struct SkipCard: View {
                         }
                         .buttonStyle(GelPress())
                         .padding(.trailing, 18)
-                        .accessibilityLabel("Undo the skip, so the \(time(next.0)) alarm rings")
+                        .accessibilityLabel(moved != nil ? "Undo just this once, so the \(time(next.0)) alarm rings as usual" : "Undo the skip, so the \(time(next.0)) alarm rings")
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                     }
                 }
                 if let f = model.failed("skip") { FailNote(text: f) }
+                // Later or another sound for that one ring, under the slab it belongs to.
+                JustOnceMenu().padding(.leading, 18)
             }
             .animation(.easeOut(duration: 0.12), value: pending)
             .onChange(of: skipped != nil) { _, now in withAnimation(.easeInOut(duration: 0.35)) { shown = now } }

@@ -23,11 +23,19 @@ const stateNow = v => ({ ...v, ...clockNow() });
 // What the real do_save turns down, so a save the Chumby would refuse fails here too (a backupDelay of 0 cost every nap
 // from 11-05 while the build saw nothing). Returns the Chumby's own error, or null.
 const ALARM_KEYS = ['name', 'enabled', 'time', 'when', 'type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss', 'action', 'action_param', 'backup', 'backupDelay'];
+// As of 510ac74 a missing or odd backupDelay is written as the stock 5, never refused; text over its length or with a
+// control character is "bad text"; tpl must name an alarm in the list.
+const TEXT_MAX = { name: 64, arg: 64, param: 1024, param_description: 128, action_param: 64 };
 function saveProblem(f) {
   const n = +f.get('n');
   if (!/^\d+$/.test(f.get('n') || '') || n > 16) return 'bad count';
-  const range = { enabled: [0, 1], duration: [-1, 1440], snooze: [1, 120], auto_dismiss: [0, 1], backup: [0, 1], backupDelay: [1, 120], time: [0, 2e9] };
+  if (f.has('tpl') && !(/^\d+$/.test(f.get('tpl')) && +f.get('tpl') < n)) return 'bad tpl';
+  const range = { enabled: [0, 1], duration: [-1, 1440], snooze: [1, 120], auto_dismiss: [0, 1], backup: [0, 1], time: [0, 2e9] };
   for (let i = 0; i < n; i++) {
+    for (const [k, max] of Object.entries(TEXT_MAX)) {
+      const v = f.get(i + '_' + k) || '';
+      if (v.length > max || /[\x00-\x1f]/.test(v)) return 'bad text';
+    }
     if (!['once', 'daily', 'weekday', 'weekend', 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].includes(f.get(i + '_when'))) return 'bad choice';
     if (!['none', 'beep', 'audio', 'widget'].includes(f.get(i + '_type')) || !['', 'profile', 'nightmode', 'power', 'bright'].includes(f.get(i + '_action') || '')) return 'bad choice';
     for (const [k, [lo, hi]] of Object.entries(range)) {
@@ -257,6 +265,26 @@ function nextWork() {
   }
 }
 const songScene = { at: 0 };
+// What do_save writes, given the list it held: never the stock backup beeper; every "Calendar: " alarm with the shared
+// calendar set (tpl=I makes alarm I's the set); one copy per name, repeat and time (the one that's on, then the later);
+// and Rick's newest_wins: an alarm that's on and wasn't in the saved list (by name|when|time) turns every other alarm
+// off, Calendar, Catch-up and Nap alarms apart. So switching on one already in the list is a plain toggle.
+const TPL_KEYS = ['type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss', 'action', 'action_param', 'backup', 'backupDelay'];
+function kept(state, f) {
+  const n = +f.get('n') || 0, sent = Array.from({ length: n }, (_, i) => Object.fromEntries(ALARM_KEYS.map(k => [k, f.get(i + '_' + k) || ''])));
+  const isCal = a => a.name.startsWith('Calendar: '), helper = a => a.name === 'Catch-up' || a.name === 'Nap', key = a => a.name + '|' + a.when + '|' + a.time;
+  if (f.has('tpl')) state.calTpl = { ...Object.fromEntries(TPL_KEYS.map(k => [k, sent[+f.get('tpl')][k]])), name: '', enabled: '', time: '', when: '' };
+  const old = new Set(state.alarms.map(key)), counts = a => a.enabled === '1' && !helper(a) && !isCal(a);
+  const added = sent.map(a => counts(a) && !old.has(key(a)));
+  const any = added.some(Boolean);
+  const out = sent.map((a, i) => {
+    const b = { ...a, ...(isCal(a) && state.calTpl ? Object.fromEntries(TPL_KEYS.map(k => [k, state.calTpl[k]])) : {}), backup: '0' };
+    if (!/^\d+$/.test(b.backupDelay) || +b.backupDelay > 120) b.backupDelay = '5';
+    if (any && counts(a) && !added[i]) b.enabled = '0';
+    return b;
+  });
+  return out.filter((a, i) => !out.some((b, j) => j !== i && key(b) === key(a) && (b.enabled === '1' && a.enabled !== '1' || (j > i && (b.enabled === '1') === (a.enabled === '1')))));
+}
 function chumbyScene(q, s) {
   const a = new URL(q.url, 'http://x').searchParams.get('a');
   // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
@@ -283,8 +311,7 @@ function chumbyScene(q, s) {
         if (a === 'save') {
           const why = saveProblem(f);
           if (why) return json({ ok: false, error: why });
-          // As the Chumby keeps it: never the stock backup beeper.
-          live.state.alarms = Array.from({ length: +f.get('n') || 0 }, (_, i) => ({ ...Object.fromEntries(ALARM_KEYS.map(k => [k, f.get(i + '_' + k) || ''])), backup: '0' }));
+          live.state.alarms = kept(live.state, f);
           live.state.volume = +f.get('v'); live.state.fade = +f.get('f');
         }
         json({ ok: true });

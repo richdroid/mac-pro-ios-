@@ -22,6 +22,10 @@ struct WakeRules: Codable, Equatable {
     var dayStartHour = 5
     // One day's own wake-up lead, set from that day's sheet, by PlannedWake key.
     var leadOverrides: [String: Int] = [:]
+    // One day's own exact wake-up time and label, set from that day's sheet, by PlannedWake key (see DayEdit).
+    var dayEdits: [String: DayEdit] = [:]
+    // Whether that day has anything of its own: a lead, a time or a label.
+    func edited(_ key: String) -> Bool { leadOverrides[key] != nil || !(dayEdits[key]?.isEmpty ?? true) }
     init() {}
     // Every field optional, so settings saved by an older build still load rather than resetting to the defaults.
     init(from d: Decoder) throws {
@@ -40,6 +44,24 @@ struct WakeRules: Codable, Equatable {
         daysAhead = try c.decodeIfPresent(Int.self, forKey: .daysAhead) ?? f.daysAhead
         dayStartHour = try c.decodeIfPresent(Int.self, forKey: .dayStartHour) ?? f.dayStartHour
         leadOverrides = try c.decodeIfPresent([String: Int].self, forKey: .leadOverrides) ?? f.leadOverrides
+        dayEdits = try c.decodeIfPresent([String: DayEdit].self, forKey: .dayEdits) ?? f.dayEdits
+    }
+}
+// What one calendar day changes for itself alone. The day's key holds the event's start, so if the event moves, the edit
+// is left behind with the old time and the day goes back to the usual settings, as a lead set for that day does.
+// Sound and snooze aren't here: the Chumby gives every "Calendar: " alarm the one shared set (chalarm.c pick()), so a
+// different sound for one day is a "just this once" alarm beside it (JustOnce), which the device keeps as sent.
+struct DayEdit: Codable, Equatable {
+    // An exact wake-up time (seconds since 1970) in place of "how long before".
+    var wakeAt: Double?
+    // Shown on the Chumby in place of the event's title, after "Calendar: ".
+    var label: String?
+    var isEmpty: Bool { wakeAt == nil && (label ?? "").isEmpty }
+    init(wakeAt: Double? = nil, label: String? = nil) { self.wakeAt = wakeAt; self.label = label }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        wakeAt = try c.decodeIfPresent(Double.self, forKey: .wakeAt)
+        label = try c.decodeIfPresent(String.self, forKey: .label)
     }
 }
 struct PlannedWake: Identifiable, Equatable {
@@ -51,7 +73,10 @@ struct PlannedWake: Identifiable, Equatable {
     var isWork: Bool
     var skipped = false
     var shortNight: String?
-    var custom = false          // its lead was set for this day alone
+    var custom = false          // its lead, time or label was set for this day alone
+    var exact = false           // rings at a time set for this day, not "how long before"
+    var label: String?          // this day's own label, in place of the title on the Chumby
+    var shown: String { label ?? title }
     var id: String { key }
 }
 
@@ -95,13 +120,21 @@ enum WakePlanner {
             let list = byDay[day]!.filter { !(off.contains(day) && isWork($0, r)) }
             guard let first = list.first else { continue }
             let work = isWork(first, r)
-            let lead = r.leadOverrides[key(first)] ?? (work ? r.workLead : r.otherLead + (first.hasLocation ? r.travelExtra : 0))
-            let wake = first.start.addingTimeInterval(TimeInterval(-lead * 60))
+            let edit = r.dayEdits[key(first)]
+            var lead = r.leadOverrides[key(first)] ?? (work ? r.workLead : r.otherLead + (first.hasLocation ? r.travelExtra : 0))
+            var wake = first.start.addingTimeInterval(TimeInterval(-lead * 60))
+            // A time set for this day alone, as long as it's still before the event.
+            if let at = edit?.wakeAt, at < first.start.timeIntervalSince1970 {
+                wake = Date(timeIntervalSince1970: at)
+                lead = Int((first.start.timeIntervalSince(wake) / 60).rounded())
+            }
             // Already past: you're either up already or it's too late for an alarm to help.
             guard wake > now else { continue }
             var item = PlannedWake(key: key(first), title: first.title, start: first.start, wake: wake, lead: lead, isWork: work)
             item.skipped = r.skipped.contains(item.key)
-            item.custom = r.leadOverrides[item.key] != nil
+            item.custom = r.edited(item.key)
+            item.exact = wake.timeIntervalSince1970 == edit?.wakeAt
+            if let l = edit?.label?.trimmingCharacters(in: .whitespaces), !l.isEmpty { item.label = l }
             // Worth saying if the night before leaves little sleep.
             if let i = usable.indices.last(where: { usable[$0].end <= wake && days[$0] < day }) {
                 let before = usable[i]

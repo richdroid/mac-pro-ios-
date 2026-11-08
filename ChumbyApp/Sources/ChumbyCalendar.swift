@@ -15,7 +15,7 @@ final class CalendarWake: ObservableObject {
     static let refreshID = "local.macpro.Chumby.calendar"
     nonisolated static let prefix = Alarm.calendarPrefix
     // The build's simulator shots, which have no calendar, show a sample plan in these.
-    static let samplePoses: Set<String> = ["calendar", "calsettings", "calday", "template"]
+    static let samplePoses: Set<String> = ["calendar", "calsettings", "calday", "caldayedit", "template"]
     static var sample: Bool { samplePoses.contains(ChumbyModel.pose) }
     let store = EKEventStore()
     // A change here updates the Chumby a moment later, wherever it was made, so nothing waits for a page to close.
@@ -46,6 +46,7 @@ final class CalendarWake: ObservableObject {
         get { UserDefaults.standard.data(forKey: "calendarAlarmSettings").flatMap { try? JSONDecoder().decode(Alarm.self, from: $0) } }
         set { UserDefaults.standard.set(newValue.flatMap { try? JSONEncoder().encode($0) }, forKey: "calendarAlarmSettings") }
     }
+    private var samplePlan: [PlannedWake] = []
     func showSample() {
         rules.enabled = true; allowed = true
         let cal = Calendar.current, base = cal.startOfDay(for: Date())
@@ -53,7 +54,8 @@ final class CalendarWake: ObservableObject {
             let start = cal.date(byAdding: .hour, value: day * 24 + hour, to: base) ?? base
             return PlannedWake(key: title + "\(day)", title: title, start: start, wake: start.addingTimeInterval(TimeInterval(-lead * 60)), lead: lead, isWork: work, shortNight: short)
         }
-        plan = [shift(1, 18, "Shift", work: true, lead: 160), shift(2, 13, "Dentist", work: false, lead: 120), shift(3, 18, "Shift", work: true, lead: 160)]
+        samplePlan = [shift(1, 18, "Shift", work: true, lead: 160), shift(2, 13, "Dentist", work: false, lead: 120), shift(3, 18, "Shift", work: true, lead: 160)]
+        plan = samplePlan
         lastSync = Date().addingTimeInterval(-240)
     }
     func enable() async {
@@ -79,7 +81,18 @@ final class CalendarWake: ObservableObject {
     }
     func refreshPlan() {
         if Self.sample {
-            for i in plan.indices { plan[i].skipped = rules.skipped.contains(plan[i].key); if let l = rules.leadOverrides[plan[i].key] { plan[i].lead = l; plan[i].wake = plan[i].start.addingTimeInterval(TimeInterval(-l * 60)); plan[i].custom = true } }
+            plan = samplePlan
+            for i in plan.indices {
+                let k = plan[i].key, w = plan[i]
+                plan[i].skipped = rules.skipped.contains(k)
+                let lead = rules.leadOverrides[k] ?? w.lead
+                plan[i].lead = lead; plan[i].wake = w.start.addingTimeInterval(TimeInterval(-lead * 60)); plan[i].exact = false
+                if let at = rules.dayEdits[k]?.wakeAt, at < w.start.timeIntervalSince1970 {
+                    plan[i].wake = Date(timeIntervalSince1970: at); plan[i].lead = Int((w.start.timeIntervalSince(plan[i].wake) / 60).rounded()); plan[i].exact = true
+                }
+                plan[i].label = rules.dayEdits[k]?.label.flatMap { $0.isEmpty ? nil : $0 }
+                plan[i].custom = rules.edited(k)
+            }
             return
         }
         if allowed { plan = WakePlanner.plan(events(), rules: rules) }
@@ -122,7 +135,8 @@ final class CalendarWake: ObservableObject {
         return names.first
     }
     nonisolated static func minutes(_ d: Date) -> String { String(Int(d.timeIntervalSince1970 / 60)) }
-    nonisolated static func alarmName(_ w: PlannedWake) -> String { alarmName(title: w.title) }
+    // A day's own label, when it has one, names its alarm on the Chumby in place of the event's title.
+    nonisolated static func alarmName(_ w: PlannedWake) -> String { alarmName(title: w.shown) }
     nonisolated static func alarmName(title: String) -> String { prefix + String(title.prefix(30)) }
     // Whether the Chumby really holds what the plan says, so the list never shows the phone's plan as if it were set.
     enum OnDevice { case set, missing, stillOn }
@@ -159,7 +173,7 @@ final class CalendarWake: ObservableObject {
         let evs = events()
         plan = WakePlanner.plan(evs, rules: rules)
         let wanted = rules.enabled ? plan.filter { !$0.skipped } : []
-        let keep = CalendarKeep(plan: plan, events: evs)
+        let keep = CalendarKeep(plan: plan, events: evs, labels: rules.dayEdits.compactMapValues { $0.label })
         let stored = storedSettings
         do {
             // The same careful save as everything else: read fresh, change only the calendar's alarms, never under a
@@ -212,18 +226,30 @@ final class CalendarWake: ObservableObject {
 struct CalendarKeep {
     var plan: [PlannedWake]            // every planned wake, skipped ones too
     var events: [CalEvent]             // everything read, declined and canceled ones too
+    var labels: [String: String] = [:] // a day's own label, by event key: its alarm goes by that name on the Chumby
     enum Verdict { case keep, userChose, gone }
     // For a calendar alarm that's on, due within 24 h, which the plan no longer wants.
     func verdict(_ a: Alarm, due: Date) -> Verdict {
         // Its event: same title, starting after the alarm and no more than 18 hours after it (any lead there is).
         func near(_ start: Date) -> Bool { start >= due && start.timeIntervalSince(due) <= 18 * 3600 }
-        if let item = plan.first(where: { CalendarWake.alarmName($0) == a.name && near($0.start) }) {
-            // Turned off for that day, or given that day's own lead, by hand: the user's call, and the new time replaces it.
+        // Events whose day was given a label this alarm goes by (the event's id, from "id@start", so it's found after the
+        // event moves too).
+        let labelled = Set(labels.filter { CalendarWake.alarmName(title: $0.value) == a.name }.keys.map { k in k.range(of: "@", options: .backwards).map { String(k[..<$0.lowerBound]) } ?? k })
+        func ofLabelled(_ key: String) -> Bool { key.range(of: "@", options: .backwards).map { labelled.contains(String(key[..<$0.lowerBound])) } ?? false }
+        // By the name it has now, by its event's title for an alarm made before that day was given a label of its own,
+        // or by a label that day was given.
+        if let item = plan.first(where: { (CalendarWake.alarmName($0) == a.name || CalendarWake.alarmName(title: $0.title) == a.name || ofLabelled($0.key)) && near($0.start) }) {
+            // Turned off for that day, or given that day's own lead, time or label, by hand: the user's call, and the new
+            // alarm replaces it.
             if item.skipped || item.custom { return .userChose }
             // Moved some other way (the event's time, a rule): the old time still rings, beside the new one.
             return .keep
         }
-        let matching = events.filter { CalendarWake.alarmName(title: $0.title) == a.name && near($0.start) }
+        // Its event by title, or by the label that day was given, so a labelled day's alarm is kept like any other while
+        // its event is still there.
+        let matching = events.filter { e in
+            (CalendarWake.alarmName(title: e.title) == a.name || ofLabelled(WakePlanner.key(e))) && near(e.start)
+        }
         if matching.contains(where: { !$0.declined && !$0.canceled }) { return .keep }
         if !matching.isEmpty { return .gone }               // declined or canceled
         // Nothing by that name: deleted, as long as the calendar was really read. An empty read (locked phone, no access
@@ -444,7 +470,8 @@ struct CalendarWakeSettings: View {
 }
 
 // MARK: - One calendar day
-// A calendar alarm opened: its event, that day's own wake-up time, whether it rings, and how calendar alarms sound.
+// A calendar alarm opened: its event, and for that day alone its wake-up (how long before, or a set time), its label,
+// whether it rings, and another sound or snooze; then how every calendar alarm sounds. Nothing here changes another day.
 struct CalendarDaySheet: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
@@ -454,6 +481,10 @@ struct CalendarDaySheet: View {
     @State private var fit: CGFloat = 520
     @State private var detent: PresentationDetent = .height(520)
     @State private var openedAt = Date()
+    @State private var labelText = ""
+    @State private var problem: String?
+    @State private var justOnce = false
+    @State private var undoing = false
     let key: String
     // Set when it fills the open Duo's right pane, or the folded content column, instead of being a sheet.
     var close: (() -> Void)?
@@ -461,28 +492,125 @@ struct CalendarDaySheet: View {
     var done = true
     var item: PlannedWake? { wake.plan.first { $0.key == key } }
     var title: String { item.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
+    var edit: DayEdit { wake.rules.dayEdits[key] ?? DayEdit() }
+    // One change to this day's own settings; an edit left with nothing in it is dropped, so the day is plainly usual again.
+    func setEdit(_ change: (inout DayEdit) -> Void) {
+        var e = edit
+        change(&e)
+        wake.rules.dayEdits[key] = e.isEmpty ? nil : e
+    }
+    func commitLabel() {
+        let l = String(labelText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(30))
+        guard l != (edit.label ?? "") else { return }
+        setEdit { $0.label = l.isEmpty ? nil : l }
+    }
+    // A time on the clock, put on the last such time before the event starts, and never one already gone.
+    func setExact(_ d: Date, for item: PlannedWake) {
+        let cal = Calendar.current, c = cal.dateComponents([.hour, .minute], from: d)
+        guard var t = cal.date(bySettingHour: c.hour ?? 0, minute: c.minute ?? 0, second: 0, of: item.start) else { return }
+        if t >= item.start { t = cal.date(byAdding: .day, value: -1, to: t) ?? t }
+        guard t > Date().addingTimeInterval(60) else { problem = "That time has already gone. Pick a later one."; return }
+        problem = nil
+        setEdit { $0.wakeAt = t.timeIntervalSince1970 }
+    }
+    // That day's alarm as the Chumby holds it, once it's there.
+    func onChumby(_ item: PlannedWake) -> Alarm? {
+        model.deviceState.alarms.first { $0.isOn && $0.name == CalendarWake.alarmName(item) && $0.time == CalendarWake.minutes(item.wake) }
+    }
+    func useUsual(_ item: PlannedWake) {
+        wake.rules.leadOverrides[key] = nil
+        wake.rules.dayEdits[key] = nil
+        labelText = ""; problem = nil
+        if model.state.justOnce(for: item) != nil { undo() }
+    }
+    func undo() {
+        undoing = true
+        Task { problem = await model.undoJustOnce(); undoing = false }
+    }
     @ViewBuilder var sections: some View {
         if let item {
             Section {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item.title).font(.custom("Trebuchet MS", size: 24).weight(.bold))
+                    Text(item.shown).font(.custom("Trebuchet MS", size: 24).weight(.bold))
+                    if item.label != nil { Text("“\(item.title)” on your calendar").foregroundStyle(.secondary).lineLimit(1) }
                     Text("Starts \(item.start.formatted(.dateTime.weekday(.wide).hour().minute()))").foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 4)
             }
             Section {
-                Stepper(value: Binding(get: { item.lead }, set: { wake.rules.leadOverrides[key] = $0 }), in: 15...360, step: 5) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Wake \(leadText(item.lead)) before")
-                        Text("Rings at \(item.wake.formatted(date: .omitted, time: .shortened))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                Picker("Wake", selection: Binding(get: { item.exact }, set: { exact in
+                    problem = nil
+                    setEdit { $0.wakeAt = exact ? (item.wake.timeIntervalSince1970 / 60).rounded() * 60 : nil }
+                })) {
+                    Text("Before it starts").tag(false); Text("At a set time").tag(true)
+                }
+                .pickerStyle(.segmented)
+                if item.exact {
+                    DatePicker(selection: Binding(get: { item.wake }, set: { setExact($0, for: item) }), displayedComponents: .hourAndMinute) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Rings at")
+                            Text("\(leadText(item.lead)) before it starts").font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                    }
+                } else {
+                    Stepper(value: Binding(get: { item.lead }, set: { wake.rules.leadOverrides[key] = $0 }), in: 15...360, step: 5) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Wake \(leadText(item.lead)) before")
+                            Text("Rings at \(item.wake.formatted(date: .omitted, time: .shortened))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                        }
                     }
                 }
-                if item.custom { Button("Use the usual time") { wake.rules.leadOverrides[key] = nil }.foregroundStyle(.tint) }
+                if let problem { FailNote(text: problem) }
+                HStack {
+                    Text("Label")
+                    TextField(item.title, text: $labelText).multilineTextAlignment(.trailing).foregroundStyle(.secondary)
+                        .submitLabel(.done).onSubmit(commitLabel)
+                }
                 Toggle("Ring that day", isOn: Binding(get: { !item.skipped }, set: { _ in wake.toggleSkip(item) }))
+            } header: { Text("Just this day") }
+            soundSection(item)
+            if item.custom || model.state.justOnce(for: item) != nil {
+                Section {
+                    Button("Use the usual settings") { useUsual(item) }.foregroundStyle(.tint).disabled(undoing)
+                } footer: { Text("This day wakes and rings like every other again.") }
             }
-            Section { CalendarSoundRow().background { foot } } header: { Text("How they ring") }
+            Section { CalendarSoundRow().background { foot } } header: { Text("How they all ring") }
         } else {
             Text("That day is no longer on your calendar.").foregroundStyle(.secondary).background { foot }
+        }
+    }
+    // Another sound or snooze for this day: a "just this once" beside the calendar's alarm (see JustOnce), which the
+    // Chumby can only do for the next alarm to ring, so a later day says when it can.
+    @ViewBuilder func soundSection(_ item: PlannedWake) -> some View {
+        Section {
+            if let j = model.state.justOnce(for: item) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(j.alarm.soundText) · \(j.at.formatted(date: .omitted, time: .shortened))")
+                        Text("Snooze \(j.alarm.snooze) min, just this once").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    if undoing { ProgressView() } else { Button("Undo") { undo() }.font(.subheadline.weight(.semibold)).foregroundStyle(.tint).buttonStyle(.borderless) }
+                }
+            } else if let a = onChumby(item), !item.skipped, model.justOnceBlock(for: a) == nil {
+                Button { justOnce = true } label: {
+                    HStack {
+                        Text("Another sound or snooze").foregroundStyle(.tint)
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $justOnce) { JustOnceSheet(original: a, due: item.wake, later: 1).environmentObject(model) }
+            } else {
+                let r = wake.ringsWith(model.state)
+                LabeledContent("Sound", value: r.sound).lineLimit(1)
+            }
+        } header: { Text("Sound for this day") } footer: {
+            if model.state.justOnce(for: item) == nil && !item.skipped && !(onChumby(item).map { model.justOnceBlock(for: $0) == nil } ?? false) {
+                Text("Another sound or snooze for this day can be picked once it’s the next alarm to ring.")
+            }
         }
     }
     // Folded, where the last row ends, so the sheet can stop just under it. onGeometryChange reports the first layout too,
@@ -506,9 +634,11 @@ struct CalendarDaySheet: View {
     var body: some View {
         if let close {
             Group {
-                PageTitle(title) { if done { Button("Done") { close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
+                PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
                 sections
             }
+            .onAppear { labelText = edit.label ?? "" }
+            .onDisappear { commitLabel() }
         } else {
             NavigationStack {
                 // The folded sheet is as tall as what's in it (see foot), so no row is cut by its bottom edge, no empty sheet
@@ -516,17 +646,26 @@ struct CalendarDaySheet: View {
                 List { sections.listRowBackground(GlassRow()) }
                 .coordinateSpace(.named("daySheet"))
                 .seaList().background { SeaBackground().ignoresSafeArea() }
-                .onAppear { openedAt = Date() }
+                .onAppear { openedAt = Date(); labelText = edit.label ?? "" }
+                .onDisappear { commitLabel() }
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .principal) { Text(title).font(.custom("Trebuchet MS", size: 18).weight(.bold)) }
                     // Tinted, the same as Done in the open pane.
-                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.fontWeight(.semibold).foregroundStyle(.tint) }
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { commitLabel(); dismiss() }.fontWeight(.semibold).foregroundStyle(.tint) }
                 }
             }
             .tint(ChumbyPalette.acc(scheme == .dark))
             .presentationDetents([.height(fit), .large], selection: $detent)
         }
+    }
+}
+
+extension ChumbyState {
+    // The "just this once" standing in for this calendar day's alarm, if there is one.
+    func justOnce(for item: PlannedWake) -> (alarm: Alarm, at: Date)? {
+        guard let j = justOnce(), let r = j.replaces, r.name == CalendarWake.alarmName(item), abs(r.at - item.wake.timeIntervalSince1970) < 60 else { return nil }
+        return (j.alarm, j.at)
     }
 }
 

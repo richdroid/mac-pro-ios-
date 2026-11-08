@@ -603,6 +603,12 @@ struct AlarmsTab: View {
             case "calsettings": openSettings()
             case "template": if wide { show(.template) } else { openSettings() }
             case "calday": if let k = wake.plan.first?.key { openDay(k) }
+            // A day with its own settings: a set time 25 minutes earlier than usual and a label of its own.
+            case "caldayedit":
+                if let w = wake.plan.first {
+                    wake.rules.dayEdits[w.key] = DayEdit(wakeAt: w.wake.addingTimeInterval(-25 * 60).timeIntervalSince1970, label: "Early start")
+                    openDay(w.key)
+                }
             case "editor": edit(mine.first ?? Alarm())
             case "editornew": edit(nil)
             // His own alarms and the nap brought on screen, folded, for their shot.
@@ -638,11 +644,14 @@ struct AlarmsTab: View {
             VStack(alignment: .leading, spacing: 3) {
                 // A skip shows here too, with its Undo, so the time below never looks as if the skipped one vanished.
                 if let s = model.state.skipped, s.date > Date() {
+                    // Behind a "just this once", Undo takes both back: the usual time rings again and the one-off goes.
+                    let moved = model.state.justOnce().flatMap { $0.replaces != nil ? $0.at : nil }
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(clockParts(s.date).0 + " " + clockParts(s.date).1).font(.custom("Trebuchet MS", size: 17).weight(.bold)).strikethrough().foregroundStyle(.secondary)
-                        Text("Skipped").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(moved != nil ? "Later, just this once" : "Skipped").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
                         Spacer(minLength: 8)
-                        Button("Undo") { Task { await model.unskip() } }.font(.subheadline.weight(.semibold)).foregroundStyle(.tint).buttonStyle(.borderless)
+                        Button("Undo") { Task { if moved != nil { if let why = await model.undoJustOnce() { model.fail("skip", why) } } else { await model.unskip() } } }
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.tint).buttonStyle(.borderless)
                     }
                     .padding(.bottom, 4)
                 }
@@ -674,6 +683,7 @@ struct AlarmsTab: View {
                     }
                 }
                 if let f = model.failed("skip") { FailNote(text: f) }
+                JustOnceMenu()
             }
             .padding(.vertical, 2)
             // A nap starting or called off rolls the time over rather than swapping it.
@@ -710,7 +720,15 @@ struct AlarmsTab: View {
                          detail: [a.whenUnlessNamed, a.soundText].filter { !$0.isEmpty }.joined(separator: " · "), on: a.isOn, mark: a.key,
                          tile: AnyView(AlarmTile(calendarDay: nil, on: a.isOn)),
                          tap: { edit(a) },
-                         toggle: Binding(get: { a.isOn }, set: { model.change(.toggle(a, $0)) })) {
+                         toggle: Binding(get: { a.isOn }, set: { on in
+                             // Switching off a "just this once" puts the usual time back, never leaving both quiet.
+                             if !on, JustOnce.isOne(a), let j = model.state.justOnce(), j.alarm.key == a.key, j.replaces != nil {
+                                 Task { if let why = await model.undoJustOnce() { model.fail("skip", why) } }
+                             } else { model.change(.toggle(a, on)) }
+                         })) {
+                    if JustOnce.isOne(a), let r = model.state.justOnce()?.replaces, model.state.justOnce()?.alarm.key == a.key {
+                        RowNote(icon: "clock.arrow.circlepath", text: "In place of the \(r.date.formatted(date: .omitted, time: .shortened)), just this once", color: .secondary)
+                    }
                     MarkNote(mark: a.key)
                 }
                 .zoomSource(a.key, in: editNS)
@@ -759,13 +777,19 @@ struct AlarmsTab: View {
                 ForEach(wake.plan) { item in
                     // Only against a recent reading, and never in the build's sample, which has no Chumby behind it.
                     let status = model.stateConfirmed && !CalendarWake.sample ? wake.onDevice(item, in: model.deviceState) : .set
-                    AlarmRow(clock: clockParts(item.wake), title: item.title,
-                             detail: "\(item.start.formatted(date: .omitted, time: .shortened)) · \(leadText(item.lead)) before",
+                    AlarmRow(clock: clockParts(item.wake), title: item.shown,
+                             detail: "\(item.start.formatted(date: .omitted, time: .shortened)) · \(item.exact ? "set time" : leadText(item.lead) + " before")",
                              on: !item.skipped,
                              tile: AnyView(AlarmTile(calendarDay: item.wake, on: !item.skipped)),
                              oneLine: true,
                              tap: { openDay(item.key) },
                              toggle: Binding(get: { !item.skipped }, set: { _ in model.tick(); wake.toggleSkip(item) })) {
+                        // What that day does differently, said where the day is.
+                        if let j = model.state.justOnce(for: item) {
+                            RowNote(icon: "clock.arrow.circlepath", text: "\(j.alarm.soundText) · \(j.at.formatted(date: .omitted, time: .shortened)) (just this once)", color: ChumbyPalette.cal(scheme == .dark))
+                        } else if item.custom {
+                            RowNote(icon: "pencil", text: item.label != nil && !item.exact && wake.rules.leadOverrides[item.key] == nil ? "Label just for this day" : "Just this day", color: ChumbyPalette.cal(scheme == .dark))
+                        }
                         if let short = item.shortNight { RowNote(icon: "moon.zzz", text: "Short night: \(short)") }
                         if !item.skipped, let other = wake.alsoRinging(item, in: model.state) { RowNote(icon: "alarm", text: "Also rings earlier: \(other)") }
                         if status == .missing && !wake.running && !wake.queued {
@@ -897,6 +921,85 @@ extension Alarm {
 }
 extension String { var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() } }
 
+// MARK: - Sound
+// What an alarm plays, as the editor's pickers hold it, and how it's written into an alarm the way the Chumby reads it.
+// Shared by the alarm editor, the calendar alarms' settings and "just this once", so all three offer the same choices.
+struct SoundChoice: Equatable {
+    var kind = "beep", tone = "Beep", streamIndex = 0, pandoraID = ""
+    init() {}
+    init(_ a: Alarm, state: ChumbyState, stations: [NamedID]) {
+        kind = a.type == "beep" ? "beep" : a.type == "none" ? "none" : a.arg == "directurl" ? "stream" : a.arg == "pandora" ? "pandora" : "keep"
+        tone = state.tones.contains(a.arg) ? a.arg : (state.tones.first ?? "Beep")
+        if kind == "stream", let k = state.streams.firstIndex(where: { (!$0.id.isEmpty && a.param.contains($0.id)) || a.param.contains($0.url.replacingOccurrences(of: "&", with: "&amp;")) }) { streamIndex = k }
+        pandoraID = kind == "pandora" ? (a.param.components(separatedBy: "##").first ?? "") : (stations.first?.id ?? "")
+    }
+    // Writes the sound into `a`, or says why it can't. "keep" leaves the alarm's own sound as it is.
+    func apply(to a: inout Alarm, state: ChumbyState, stations: [NamedID]) -> ChumbyError? {
+        switch kind {
+        case "beep": a.type = "beep"; a.arg = tone; a.param = ""; a.param_description = tone
+        case "none": a.type = "none"; a.arg = ""; a.param = ""; a.param_description = "None"
+        case "stream":
+            guard state.streams.indices.contains(streamIndex) else { return .message("Add a radio stream on the Sounds tab first.") }
+            let s = state.streams[streamIndex]
+            func esc(_ v: String) -> String { v.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;").replacingOccurrences(of: "<", with: "&lt;") }
+            a.type = "audio"; a.arg = "directurl"; a.param_description = s.name.isEmpty ? s.url : s.name
+            a.param = "<stream url=\"\(esc(s.url))\" id=\"\(esc(s.id))\" mimetype=\"\(esc(s.mimetype))\" name=\"\(esc(s.name.isEmpty ? s.url : s.name))\" />"
+        case "pandora":
+            guard !pandoraID.isEmpty else { return .message("Pick a Pandora station first.") }
+            let name = stations.first { $0.id == pandoraID }?.name ?? "Pandora"
+            a.type = "audio"; a.arg = "pandora"; a.param = pandoraID + "##" + name; a.param_description = name
+        default: break
+        }
+        if kind == "none" { a.duration = "0" } else if a.duration == "0" { a.duration = "30" }
+        return nil
+    }
+}
+// The editor's sound rows: what it plays (with a try on the Chumby for a tone), for how long, the snooze, and whether
+// it stops on its own. `alarm` holds the length, snooze and stop; `choice` the sound.
+struct SoundRows: View {
+    @EnvironmentObject var model: ChumbyModel
+    @Binding var choice: SoundChoice
+    @Binding var alarm: Alarm
+    var stations: [NamedID] { model.pandoraStations }
+    var body: some View {
+        Picker("Plays", selection: $choice.kind) {
+            Text("Tone").tag("beep"); Text("Radio").tag("stream"); Text("Pandora").tag("pandora"); Text("Silent").tag("none")
+            if choice.kind == "keep" { Text("Current").tag("keep") }
+        }
+        if choice.kind == "beep" {
+            Picker("Tone", selection: $choice.tone) { ForEach(model.state.tones, id: \.self) { Text($0).tag($0) } }
+            Button {
+                Task { do { try await model.api?.post("test", extra: "&tone=" + ChumbyAPI.enc(choice.tone)) } catch { model.fail("test", "Couldn’t play it. \(AlarmWriter.explain(error))") } }
+            } label: { Label("Play on the Chumby", systemImage: "play.fill") }
+            .foregroundStyle(.tint)
+            if let f = model.failed("test") { FailNote(text: f) }
+        }
+        if choice.kind == "stream" {
+            if model.state.streams.isEmpty { Text("Add a radio stream on the Sounds tab first.").foregroundStyle(.secondary) }
+            else { Picker("Station", selection: $choice.streamIndex) { ForEach(model.state.streams.indices, id: \.self) { i in Text(model.state.streams[i].name.isEmpty ? model.state.streams[i].url : model.state.streams[i].name).tag(i) } } }
+        }
+        if choice.kind == "pandora" {
+            if stations.isEmpty { Text("No Pandora stations on the Chumby yet.").foregroundStyle(.secondary) }
+            else { Picker("Station", selection: $choice.pandoraID) { ForEach(stations) { Text($0.name).tag($0.id) } } }
+        }
+        if choice.kind == "keep" { LabeledContent("Plays", value: alarm.soundText) }
+        if choice.kind != "none" {
+            Picker("Plays for", selection: $alarm.duration) {
+                ForEach([("1", "1 minute"), ("5", "5 minutes"), ("10", "10 minutes"), ("15", "15 minutes"), ("30", "30 minutes"), ("60", "1 hour"), ("120", "2 hours"), ("-1", "Until stopped")], id: \.0) { Text($0.1).tag($0.0) }
+            }
+        }
+        Picker("Snooze", selection: $alarm.snooze) {
+            ForEach(SoundRows.snoozes(including: alarm.snooze), id: \.self) { Text("\($0) min").tag($0) }
+        }
+        Toggle("Stop on its own", isOn: Binding(get: { alarm.auto_dismiss == "1" }, set: { alarm.auto_dismiss = $0 ? "1" : "0" }))
+    }
+    // The usual lengths, and the alarm's own if it's another (set on the Chumby), so the picker never shows nothing.
+    static func snoozes(including s: String) -> [String] {
+        let usual = ["1", "3", "5", "9", "10", "15", "20", "30", "60"]
+        return usual.contains(s) || Int(s) == nil ? usual : (usual + [s]).sorted { (Int($0) ?? 0) < (Int($1) ?? 0) }
+    }
+}
+
 // MARK: - The alarm editor
 struct AlarmEditor: View {
     @EnvironmentObject var model: ChumbyModel
@@ -915,15 +1018,13 @@ struct AlarmEditor: View {
     @State private var date = Date()
     @State private var repeatMode = "daily"
     @State private var day = 1
-    @State private var kind = "beep"
-    @State private var tone = "Beep"
-    @State private var streamIndex = 0
-    @State private var pandoraID = ""
+    @State private var sound = SoundChoice()
     @State private var after = ""
     @State private var confirmDelete = false
     @State private var saving = false
     @State private var problem: String?
     @State private var loaded = false
+    @State private var justOnce = false
 
     var stations: [NamedID] { model.pandoraStations }
     var afterOptions: [(String, String)] {
@@ -950,22 +1051,7 @@ struct AlarmEditor: View {
             a.name = a.name.trimmingCharacters(in: .whitespacesAndNewlines)
             a.enabled = "1"
         }
-        switch kind {
-        case "beep": a.type = "beep"; a.arg = tone; a.param = ""; a.param_description = tone
-        case "none": a.type = "none"; a.arg = ""; a.param = ""; a.param_description = "None"
-        case "stream":
-            guard model.state.streams.indices.contains(streamIndex) else { return .failure(.message("Add a radio stream on the Sounds tab first.")) }
-            let s = model.state.streams[streamIndex]
-            func esc(_ v: String) -> String { v.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;").replacingOccurrences(of: "<", with: "&lt;") }
-            a.type = "audio"; a.arg = "directurl"; a.param_description = s.name.isEmpty ? s.url : s.name
-            a.param = "<stream url=\"\(esc(s.url))\" id=\"\(esc(s.id))\" mimetype=\"\(esc(s.mimetype))\" name=\"\(esc(s.name.isEmpty ? s.url : s.name))\" />"
-        case "pandora":
-            guard !pandoraID.isEmpty else { return .failure(.message("Pick a Pandora station first.")) }
-            let name = stations.first { $0.id == pandoraID }?.name ?? "Pandora"
-            a.type = "audio"; a.arg = "pandora"; a.param = pandoraID + "##" + name; a.param_description = name
-        default: break
-        }
-        if kind == "none" { a.duration = "0" }
+        if let why = sound.apply(to: &a, state: model.state, stations: stations) { return .failure(why) }
         let parts = after.components(separatedBy: "|")
         a.action = parts.first ?? ""; a.action_param = parts.count > 1 ? parts[1] : ""
         return .success(a)
@@ -1052,44 +1138,36 @@ struct AlarmEditor: View {
                     }
                 }
                 }
-                Section("Sound") {
-                    Picker("Plays", selection: $kind) {
-                        Text("Tone").tag("beep"); Text("Radio").tag("stream"); Text("Pandora").tag("pandora"); Text("Silent").tag("none")
-                        if kind == "keep" { Text("Current").tag("keep") }
-                    }
-                    if kind == "beep" {
-                        Picker("Tone", selection: $tone) { ForEach(model.state.tones, id: \.self) { Text($0).tag($0) } }
-                        Button {
-                            Task { do { try await model.api?.post("test", extra: "&tone=" + ChumbyAPI.enc(tone)) } catch { model.fail("test", "Couldn’t play it. \(AlarmWriter.explain(error))") } }
-                        } label: { Label("Play on the Chumby", systemImage: "play.fill") }
-                        .foregroundStyle(.tint)
-                        if let f = model.failed("test") { FailNote(text: f) }
-                    }
-                    if kind == "stream" {
-                        if model.state.streams.isEmpty { Text("Add a radio stream on the Sounds tab first.").foregroundStyle(.secondary) }
-                        else { Picker("Station", selection: $streamIndex) { ForEach(model.state.streams.indices, id: \.self) { i in Text(model.state.streams[i].name.isEmpty ? model.state.streams[i].url : model.state.streams[i].name).tag(i) } } }
-                    }
-                    if kind == "pandora" {
-                        if stations.isEmpty { Text("No Pandora stations on the Chumby yet.").foregroundStyle(.secondary) }
-                        else { Picker("Station", selection: $pandoraID) { ForEach(stations) { Text($0.name).tag($0.id) } } }
-                    }
-                    if kind == "keep" { LabeledContent("Plays", value: alarm.soundText) }
-                    if kind != "none" {
-                        Picker("Plays for", selection: $alarm.duration) {
-                            ForEach([("1", "1 minute"), ("5", "5 minutes"), ("10", "10 minutes"), ("15", "15 minutes"), ("30", "30 minutes"), ("60", "1 hour"), ("120", "2 hours"), ("-1", "Until stopped")], id: \.0) { Text($0.1).tag($0.0) }
-                        }
-                    }
-                    Picker("Snooze", selection: $alarm.snooze) {
-                        ForEach(["1", "3", "5", "9", "10", "15", "20", "30", "60"], id: \.self) { Text("\($0) min").tag($0) }
-                    }
-                    Toggle("Stop on its own", isOn: Binding(get: { alarm.auto_dismiss == "1" }, set: { alarm.auto_dismiss = $0 ? "1" : "0" }))
-                }
+                Section("Sound") { SoundRows(choice: $sound, alarm: $alarm) }
                 Section {
                     // No Backup beep switch: the Chumby saves every alarm with backup 0 whatever it's sent (do_save, since
                     // 11-05: the stock beeper killed the alarm panel), so turning it on here came back off after Save.
                     Picker("Then", selection: $after) { ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) } }
                 } header: { Text("Afterwards") } footer: { if calendarTemplate { Text("Applies to every alarm your calendar sets, now and later.") } }
-                if let original, !calendarTemplate { Section {
+                // One of his repeating alarms: later or another sound for its next ring only, when that's the next ring.
+                if let original, !calendarTemplate, original.when != "once", original.isOn, let block = Optional(model.justOnceBlock(for: original)), block != .hidden {
+                    Section {
+                        if case .note(let why) = block { Text(why).font(.subheadline).foregroundStyle(.secondary) }
+                        else if let n = model.nextRing() {
+                            Button { justOnce = true } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Later or another sound, just this once").foregroundStyle(.tint)
+                                    Text("\(dayWord(n.at)) at \(n.at.formatted(date: .omitted, time: .shortened)) only. It repeats as usual after.").font(.subheadline).foregroundStyle(.secondary)
+                                }
+                            }
+                            .sheet(isPresented: $justOnce) { JustOnceSheet(original: original, due: n.at).environmentObject(model) }
+                        }
+                    } header: { Text("Just this once") }
+                }
+                // A "just this once" goes back to the usual time rather than just going: deleting it alone would leave the
+                // usual one skipped, and neither would ring.
+                if let original, !calendarTemplate, JustOnce.isOne(original), let j = model.state.justOnce(), j.alarm.key == original.key, j.replaces != nil { Section {
+                    Button("Back to the usual time") {
+                        saving = true; problem = nil
+                        Task { let why = await model.undoJustOnce(); saving = false; if let why { problem = why } else { finish() } }
+                    }.foregroundStyle(.tint).disabled(saving)
+                } footer: { Text("The usual alarm rings again and this one goes.") } }
+                else if let original, !calendarTemplate { Section {
                     // The question hangs off the button that asked it, so it points at what was tapped.
                     Button("Delete alarm", role: .destructive) { confirmDelete = true }.foregroundStyle(.red).disabled(saving)
                         .confirmationDialog("Delete this alarm?", isPresented: $confirmDelete, titleVisibility: .visible) {
@@ -1111,10 +1189,7 @@ struct AlarmEditor: View {
         time = Calendar.current.date(bySettingHour: m / 60 % 24, minute: m % 60, second: 0, of: Date()) ?? Date()
         if let d = Alarm.dayKeys.firstIndex(of: alarm.when) { day = d; repeatMode = "day" } else { repeatMode = alarm.when }
         if alarm.when == "once" { date = Date(timeIntervalSince1970: (Double(alarm.time) ?? 0) * 60) }
-        kind = alarm.type == "beep" ? "beep" : alarm.type == "none" ? "none" : alarm.arg == "directurl" ? "stream" : alarm.arg == "pandora" ? "pandora" : "keep"
-        tone = model.state.tones.contains(alarm.arg) ? alarm.arg : (model.state.tones.first ?? "Beep")
-        if kind == "stream", let k = model.state.streams.firstIndex(where: { (!$0.id.isEmpty && alarm.param.contains($0.id)) || alarm.param.contains($0.url.replacingOccurrences(of: "&", with: "&amp;")) }) { streamIndex = k }
-        pandoraID = kind == "pandora" ? (alarm.param.components(separatedBy: "##").first ?? "") : (stations.first?.id ?? "")
+        sound = SoundChoice(alarm, state: model.state, stations: stations)
         after = alarm.action.isEmpty ? "" : alarm.action + "|" + alarm.action_param
     }
 
