@@ -12,7 +12,8 @@ permissions:
   contents: write
 concurrency:
   group: macpro-shots
-  cancel-in-progress: true
+  # The running job always finishes; a newer push only replaces one still waiting (several sessions push the Mac Pro app).
+  cancel-in-progress: false
 jobs:
   shots:
     runs-on: xcode-27
