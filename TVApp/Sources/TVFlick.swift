@@ -1989,6 +1989,11 @@ private struct MoveFrame: ViewModifier, Animatable {
             .clipShape(RoundedRectangle(cornerRadius: r, style: .continuous))
             .frame(width: w, height: h)
             .overlay { if ring { LoadingRing(radius: r).transition(.opacity) } }
+            // Laid out at each frame's own size, at once. The move's spring is the modifier's (its animatableData); with
+            // it handed on to the content as well, the picture and its light each chased every frame's size on a spring of
+            // their own and lagged the frame by up to 33 pt, two rings and a picture offset from both, through the whole
+            // move (the review of 12bb646, open in portrait).
+            .transaction { $0.animation = nil }
     }
 }
 private struct MoveScale: ViewModifier, Animatable {
@@ -1996,7 +2001,7 @@ private struct MoveScale: ViewModifier, Animatable {
     let lean: CGFloat, leanScale: CGFloat
     var animatableData: CGFloat { get { t } set { t = newValue } }
     func body(content: Content) -> some View {
-        content.scaleEffect(1 + (leanScale - 1) * lean * (1 - min(max(t, 0), 1)))
+        content.scaleEffect(1 + (leanScale - 1) * lean * (1 - min(max(t, 0), 1))).transaction { $0.animation = nil }
     }
 }
 private struct MoveOffset: ViewModifier, Animatable {
@@ -2009,7 +2014,7 @@ private struct MoveOffset: ViewModifier, Animatable {
     }
     func body(content: Content) -> some View {
         let p = min(max(t, 0), 1)
-        content.offset(x: lerp(from.minX, to.minX, p), y: lerp(from.minY, to.minY, p))
+        content.offset(x: lerp(from.minX, to.minX, p), y: lerp(from.minY, to.minY, p)).transaction { $0.animation = nil }
     }
 }
 private func between(_ a: CGRect, _ b: CGRect, _ t: CGFloat) -> CGRect {
