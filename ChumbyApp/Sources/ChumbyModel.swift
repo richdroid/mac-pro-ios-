@@ -180,6 +180,21 @@ final class ChumbyModel: ObservableObject {
             if let d = try? Data(contentsOf: Self.cache("rings")), let v = try? JSONDecoder().decode([Ring].self, from: d) { rings = v }
         } else { lastHeard = nil }
         CalendarWake.shared.saved = { [weak self] s in self?.adopt(s) }
+        ScrollHold.onRelease = { [weak self] in self?.releaseHeld() }
+    }
+    // Polled readings that came in while a page was moving under his finger, put on screen the moment it settles: a
+    // row changing height under a page pulled past its end snaps it back instead of letting it spring (2026-11-08).
+    // Only what's polled waits: his own saves, skips and channel choices go straight through, and so does a ring.
+    private var heldSys: (data: Data, fresh: Bool)?
+    private var heldState: (data: Data, state: ChumbyState, recent: Bool)?
+    private var heldChannels: (data: Data, list: ChannelList)?
+    private var heldSongs: History?
+    private struct History: Decodable { let songs: [Song]; let rings: [Ring]? }
+    private func releaseHeld() {
+        if let h = heldSys { heldSys = nil; if var v = try? JSONDecoder().decode(Sys.self, from: h.data) { if !h.fresh { v.ring = sys.ring }; applySys(v, data: h.data, fresh: h.fresh) } }
+        if let h = heldState { heldState = nil; if Date() >= stateHold { applyState(h.state, data: h.data, recent: h.recent) } }
+        if let h = heldChannels { heldChannels = nil; applyChannels(h.list, data: h.data) }
+        if let h = heldSongs { heldSongs = nil; applySongs(h) }
     }
     // A list just saved from elsewhere in the app, as the Chumby now holds it. Kept back while an alarm is open in the editor.
     func adopt(_ s: ChumbyState) {
@@ -235,18 +250,12 @@ final class ChumbyModel: ObservableObject {
             guard Date() >= sysHold, r.data != sysBytes else { return }
             // An old copy from the Mac never starts, snoozes or ends a ring; it's read again until a fresh one says so.
             let fresh = r.age <= 10
-            sysBytes = fresh ? r.data : Data()
             var s = try JSONDecoder().decode(Sys.self, from: r.data)
             if !fresh { s.ring = sys.ring }
-            if s.ringing?.snoozed == true, sys.ringing?.snoozed != true { snoozedAt = sys.ringing == nil ? nil : Date() }
-            if s.ringing == nil, snoozedAt != nil { snoozedAt = nil }
-            if sys.up > s.up, busy != nil { busy = nil }     // back from its restart
-            // An alarm just ended: what it woke him to goes into Pandora's history song by song, so "Woke up to" (and its
-            // widget) reads it again soon after and a few times more, rather than waiting out the usual five minutes.
-            if sys.ringing != nil, s.ringing == nil { songsAfterRing() }
-            // A ring starting, snoozing or ending on the Chumby moves the page as one, never in a single frame.
-            if s.ringing != sys.ringing { withAnimation(Self.ringChange(to: s.ringing)) { sys = s } } else if s != sys { sys = s }
-            try? r.data.write(to: Self.cache("sys"), options: .atomic)
+            // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
+            // snoozing or ending never waits.
+            if ScrollHold.holding, s.ringing == sys.ringing { heldSys = (r.data, fresh); return }
+            applySys(s, data: r.data, fresh: fresh)
         } catch is CancellationError {
         } catch ChumbyError.deviceDown {
             failures = 0; set(\.offline, false); set(\.dead, true); staleReadings = 3
@@ -255,6 +264,20 @@ final class ChumbyModel: ObservableObject {
             if Task.isCancelled { return }
             failures += 1
             if failures >= 2 { set(\.offline, true); switchRoute() }
+        }
+    }
+    private func applySys(_ s: Sys, data: Data, fresh: Bool) {
+        sysBytes = fresh ? data : Data()
+        do {
+            if s.ringing?.snoozed == true, sys.ringing?.snoozed != true { snoozedAt = sys.ringing == nil ? nil : Date() }
+            if s.ringing == nil, snoozedAt != nil { snoozedAt = nil }
+            if sys.up > s.up, busy != nil { busy = nil }     // back from its restart
+            // An alarm just ended: what it woke him to goes into Pandora's history song by song, so "Woke up to" (and its
+            // widget) reads it again soon after and a few times more, rather than waiting out the usual five minutes.
+            if sys.ringing != nil, s.ringing == nil { songsAfterRing() }
+            // A ring starting, snoozing or ending on the Chumby moves the page as one, never in a single frame.
+            if s.ringing != sys.ringing { withAnimation(Self.ringChange(to: s.ringing)) { sys = s } } else if s != sys { sys = s }
+            try? data.write(to: Self.cache("sys"), options: .atomic)
         }
     }
     // Assigns only a different value, so a poll that finds nothing new publishes nothing.
@@ -277,12 +300,17 @@ final class ChumbyModel: ObservableObject {
         // an older copy (the Mac's, just after a save) is never shown over it.
         let recent = r.age < 30
         if !recent && stateConfirmed { return }
-        if recent, !stateConfirmed { stateConfirmed = true }
-        if r.data == stateBytes { return }
+        if r.data == stateBytes { if recent, !stateConfirmed { stateConfirmed = true }; return }
         guard Date() >= stateHold, let s = try? JSONDecoder().decode(ChumbyState.self, from: r.data) else { return }
-        stateBytes = r.data
+        // Not while a page is moving (see releaseHeld). The ring is sys's, which never waits.
+        if ScrollHold.holding { heldState = (r.data, s, recent); return }
+        applyState(s, data: r.data, recent: recent)
+    }
+    private func applyState(_ s: ChumbyState, data: Data, recent: Bool) {
+        if recent, !stateConfirmed { stateConfirmed = true }
+        stateBytes = data
         took(s)
-        try? r.data.write(to: Self.cache("state"), options: .atomic)
+        try? data.write(to: Self.cache("state"), options: .atomic)
     }
     // The Chumby's list, with whatever is still on its way laid over it.
     private func took(_ s: ChumbyState) {
@@ -332,8 +360,12 @@ final class ChumbyModel: ObservableObject {
     private var skipWanted: (skipped: SkippedAlarm?, until: Date)?
     func loadChannels() async {
         guard let api, let r = try? await fetch("chlist", from: api), r.data != channelBytes, let c = try? JSONDecoder().decode(ChannelList.self, from: r.data) else { return }
-        channelBytes = r.data; channelData = c
-        try? r.data.write(to: Self.cache("chlist"), options: .atomic)
+        if ScrollHold.holding { heldChannels = (r.data, c); return }
+        applyChannels(c, data: r.data)
+    }
+    private func applyChannels(_ c: ChannelList, data: Data) {
+        channelBytes = data; channelData = c
+        try? data.write(to: Self.cache("chlist"), options: .atomic)
     }
     func refreshShot() async -> Bool {
         guard let api, let d = try? await api.shot() else { return false }
@@ -368,8 +400,11 @@ final class ChumbyModel: ObservableObject {
         guard let api, Date().timeIntervalSince(histAt) > (force ? 15 : 300) else { return }
         histAt = Date()
         // "rings" is optional: an older Chumby's history has none, and Woke up to then falls back to the alarm list.
-        struct H: Decodable { let songs: [Song]; let rings: [Ring]? }
-        guard let r = try? await fetch("hist", from: api), let h = try? JSONDecoder().decode(H.self, from: r.data) else { return }
+        guard let r = try? await fetch("hist", from: api), let h = try? JSONDecoder().decode(History.self, from: r.data) else { return }
+        if ScrollHold.holding { heldSongs = h; return }
+        applySongs(h)
+    }
+    private func applySongs(_ h: History) {
         if let rr = h.rings, rr != rings {
             rings = rr
             try? JSONEncoder().encode(rr).write(to: Self.cache("rings"), options: .atomic)

@@ -159,7 +159,38 @@ extension View {
     // No scroll bars in any Chumby list or scroll. Inset 7 pt they only hung as a grey line against the cards, by the rail
     // (Richard, 2026-11-05: "the scroll bar is too close to the screen for my eyes", then "the scroll bar dude"); the pages
     // are short and their content shows where you are.
-    func roomyIndicators() -> some View { self.scrollIndicators(.hidden) }
+    // Every list and scroll in the app comes through here, and each says when it's moving: readings from the Chumby
+    // wait while one is, so no row changes height under a page pulled past its end, which snaps the page back in one
+    // move instead of letting it spring (Richard, 2026-11-08, on the Mac Pro app: "it doesnt bounce back naturally its
+    // like a sudden move back", to be fixed "in all apps if it exists").
+    func roomyIndicators() -> some View { self.scrollIndicators(.hidden).modifier(ScrollMoving()) }
+}
+struct ScrollMoving: ViewModifier {
+    @State private var id = UUID()
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+            .onScrollPhaseChange { _, phase in ScrollHold.set(id, moving: phase != .idle) }
+            .onDisappear { ScrollHold.set(id, moving: false) }
+        #else
+        content
+        #endif
+    }
+}
+// Which pages are moving right now. Readings from the Chumby wait while any is, never more than 4 s at a stretch; his
+// own saves, skips and channel changes never wait, and a ring starting or ending never does either (ChumbyModel).
+@MainActor
+enum ScrollHold {
+    private static var moving: Set<UUID> = []
+    private static var since = Date.distantPast
+    static var onRelease: (() -> Void)?
+    static var holding: Bool { !moving.isEmpty && Date().timeIntervalSince(since) < 4 }
+    static func set(_ id: UUID, moving now: Bool) {
+        let was = !moving.isEmpty
+        if now { moving.insert(id) } else { moving.remove(id) }
+        if !was && !moving.isEmpty { since = Date() }
+        if was && moving.isEmpty { onRelease?() }
+    }
 }
 struct GlassRow: View {
     @Environment(\.colorScheme) private var scheme
