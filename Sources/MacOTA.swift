@@ -478,6 +478,7 @@ struct VersionHistorySection: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("\(a.name) version history")
+                    .id(a.id == mine.first?.id ? AnyHashable("versions") : AnyHashable("versions-" + a.id))
                 }
             }
         }

@@ -368,8 +368,10 @@ struct Screen<Content: View>: View {
             .task {
                 // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
-                guard model.pose != "scrolled" || tab == 0 else {
-                    guard side != .left, let to = [1: "open", 2: "usage"][tab] else { return }
+                guard !["scrolled", "versionsrow"].contains(model.pose) || tab == 0 else {
+                    // "versionsrow": Apps with its Version History rows at the top, on the pane that has them.
+                    let rows = model.pose == "versionsrow"
+                    guard side != (rows ? .right : .left), let to = (rows ? [1: "versions"] : [1: "open", 2: "usage"])[tab] else { return }
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     proxy.scrollTo(to, anchor: .top)

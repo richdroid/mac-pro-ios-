@@ -129,7 +129,7 @@ jobs:
                      "displayhold 9001 -tab 0 -pose displayhold" \
                      "screen-shift 9001 -tab 0 -pose screenshift -openScreen YES" "screen-pinch 9001 -tab 0 -pose screenpinch -openScreen YES" \
                      "apps-scrolled 9001 -tab 1 -pose scrolled" "claude-usage 9001 -tab 2 -pose scrolled" \
-                     "otaready 9001 -tab 1 -pose otaready" "otaoffer 9001 -tab 1 -pose otaoffer" "otasent 9001 -tab 1 -pose otasent" "uptodate 9001 -tab 1 -pose uptodate" "otahome 9001 -tab 1 -pose otahome" "history 9001 -tab 1 -pose history" "tab4-macos 9001 -tab 4"; do
+                     "otaready 9001 -tab 1 -pose otaready" "otaoffer 9001 -tab 1 -pose otaoffer" "otasent 9001 -tab 1 -pose otasent" "uptodate 9001 -tab 1 -pose uptodate" "otahome 9001 -tab 1 -pose otahome" "versions 9001 -tab 1 -pose versions" "tab4-macos 9001 -tab 4"; do
               set -- "$1" "$2" $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:$4 "${@:5}"
               sleep 8
@@ -415,7 +415,7 @@ jobs:
             for V in "scrolled 0 -pose scrolled" "apps-scrolled 1 -pose scrolled" "claude-usage 2 -pose scrolled" \
                      "screen-shift 0 -pose screenshift -openScreen YES" "screen-pinch 0 -pose screenpinch -openScreen YES" \
                      "screen-laptop 0 -pose screen -openScreen YES -screenPosture laptop" "displayhold 0 -pose displayhold" \
-                     "otaready 1 -pose otaready" "otaoffer 1 -pose otaoffer" "otasent 1 -pose otasent" "uptodate 1 -pose uptodate" "otahome 1 -pose otahome" "history 1 -pose history"; do
+                     "otaready 1 -pose otaready" "otaoffer 1 -pose otaoffer" "otasent 1 -pose otasent" "uptodate 1 -pose uptodate" "otahome 1 -pose otahome" "versions 1 -pose versions"; do
               set -- $V
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab $2 "${@:3}"
               sleep 8
