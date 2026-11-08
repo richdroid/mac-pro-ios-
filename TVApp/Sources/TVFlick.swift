@@ -529,9 +529,9 @@ struct FlickScreen: View {
     // other page, never at the top (Richard, 2026-11-02: "controls r hidden at top").
     @ToolbarContentBuilder var footBar: some ToolbarContent {
         #if os(iOS)
+        // One group, so the two keep to one glass pill under the card rather than one at each corner.
         ToolbarItemGroup(placement: .bottomBar) {
             if let previous { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
-            Spacer()
             let stops = flown
             Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : "Close", systemImage: "xmark") }
         }
@@ -966,6 +966,9 @@ struct FlickScreen: View {
         let ins = g.safeAreaInsets
         let screen = CGRect(x: -ins.leading, y: -ins.top, width: g.size.width + ins.leading + ins.trailing, height: g.size.height + ins.top + ins.bottom)
         var look = screen, hand = screen
+        // Open in portrait the ‹ and X sit in the system's bar along the foot: the card waits above it, never under it
+        // (the review of e59620e: the bar sat over the card's title strip).
+        if tabsAtFoot { hand.size.height -= max(ins.bottom, TVLook.footRoom) }
         #if os(iOS)
         if #available(iOS 27.1, *), let crease = g.reservedRegions(kind: .division).first?.frame, crease.width > 0 || crease.height > 0 {
             if crease.height >= crease.width {
@@ -1236,15 +1239,18 @@ struct FlickScreen: View {
             }
             // The card is opaque and exactly this shape, so its shadows come from the shape. Lifted, it rises off the
             // table: a bigger, lower shadow. In the air the shadow is gone by 200 ms.
+            // The lift's and the lean's own springs are scoped to the shadow and the rotation alone. Put on the whole
+            // chain (`.animation(value:)`), they took `becoming` with them when the card was let go (the lean goes to 0
+            // and the lift ends on the release frame), so the card reached the TV on the flight's spring still a card and
+            // became its picture a beat later, on theirs (the review of e59620e).
             .background {
                 RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.black)
                     .shadow(color: glow.opacity(0.65 * rim), radius: 4 + 14 * rim)
                     .shadow(color: .black.opacity(flown ? 0 : lifted ? 0.55 : 0.45), radius: lifted ? 30 : 18, y: lifted ? 22 : 10)
                     .opacity(morph ? 0 : 1)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: lifted)
             }
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: lifted)
-            .rotationEffect(.degrees(returning || flown ? 0 : lean))
-            .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.62), value: lean)
+            .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.62)) { $0.rotationEffect(.degrees(returning || flown ? 0 : lean)) }
             // Tipped into the throw and flat again as it lands in the screen.
             .keyframeAnimator(initialValue: 0.0, trigger: thrown) { c, a in
                 c.rotation3DEffect(.degrees(a), axis: (x: 1, y: 0, z: 0), perspective: 0.5)
@@ -1467,11 +1473,11 @@ struct FlickScreen: View {
             // else changes in this update: the bar's buttons went with `toRemote` and the bar itself stays, in every
             // posture, so no layout pass can swallow the spring's frames (the review of 9c34a08: folded and in portrait
             // the picture stood still through the stage's fade and leapt to the Remote in one frame).
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) {
-                toRemote = true
-                // The stage gone in 0.12 s, before the keys come, so the two never overlap.
-                withAnimation(.easeOut(duration: 0.12)) { arrived = false }
-            }
+            // Two animations side by side, never one inside the other: nested, the inner 0.12 s ease took the whole
+            // update with it and the picture crossed to the Remote in three frames (the review of e59620e, all postures).
+            // The stage gone in 0.12 s, before the keys come, so the two never overlap.
+            withAnimation(.easeOut(duration: 0.12)) { arrived = false }
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { toRemote = true }
             // The Remote's picture can still settle as its page lays out, so the move keeps aiming at where it is now,
             // place and size, until the spring has run its course and the picture has stopped moving. Once the screen
             // is on it, a late change eases across rather than stepping.
