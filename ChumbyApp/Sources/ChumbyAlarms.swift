@@ -456,7 +456,6 @@ struct AlarmsTab: View {
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
     @State private var editing: EditTarget?
-    @State private var day: DayTarget?
     // Open, the right pane holds whatever would otherwise be a sheet, so nothing sits across the fold.
     enum Pane: Equatable { case schedule, settings, editor(Alarm?), day(String), template }
     @State private var pane: Pane = .schedule
@@ -469,7 +468,6 @@ struct AlarmsTab: View {
     // from the foot with no tie to what was tapped (Richard, 2026-11-07: "the animation to edit like the calendar alarm
     // sucks").
     @Namespace private var editNS
-    struct DayTarget: Identifiable { let id: String }
 
     var dismissed: Set<String> { Set(dismissedRaw.split(separator: "\n").map(String.init)) }
     var missed: [ChumbyState.Missed] { model.state.missed.filter { Date().timeIntervalSince1970 - $0.at < 86400 && !dismissed.contains($0.id) }.suffix(3).reversed().map { $0 } }
@@ -485,93 +483,21 @@ struct AlarmsTab: View {
     }
     func show(_ p: Pane) { withAnimation(.snappy) { pane = p } }
     func edit(_ a: Alarm?) { if wide { show(.editor(a)) } else { editing = EditTarget(alarm: a) } }
-    // With the side column, a day is a page in the content column like Calendar settings, so no sheet's corner sits under
-    // the rail's clock. With the bars across it's a sheet the height of what's in it.
-    func openDay(_ k: String) {
-        if wide { show(.day(k)) } else if rail {
-            dayPage = k
-            model.alarmsPageTitle = wake.plan.first { $0.key == k }.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "That day"
-            anchor(for: k)
-            model.alarmsPage = true
-        } else { day = DayTarget(id: k) }
-    }
-    func openSettings() { if wide { show(.settings) } else { dayPage = nil; model.alarmsPageTitle = "Calendar settings"; anchor(for: "calendar"); model.alarmsPage = true } }
+    // Folded, and open in portrait, a day is a page pushed over Alarms like Calendar settings; open in landscape it fills
+    // the right pane.
+    func openDay(_ k: String) { if wide { show(.day(k)) } else { dayPage = k; model.alarmsPage = true } }
+    func openSettings() { if wide { show(.settings) } else { dayPage = nil; model.alarmsPage = true } }
     @State private var dayPage: String?
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
     @State private var scrollTo: String?
-    // With the Duo's side column, Calendar settings (or a calendar day) is a page swapped in inside this tab, never a push: a push
-    // carried the rail off with the page. It grows out of the row that opened it and shrinks back into it, the iOS zoom
-    // (Richard, 2026-11-07: "the animation in chumby app to edit like the calendar alarm sucks" about a slide); the list
-    // fades under it, kept as it was, so coming back finds it where it was left. The page is put in the tree a frame
-    // before it starts to grow, so every row's switch and stepper is drawn from the zoom's first frame, not after it lands.
-    var rail: Bool { model.railWidth >= 44 }
-    // The page in the tree, and the page grown to full size; the row it grew from, as a point in this tab's frame.
-    @State private var pageMounted = false
-    @State private var pageShown = false
-    @State private var zoomAnchor: UnitPoint = .center
-    @State private var tabFrame: CGRect = .zero
-    static let zoom = Animation.spring(duration: 0.42, bounce: 0.12)
-    func anchor(for id: String) {
-        guard let r = ZoomFrames.shared.frames[id], tabFrame.width > 0 else { zoomAnchor = .center; return }
-        zoomAnchor = UnitPoint(x: min(max((r.midX - tabFrame.minX) / tabFrame.width, 0), 1), y: min(max((r.midY - tabFrame.minY) / tabFrame.height, 0), 1))
-    }
+    // Calendar settings or a day over Alarms is a real push, with the system's own Back and its edge swipe, laid out by
+    // iOS the Duo's way (the top of the side strip folded and open in landscape, the top bar open in portrait): Apple's
+    // HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the back button is retarded and not iphone duo
+    // standard". The page grows out of the row that opened it and shrinks back into it (the zoom, 11-07).
     var body: some View {
-        let swapped = rail && model.alarmsPage
-        ZStack {
-            // Never clipped or masked, so it stays drawn whole while it fades.
-            ScrollViewReader { proxy in
-                page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
-            }
-            // Fades as the page grows over it, back as the page shrinks away.
-            .opacity(pageShown ? 0 : 1)
-            .allowsHitTesting(!pageMounted).accessibilityHidden(pageMounted)
-            // It brings no sea of its own: the tab's stays as it is.
-            if pageMounted {
-                // The zoom's clip, scale and fade go on a frame around the page, never on the list itself: clipped, a
-                // list no longer runs under the top edge, and its title sat 33 pt lower than the tab's (build 185).
-                ZStack {
-                    Group {
-                        if let k = dayPage {
-                            List { CalendarDaySheet(key: k, close: { model.alarmsPage = false }, done: false).listRowBackground(GlassRow()) }
-                                .seaList()
-                        } else {
-                            CalendarWakeSettings(ownSea: false)
-                        }
-                    }
-                    // A swipe in from the left edge goes back, as it would from a pushed page.
-                    .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { g in
-                        if g.startLocation.x < 40 && g.translation.width > 80 && abs(g.translation.height) < g.translation.width { model.alarmsPage = false }
-                    })
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: pageShown ? 0 : 28, style: .continuous))
-                .scaleEffect(pageShown ? 1 : 0.1, anchor: zoomAnchor)
-                .opacity(pageShown ? 1 : 0)
-                .allowsHitTesting(pageShown)
-            }
-        }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { tabFrame = $0 }
-        .onChange(of: swapped) { _, on in
-            if on {
-                pageMounted = true
-                // Drawn once at its small size, then grown: the zoom's first frame already holds the whole page.
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 16_000_000)
-                    guard model.alarmsPage else { return }
-                    withAnimation(Self.zoom) { pageShown = true }
-                    // Back once the page can be seen (it starts near clear), not two frames before it (build 185).
-                    try? await Task.sleep(nanoseconds: 120_000_000)
-                    if model.alarmsPage { model.alarmsPageShown = true }
-                }
-            } else {
-                model.alarmsPageShown = false
-                withAnimation(Self.zoom) { pageShown = false }
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 450_000_000)
-                    if !model.alarmsPage { pageMounted = false; dayPage = nil }
-                }
-            }
+        ScrollViewReader { proxy in
+            page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
         }
     }
     // Folded, top to bottom as he uses it: what rings next (with Skip), then the calendar's alarms, then his own, then a
@@ -582,8 +508,7 @@ struct AlarmsTab: View {
     // and "Woke up to" to Sounds.
     var page: some View {
         TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
-            // Add alarm is never a loose circle: by the rail it's RootView's foot bar; with the tabs across the foot, the same bar
-            // sits centred just above them (below).
+            // Add alarm is never a loose circle: it's the last row of My alarms (below).
             PageTitle("Alarms")
             ReachRow()
             if model.sys.ringing != nil { Section { RingingCard() } }
@@ -621,17 +546,11 @@ struct AlarmsTab: View {
         // A nap set or called off moves anything it touches (the next alarm, the chip) in one spring, never in one frame.
         .animation(.snappy, value: model.napDue)
         .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
-        // Pushed only with the bars across, where the system's own Back is used.
-        .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !rail }, set: { model.alarmsPage = $0 })) {
-            // Back is the foot bar's first item there (RootView), never also the system's at the top; the edge swipe stays.
-            CalendarWakeSettings().zoomed(from: "calendar", in: editNS)
-                .navigationBarBackButtonHidden(true)
-                .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { g in
-                    if g.startLocation.x < 40 && g.translation.width > 80 && abs(g.translation.height) < g.translation.width { model.alarmsPage = false }
-                })
+        .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !wide }, set: { model.alarmsPage = $0 })) {
+            Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
+                .zoomed(from: dayPage ?? "calendar", in: editNS)
         }
         .sheet(item: $editing) { t in AlarmEditor(original: t.alarm).environmentObject(model).zoomed(from: t.id, in: editNS) }
-        .sheet(item: $day) { d in CalendarDaySheet(key: d.id).environmentObject(model).zoomed(from: d.id, in: editNS) }
         .refreshable { await model.loadState() }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
         .onChange(of: wide) { _, _ in pane = .schedule }
@@ -681,7 +600,7 @@ struct AlarmsTab: View {
                     try? await Task.sleep(nanoseconds: 2_000_000_000); openSettings()
                     try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { model.alarmsPage = false }
                     try? await Task.sleep(nanoseconds: 1_200_000_000); if let k = wake.plan.first?.key { openDay(k) }
-                    try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { model.alarmsPage = false; day = nil }
+                    try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { model.alarmsPage = false }
                     try? await Task.sleep(nanoseconds: 1_200_000_000); if let a = mine.first { edit(a) }
                     try? await Task.sleep(nanoseconds: 2_500_000_000); if wide { show(.schedule) } else { editing = nil }
                     try? await Task.sleep(nanoseconds: 1_200_000_000); scrollTo = "nap"
@@ -1302,16 +1221,10 @@ struct AlarmEditor: View {
 }
 
 // The iOS zoom between a row and what it opens: the row is the source, the sheet or page grows out of it.
-// Where each row is on screen, for the page that grows out of it by the rail. Not published: nothing redraws for it.
-@MainActor final class ZoomFrames {
-    static let shared = ZoomFrames()
-    var frames: [String: CGRect] = [:]
-}
 extension View {
     @ViewBuilder func zoomSource(_ id: String, in ns: Namespace.ID) -> some View {
         #if os(iOS)
         matchedTransitionSource(id: id, in: ns)
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ZoomFrames.shared.frames[id] = $0 }
         #else
         self
         #endif

@@ -123,10 +123,6 @@ final class ChumbyModel: ObservableObject {
     // Folded, Calendar settings pushed inside Alarms. Kept here so its Back can sit in the rail, outside the page that slides.
     @Published var alarmsPage = false
     // The page shown in place of Alarms ("Calendar settings", or the day's name), for its bar's title.
-    @Published var alarmsPageTitle = "Calendar settings"
-    // By the rail, true from the frame the page starts to zoom in until it starts to zoom out: the side bar's Back
-    // follows it, never showing before the page is there.
-    @Published var alarmsPageShown = false
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []
     private var failureClear: Task<Void, Never>?

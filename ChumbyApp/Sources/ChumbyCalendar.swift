@@ -457,24 +457,34 @@ struct WordsGroup: View {
         .onChange(of: open) { _, o in if !o { add() } }
     }
 }
-// Folded, its own page. With the Duo's side column it slides in inside the Alarms tab (AlarmsTab), with no bar of its own:
-// Back sits in the rail where + was (RootView), so the rail never moves. With the bars across it's pushed, with the system's Back.
+// Folded, and open in portrait, its own page pushed over Alarms, with the system's Back (laid out by iOS the Duo's
+// way) and the system's title; open in landscape its sections fill the right pane (AlarmsTab).
 struct CalendarWakeSettings: View {
     @EnvironmentObject var model: ChumbyModel
-    // Pushed, it brings its own sea. Slid in inside Alarms it brings none, so the tab's sea never moves or changes.
-    var ownSea = true
-    var rail: Bool { model.railWidth >= 44 }
     var body: some View {
-        List {
-            if rail { PageTitle("Calendar settings") }
-            CalendarSettingsSections().listRowBackground(GlassRow())
-        }
+        List { CalendarSettingsSections().listRowBackground(GlassRow()) }
         .seaList()
-        .overSea(shown: ownSea)
-        .toolbar(rail ? .hidden : .visible, for: .navigationBar)
+        .overSea()
+        .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .navigationTitle("Calendar settings")
+        .navigationTitle("Calendar settings").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .principal) { Text("Calendar settings").font(.custom("Trebuchet MS", size: 18).weight(.bold)) } }
+    }
+}
+// A calendar day pushed over Alarms (folded, and open in portrait): the day's own settings, with the system's Back.
+struct CalendarDayPage: View {
+    @EnvironmentObject var model: ChumbyModel
+    @ObservedObject private var wake = CalendarWake.shared
+    let key: String
+    var title: String { wake.plan.first { $0.key == key }.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
+    var body: some View {
+        List { CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false, titled: false).listRowBackground(GlassRow()) }
+        .seaList()
+        .overSea()
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .principal) { Text(title).font(.custom("Trebuchet MS", size: 18).weight(.bold)) } }
     }
 }
 
@@ -499,8 +509,9 @@ struct CalendarDaySheet: View {
     let key: String
     // Set when it fills the open Duo's right pane, or the folded content column, instead of being a sheet.
     var close: (() -> Void)?
-    // Folded with the side column, Back in the rail closes it, so it has no Done of its own.
+    // Pushed, the system's Back closes it, so it has no Done of its own, and the page's title is the system's (titled false).
     var done = true
+    var titled = true
     var item: PlannedWake? { wake.plan.first { $0.key == key } }
     var title: String { item.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
     var edit: DayEdit { wake.rules.dayEdits[key] ?? DayEdit() }
@@ -654,7 +665,7 @@ struct CalendarDaySheet: View {
     var body: some View {
         if let close {
             Group {
-                PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
+                if titled { PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } } }
                 sections
             }
             .onAppear { labelText = edit.label ?? ""; loadOwn() }

@@ -296,23 +296,14 @@ struct RootView: View {
             ZStack {
                 // The sea's own base colour under everything, so the first frame matches the launch screen.
                 ChumbyPalette.sea(scheme == .dark)[0].ignoresSafeArea()
-                // The Duo's side column (clock, Wi-Fi and the tab bar) is the trailing safe area: with it, pages over Alarms zoom in.
+                // The Duo's side column (clock, Wi-Fi and the tab bar) is the trailing safe area.
                 Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { model.railWidth = $0 }
-                // -1 is the side bar's Back: it never becomes the tab, it closes the page open over Alarms.
-                TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 == -1 { model.alarmsPage = false } else { model.tab = $0 } })) { t in
+                TabView(selection: TabReset.binding($model.tab) { t in
                     resets[t, default: 0] += 1
                     if t == 2 { model.alarmsPage = false }
                     // Home again: the octopus answers, as it does to a tap.
                     if t == 0 { model.homePoke = Date() }
                 }) {
-                    // Back is the side bar's first item, above the tabs, only while a page (Calendar settings, a day) is
-                    // open over Alarms, as the TV and Mac Pro apps have it (Richard, 2026-11-07: "back should be on side
-                    // bar"); with the bar along the foot it's that bar's first item. Never a capsule floating over the
-                    // page's last rows. It comes with the page, not before it: by the rail the page zooms in, and Back
-                    // shows as the zoom starts.
-                    if model.tab == 2 && (model.railWidth >= 44 ? model.alarmsPageShown : model.alarmsPage) {
-                        Tab(value: -1) { Color.clear } label: { tabLabel("Back", "chevron.backward") }
-                    }
                     Tab(value: 0) { NavigationStack { HomeTab().tabPage(0, model) }.id(resets[0, default: 0]) } label: { tabLabel("my chumby", asset: "OctoTab", fit: 34) }
                     Tab(value: 1) { NavigationStack { ChannelsTab().tabPage(1, model) }.id(resets[1, default: 0]) } label: { tabLabel("channels", "tv") }
                     Tab(value: 2) { NavigationStack { AlarmsTab().tabPage(2, model) }.id(resets[2, default: 0]) } label: { tabLabel("alarms", "alarm") }
