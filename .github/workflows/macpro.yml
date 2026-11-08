@@ -153,6 +153,30 @@ jobs:
           slowfilms 1 ""
           film scrollfilm 1 30 -tab 0 -pose scrollfilm
           swipefilm versionsfling 1 0.45 0.8 0.28 -tab 1 -pose versionsfilm
+          # The hinge moved with a page up (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios across
+          # everything"): both displays filmed while a pushed page and then Status are flung, the phone opened, turned,
+          # half closed and closed again, so each change is judged moving, place and state kept or not.
+          posturefilm() {
+            local name=$1; shift
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/macpro-$name-outer.mp4 > /dev/null 2>&1 & R1=$!
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/macpro-$name-inner.mp4 > /dev/null 2>&1 & R3=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep 10
+            $D "$DEVICE" drag 0.45 0.8 0.3 0.12 || true; sleep 2
+            $D "$DEVICE" pose open || true; sleep 5
+            $D "$DEVICE" drag 0.5 0.8 0.3 0.12 || true; sleep 2
+            $D "$DEVICE" rotate 1 || true; sleep 5
+            $D "$DEVICE" drag 0.5 0.8 0.3 0.12 || true; sleep 2
+            $D "$DEVICE" rotate 3 || true; sleep 5
+            $D "$DEVICE" pose partial || true; sleep 5
+            $D "$DEVICE" pose closed || true; sleep 5
+            kill -INT $R1 $R3; wait $R1 $R3
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          posturefilm posture-versions -tab 1 -pose versionsfilm
+          posturefilm posture-status -tab 0
           ls dist
       - name: Publish
         if: always()
