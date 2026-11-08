@@ -69,8 +69,14 @@ jobs:
             # come up, so the first search shot of a posture is thrown away and taken again (the review of 9c34a08: no
             # keyboard in either open-portrait search shot, the first posture shot).
             shot search$x $d 12 $M -tab 1 -pose search
+            # Whether the field took the keyboard and whether it let it go, from the app's own word (what=focus in the
+            # mock's log), so a shot with no keyboard is read, not guessed (01fc626: none in open portrait, cause unknown).
+            rm -f /tmp/tv-home-applied.log
             shot search$x $d 12 $M -tab 1 -pose search
+            grep focus /tmp/tv-home-applied.log > dist/tv-focus-search$x.log 2>/dev/null || echo "no focus line" > dist/tv-focus-search$x.log
+            rm -f /tmp/tv-home-applied.log
             shot remotesearch$x $d 12 $M -tab 0 -pose remotesearch
+            grep focus /tmp/tv-home-applied.log > dist/tv-focus-remotesearch$x.log 2>/dev/null || echo "no focus line" > dist/tv-focus-remotesearch$x.log
             # A show's page, on the real bridge's answers.
             curl -s $M/real/reset > /dev/null; shot realseries-end$x $d 14 $M/real -tab 3 -pose realseries
             # The flick's stage with the card in the hand, and the catch filmed.

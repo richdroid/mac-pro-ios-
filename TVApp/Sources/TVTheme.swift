@@ -13,6 +13,9 @@ enum TVLook {
     static let press = Animation.spring(duration: 0.25, bounce: 0.25)
     // The side bar's glass and its margin from the display's edge, folded and open alike.
     static let railRoom: CGFloat = 76
+    // The tab bar's room along the foot, open in portrait (its glass and its margin), for a page laid over everything to
+    // stop short of; the measured foot inset is used when it's more.
+    static let footRoom: CGFloat = 92
     // A form row in the same glass as the cards, never the system's opaque grey over the living background.
     static var glassRow: some View { Rectangle().fill(.ultraThinMaterial) }
 }

@@ -285,11 +285,10 @@ extension View {
     func topFade() -> some View { modifier(TopFade()) }
 }
 
-// The flick's screen over the tabs, stopping short of whichever bar holds Back: the side bar while choosing (folded and
-// open), and open in portrait the tab bar along the foot, for the whole flick, so its Back is the one way back from the
-// show's page, the streams and the stage (Richard, 2026-11-07: "back should be on side bar"; the review of 9c34a08:
-// a "‹ Back" foot bar and a pill at the top of the stage there instead). Under the stage the pages are black, so the bar
-// is the only thing beside it.
+// The flick's screen over the tabs, stopping short of whichever bar holds Back while choosing: the side bar folded and
+// open, and open in portrait the tab bar along the foot, so its Back is the way back from the show's page and the
+// streams (Richard, 2026-11-07: "back should be on side bar"; the review of 9c34a08: a "‹ Back" foot bar there
+// instead). The stage covers everything, in every posture.
 private struct FlickHost: View {
     @Environment(TVModel.self) var model
     @Environment(\.horizontalSizeClass) private var size
@@ -301,7 +300,7 @@ private struct FlickHost: View {
             // Measured from the screen's own edge, not inside the tab view's trailing inset, which folded is far wider
             // than the bar (r19: an 88 pt strip of the page underneath showed between the two).
             .padding(.trailing, model.flickChoosing && !foot ? TVLook.railRoom : 0)
-            .padding(.bottom, foot ? model.footBarRoom : 0)
+            .padding(.bottom, model.flickChoosing && foot ? max(model.footBarRoom, TVLook.footRoom) : 0)
             .ignoresSafeArea(.container, edges: foot ? [.trailing, .bottom] : .trailing)
             .animation(.spring(response: 0.4, dampingFraction: 0.9), value: model.flickChoosing)
     }
@@ -616,6 +615,11 @@ struct SendBar: View {
                 .focused($focused).autocorrectionDisabled().submitLabel(link ? .send : .search)
                 .hidesTabBar(while: focused, "send")
                 .onChange(of: draft.focusRequest) { _, _ in focused = true; draft.wantsFocus = false }
+                // For the build's shots: whether the field took the keyboard, and when it let it go, in the mock's log,
+                // so a search shot with no keyboard can be read (the field never focused, or lost it) rather than guessed.
+                .onChange(of: focused) { _, on in
+                    if UserDefaults.standard.string(forKey: "pose") != nil { Task { _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=focus&on=\(on ? 1 : 0)"), timeout: 3) } }
+                }
                 // Words are already being searched as they're typed, so Return only puts the keyboard away.
                 .onSubmit { if link { submit() } else { focused = false } }
                 .task {
@@ -1260,9 +1264,11 @@ struct RemoteTab: View {
                 // show started): sized, as open, for the bar and the episode line under it, which sits there as open does
                 // rather than as a loose glass circle over the side bar (review of dfd490e: Episodes and the eye floated
                 // there). The pad gives up the height, down to 110 pt while something plays. The transport row is in this
-                // column too, so its room is kept as well while nothing is on (the review of 9c34a08: 343 pt idle, 275 pt
-                // with anything on, the picture shrinking the moment a show started).
-                PictureColumn(spacing: 14, under: Self.underRoom + Self.transportRoom) {
+                // column too, so its room is kept as well while nothing is on, and only then: it's in the keys' own height
+                // once something is (the review of 9c34a08: 343 pt idle, 275 pt with anything on, the picture shrinking the
+                // moment a show started; 01fc626 kept the room on top of the row itself, and the picture was 155 pt with a
+                // film on).
+                PictureColumn(spacing: 14, under: Self.underRoom + (session ? 0 : Self.transportRoom)) {
                     // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
                     // Always there, as open: hidden, it shows what's on blurred behind its own "Show the TV's screen", and
                     // a long press on it has the same, so nothing for it is left in the bar.
@@ -1284,9 +1290,11 @@ struct RemoteTab: View {
         // ends (r33: 7 pt up and down with the subtitle).
         .navigationSubtitle(state.isEmpty ? "\u{00A0}" : state)
         // The keyboard would slice the tab rail and leave half a button peeking above it, folded or open: the rail steps
-        // aside while typing, and comes back with the keyboard's going.
+        // aside while typing, and comes back with the keyboard's going. Not the bar along the foot, open in portrait: the
+        // keyboard simply covers it, and hiding it there re-laid the page out under the field as it took the keyboard,
+        // which never came up (the reviews of 9c34a08 and 01fc626: no keyboard in any open-portrait search shot).
         #if os(iOS)
-        .toolbarVisibility(typing || model.typingIn != nil ? .hidden : .automatic, for: .tabBar)
+        .toolbarVisibility((typing || model.typingIn != nil) && !(size == .regular && !panes) ? .hidden : .automatic, for: .tabBar)
         #endif
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
@@ -3027,13 +3035,18 @@ extension View { func underFlick(barHidden: Bool = false) -> some View { modifie
 // The Remote (not `enabled`) has its own, which follows `typingIn` too.
 struct TypingHidesTabBar: ViewModifier {
     @Environment(TVModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var size
+    @Environment(\.paneLayout) private var panes
     var enabled = true
     // The side bar's inset while it's there, and the inset now.
     @State private var beside: CGFloat = 0
     @State private var now: CGFloat = 0
     func body(content: Content) -> some View {
         if enabled {
-            let away = model.typingIn != nil
+            // Only a side bar steps aside. The bar along the foot (open in portrait) is simply covered by the keyboard;
+            // hidden, it re-laid the page out as the field took the keyboard, and the keyboard never came (the reviews of
+            // 9c34a08 and 01fc626: no keyboard in any open-portrait search shot, in every other posture it was there).
+            let away = model.typingIn != nil && !(size == .regular && !panes)
             content
                 .padding(.trailing, away ? max(0, beside - now) : 0)
                 .background {

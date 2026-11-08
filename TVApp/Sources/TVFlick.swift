@@ -375,8 +375,10 @@ struct FlickScreen: View {
             // the moving picture in the move's first frame, and the picture leapt to the Remote instead of moving (r27,
             // r28 open; the review of 9c34a08 found the same one-frame jump folded and in portrait, where the bar was
             // still being hidden for the move). The Remote's eye is on its picture now, so nothing here becomes it.
-            // Open in portrait there's no side bar: Back in the bottom bar does the pill's work, so there's no X at all.
-            .toolbar { if barShown && !choosing && !toRemote && !tabsAtFoot { bar } }
+            // Open in portrait there's no side bar: the stage covers the tab bar (the Remote comes up under the stage
+            // 0.6 s in, and a bar left in view would show its tab change), so the same ‹ and X sit in the system's bar
+            // along the foot, where the tab bar was. While choosing, the tab bar stays and its Back is the way back.
+            .toolbar { if barShown && !choosing && !toRemote { if tabsAtFoot { footBar } else { bar } } }
             .environment(\.pageBar, pageBar)
             // Open, the show's one big key sits at the left pane's foot, level with Back at the right's: the same height,
             // the same baseline. Flowing under the blurb it landed 34 pt above Back, two bars that didn't line up (r29).
@@ -390,13 +392,11 @@ struct FlickScreen: View {
             }
             .onChange(of: choosing && !leaving, initial: true) { _, c in model.flickChoosing = c }
             // The side bar's Back steps back through the choosing (streams → episodes → out), as the page's own bar did.
-            // Open in portrait the tab bar along the foot stays under the whole flick, and its Back is the only way back
-            // (Richard, 2026-11-07: "back should be on side bar"; the review of 9c34a08: a "‹ Back" foot bar on the streams
-            // and show pages, an X and ‹ pill at the top of the stage, and Back in the bottom bar one page earlier, three
-            // homes in one flow). There it stays through the stage too, as the pill's ‹ and X: back a step, out, or, once
-            // the card has left the hand, calling the throw off.
-            .onChange(of: (choosing || (tabsAtFoot && step == .flick && !toRemote)) && !leaving, initial: true) { _, on in
-                if on { model.pushBack(railBackID) { if flown { callOff() } else if let previous { go(previous) } else { leave() } } } else { model.popBack(railBackID) }
+            // Open in portrait the tab bar along the foot stays under the show's page and the streams, and its Back is
+            // the way back there too (Richard, 2026-11-07: "back should be on side bar"; the review of 9c34a08: a "‹ Back"
+            // foot bar on those pages instead, with Back in the bottom bar one page earlier).
+            .onChange(of: choosing && !leaving, initial: true) { _, on in
+                if on { model.pushBack(railBackID) { if let previous { go(previous) } else { leave() } } } else { model.popBack(railBackID) }
             }
             .onChange(of: !choosing && !toRemote && !leaving, initial: true) { _, c in model.flickCovering = c }
             .onDisappear { model.flickChoosing = false; model.flickCovering = false; model.popBack(railBackID) }
@@ -407,12 +407,13 @@ struct FlickScreen: View {
                 if on { Task { try? await Task.sleep(nanoseconds: 600_000_000); prepareRemote() } }
                 else if !flown && !toRemote { backToThrownFrom() }
             }
-            // Another tab, from the side bar while choosing (or from the bottom bar under the stage, open in portrait),
-            // leaves the page for it.
+            // Another tab, from the side bar while choosing, leaves the page for it.
             .onChange(of: model.tab) { _, t in
-                // Its own putting back of the page he came from isn't him picking a tab.
+                // Its own putting back of the page he came from isn't him picking a tab, nor is the Remote being brought up
+                // under the stage (prepareRemote; in 01fc626 that took the stage down 0.6 s after it opened, in portrait).
                 if t == restoredTab { restoredTab = nil; return }
-                if (choosing || (tabsAtFoot && step == .flick && !flown && !toRemote)) && !leaving { leave() }
+                if model.flickHandoff { return }
+                if choosing && !leaving { leave() }
             }
             .toolbarBackground(.hidden, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
@@ -524,6 +525,20 @@ struct FlickScreen: View {
             .opacity(arrived && !toRemote ? 1 : 0)
     }
 
+    // Open in portrait: the same ‹ and X in the system's bar along the foot of the stage, where the tab bar is on every
+    // other page, never at the top (Richard, 2026-11-02: "controls r hidden at top").
+    @ToolbarContentBuilder var footBar: some ToolbarContent {
+        #if os(iOS)
+        ToolbarItemGroup(placement: .bottomBar) {
+            if let previous { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
+            Spacer()
+            let stops = flown
+            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : "Close", systemImage: "xmark") }
+        }
+        #else
+        bar
+        #endif
+    }
     @ToolbarContentBuilder var bar: some ToolbarContent {
         if let previous {
             ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
@@ -1058,7 +1073,11 @@ struct FlickScreen: View {
     // The TV's screen on the stage. Once the card lands it *is* the card's picture, full bleed, with the light lapping its
     // edge while the TV starts it; then, going to the Remote, one number runs from here to the Remote's own picture of
     // the TV, which shows the same poster and the same light, so the one picture carries on there (§2.5a C4).
-    var screenLayer: some View { Moving(t: toRemote ? 1 : 0) { screenLayer(move: $0) } }
+    // The move is the ordinary animation of the layer's own frame, offset, corners and scale from one place to the other,
+    // inside goRemote's spring. It was driven through a number on a view conforming to Animatable, which never
+    // interpolated here: the stage faded frame by frame while the picture stood still, then stood on the Remote in the
+    // next frame, in every posture (the reviews of 9c34a08 and 01fc626).
+    var screenLayer: some View { screenLayer(move: toRemote ? 1 : 0) }
     func screenLayer(move t: CGFloat) -> some View {
         let slot = toRemote || t > 0 ? between(tvFrame, remoteSlot, t) : tvFrame
         // The Remote's picture's own corners by the end of the move, so landing on it changes nothing but place and size.
@@ -1891,24 +1910,20 @@ struct TVPhaseDots: View {
 // A flash across the TV's screen as it takes something on.
 
 // Hands its content how far along a move it is, every frame, so what's drawn can be worked out from that one number.
-private struct Moving<C: View>: View, Animatable {
-    var t: CGFloat
-    @ViewBuilder let content: (CGFloat) -> C
-    var animatableData: CGFloat { get { t } set { t = newValue } }
-    var body: some View { content(t) }
-}
 // The flying card's picture, sized inside the card's own scale: `scale` is the card's scale as it is in this frame (the
 // same animation drives both) and `amount` how far it has turned from the card into the TV's screen, so on screen it
 // runs from the card's size to `tv`, whatever the card's scale is doing on its way.
 // The card turning into the TV's picture, from one number that runs with the flight (0 in the hand, 1 at the TV). The
-// card stays a card for the first third of the way, then crosses into its picture over the next sixth, and the picture's
-// frame grows from the card's to the TV's over the rest, eased, so it's the TV's size as it arrives.
+// card stays a card for the first third of the way, then is its picture (a cut, within one frame: the thrown card
+// covers most of the way in two frames, so a crossfade there drew the card's ghost over the picture for three frames,
+// the review of 01fc626), and the picture's frame grows from the card's to the TV's over the rest, eased, so it's the
+// TV's size as it arrives.
 private enum Becoming {
     static func shape(_ p: CGFloat) -> CGFloat {
         let x = min(max((p - 0.3) / 0.7, 0), 1)
         return x * x * (3 - 2 * x)
     }
-    static func picture(_ p: CGFloat) -> CGFloat { min(max((p - 0.3) / 0.15, 0), 1) }
+    static func picture(_ p: CGFloat) -> CGFloat { min(max((p - 0.3) / 0.02, 0), 1) }
 }
 private struct MorphFrame: ViewModifier, Animatable {
     var scale: CGFloat
