@@ -103,8 +103,20 @@ final class AppModel: ObservableObject {
     // What came in while a page was moving, put on screen the moment it settles.
     private var heldStatus: Status?
     private var heldLive: LiveStatus?
+    // Only a settled page with something already on it is worth protecting: never the first reading, nor while a page is
+    // open over a tab (a history waits on its chart; designer HOLD, 2026-11-08: the first status parked at launch left
+    // the history in portrait on an empty chart).
+    private var parks: Bool { ScrollHold.holding && status != nil && history == nil && processes == nil && sessionScreen == nil && pendingSession == nil }
+    private func apply(_ fresh: Status) {
+        status = fresh
+        IconCache.prefetch(fresh, api: api)
+        openPending()
+        // Status's histories read ahead, so a tile opens onto a drawn chart.
+        if tab == 0 { let api = api; Task { await TrendCache.prefetch(api, fresh) } }
+        AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
+    }
     private func releaseHeld() {
-        if let s = heldStatus { heldStatus = nil; status = s; IconCache.prefetch(s, api: api); openPending(); AlertWatch.shared.sawInForeground(s.alerts ?? []) }
+        if let s = heldStatus { heldStatus = nil; apply(s) }
         if let l = heldLive { heldLive = nil; if liveStore.live != l { liveStore.live = l } }
     }
 
@@ -168,7 +180,7 @@ final class AppModel: ObservableObject {
             return
         }
         // Not while a page is moving under his finger: a row changing height mid-bounce snaps the page back.
-        if ScrollHold.holding { heldLive = l; return }
+        if parks { heldLive = l; return }
         if liveStore.live != l { liveStore.live = l }
     }
 
@@ -198,13 +210,8 @@ final class AppModel: ObservableObject {
             Self.applyPose(pose, to: &fresh)
             // The build's shot of a session's own page, opened as from the Claude tab.
             if pose == "session", sessionScreen == nil { pendingSession = "chumby"; tab = 2 }
-            if ScrollHold.holding { heldStatus = fresh; return }
-            status = fresh
-            IconCache.prefetch(fresh, api: api)
-            openPending()
-            // Status's histories read ahead, so a tile opens onto a drawn chart.
-            if tab == 0 { let api = api; Task { await TrendCache.prefetch(api, fresh) } }
-            AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
+            if parks { heldStatus = fresh; return }
+            apply(fresh)
         } catch APIError.signInNeeded {
             if !needsSignIn { needsSignIn = true }
             lastData = nil
