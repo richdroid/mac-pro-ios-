@@ -186,6 +186,9 @@ struct RootView: View {
                         .padding(.trailing, model.flickChoosing ? TVLook.railRoom : 0)
                         .ignoresSafeArea(.container, edges: .trailing)
                         .animation(.spring(response: 0.4, dampingFraction: 0.9), value: model.flickChoosing)
+                        // Landed on the Remote, it waits out of sight and out of touch's way to be taken down (retireFlick).
+                        .opacity(model.flickRetired ? 0 : 1)
+                        .allowsHitTesting(!model.flickRetired)
                 }
             }
         }

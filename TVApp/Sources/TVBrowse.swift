@@ -414,6 +414,9 @@ struct FlickCardButton: View {
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
             .overlay(alignment: .topTrailing) { if hasInfo { InfoBadge { model.tick(); showInfo = true } } }
             .sheet(isPresented: $showInfo) { TitleInfoSheet(item: item, source: source) }
+            // A show he's part way through (Continue watching's tiles carry how far): its episodes asked for as the tile
+            // comes on screen, so its page opens on them rather than on grey rows.
+            .onAppear { if source == .stremio, item.progress != nil { NextUp.prefetch(item) } }
     }
 }
 final class FrameBox { var rect: CGRect? }

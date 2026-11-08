@@ -1038,22 +1038,32 @@ struct FlickScreen: View {
     @ViewBuilder var landedPicture: some View {
         // Always a picture already in hand: the card's own, or the one decoded when it was thrown. A fetch by address
         // here blanked the TV for a moment after the impact (r24).
+        // Opaque from its first frame, on its own soft picture edge to edge: the Remote's StartingPicture is the same
+        // poster on its blur over black, so the catch, the move and the landing are one picture. On a black ground with
+        // nothing soft yet, the TV's sides were two black bars beside a small poster in the catch's frame (dfd490e
+        // tv-flick-starting, 17.90 s).
         if let image = target.image ?? heldImage.map({ Image(tv: $0) }) {
             ZStack {
-                Color.black.opacity(0.35)
-                // Soft, edge to edge: the picture shrunk to 16 px and stretched, made off the main thread, as the Remote's
-                // own picture does. A live blur here (radius 24, the whole TV) was first drawn in the impact's frame and
-                // redrawn every frame of the move as the picture grew: the ~200 ms stall after the impact, and the leap.
-                if let soft = softImage {
-                    Color.clear.overlay { Image(tv: soft).resizable().interpolation(.high).scaledToFill() }.clipped().opacity(0.7)
-                } else {
-                    Color.clear.overlay { image.resizable().scaledToFill() }.clipped().blur(radius: 24, opaque: true).opacity(0.7)
-                }
+                softGround
                 image.resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .shadow(color: .black.opacity(0.5), radius: 14, y: 6).padding(14)
             }
         } else {
-            PosterOnBlur(url: URL(string: screenURL?.absoluteString ?? item.art))
+            ZStack { softGround; PosterOnBlur(url: URL(string: screenURL?.absoluteString ?? item.art)) }
+        }
+    }
+    // Under the landed picture: black, and the picture shrunk to 16 px and stretched over it at 0.7, made off the main
+    // thread, as the Remote's own picture does. A live blur here (radius 24, the whole TV) was first drawn in the impact's
+    // frame and redrawn every frame of the move as the picture grew: the ~200 ms stall after the impact, and the leap.
+    // With no soft version in hand, the card's own colour in its place, never black.
+    var softGround: some View {
+        ZStack {
+            Color.black
+            if let soft = softImage ?? (screenURL ?? URL(string: item.art)).flatMap({ ImageStore.shared.small($0, 16) }) {
+                Color.clear.overlay { Image(tv: soft).resizable().interpolation(.high).scaledToFill() }.clipped().opacity(0.7)
+            } else {
+                (tint ?? Color(white: 0.15)).opacity(0.7)
+            }
         }
     }
     @ViewBuilder func artwork(fill: Bool) -> some View {
@@ -1074,7 +1084,10 @@ struct FlickScreen: View {
         // The rim and glow go at the landing: from then the light round the picture is its only frame (r19: the rim and the
         // light drew two frames on one picture, and the rim lagged beside it on the move).
         // Eased off over 0.2 s from the impact (`caught`), never dropped in a frame (r21: a look-swap at the catch).
-        let glow = toRemote || caught ? 0 : Double(1 - t)
+        // And from the card turning into the picture (`morph`, 120 ms before the impact), as the picture grows over it: the
+        // picture covered the rim in the flight's last frames, and the TV took over with the rim back on, a bezel that
+        // dropped and came back at the catch (dfd490e tv-flick-starting, 17.92–18.07 s).
+        let glow = toRemote || caught || morph ? 0 : Double(1 - t)
         return ZStack {
             RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.black.opacity(0.55 - 0.2 * Double(t)))
             // What the TV is showing now, so it reads as his TV rather than an empty slab. It gives way as the card comes.
@@ -1111,7 +1124,7 @@ struct FlickScreen: View {
         // enough flair").
         .overlay { TVSparks(trigger: impacts, tint: sparkTint) }
         // It leans in to meet the card, then gives as the card hits: squashed, over, and settled.
-        .scaleEffect(1 + 0.09 * lean)
+        .scaleEffect(1 + (Self.leanScale - 1) * lean)
         .keyframeAnimator(initialValue: CGFloat(1), trigger: impacts) { c, s in c.scaleEffect(s) } keyframes: { _ in
             CubicKeyframe(0.95, duration: 0.07)
             CubicKeyframe(1.03, duration: 0.12)
@@ -1134,7 +1147,11 @@ struct FlickScreen: View {
                 if let note {
                     Text(note).font(.footnote.weight(.semibold)).multilineTextAlignment(.center).lineLimit(2).id(note).transition(.opacity)
                 } else if flicksDone < 3 && !pickingBest {
+                    // Only before the throw: from the pick-up on, it's being done, and the card flew over the words (review
+                    // of dfd490e: "Flick up to play" under the flying card).
                     Text("Flick up to play on the TV").font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.6)).transition(.opacity)
+                        .opacity(lifted || flown ? 0 : 1)
+                        .animation(.easeOut(duration: 0.15), value: lifted || flown)
                 }
             }
             .opacity(arrived ? 1 : 0)
@@ -1165,6 +1182,8 @@ struct FlickScreen: View {
             .overlay(alignment: .bottom) { Capsule().fill(.white.opacity(0.3)).frame(width: 56, height: 3).offset(y: 9) }
             .accessibilityHidden(true)
     }
+    // How far the TV leans in to meet the card: the size its screen is at the catch, which the flying picture ends at.
+    static let leanScale: CGFloat = 1.09
     func card(_ width: CGFloat) -> some View {
         // Rising toward the TV it swells, to 1.31 times by seven tenths of the way, lit round its edge more and more.
         // Let go, it flies into the TV and becomes its picture: from 200 ms its own picture grows to exactly the TV's
@@ -1195,15 +1214,21 @@ struct FlickScreen: View {
             }
             // The light round the card while its stream is still being found: it can't go until it has one.
             .overlay { if pickingBest && !flown { LoadingRing(radius: radius).transition(.opacity) } }
+            // The card itself goes in the frame its picture covers it whole, so only the one picture flies on: the card's
+            // poster, title and chip above and below a landscape picture were three pictures at once (dfd490e
+            // tv-flick-starting, 17.90 s).
+            .opacity(morph ? 0 : 1).animation(nil, value: morph)
             // The card's own picture, growing into the TV's screen in the last part of the flight. It covers the card
-            // whole from its first frame (no fade of either, so never two translucent pictures at once), and its size is
-            // given before the card's scale, so it ends exactly on the TV's screen.
+            // whole from its first frame (no fade of either, so never two translucent pictures at once). Its size is
+            // worked out every frame against the card's scale as it is then, so on screen it runs from the card's size to
+            // the TV's leant-in screen and never past it: sized against the scale the flight ends at, it showed a third
+            // bigger than the TV for 130 ms, then snapped back as the TV took over (17.92–18.07 s).
             .overlay {
-                landedPicture.background(.black)
+                landedPicture
+                    .modifier(MorphFrame(scale: size, amount: morph ? 1 : 0, card: cardFrame.size, cardRadius: radius,
+                                         tv: CGSize(width: tvFrame.width * Self.leanScale, height: tvFrame.height * Self.leanScale),
+                                         tvRadius: 9 * Self.leanScale))
                     .opacity(morph ? 1 : 0).animation(nil, value: morph)
-                    .frame(width: (morph ? tvFrame.width : cardFrame.width) / max(size, 0.01),
-                           height: (morph ? tvFrame.height : cardFrame.height) / max(size, 0.01))
-                    .clipShape(RoundedRectangle(cornerRadius: (morph ? 9 : radius) / max(size, 0.01), style: .continuous))
                     .allowsHitTesting(false)
             }
             // The card is opaque and exactly this shape, so its shadows come from the shape. Lifted, it rises off the
@@ -1471,7 +1496,8 @@ struct FlickScreen: View {
             try? await Task.sleep(nanoseconds: 230_000_000)
             // Only now, with nothing moving: the picture he last threw, which redraws the app's pages (r26).
             handOverArt()
-            model.closeFlick()
+            // Hidden now, and taken down once the Remote has settled, not in the same moment as everything else.
+            model.retireFlick()
             // Only once the move is over, so its fetch and redraw can't hitch it.
             await model.load()
         }
@@ -1482,9 +1508,13 @@ struct FlickScreen: View {
         // A show opened from anywhere but Continue watching still starts where he is in it, if Stremio's row knows.
         let home = BrowseStore.shared(.stremio)
         let homeLoad = Task { if ref.type == "series" && ref.video == nil && home.rows.isEmpty { await home.load() } }
-        guard let d = await TVBridge.data(TVBridge.url("/api/tv/stremio-meta?type=\(ref.type)&id=\(ref.imdb)"), timeout: 15),
-              let m = try? JSONDecoder().decode(StremioMeta.self, from: d), !(ref.type == "series" && m.episodes.isEmpty) else { metaFailed = true; return }
-        if ref.type == "series" { NextUp.remember(m, for: ref.imdb) }
+        // A show's episodes are NextUp's, asked for as its Continue watching tile came on screen, so mostly already here.
+        let found: StremioMeta?
+        if ref.type == "series" { found = await NextUp.meta(ref.imdb) } else {
+            let d = await TVBridge.data(TVBridge.url("/api/tv/stremio-meta?type=\(ref.type)&id=\(ref.imdb)"), timeout: 15)
+            found = d.flatMap { try? JSONDecoder().decode(StremioMeta.self, from: $0) }
+        }
+        guard let m = found else { metaFailed = true; return }
         defer {
             // The episode the big key would play, its streams fetched now, so tapping it never waits on them (§2.5a C7).
             if ref.type == "series", let e = resumeTarget?.episode, !isOn(e) { Task { _ = await StreamCache.shared.streams(type: "series", imdb: ref.imdb, video: e.id) } }
@@ -1877,6 +1907,27 @@ private struct Moving<C: View>: View, Animatable {
     @ViewBuilder let content: (CGFloat) -> C
     var animatableData: CGFloat { get { t } set { t = newValue } }
     var body: some View { content(t) }
+}
+// The flying card's picture, sized inside the card's own scale: `scale` is the card's scale as it is in this frame (the
+// same animation drives both) and `amount` how far it has turned from the card into the TV's screen, so on screen it
+// runs from the card's size to `tv`, whatever the card's scale is doing on its way.
+private struct MorphFrame: ViewModifier, Animatable {
+    var scale: CGFloat
+    var amount: CGFloat
+    let card: CGSize
+    let cardRadius: CGFloat
+    let tv: CGSize
+    let tvRadius: CGFloat
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(scale, amount) }
+        set { scale = newValue.first; amount = newValue.second }
+    }
+    func body(content: Content) -> some View {
+        let s = max(scale, 0.01), a = min(max(amount, 0), 1)
+        return content
+            .frame(width: max(0, card.width * (1 - a) + tv.width * a / s), height: max(0, card.height * (1 - a) + tv.height * a / s))
+            .clipShape(RoundedRectangle(cornerRadius: max(0, cardRadius * (1 - a) + tvRadius * a / s), style: .continuous))
+    }
 }
 private func between(_ a: CGRect, _ b: CGRect, _ t: CGFloat) -> CGRect {
     CGRect(x: a.minX + (b.minX - a.minX) * t, y: a.minY + (b.minY - a.minY) * t,

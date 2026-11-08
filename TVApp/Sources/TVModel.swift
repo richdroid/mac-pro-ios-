@@ -101,13 +101,14 @@ final class TVModel {
         Keyboard.dismiss()
         // One at a time. And a send that goes by itself (next episode, an episode picked from the list) taken twice within
         // three seconds is the same tap, never a second start.
-        guard flicking == nil else { return }
+        // One being taken down after landing on the Remote (retireFlick) doesn't count.
+        guard flicking == nil || flickRetired else { return }
         if target.autoplay {
             if let l = lastFlick, l.id == target.item.id, Date().timeIntervalSince(l.at) < 3 { return }
             lastFlick = (target.item.id, Date())
         }
         var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { flicking = target }
+        withTransaction(t) { flicking = target; flickRetired = false }
     }
     // The thing on a card is what the TV is playing now (the same film, or the episode named on the card): tapping it goes
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
@@ -153,7 +154,21 @@ final class TVModel {
     }
     func closeFlick() {
         var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { flicking = nil }
+        withTransaction(t) { flicking = nil; flickRetired = false }
+    }
+    // Landed on the Remote, the flick's screen is hidden and out of touch's way but kept a moment longer, and taken down
+    // only once the Remote's keys have settled: taken down at once, its teardown was ~70 ms of the stall at the hand-over
+    // (review of dfd490e, speed 3). A new flick in the meantime simply replaces it.
+    var flickRetired = false
+    func retireFlick() {
+        guard let id = flicking?.id else { return }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { flickRetired = true }
+        Task {
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard flickRetired, flicking?.id == id else { return }
+            closeFlick()
+        }
     }
     // A start the flick sent, kept here rather than by the flick screen, which closes as he lands on the Remote: the
     // Remote's picture shows it (the poster, the light lapping its edge) until the TV plays it or says no.
@@ -335,7 +350,7 @@ final class TVModel {
                 while !Task.isCancelled {
                     // Not while a flick is up: every refresh redraws the pages behind it, which shows as stutter in the flick.
                     // Its control screen keeps itself current.
-                    if let self, self.flicking == nil, Date().timeIntervalSince(self.lastKeyAt) > 1.5 { await self.load() }
+                    if let self, self.flicking == nil || self.flickRetired, Date().timeIntervalSince(self.lastKeyAt) > 1.5 { await self.load() }
                     // What's playing changes under you, so the Playing tab keeps closer watch.
                     // The Remote shows play/pause and what's on: every second there, as a check costs the bridge 20-400 ms
                     // (Richard, 2026-11-07: "playing and not playing dont update fast enough", "doesnt update based on
@@ -401,6 +416,8 @@ final class TVModel {
     // One reading at a time: the loop, a key, a tab change and a send each asked for their own, overlapping, and each
     // could redraw. Whoever asks while one is on its way waits for that one.
     @ObservationIgnored private var loading: Task<Void, Never>?
+    // The last answer's bytes, so an unchanged answer is neither decoded nor compared field by field.
+    @ObservationIgnored private var lastStatusBytes: Data?
     func load() async {
         if let l = loading { await l.value; return }
         let t = Task { await reload() }
@@ -411,13 +428,23 @@ final class TVModel {
     private func reload() async {
         guard let u = url("/api/tv/status") else { return }
         var r = URLRequest(url: u); r.timeoutInterval = 8; r.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
-              let s = try? JSONDecoder().decode(TVStatus.self, from: d) else { if !Task.isCancelled { reachable = false }; return }
+        guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200 else { if !Task.isCancelled { reachable = false }; return }
+        // Decoded off the main thread, as the browse rows are: the whole status every second on the main actor was a bite
+        // out of every frame drawn while it landed (review of dfd490e, speed 2). The same bytes as last time aren't decoded
+        // again at all, and nothing below publishes unless something changed.
+        let s: TVStatus, unchanged = d == lastStatusBytes && status != nil
+        if unchanged, let same = status { s = same } else {
+            guard let fresh = await Task.detached(priority: .userInitiated, operation: { try? JSONDecoder().decode(TVStatus.self, from: d) }).value else {
+                if !Task.isCancelled { reachable = false }; return
+            }
+            s = fresh
+        }
+        lastStatusBytes = d
         if !reachable { reachable = true }
         #if os(iOS)
         await TVIsland.sync(s, art: islandArt(s))
         #endif
-        if s != status {
+        if !unchanged && s != status {
             status = s
             // Every app's banner fetched once, as soon as the list first comes, so the Apps tab and the Remote's tiles
             // never wait on one.

@@ -124,10 +124,28 @@ final class NextUp: ObservableObject {
     static func remember(_ m: StremioMeta, for imdb: String) { metas[imdb] = m }
     static func meta(_ imdb: String) async -> StremioMeta? {
         if let m = metas[imdb] { return m }
-        guard let d = await TVBridge.data(TVBridge.url("/api/tv/stremio-meta?type=series&id=\(imdb)"), timeout: 15),
-              let m = try? JSONDecoder().decode(StremioMeta.self, from: d), !m.episodes.isEmpty else { return nil }
-        metas[imdb] = m
+        // One request per show, whoever asks while it's on its way.
+        if let t = asking[imdb] { return await t.value }
+        let t = Task { () -> StremioMeta? in
+            guard let d = await TVBridge.data(TVBridge.url("/api/tv/stremio-meta?type=series&id=\(imdb)"), timeout: 15) else { return nil }
+            return await Task.detached(priority: .userInitiated) { () -> StremioMeta? in
+                guard let m = try? JSONDecoder().decode(StremioMeta.self, from: d), !m.episodes.isEmpty else { return nil }
+                return m
+            }.value
+        }
+        asking[imdb] = t
+        let m = await t.value
+        asking[imdb] = nil
+        if let m { metas[imdb] = m }
         return m
+    }
+    private static var asking: [String: Task<StremioMeta?, Never>] = [:]
+    static func cached(_ imdb: String) -> StremioMeta? { metas[imdb] }
+    // A show's Continue watching tile on screen: its episodes asked for now, so the show's page (and the Remote's and
+    // Playing's lists, if it's put on) find them waiting rather than grey for a few seconds (review of dfd490e, speed 4).
+    static func prefetch(_ item: MediaItem) {
+        guard let ref = item.stremioRef, ref.type == "series", metas[ref.imdb] == nil, asking[ref.imdb] == nil else { return }
+        Task { _ = await meta(ref.imdb) }
     }
     // In order, specials left out unless that's where you are.
     static func after(_ e: StremioEpisode, in episodes: [StremioEpisode]) -> StremioEpisode? {
@@ -693,17 +711,34 @@ struct EpisodePicker: View {
 struct LoadingRing: View {
     var radius: CGFloat
     @Environment(\.accessibilityReduceMotion) private var still
+    // 1.4 s a lap, set by one clock: each ring starts where the reference clock has every ring in its lap, then runs at the
+    // same rate, so the flick's TV handing its light to the Remote's picture is one unbroken light, never one that stops
+    // and starts again at the left (r21). The lap is the shape's own animation, drawn by the render loop: a TimelineView per
+    // ring rebuilt every ring's view 60 times a second, and a shadow per ring was an offscreen pass each frame (review of
+    // dfd490e, speed 1).
+    static let lap = 1.4
+    static func phaseNow() -> CGFloat { CGFloat(Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: lap) / lap) }
+    @State private var phase: CGFloat = LoadingRing.phaseNow()
+    @State private var running = false
     var body: some View {
-        // 1.4 s a lap, read off one clock: every ring is at the same place in its lap, so the flick's TV handing its light to
-        // the Remote's picture is one unbroken light, never one that stops and starts again at the left (r21).
-        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: still)) { ctx in
-            let phase = still ? 0.1 : CGFloat(ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4)
-            ZStack {
-                RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 2)
-                RunningEdge(radius: radius, phase: phase)
-                    .stroke(TVLook.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .shadow(color: TVLook.accent.opacity(0.7), radius: 4)
-            }
+        ZStack {
+            RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 2)
+            // Its glow, a wider faint stroke under it rather than a blur.
+            RunningEdge(radius: radius, phase: still ? 0.1 : phase)
+                .stroke(TVLook.accent.opacity(0.28), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+            RunningEdge(radius: radius, phase: still ? 0.1 : phase)
+                .stroke(TVLook.accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+        }
+        // Only the lap itself takes this animation, and only the once it's set going.
+        .animation(running ? .linear(duration: Self.lap).repeatForever(autoreverses: false) : nil, value: phase)
+        .onAppear {
+            guard !still, !running else { return }
+            let from = Self.phaseNow()
+            var quiet = Transaction(); quiet.disablesAnimations = true
+            withTransaction(quiet) { phase = from }
+            running = true
+            // A tick on, so the start isn't swallowed by the frame the ring arrives in.
+            Task { @MainActor in phase = from + 1 }
         }
         .allowsHitTesting(false)
         .accessibilityLabel("Loading")
