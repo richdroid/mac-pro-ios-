@@ -335,6 +335,57 @@ jobs:
               done
             fi
           }
+          # The hinge and a turn with something up (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios
+          # across everything"): both displays filmed while the Duo is opened, turned, half closed and closed, so each
+          # change is judged moving and place, state and focus kept or not. Each film starts from the posture it names.
+          #   editor:  the alarm editor's sheet, folded, then opened flat, turned upright, turned back and closed.
+          #   calday:  a calendar day's pushed page, open upright, scrolled, turned flat (it moves to the right pane),
+          #            turned back and closed.
+          #   justonce: the "just this once" sheet, folded, opened flat, closed.
+          #   homemenu: Home with the channel menu open (tapped by its label), opened flat and closed again.
+          #   alarms:  Alarms scrolled part way, open upright, turned flat, turned back.
+          chumby_posturefilms() {
+            local D=/tmp/dh/.build/release/devicehubctl
+            film() { # name, start posture (closed|openup), launch args...
+              local name=$1 start=$2; shift 2
+              if [ "$start" = openup ]; then $D "$DEVICE" pose open || true; sleep 4; $D "$DEVICE" rotate 1 || true; sleep 4
+              else $D "$DEVICE" pose closed || true; sleep 4; fi
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/chumby-posture-$name-outer.mp4 > /dev/null 2>&1 & R1=$!
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/chumby-posture-$name-inner.mp4 > /dev/null 2>&1 & R3=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 "$@"
+              sleep 9
+            }
+            done_() { kill -INT $R1 $R3; wait $R1 $R3; echo "chumby posture $1 film exit $?"; xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true; }
+            film editor closed -tab 2 -pose editor
+            $D "$DEVICE" pose open || true; sleep 5
+            $D "$DEVICE" rotate 1 || true; sleep 5
+            $D "$DEVICE" rotate 3 || true; sleep 4
+            $D "$DEVICE" pose closed || true; sleep 5
+            done_ editor
+            film calday openup -tab 2 -pose calday
+            $D "$DEVICE" drag 0.5 0.8 0.5 0.35 || true; sleep 3
+            $D "$DEVICE" rotate 3 || true; sleep 5
+            $D "$DEVICE" rotate 1 || true; sleep 5
+            $D "$DEVICE" pose closed || true; sleep 5
+            done_ calday
+            film justonce closed -tab 0 -pose justonce
+            $D "$DEVICE" pose open || true; sleep 5
+            $D "$DEVICE" pose closed || true; sleep 5
+            done_ justonce
+            film homemenu closed -tab 0
+            $D "$DEVICE" tap "Channel, Default" || true; sleep 3
+            $D "$DEVICE" pose open || true; sleep 5
+            $D "$DEVICE" tap "Channel, Default" || true; sleep 3
+            $D "$DEVICE" pose closed || true; sleep 5
+            done_ homemenu
+            film alarms openup -tab 2
+            $D "$DEVICE" drag 0.5 0.85 0.5 0.3 || true; sleep 3
+            $D "$DEVICE" rotate 3 || true; sleep 5
+            $D "$DEVICE" rotate 1 || true; sleep 5
+            $D "$DEVICE" pose closed || true; sleep 4
+            done_ alarms
+          }
           # The posture Richard actually holds (2026-11-05: his screenshots are the Duo open in portrait, bottom tab bar):
           # every tab, light and dark; Home scrolled so its caption sits at the tab bar; and Home playing, at night and held.
           chumby_portrait() {
@@ -729,6 +780,8 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
           pose_shots 3 "-partial" || echo "partial shots incomplete"
           tv_flick 3 "-partial" || echo "TV flick partial incomplete"
+          # Last, since each moves the hinge: the Chumby app filmed through folds and turns with pages and sheets up.
+          chumby_posturefilms || echo "Chumby posture films incomplete"
       - name: Collect crash reports
         if: always()
         run: |

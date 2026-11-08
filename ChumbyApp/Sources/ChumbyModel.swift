@@ -122,6 +122,9 @@ final class ChumbyModel: ObservableObject {
     @Published var addAlarm: Date?
     // Folded, Calendar settings pushed inside Alarms. Kept here so its Back can sit in the rail, outside the page that slides.
     // A page opening over Alarms gets anything parked at once (see parks).
+    // The "just this once" sheet, open or not: on the model, not in the menu's own state, because Home lays its
+    // controls out in another place of the tree when the phone opens flat, and a sheet held by the view went with it.
+    @Published var justOnceSheetOpen = false
     @Published var alarmsPage = false { didSet { if alarmsPage { releaseHeld() } } }
     // The page shown in place of Alarms ("Calendar settings", or the day's name), for its bar's title.
     private(set) var api: ChumbyAPI?

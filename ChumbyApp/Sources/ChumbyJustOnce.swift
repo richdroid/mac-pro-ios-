@@ -167,7 +167,6 @@ extension ChumbyModel {
 struct JustOnceMenu: View {
     @EnvironmentObject var model: ChumbyModel
     @State private var busy = false
-    @State private var sheet = false
     @State private var problem: String?
     @State private var posed = false
     @State private var confirmReskip = false
@@ -182,7 +181,7 @@ struct JustOnceMenu: View {
                             Button("+\(m) min · \(at.formatted(date: .omitted, time: .shortened))") { run { await model.justOnce(a, due: due, at: at, settings: a) } }
                         }
                     }
-                    Button { sheet = true } label: { Label("Another time or sound…", systemImage: "slider.horizontal.3") }
+                    Button { model.justOnceSheetOpen = true } label: { Label("Another time or sound…", systemImage: "slider.horizontal.3") }
                 } label: {
                     HStack(spacing: 6) {
                         if busy { ProgressView().controlSize(.small) } else { Image(systemName: "clock.arrow.circlepath") }
@@ -193,8 +192,8 @@ struct JustOnceMenu: View {
                 }
                 .disabled(busy)
                 .accessibilityHint("Moves the \(due.formatted(date: .omitted, time: .shortened)) alarm later, or changes its sound, for this time only")
-                .sheet(isPresented: $sheet) { JustOnceSheet(original: a, due: due).environmentObject(model) }
-                .onAppear { if ChumbyModel.pose == "justonce" && model.tab == 0 && !posed { posed = true; sheet = true } }
+                .sheet(isPresented: $model.justOnceSheetOpen) { JustOnceSheet(original: a, due: due).environmentObject(model) }
+                .onAppear { if ChumbyModel.pose == "justonce" && model.tab == 0 && !posed { posed = true; model.justOnceSheetOpen = true } }
             }
             if let problem { FailNote(text: problem) }
         }

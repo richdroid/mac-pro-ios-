@@ -555,7 +555,24 @@ struct AlarmsTab: View {
         .sheet(item: $editing) { t in AlarmEditor(original: t.alarm).environmentObject(model).zoomed(from: t.id, in: editNS) }
         .refreshable { await model.loadState() }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
-        .onChange(of: wide) { _, _ in pane = .schedule }
+        // The hinge or a turn mid-page keeps the page (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios
+        // across everything"): opened flat, what was pushed over the one list (Calendar settings, a day) moves to the
+        // right pane, and an editor opened there goes back to a sheet when the phone is folded or turned upright; a
+        // sheet already up stays a sheet. Never a page lost to a fold.
+        .onChange(of: wide) { _, w in
+            if w {
+                if model.alarmsPage { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false }
+                else { pane = .schedule }
+            } else {
+                switch pane {
+                case .settings: dayPage = nil; model.alarmsPage = true
+                case .day(let k): dayPage = k; model.alarmsPage = true
+                case .editor(let a): editing = EditTarget(alarm: a)
+                case .template, .schedule: break
+                }
+                pane = .schedule
+            }
+        }
         .onAppear {
             wake.refreshPlan()
             guard !posed else { return }
