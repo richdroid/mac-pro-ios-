@@ -1093,9 +1093,11 @@ struct AlarmEditor: View {
                 }
                 .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
                 .onDisappear { model.editingAlarm = false }
+                // On this one row, never on the group: inside the pane's list a modifier on the group lands on every
+                // row, and a sheet bound to the same state from many rows presents from none (build 204, open flat).
+                .sheet(isPresented: $justOnce) { justOnceSheet }
                 sections
             }
-            .sheet(isPresented: $justOnce) { justOnceSheet }
         } else {
             NavigationStack {
                 Form { sections.listRowBackground(GlassRow()) }

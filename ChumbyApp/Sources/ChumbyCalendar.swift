@@ -483,6 +483,9 @@ struct CalendarWakeSettings: View {
     var body: some View {
         List { CalendarSettingsSections().listRowBackground(GlassRow()) }
         .seaList()
+        // Open in portrait the tab bar runs along the foot under this page too: its rows fade out above the bar, as a
+        // tab's do, never reading through it (build 204: "Never wake for…" beside the bar).
+        .modifier(TabBarFade())
         .overSea()
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -499,6 +502,7 @@ struct CalendarDayPage: View {
     var body: some View {
         List { CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false, titled: false).listRowBackground(GlassRow()) }
         .seaList()
+        .modifier(TabBarFade())
         .overSea()
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
