@@ -5,11 +5,13 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
-# One build at a time, the newest: every push carries everything before it, so an older run still going is cancelled. Six
-# runs queued behind each other on 2026-11-07, and a fix took four hours to reach the phone instead of two.
+# One build at a time, and only the newest waits behind it: every push carries everything before it, so older pushes still
+# waiting are dropped. Six runs queued behind each other on 2026-11-07, and a fix took four hours to reach the phone. The
+# build already running always finishes: cancelling it on every push, with three sessions pushing, could leave nothing
+# ever finishing.
 concurrency:
   group: build-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: xcode-27
