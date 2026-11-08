@@ -590,9 +590,17 @@ struct FlickScreen: View {
         let a = meta?.about ?? item.about
         return a?.isEmpty == false ? a : nil
     }
+    // Stremio's own words for it are on their way (the card's are in hand at once, the catalogue's a moment later).
+    var blurbComing: Bool { source == .stremio && target.send == nil && item.stremioRef != nil && meta == nil && !metaFailed }
     func blurb(_ lines: Int) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let t = blurbText { Text(t).font(.subheadline).foregroundStyle(.secondary).lineLimit(lines).fixedSize(horizontal: false, vertical: true).contentTransition(.opacity) }
+            // Its full height held from the start, whatever words are in it and while the catalogue's are on their way,
+            // so the late description crossfades in place and nothing under it moves (review of dfd490e: tv-realsearch
+            // 16→19 s, the page reflowed as the words changed).
+            if let t = blurbText ?? (blurbComing ? "" : nil) {
+                Text(t).font(.subheadline).foregroundStyle(.secondary).lineLimit(lines, reservesSpace: true)
+                    .fixedSize(horizontal: false, vertical: true).contentTransition(.opacity)
+            }
             HStack(spacing: 18) {
                 // Everything about it, before choosing (Richard, 2026-11-07: "an i to see full details of each before i flick").
                 if item.stremioRef != nil {

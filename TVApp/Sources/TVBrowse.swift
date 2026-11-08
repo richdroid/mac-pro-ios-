@@ -333,6 +333,7 @@ struct BrowseColumn: View {
     @Environment(TVModel.self) var model
     @ObservedObject var store: BrowseStore
     var part = Part.all
+    @FocusState private var searchFocused: Bool
     // Unfolded, the rows take turns on each side of the fold.
     var shown: [MediaRow] {
         part == .all ? store.rows : store.rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)
@@ -345,6 +346,7 @@ struct BrowseColumn: View {
                 if part != .right { HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField(store.source.prompt, text: $store.query).autocorrectionDisabled().submitLabel(.search)
+                        .focused($searchFocused).hidesTabBar(while: searchFocused, "browse")
                         .onChange(of: store.query) { _, _ in store.searchSoon() }
                     if !store.query.isEmpty {
                         Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search")

@@ -160,6 +160,8 @@ final class TVModel {
     // only once the Remote's keys have settled: taken down at once, its teardown was ~70 ms of the stall at the hand-over
     // (review of dfd490e, speed 3). A new flick in the meantime simply replaces it.
     var flickRetired = false
+    // Which search or send box has the keyboard, if any: the tab bar steps aside for it (TypingHidesTabBar).
+    var typingIn: String?
     func retireFlick() {
         guard let id = flicking?.id else { return }
         var t = Transaction(); t.disablesAnimations = true

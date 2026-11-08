@@ -637,6 +637,9 @@ struct EpisodePicker: View {
     // The row that's on its way to the TV, with the light running round it.
     var busy: String?
     let choose: (StremioEpisode) -> Void
+    // The season chips and the rows, or one of them, for a list whose chips stay put over its scrolling rows.
+    enum Part { case all, header, rows }
+    var part = Part.all
     var seasons: [Int] { Array(Set(episodes.map(\.season))).sorted() }
     var currentEpisode: StremioEpisode? { current.flatMap { id in episodes.first { $0.id == id } } }
     // Before the one he's on, in order, he's seen; the one he's on once it's all but done.
@@ -697,8 +700,8 @@ struct EpisodePicker: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            header.padding(.bottom, 2)
-            ForEach(episodes.filter { $0.season == season }) { e in row(e).id(e.id) }
+            if part != .rows { header.padding(.bottom, part == .all ? 2 : 0) }
+            if part != .header { ForEach(episodes.filter { $0.season == season }) { e in row(e).id(e.id) } }
         }
         .onGeometryChange(for: Bool.self) { $0.size.width < 330 } action: { narrow = $0 }
         .animation(.easeInOut(duration: 0.2), value: season)
@@ -772,12 +775,23 @@ struct EpisodesLine: View {
         if model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one", let line = s.episodeLine, nextUp.series != nil {
           Group {
             Button { model.tick(); open = true } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "list.bullet.rectangle.portrait").foregroundStyle(TVLook.accent)
-                    Text(line).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Spacer(minLength: 8)
-                    Text("Episodes").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent)
-                    Image(systemName: "chevron.up").font(.caption.weight(.bold)).foregroundStyle(TVLook.accent)
+                // Where the whole line doesn't fit (folded, beside the side bar), the word "Episodes" gives way before the
+                // episode's own name does (r33: "S1 E…  Episod/es").
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "list.bullet.rectangle.portrait").foregroundStyle(TVLook.accent)
+                        Text(line).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
+                        Spacer(minLength: 8)
+                        Text("Episodes").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent)
+                        Image(systemName: "chevron.up").font(.caption.weight(.bold)).foregroundStyle(TVLook.accent)
+                    }
+                    HStack(spacing: 10) {
+                        Image(systemName: "list.bullet.rectangle.portrait").foregroundStyle(TVLook.accent)
+                        Text(line).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.up").font(.caption.weight(.bold)).foregroundStyle(TVLook.accent)
+                    }
+                    .accessibilityLabel("Episodes, \(line)")
                 }
                 .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
             }
@@ -813,25 +827,59 @@ struct ShowEpisodes: View {
     // Brought into view on its own only where the list is all that scrolls (the sheet, the open right pane). Inside a page
     // that also holds the film, scrolling to it took the whole page down and cut the picture off (r17).
     var bringsIntoView = true
+    // The show's name and the season chips held at the top, only the rows scrolling under them (the sheet over the Remote):
+    // scrolled to the episode playing, the name and the chips had gone off the top, and the grabber sat over a cut row
+    // (review of dfd490e, tv-episodes).
+    var pinsHeader = false
     var picked: () -> Void = {}
     @State private var meta: StremioMeta?
     @State private var info: SeriesInfo.Info?
     @State private var season = 0
     @State private var busy: String?
+    func picker(_ meta: StremioMeta, _ s: NextUp.Series, _ part: EpisodePicker.Part) -> some View {
+        EpisodePicker(episodes: meta.episodes, season: $season, current: s.current, currentLabel: "Playing",
+                      after: nextUp.next?.stremioRef?.video, info: info, busy: busy, choose: { e in
+            guard e.id != s.current else { picked(); return }
+            busy = e.id
+            model.flick(FlickTarget(item: NextUp.item(s, e), source: .stremio, ready: true, autoplay: true))
+            Task { try? await Task.sleep(nanoseconds: 250_000_000); busy = nil; picked() }
+        }, part: part)
+    }
+    @ViewBuilder var title: some View {
+        if titled, let s = nextUp.series { Text(s.title).font(.title2.weight(.bold)).lineLimit(2) }
+    }
+    @ViewBuilder func rows(_ part: EpisodePicker.Part) -> some View {
+        if let meta, let s = nextUp.series { picker(meta, s, part) }
+        else { ForEach(0..<5, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12, thumb: true) } }
+    }
     var body: some View {
         ScrollViewReader { proxy in
-            VStack(alignment: .leading, spacing: 14) {
-                if titled, let s = nextUp.series { Text(s.title).font(.title2.weight(.bold)).lineLimit(2) }
-                if let meta, let s = nextUp.series {
-                    EpisodePicker(episodes: meta.episodes, season: $season, current: s.current, currentLabel: "Playing",
-                                  after: nextUp.next?.stremioRef?.video, info: info, busy: busy) { e in
-                        guard e.id != s.current else { picked(); return }
-                        busy = e.id
-                        model.flick(FlickTarget(item: NextUp.item(s, e), source: .stremio, ready: true, autoplay: true))
-                        Task { try? await Task.sleep(nanoseconds: 250_000_000); busy = nil; picked() }
+            Group {
+                if pinsHeader {
+                    VStack(alignment: .leading, spacing: 0) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            title
+                            if let meta, let s = nextUp.series { picker(meta, s, .header) }
+                        }
+                        .padding(.horizontal, 20).padding(.bottom, 12)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 10) { rows(.rows) }
+                                .padding(.horizontal, 20).padding(.bottom, 20)
+                        }
+                        .contentMargins(.top, 4, for: .scrollContent)
+                        // The rows fade under the chips rather than being cut at a hard edge.
+                        .mask {
+                            VStack(spacing: 0) {
+                                LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
+                                Color.black
+                            }
+                        }
                     }
                 } else {
-                    ForEach(0..<5, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12, thumb: true) }
+                    VStack(alignment: .leading, spacing: 14) {
+                        title
+                        rows(.all)
+                    }
                 }
             }
             .task(id: nextUp.series) {
@@ -855,13 +903,13 @@ struct EpisodeSheet: View {
     var body: some View {
         // An opaque enough backdrop and its own top inset, so nothing of the page under it (the "Remote" title) shows at its
         // top edge (r20).
-        // The rows centred in the sheet, never ending well short of its right edge (r21), and a margin the scroll keeps,
-        // so the playing row brought into view never sits under the grabber.
-        ScrollView {
-            ShowEpisodes(titled: true, picked: close).padding(.horizontal, 20).padding(.bottom, 20)
-                .frame(maxWidth: 560).frame(maxWidth: .infinity)
-        }
-        .contentMargins(.top, 32, for: .scrollContent)
+        // The show's name and the seasons held at the top, 28 pt down so the grabber is clear of them, and only the rows
+        // scroll, under them, so no row's words ever sit under the grabber. The same 20 pt each side: the side bar's inset
+        // isn't the sheet's, and kept, it left a 95 pt strip on the right (review of dfd490e, tv-episodes).
+        ShowEpisodes(titled: true, pinsHeader: true, picked: close)
+            .frame(maxWidth: 560).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.top, 28)
+            .ignoresSafeArea(.container, edges: [.leading, .trailing, .bottom])
         // Opaque: the material let the Remote's title show through as a stray "F" behind its top, open (r27).
         .presentationBackground(Color(white: 0.12))
         // One corner shape all round, whether it's a popover or a sheet (r21: one square corner, one round).
