@@ -507,8 +507,9 @@ private struct BackToTop: ViewModifier {
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in
                 if let pageScroll, abs(pageScroll.y - y) > 0.25 { pageScroll.y = y }
             }
-            // Every tab's scrolling page takes this, so it's where the page's top fade goes too.
+            // Every tab's scrolling page takes this, so it's where the page's top fade goes too, and where it says it's moving.
             .topFade()
+            .modifier(ScrollMoving())
             .onChange(of: top) { _, _ in withAnimation(.snappy) { position.scrollTo(edge: .top) } }
             // Animated, like a drag, so the bar follows it and folds the title as a real scroll would.
             .task { if posed { await PoseScroll.apply { position.scrollTo(y: $0) } } }
