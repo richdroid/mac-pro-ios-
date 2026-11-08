@@ -510,6 +510,20 @@ struct VersionHistoryView: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in list.task(id: builds?.count ?? 0) { await film(proxy) } }
+    }
+    // The build's film of this page moving, down to its last build and back twice, so its scrolling is judged moving.
+    private func film(_ proxy: ScrollViewProxy) async {
+        guard model.pose == "versionsfilm", let first = builds?.first?.id, let last = builds?.last?.id else { return }
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        for _ in 0..<2 {
+            withAnimation(.easeInOut(duration: 2.4)) { proxy.scrollTo(last, anchor: .bottom) }
+            try? await Task.sleep(nanoseconds: 3_400_000_000)
+            withAnimation(.easeInOut(duration: 2.4)) { proxy.scrollTo(first, anchor: .top) }
+            try? await Task.sleep(nanoseconds: 3_400_000_000)
+        }
+    }
+    private var list: some View {
         List {
             if let app {
                 Section {
@@ -539,7 +553,7 @@ struct VersionHistoryView: View {
                 if let builds {
                     if builds.isEmpty { Text("No builds yet").foregroundStyle(.secondary) }
                     let here = app.flatMap { Self.hereBuild(Self.phoneBuild($0), in: builds) }
-                    ForEach(builds) { entry($0, here: $0.build == here) }
+                    ForEach(builds) { entry($0, here: $0.build == here).id($0.id) }
                 } else if let failed {
                     // Something he can do about it: ask again.
                     Button { self.failed = nil; Task { await load() } } label: {
@@ -558,6 +572,9 @@ struct VersionHistoryView: View {
         }
         .contentMargins(.top, 4, for: .scrollContent)
         .scrollsUnder()
+        // Open upright the tab bar floats over the page's foot; the notes fade out above it, as on Apps itself, instead of
+        // reading on either side of it (Richard, 2026-11-05: "fade page content out under the tab bar").
+        .modifier(TabBarFade())
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
         .navigationTitle("Version History")

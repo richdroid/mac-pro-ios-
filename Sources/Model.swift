@@ -213,7 +213,11 @@ final class AppModel: ObservableObject {
             // The build's shot of a session's own page, opened as from the Claude tab.
             if pose == "session", sessionScreen == nil { pendingSession = "chumby"; tab = 2 }
             // The build's shot of an app's Version History, opened as from the Apps tab.
-            if pose == "versions", !posedHistory { posedHistory = true; tab = 1; appHistory = "TV.ipa" }
+            if ["versions", "versionsfilm", "versionsupdate"].contains(pose), !posedHistory {
+                posedHistory = true; tab = 1
+                // "versionsupdate": an app with a newer build ready over the air, so the page's Update shows.
+                appHistory = pose == "versionsupdate" ? "Chumby.ipa" : "TV.ipa"
+            }
             if parks { heldStatus = fresh; return }
             apply(fresh)
         } catch APIError.signInNeeded {
@@ -247,7 +251,7 @@ final class AppModel: ObservableObject {
                 }
                 s.iosApps = Status.SeedStatus(reachable: seed.reachable, via: seed.via, checkedAt: seed.checkedAt, seeding: "", fetch: seed.fetch, apps: apps)
             }
-        case "otaready", "otaoffer", "otasent", "otahome":
+        case "otaready", "otaoffer", "otasent", "otahome", "versionsupdate":
             let mine = Int(OTAInstaller.thisBuild) ?? 12
             func link(_ n: String) -> String { "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac-pro.example.ts.net%2Fota%2F\(n).plist" }
             let apps = [

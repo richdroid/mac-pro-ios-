@@ -87,6 +87,7 @@ jobs:
             shot otahome$x $d 9 -tab 1 -pose otahome
             # Each app's Version History, opened from the Apps tab (Richard, 2026-11-08: "duos changelogs in mac pro app").
             shot versions$x $d 9 -tab 1 -pose versions
+            shot versionsupdate$x $d 9 -tab 1 -pose versionsupdate
             shot claude-usage$x $d 9 -tab 2 -pose scrolled
             shot usage-link$x $d 9 -tab 3
             shot scrolled$x $d 9 -tab 0 -pose scrolled
@@ -114,10 +115,12 @@ jobs:
           # Scrolling judged moving (the title now goes up with the page), and the tabs in turn, coming back to each.
           film scrollfilm-portrait 3 30 -tab 0 -pose scrollfilm
           film tour-portrait 3 26 -tab 0 -pose tour
+          film versionsfilm-portrait 3 24 -tab 1 -pose versionsfilm
           python3 ci/title-check.py dist/macpro-tab*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
           for T in 0 1 2; do shot tab$T-open 3 7 -tab $T; done
+          shot versions-open 3 9 -tab 1 -pose versions
           shot screen-open 3 8 -tab 0 -pose screen -openScreen YES
           shot screen-book-open 3 8 -tab 0 -pose screen -openScreen YES -screenPosture book
           # Partly folded.
@@ -128,6 +131,7 @@ jobs:
           poses 1 ""
           slowfilms 1 ""
           film scrollfilm 1 30 -tab 0 -pose scrollfilm
+          film versionsfilm 1 24 -tab 1 -pose versionsfilm
           ls dist
       - name: Publish
         if: always()

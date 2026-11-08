@@ -38,11 +38,11 @@
     "182": ["Updates sit at the top of Apps, App Store style, with Update All", "On this iPhone lists only your own apps, with their real icons"],
     "178": ["Your apps update over the air from Apps, from anywhere"],
     "177": ["Screen: typing folded, the Mac's modifier keys ride above the keyboard"],
-    "175": ["Back is the side bar's first item", "Screen: the first picture comes much faster on a slow link", "Screen: while you type, the keys and trackpad step aside for the picture"],
+    "175": ["Back moves to the top of the side bar", "Screen: the first picture comes much faster on a slow link", "Screen: while you type, the keys and trackpad step aside for the picture"],
     "173": ["Rows fade out under the status bar"],
     "170": ["The waiting-apps notification opens Apps"],
     "169": ["Six tabs, with Usage on the Claude tab", "Quit is a full-strength button, and only running apps are listed", "Screen: symbols on the keys, @ reaches the Mac, held keys repeat", "Screen: a MacBook-shaped trackpad and a Terminal key"],
-    "160": ["Screen follows the Duo's hinge: half open is a laptop, flat is a display"],
+    "160": ["Screen: half open it's a laptop, open flat it's a display"],
     "157": ["Screen: open flat, the Mac's picture fills the display above the keys"],
     "155": ["Screen: Reconnecting no longer sits over a working screen"],
     "154": ["App memory shows in MB"],
@@ -54,7 +54,7 @@
     "144": ["Screen: the picture fills the space above the keys and follows the pointer"],
     "143": ["The API dial says when your credit is used up"],
     "140": ["Open in two panes, scrolling one never moves the other"],
-    "135": ["Pages scroll under the title with the system's soft edge"]
+    "135": ["Pages scroll softly under their title"]
   },
   "Chumby.ipa": {
     "204": ["Pages open without waiting for scrolling to stop"],
@@ -65,6 +65,6 @@
     "167": ["Home's channel switcher catches every tap"],
     "165": ["Alarm editors and calendar days zoom out of their row"],
     "154": ["Naps and new alarms save again", "Widgets never show an old copy of your alarms"],
-    "150": ["Woke up to shows the song, even for calendar alarms"]
+    "150": ["“Woke up to” shows the song, even for calendar alarms"]
   }
 }
