@@ -18,7 +18,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 80
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,7 +35,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 55
+        timeout-minutes: 95
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -98,11 +98,11 @@ jobs:
           # Real touches through Device Hub, filmed: six flings down, a slow pull past the end and let go, seven flings back up,
           # a slow pull past the top. The spring-back he says still snaps (2026-11-08: "the bounch back issie still happwns").
           swipefilm() {
-            local name=$1 display=$2 x=$3 lo=$4 hi=$5; shift 5
+            local name=$1 display=$2 x=$3 lo=$4 hi=$5 address=$6; shift 6
             local D=/tmp/dh/.build/release/devicehubctl
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M "$@"
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
             sleep 10
             for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x $lo $x $hi 0.12 || echo "drag failed: $($D "$DEVICE" drag $x $lo $x $hi 0.12 2>&1 | tail -1)"; sleep 1.4; done
             $D "$DEVICE" drag $x $lo $x $hi 0.9 || true; sleep 2.5
@@ -122,18 +122,19 @@ jobs:
           poses 3 -portrait
           # Positions are fractions of the screenshot (0 to 1), not points: points failed every drag (ca86a09).
           # Watch (tab 3) and the Stremio and Continue watching pages, the long ones; Apps for its view-aligned right pane.
-          swipefilm fling3-portrait 3 0.5 0.8 0.25 -tab 3
-          swipefilm flingbrowse-portrait 3 0.5 0.8 0.25 -tab 1 -pose browse
-          swipefilm flingrow-portrait 3 0.5 0.8 0.25 -tab 1 -pose stremiorow
-          swipefilm fling1-portrait 3 0.5 0.8 0.25 -tab 1
+          swipefilm fling3-portrait 3 0.5 0.8 0.25 $M -tab 3
+          swipefilm flingbrowse-portrait 3 0.5 0.8 0.25 $M -tab 1 -pose browse
+          swipefilm flingrow-portrait 3 0.5 0.8 0.25 $M -tab 1 -pose stremiorow
+          swipefilm fling1-portrait 3 0.5 0.8 0.25 $M -tab 1
+          # The same pulls with the readings changing every two seconds under the finger (the mock's /live scene): the
+          # static scenes' releases decayed over 0.4–0.7 s; a reading landing as the finger lifts is the remaining suspect.
+          swipefilm flinglive-portrait 3 0.5 0.8 0.25 $M/live -tab 1
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -open
           # Folded, the outer display, last.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
           poses 1 ""
-          swipefilm fling3 1 0.5 0.8 0.25 -tab 3
-          swipefilm flingbrowse 1 0.5 0.8 0.25 -tab 1 -pose browse
           # The hinge and the rotation moved with a screen up (Richard, 2026-11-08: "pay particular attention to adherence
           # to iphone duo design specs and like reactivity to diff modes and folding scenarios across everything"): both
           # displays filmed while the app is folded, half opened, opened, turned and closed again, each with a state up
@@ -177,6 +178,9 @@ jobs:
           posturefilm posture-streams "portrait:1 open:6 drag:2 landscape:6 closed:6 open:6" $M -tab 1 -pose streams
           # 5. Watch mid-scroll: turned both ways, half closed, closed.
           posturefilm posture-watch "portrait:1 open:6 drag:2 drag:2 landscape:6 portrait:6 partial:6 closed:6" $M -tab 3
+          swipefilm fling3 1 0.5 0.8 0.25 $M -tab 3
+          swipefilm flingbrowse 1 0.5 0.8 0.25 $M -tab 1 -pose browse
+          swipefilm flinglive 1 0.5 0.8 0.25 $M/live -tab 1
           ls dist
       - name: Publish
         if: always()

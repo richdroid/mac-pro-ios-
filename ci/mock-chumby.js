@@ -465,7 +465,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutubebare|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutubebare|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; return tvReal(q, s, path, query, json); }
@@ -536,6 +536,15 @@ function tvPose(q, s) {
     if (scene === 'rjoin' || scene === 'rstall') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'rfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; }
     if (scene === 'repisode') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Sample Series', 'S1E2 Episode Two'], position: 1260000, sampledAt: now, duration: 3480000, canSeek: true }; }
+    return json(v);
+  }
+  // /live: the readings change under his finger, as the real box's do: every two seconds the last three apps come and go
+  // (the Apps page's "Tools and settings" row with them) and the song pauses and plays (the Remote's player), so a fling
+  // film on this scene shows whether a reading landing as a page is pulled past its end snaps it back (2026-11-08).
+  if (scene === 'live' && path === '/api/tv/status') {
+    const v = JSON.parse(tvStatus), odd = Math.floor(Date.now() / 2000) % 2 === 1;
+    if (odd) v.apps = v.apps.slice(0, -3);
+    v.music = { ...v.music, playing: !odd, sampledAt: Date.now() };
     return json(v);
   }
   if (scene === 'tour' && path === '/api/tv/status') {
