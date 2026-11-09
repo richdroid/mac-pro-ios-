@@ -669,9 +669,17 @@ struct AlarmsTab: View {
                     Spacer(minLength: 8)
                     Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
                 }
-                HStack(alignment: .center, spacing: 10) {
-                    Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst)" + (moved?.usual.map { " · just this once (usually \($0.formatted(date: .omitted, time: .shortened)))" } ?? ""))
+                // Moved for one ring, the day line says so in few words and "Back to 6:45 AM" has a row of its own:
+                // beside the line, folded, both were cut short (build 218: "Back to 6:45…", "just this once (usual…").
+                if let moved, moved.usual != nil {
+                    Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst) · just this once" + (moved.usual.map { " · usually \($0.formatted(date: .omitted, time: .shortened))" } ?? ""))
                         .foregroundStyle(.secondary).lineLimit(2).contentTransition(.numericText())
+                }
+                HStack(alignment: .center, spacing: 10) {
+                    if moved == nil {
+                        Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst)")
+                            .foregroundStyle(.secondary).lineLimit(1).contentTransition(.numericText())
+                    }
                     Spacer(minLength: 8)
                     if let moved, let u = moved.usual {
                         // Back to the usual: the skip taken back and the one-off removed, in that order (undoJustOnce).
@@ -680,7 +688,7 @@ struct AlarmsTab: View {
                             Task { if let why = await model.undoJustOnce() { model.fail("skip", why) }; skipping = false }
                         } label: {
                             Group { if skipping { ProgressView() } else { Text("Back to \(u.formatted(date: .omitted, time: .shortened))") } }
-                                .font(.subheadline.weight(.semibold)).lineLimit(1).frame(minHeight: 30).padding(.horizontal, 4)
+                                .font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize().frame(minHeight: 30).padding(.horizontal, 4)
                         }
                         .buttonStyle(.glass).disabled(skipping || model.unreachable)
                         .accessibilityLabel("Back to the usual \(u.formatted(date: .omitted, time: .shortened)) alarm")

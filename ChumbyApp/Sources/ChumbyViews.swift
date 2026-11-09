@@ -2170,6 +2170,17 @@ struct SkipCard: View {
         }
         .foregroundStyle(.white)
     }
+    // "Back to 6:45 AM", the way back from a ring moved just this once: the skip taken back, then the one-off removed.
+    private func backCapsule(_ at: Date) -> some View {
+        Button { send(false) } label: {
+            Text("Back to \(usual.map(time) ?? "usual")").font(.custom("Trebuchet MS", size: 16).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
+                .lineLimit(1).fixedSize()
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(.white, in: Capsule())
+        }
+        .buttonStyle(GelPress())
+        .accessibilityLabel("Back to the usual \(usual.map(time) ?? "") alarm")
+    }
     var body: some View {
         if model.stateKnown && model.state.skipKnown && !model.unreachable && model.sys.ringing == nil,
            let next = movedOne.flatMap({ j in j.original.map { (j.at, $0.name) } }) ?? skipped.map({ ($0.date, $0.name) }) ?? model.nextRing().map({ ($0.at, $0.alarm.name) }) {
@@ -2184,15 +2195,21 @@ struct SkipCard: View {
                 ZStack {
                     ChumbyGel(colors: Self.day, rim: 0x1f4589)
                     ChumbyGel(colors: Self.night, rim: 0x172447).opacity(asleep ? 1 : 0)
-                    HStack(spacing: 14) {
-                        SleepyOctopus(asleep: asleep, tint: .white)
-                        lines(next.0, next.1, struck: asleep)
-                        Spacer(minLength: 8)
-                        Image(systemName: "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
-                            .opacity(asleep || moved != nil ? 0 : 1)
-                            // Room for Undo, or for "Back to 6:45 AM", which sits over this end of the slab.
-                            .frame(minWidth: moved != nil ? 128 : asleep ? 92 : 0, alignment: .trailing)
+                    // Moved for one ring, "Back to 6:45 AM" is a row of its own under the words: beside them it
+                    // squeezed the heading, time and day to "Just this on… / 6:55… / Today · Wo…" folded and open
+                    // (build 218).
+                    VStack(alignment: .trailing, spacing: moved != nil ? 10 : 0) {
+                        HStack(spacing: 14) {
+                            SleepyOctopus(asleep: asleep, tint: .white)
+                            lines(next.0, next.1, struck: asleep)
+                            Spacer(minLength: 8)
+                            Image(systemName: "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
+                                .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
+                                .opacity(asleep || moved != nil ? 0 : 1)
+                                // Room for Undo, which sits over this end of the slab.
+                                .frame(minWidth: moved != nil ? 0 : asleep ? 92 : 0, alignment: .trailing)
+                        }
+                        if moved != nil { backCapsule(next.0) }
                     }
                     .padding(.horizontal, 18).padding(.vertical, 16)
                 }
@@ -2202,16 +2219,15 @@ struct SkipCard: View {
                 .disabled(asleep || moved != nil)
                 .accessibilityLabel(moved != nil ? "Just this once, \(time(next.0)) alarm" : asleep ? "Skipped, \(time(next.0)) alarm" : "Skip the \(time(next.0)) alarm, \(day(next.0))")
                 .overlay(alignment: .trailing) {
-                    if asleep || moved != nil {
+                    if asleep && moved == nil {
                         Button { send(false) } label: {
-                            Text(moved != nil ? "Back to \(usual.map(time) ?? "usual")" : "Undo").font(.custom("Trebuchet MS", size: moved != nil ? 16 : 18).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
-                                .lineLimit(1).minimumScaleFactor(0.8)
-                                .padding(.horizontal, moved != nil ? 14 : 20).padding(.vertical, 11)
+                            Text("Undo").font(.custom("Trebuchet MS", size: 18).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
+                                .padding(.horizontal, 20).padding(.vertical, 11)
                                 .background(.white, in: Capsule())
                         }
                         .buttonStyle(GelPress())
                         .padding(.trailing, 18)
-                        .accessibilityLabel(moved != nil ? "Back to the usual \(usual.map(time) ?? "") alarm" : "Undo the skip, so the \(time(next.0)) alarm rings")
+                        .accessibilityLabel("Undo the skip, so the \(time(next.0)) alarm rings")
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                     }
                 }
