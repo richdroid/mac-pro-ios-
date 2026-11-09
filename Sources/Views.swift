@@ -457,9 +457,9 @@ struct Screen<Content: View>: View {
             .toolbarVisibility(.hidden, for: .navigationBar)
             .navigationDestination(item: tab == 0 ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
             // All processes, from Status itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && model.history == nil ? $model.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0) }
-            .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0) }
-            .navigationDestination(item: tab == 1 ? $model.appHistory : Binding<String?>.constant(nil)) { VersionHistoryView(file: $0) }
+            .navigationDestination(item: tab == 0 && model.history == nil ? $model.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
+            .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
+            .navigationDestination(item: tab == 1 ? $model.appHistory : Binding<String?>.constant(nil)) { VersionHistoryView(file: $0, model: model) }
         }
     }
 }

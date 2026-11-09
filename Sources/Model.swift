@@ -4,6 +4,20 @@ import SwiftUI
 @MainActor
 final class LiveStore: ObservableObject { @Published var live: LiveStatus? }
 
+// What the pushed pages show from the status, kept apart from it: Version History its app's entry, a session's page its
+// session. Each is set only when it changed, so a page watching these never redraws for a reading (the status itself is
+// republished with every one; Version History redrew once a second under live readings, 2.4 % late frames vs 0.2 %).
+@MainActor
+final class SeedStore: ObservableObject {
+    @Published private(set) var seed: Status.SeedStatus?
+    func set(_ s: Status.SeedStatus?) { if s != seed { seed = s } }
+}
+@MainActor
+final class SessionStore: ObservableObject {
+    @Published private(set) var sessions: [Status.Session] = []
+    func set(_ s: [Status.Session]) { if s != sessions { sessions = s } }
+}
+
 // When the Mac last answered. Kept apart from the model so the beat on each refresh redraws only the chip that shows it.
 @MainActor
 final class Pulse: ObservableObject {
@@ -14,11 +28,13 @@ final class Pulse: ObservableObject {
 @MainActor
 final class AppModel: ObservableObject {
     let liveStore = LiveStore()
+    let seedStore = SeedStore()
+    let sessionStore = SessionStore()
     let pulse = Pulse()
     let screen = RemoteScreen()
     @Published var screenOpen = false { didSet { screen.paused = !screenOpen } }
     @Published var signingIn = false
-    @Published var status: Status?
+    @Published var status: Status? { didSet { seedStore.set(status?.iosApps); sessionStore.set(status?.claude.sessions ?? []) } }
     @Published var problem: String?
     // The Mac wants its access code. Shown as a row at the top of each tab; the sheet only opens by itself when there's
     // no address at all, so pressing Cancel is respected.
@@ -44,7 +60,7 @@ final class AppModel: ObservableObject {
     func show(tab t: Int) {
         if t == 3 { tab = 2; usageAsked += 1 } else { tab = t }
     }
-    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); liveStore.live = nil; lastData = nil } }
+    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); liveStore.live = nil; lastData = nil; IconCache.api = api } }
 
     var api: API { API(base: URL(string: address) ?? URL(string: "https://invalid.invalid")!) }
     private var loops: [Task<Void, Never>] = []
@@ -61,6 +77,8 @@ final class AppModel: ObservableObject {
         processes = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // Show the last known state at once; fresh numbers replace it moments later.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(Status.self, from: d) }
+        seedStore.set(status?.iosApps); sessionStore.set(status?.claude.sessions ?? [])
+        IconCache.api = api
         // How old those numbers are, so being offline never passes them off as live.
         pulse.lastFresh = (try? FileManager.default.attributesOfItem(atPath: Self.cacheFile.path)[.modificationDate]) as? Date
     }

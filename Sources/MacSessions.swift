@@ -30,14 +30,18 @@ enum TermCache {
 // A kept session's own screen, to answer whatever it's waiting on from here: its menu's choices as buttons, keys for
 // anything else, and a box to tell it something.
 struct SessionTerminal: View {
-    @EnvironmentObject var model: AppModel
+    // Held, not watched: the page redraws for its own session's entry (sessions), never for a reading.
+    let model: AppModel
+    @ObservedObject private var sessions: SessionStore
     @Environment(\.paneLayout) private var panes
     let session: Status.Session
     @State private var text: String
     @State private var running: Bool
     @State private var loaded: Bool
-    init(session: Status.Session) {
+    init(session: Status.Session, model: AppModel) {
         self.session = session
+        self.model = model
+        _sessions = ObservedObject(wrappedValue: model.sessionStore)
         let kept = TermCache.screens[session.key ?? session.name]
         _text = State(initialValue: kept?.text ?? "")
         _running = State(initialValue: kept?.running ?? true)
@@ -57,7 +61,7 @@ struct SessionTerminal: View {
                                                    ("1", "1", "1"), ("2", "2", "2"), ("3", "3", "3"), ("tab", "⇥", "Tab"), ("shift-tab", "⇧⇥", "Shift Tab"), ("ctrl-c", "⌃C", "Control C")]
     var key: String { session.key ?? session.name }
     // The latest the Mac has said about this session, rather than what it was when the page opened.
-    var current: Status.Session { model.status?.claude.sessions.first { $0.key == session.key } ?? session }
+    var current: Status.Session { sessions.sessions.first { $0.key == session.key } ?? session }
 
     // A numbered menu at the foot of the screen, with the ❯ marking the highlighted choice. Only the last few lines are
     // read, so a list from earlier in the conversation never turns into buttons.

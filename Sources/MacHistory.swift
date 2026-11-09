@@ -250,7 +250,7 @@ struct HistoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .animation(.easeOut(duration: 0.2), value: hours)
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }
-        .navigationDestination(item: $model.processes) { ProcessesView(first: $0) }
+        .navigationDestination(item: $model.processes) { ProcessesView(first: $0, model: model) }
         .task {
             // A new reading arrives once a minute. Until the first one gets through, it keeps trying every few seconds.
             while !Task.isCancelled {

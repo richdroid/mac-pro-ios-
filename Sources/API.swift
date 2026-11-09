@@ -117,6 +117,10 @@ extension Status.Memory: Equatable {}
 extension Status.Network: Equatable {}
 extension Status.History: Equatable {}
 extension Status.Temp: Equatable {}
+// Compared, so a pushed page that shows one app or one session redraws only when that changes, never for a reading.
+extension Status.SeedApp: Equatable {}
+extension Status.SeedStatus: Equatable {}
+extension Status.Fetch: Equatable {}
 
 enum APIError: LocalizedError {
     case signInNeeded, message(String), badResponse

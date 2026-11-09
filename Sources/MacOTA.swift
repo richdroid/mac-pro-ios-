@@ -379,7 +379,6 @@ struct WhatsNew: View {
 
 // An app's own icon, fetched once from the Mac; until then (or for an app the Mac has no package of) a plain tile.
 struct AppIcon: View {
-    @EnvironmentObject var model: AppModel
     let app: Status.SeedApp
     var size: CGFloat = 58
     @State private var image: Image?
@@ -397,7 +396,7 @@ struct AppIcon: View {
         .accessibilityHidden(true)
         .task(id: key) {
             if let known = IconCache.images[key] { image = known; return }
-            guard let i = await IconCache.fetch(app, api: model.api) else { return }
+            guard let api = IconCache.api, let i = await IconCache.fetch(app, api: api) else { return }
             withAnimation(.easeOut(duration: 0.25)) { image = i }
         }
     }
@@ -406,6 +405,8 @@ struct AppIcon: View {
 @MainActor
 enum IconCache {
     static var images: [String: Image] = [:]
+    // The Mac to ask, set by the model, so an icon never watches the model (it redrew with every reading).
+    static var api: API?
     static func key(_ a: Status.SeedApp) -> String { (a.icon ?? "") + "@" + a.build }
     static func fetch(_ a: Status.SeedApp, api: API) async -> Image? {
         guard let path = a.icon, !path.isEmpty, let d = try? await api.data(path), let i = make(d) else { return nil }
@@ -464,7 +465,9 @@ struct BuildNotes: Codable, Identifiable, Equatable {
 // Every finished build that changed the app, newest first: its number, when, and what changed, the one on this iPhone
 // marked. Pushed on the Apps tab's stack, with the system's own Back (the Duo's way, 2026-11-08 ruling).
 struct VersionHistoryView: View {
-    @EnvironmentObject var model: AppModel
+    // Held, not watched: the page redraws for its own app's entry (seeds) and the installer, never for a reading.
+    let model: AppModel
+    @ObservedObject private var seeds: SeedStore
     @ObservedObject private var ota = OTAInstaller.shared
     let file: String
     @State private var builds: [BuildNotes]?
@@ -477,12 +480,14 @@ struct VersionHistoryView: View {
     }()
     private static var knownFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("version-history.json") }
 
-    init(file: String) {
+    init(file: String, model: AppModel) {
         self.file = file
+        self.model = model
+        _seeds = ObservedObject(wrappedValue: model.seedStore)
         _builds = State(initialValue: Self.known[file])
     }
 
-    private var app: Status.SeedApp? { model.status?.iosApps?.apps.first { $0.file == file } }
+    private var app: Status.SeedApp? { seeds.seed?.apps.first { $0.file == file } }
 
     // The build on this iPhone: this app knows its own; for the others, what the Mac last saw on the phone.
     // What the Mac sees on the phone first, so the page says what the On this iPhone row says; away from home this app
@@ -596,7 +601,7 @@ struct VersionHistoryView: View {
     }
     // A newer build ready for this iPhone: Update, as on the app's App Store page.
     @ViewBuilder func update(_ app: Status.SeedApp) -> some View {
-        if let seed = model.status?.iosApps, UpdatesSection.updates(seed).contains(where: { $0.id == app.id }), UpdatesSection.link(app) != nil {
+        if let seed = seeds.seed, UpdatesSection.updates(seed).contains(where: { $0.id == app.id }), UpdatesSection.link(app) != nil {
             if ota.current?.file == app.id { ProgressView().frame(width: 84) }
             else {
                 Button { ota.install([app]) } label: { Text("Update").font(.subheadline.weight(.bold)) }

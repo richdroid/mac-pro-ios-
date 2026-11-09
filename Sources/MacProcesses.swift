@@ -18,7 +18,8 @@ enum ProcessSort: String, Identifiable, Hashable, CaseIterable {
 }
 
 struct ProcessesView: View {
-    @EnvironmentObject var model: AppModel
+    // Held, not watched: nothing here comes from the status, so a reading never redraws the list.
+    let model: AppModel
     @Environment(\.paneLayout) private var panes
     struct Pending: Identifiable { let process: MacProcess; let force: Bool; var id: String { "\(process.pid)\(force)" } }
     @State private var sort: ProcessSort
@@ -27,7 +28,7 @@ struct ProcessesView: View {
     @State private var pending: Pending?
     @State private var working: Int?
     @State private var note: String?
-    init(first: ProcessSort) { _sort = State(initialValue: first) }
+    init(first: ProcessSort, model: AppModel) { _sort = State(initialValue: first); self.model = model }
 
     func rows(_ by: ProcessSort) -> [MacProcess] { by == .cpu ? report?.cpu ?? [] : report?.mem ?? [] }
 
