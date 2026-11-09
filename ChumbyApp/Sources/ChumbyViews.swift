@@ -21,6 +21,7 @@ struct ChumbyApp: App {
                 }
                 .onAppear {
                     model.start()
+                    ChumbyApp.dressBars()
                     // Calendar alarms follow the calendar from the start, not only once the Alarms tab has been opened.
                     if CalendarWake.shared.rules.enabled { CalendarWake.shared.startWatching() }
                     CalendarWake.shared.syncIfDue()
@@ -44,6 +45,21 @@ struct ChumbyApp: App {
         .backgroundTask(.appRefresh(CalendarWake.refreshID)) {
             await CalendarWake.shared.sync()
             await CalendarWake.shared.scheduleRefresh()
+        }
+        #endif
+    }
+}
+
+extension ChumbyApp {
+    // A pushed page's title is the system's own large title (so Back and the title are laid out by iOS the Duo's way),
+    // in the face every tab's title wears: Trebuchet, bold, 30 pt, and 18 pt once it has collapsed into the bar.
+    static func dressBars() {
+        #if canImport(UIKit)
+        let bar = UINavigationBar.appearance()
+        if let big = UIFont(name: "Trebuchet MS", size: 30), let small = UIFont(name: "Trebuchet MS", size: 18) {
+            let bold = UIFontDescriptor.SymbolicTraits.traitBold
+            bar.largeTitleTextAttributes = [.font: UIFont(descriptor: big.fontDescriptor.withSymbolicTraits(bold) ?? big.fontDescriptor, size: 30)]
+            bar.titleTextAttributes = [.font: UIFont(descriptor: small.fontDescriptor.withSymbolicTraits(bold) ?? small.fontDescriptor, size: 18)]
         }
         #endif
     }
@@ -743,22 +759,21 @@ struct HomeTab: View {
             .padding(.horizontal, 18).frame(minHeight: 44)
     }
     // Home in the order he uses it (Richard, 2026-11-05: "next alarm and right now like that whole section is too close
-    // together … idek what right now means make the home screen make more sense"): the Chumby; right under it its own
-    // controls (the channel it's showing, day or night, the widget before and after); what it's playing, only while it plays;
-    // the next alarm; then the about. One spacing scale: 32 pt between sections, 12 between the rows of one, and the
-    // controls 24 under the device they belong to.
+    // together … idek what right now means make the home screen make more sense"; 2026-11-09: "a bit cluttered"): the
+    // Chumby; right under it one row of its own controls (day or night, and the channel it's showing, whose menu also
+    // steps through the widgets); the next alarm, with Skip; what it's playing, only while it plays; then the about. One
+    // spacing scale: 32 pt between sections, 12 between the rows of one, and the controls 24 under the device they belong to.
     static let sectionGap: CGFloat = 32, rowGap: CGFloat = 12, underDevice: CGFloat = 24
     // Open in portrait the column is the Duo's whole width; the controls keep a phone's measure, centred.
     static let column: CGFloat = 480
+    // One row, two pills of one height: day or night, and what the screen is showing. Stepping through the channel's
+    // widgets lives in the channel's menu, with the channels (it was two more keys on a row of its own; Richard,
+    // 2026-11-09: "the chumby app start screen is a bit cluttered").
     var remote: some View {
         VStack(spacing: 10) {
-            VStack(spacing: Self.rowGap) {
+            HStack(spacing: Self.rowGap) {
+                NightButton()
                 if !model.state.channelNames.isEmpty { channelRow }
-                HStack(spacing: Self.rowGap) {
-                    NightButton()
-                    RemoteButton(icon: "backward.fill", label: "Previous widget") { model.cmd("prev", id: "remote") }
-                    RemoteButton(icon: "forward.fill", label: "Next widget") { model.cmd("next", id: "remote") }
-                }
             }
             .disabled(model.unreachable).opacity(model.unreachable ? 0.45 : 1)
             if let f = model.failed("remote") { FailNote(text: f) }
@@ -776,9 +791,16 @@ struct HomeTab: View {
         // reading that was the channel he wanted, so the tap did nothing. Every tap goes to the Chumby; the tick marks
         // the one showing.
         Menu {
-            ForEach(model.state.channelNames, id: \.self) { name in
-                Button { model.playChannel(name, id: "homeChannel") } label: {
-                    if name == channelName { Label(name, systemImage: "checkmark") } else { Text(name) }
+            // The widget before and after this one, then the channels; the tick marks the one showing.
+            Section {
+                Button("Next widget", systemImage: "forward.fill") { model.cmd("next", id: "remote") }
+                Button("Previous widget", systemImage: "backward.fill") { model.cmd("prev", id: "remote") }
+            }
+            Section("Channel") {
+                ForEach(model.state.channelNames, id: \.self) { name in
+                    Button { model.playChannel(name, id: "homeChannel") } label: {
+                        if name == channelName { Label(name, systemImage: "checkmark") } else { Text(name) }
+                    }
                 }
             }
         } label: {
@@ -795,13 +817,14 @@ struct HomeTab: View {
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark))
             }
-            .padding(.leading, 18).padding(.trailing, 22)
+            .padding(.leading, 16).padding(.trailing, 16)
             .frame(height: HomeKey.size).frame(maxWidth: .infinity)
             .contentShape(Capsule())
             .glassEffect(.regular.interactive(), in: Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Channel, \(channelName)")
+        .accessibilityHint("Choose a channel, or step to the next widget")
         .animation(.easeInOut(duration: 0.2), value: channelName)
     }
     // What it's playing, only while it plays: the same panel as Sounds' Now, with Stop and the volume. With nothing playing
@@ -844,9 +867,9 @@ struct HomeTab: View {
     @ViewBuilder var controls: some View {
         if model.sys.ringing != nil { RingingCard().card().padding(.bottom, Self.underDevice).transition(.ringCard) }
         remote
-        playing
-        plainNext
         SkipCard().padding(.top, Self.sectionGap)
+        plainNext
+        playing
     }
     var wordmark: some View {
         ArtShape(art: ChumbyArt.word, box: ChumbyArt.wordBox).fill(ChumbyPalette.word(dark), style: FillStyle(eoFill: true))
@@ -968,20 +991,6 @@ struct MeterRow: View {
 // Home's controls are one height, so the channel, the day/night pill and the widget keys line up as one block.
 enum HomeKey { static let size: CGFloat = 64 }
 // A round glass key the height of its row.
-struct RemoteButton: View {
-    @Environment(\.colorScheme) private var scheme
-    let icon: String, label: String
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon).font(.system(size: 22, weight: .semibold)).foregroundStyle(ChumbyPalette.ink(scheme == .dark))
-                .frame(width: HomeKey.size, height: HomeKey.size).contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: Circle())
-        .accessibilityLabel(label)
-    }
-}
 // The night style chosen in Tinker: what night looks like on the Chumby. Kept on the Chumby as the kind its nightly time
 // switches to (ChumbyState.nightStyle), so the widget nights the same way; remembered here too for a Chumby with no
 // nightly time.
@@ -2015,7 +2024,10 @@ struct NightSettings: View {
                     Image(systemName: e.cmd == "night" ? (e.val == "off" ? "sun.max.fill" : "moon.fill") : e.cmd == "screen" ? "sun.min" : "tv")
                         .font(.body.weight(.semibold)).frame(width: 24)
                         .foregroundStyle(e.cmd == "night" && e.val == "off" ? ChumbyPalette.hex(0xe59a2e) : ChumbyPalette.hex(0xa4b7d6))
+                    // In the accent, so the time reads as something to tap, not a grey chip saying when (Richard, 2026-11-09:
+                    // "i should be able to delete an entry for the night time thing or edit it").
                     DatePicker("Time", selection: Binding(get: { NightSettings.date(e.time) }, set: { e.time = NightSettings.hhmm($0); model.saveScheduleSoon() }), displayedComponents: .hourAndMinute).labelsHidden()
+                        .tint(ChumbyPalette.acc(scheme == .dark))
                     Spacer(minLength: 8)
                     // What happens at that time, and taking the time out, in one menu.
                     Menu {

@@ -489,8 +489,11 @@ struct CalendarWakeSettings: View {
         .overSea()
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .navigationTitle("Calendar settings").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .principal) { Text("Calendar settings").font(.custom("Trebuchet MS", size: 18).weight(.bold)) } }
+        // The system's large title, never a hand-set one in the bar: a text item there forces a horizontal bar across the
+        // top even where the Duo puts controls on the side, leaving Back alone on the strip far from a small centred title
+        // (Richard, 2026-11-09: "the back button looks off … not iphone duo"). Large, the title leads the page like every
+        // tab's, and Back sits where iOS puts it. The face is set once in ChumbyApp.dressBars.
+        .navigationTitle("Calendar settings").navigationBarTitleDisplayMode(.large)
     }
 }
 // A calendar day pushed over Alarms (folded, and open in portrait): the day's own settings, with the system's Back.
@@ -506,8 +509,8 @@ struct CalendarDayPage: View {
         .overSea()
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .principal) { Text(title).font(.custom("Trebuchet MS", size: 18).weight(.bold)) } }
+        // The system's large title, as Calendar settings (above).
+        .navigationTitle(title).navigationBarTitleDisplayMode(.large)
     }
 }
 
@@ -643,7 +646,7 @@ struct CalendarDaySheet: View {
                 if on { var a = Alarm(); a.takeSettings(from: shared); setEdit { $0.own = a } } else { setEdit { $0.own = nil } }
                 loadOwn()
             })) {
-                Text("Same as the others").tag(false); Text("Its own").tag(true)
+                Text("Same as the others").tag(false); Text("Different").tag(true)
             }
             .pickerStyle(.segmented)
             if edit.own != nil {
