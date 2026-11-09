@@ -109,10 +109,13 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
             sleep $wait
             /tmp/dh/.build/release/devicehubctl "$DEVICE" touch $x $y 6 & HOLD=$!
-            sleep 2
-            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
-            sleep 1
-            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-late.png
+            # A shot every 0.6 s while the hold lasts, timed in the log: the tool takes a while to find the display before
+            # the finger lands (shots 2 s and 3 s in were both before it, CI 6da2654), so one of these is the press.
+            local i=1
+            while kill -0 $HOLD 2>/dev/null; do
+              xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-$i.png > /dev/null 2>&1
+              echo "$name-$i at $(date +%s.%N | cut -c1-14)"; i=$((i + 1)); sleep 0.6
+            done
             wait $HOLD || echo "hold failed"
             sleep 1
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-after.png
