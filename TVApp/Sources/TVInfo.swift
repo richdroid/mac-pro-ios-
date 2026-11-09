@@ -79,7 +79,11 @@ struct TitleInfoPage: View {
     // Folded and turned sideways the display is about 400 pt tall: a banner up to 360 pt left the title under the key
     // (54832f8's folded-landscape shot). There it's a short strip, so the name and the first lines show above the key.
     @Environment(\.verticalSizeClass) private var vSize
-    private var bannerMax: CGFloat { vSize == .compact ? 150 : 360 }
+    // And folded flat the display is 466 pt tall without being compact in height: the banner takes at most two fifths
+    // of whatever height the page has, so the name clears the key in every posture (tv17's folded shot: "Toe Rings"
+    // under the key).
+    @State private var pageHeight: CGFloat = 0
+    private var bannerMax: CGFloat { min(vSize == .compact ? 150 : 360, pageHeight > 0 ? pageHeight * 0.4 : 360) }
     let item: MediaItem
     let source: MediaSource
     // Opened from the flick's own page: there's nothing to carry on to, it's already there.
@@ -136,6 +140,13 @@ struct TitleInfoPage: View {
             .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
+        // The page runs under the bar to the top of the glass, so the picture is the first thing there and the system's
+        // Back floats on it, as in Apple's own TV app. Inset, the page began under the bar instead, leaving a flat band
+        // of the app's background between the glass edge and the picture in every posture (tv17's details shots: 23 pt
+        // folded, the whole bar's height open upright), which read as a bar of its own colour with Back stuck in it
+        // (Richard, 2026-11-09: "the back button looks off … not iphone duo").
+        .ignoresSafeArea(edges: .top)
+        .background { Color.clear.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 } }
         // The key in the page's foot inset: the page scrolls above it, never under it.
         .safeAreaInset(edge: .bottom) {
             if !fromFlick {
