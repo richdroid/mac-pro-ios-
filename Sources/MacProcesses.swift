@@ -64,6 +64,7 @@ struct ProcessesView: View {
     }
 
     func list(_ by: ProcessSort, chooser: Bool, notes: Bool) -> some View {
+        ScrollViewReader { proxy in
         List {
             if chooser {
                 Section {
@@ -77,14 +78,16 @@ struct ProcessesView: View {
         }
         .contentMargins(.top, 4, for: .scrollContent)
         .scrollsUnder(by == .memory && !chooser ? 1 : 0)
+        .keepsPlace("processes", proxy)
         .refreshable { await load() }
+        }
     }
     @ViewBuilder func rowsBody(_ by: ProcessSort) -> some View {
         if report == nil {
             if failed { Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark").foregroundStyle(.secondary) }
             else { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) } }
         }
-        ForEach(rows(by)) { row($0, by: by) }
+        ForEach(rows(by)) { row($0, by: by).place($0.pid) }
     }
 
     func load() async {

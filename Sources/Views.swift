@@ -205,6 +205,74 @@ enum ScrollHold {
 extension View {
     func topEdge() -> some View { modifier(TopEdge()) }
     func scrollsUnder(_ id: Int = 0) -> some View { modifier(ScrollsUnder(id: id)) }
+    // A row that can be his place on its page: given an id to scroll to, and noted as the place while it's the row at the
+    // top of the page.
+    func place<ID: Hashable>(_ id: ID) -> some View { self.id(id).modifier(MarksPlace(id: AnyHashable(id))) }
+    // On a page's scroll view, under a ScrollViewReader: puts the page back at his place when a change of posture rebuilt it.
+    func keepsPlace(_ page: String, _ proxy: ScrollViewProxy) -> some View { modifier(KeepsPlace(page: page, proxy: proxy)) }
+}
+
+// His place on each page, kept across a change of posture. A page that's one column folded or upright and two panes open
+// flat is a different view in each, so opening, turning or closing the Duo built it afresh at its top (audit finding 1,
+// item 26: "keep his place"). Each page notes the row at its top as he scrolls, and when its layout changes, scrolls back
+// to that row: one column scrolls to it, and of two panes the one that holds it does. Plain storage, never SwiftUI state,
+// so noting the place redraws nothing.
+@MainActor
+final class PlaceKeeper {
+    private static var pages: [String: PlaceKeeper] = [:]
+    static func page(_ name: String) -> PlaceKeeper {
+        if let p = pages[name] { return p }
+        let p = PlaceKeeper(); pages[name] = p; return p
+    }
+    var top: AnyHashable?
+    var layout: Bool?
+    // Where the top of the page is on screen (its scroll view's top plus the bars over it), in the window's points.
+    var line: CGFloat = 120
+    var restoring = Date.distantPast
+    // While the rebuilt page lays out and scrolls back, its rows pass the line and must not count as his place.
+    var settling: Bool { Date().timeIntervalSince(restoring) < 1.2 }
+}
+private struct PlacePageKey: EnvironmentKey { static let defaultValue: String? = nil }
+extension EnvironmentValues { var placePage: String? { get { self[PlacePageKey.self] } set { self[PlacePageKey.self] = newValue } } }
+
+// Notes a row as the place when it's the one across the top of the page. Only the crossing is reported, a yes or no that
+// changes once per row passing, so scrolling costs a comparison per row and frame and redraws nothing.
+struct MarksPlace: ViewModifier {
+    @Environment(\.placePage) private var page
+    let id: AnyHashable
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: Bool.self) { g in
+            guard let page else { return false }
+            let f = g.frame(in: .global), line = MainActor.assumeIsolated { PlaceKeeper.page(page).line }
+            return f.minY <= line && f.maxY > line
+        } action: { on in
+            guard on, let page else { return }
+            let k = PlaceKeeper.page(page)
+            if !k.settling { k.top = id }
+        }
+    }
+}
+
+struct KeepsPlace: ViewModifier {
+    @Environment(\.paneLayout) private var panes
+    let page: String
+    let proxy: ScrollViewProxy
+    func body(content: Content) -> some View {
+        content
+            .environment(\.placePage, page)
+            // The line is just under the bars over the page: the scroll view's top in the window plus its top inset.
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top + 8 } action: { PlaceKeeper.page(page).line = $0 }
+            .task(id: panes) {
+                let k = PlaceKeeper.page(page)
+                // Of two panes the first to appear starts the restore; the other, a moment later, scrolls too if it holds it.
+                if let was = k.layout, was != panes, k.top != nil { k.restoring = Date() }
+                k.layout = panes
+                guard Date().timeIntervalSince(k.restoring) < 0.5, let top = k.top else { return }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard !Task.isCancelled else { return }
+                proxy.scrollTo(top, anchor: .top)
+            }
+    }
 }
 
 // One set of timings for the whole app: quick enough to feel instant, long enough to read as motion, and critically
@@ -364,7 +432,7 @@ struct Screen<Content: View>: View {
                 // title collapsed into the bar, and the rows ran on under it ("Open on the Mac (13)" printed behind
                 // "Apps", 2026-11-07). The TV app does the same.
                 // At the cards' edge and as far down as the system's large title sat, so nothing moved but its behaviour.
-                Section { paneTitle(side).padding(.top, TopEdge.statusBar < 20 ? 14 : 0).id("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+                Section { paneTitle(side).padding(.top, TopEdge.statusBar < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right, Notice.shows(model) { Section { Notice() } }
                 if let s = model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
@@ -372,6 +440,7 @@ struct Screen<Content: View>: View {
             // One gap between the blocks on Status, where they sit on the page's own background.
             .listSectionSpacing(tab == 0 ? .custom(28) : .default)
             .scrollsUnder(side == .right ? 1 : 0)
+            .keepsPlace("tab\(tab)", proxy)
             // No pull to refresh: every figure follows the Mac by itself (each second on Status, every 10 seconds
             // otherwise, and at once on opening a tab), so pulling only ever showed what was already there (Richard,
             // 2026-11-07: the display key "should self update not requiring refresh which u can take the function out").
@@ -713,9 +782,9 @@ struct StatusTab: View {
     // The figures, dimmed while they're only the last ones the Mac sent.
     @ViewBuilder var graphics: some View {
         let dim = model.stale ? 0.5 : 1
-        Section { LiveTiles(s: s).opacity(dim).id(side == .right ? "top" : "tiles") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+        Section { LiveTiles(s: s).opacity(dim).place("tiles") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         if showTemps, let temps = s.temps, !temps.isEmpty {
-            Section("Temperatures") { TempDials(s: s).opacity(dim).id("temps") }
+            Section("Temperatures") { TempDials(s: s).opacity(dim).place("temps") }
         }
         if showDisk {
             Section("Disk") {
@@ -734,6 +803,7 @@ struct StatusTab: View {
                     .opacity(dim)
                 }
                 .buttonStyle(PressStyle())
+                .place("disk")
             }
         }
     }
@@ -741,29 +811,30 @@ struct StatusTab: View {
         AlertSettings()
         if showAccess {
             Section("Remote access") {
-                StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
-                StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
-                StateRow(label: "Tailscale", good: s.tailscale.state == "Running", value: s.tailscale.state == "Running" ? "Connected" : "Off")
-                StateRow(label: "Public link", good: s.publicLinkActive, value: s.publicLinkActive ? "Active" : s.publicUrl.isEmpty ? "Off" : "Down")
-                StateRow(label: "Screen Sharing", good: s.sharing.vnc, value: s.sharing.vnc ? "On" : "Off")
-                StateRow(label: "SSH", good: s.sharing.ssh, value: s.sharing.ssh ? "On" : "Off")
+                StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped").place("access-Remote control")
+                StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped").place("access-Desktop app")
+                StateRow(label: "Tailscale", good: s.tailscale.state == "Running", value: s.tailscale.state == "Running" ? "Connected" : "Off").place("access-Tailscale")
+                StateRow(label: "Public link", good: s.publicLinkActive, value: s.publicLinkActive ? "Active" : s.publicUrl.isEmpty ? "Off" : "Down").place("access-Public link")
+                StateRow(label: "Screen Sharing", good: s.sharing.vnc, value: s.sharing.vnc ? "On" : "Off").place("access-Screen Sharing")
+                StateRow(label: "SSH", good: s.sharing.ssh, value: s.sharing.ssh ? "On" : "Off").place("access-SSH")
             }
         }
         if showThisMac {
             Section("This Mac") {
-                LabeledContent("Model", value: s.model)
-                LabeledContent("Processor", value: s.cpuModel.replacingOccurrences(of: "(R)", with: "").replacingOccurrences(of: "CPU ", with: ""))
-                LabeledContent("Tailnet", value: s.tailscale.name ?? "Not signed in")
-                Button("Change connection") { model.signInSheet = true }
+                LabeledContent("Model", value: s.model).place("mac-model")
+                LabeledContent("Processor", value: s.cpuModel.replacingOccurrences(of: "(R)", with: "").replacingOccurrences(of: "CPU ", with: "")).place("mac-cpu")
+                LabeledContent("Tailnet", value: s.tailscale.name ?? "Not signed in").place("mac-tailnet")
+                Button("Change connection") { model.signInSheet = true }.place("mac-change")
             }
         }
         if showProcesses {
             Section("Top processes") {
-                ForEach(s.procs) { p in LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)) }
+                ForEach(s.procs) { p in LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)).place("proc-\(p.pid)") }
                 Button { model.processes = .cpu } label: {
                     HStack { Text("All processes").foregroundStyle(.primary); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
                         .contentShape(Rectangle())
                 }
+                .place("procs-all")
             }
         }
     }
@@ -773,8 +844,8 @@ struct StatusTab: View {
         if side != .right {
             // Updates waiting are the number on the Apps tab, not a problem with the Mac.
             if let alerts = s.alerts?.filter({ $0.id != OTAInstaller.alertID }), !alerts.isEmpty { AlertBanner(alerts: alerts) }
-            Section { Hero(s: s).id("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
-            if showQuick { Section { QuickActions() }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
+            Section { Hero(s: s).place("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
+            if showQuick { Section { QuickActions().place("quick") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
         }
         if side != .left { graphics }
         if side != .right { text }
@@ -819,7 +890,7 @@ struct AppsTab: View {
                             .accessibilityLabel("Quit \(a.name)")
                     }
                     // The first app is where the build's scrolled shot stops, its heading gone up under the top.
-                    .id(open.first?.id == a.id ? AnyHashable("open") : AnyHashable(a.id))
+                    .place(open.first?.id == a.id ? AnyHashable("open") : AnyHashable(a.id))
                 }
             }
             Section {
@@ -827,6 +898,7 @@ struct AppsTab: View {
                     // What isn't already open, the Mac's own apps included (Terminal, Calendar and the rest).
                     ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button(name) { Task { alert = await model.run("app-open", ["name": name]) } } }
                 } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
+                .place("launch")
             }
             // One question from the row's Quit, with Force Quit beside it for an app that won't go.
             .alert(pending.map { "Quit \($0.name)?" } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
@@ -876,7 +948,8 @@ struct ClaudeTab: View {
                             .contentShape(Rectangle())
                             .onTapGesture { model.open(session: x) }
                             .accessibilityAddTraits(.isButton)
-                    } else { row }
+                            .place("session-\(x.id)")
+                    } else { row.place("session-\(x.id)") }
                 }
                 if let sessionNote { FailText(sessionNote) }
             }
@@ -888,7 +961,7 @@ struct ClaudeTab: View {
         if side != .right {
             Section("Claude Code") {
                 StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
-                StateRow(label: "Auto-restart", good: s.claude.keepAlive, value: s.claude.keepAlive ? "Armed" : "Off")
+                StateRow(label: "Auto-restart", good: s.claude.keepAlive, value: s.claude.keepAlive ? "Armed" : "Off").place("cc-restart")
                 StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
                 LabeledContent("Version", value: s.claude.version.replacingOccurrences(of: " (Claude Code)", with: ""))
                 LabeledContent("Service", value: sentenceCase(s.claude.service ?? "Unknown"))
@@ -1706,6 +1779,7 @@ struct SeedSection: View {
                 // the list's own row highlight, inside the card's corners (a wash of our own stuck out square past
                 // them; designer HOLD 2026-11-08).
                 .accessibilityHint("Opens its version history")
+                .place("seed-\(a.id)")
             }
             Menu {
                 Button { picking = true } label: { Label("From Files", systemImage: "folder") }
@@ -1716,6 +1790,7 @@ struct SeedSection: View {
                     if uploading || seed.fetch?.state == "working" { Spacer(); ProgressView() }
                 }
             }
+            .place("add")
             .disabled(uploading || seed.fetch?.state == "working")
             if let f = seed.fetch, f.state == "failed" { Text(f.message).font(.footnote).foregroundStyle(.red) }
             if let addFail { FailText(addFail) }

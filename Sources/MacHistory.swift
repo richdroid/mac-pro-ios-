@@ -226,19 +226,24 @@ struct HistoryView: View {
         if let sort = ProcessSort(metric: metric) { ProcessesLink(sort: sort) }
     }
     var body: some View {
+        // Opened, turned or closed, the page comes back where he was: the figures scroll to what was at the top.
+        ScrollViewReader { proxy in
         Group {
             if panes {
                 FoldSplit {
                     VStack(spacing: 14) { readout; chart.frame(maxHeight: .infinity) }.padding(20)
                 } right: {
-                    ScrollView { VStack(spacing: 14) { range; stats; processes; coverage }.padding(20) }.scrollsUnder()
+                    ScrollView { VStack(spacing: 14) { range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }.padding(20) }.scrollsUnder()
+                        .keepsPlace("history-\(metric.key)", proxy)
                 }
             } else {
                 ScrollView {
-                    VStack(spacing: 14) { readout; range; chart.frame(height: 260); stats; processes; coverage }.padding(.horizontal, 16).padding(.vertical, 8)
+                    VStack(spacing: 14) { readout.place("readout"); range.place("range"); chart.frame(height: 260).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }.padding(.horizontal, 16).padding(.vertical, 8)
                 }
                 .scrollsUnder()
+                .keepsPlace("history-\(metric.key)", proxy)
             }
+        }
         }
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()

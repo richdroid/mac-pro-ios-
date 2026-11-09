@@ -266,6 +266,7 @@ struct UpdatesSection: View {
         // Color.primary, the label colour itself: .primary resolved to the style's tint and turned every line blue.
         Button { model.appHistory = a.file } label: { rowBody(a).foregroundStyle(Color.primary) }
             .accessibilityHint("Opens its version history")
+            .place("update-\(a.id)")
     }
     func rowBody(_ a: Status.SeedApp) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -534,6 +535,7 @@ struct VersionHistoryView: View {
         .task { await load() }
     }
     private func pane(header: Bool, showBuilds: Bool, afterNewest: Bool = false) -> some View {
+        ScrollViewReader { proxy in
         List {
             if header, let app {
                 Section {
@@ -553,11 +555,12 @@ struct VersionHistoryView: View {
                         }
                     }
                     .padding(.vertical, 4)
+                    .place("header")
                 }
             }
             if header, !showBuilds, let builds, let newest = builds.first {
                 let here = app.flatMap { Self.hereBuild(Self.phoneBuild($0), in: builds) }
-                Section("What’s New") { entry(newest, here: newest.build == here) }
+                Section("What’s New") { entry(newest, here: newest.build == here).place(newest.id) }
             }
             // The bar already says Version History; the builds follow the app without a heading saying it again.
             if showBuilds {
@@ -565,7 +568,7 @@ struct VersionHistoryView: View {
                 if let builds {
                     if builds.isEmpty { Text("No builds yet").foregroundStyle(.secondary) }
                     let here = app.flatMap { Self.hereBuild(Self.phoneBuild($0), in: builds) }
-                    ForEach(afterNewest ? Array(builds.dropFirst()) : builds) { entry($0, here: $0.build == here).id($0.id) }
+                    ForEach(afterNewest ? Array(builds.dropFirst()) : builds) { entry($0, here: $0.build == here).place($0.id) }
                 } else if let failed {
                     // Something he can do about it: ask again.
                     Button { self.failed = nil; Task { await load() } } label: {
@@ -588,9 +591,12 @@ struct VersionHistoryView: View {
         // as Apps does, not dissolving into it (CI ac93e14's film, open upright).
         .contentMargins(.bottom, 24, for: .scrollContent)
         .scrollsUnder()
+        // Opened, turned or closed, the page comes back at the build he was reading.
+        .keepsPlace("versions-\(file)", proxy)
         // Open upright the tab bar floats over the page's foot; the notes fade out above it, as on Apps itself, instead of
         // reading on either side of it (Richard, 2026-11-05: "fade page content out under the tab bar").
         .modifier(TabBarFade())
+        }
     }
 
     func names(_ app: Status.SeedApp) -> some View {
