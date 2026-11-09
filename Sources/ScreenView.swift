@@ -92,6 +92,7 @@ struct RemoteScreenView: View {
             let insets = ScreenInsets.current
             let p = Self.plan(area: full.size, fold: f, aspect: aspect, top: insets.top, bottom: insets.bottom,
                               keyboard: typing ? keyboardHeight : 0, force: force)
+            let _ = RegionLog.note("plan \(p.kind) top \(Int(insets.top)) picture \(p.picture.debugDescription) fnRow \(p.fnRow.debugDescription) tools \(p.tools.count) \(p.tools.first?.debugDescription ?? "")")
             stage(p, area: full.size)
         }
         .ignoresSafeArea()
@@ -160,13 +161,23 @@ struct RemoteScreenView: View {
     // Where the hinge runs, in this view's own space, and whether the Duo is partly folded there (the region is active)
     // or open flat. With it, what covers the display right now: the outer camera (always, on the cover) and the inner
     // one while it's in use, as the system's occlusion regions, their margins already included.
-    struct Fold { var crease: CGRect?; var folded = false; var covered: [CGRect] = [] }
+    // `cores` are the same regions without their margins: the camera itself, which is what the tools beside it keep
+    // clear of where a region runs the whole side.
+    struct Fold { var crease: CGRect?; var folded = false; var covered: [CGRect] = []; var cores: [CGRect] = [] }
     func fold(_ g: GeometryProxy) -> Fold {
         #if os(iOS)
         if #available(iOS 27.1, *) {
+            let occ = g.reservedRegions(kind: .occlusion)
+            RegionLog.note("display \(Int(g.size.width))x\(Int(g.size.height)) occlusion " + occ.map { "\($0.frame.debugDescription) margins t\(Int($0.margins.top)) l\(Int($0.margins.leading)) b\(Int($0.margins.bottom)) r\(Int($0.margins.trailing)) active \($0.isActive)" }.joined(separator: " | ")
+                           + " inactive-too \(g.reservedRegions(kind: .occlusion, options: .includeInactive).map(\.frame.debugDescription))")
             return Fold(crease: g.reservedRegions(kind: .division, options: .includeInactive).first?.frame,
                         folded: hingeFolded ?? !g.reservedRegions(kind: .division).isEmpty,
-                        covered: g.reservedRegions(kind: .occlusion).map(\.frame))
+                        covered: occ.map(\.frame),
+                        cores: occ.map { r in
+                            let m = r.margins
+                            return CGRect(x: r.frame.minX + m.leading, y: r.frame.minY + m.top,
+                                          width: max(r.frame.width - m.leading - m.trailing, 1), height: max(r.frame.height - m.top - m.bottom, 1))
+                        })
         }
         #endif
         return Fold()
@@ -175,9 +186,9 @@ struct RemoteScreenView: View {
     func effectiveFold(_ f: Fold, _ area: CGSize) -> (Fold, ScreenPlan.Kind?) {
         switch postureOverride {
         // Only where the display could really fold that way: the outer display has no hinge, so there it's left as it is.
-        case "laptop" where area.height >= 600: return (Fold(crease: CGRect(x: 0, y: (area.height * 0.478).rounded(), width: area.width, height: 40), folded: true, covered: f.covered), nil)
-        case "book" where area.width >= 600: return (Fold(crease: CGRect(x: (area.width * 0.478).rounded(), y: 0, width: 40, height: area.height), folded: true, covered: f.covered), nil)
-        case "closedLandscape": return (Fold(covered: f.covered), .closedLandscape)
+        case "laptop" where area.height >= 600: return (Fold(crease: CGRect(x: 0, y: (area.height * 0.478).rounded(), width: area.width, height: 40), folded: true, covered: f.covered, cores: f.cores), nil)
+        case "book" where area.width >= 600: return (Fold(crease: CGRect(x: (area.width * 0.478).rounded(), y: 0, width: 40, height: area.height), folded: true, covered: f.covered, cores: f.cores), nil)
+        case "closedLandscape": return (Fold(covered: f.covered, cores: f.cores), .closedLandscape)
         default: return (f, nil)
         }
     }
@@ -299,7 +310,13 @@ struct RemoteScreenView: View {
                 // keys riding on the keyboard).
                 let limit = keyboard > 0 ? foot : max(foot, top + h * 0.7)
                 let col = CGRect(x: colX, y: top + 20, width: colW, height: max(limit - top - 20, 0))
-                if let slots = Self.toolSlots(in: col, avoiding: fold.covered, count: ScreenTool.allCases.count), let last = slots.last {
+                // A region that runs most of the side (the system's own side column on the cover) is kept clear of only
+                // where the camera itself is, as the system's Back sits in that column under it; a small one, margins and all.
+                let avoid = fold.covered.indices.map { i -> CGRect in
+                    let r = fold.covered[i], core = i < fold.cores.count ? fold.cores[i] : r
+                    return r.height > h * 0.4 && core.height <= h * 0.4 ? core.insetBy(dx: 0, dy: -6) : r
+                }
+                if let slots = Self.toolSlots(in: col, avoiding: avoid, count: ScreenTool.allCases.count), let last = slots.last {
                     let bottomY = max(foot, last.maxY)
                     p.tools = slots
                     p.fnRow = .zero
@@ -2336,6 +2353,19 @@ struct EdgeClamped<Content: View>: View {
         #else
         return 10_000
         #endif
+    }
+}
+
+// For the build's shots only: what the display's reserved regions are and what the Screen made of them, each change once,
+// to Caches/regions.txt, which the build collects (the cover's camera region couldn't be seen from a picture alone).
+@MainActor enum RegionLog {
+    static var last = ""
+    static func note(_ line: String) {
+        guard line != last, !(UserDefaults.standard.string(forKey: "pose") ?? "").isEmpty else { return }
+        last = line
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("regions.txt")
+        let data = Data((line + "\n").utf8)
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(data); try? h.close() } else { try? data.write(to: url) }
     }
 }
 

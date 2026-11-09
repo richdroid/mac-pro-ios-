@@ -235,6 +235,8 @@ jobs:
             posturefilm posture-status $pass -tab 0
             posturefilm posture-session $pass -tab 2 -pose session
           done
+          # The display's reserved regions as the Screen read them in each posture (Caches/regions.txt, written only in poses).
+          c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) && cp "$c/Library/Caches/regions.txt" dist/macpro-regions.log || true
           ls dist
       - name: Publish
         if: always()
