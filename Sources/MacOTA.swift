@@ -177,25 +177,29 @@ struct OTAOfferSheet: View {
                 .padding(.top, 8)
             VStack(spacing: 6) {
                 Text(apps.count == 1 ? "Update ready" : "\(apps.count) updates ready").font(.title2.weight(.bold))
-                Text("From the Mac, over the air. iOS asks you to confirm each one.")
+                // Only what he needs to know before tapping: iOS will ask once per app. Where it comes from is plumbing.
+                Text("iOS asks you to confirm each one.")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             VStack(spacing: 0) {
                 ForEach(Array(apps.enumerated()), id: \.element.id) { i, a in
                     if i > 0 { Divider().padding(.leading, 16) }
-                    HStack {
-                        Text(a.name).font(.body.weight(.medium))
+                    // The same app as on the Apps tab's row: its icon, its name, its build in the same words.
+                    HStack(spacing: 12) {
+                        AppIcon(app: a, size: 32)
+                        Text(a.name).font(.headline)
                         Spacer(minLength: 8)
-                        Text(a.phoneBuild.isEmpty ? "Build \(a.build)" : "\(a.phoneBuild) → \(a.build)")
+                        Text(a.phoneBuild.isEmpty ? "Build \(a.build)" : "Build \(a.phoneBuild) → \(a.build)")
                             .font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
                     }
-                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
                 }
             }
             .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: cardRadius - 6, style: .continuous))
             VStack(spacing: 6) {
                 Button { install(apps) } label: {
-                    Text(apps.count == 1 ? "Install" : "Install all").font(.headline).frame(maxWidth: .infinity, minHeight: 50)
+                    // The Apps tab's words for the same thing: Update, Update All.
+                    Text(apps.count == 1 ? "Update" : "Update All").font(.headline).frame(maxWidth: .infinity, minHeight: 50)
                 }
                 .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
                 Button("Not now") { dismiss() }
@@ -298,10 +302,8 @@ struct UpdatesSection: View {
         if a.state == "installing" || ota.current?.file == a.id {
             ProgressView().controlSize(.regular).frame(width: 84)
         } else if Self.link(a) != nil {
-            Button { ota.install([a]) } label: {
-                Text("Update").font(.subheadline.weight(.bold))
-            }
-            .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
+            Button("Update") { ota.install([a]) }
+            .rowCapsule()
             .disabled(ota.running)
             .accessibilityLabel("Update \(a.name) to build \(a.build)")
         } else if seed.reachable {
@@ -309,8 +311,8 @@ struct UpdatesSection: View {
             Button {
                 fails[a.id] = nil
                 Task { fails[a.id] = await model.run("ios-seed", ["file": a.file]) }
-            } label: { Text("Update").font(.subheadline.weight(.bold)) }
-            .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
+            } label: { Text("Update") }
+            .rowCapsule()
             .disabled(!seed.seeding.isEmpty)
         } else {
             // No copy signed ahead yet, away from home: the capsule is there, dimmed, and the row says when it goes.
@@ -332,49 +334,73 @@ struct UpdatesSection: View {
     }
 }
 
-// What's new, three lines with "more" at the end of the third like the App Store's, only when there is more; opened,
-// one line per change.
+// What's new, three lines with "more" at the end of the third like the App Store's, only when there is more. The same
+// bullet lines as Version History, collapsed and opened: "more" lets the rest of the list show under the lines already
+// there, never a second layout (it was a run-on paragraph cut mid-word, then bullets once opened).
 struct WhatsNew: View {
     let notes: [String]
     @State private var open = false
-    @State private var shown: CGFloat = 0
     @State private var whole: CGFloat = 0
-    private var more: Bool { whole > shown + 1 }
+    // One line of the notes' type; until measured, the system's own figure for it.
+    @State private var line: CGFloat = NoteLines.lineHeight
+    private var cut: CGFloat { line * 3 }
+    private var more: Bool { whole > cut + 1 }
     var body: some View {
-        Group {
-            if open {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(notes.enumerated()), id: \.offset) { _, n in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text("•").foregroundStyle(.secondary)
-                            Text(n).fixedSize(horizontal: false, vertical: true)
-                        }
+        NoteLines(notes: notes)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { whole = $0 }
+            .frame(height: open || !more ? nil : cut, alignment: .top)
+            .clipped()
+            .overlay(alignment: .bottomTrailing) {
+                if more && !open {
+                    Button { withAnimation(.snappy) { open = true } } label: {
+                        Text("more").fontWeight(.semibold).foregroundStyle(macBlue)
+                            .padding(.leading, 40)
+                            .background(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: cardFill, location: 0.5)], startPoint: .leading, endPoint: .trailing))
                     }
+                    .buttonStyle(.plain)
                 }
-                .transition(.opacity)
-            } else {
-                let text = notes.joined(separator: "\n")
-                Text(text).lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shown = $0 }
-                    // The whole text, unclipped and unseen, to know whether three lines hold it.
-                    .background(alignment: .topLeading) {
-                        Text(text).fixedSize(horizontal: false, vertical: true).hidden()
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { whole = $0 }
-                    }
-                    .overlay(alignment: .bottomTrailing) {
-                        if more {
-                            Button { withAnimation(.snappy) { open = true } } label: {
-                                Text("more").fontWeight(.semibold).foregroundStyle(macBlue)
-                                    .padding(.leading, 40)
-                                    .background(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: Color(white: 0.11), location: 0.5)], startPoint: .leading, endPoint: .trailing))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+            }
+            .background(alignment: .topLeading) {
+                Text("A").hidden().onGeometryChange(for: CGFloat.self) { $0.size.height } action: { line = $0 }
+            }
+            .font(.subheadline)
+    }
+}
+
+// An update's notes, one bullet per change with its wrap hung under the text: on an Updates row, opened by "more", and in
+// Version History alike. No gap between them, so three lines are always exactly three lines' height.
+struct NoteLines: View {
+    let notes: [String]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(notes.enumerated()), id: \.offset) { _, n in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("•").foregroundStyle(.secondary)
+                    Text(n).fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
-        .font(.subheadline)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    @MainActor static var lineHeight: CGFloat {
+        #if canImport(UIKit)
+        return UIFont.preferredFont(forTextStyle: .subheadline).lineHeight.rounded(.up)
+        #else
+        return 18
+        #endif
+    }
+}
+
+extension View {
+    // The one capsule on every row of his apps, as the App Store's Update and Open: bold, filled for the thing to do now
+    // (Update, Install), tinted glass for the rest (Renew, Quit). Before, Update was bold and small, Install larger and
+    // semibold, Renew and Quit plain body in a rounded rectangle: four buttons for one job.
+    @ViewBuilder func rowCapsule(prominent: Bool = true) -> some View {
+        if prominent {
+            self.font(.subheadline.weight(.bold)).buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
+        } else {
+            self.font(.subheadline.weight(.bold)).buttonStyle(.bordered).buttonBorderShape(.capsule).tint(macBlue)
+        }
     }
 }
 
@@ -505,9 +531,16 @@ struct VersionHistoryView: View {
         guard let p = Int(phone) else { return nil }
         return builds.compactMap { Int($0.build) }.filter { $0 <= p }.max().map(String.init)
     }
-    static func onPhoneLine(_ a: Status.SeedApp) -> String {
+    // Under the name, what the build marked "On this iPhone" below doesn't already say: how long it has left, or that a
+    // newer one waits (it said "Build 204 on this iPhone" right above "Build 204  On this iPhone").
+    static func onPhoneLine(_ a: Status.SeedApp) -> (String, Color) {
         let b = phoneBuild(a)
-        return b.isEmpty ? "Not on this iPhone" : "Build \(b) on this iPhone"
+        if b.isEmpty { return ("Not on this iPhone", .orange) }
+        if b != a.build, ["waiting", "update", "installing"].contains(a.state) { return ("Build \(a.build) is ready", .secondary) }
+        if a.state == "failed" { return ("Install failed", .red) }
+        guard let days = SeedSection.daysLeft(a) else { return ("On this iPhone", .secondary) }
+        let l = SeedSection.left(days)
+        return (l.0 + " on this iPhone", l.1)
     }
     // "Today, 10:16 AM", "Yesterday, 9:50 PM", "Nov 6": several builds can land in a day.
     static func when(_ ms: Double) -> String {
@@ -529,14 +562,30 @@ struct VersionHistoryView: View {
         }
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
-        .navigationTitle("Version History")
+        // The page's name as large as every tab's, never the small bar title it was (17 pt, under the 20 pt app name in the
+        // card below it, beside a 34 pt "Apps" one Back away). One pane: the system's large title, no hand-made item in
+        // the bar, so iOS lays out Back the Duo's way (ruling 2026-11-09). Two panes: the left pane's first line, as each
+        // tab does there, because a large title collapsing as the builds scroll slid the other pane with it (2026-11-06).
+        .navigationTitle(panes ? "" : "Version History")
         .toolbarVisibility(.visible, for: .navigationBar)
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(panes ? .inline : .large)
         .task { await load() }
     }
     private func pane(header: Bool, showBuilds: Bool, afterNewest: Bool = false) -> some View {
         ScrollViewReader { proxy in
         List {
+            if panes {
+                // As a tab's paneTitle: at the cards' edge, the same height in both panes so their first cards start level.
+                Section {
+                    Text("Version History").font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, TopEdge.statusBar < 20 ? 14 : 0)
+                        .opacity(header ? 1 : 0)
+                        .accessibilityHidden(!header)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+            }
             if header, let app {
                 Section {
                     // Beside the name when the line fits whole; folded, "Build 11 on this iPhone" wrapped to two lines
@@ -601,8 +650,9 @@ struct VersionHistoryView: View {
 
     func names(_ app: Status.SeedApp) -> some View {
         VStack(alignment: .leading, spacing: 2) {
+            let line = Self.onPhoneLine(app)
             Text(app.name).font(.title3.weight(.bold))
-            Text(Self.onPhoneLine(app)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+            Text(line.0).font(.subheadline).foregroundStyle(line.1).monospacedDigit()
         }
     }
     // A newer build ready for this iPhone: Update, as on the app's App Store page.
@@ -610,8 +660,8 @@ struct VersionHistoryView: View {
         if let seed = seeds.seed, UpdatesSection.updates(seed).contains(where: { $0.id == app.id }), UpdatesSection.link(app) != nil {
             if ota.current?.file == app.id { ProgressView().frame(width: 84) }
             else {
-                Button { ota.install([app]) } label: { Text("Update").font(.subheadline.weight(.bold)) }
-                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
+                Button("Update") { ota.install([app]) }
+                    .rowCapsule()
                     .disabled(ota.running)
                     .accessibilityLabel("Update \(app.name) to build \(app.build)")
             }
@@ -633,15 +683,8 @@ struct VersionHistoryView: View {
                 Spacer(minLength: 8)
                 Text(Self.when(b.at)).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
             }
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(b.notes.enumerated()), id: \.offset) { _, n in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("•").foregroundStyle(.secondary)
-                        Text(n).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .font(.subheadline)
+            // The same lines as the Updates row's what's new.
+            NoteLines(notes: b.notes).font(.subheadline)
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)

@@ -508,7 +508,9 @@ struct Screen<Content: View>: View {
     }
     func page(_ side: Side) -> some View {
         VStack(spacing: 12) {
-            paneTitle(side).padding(.leading, side == .right ? 0 : 20)
+            // As high as the listed tabs' titles (the list's 4 pt margin, and 14 pt more where the clock is on the side):
+            // macOS's sat 18 pt above Apps' folded, so the title jumped going from one tab to the next.
+            paneTitle(side).padding(.leading, side == .right ? 0 : 20).padding(.top, (TopEdge.statusBar < 20 ? 14 : 0) + 4)
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
                     .padding(.leading, 20)
@@ -901,7 +903,7 @@ struct AppsTab: View {
                         }
                         Spacer(minLength: 8)
                         Button("Quit") { pending = a }
-                            .buttonStyle(.bordered)
+                            .rowCapsule(prominent: false)
                             .accessibilityLabel("Quit \(a.name)")
                     }
                     // The first app is where the build's scrolled shot stops, its heading gone up under the top.
@@ -1328,7 +1330,8 @@ struct UpgradeTab: View {
                     Text("macOS \(s.macos) · OCLP \(oclp)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                     Text(patched).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
                     // The date on a line of its own, so it never breaks across two.
-                    if !s.oclp.patchedAt.isEmpty { Text(s.oclp.patchedAt).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
+                    // Said what it is: a bare "October 30" under the patches read as nothing in particular.
+                    if !s.oclp.patchedAt.isEmpty { Text("Patched \(s.oclp.patchedAt)").font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 Spacer(minLength: 8)
                 if s.upgrade.installed {
@@ -1380,7 +1383,9 @@ struct UpgradeTab: View {
         }
         .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
     }
-    func header(_ t: String) -> some View { Text(t).font(.title3.weight(.semibold)).padding(.leading, 4) }
+    // The Apps tab's section headings ("Updates", "On this iPhone"): bold, secondary, under the title rather than as loud
+    // as it, in line with the text in the cards below. "Log" was white and semibold at the cards' very edge.
+    func header(_ t: String) -> some View { Text(t).font(.title3.weight(.bold)).foregroundStyle(.secondary).padding(.leading, 16) }
     // The same edges as the system's list cards on every other tab: 20 pt in from the leading side, out to the trailing
     // edge of the space, and in the right pane open, from its leading edge.
     var body: some View {
@@ -1714,25 +1719,37 @@ struct SeedSection: View {
             catch { rowFail[row] = error.localizedDescription }
         }
     }
-    func daysLeft(_ a: Status.SeedApp) -> Int? {
+    static func daysLeft(_ a: Status.SeedApp) -> Int? {
         a.expires > 0 ? Int(ceil((a.expires / 1000 - Date().timeIntervalSince1970) / 86400)) : nil
     }
+    func daysLeft(_ a: Status.SeedApp) -> Int? { Self.daysLeft(a) }
+    // How long the signature has left, in words; coloured only once it needs him.
+    static func left(_ days: Int) -> (String, Color) {
+        days > 1 ? ("\(days) days left", .secondary) : days == 1 ? ("1 day left", .orange) : ("Expired", .red)
+    }
+    // One line under the name, as the Updates rows have ("Build 178 · Today"): the build in the same words, then what's
+    // worth knowing about it. It was three: a green "Up to date · 6d left" (the section above already says everything is
+    // up to date), "1.0 (12)" in a second numbering, and the chevron. Colour only for what needs him.
     func label(_ a: Status.SeedApp) -> (String, Color) {
+        let build = "Build \(a.phoneBuild.isEmpty ? a.build : a.phoneBuild)"
         // This app, already at the build the Mac still thinks is waiting (it can't see the phone away from home).
-        if OTAInstaller.isThisApp(a), a.build == OTAInstaller.thisBuild, ["waiting", "update"].contains(a.state) { return ("Up to date", .green) }
+        if OTAInstaller.isThisApp(a), a.build == OTAInstaller.thisBuild, ["waiting", "update"].contains(a.state) {
+            return ("Build \(a.build)" + (daysLeft(a).map { " · " + Self.left($0).0 } ?? ""), .secondary)
+        }
         switch a.state {
-        case "installing": return ("Installing…", .blue)
+        case "installing": return ("Installing build \(a.build)…", .secondary)
         case "waiting" where otaLink(a) != nil:
-            return ota.wasOpened(a) ? ("Build \(a.build) sent to this iPhone", .secondary) : ("Update ready: build \(a.build)", .blue)
-        case "waiting": return ("Build \(a.build) ready. Installs on home Wi-Fi.", .blue)
-        case "failed": return ("Install failed", .red)
+            return ota.wasOpened(a) ? ("Build \(a.build) sent to this iPhone", .secondary) : ("Build \(a.build) is ready", .secondary)
+        case "waiting": return ("Build \(a.build) installs on home Wi-Fi", .secondary)
+        case "failed": return ("\(build) · Install failed", .red)
         case "missing": return ("Not on this iPhone", .orange)
-        case "update": return ("Update ready: build \(a.build)", .blue)
+        case "update": return ("Build \(a.build) is ready", .secondary)
         case "external": return ("Installed outside the Mac", .secondary)
-        case "unknown": return ("Checking…", .secondary)
+        case "unknown": return (build, .secondary)
         default:
-            if let days = daysLeft(a) { return (days > 0 ? "Up to date · \(days)d left" : "Expired", days > 1 ? .green : days > 0 ? .orange : .red) }
-            return ("Up to date", .green)
+            guard let days = daysLeft(a) else { return (build, .secondary) }
+            let l = Self.left(days)
+            return (days > 0 ? "\(build) · \(l.0)" : "\(build) · Expired", l.1)
         }
     }
     // A newer build signed for this iPhone installs over the air, at home or away: the Mac's link, opened here.
@@ -1756,23 +1773,24 @@ struct SeedSection: View {
             ForEach(seed.apps.filter { $0.own && !ups.contains($0.id) }) { a in
                 let l = label(a)
                 Button { model.appHistory = a.file } label: {
-                HStack(spacing: 12) {
-                    AppIcon(app: a, size: 40)
+                // The Updates rows' own layout, so the two sections read as one list: the 58 pt icon, the name in the
+                // headline, one line under it, the capsule at the end. No chevron: the App Store's rows open their app
+                // without one, as the Updates rows above already do.
+                HStack(spacing: 14) {
+                    AppIcon(app: a, size: 58)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(a.name)
-                        Text(l.0).font(.footnote).foregroundStyle(l.1)
-                        Text(a.version.isEmpty ? "Build \(a.phoneBuild.isEmpty ? a.build : a.phoneBuild)" : "\(a.version) (\(a.phoneBuild.isEmpty ? a.build : a.phoneBuild))").font(.caption2).foregroundStyle(.secondary)
-                        if !a.message.isEmpty { Text(a.message).font(.caption2).foregroundStyle(.secondary).lineLimit(3) }
-                        if shareFile?.app == a.id { Text("Choose SideStore. LocalDevVPN needs to be on.").font(.caption2).foregroundStyle(.secondary) }
-                        if let f = rowFail[a.id] { Text(f).font(.caption2).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+                        Text(a.name).font(.headline)
+                        Text(l.0).font(.subheadline).foregroundStyle(l.1).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+                        if !a.message.isEmpty { Text(a.message).font(.footnote).foregroundStyle(.secondary).lineLimit(3) }
+                        if shareFile?.app == a.id { Text("Choose SideStore. LocalDevVPN needs to be on.").font(.footnote).foregroundStyle(.secondary) }
+                        if let f = rowFail[a.id] { Text(f).font(.footnote).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
                     }
-                    Spacer()
-                    if handing == a.file || ota.current?.file == a.id { ProgressView() }
+                    Spacer(minLength: 8)
+                    if handing == a.file || ota.current?.file == a.id { ProgressView().frame(width: 84) }
                     else if otaLink(a) != nil, !ota.wasOpened(a) {
                         // The way in now: a filled capsule, the one thing on the row to tap. SideStore only without a link.
                         Button("Install") { ota.install([a]) }
-                            .font(.body.weight(.semibold))
-                            .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).tint(macBlue)
+                            .rowCapsule()
                             .disabled(ota.running)
                             .accessibilityLabel("Install \(a.name) build \(a.build)")
                     }
@@ -1781,10 +1799,12 @@ struct SeedSection: View {
                             rowFail[a.id] = nil
                             if seed.reachable { Task { rowFail[a.id] = await model.run("ios-seed", ["file": a.file]) } }
                             else { handOff(a.file, row: a.id) }
-                        }.buttonStyle(.bordered).foregroundStyle(.tint).disabled(!seed.seeding.isEmpty || handing != nil)
+                        }
+                        .rowCapsule(prominent: false)
+                        .disabled(!seed.seeding.isEmpty || handing != nil)
                     }
-                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
+                .padding(.vertical, 6)
                 // In its own colours: the list's button style tints its whole label, and .primary resolved to that tint
                 // (CI f7bb947, every line blue). Color.primary is the label colour itself, and .secondary follows it.
                 .foregroundStyle(Color.primary)
@@ -1800,8 +1820,11 @@ struct SeedSection: View {
                 Button { picking = true } label: { Label("From Files", systemImage: "folder") }
                 Button { linking = true } label: { Label("From a link", systemImage: "link") }
             } label: {
-                HStack {
-                    Label(uploading ? "Sending to the Mac…" : "Add an app", systemImage: "plus")
+                // On the apps' grid: the plus in the icons' column, the words where the names start (they began 35 pt
+                // short of them).
+                HStack(spacing: 14) {
+                    Image(systemName: "plus").font(.title3.weight(.semibold)).frame(width: 58)
+                    Text(uploading ? "Sending to the Mac…" : "Add an app")
                     if uploading || seed.fetch?.state == "working" { Spacer(); ProgressView() }
                 }
             }
