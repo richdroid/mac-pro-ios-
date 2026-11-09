@@ -128,7 +128,12 @@ final class AppModel: ObservableObject {
     // the history in portrait on an empty chart).
     private var parks: Bool { ScrollHold.holding && status != nil && history == nil && processes == nil && sessionScreen == nil && pendingSession == nil }
     private func apply(_ fresh: Status) {
-        status = fresh
+        // An app opening or quitting on the Mac, or one of his apps coming or going, slides its row in or out with the list's
+        // own animation; put in at once, the rows under it jumped a row's height in one frame (designer, CI 836207d: the
+        // foot of Apps went 90→76 between two frames as TextEdit came and went, the page at rest at its end).
+        func rows(_ s: Status?) -> [String] { (s?.apps.filter { $0.mem != nil }.map { "\($0.pid)" } ?? []) + (s?.iosApps?.apps.map(\.id) ?? []) }
+        if status != nil, rows(status) != rows(fresh) { withAnimation(Motion.quick) { status = fresh } }
+        else { status = fresh }
         IconCache.prefetch(fresh, api: api)
         openPending()
         // Status's histories read ahead, so a tile opens onto a drawn chart.
