@@ -50,6 +50,8 @@ struct SessionTerminal: View {
     @State private var starting = false
     // Following the newest line, unless scrolled back to read what came before.
     @State private var following = true
+    // The "Waiting for you" chip's height, so the choices across the fold start level with the screen under it.
+    @State private var chipHeight: CGFloat = 0
     // Glyphs short enough for a sixth of the folded width, each with its full name for VoiceOver.
     static let keys: [(String, String, String)] = [("esc", "esc", "Escape"), ("enter", "⏎", "Enter"), ("up", "↑", "Up"), ("down", "↓", "Down"), ("left", "←", "Left"), ("right", "→", "Right"),
                                                    ("1", "1", "1"), ("2", "2", "2"), ("3", "3", "3"), ("tab", "⇥", "Tab"), ("shift-tab", "⇧⇥", "Shift Tab"), ("ctrl-c", "⌃C", "Control C")]
@@ -251,17 +253,20 @@ struct SessionTerminal: View {
     // the foot up: the box, the keys, then the menu's choices.
     var terminalColumn: some View {
         VStack(spacing: 8) {
-            stateChip
+            stateChip.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chipHeight = $0 }
             screen
         }
     }
-    var controls: some View {
+    // The menu's choices at the top, level with the screen's top beside it (under the chip, which only the screen's side
+    // has), the keys and the box at the foot. In one column the space between is nothing, so they sit together as before.
+    func controls(lead: CGFloat) -> some View {
         VStack(spacing: 8) {
-            Spacer(minLength: 0)
             if !options.isEmpty { choices }
+            Spacer(minLength: 0)
             keyRows
             composer
         }
+        .padding(.top, lead)
     }
     // Where the fold runs, in this view's own space, read as the Screen reads it. Only for the build's shots, the Screen's
     // made-up laptop posture applies here too (-screenPosture laptop), since the simulator can't fold upright.
@@ -295,7 +300,7 @@ struct SessionTerminal: View {
             let mode = arrangement(g)
             SessionFoldLayout(mode: mode) {
                 terminalColumn
-                controls
+                controls(lead: { if case .panes = mode, waiting { return chipHeight + 8 } else { return 0 } }())
             }
             // The parts move to their new places in the Screen's own spring as the hinge moves.
             .animation(RemoteScreenView.posture, value: mode)
