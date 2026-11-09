@@ -31,6 +31,7 @@ enum TermCache {
 // anything else, and a box to tell it something.
 struct SessionTerminal: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.paneLayout) private var panes
     let session: Status.Session
     @State private var text: String
     @State private var running: Bool
@@ -246,16 +247,59 @@ struct SessionTerminal: View {
             .transition(.opacity)
         }
     }
-    var body: some View {
-        // A page of its own, pushed like any other, so Back is where the system puts it, on the side on the Duo.
+    // The page's two halves: the screen (with what the session wants under the title), and the controls, which read from
+    // the foot up: the box, the keys, then the menu's choices.
+    var terminalColumn: some View {
         VStack(spacing: 8) {
             stateChip
             screen
+        }
+    }
+    var controls: some View {
+        VStack(spacing: 8) {
+            Spacer(minLength: 0)
             if !options.isEmpty { choices }
             keyRows
             composer
         }
-        .padding(.horizontal, 12).padding(.bottom, 8)
+    }
+    // Where the fold runs, in this view's own space, read as the Screen reads it. Only for the build's shots, the Screen's
+    // made-up laptop posture applies here too (-screenPosture laptop), since the simulator can't fold upright.
+    func arrangement(_ g: GeometryProxy) -> SessionFoldLayout.Mode {
+        let w = g.size.width, h = g.size.height
+        if UserDefaults.standard.string(forKey: "screenPosture") == "laptop", h >= 600, h > w {
+            let y = (h * 0.478).rounded(); return .stacked(above: y, below: y + 40)
+        }
+        #if os(iOS)
+        if #available(iOS 27.1, *) {
+            // Partly open: the crease across (laptop) stacks the screen above it and the controls below; down the middle
+            // (book) it's one page each, nothing across the fold.
+            if let c = g.reservedRegions(kind: .division).first?.frame {
+                return c.width >= c.height ? .stacked(above: c.minY, below: c.maxY) : .panes(seam: c.midX, gutter: min(max(24, c.width / 2 + 4), 40))
+            }
+            if panes {
+                let crease = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame
+                return .panes(seam: min(max(crease?.midX ?? w / 2, w * 0.3), w * 0.7), gutter: min(max(24, (crease?.width ?? 0) / 2 + 4), 40))
+            }
+            return .column
+        }
+        #endif
+        return panes ? .panes(seam: w / 2, gutter: 24) : .column
+    }
+    var body: some View {
+        // A page of its own, pushed like any other, so Back is where the system puts it, on the side on the Duo.
+        // Open flat in landscape the screen is the left pane and the controls the right, as FoldSplit lays other pages;
+        // folded or open in portrait it's one column; partly open it keeps to either side of the crease. One layout for
+        // all of them, so the box is the same view through every change of posture, with its text and focus.
+        GeometryReader { g in
+            let mode = arrangement(g)
+            SessionFoldLayout(mode: mode) {
+                terminalColumn
+                controls
+            }
+            // The parts move to their new places in the Screen's own spring as the hinge moves.
+            .animation(RemoteScreenView.posture, value: mode)
+        }
         .animation(Motion.fade, value: options)
         .animation(Motion.fade, value: waiting)
         .background(Color.black.ignoresSafeArea())
@@ -273,5 +317,44 @@ struct SessionTerminal: View {
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
             }
         }
+    }
+}
+
+// The session page's two parts, the screen and the controls, placed for the posture: one column (the controls at the
+// foot, the screen taking the rest), stacked either side of a crease across, or a pane each side of the hinge. The same
+// two children in every mode, so nothing in them is made anew when the Duo folds.
+struct SessionFoldLayout: Layout {
+    enum Mode: Equatable { case column, stacked(above: CGFloat, below: CGFloat), panes(seam: CGFloat, gutter: CGFloat) }
+    var mode: Mode
+    // The page's own margins: the sides, the foot, the gap between the parts, and the display's bare outer edge open
+    // flat, where the left pane gets the same air FoldSplit gives it.
+    static let side: CGFloat = 12, foot: CGFloat = 8, gap: CGFloat = 8, outer: CGFloat = 14
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize { proposal.replacingUnspecifiedDimensions() }
+    func placeSubviews(in b: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let w = b.width, h = b.height, inner = max(w - Self.side * 2, 0)
+        var screen = CGRect.zero, controls = CGRect.zero
+        // The controls at the foot, as tall as they ask (the box grows as it's typed in), the screen above them.
+        func column() {
+            let want = min(subviews[1].sizeThatFits(ProposedViewSize(width: inner, height: nil)).height, max(h - Self.foot, 0))
+            controls = CGRect(x: Self.side, y: h - Self.foot - want, width: inner, height: want)
+            screen = CGRect(x: Self.side, y: 0, width: inner, height: max(controls.minY - Self.gap, 0))
+        }
+        switch mode {
+        case .column: column()
+        case .stacked(let above, let below):
+            // Below the crease the controls sit at the foot, the choices nearest it. When the system keyboard leaves too
+            // little room there, they ride above it instead, as in one column.
+            let room = h - Self.foot - below - Self.gap
+            if room >= subviews[1].sizeThatFits(ProposedViewSize(width: inner, height: nil)).height {
+                screen = CGRect(x: Self.side, y: 0, width: inner, height: max(above - Self.gap, 0))
+                controls = CGRect(x: Self.side, y: below + Self.gap, width: inner, height: room)
+            } else { column() }
+        case .panes(let seam, let gutter):
+            screen = CGRect(x: Self.outer, y: 0, width: max(seam - gutter - Self.outer, 0), height: max(h - Self.foot, 0))
+            controls = CGRect(x: seam + gutter, y: 0, width: max(w - seam - gutter - Self.side, 0), height: max(h - Self.foot, 0))
+        }
+        subviews[0].place(at: CGPoint(x: b.minX + screen.minX, y: b.minY + screen.minY), proposal: ProposedViewSize(screen.size))
+        subviews[1].place(at: CGPoint(x: b.minX + controls.minX, y: b.minY + controls.minY), proposal: ProposedViewSize(controls.size))
     }
 }
