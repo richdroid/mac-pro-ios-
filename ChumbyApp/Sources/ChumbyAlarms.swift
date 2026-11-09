@@ -777,7 +777,8 @@ struct AlarmsTab: View {
         }
     }
 
-    var nap: some View { Section { NapChips().id("nap") } header: { SectionHead(icon: "zzz", text: "Nap", color: ChumbyPalette.sub(scheme == .dark)) } }
+    // The heading says what a chip does, so "20 min" reads as a nap that rings in 20 minutes, not a setting.
+    var nap: some View { Section { NapChips().id("nap") } header: { SectionHead(icon: "zzz", text: "Nap, wake me in", color: ChumbyPalette.sub(scheme == .dark)) } }
     var calendarListed: Bool { wake.rules.enabled && wake.allowed && !wake.plan.isEmpty }
     // The rule first, said plainly, and changed only as a rule; then the alarms it has set, checked against what the
     // Chumby really holds. A row opens that day, which is also changed only as "how long before".
@@ -839,7 +840,17 @@ struct AlarmsTab: View {
             } else if wake.rules.enabled {
                 Text("Chumby can’t see your calendar, so these can’t follow it.").foregroundStyle(.secondary)
             } else {
-                Button { Task { await wake.enable() } } label: { Label("Wake me from my calendar", systemImage: "calendar.badge.clock") }
+                // Off, the row says what it is and that a tap turns it on; a bare label read as a row that opened something.
+                Button { Task { await wake.enable() } } label: {
+                    HStack(spacing: 8) {
+                        Label("Wake me from my calendar", systemImage: "calendar.badge.clock")
+                        Spacer(minLength: 8)
+                        Text("Turn on").font(.subheadline.weight(.semibold)).foregroundStyle(ChumbyPalette.cal(scheme == .dark))
+                            .padding(.horizontal, 12).padding(.vertical, 6).background(ChumbyPalette.cal(scheme == .dark).opacity(0.14), in: Capsule())
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
             // Left on the Chumby when the plan stopped wanting them (Calendars turned off, an event gone): they still ring.
             ForEach(model.stateConfirmed && !CalendarWake.sample ? wake.strays(in: model.deviceState) : [], id: \.key) { a in

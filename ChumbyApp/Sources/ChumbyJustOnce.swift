@@ -175,7 +175,7 @@ struct JustOnceMenu: View {
             if let j = model.state.justOnce(), j.orphan { orphan(j) }
             else if case .ok(let a, let due, _) = model.justOnceOffer() {
                 Menu {
-                    Section("Later, just this once") {
+                    Section("Ring later, just \(justDay(due))") {
                         ForEach([10, 20, 30], id: \.self) { m in
                             let at = due.addingTimeInterval(Double(m * 60))
                             Button("+\(m) min · \(at.formatted(date: .omitted, time: .shortened))") { run { await model.justOnce(a, due: due, at: at, settings: a) } }
@@ -185,7 +185,9 @@ struct JustOnceMenu: View {
                 } label: {
                     HStack(spacing: 6) {
                         if busy { ProgressView().controlSize(.small) } else { Image(systemName: "clock.arrow.circlepath") }
-                        Text("Later or different, just this once")
+                        // Said as the two things he'd do, scoped to the day: "Later or different, just this once" named neither
+                        // (Richard, 2026-11-09: "the alarm stuff is still a bit unintuitive and confusing at points").
+                        Text("Later or another sound, just \(justDay(due))")
                     }
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
                     .frame(minHeight: 30).contentShape(Rectangle())
@@ -223,6 +225,8 @@ struct JustOnceMenu: View {
         busy = true; problem = nil
         Task { problem = await work(); busy = false }
     }
+    // "just today", "just tomorrow", "just Friday": the day in the sentence, a weekday keeping its capital.
+    func justDay(_ d: Date) -> String { let w = dayWord(d); return w == "Today" || w == "Tomorrow" ? w.lowercased() : w }
 }
 
 // Another time or sound for one ring: how much later (a few presets or a time), and the editor's own sound rows. When the
