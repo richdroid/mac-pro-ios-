@@ -793,6 +793,24 @@ struct HomeTab: View {
     // Named only from a recent reading, or his own tap: the kept copy can be from last night, when the Chumby's own
     // schedule had another channel up, and a name that then changes in front of him reads as the switcher failing.
     var channelSettled: Bool { model.stateConfirmed || model.chosenChannel != nil }
+    func channelLabel(icon: Bool) -> some View {
+        HStack(spacing: 10) {
+            if icon { Image(systemName: "tv").font(.system(size: 20, weight: .semibold)).foregroundStyle(ChumbyPalette.acc(dark)).frame(width: 28) }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Channel").font(.custom("Trebuchet MS", size: 13).weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark))
+                    .lineLimit(1).fixedSize()
+                Text(channelName.isEmpty ? "Choose one" : channelName).font(.custom("Trebuchet MS", size: 19).weight(.bold))
+                    .foregroundStyle(ChumbyPalette.ink(dark)).lineLimit(1).minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: icon, vertical: false)
+                    .contentTransition(.opacity)
+                    .opacity(channelSettled ? 1 : 0)
+                    .animation(.easeIn(duration: 0.25), value: channelSettled)
+            }
+            .layoutPriority(1)
+            Spacer(minLength: 4)
+            Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark))
+        }
+    }
     var channelRow: some View {
         // Buttons, not a picker: a picker sends nothing when the one tapped is the one it thinks is on, and with a stale
         // reading that was the channel he wanted, so the tap did nothing. Every tap goes to the Chumby; the tick marks
@@ -811,18 +829,11 @@ struct HomeTab: View {
                 }
             }
         } label: {
-            HStack(spacing: 14) {
-                Image(systemName: "tv").font(.system(size: 20, weight: .semibold)).foregroundStyle(ChumbyPalette.acc(dark)).frame(width: 28)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Channel").font(.custom("Trebuchet MS", size: 13).weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark))
-                    Text(channelName.isEmpty ? "Choose one" : channelName).font(.custom("Trebuchet MS", size: 19).weight(.bold))
-                        .foregroundStyle(ChumbyPalette.ink(dark)).lineLimit(1)
-                        .contentTransition(.opacity)
-                        .opacity(channelSettled ? 1 : 0)
-                        .animation(.easeIn(duration: 0.25), value: channelSettled)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark))
+            // Half the width folded (beside Night): the icon steps aside before the words are ever broken or cut (build 240,
+            // folded: "Channe / l / Def…").
+            ViewThatFits(in: .horizontal) {
+                channelLabel(icon: true)
+                channelLabel(icon: false)
             }
             .padding(.leading, 16).padding(.trailing, 16)
             .frame(height: HomeKey.size).frame(maxWidth: .infinity)
