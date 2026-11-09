@@ -139,12 +139,13 @@ struct ScrollsUnder: ViewModifier {
     @State private var track = Track()
     @Environment(\.refresh) private var refresh
     let id: Int
-    final class Track { var rest: CGFloat?; var now: CGFloat = 0; var under = false; let id = UUID() }
+    final class Track { var rest: CGFloat?; var now: CGFloat = 0; var under = false; let id = UUID(); var idle: Task<Void, Never>? }
     func body(content: Content) -> some View {
         content
             .scrollEdgeEffectStyle(.soft, for: .top)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 track.now = y
+                ScrollHold.stillMoving()
                 guard let r = track.rest else { return }
                 let under = y > r + 4
                 if under != track.under { track.under = under; report(id, under) }
@@ -159,9 +160,21 @@ struct ScrollsUnder: ViewModifier {
             // While it moves (finger down, flung, bouncing back from either end) the Mac's readings wait, and land when it
             // settles: a row changing height mid-bounce made the page snap back instead of springing (Richard, 2026-11-08:
             // "it doesnt bounce back naturally its like a sudden move back").
-            .onDisappear { ScrollHold.set(track.id, moving: false) }
+            .onDisappear { track.idle?.cancel(); ScrollHold.set(track.id, moving: false) }
             .onScrollPhaseChange { _, phase in
-                ScrollHold.set(track.id, moving: phase != .idle)
+                track.idle?.cancel(); track.idle = nil
+                if phase != .idle { ScrollHold.set(track.id, moving: true) }
+                else {
+                    // Readings wait a moment past idle: the spring back from a pull past the end can outlast the phase,
+                    // and a flick often follows a flick. One landing then moved the page under his thumb (CI f7bb947,
+                    // against a Mac whose readings change: 200 px jumps mid-pull, a 275 px first step of the spring).
+                    let id = track.id
+                    track.idle = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 600_000_000)
+                        guard !Task.isCancelled else { return }
+                        ScrollHold.set(id, moving: false)
+                    }
+                }
                 guard phase == .idle else { return }
                 if track.rest == nil { track.rest = track.now }
                 else if let r = track.rest, track.now < r, !(refresh != nil && track.now < r - 30) {
@@ -171,19 +184,23 @@ struct ScrollsUnder: ViewModifier {
             }
     }
 }
-// Which pages are moving right now. Readings from the Mac wait while any is, never more than 4 s at a stretch.
+// Which pages are moving right now. Readings from the Mac wait while any is, and for 4 s at most after it was last seen
+// moving (a phase change, or its content shifting a frame): a missed idle never holds them for good. Counted from the
+// first motion instead, a few flicks and a pull used the 4 s up and the readings landed under his finger and as the page
+// sprang back (CI f7bb947: "it doesnt bounce back naturally its like a sudden move back").
 @MainActor
 enum ScrollHold {
     private static var moving: Set<UUID> = []
-    private static var since = Date.distantPast
+    private static var alive = Date.distantPast
     static var onRelease: (() -> Void)?
-    static var holding: Bool { !moving.isEmpty && Date().timeIntervalSince(since) < 4 }
+    static var holding: Bool { !moving.isEmpty && Date().timeIntervalSince(alive) < 4 }
     static func set(_ id: UUID, moving now: Bool) {
         let was = !moving.isEmpty
-        if now { moving.insert(id) } else { moving.remove(id) }
-        if !was && !moving.isEmpty { since = Date() }
+        if now { moving.insert(id); alive = Date() } else { moving.remove(id) }
         if was && moving.isEmpty { onRelease?() }
     }
+    // Each frame a page's content moves, from its scroll geometry; nothing when none is moving.
+    static func stillMoving() { if !moving.isEmpty { alive = Date() } }
 }
 extension View {
     func topEdge() -> some View { modifier(TopEdge()) }
