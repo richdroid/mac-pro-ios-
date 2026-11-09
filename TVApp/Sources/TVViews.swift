@@ -370,10 +370,15 @@ extension EnvironmentValues { var pageScroll: PageScrollY? { get { self[PageScro
 private struct MovingTitle: View {
     let title: String
     let scrolled: PageScrollY
+    // What the display already keeps clear above the page: the clock's row open upright; nothing folded or open flat,
+    // where the clock is on the side and the name sat 13 pt from the glass (Richard, 2026-11-09, Playing folded: "too
+    // close to top edge"). It takes the same air from the top as from the side then, 22 pt to its cap, every tab alike.
+    @State private var above: CGFloat = 0
     var body: some View {
         let y = max(0, scrolled.y)
         PageHeading(title)
-            .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 8)
+            .padding(.horizontal, 20).padding(.top, max(4, 13 - above)).padding(.bottom, 8)
+            .background { Color.clear.ignoresSafeArea(edges: .top).onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { above = $0 } }
             .offset(y: -y)
             .opacity(Double(max(0, 1 - y / 44)))
             .allowsHitTesting(false)
@@ -426,18 +431,29 @@ struct ScrollMoving: ViewModifier {
     }
 }
 // Which pages are moving right now. Only the polled status waits while any is, never more than 4 s at a stretch: his own
-// presses, and every load they ask for, go straight through (TVModel).
+// presses, and every load they ask for, go straight through (TVModel). A page that has just gone idle keeps the hold
+// half a second longer: on his phone the spring back from a pull still snapped (2026-11-09), and a reading landing on
+// the phase's first idle moment, while the page is still settling, is the one way left for a row to change height
+// under it. The mock's films, where nothing changes, can't show that; the real bridge changes something every poll.
 @MainActor
 enum ScrollHold {
     private static var moving: Set<UUID> = []
     private static var since = Date.distantPast
+    private static var settling: Task<Void, Never>?
     static var onRelease: (() -> Void)?
-    static var holding: Bool { !moving.isEmpty && Date().timeIntervalSince(since) < 4 }
+    static var holding: Bool { (!moving.isEmpty || settling != nil) && Date().timeIntervalSince(since) < 4 }
     static func set(_ id: UUID, moving now: Bool) {
-        let was = !moving.isEmpty
-        if now { moving.insert(id) } else { moving.remove(id) }
-        if !was && !moving.isEmpty { since = Date() }
-        if was && moving.isEmpty { onRelease?() }
+        let was = !moving.isEmpty || settling != nil
+        if now { moving.insert(id); settling?.cancel(); settling = nil } else { moving.remove(id) }
+        if !was && now { since = Date() }
+        if was && !now && moving.isEmpty && settling == nil {
+            settling = Task {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
+                settling = nil
+                onRelease?()
+            }
+        }
     }
 }
 struct PageHeading: View {
