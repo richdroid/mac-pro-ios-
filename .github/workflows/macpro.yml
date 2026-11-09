@@ -199,12 +199,12 @@ jobs:
           swipefilm versionsfling 1 0.45 0.8 0.28 -tab 1 -pose versionsfilm
           # The hinge moved with a page up (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios across
           # everything"): both displays filmed while a pushed page and then Status are flung, the phone opened, turned,
-          # half closed and closed again, so each change is judged moving, place and state kept or not.
+          # half closed and closed again, so each change is judged moving, place and state kept or not. One display per
+          # pass (two recorders at once kept only one film per run), so the sequence runs twice: name, display, suffix.
           posturefilm() {
-            local name=$1; shift
+            local name=$1 display=$2 side=$3; shift 3
             local D=/tmp/dh/.build/release/devicehubctl
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/macpro-$name-outer.mp4 > /dev/null 2>&1 & R1=$!
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/macpro-$name-inner.mp4 > /dev/null 2>&1 & R3=$!
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name-$side.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
             sleep 10
@@ -216,11 +216,13 @@ jobs:
             $D "$DEVICE" rotate 3 || true; sleep 5
             $D "$DEVICE" pose partial || true; sleep 5
             $D "$DEVICE" pose closed || true; sleep 5
-            kill -INT $R1 $R3; wait $R1 $R3
+            kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
-          posturefilm posture-versions -tab 1 -pose versionsfilm
-          posturefilm posture-status -tab 0
+          for pass in "1 outer" "3 inner"; do
+            posturefilm posture-versions $pass -tab 1 -pose versionsfilm
+            posturefilm posture-status $pass -tab 0
+          done
           ls dist
       - name: Publish
         if: always()
