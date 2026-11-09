@@ -1079,6 +1079,10 @@ struct PlayKey: View {
 struct RemoteTab: View {
     @Environment(TVModel.self) var model
     @Environment(\.horizontalSizeClass) private var size
+    // Folded and turned sideways the display is short: the one column stacked the picture, its lines, the pad and the keys
+    // in 405 pt and the picture collapsed to a sliver under the pad (836207d's folded-landscape shots). There the Remote
+    // lays out as open does, the picture beside the pad.
+    @Environment(\.verticalSizeClass) private var vSize
     @Environment(\.paneLayout) private var panes
     @ObservedObject private var nextUp = NextUp.shared
     // The build's shot of the typing bar opens with it up.
@@ -1292,7 +1296,7 @@ struct RemoteTab: View {
     }
     var body: some View {
         Group {
-            if size == .regular {
+            if size == .regular || vSize == .compact {
                 FoldSplit {
                     // The apps come along when there's room, and step aside when held in portrait.
                     side(apps: panes)

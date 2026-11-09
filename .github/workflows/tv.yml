@@ -111,6 +111,11 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # A recording that caught nothing (the inner display gave empty films right after a slow first unfold, 836207d):
+            # once more, and that's it.
+            if [ "$(stat -f %z dist/tv-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ] && [ -z "$RETRIED" ]; then
+              echo "film $name empty, once more"; RETRIED=1 swipefilm "$name" "$display" "$x" "$lo" "$hi" "$address" "$@"
+            fi
           }
           # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
@@ -133,8 +138,18 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -open
           # Folded, the outer display, last.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1 || true; sleep 3
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
           poses 1 ""
+          # Folded and turned sideways, a posture he can hold too: the Remote with a show on, Apps, Watch and a details page
+          # (836207d: the Remote's picture, bar and episode line collapsed to a sliver under the pad there).
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 4
+          shot tab0-fland 1 7 $M -tab 0
+          shot remote-repisode-fland 1 8 $M/repisode -tab 0
+          shot tab1-fland 1 7 $M -tab 1
+          shot tab3-fland 1 7 $M -tab 3
+          shot details-fland 1 13 $M -tab 1 -pose details
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1 || true; sleep 4
           # The hinge and the rotation moved with a screen up (Richard, 2026-11-08: "pay particular attention to adherence
           # to iphone duo design specs and like reactivity to diff modes and folding scenarios across everything"): both
           # displays filmed while the app is folded, half opened, opened, turned and closed again, each with a state up
@@ -144,26 +159,35 @@ jobs:
           posturefilm() {
             local name=$1 steps=$2; shift 2
             local D=/tmp/dh/.build/release/devicehubctl
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/tv-$name-outer.mp4 > /dev/null 2>&1 & R1=$!
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/tv-$name-inner.mp4 > /dev/null 2>&1 & R3=$!
-            sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address "$@"
-            sleep 10
-            local step cmd wait
-            for step in $steps; do
-              cmd=${step%%:*}; wait=${step##*:}
-              case $cmd in
-                open|partial|closed) $D "$DEVICE" pose $cmd || echo "pose $cmd failed";;
-                portrait) $D "$DEVICE" rotate 1 || echo "rotate failed";;
-                landscape) $D "$DEVICE" rotate 3 || echo "rotate failed";;
-                drag) $D "$DEVICE" drag 0.5 0.8 0.5 0.3 0.12 || echo "drag failed";;
-                dragup) $D "$DEVICE" drag 0.5 0.3 0.5 0.8 0.12 || echo "drag failed";;
-                shot) xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-$name-outer-$RANDOM.png; xcrun simctl io "$DEVICE" screenshot --display=3 dist/tv-$name-inner-$RANDOM.png;;
-              esac
-              sleep $wait
+            # One display at a time: the simulator records one video per device, and a second recorder exits at once with an
+            # empty file (836207d: no inner film for five of six). So each sequence runs twice, the outer display filmed and
+            # then the inner, from the folded upright phone every time.
+            local pass display
+            for pass in outer inner; do
+              display=1; [ $pass = inner ] && display=3
+              $D "$DEVICE" pose closed > /dev/null 2>&1 || true; sleep 4
+              $D "$DEVICE" rotate 1 > /dev/null 2>&1 || true; sleep 2
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name-$pass.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address "$@"
+              sleep 10
+              local step cmd wait
+              for step in $steps; do
+                cmd=${step%%:*}; wait=${step##*:}
+                case $cmd in
+                  open|partial|closed) $D "$DEVICE" pose $cmd || echo "pose $cmd failed";;
+                  portrait) $D "$DEVICE" rotate 1 || echo "rotate failed";;
+                  landscape) $D "$DEVICE" rotate 3 || echo "rotate failed";;
+                  drag) $D "$DEVICE" drag 0.5 0.8 0.5 0.3 0.12 || echo "drag failed";;
+                  dragup) $D "$DEVICE" drag 0.5 0.3 0.5 0.8 0.12 || echo "drag failed";;
+                  shot) xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-$pass-$RANDOM.png;;
+                esac
+                sleep $wait
+              done
+              kill -INT $REC; wait $REC
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+              if [ "$(stat -f %z dist/tv-$name-$pass.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name-$pass empty"; fi
             done
-            kill -INT $R1 $R3; wait $R1 $R3
-            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
           }
           # 1. The flick's stage with the card in the hand: folded, opened flat, turned upright, half closed, closed again.
           curl -s $M/fnormal/reset > /dev/null
@@ -180,7 +204,8 @@ jobs:
           posturefilm posture-watch "portrait:1 open:6 drag:2 drag:2 landscape:6 portrait:6 partial:6 closed:6" $M -tab 3
           swipefilm fling3 1 0.5 0.8 0.25 $M -tab 3
           swipefilm flingbrowse 1 0.5 0.8 0.25 $M -tab 1 -pose browse
-          swipefilm flinglive 1 0.5 0.8 0.25 $M/live -tab 1
+          # Folded, Apps fits the screen and can't be pulled; Playing can, and its player follows the song's playing and pausing.
+          swipefilm flinglive 1 0.5 0.8 0.25 $M/live -tab 2
           ls dist
       - name: Publish
         if: always()
