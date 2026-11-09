@@ -280,9 +280,11 @@ struct RemoteScreenView: View {
                 if real == nil { p.picture = clear(CGRect(x: 0, y: 0, width: w, height: max(fnY - 8, 1))) }
             }
         case .closed:
-            // Under the cover's camera the picture stops short of its column, black beside it (the desktop sat under the
-            // ring, 2026-11-08), and the deck below follows the picture's foot.
-            p.picture = fitted(in: clear(CGRect(x: 0, y: top, width: w, height: h * 0.5)))
+            // The picture fills the width, as in build 204. Cutting it short of the camera's column left a black band down
+            // the side with the row still under it (CI 836207d–1fa038d), smaller than what he has; the camera is only kept
+            // clear when the tools can take that column instead (below).
+            let pic = fitWidth(w, maxHeight: h * 0.5)
+            p.picture = CGRect(x: (w - pic.width) / 2, y: top, width: pic.width, height: pic.height)
             p.fnRow = CGRect(x: side, y: p.picture.maxY + 8, width: w - side * 2, height: 32)
             p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: w - side * 2, height: 40)
             p.trackpad = CGRect(x: side, y: p.modRow.maxY + 10, width: w - side * 2, height: max(h - bottom - 8 - p.modRow.maxY - 10, 60))
@@ -292,7 +294,8 @@ struct RemoteScreenView: View {
             if keyboard > 0 {
                 p.modRow.origin.y = h - keyboard - 46
                 p.fnRow.origin.y = p.modRow.minY - 6 - 32
-                p.picture = fitted(in: clear(CGRect(x: 0, y: top, width: w, height: max(p.fnRow.minY - 8 - top, 60))))
+                let room = fitWidth(w, maxHeight: max(p.fnRow.minY - 8 - top, 60))
+                p.picture = CGRect(x: (w - room.width) / 2, y: top, width: room.width, height: room.height)
                 p.trackpad = .zero
             }
             // The cover's camera beside the picture: the function row's tools go up the side under it instead, Done at the
