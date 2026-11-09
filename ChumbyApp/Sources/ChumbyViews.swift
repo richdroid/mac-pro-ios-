@@ -782,7 +782,14 @@ struct HomeTab: View {
     }
     // The channel the Chumby is showing, named as one (Channels calls it that too), and changed right here. The choice is
     // the model's, so the Channels editor moves to it as well.
-    var channelName: String { !model.state.channel.isEmpty ? model.state.channel : model.sys.chan }
+    // His own tap first; then the Chumby's live channel (its status, read every few seconds); the saved list's last.
+    // The saved list (a=state) is read less often and can be half a minute old through the Mac, so a channel changed on
+    // the Chumby or by its schedule showed late here (Richard, 2026-11-09: "the chumby channel indicator doesnt update
+    // fast enough").
+    var channelName: String {
+        if let c = model.chosenChannel, Date().timeIntervalSince(c.at) < 20 { return c.name }
+        return !model.sys.chan.isEmpty ? model.sys.chan : model.state.channel
+    }
     // Named only from a recent reading, or his own tap: the kept copy can be from last night, when the Chumby's own
     // schedule had another channel up, and a name that then changes in front of him reads as the switcher failing.
     var channelSettled: Bool { model.stateConfirmed || model.chosenChannel != nil }

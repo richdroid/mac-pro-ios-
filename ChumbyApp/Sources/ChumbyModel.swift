@@ -452,9 +452,9 @@ final class ChumbyModel: ObservableObject {
             }
         }
     }
-    func cmd(_ c: String, _ v: String? = nil, id: String) {
+    func cmd(_ c: String, _ v: String? = nil, id: String, holdFor: Double = 5) {
         tick()
-        hold(5)
+        hold(holdFor)
         Task {
             do { try await api?.cmd(c, v) } catch { fail(id, "The Chumby didn’t get that. \(AlarmWriter.explain(error))") }
         }
@@ -465,8 +465,21 @@ final class ChumbyModel: ObservableObject {
     @Published var chosenChannel: ChannelChoice?
     func playChannel(_ name: String, id: String) {
         state.channel = name
-        chosenChannel = ChannelChoice(name: name, at: Date())
-        cmd("channel", name, id: id)
+        let choice = ChannelChoice(name: name, at: Date())
+        chosenChannel = choice
+        // Readings wait only a second, not five: the name shown is his choice until the Chumby says so (channelName), so
+        // an early reading can't flip it back, and the quick reads below need to get through.
+        cmd("channel", name, id: id, holdFor: 1)
+        // Read the Chumby's status every half second until it says it's on the channel (or 8 s pass), rather than at the
+        // next 4 s poll, so the switcher settles as soon as the Chumby has switched.
+        Task { [weak self] in
+            for _ in 0..<16 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self, self.chosenChannel == choice else { return }
+                await self.loadSys()
+                if self.sys.chan == name { return }
+            }
+        }
     }
     // Restarting and rebooting take minutes, so the device itself says so until it's back.
     func restart(_ reboot: Bool) {
