@@ -158,13 +158,15 @@ struct RemoteScreenView: View {
     var aspect: CGFloat { screen.size.width > 0 ? screen.size.height / screen.size.width : 0.625 }
 
     // Where the hinge runs, in this view's own space, and whether the Duo is partly folded there (the region is active)
-    // or open flat.
-    struct Fold { var crease: CGRect?; var folded = false }
+    // or open flat. With it, what covers the display right now: the outer camera (always, on the cover) and the inner
+    // one while it's in use, as the system's occlusion regions, their margins already included.
+    struct Fold { var crease: CGRect?; var folded = false; var covered: [CGRect] = [] }
     func fold(_ g: GeometryProxy) -> Fold {
         #if os(iOS)
         if #available(iOS 27.1, *) {
             return Fold(crease: g.reservedRegions(kind: .division, options: .includeInactive).first?.frame,
-                        folded: hingeFolded ?? !g.reservedRegions(kind: .division).isEmpty)
+                        folded: hingeFolded ?? !g.reservedRegions(kind: .division).isEmpty,
+                        covered: g.reservedRegions(kind: .occlusion).map(\.frame))
         }
         #endif
         return Fold()
@@ -173,9 +175,9 @@ struct RemoteScreenView: View {
     func effectiveFold(_ f: Fold, _ area: CGSize) -> (Fold, ScreenPlan.Kind?) {
         switch postureOverride {
         // Only where the display could really fold that way: the outer display has no hinge, so there it's left as it is.
-        case "laptop" where area.height >= 600: return (Fold(crease: CGRect(x: 0, y: (area.height * 0.478).rounded(), width: area.width, height: 40), folded: true), nil)
-        case "book" where area.width >= 600: return (Fold(crease: CGRect(x: (area.width * 0.478).rounded(), y: 0, width: 40, height: area.height), folded: true), nil)
-        case "closedLandscape": return (Fold(), .closedLandscape)
+        case "laptop" where area.height >= 600: return (Fold(crease: CGRect(x: 0, y: (area.height * 0.478).rounded(), width: area.width, height: 40), folded: true, covered: f.covered), nil)
+        case "book" where area.width >= 600: return (Fold(crease: CGRect(x: (area.width * 0.478).rounded(), y: 0, width: 40, height: area.height), folded: true, covered: f.covered), nil)
+        case "closedLandscape": return (Fold(covered: f.covered), .closedLandscape)
         default: return (f, nil)
         }
     }
@@ -196,6 +198,25 @@ struct RemoteScreenView: View {
         func fitWidth(_ width: CGFloat, maxHeight: CGFloat) -> CGSize {
             let ph = width * aspect
             return ph <= maxHeight ? CGSize(width: width, height: ph) : CGSize(width: maxHeight / aspect, height: maxHeight)
+        }
+        // The picture's space with the camera kept out of it (Apple's HIG for iPhone Duo: the outer camera's region "is
+        // always present"). The cheapest cut that clears each region covering the space: the column beside the camera
+        // on the cover, black left where it was, rather than the Mac's desktop under the ring.
+        func clear(_ space: CGRect) -> CGRect {
+            var r = space
+            for o in fold.covered where o.intersects(r) {
+                let cuts = [CGRect(x: o.maxX, y: r.minY, width: r.maxX - o.maxX, height: r.height),
+                            CGRect(x: r.minX, y: r.minY, width: o.minX - r.minX, height: r.height),
+                            CGRect(x: r.minX, y: o.maxY, width: r.width, height: r.maxY - o.maxY),
+                            CGRect(x: r.minX, y: r.minY, width: r.width, height: o.minY - r.minY)]
+                if let best = cuts.filter({ $0.width >= 1 && $0.height >= 1 }).max(by: { $0.width * $0.height < $1.width * $1.height }) { r = best }
+            }
+            return r
+        }
+        // A picture fitted whole into a space, against its top, centred across it.
+        func fitted(in space: CGRect) -> CGRect {
+            let pic = fitWidth(max(space.width, 1), maxHeight: max(space.height, 1))
+            return CGRect(x: space.minX + (space.width - pic.width) / 2, y: space.minY, width: pic.width, height: pic.height)
         }
         let kind: ScreenPlan.Kind
         if let force { kind = force }
@@ -222,7 +243,7 @@ struct RemoteScreenView: View {
             // From the very top in the laptop posture too: the band above was the status bar, and he holds the Duo folded
             // like a MacBook with the lid as the screen (2026-11-07: "its a folding phone", "be smarter its an iPhone Duo").
             let lidTop: CGFloat = 0
-            p.picture = CGRect(x: 0, y: lidTop, width: w, height: max(c.minY - (real == nil ? 0 : air) - lidTop, 1))
+            p.picture = clear(CGRect(x: 0, y: lidTop, width: w, height: max(c.minY - (real == nil ? 0 : air) - lidTop, 1)))
             // The base: function row, the keyboard, and a trackpad centred under it like a MacBook's.
             let y0 = c.maxY + 8, base = h - bottom - 8 - y0
             p.fnRow = CGRect(x: side, y: y0, width: w - side * 2, height: 32)
@@ -245,11 +266,12 @@ struct RemoteScreenView: View {
                 let fnY = max(h - keyboard - 8 - 32, (real?.maxY ?? 0) + 8)
                 p.fnRow = CGRect(x: side, y: fnY, width: w - side * 2, height: 32)
                 p.keyboard = .zero; p.modRow = .zero; p.trackpad = .zero
-                if real == nil { p.picture = CGRect(x: 0, y: 0, width: w, height: max(fnY - 8, 1)) }
+                if real == nil { p.picture = clear(CGRect(x: 0, y: 0, width: w, height: max(fnY - 8, 1))) }
             }
         case .closed:
-            let pic = fitWidth(w, maxHeight: h * 0.5)
-            p.picture = CGRect(x: (w - pic.width) / 2, y: top, width: pic.width, height: pic.height)
+            // Under the cover's camera the picture stops short of its column, black beside it (the desktop sat under the
+            // ring, 2026-11-08), and the deck below follows the picture's foot.
+            p.picture = fitted(in: clear(CGRect(x: 0, y: top, width: w, height: h * 0.5)))
             p.fnRow = CGRect(x: side, y: p.picture.maxY + 8, width: w - side * 2, height: 32)
             p.modRow = CGRect(x: side, y: p.fnRow.maxY + 6, width: w - side * 2, height: 40)
             p.trackpad = CGRect(x: side, y: p.modRow.maxY + 10, width: w - side * 2, height: max(h - bottom - 8 - p.modRow.maxY - 10, 60))
@@ -259,8 +281,7 @@ struct RemoteScreenView: View {
             if keyboard > 0 {
                 p.modRow.origin.y = h - keyboard - 46
                 p.fnRow.origin.y = p.modRow.minY - 6 - 32
-                let room = fitWidth(w, maxHeight: max(p.fnRow.minY - 8 - top, 60))
-                p.picture = CGRect(x: (w - room.width) / 2, y: top, width: room.width, height: room.height)
+                p.picture = fitted(in: clear(CGRect(x: 0, y: top, width: w, height: max(p.fnRow.minY - 8 - top, 60))))
                 p.trackpad = .zero
             }
         case .book:
@@ -272,10 +293,6 @@ struct RemoteScreenView: View {
                 return plan(area: area, fold: Fold(), aspect: aspect, top: top, bottom: bottom, keyboard: keyboard, force: .closed)
             }
             let head = top + side, foot = h - bottom - side, tall = max(foot - head, 1)
-            // The screen: fitted to the left page inside the margin, whichever way it binds, centred.
-            let page = c.minX - air
-            let pic = fitWidth(max(page - side * 2, 1), maxHeight: tall)
-            p.picture = CGRect(x: (page - pic.width) / 2, y: head + (tall - pic.height) / 2, width: pic.width, height: pic.height)
             // The base on the right page, stacked: function row, keyboard, trackpad.
             let left = c.maxX + air + side, width = max(w - side - left, 1)
             let fn: CGFloat = 32, gap: CGFloat = 8, padGap: CGFloat = 12
@@ -315,14 +332,19 @@ struct RemoteScreenView: View {
                 p.modRow = CGRect(x: left, y: p.fnRow.maxY + gap, width: width, height: mod)
                 p.trackpad = CGRect(x: left, y: p.modRow.maxY + padGap, width: width, height: max(foot - p.modRow.maxY - padGap, 60))
             }
+            // The screen on the left page, level with the base: its top on the function row's, its edge the same margin
+            // from the display's bare edge as the deck keeps on its right (it floated centred, its top below the keys and
+            // nearer the edge, 2026-11-08). Fitted whole to the page inside that margin, whichever way it binds.
+            let page = clear(CGRect(x: side, y: p.fnRow.minY, width: max(c.minX - air - side * 2, 1), height: max(foot - p.fnRow.minY, 1)))
+            let pic = fitWidth(page.width, maxHeight: page.height)
+            p.picture = CGRect(x: page.minX, y: page.minY, width: pic.width, height: pic.height)
         case .closedLandscape, .flatLandscape:
             // The dock lives in the black under the picture, never over the Mac's own Dock.
             let dock: CGFloat = 52
-            let pic = fitWidth(w, maxHeight: kind == .closedLandscape ? h - dock - 4 : h)
-            p.picture = CGRect(x: (w - pic.width) / 2, y: 0, width: pic.width, height: pic.height)
-            let room = h - pic.height
+            p.picture = fitted(in: clear(CGRect(x: 0, y: 0, width: w, height: kind == .closedLandscape ? h - dock - 4 : h)))
+            let room = h - p.picture.maxY
             p.dock = room >= dock + 4
-                ? CGRect(x: 0, y: pic.height + (room - dock) / 2, width: w, height: dock)
+                ? CGRect(x: 0, y: p.picture.maxY + (room - dock) / 2, width: w, height: dock)
                 : CGRect(x: 0, y: h - dock - 6 - bottom, width: w, height: dock)
             p.crease = kind == .flatLandscape ? fold.crease : nil
         }
