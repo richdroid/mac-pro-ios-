@@ -2038,6 +2038,9 @@ struct NightSettings: View {
                         .background(.white.opacity(0.12), in: Capsule())
                     }
                     .accessibilityLabel("At \(e.time): \(words(e))")
+                    // Taking a time out is a control he can see in the row, as on the X widget's rows; it was only at the
+                    // foot of the menu (Richard, 2026-11-09: "i should be able to delete an entry for the night time thing").
+                    RowRemove(label: "Remove the \(words(e).lowercased()) time") { remove(e.id) }
                 }
             }
             Button {
