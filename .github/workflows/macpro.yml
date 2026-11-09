@@ -217,7 +217,8 @@ jobs:
             sleep 10
             $D "$DEVICE" drag 0.45 0.8 0.3 0.12 || true; sleep 2
             $D "$DEVICE" pose open || true; sleep 5
-            $D "$DEVICE" drag 0.5 0.8 0.3 0.12 || true; sleep 2
+            # Open flat, on the right pane, the long one (on the left pane's short list nothing moved).
+            $D "$DEVICE" drag 0.7 0.8 0.7 0.12 || true; sleep 2
             $D "$DEVICE" rotate 1 || true; sleep 5
             $D "$DEVICE" drag 0.5 0.8 0.3 0.12 || true; sleep 2
             $D "$DEVICE" rotate 3 || true; sleep 5
