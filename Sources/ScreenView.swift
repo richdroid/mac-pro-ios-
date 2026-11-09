@@ -284,6 +284,32 @@ struct RemoteScreenView: View {
                 p.picture = fitted(in: clear(CGRect(x: 0, y: top, width: w, height: max(p.fnRow.minY - 8 - top, 60))))
                 p.trackpad = .zero
             }
+            // The cover's camera beside the picture: the function row's tools go up the side under it instead, Done at the
+            // top, as the system's own side bar puts Back (Apple's HIG for iPhone Duo, "Vertical controls"), and the
+            // picture takes the row's height back, filled to the camera's column with nothing black beside it. A column
+            // can't hold every tool (a display without the camera, or too short while typing), the row stays as above.
+            let lid = CGRect(x: 0, y: top, width: w, height: h * 0.5)
+            if let o = fold.covered.first(where: { $0.intersects(lid) }) {
+                let right = o.midX >= w / 2
+                let colX = right ? o.minX : side, colW = right ? w - side / 2 - o.minX : o.maxX - side
+                // The picture keeps the row's place under it: the modifiers stay where they were, or ride on the keyboard.
+                let foot = keyboard > 0 ? p.modRow.minY - 6 : fitWidth(w, maxHeight: h * 0.5).height + top + 8 + 32
+                // Clear of the display's rounded corner at the top. Where the camera leaves too few places beside the row's
+                // height, the picture and its column grow down together, never past 70 % of the display (or into the
+                // keys riding on the keyboard).
+                let limit = keyboard > 0 ? foot : max(foot, top + h * 0.7)
+                let col = CGRect(x: colX, y: top + 20, width: colW, height: max(limit - top - 20, 0))
+                if let slots = Self.toolSlots(in: col, avoiding: fold.covered, count: ScreenTool.allCases.count), let last = slots.last {
+                    let bottomY = max(foot, last.maxY)
+                    p.tools = slots
+                    p.fnRow = .zero
+                    p.picture = CGRect(x: right ? 0 : o.maxX, y: top, width: right ? o.minX : w - o.maxX, height: bottomY - top)
+                    if keyboard == 0 {
+                        p.modRow.origin.y = p.picture.maxY + 6
+                        p.trackpad = CGRect(x: side, y: p.modRow.maxY + 10, width: w - side * 2, height: max(h - bottom - 8 - p.modRow.maxY - 10, 60))
+                    }
+                }
+            }
         case .book:
             // A MacBook opened across the fold: the left page is the screen alone, as large as the page allows; the right
             // page is the base, the function row, the full keyboard and a 16:10 trackpad centred under it. Both pages keep
@@ -351,6 +377,26 @@ struct RemoteScreenView: View {
         return p
     }
 
+    // Places for the Screen's tools down a side column, top first, two to a row where it's wide enough, every row clear of
+    // the regions covering the display. Nil when they don't all fit.
+    static func toolSlots(in col: CGRect, avoiding covered: [CGRect], count: Int) -> [CGRect]? {
+        let size: CGFloat = 34, gap: CGFloat = 6
+        guard col.width >= size, col.height >= size else { return nil }
+        let perRow = max(1, min(2, Int((col.width + gap) / (size + gap))))
+        let rowW = CGFloat(perRow) * size + CGFloat(perRow - 1) * gap
+        let x0 = (col.minX + (col.width - rowW) / 2).rounded()
+        var slots: [CGRect] = [], y = col.minY
+        while y + size <= col.maxY, slots.count < count {
+            let row = CGRect(x: x0, y: y, width: rowW, height: size)
+            if let hit = covered.first(where: { $0.intersects(row) }) { y = hit.maxY + gap; continue }
+            for i in 0..<perRow where slots.count < count {
+                slots.append(CGRect(x: x0 + CGFloat(i) * (size + gap), y: y, width: size, height: size))
+            }
+            y += size + gap
+        }
+        return slots.count == count ? slots : nil
+    }
+
     // A MacBook Pro 14's trackpad against its keyboard: about 54 % of the keys' width, 1.56 wide to 1 high. Where the base
     // is too short for that height, it keeps the height there is and widens to keep the room for gestures, never past
     // 72 % of the keys.
@@ -372,6 +418,10 @@ struct RemoteScreenView: View {
             // took the tap as a click on the Mac and the card could never be put away.
             if showHint, screen.hasPicture { place(gestureHint, p.picture) }
             place(functionRow, p.fnRow)
+            // Folded beside the camera, the same tools down the side, each in its own place.
+            ForEach(Array(zip(ScreenTool.allCases, p.tools)), id: \.0) { t, r in
+                tool(t).frame(width: r.width, height: r.height).position(x: r.midX, y: r.midY)
+            }
             place(MacKeyboardView(keys: keys), p.keyboard)
             place(modifierRow, p.modRow)
             place(trackpad, p.trackpad)
@@ -394,21 +444,28 @@ struct RemoteScreenView: View {
     // Where a MacBook's function keys are: the Mac's own shortcuts on the left, this screen's tools and Done on the right.
     var functionRow: some View {
         HStack(spacing: 5) {
-            fnKey("esc", nil, "Escape") { keys.tap(MacKey.esc) }
-            fnKey("", "rectangle.3.group", "Mission Control") { keys.tap(MacKey.up, with: [MacKey.control]) }
-            // Terminal, opened on the Mac. A window glyph here sent App Exposé, which he read as Terminal and got every window
-            // instead (Richard, 2026-11-07: "terminal button works like show all windows button"). App Exposé is still
-            // three fingers down.
-            fnKey("", "apple.terminal", "Open Terminal") { openTerminal() }
-            fnKey("", "magnifyingglass", "Spotlight") { keys.tap(MacKey.space, with: [MacKey.command]) }
-            fnKey("", "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() }
+            ForEach([ScreenTool.esc, .missionControl, .terminal, .spotlight, .switchApps], id: \.self) { tool($0) }
             Spacer(minLength: 6)
-            toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Dictate or type", on: typing, compact: true) { typing.toggle() }
-            clipButton(paste: false, compact: true)
-            clipButton(paste: true, compact: true)
-            toolButton("key.fill", "Sign in to the Mac", compact: true) { signingIn = true }
-            if zoomed || fillZoom > 1.01 { toolButton(fitIcon, fitLabel, compact: true) { fitScreen() } }
-            toolButton("xmark", "Done", on: true, compact: true) { model.screenOpen = false }
+            ForEach([ScreenTool.keyboard, .copy, .paste, .signIn, .fit, .done], id: \.self) { tool($0) }
+        }
+    }
+    var showsFit: Bool { zoomed || fillZoom > 1.01 }
+    @ViewBuilder func tool(_ t: ScreenTool) -> some View {
+        switch t {
+        case .esc: fnKey("esc", nil, "Escape") { keys.tap(MacKey.esc) }
+        case .missionControl: fnKey("", "rectangle.3.group", "Mission Control") { keys.tap(MacKey.up, with: [MacKey.control]) }
+        // Terminal, opened on the Mac. A window glyph here sent App Exposé, which he read as Terminal and got every window
+        // instead (Richard, 2026-11-07: "terminal button works like show all windows button"). App Exposé is still
+        // three fingers down.
+        case .terminal: fnKey("", "apple.terminal", "Open Terminal") { openTerminal() }
+        case .spotlight: fnKey("", "magnifyingglass", "Spotlight") { keys.tap(MacKey.space, with: [MacKey.command]) }
+        case .switchApps: fnKey("", "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() }
+        case .keyboard: toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Dictate or type", on: typing, compact: true) { typing.toggle() }
+        case .copy: clipButton(paste: false, compact: true)
+        case .paste: clipButton(paste: true, compact: true)
+        case .signIn: toolButton("key.fill", "Sign in to the Mac", compact: true) { signingIn = true }
+        case .fit: if showsFit { toolButton(fitIcon, fitLabel, compact: true) { fitScreen() } }
+        case .done: toolButton("xmark", "Done", on: true, compact: true) { model.screenOpen = false }
         }
     }
     func fnKey(_ label: String, _ icon: String?, _ a11y: String, action: @escaping () -> Void) -> some View {
@@ -1085,7 +1142,12 @@ struct ScreenPlan: Equatable {
     var trackpad = CGRect.zero
     var dock = CGRect.zero
     var crease: CGRect?
+    // Folded beside the camera: one place per tool down the side, in ScreenTool's order, in place of the function row.
+    var tools: [CGRect] = []
 }
+// The function row's tools, in the order they go down the side column folded: Done first, at the top, then this
+// screen's own tools, then the Mac's shortcuts. Fill/Fit last, since it's there only when the picture can change.
+enum ScreenTool: CaseIterable { case done, keyboard, copy, paste, signIn, esc, missionControl, terminal, spotlight, switchApps, fit }
 
 // The window's own insets (the camera at the top, the home bar at the foot), which the screen's plan keeps clear of
 // itself, since the view runs edge to edge.
