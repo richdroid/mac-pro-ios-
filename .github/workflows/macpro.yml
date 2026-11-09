@@ -165,6 +165,8 @@ jobs:
           poses 3 -portrait
           shot screen-laptop-portrait 3 8 -tab 0 -pose screen -openScreen YES -screenPosture laptop
           shot screen-laptop-typing-portrait 3 8 -tab 0 -pose screentyping -openScreen YES -screenPosture laptop
+          # A session half open upright (stood in for): its screen above the crease, its keys and box below.
+          shot session-laptop-portrait 3 9 -tab 2 -pose session -screenPosture laptop
           # An app's row on Apps pressed (On this iPhone, and an update's row): the list's own highlight, inside the card's
           # corners; the -after shot is the page it opened. Then the Update capsule tapped on its own: the row's page must
           # not open from it.
@@ -191,9 +193,11 @@ jobs:
           shot versions-open 3 9 -tab 1 -pose versions
           shot screen-open 3 8 -tab 0 -pose screen -openScreen YES
           shot screen-book-open 3 8 -tab 0 -pose screen -openScreen YES -screenPosture book
+          shot session-open 3 9 -tab 2 -pose session
           # Partly folded.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
           shot screen-partial 3 8 -tab 0 -pose screen -openScreen YES
+          shot session-partial 3 9 -tab 2 -pose session
           # Folded, the outer display, last.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
           poses 1 ""
@@ -225,6 +229,7 @@ jobs:
           for pass in "1 outer" "3 inner"; do
             posturefilm posture-versions $pass -tab 1 -pose versionsfilm
             posturefilm posture-status $pass -tab 0
+            posturefilm posture-session $pass -tab 2 -pose session
           done
           ls dist
       - name: Publish
