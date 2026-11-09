@@ -76,6 +76,10 @@ struct InfoBadge: View {
 struct TitleInfoPage: View {
     @Environment(TVModel.self) var model
     @Environment(\.dismiss) private var dismiss
+    // Folded and turned sideways the display is about 400 pt tall: a banner up to 360 pt left the title under the key
+    // (54832f8's folded-landscape shot). There it's a short strip, so the name and the first lines show above the key.
+    @Environment(\.verticalSizeClass) private var vSize
+    private var bannerMax: CGFloat { vSize == .compact ? 150 : 360 }
     let item: MediaItem
     let source: MediaSource
     // Opened from the flick's own page: there's nothing to carry on to, it's already there.
@@ -148,6 +152,11 @@ struct TitleInfoPage: View {
                 }
                 .buttonStyle(PressCard())
                 .padding(.horizontal, 22).padding(.top, 8).padding(.bottom, 12)
+                // What scrolls under the key fades out above it, never reads through beside it.
+                .background(alignment: .bottom) {
+                    LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .top, endPoint: .center)
+                        .padding(.top, -28).ignoresSafeArea(edges: [.bottom, .horizontal]).allowsHitTesting(false)
+                }
             }
         }
         .background { Ambience() }
@@ -168,7 +177,7 @@ struct TitleInfoPage: View {
     var header: some View {
         ZStack(alignment: .bottomLeading) {
             Color.clear.aspectRatio(16 / 9, contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: 360)
+                .frame(maxWidth: .infinity, maxHeight: bannerMax)
                 .overlay {
                     Art(url: URL(string: info?.background ?? item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.06) }
                 }

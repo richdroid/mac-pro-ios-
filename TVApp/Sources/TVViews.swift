@@ -1294,18 +1294,27 @@ struct RemoteTab: View {
         .animation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
         .padding(.horizontal, 20).padding(.bottom, 16)
     }
+    // The pad and the keys, the second column wherever the Remote has two.
+    private var keysColumn: some View {
+        VStack(spacing: 14) { pad.frame(maxHeight: .infinity); keysBlock }.padding(.horizontal, 20).padding(.bottom, 16)
+            .modifier(KeysArrive(gate: keysGate))
+    }
     var body: some View {
         Group {
-            if size == .regular || vSize == .compact {
+            if size == .regular {
                 FoldSplit {
                     // The apps come along when there's room, and step aside when held in portrait.
                     side(apps: panes)
                         // While typing on the TV the keyboard is for the other pane, so this one keeps its size under it
                         // rather than squeezing the screen and cutting its labels. Its own search box still lifts.
                         .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
-                } right: {
-                    VStack(spacing: 14) { pad.frame(maxHeight: .infinity); keysBlock }.padding(.horizontal, 20).padding(.bottom, 16)
-                        .modifier(KeysArrive(gate: keysGate))
+                } right: { keysColumn }
+            } else if vSize == .compact {
+                // Folded and turned sideways: the picture beside the pad, as open. Not through FoldSplit, whose split
+                // arrangement shows only its first pane on the folded display (54832f8's shot: no pad and no keys at all).
+                HStack(spacing: 0) {
+                    side(apps: false).ignoresSafeArea(typing ? .keyboard : [], edges: .bottom).frame(maxWidth: .infinity)
+                    keysColumn.frame(maxWidth: .infinity)
                 }
             } else {
                 // Folded, the picture is one size in every state (r33: 345 pt idle, 206 with an episode, so it shrank as a
