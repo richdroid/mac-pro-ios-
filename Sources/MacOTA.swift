@@ -263,7 +263,8 @@ struct UpdatesSection: View {
     func row(_ a: Status.SeedApp) -> some View {
         // The app's row opens its Version History, as on the App Store; Update and "more" keep their own taps. The
         // system's button style in the list, so the press is the row's own highlight inside the card's corners.
-        Button { model.appHistory = a.file } label: { rowBody(a).foregroundStyle(.primary) }
+        // Color.primary, the label colour itself: .primary resolved to the style's tint and turned every line blue.
+        Button { model.appHistory = a.file } label: { rowBody(a).foregroundStyle(Color.primary) }
             .accessibilityHint("Opens its version history")
     }
     func rowBody(_ a: Status.SeedApp) -> some View {

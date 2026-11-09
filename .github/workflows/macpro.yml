@@ -102,14 +102,17 @@ jobs:
             [ -f "$c/Library/Caches/frame-log.txt" ] && mv "$c/Library/Caches/frame-log.txt" dist/macpro-$1-frames.log && tail -1 dist/macpro-$1-frames.log || true
           }
           # A shot with a finger held on the screen: name, display, wait, x, y (fractions), then the app's own arguments.
-          # The hold starts after the wait and the shot is taken 1 s into it, so a row is seen pressed.
+          # The hold starts after the wait and lasts 6 s; shots 2 s and 4 s into it (the tool takes a moment to find the
+          # display before the finger lands, so the first shot can come before the press), then one after the finger lifts.
           holdshot() {
             local name=$1 display=$2 wait=$3 x=$4 y=$5; shift 5
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
             sleep $wait
-            /tmp/dh/.build/release/devicehubctl "$DEVICE" touch $x $y 3 & HOLD=$!
-            sleep 1
+            /tmp/dh/.build/release/devicehubctl "$DEVICE" touch $x $y 6 & HOLD=$!
+            sleep 2
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            sleep 1
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-late.png
             wait $HOLD || echo "hold failed"
             sleep 1
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-after.png

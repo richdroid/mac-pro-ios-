@@ -1676,12 +1676,13 @@ struct SeedSection: View {
                             rowFail[a.id] = nil
                             if seed.reachable { Task { rowFail[a.id] = await model.run("ios-seed", ["file": a.file]) } }
                             else { handOff(a.file, row: a.id) }
-                        }.buttonStyle(.bordered).disabled(!seed.seeding.isEmpty || handing != nil)
+                        }.buttonStyle(.bordered).foregroundStyle(.tint).disabled(!seed.seeding.isEmpty || handing != nil)
                     }
                     Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
-                // In its own colours, not the button's tint: the row reads as a row, its press is the list's.
-                .foregroundStyle(.primary)
+                // In its own colours: the list's button style tints its whole label, and .primary resolved to that tint
+                // (CI f7bb947, every line blue). Color.primary is the label colour itself, and .secondary follows it.
+                .foregroundStyle(Color.primary)
                 }
                 // The App Store's way: the app's row opens its page, Version History (Richard, 2026-11-08: "duos
                 // changelogs in mac pro app"). Its own buttons keep their taps. The system's style, so the press is
