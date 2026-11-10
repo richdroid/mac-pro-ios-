@@ -434,9 +434,10 @@ final class ChumbyModel: ObservableObject {
         #if canImport(UIKit)
         Haptics.note.notificationOccurred(.error)
         #endif
-        failure = Failure(id: id, text: text, at: Date())
+        // The note's row comes and goes in one spring, never in one frame.
+        withAnimation(.snappy) { failure = Failure(id: id, text: text, at: Date()) }
         failureClear?.cancel()
-        failureClear = Task { [weak self] in try? await Task.sleep(nanoseconds: 6_000_000_000); if !Task.isCancelled { self?.failure = nil } }
+        failureClear = Task { [weak self] in try? await Task.sleep(nanoseconds: 6_000_000_000); if !Task.isCancelled { withAnimation(.snappy) { self?.failure = nil } } }
     }
     func failed(_ id: String) -> String? { failure?.id == id ? failure?.text : nil }
     func hold(_ seconds: Double = 8) { let until = Date().addingTimeInterval(seconds); sysHold = until; stateHold = until; sysBytes = Data(); stateBytes = Data() }

@@ -1039,13 +1039,17 @@ struct SoundRows: View {
     @Binding var alarm: Alarm
     // Laid under the last row, for a sheet that measures where its rows end (a calendar day's).
     var tail: AnyView? = nil
+    // What "Plays" was while its menu closes on a new pick (MenuClose): the rows under it follow `kind`, which changes
+    // only once the menu has gone, so the close is never cut short.
+    @State private var closing: String?
+    var kind: String { closing ?? choice.kind }
     var stations: [NamedID] { model.pandoraStations }
     var body: some View {
-        Picker("Plays", selection: $choice.kind) {
+        Picker("Plays", selection: $choice.kind.afterMenu($closing)) {
             Text("Tone").tag("beep"); Text("Radio").tag("stream"); Text("Pandora").tag("pandora"); Text("Silent").tag("none")
-            if choice.kind == "keep" { Text("Current").tag("keep") }
+            if kind == "keep" { Text("Current").tag("keep") }
         }
-        if choice.kind == "beep" {
+        if kind == "beep" {
             Picker("Tone", selection: $choice.tone) { ForEach(model.state.tones, id: \.self) { Text($0).tag($0) } }
             Button {
                 Task { do { try await model.api?.post("test", extra: "&tone=" + ChumbyAPI.enc(choice.tone)) } catch { model.fail("test", "Couldn’t play it. \(AlarmWriter.explain(error))") } }
@@ -1053,16 +1057,16 @@ struct SoundRows: View {
             .foregroundStyle(.tint)
             if let f = model.failed("test") { FailNote(text: f) }
         }
-        if choice.kind == "stream" {
+        if kind == "stream" {
             if model.state.streams.isEmpty { Text("Add a radio stream on the Sounds tab first.").foregroundStyle(.secondary) }
             else { Picker("Station", selection: $choice.streamIndex) { ForEach(model.state.streams.indices, id: \.self) { i in Text(model.state.streams[i].name.isEmpty ? model.state.streams[i].url : model.state.streams[i].name).tag(i) } } }
         }
-        if choice.kind == "pandora" {
+        if kind == "pandora" {
             if stations.isEmpty { Text("No Pandora stations on the Chumby yet.").foregroundStyle(.secondary) }
             else { Picker("Station", selection: $choice.pandoraID) { ForEach(stations) { Text($0.name).tag($0.id) } } }
         }
-        if choice.kind == "keep" { LabeledContent("Plays", value: alarm.soundText) }
-        if choice.kind != "none" {
+        if kind == "keep" { LabeledContent("Plays", value: alarm.soundText) }
+        if kind != "none" {
             Picker("Plays for", selection: $alarm.duration) {
                 ForEach([("1", "1 minute"), ("5", "5 minutes"), ("10", "10 minutes"), ("15", "15 minutes"), ("30", "30 minutes"), ("60", "1 hour"), ("120", "2 hours"), ("-1", "Until stopped")], id: \.0) { Text($0.1).tag($0.0) }
             }
@@ -1103,6 +1107,7 @@ struct AlarmEditor: View {
     @State private var time = Date()
     @State private var date = Date()
     @State private var repeatMode = "daily"
+    @State private var repeatClosing: String?     // Repeat's old value while its menu closes (MenuClose)
     @State private var day = 1
     @State private var sound = SoundChoice()
     @State private var after = ""
@@ -1249,13 +1254,15 @@ struct AlarmEditor: View {
                 if !calendarTemplate && !nap {
                 Section { DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute).datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity) }
                 Section {
-                    Picker("Repeat", selection: $repeatMode) {
+                    Picker("Repeat", selection: $repeatMode.afterMenu($repeatClosing)) {
                         Text("Once").tag("once"); Text("Daily").tag("daily"); Text("Weekdays").tag("weekday"); Text("Weekends").tag("weekend"); Text("One day").tag("day")
                     }
-                    if repeatMode == "day" {
+                    // The Day and Date rows come and go once Repeat's menu has closed, not under it.
+                    let repeatShown = repeatClosing ?? repeatMode
+                    if repeatShown == "day" {
                         Picker("Day", selection: $day) { ForEach(0..<7, id: \.self) { Text(Calendar.current.weekdaySymbols[$0]).tag($0) } }
                     }
-                    if repeatMode == "once" {
+                    if repeatShown == "once" {
                         DatePicker("Date", selection: $date, displayedComponents: .date)
                         Text("Rings \(onceAt.formatted(.dateTime.weekday(.wide).month(.abbreviated).day().hour().minute()))").font(.subheadline).foregroundStyle(.secondary)
                     }

@@ -244,6 +244,28 @@ struct GlassRow: View {
         Rectangle().fill(scheme == .dark ? Color(red: 0.09, green: 0.19, blue: 0.38).opacity(0.62) : Color.white.opacity(0.46))
     }
 }
+// A menu's own close takes about a third of a second, and a pick in it runs at once. Rows that change under the menu in
+// that time (the editor's Tone and "Play on the Chumby" rows going as Radio is picked, a row the menu sat on going) cut
+// the close short: the menu just vanished (Richard, 2026-11-10, changing an alarm's sound: "the window for selecting just
+// dissapears"). So what a pick changes around a menu waits for the close, then moves in one spring.
+enum MenuClose {
+    static let seconds = 0.35
+    static func then(_ work: @escaping @MainActor () -> Void) {
+        Task { @MainActor in try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9)); withAnimation(.snappy) { work() } }
+    }
+}
+extension Binding where Value: Equatable {
+    // A menu picker's selection: the pick lands at once, so the picker's own row shows it as the menu closes (as the system's
+    // do), while `closing` keeps the old value until the close is over; rows that depend on the pick read `closing ?? value`.
+    func afterMenu(_ closing: Binding<Value?>) -> Binding<Value> {
+        Binding(get: { wrappedValue }, set: { new in
+            guard new != wrappedValue else { return }
+            let was = wrappedValue
+            closing.wrappedValue = was; wrappedValue = new
+            MenuClose.then { if closing.wrappedValue == was { closing.wrappedValue = nil } }
+        })
+    }
+}
 struct PageTitle<Trailing: View>: View {
     let title: String
     let trailing: Trailing
@@ -345,8 +367,11 @@ struct RootView: View {
                 // The Duo's side column (clock, Wi-Fi and the tab bar) is the trailing safe area.
                 Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { model.railWidth = $0 }
                 TabView(selection: TabReset.binding($model.tab) { t in
+                    // With a page pushed (Alarms' Calendar settings or a day), the tap pops it, sliding as the system does;
+                    // starting the tab over as well cut that to a jump (ruling 11-10: "navigation always animates"). The
+                    // next tap, at the root, goes back to the top.
+                    if t == 2 && model.alarmsPage { model.alarmsPage = false; return }
                     resets[t, default: 0] += 1
-                    if t == 2 { model.alarmsPage = false }
                     // Home again: the octopus answers, as it does to a tap.
                     if t == 0 { model.homePoke = Date() }
                 }) {
@@ -1492,7 +1517,7 @@ struct ChannelsTab: View {
                 }
                 // Taking it out lives with its other choice, not behind a swipe that slides the row off its card.
                 Divider()
-                Button("Remove from \(pickedTitle)", systemImage: "minus.circle", role: .destructive) { remove(w.id) }
+                Button("Remove from \(pickedTitle)", systemImage: "minus.circle", role: .destructive) { MenuClose.then { remove(w.id) } }
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "timer")
@@ -1557,7 +1582,8 @@ struct ChannelsTab: View {
                     Section("Channel") {
                         ForEach(channels, id: \.id) { c in
                             let name = title(c)
-                            Button { model.tick(); model.playChannel(name, id: "nowPlaying") } label: {
+                            // The tick at once; the switch (and the list following it, below) once the menu has closed.
+                            Button { model.tick(); MenuClose.then { model.playChannel(name, id: "nowPlaying") } } label: {
                                 if name.trimmingCharacters(in: .whitespacesAndNewlines) == showing.trimmingCharacters(in: .whitespacesAndNewlines) { Label(name, systemImage: "checkmark") } else { Text(name) }
                             }
                         }
@@ -1645,7 +1671,8 @@ struct ChannelsTab: View {
         }
         .seaList()
         .dragToReorder(reordering)
-        .onChange(of: picked) { _, _ in pick() }
+        // Following a channel swaps the rows in one spring; the first fill, as the page opens, is drawn in place.
+        .onChange(of: picked) { was, _ in if was.isEmpty { pick() } else { withAnimation(.snappy) { pick() } } }
         .onChange(of: model.chosenChannel) { _, c in if let c { followPlaying(c.name) } }
         // The Chumby's own switches too (its nightly times, a tap on the device), so the list is always the channel showing.
         .onChange(of: model.sys.chan) { _, _ in followPlaying(showing) }
@@ -2145,7 +2172,7 @@ struct NightSettings: View {
                             ForEach(actions, id: \.0) { Text($0.1).tag($0.0) }
                         }
                         Divider()
-                        Button("Remove this time", systemImage: "trash", role: .destructive) { remove(e.id) }
+                        Button("Remove this time", systemImage: "trash", role: .destructive) { MenuClose.then { remove(e.id) } }
                     } label: {
                         // In a word or two: beside the time, folded, "Night starts" was cut to "Night st…" (build 241). The
                         // menu itself says it in full.

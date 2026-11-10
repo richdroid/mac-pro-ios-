@@ -786,6 +786,34 @@ jobs:
           tv_flick 3 "-partial" || echo "TV flick partial incomplete"
           # Last, since each moves the hinge: the Chumby app filmed through folds and turns with pages and sheets up.
           chumby_posturefilms || echo "Chumby posture films incomplete"
+          # Menus closing, folded, for the designer to judge in frames (Richard, 2026-11-10: changing an alarm's sound, "the
+          # window for selecting just dissapears"): the editor's Plays menu picked to Radio and back to Tone, then Repeat to
+          # Once (menufilm-editor); Channels' header menu picked to News (menufilm-channels). Taps are by accessibility label.
+          chumby_menufilms() {
+            local D=/tmp/dh/.build/release/devicehubctl
+            $D "$DEVICE" pose closed || true; sleep 4
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/chumby-menufilm-editor.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 2 -pose editor
+            sleep 8
+            $D "$DEVICE" tap "Plays" || true; sleep 2.5
+            $D "$DEVICE" tap "Radio" || true; sleep 2.5
+            $D "$DEVICE" tap "Plays" || true; sleep 2.5
+            $D "$DEVICE" tap "Tone" || true; sleep 2.5
+            $D "$DEVICE" tap "Repeat" || true; sleep 2.5
+            $D "$DEVICE" tap "Once" || true; sleep 3
+            kill -INT $REC; wait $REC; echo "chumby menufilm editor exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/chumby-menufilm-channels.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 1
+            sleep 8
+            $D "$DEVICE" tap "Channel, Default" || true; sleep 2.5
+            $D "$DEVICE" tap "News" || true; sleep 4
+            kill -INT $REC; wait $REC; echo "chumby menufilm channels exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          chumby_menufilms || echo "Chumby menu films incomplete"
       - name: Collect crash reports
         if: always()
         run: |
