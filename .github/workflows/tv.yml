@@ -134,6 +134,25 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             if [ "$(stat -f %z dist/tv-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
           }
+          # The flick by a real finger, filmed: the stage at rest with the card in the hand, then one fast upward drag on the
+          # card (y 0.85 → 0.35 in 0.15 s, about 2,300 pt/s folded), so the throw's own physics show: the release speed
+          # carried, the arrival timed by it, the catch, the hold and the move onto the Remote (Richard, 2026-11-09:
+          # "animation is still fucked when flicking"). The scripted flick films carry the card onto the TV before letting
+          # go, so none of that is in them. Judged in frames against §2.5a C4.
+          flickfilm() {
+            local name=$1 display=$2 address=$3; shift 3
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address -tab 1 -pose flick-stage
+            sleep 13
+            $D "$DEVICE" drag 0.5 0.85 0.5 0.35 0.15 || echo "flick drag failed"
+            sleep 6
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            if [ "$(stat -f %z dist/tv-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
+          }
           # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
@@ -155,12 +174,18 @@ jobs:
           backfilm back-details-portrait 3 13 $M -tab 1 -pose details
           backfilm back-browse-portrait 3 9 $M -tab 1 -pose browse
           backfilm back-row-portrait 3 12 $M -tab 1 -pose stremiorow
+          # The card thrown by a real drag, open upright.
+          curl -s $M/fnormal/reset > /dev/null; flickfilm flickreal-portrait 3 $M/fnormal
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -open
           # Folded, the outer display, last.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1 || true; sleep 3
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
+          # Upright again once closed: the tv19 folded flick film came out sideways (the X top left, "Remote" on its side),
+          # the outer display having kept the landscape it was last turned to, so the one folded flick film was of a posture
+          # he rarely holds.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1 || true; sleep 3
           poses 1 ""
           # Folded and turned sideways, a posture he can hold too: the Remote with a show on, Apps, Watch and a details page
           # (836207d: the Remote's picture, bar and episode line collapsed to a sliver under the pad there).
@@ -231,6 +256,8 @@ jobs:
           backfilm back-details 1 13 $M -tab 1 -pose details
           backfilm back-browse 1 9 $M -tab 1 -pose browse
           backfilm back-row 1 12 $M -tab 1 -pose stremiorow
+          # And the card thrown by a real drag, folded upright.
+          curl -s $M/fnormal/reset > /dev/null; flickfilm flickreal 1 $M/fnormal
           ls dist
       - name: Publish
         if: always()
