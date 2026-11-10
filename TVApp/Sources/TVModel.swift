@@ -57,6 +57,19 @@ final class TVModel {
     @ObservationIgnored var moodArt: String?
     func keepMood(until art: String) { moodArt = art }
     var reachable = true
+    // "Can't reach the Mac" only after the Mac has failed to answer for a while, never on one missed reading: a network
+    // change, Tailscale reconnecting after the phone wakes, or the dashboard restarting each lost a reading or two and put
+    // the red note up for a moment (Richard, 2026-11-10: "cant reach the mac is tailscale on keeps happening in tv and
+    // its annoying"). Not in the first seconds back in the foreground either, while the tunnel comes back.
+    @ObservationIgnored private var failingSince: Date?
+    @ObservationIgnored private var foregroundAt = Date()
+    private static let unreachableAfter: TimeInterval = 8, settleAfterForeground: TimeInterval = 6
+    private func missed() {
+        guard !Task.isCancelled else { return }
+        let now = Date()
+        if failingSince == nil { failingSince = now }
+        if now.timeIntervalSince(failingSince!) >= Self.unreachableAfter, now.timeIntervalSince(foregroundAt) >= Self.settleAfterForeground { reachable = false }
+    }
     var watchlist: [Film] = []
     var friends: [Film] = []
     var recommended: [Film] = []
@@ -356,6 +369,7 @@ final class TVModel {
     func url(_ path: String) -> URL? { URL(string: address.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) }
     func start() {
         stop()
+        foregroundAt = Date(); failingSince = nil
         // Back in the foreground: the polls take over from the background grace.
         grace?.cancel(); grace = nil
         #if canImport(UIKit)
@@ -478,17 +492,19 @@ final class TVModel {
     private func reload(polled: Bool = false) async {
         guard let u = url("/api/tv/status") else { return }
         var r = URLRequest(url: u); r.timeoutInterval = 8; r.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200 else { if !Task.isCancelled { reachable = false }; return }
+        guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200 else { missed(); return }
         // Decoded off the main thread, as the browse rows are: the whole status every second on the main actor was a bite
         // out of every frame drawn while it landed (review of dfd490e, speed 2). The same bytes as last time aren't decoded
         // again at all, and nothing below publishes unless something changed.
         let s: TVStatus, unchanged = d == lastStatusBytes && status != nil
         if unchanged, let same = status { s = same } else {
             guard let fresh = await Task.detached(priority: .userInitiated, operation: { try? JSONDecoder().decode(TVStatus.self, from: d) }).value else {
-                if !Task.isCancelled { reachable = false }; return
+                // The Mac answered; only this reading didn't parse. Not a reason to say it can't be reached.
+                return
             }
             s = fresh
         }
+        failingSince = nil
         if !reachable { reachable = true }
         #if os(iOS)
         await TVIsland.sync(s, art: islandArt(s))
