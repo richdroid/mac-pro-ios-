@@ -93,7 +93,7 @@ struct IslandTime: View {
             }
         }
         .font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.62)).lineLimit(1)
-        .frame(width: long ? 52 : 38, alignment: left ? .trailing : .leading)
+        .frame(width: (long ? 54 : 38) + (left ? 8 : 0), alignment: left ? .trailing : .leading)
     }
 }
 // Play or pause, saying what a press will do, as every player's does.
@@ -117,12 +117,14 @@ struct IslandSkip: View {
     let app: String
     let forward: Bool
     var size: CGFloat = 20
+    // The Lock Screen's keys stand apart in a row; the island's hug the ends of the bar, level with the cover and ⏯.
+    var wide = false
     var body: some View {
         let song = app == "Mint"
         Button(intent: TVIslandSkip(forward: forward)) {
             Image(systemName: song ? (forward ? "forward.fill" : "backward.fill") : (forward ? "goforward.10" : "gobackward.10"))
-                .font(.system(size: size, weight: .medium)).foregroundStyle(.white)
-                .frame(width: 40, height: 40).contentShape(Circle())
+                .font(.system(size: song ? size - 4 : size, weight: .medium)).foregroundStyle(.white)
+                .frame(width: wide ? 44 : 32, height: 40).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(song ? (forward ? "Next song" : "Previous song") : (forward ? "Forward 10 seconds" : "Back 10 seconds"))
@@ -169,8 +171,8 @@ struct IslandOpenBottom: View {
                     IslandSkip(app: state.app, forward: true)
                 }
                 .frame(height: 32)
-                // The keys' glyphs, not their 40 pt touch areas, line up with the cover and ⏯ above.
-                .padding(.horizontal, -8)
+                // The keys' glyphs, not their touch areas, line up with the cover and ⏯ above.
+                .padding(.horizontal, -4)
             }
         }
         .padding(.horizontal, 6).padding(.bottom, 2)
@@ -197,9 +199,9 @@ struct IslandLockCard: View {
             .frame(height: 14)
             if !stale {
                 HStack(spacing: 34) {
-                    IslandSkip(app: state.app, forward: false, size: 22)
+                    IslandSkip(app: state.app, forward: false, size: 22, wide: true)
                     IslandPlay(playing: state.playing)
-                    IslandSkip(app: state.app, forward: true, size: 22)
+                    IslandSkip(app: state.app, forward: true, size: 22, wide: true)
                 }
                 .frame(height: 40)
             }
@@ -208,7 +210,7 @@ struct IslandLockCard: View {
         .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, stale ? 14 : 8)
     }
 }
-// The small island, either side of the camera: the cover, and what it's doing. Playing, a ring of how far in, running
+// The small island, either side of the camera: the cover, and what it's doing. Playing, the time left, counting down
 // by itself; paused, the pause mark. Never a key's glyph: nothing here can be pressed, and "⏸" while it played read as
 // paused. Out of date, the cover alone.
 struct IslandCompactTrailing: View {
@@ -218,8 +220,8 @@ struct IslandCompactTrailing: View {
         if stale { EmptyView() }
         else if !state.playing { Image(systemName: "pause.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white.opacity(0.7)).accessibilityLabel("Paused") }
         else if let a = state.start, let b = state.end, b > a {
-            ProgressView(timerInterval: a...b, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
-                .progressViewStyle(.circular).tint(TVLook.accent).labelsHidden().frame(width: 20, height: 20).accessibilityLabel("Playing")
+            Text(timerInterval: a...b, countsDown: true).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(TVLook.accent)
+                .multilineTextAlignment(.trailing).lineLimit(1).frame(width: (state.length ?? 0) >= 3600 ? 56 : 40, alignment: .trailing)
         } else {
             Image(systemName: "waveform").font(.system(size: 14, weight: .semibold)).foregroundStyle(TVLook.accent).accessibilityLabel("Playing")
         }
@@ -263,7 +265,7 @@ struct TVIslandGallery: View {
             HStack {
                 IslandOpenLeading()
                 Spacer()
-                Capsule().fill(Color(white: 0.09)).frame(width: 122, height: 33)
+                Capsule().fill(Color(white: 0.09)).frame(width: 118, height: 33)
                 Spacer()
                 IslandOpenTrailing(state: st, stale: stale)
             }
@@ -271,7 +273,7 @@ struct TVIslandGallery: View {
             IslandOpenBottom(state: st, stale: stale).padding(.top, 8)
         }
         .padding(.horizontal, 14).padding(.top, 11).padding(.bottom, 14)
-        .frame(width: 402)
+        .frame(width: 366)
         .background(.black, in: RoundedRectangle(cornerRadius: 44, style: .continuous))
     }
     func compact(_ st: TVIslandAttributes.ContentState, _ stale: Bool) -> some View {
@@ -280,7 +282,7 @@ struct TVIslandGallery: View {
             Spacer(minLength: 0)
             IslandCompactTrailing(state: st, stale: stale)
         }
-        .padding(.horizontal, 9).frame(width: 232, height: 37).background(.black, in: Capsule())
+        .padding(.horizontal, 9).frame(width: 236, height: 37).background(.black, in: Capsule())
     }
     var body: some View {
         VStack(spacing: 12) {
@@ -288,7 +290,7 @@ struct TVIslandGallery: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(s.name).font(.caption2.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
                     if lock {
-                        IslandLockCard(state: s.state, stale: s.stale).frame(width: 402)
+                        IslandLockCard(state: s.state, stale: s.stale).frame(width: 366)
                             .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
                             .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
                             .environment(\.colorScheme, .dark)
@@ -302,7 +304,7 @@ struct TVIslandGallery: View {
                 }
             }
         }
-        .padding(.vertical, 16).frame(maxWidth: .infinity)
+        .padding(.vertical, 16).padding(.leading, 12).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 #endif
