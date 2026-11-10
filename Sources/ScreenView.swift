@@ -83,6 +83,7 @@ struct RemoteScreenView: View {
     // flat. Nil where there's no hinge or the system doesn't say, and the fold region decides as before (Richard,
     // 2026-11-07: "use the iphone duo api").
     @State private var hingeFolded: Bool?
+    @State private var shownAt = Date()
 
     enum ClipState: Equatable {
         case idle, working, done, failed(String)
@@ -98,8 +99,17 @@ struct RemoteScreenView: View {
             let insets = ScreenInsets.current
             let p = Self.plan(area: full.size, fold: f, aspect: aspect, top: insets.top, bottom: insets.bottom,
                               keyboard: typing ? keyboardHeight : 0, force: force)
-            let _ = RegionLog.note("plan \(p.kind) top \(Int(insets.top)) picture \(p.picture.debugDescription) fnRow \(p.fnRow.debugDescription) tools \(p.tools.count) \(p.tools.first?.debugDescription ?? "")")
+            let _ = RegionLog.note("plan \(p.kind) top \(Int(insets.top)) picture \(p.picture.debugDescription) fnRow \(p.fnRow.debugDescription) tools \(p.tools.count) \(p.tools.first?.debugDescription ?? "") dock \(p.dock.debugDescription) keyboard \(Int(typing ? keyboardHeight : 0))")
             stage(p, area: full.size)
+                // A change of posture puts the system keyboard away: it was left up over the open display, covering the
+                // only key that hides it (Richard, 2026-11-10: "when i open mac screen flat the interface is fucked and the
+                // ios keyboard doesnt go away"). He brings it back with the keyboard key when he wants to type.
+                // Not while the Screen is still finding its posture as it opens (the hinge's first reading can land then).
+                .onChange(of: p.kind) { _, k in
+                    guard Date().timeIntervalSince(shownAt) > 1 else { return }
+                    RegionLog.note("posture \(k), keyboard put away: \(typing)")
+                    if typing { typing = false }
+                }
         }
         .ignoresSafeArea()
         .background(Color.black.ignoresSafeArea())
@@ -108,6 +118,7 @@ struct RemoteScreenView: View {
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onAppear {
+            shownAt = Date()
             screen.heldModifiers = []
             showPadTip()
             switch model.pose {
@@ -394,6 +405,16 @@ struct RemoteScreenView: View {
         case .closedLandscape, .flatLandscape:
             // The dock lives in the black under the picture, never over the Mac's own Dock.
             let dock: CGFloat = 52
+            if keyboard > 0 {
+                // Typing: the dock (with the key that hides the keyboard) rides on top of the system keyboard and the
+                // picture fits whole above it. The dock stayed at the foot under the keyboard, so nothing could put the
+                // keyboard away, and it covered the picture's lower part (Richard, 2026-11-10, open flat).
+                let dockY = max(h - keyboard - dock - 4, 0)
+                p.picture = fitted(in: clear(CGRect(x: 0, y: 0, width: w, height: max(dockY - 4, 1))))
+                p.dock = CGRect(x: 0, y: dockY, width: w, height: dock)
+                p.crease = kind == .flatLandscape ? fold.crease : nil
+                return p
+            }
             p.picture = fitted(in: clear(CGRect(x: 0, y: 0, width: w, height: kind == .closedLandscape ? h - dock - 4 : h)))
             let room = h - p.picture.maxY
             p.dock = room >= dock + 4
@@ -2302,6 +2323,20 @@ struct KeyCatcher: UIViewRepresentable {
     final class Field: UIView, UIKeyInput {
         var onText: ((String) -> Void)?
         var onDelete: (() -> Void)?
+        // Told when the keyboard goes for any reason (the system, the app leaving, the view rebuilt), so the toggle and the
+        // layout follow it and nothing brings it back unasked.
+        var onResign: (() -> Void)?
+        // Asked for, but not yet in a window to take it: taken the moment it is.
+        var wantsFocus = false
+        override func resignFirstResponder() -> Bool {
+            let done = super.resignFirstResponder()
+            if done { wantsFocus = false; onResign?() }
+            return done
+        }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if wantsFocus, window != nil, !isFirstResponder, becomeFirstResponder() { wantsFocus = false }
+        }
         var hasText: Bool { true }
         override var canBecomeFirstResponder: Bool { true }
         // While typing, three fingers are still the Mac's gestures, not the system's undo.
@@ -2315,13 +2350,22 @@ struct KeyCatcher: UIViewRepresentable {
         var smartDashesType: UITextSmartDashesType = .no
         var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
     }
+    final class Coordinator { var wanted = false }
+    func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> Field { Field() }
     func updateUIView(_ v: Field, context: Context) {
         v.onText = onText
         v.onDelete = onDelete
+        let binding = $active
+        v.onResign = { DispatchQueue.main.async { if binding.wrappedValue { binding.wrappedValue = false } } }
+        // Only a change of what he asked for moves the keyboard. Asserted on every redraw before, a keyboard the system
+        // had put away came straight back up by itself.
+        let was = context.coordinator.wanted
+        context.coordinator.wanted = active
+        guard was != active else { return }
         DispatchQueue.main.async {
-            if active, !v.isFirstResponder { v.becomeFirstResponder() }
-            if !active, v.isFirstResponder { v.resignFirstResponder() }
+            if active, !v.isFirstResponder { v.wantsFocus = !v.becomeFirstResponder() }
+            if !active { v.wantsFocus = false; if v.isFirstResponder { _ = v.resignFirstResponder() } }
         }
     }
 }

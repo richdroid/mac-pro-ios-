@@ -333,10 +333,18 @@ struct RootView: View {
     var body: some View {
         PaneReader {
             TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
-                // Back to the tab's own start: anything opened on it closes, and it's rebuilt at the top.
-                if t == 0 { model.history = nil; model.processes = nil }
-                if t == 2 { model.sessionScreen = nil }
-                resets[t, default: 0] += 1
+                // Back to the tab's own start. With a page open on it, the page goes back the way Back takes it, the
+                // system's animated pop (the pushed page holding its layout as it slides, NavTransit). The tab was rebuilt
+                // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
+                // button again it jankily goes back no animation"). Only a tab already at its start is rebuilt at the top.
+                let open = (t == 0 && (model.history != nil || model.processes != nil)) || (t == 1 && model.appHistory != nil) || (t == 2 && model.sessionScreen != nil)
+                if open {
+                    if t == 0 { model.history = nil; model.processes = nil }
+                    if t == 1 { model.appHistory = nil }
+                    if t == 2 { model.sessionScreen = nil }
+                } else {
+                    resets[t, default: 0] += 1
+                }
             }) {
                 // Six tabs, not seven: Usage is Claude's usage and lives on the Claude tab. Seven in the bar along the foot
                 // (open in portrait) were squeezed, the labels nearly touching (Richard, 2026-11-07: "the bar like the
