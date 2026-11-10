@@ -57,7 +57,9 @@ struct Status: Decodable {
     struct Fetch: Decodable { let state: String; let message: String }
     struct Service: Decodable, Identifiable { let label: String; let name: String; let running: Bool; var id: String { label } }
     // A temperature alert also carries its reading in °C, so it's shown in the unit chosen in Settings.
-    struct Alert: Decodable, Identifiable { let id: String; let level: String; let kind: String; var metric: String?; let title: String; let detail: String; let since: Double; var c: Double? }
+    struct Alert: Decodable, Identifiable { let id: String; let level: String; let kind: String; var metric: String?; let title: String; let detail: String; let since: Double; var c: Double?
+        // Whether the Mac's own notification for it reached Apple, so the background check never repeats it.
+        var pushed: Bool? }
     // What the Anthropic API has cost, read on the Mac with its Admin key. Read leniently: a field it can't make sense of
     // is simply missing, rather than losing the whole status.
     struct APIUsage: Decodable {
@@ -299,6 +301,12 @@ struct API {
 
     func login(code: String) async throws { try await post("/login", body: ["code": code]) }
     func action(_ name: String, _ body: [String: Any] = [:]) async throws { try await post("/api/action/\(name)", body: body) }
+    // Where the Mac sends this iPhone's notifications, or `off` to have it forget.
+    func pushToken(_ token: String, bundle: String, celsius: Bool, off: Bool) async throws {
+        try await post("/api/push/token", body: ["app": "macpro", "bundle": bundle, "token": token, "celsius": celsius, "off": off])
+    }
+    // An alert put away on the phone: no "back to normal" follows it.
+    func pushSeen(_ id: String) async throws { try await post("/api/push/seen", body: ["id": id]) }
 
     // Secrets are encrypted here, to a one-time offer from the Mac, before they leave the phone.
     func sendSealed(_ name: String, secret: String, extra: [String: Any] = [:]) async throws {

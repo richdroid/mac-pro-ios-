@@ -8,6 +8,10 @@ import UIKit
 struct MacProApp: App {
     @StateObject private var model = AppModel()
     @Environment(\.scenePhase) private var phase
+    #if canImport(UIKit)
+    // Only for the notification token iOS hands to an app delegate.
+    @UIApplicationDelegateAdaptor(PushDelegate.self) private var pushDelegate
+    #endif
     init() { AlertWatch.shared.install() }
     var body: some Scene {
         WindowGroup {
@@ -15,7 +19,7 @@ struct MacProApp: App {
                 .otaOffer(model)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in
-                    if p == .active { Reach.shared.cameForward(); model.start() } else { model.stop() }
+                    if p == .active { Reach.shared.cameForward(); model.start(); PushToken.share(model.api) } else { model.stop() }
                     #if os(iOS)
                     if p == .background { AlertWatch.shared.scheduleRefresh() }
                     #endif

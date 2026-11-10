@@ -274,6 +274,8 @@ jobs:
             shot claude-api-refused$x $d 9 -tab 2 -pose api-refused
             shot usage-link$x $d 9 -tab 3
             shot scrolled$x $d 9 -tab 0 -pose scrolled
+            # Alerts on Status, each with its own ✕ (Richard, 2026-11-10: "should be dismissable").
+            shot alerts$x $d 9 -tab 0 -pose alerts
             shot displayhold$x $d 8 -tab 0 -pose displayhold
             shot screen$x $d 8 -tab 0 -pose screen -openScreen YES
             shot screenhint$x $d 8 -tab 0 -pose screenhint -openScreen YES
@@ -325,6 +327,8 @@ jobs:
           tapshot updatetap-portrait 3 8 0.88 0.265 -tab 1 -pose otaready
           # Scrolling judged moving (the title now goes up with the page), and the tabs in turn, coming back to each.
           film scrollfilm-portrait 3 30 -tab 0 -pose scrollfilm
+          # The first alert put away with its ✕: the row fades and the list closes up in one move.
+          film alertsdismiss-portrait 3 16 -tab 0 -pose alertsdismiss
           film tour-portrait 3 26 -tab 0 -pose tour
           # Each with the frame meter on, so a page's smoothness is counted in the app, not read off the recorder.
           swipefilm versionsfling-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -frameLog YES
