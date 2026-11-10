@@ -124,6 +124,58 @@ enum SwipeLog {
     }
 }
 
+// What one scrolling page is doing, for each app's hold on polled readings (its ScrollHold): read from the page's
+// geometry as much as from its phase. Two things a phase alone never gave, and each let a reading land on a page pulled
+// past its end, which a List answers by clamping its offset back into range in one frame instead of springing (Richard,
+// 2026-11-08 and 2026-11-10: "it doesnt bounce back naturally its like a sudden move back"):
+//  - a List reports no scroll phase (Mac Pro CI 6da2654), so a hold read from the phase alone never engaged on a List
+//    page at all (Chumby's Alarms and settings, the TV's lists), and one read from the offset alone lapsed the moment a
+//    finger held the page still past its end for more than its grace (every real pull pauses before it lets go; the
+//    build's drags never do, which is why its films sprang and his phone snapped);
+//  - past either end the page is held whatever the phase says, finger down and still, on its way back, or at rest short
+//    of range. Readings land only once it's back in range and has been still for 0.6 s.
+// `set` is the app's ScrollHold.set for this page; it's called again each tick while the page is held past the end, so a
+// hold that counts from the last motion stays fresh. Every reading goes to the swipe log (never on the phone).
+@MainActor
+final class ScrollWatch {
+    let name: String
+    private let set: @MainActor (Bool) -> Void
+    private var touching = false
+    private(set) var past = false
+    private var lastMove = Date.distantPast
+    private var watch: Task<Void, Never>?
+    private(set) var holding = false
+    init(_ name: String, set: @escaping @MainActor (Bool) -> Void) { self.name = name; self.set = set }
+    // Every change of the page's offset, content, insets or container. Past the end: more than half a point above the
+    // top (its inset allowed for) or beyond the end, which is the content and both insets less the container, never
+    // less than nothing for a page shorter than its container.
+    func geometry(_ g: ScrollGeometry) {
+        let y = g.contentOffset.y + g.contentInsets.top
+        let end = max(g.contentSize.height + g.contentInsets.top + g.contentInsets.bottom - g.containerSize.height, 0)
+        let now = y < -0.5 || y > end + 0.5
+        if SwipeLog.on { SwipeLog.note("\(name) y \(Int(y.rounded())) end \(Int(end.rounded()))\(now ? " past" : "")") }
+        if now != past { past = now }
+        moved()
+    }
+    func phase(touching t: Bool) { touching = t; moved() }
+    private func moved() { lastMove = Date(); hold() }
+    private func hold() {
+        if !holding { holding = true; SwipeLog.note("\(name) hold on") }
+        set(true)
+        guard watch == nil else { return }
+        watch = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard let self else { return }
+                if self.past { self.set(true); continue }
+                if !self.touching, Date().timeIntervalSince(self.lastMove) > 0.6 { self.release(); return }
+            }
+        }
+    }
+    private func release() { watch = nil; holding = false; SwipeLog.note("\(name) hold off"); set(false) }
+    func stop() { watch?.cancel(); watch = nil; touching = false; past = false; if holding { holding = false; set(false) } }
+}
+
 // Two panes, in Apple's container: side by side when wide, stacked when tall, and clear of the fold when partly closed.
 // Lying flat it would split the area left of the side bars, putting the seam off the crease, so it's told where the hinge is.
 struct FoldSplit<L: View, R: View>: View {

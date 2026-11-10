@@ -205,6 +205,7 @@ final class ChumbyModel: ObservableObject {
     // editor is open over Alarms, since they're waiting on it.
     private var parks: Bool { ScrollHold.holding && stateConfirmed && !alarmsPage && !editingAlarm }
     private func releaseHeld() {
+        if heldSys != nil || heldState != nil { SwipeLog.note("held readings landed") }
         if let h = heldSys { heldSys = nil; if var v = try? JSONDecoder().decode(Sys.self, from: h.data) { if !h.fresh { v.ring = sys.ring }; applySys(v, data: h.data, fresh: h.fresh) } }
         if let h = heldState { heldState = nil; if Date() >= stateHold { applyState(h.state, data: h.data, recent: h.recent) } }
         if let h = heldChannels { heldChannels = nil; applyChannels(h.list, data: h.data) }
@@ -268,7 +269,8 @@ final class ChumbyModel: ObservableObject {
             if !fresh { s.ring = sys.ring }
             // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
             // snoozing or ending never waits.
-            if parks, s.ringing == sys.ringing { heldSys = (r.data, fresh); return }
+            if parks, s.ringing == sys.ringing { SwipeLog.note("sys held"); heldSys = (r.data, fresh); return }
+            SwipeLog.note("sys landed")
             applySys(s, data: r.data, fresh: fresh)
         } catch is CancellationError {
         } catch ChumbyError.deviceDown {
@@ -317,7 +319,8 @@ final class ChumbyModel: ObservableObject {
         if r.data == stateBytes { if recent, !stateConfirmed { stateConfirmed = true }; return }
         guard Date() >= stateHold, let s = try? JSONDecoder().decode(ChumbyState.self, from: r.data) else { return }
         // Not while a page is moving (see releaseHeld). The ring is sys's, which never waits.
-        if parks { heldState = (r.data, s, recent); return }
+        if parks { SwipeLog.note("state held"); heldState = (r.data, s, recent); return }
+        SwipeLog.note("state landed")
         applyState(s, data: r.data, recent: recent)
     }
     private func applyState(_ s: ChumbyState, data: Data, recent: Bool) {

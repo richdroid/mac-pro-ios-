@@ -376,7 +376,10 @@ function chumbyScene(q, s) {
       });
       return true;
     }
-    if (a === 'sys') return json(live.sys);
+    // The live scene's readings move as the real Chumby's do (its uptime, load, free memory and Wi-Fi), so a reading
+    // changes Home's status rows every poll, as on his phone: the film of Home pulled past its end (chumby-homepull-
+    // portrait) must show every one of them held while the page is past its end, not landing under the pull.
+    if (a === 'sys') { const n = Math.floor(Date.now() / 1000); return json(scene === 'live' ? { ...live.sys, up: live.sys.up + n % 100000, load: 0.3 + (n % 7) / 10, memFree: live.sys.memFree - (n % 5) * 400, wifi: 60 + (n * 7) % 31 } : live.sys); }
     if (a === 'state') return json(stateNow(live.state));
     return false;
   }

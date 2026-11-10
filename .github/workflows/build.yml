@@ -433,6 +433,27 @@ jobs:
               done
             done
             xcrun simctl ui "$DEVICE" appearance light
+            # Home and Alarms (a List, which reports no scroll phase) pulled past their ends with real touches while the
+            # live scene's readings change every poll, filmed in the posture he holds: flung to the end, drawn past it
+            # slowly (3 s) and let go, back up and past the top the same way. The app's swipe log beside each (offset every
+            # frame, the hold taking and letting go, each reading held or landed) must show no reading landing while the
+            # page is past its end, and the spring in shrinking steps, never one move (Richard, 2026-11-08 and 11-10:
+            # "it doesnt bounce back naturally its like a sudden move back", "in all apps if it exists").
+            local D=/tmp/dh/.build/release/devicehubctl
+            for V in "homepull 0" "alarmspull 2"; do
+              set -- $V
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/chumby-$1-portrait.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/live -tab $2 -swipeLog YES
+              sleep 9
+              for i in 1 2 3 4; do $D "$DEVICE" drag 0.5 0.8 0.5 0.28 0.12 || echo "drag failed"; sleep 1.4; done
+              $D "$DEVICE" drag 0.5 0.6 0.5 0.28 3 || true; sleep 3
+              for i in 1 2 3 4 5; do $D "$DEVICE" drag 0.5 0.28 0.5 0.8 0.12 || true; sleep 1.4; done
+              $D "$DEVICE" drag 0.5 0.45 0.5 0.8 3 || true; sleep 3
+              kill -INT $REC; wait $REC; echo "chumby $1 film exit $?"
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+              C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && mv "$C/Library/Caches/swipe-log.txt" dist/chumby-$1-portrait-swipe.log || true
+            done
           }
           # ---- end Chumby app poses ----
           # The TV and Mac Pro apps in the posture he holds too (Duo open in portrait, the tabs a bar along the foot), every

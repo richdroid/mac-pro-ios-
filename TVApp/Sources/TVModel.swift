@@ -495,8 +495,8 @@ final class TVModel {
         #endif
         // Polled while a page is moving: kept until it settles (releaseHeld), so nothing changes height under his finger.
         // Never the first answer since launch (every page is waiting on it), and never one with nothing shown yet.
-        if polled, !unchanged, !staleStatus, status != nil, s != status, ScrollHold.holding { heldStatus = (d, s); return }
-        heldStatus = nil
+        if polled, !unchanged, !staleStatus, status != nil, s != status, ScrollHold.holding { SwipeLog.note("status held"); heldStatus = (d, s); return }
+        if heldStatus != nil { heldStatus = nil; SwipeLog.note("held status landed") } else if !unchanged, s != status { SwipeLog.note("status landed") }
         publish(s, data: d)
     }
     private func publish(_ s: TVStatus, data d: Data) {

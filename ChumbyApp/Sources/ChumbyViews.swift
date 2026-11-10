@@ -211,20 +211,29 @@ extension View {
     // like a sudden move back", to be fixed "in all apps if it exists").
     func roomyIndicators() -> some View { self.scrollIndicators(.hidden).modifier(ScrollMoving()) }
 }
+// Read from the page's geometry as well as its phase (ScrollWatch, Shared): a List (Alarms, every settings page) reports
+// no phase at all, so read from the phase alone the hold never engaged on one; and a page held past its end under a
+// still finger stays held whatever the phase says, since a reading landing then is the snap itself.
 struct ScrollMoving: ViewModifier {
-    @State private var id = UUID()
+    @State private var track = Track()
+    @MainActor final class Track {
+        let watch: ScrollWatch
+        init() { let id = UUID(); watch = ScrollWatch("page") { ScrollHold.set(id, moving: $0) } }
+    }
     func body(content: Content) -> some View {
         #if os(iOS)
         content
-            .onScrollPhaseChange { _, phase in ScrollHold.set(id, moving: phase != .idle) }
-            .onDisappear { ScrollHold.set(id, moving: false) }
+            .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, g in track.watch.geometry(g) }
+            .onScrollPhaseChange { _, phase in track.watch.phase(touching: phase != .idle) }
+            .onDisappear { track.watch.stop() }
         #else
         content
         #endif
     }
 }
-// Which pages are moving right now. Readings from the Chumby wait while any is, never more than 4 s at a stretch; his
-// own saves, skips and channel changes never wait, and a ring starting or ending never does either (ChumbyModel).
+// Which pages are moving right now. Readings from the Chumby wait while any is, and for 4 s at most after it was last
+// seen moving (not from the first motion: a few flicks and a pull used that up, and the reading landed under the pull);
+// his own saves, skips and channel changes never wait, and a ring starting or ending never does either (ChumbyModel).
 @MainActor
 enum ScrollHold {
     private static var moving: Set<UUID> = []
@@ -233,8 +242,7 @@ enum ScrollHold {
     static var holding: Bool { !moving.isEmpty && Date().timeIntervalSince(since) < 4 }
     static func set(_ id: UUID, moving now: Bool) {
         let was = !moving.isEmpty
-        if now { moving.insert(id) } else { moving.remove(id) }
-        if !was && !moving.isEmpty { since = Date() }
+        if now { moving.insert(id); since = Date() } else { moving.remove(id) }
         if was && moving.isEmpty { onRelease?() }
     }
 }

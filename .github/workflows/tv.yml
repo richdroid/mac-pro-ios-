@@ -102,7 +102,10 @@ jobs:
             local D=/tmp/dh/.build/release/devicehubctl
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            # With the swipe log on: the page's offset every frame, the hold taking and letting go, and each reading's
+            # landing, so the spring back is judged in the app's own frames (the recorder keeps only some), and a reading
+            # that lands while the page is past its end is caught in numbers.
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address -swipeLog YES "$@"
             sleep 10
             for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x $lo $x $hi 0.12 || echo "drag failed: $($D "$DEVICE" drag $x $lo $x $hi 0.12 2>&1 | tail -1)"; sleep 1.4; done
             $D "$DEVICE" drag $x $lo $x $hi 0.9 || true; sleep 2.5
@@ -111,6 +114,7 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/tv-$name-swipe.log || true
             # A recording that caught nothing (the inner display gave empty films right after a slow first unfold, 836207d):
             # once more, and that's it.
             if [ "$(stat -f %z dist/tv-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ] && [ -z "$RETRIED" ]; then

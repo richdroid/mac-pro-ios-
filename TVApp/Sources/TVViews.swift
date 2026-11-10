@@ -447,23 +447,32 @@ private struct SummonsBar: ViewModifier {
 // Every scrolling page says when it's moving (BackToTop and SummonsBar carry this): the TV's polled status waits while
 // one is, so no row changes height under a page pulled past its end, which snaps the page back in one move instead of
 // letting it spring (Richard, 2026-11-08: "it doesnt bounce back naturally its like a sudden move back", in all apps).
+// Read from the page's geometry as well as its phase (ScrollWatch, Shared): a List reports no phase, and a page held
+// past its end under a still finger stays held whatever the phase says, since a reading landing then is the snap itself.
 struct ScrollMoving: ViewModifier {
-    @State private var id = UUID()
+    @State private var track = Track()
+    @MainActor final class Track {
+        let watch: ScrollWatch
+        init() { let id = UUID(); watch = ScrollWatch("page") { ScrollHold.set(id, moving: $0) } }
+    }
     func body(content: Content) -> some View {
         #if os(iOS)
         content
-            .onScrollPhaseChange { _, phase in ScrollHold.set(id, moving: phase != .idle) }
-            .onDisappear { ScrollHold.set(id, moving: false) }
+            .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, g in track.watch.geometry(g) }
+            .onScrollPhaseChange { _, phase in track.watch.phase(touching: phase != .idle) }
+            .onDisappear { track.watch.stop() }
         #else
         content
         #endif
     }
 }
-// Which pages are moving right now. Only the polled status waits while any is, never more than 4 s at a stretch: his own
-// presses, and every load they ask for, go straight through (TVModel). A page that has just gone idle keeps the hold
-// half a second longer: on his phone the spring back from a pull still snapped (2026-11-09), and a reading landing on
-// the phase's first idle moment, while the page is still settling, is the one way left for a row to change height
-// under it. The mock's films, where nothing changes, can't show that; the real bridge changes something every poll.
+// Which pages are moving right now. Only the polled status waits while any is, and for 4 s at most after it was last
+// seen moving: his own presses, and every load they ask for, go straight through (TVModel). A page that has just gone
+// idle keeps the hold half a second longer: on his phone the spring back from a pull still snapped (2026-11-09), and a
+// reading landing on the phase's first idle moment, while the page is still settling, is the one way left for a row to
+// change height under it. The 4 s count from the last motion, not the first: counted from the first, a few flicks down a
+// long page and the pull after them used it up, and the reading landed under the pull (the Mac Pro app's CI f7bb947
+// found the same there).
 @MainActor
 enum ScrollHold {
     private static var moving: Set<UUID> = []
@@ -474,7 +483,7 @@ enum ScrollHold {
     static func set(_ id: UUID, moving now: Bool) {
         let was = !moving.isEmpty || settling != nil
         if now { moving.insert(id); settling?.cancel(); settling = nil } else { moving.remove(id) }
-        if !was && now { since = Date() }
+        if now { since = Date() }
         if was && !now && moving.isEmpty && settling == nil {
             settling = Task {
                 try? await Task.sleep(nanoseconds: 500_000_000)
