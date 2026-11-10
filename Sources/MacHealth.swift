@@ -394,7 +394,7 @@ struct MacRestartView: View {
                 if side != .right {
                     Section {
                         ForEach(MacParts.checks, id: \.self) { id in
-                            MacPartRow(id: id, part: checks?.parts.first { $0.part == id }, check: true, pending: checks == nil || checking ? "Checking…" : nil).place(id)
+                            MacPartRow(id: id, part: checks?.parts.first { $0.part == id }, check: true, pending: checking || (checks == nil && failure == nil) ? "Checking…" : checks == nil ? "Not checked yet" : nil).place(id)
                         }
                     } header: { Text("Before it restarts") } footer: {
                         Text("It has to come back by itself, with no one at the Mac.")
@@ -402,9 +402,9 @@ struct MacRestartView: View {
                 }
                 if side != .left {
                     Section {
-                        if !red.isEmpty {
-                            Label(red.count == 1 ? "Fix \(MacParts.name(red[0].part, check: true).lowercased(with: nil)) first." : "Fix the \(red.count) red checks first.", systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
+                        if !red.isEmpty || (checks == nil && failure != nil && !checking) {
+                            if !red.isEmpty { Label(red.count == 1 ? "Fix \(MacParts.name(red[0].part, check: true).lowercased(with: nil)) first." : "Fix the \(red.count) red checks first.", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red) }
                             Button { Task { await check() } } label: { Label("Check again", systemImage: "arrow.clockwise") }.disabled(checking)
                         }
                         Button(role: .destructive) { asking = true } label: {
