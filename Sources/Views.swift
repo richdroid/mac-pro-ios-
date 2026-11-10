@@ -1726,30 +1726,19 @@ struct SeedSection: View {
     @State private var linking = false
     @State private var link = ""
     @State private var uploading = false
-    @State private var handing: String?
     // What went wrong, said in the row it happened to.
     @State private var rowFail: [String: String] = [:]
     @State private var addFail: String?
-    @State private var shareFile: ShareFile?
     @ObservedObject private var ota = OTAInstaller.shared
-    struct ShareFile: Identifiable { let url: URL; let app: String; var id: URL { url } }
 
-    // Away from home, the Mac can't reach this iPhone, so SideStore installs it from here.
-    func handOff(_ file: String, row: String) {
-        Task {
-            handing = file; defer { handing = nil }
-            rowFail[row] = nil
-            do { shareFile = ShareFile(url: try await model.api.download(file), app: row) }
-            catch { rowFail[row] = error.localizedDescription }
-        }
-    }
     static func daysLeft(_ a: Status.SeedApp) -> Int? {
         a.expires > 0 ? Int(ceil((a.expires / 1000 - Date().timeIntervalSince1970) / 86400)) : nil
     }
     func daysLeft(_ a: Status.SeedApp) -> Int? { Self.daysLeft(a) }
-    // How long the signature has left, in words; coloured only once it needs him.
-    static func left(_ days: Int) -> (String, Color) {
-        days > 1 ? ("\(days) days left", .secondary) : days == 1 ? ("1 day left", .orange) : ("Expired", .red)
+    // How long the signature has left, in words, from the real end of its profile (a year, signed with his paid team), and
+    // only once it's within a month: "340 days left" on every row was noise. Coloured only once it needs him.
+    static func left(_ days: Int) -> (String, Color)? {
+        days > 30 ? nil : days > 1 ? ("\(days) days left", .secondary) : days == 1 ? ("1 day left", .orange) : ("Expired", .red)
     }
     // One line under the name, as the Updates rows have ("Build 178 · Today"): the build in the same words, then what's
     // worth knowing about it. It was three: a green "Up to date · 6d left" (the section above already says everything is
@@ -1758,7 +1747,7 @@ struct SeedSection: View {
         let build = "Build \(a.phoneBuild.isEmpty ? a.build : a.phoneBuild)"
         // This app, already at the build the Mac still thinks is waiting (it can't see the phone away from home).
         if OTAInstaller.isThisApp(a), a.build == OTAInstaller.thisBuild, ["waiting", "update"].contains(a.state) {
-            return ("Build \(a.build)" + (daysLeft(a).map { " · " + Self.left($0).0 } ?? ""), .secondary)
+            return ("Build \(a.build)" + (daysLeft(a).flatMap(Self.left).map { " · " + $0.0 } ?? ""), .secondary)
         }
         switch a.state {
         case "installing": return ("Installing build \(a.build)…", .secondary)
@@ -1771,8 +1760,7 @@ struct SeedSection: View {
         case "external": return ("Installed outside the Mac", .secondary)
         case "unknown": return (build, .secondary)
         default:
-            guard let days = daysLeft(a) else { return (build, .secondary) }
-            let l = Self.left(days)
+            guard let days = daysLeft(a), let l = Self.left(days) else { return (build, .secondary) }
             return (days > 0 ? "\(build) · \(l.0)" : "\(build) · Expired", l.1)
         }
     }
@@ -1806,26 +1794,26 @@ struct SeedSection: View {
                         Text(a.name).font(.headline)
                         Text(l.0).font(.subheadline).foregroundStyle(l.1).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
                         if !a.message.isEmpty { Text(a.message).font(.footnote).foregroundStyle(.secondary).lineLimit(3) }
-                        if shareFile?.app == a.id { Text("Choose SideStore. LocalDevVPN needs to be on.").font(.footnote).foregroundStyle(.secondary) }
                         if let f = rowFail[a.id] { Text(f).font(.footnote).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
                     }
                     Spacer(minLength: 8)
-                    if handing == a.file || ota.current?.file == a.id { ProgressView().frame(width: 84) }
+                    if ota.current?.file == a.id { ProgressView().frame(width: 84) }
                     else if otaLink(a) != nil, !ota.wasOpened(a) {
-                        // The way in now: a filled capsule, the one thing on the row to tap. SideStore only without a link.
+                        // The way in now: a filled capsule, the one thing on the row to tap.
                         Button("Install") { ota.install([a]) }
                             .rowCapsule()
                             .disabled(ota.running)
                             .accessibilityLabel("Install \(a.name) build \(a.build)")
                     }
-                    else if a.own, needsHand(a) {
-                        Button(seed.reachable ? (a.state == "missing" ? "Install" : a.state == "update" ? "Update" : "Renew") : "Via SideStore") {
+                    // At home the Mac installs it straight away. Away, every app gets its over-the-air link once the Mac has
+                    // signed it, so until then there's nothing to press (the footer says it's on its way).
+                    else if a.own, needsHand(a), seed.reachable {
+                        Button(a.state == "missing" ? "Install" : a.state == "update" ? "Update" : "Renew") {
                             rowFail[a.id] = nil
-                            if seed.reachable { Task { rowFail[a.id] = await model.run("ios-seed", ["file": a.file]) } }
-                            else { handOff(a.file, row: a.id) }
+                            Task { rowFail[a.id] = await model.run("ios-seed", ["file": a.file]) }
                         }
                         .rowCapsule(prominent: false)
-                        .disabled(!seed.seeding.isEmpty || handing != nil)
+                        .disabled(!seed.seeding.isEmpty)
                     }
                 }
                 .padding(.vertical, 6)
@@ -1857,10 +1845,14 @@ struct SeedSection: View {
             if let f = seed.fetch, f.state == "failed" { Text(f.message).font(.footnote).foregroundStyle(.red) }
             if let addFail { FailText(addFail) }
         } header: { Text("On this iPhone") } footer: {
-            // Said only when it matters. Connected and installing by itself needs no words; an update signed for this
-            // iPhone installs over the air wherever it is; without one, away from home, SideStore is the way.
-            if !seed.reachable, seed.apps.contains(where: { $0.own && needsHand($0) && otaLink($0) == nil }) {
-                Text("Away from the Mac. Install hands the app to SideStore, which installs it from anywhere. Everything else catches up on home Wi-Fi.")
+            // Said only when it matters. The Mac signs every app ahead of time with his developer team, his own and any he
+            // adds, and each installs over the air from anywhere; an app away from home without its link yet is still
+            // being signed. Then one quiet line about where added apps come from.
+            VStack(alignment: .leading, spacing: 6) {
+                if !seed.reachable, seed.apps.contains(where: { $0.own && needsHand($0) && otaLink($0) == nil }) {
+                    Text("Still being signed on the Mac. Install will be ready in a minute.")
+                }
+                Text("An app you add runs as one of your own, so add only apps from places you trust.")
             }
         }
         .alert("Add from a link", isPresented: $linking) {
@@ -1872,7 +1864,6 @@ struct SeedSection: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("A link to an app’s .ipa file. The Mac downloads it and installs it here.") }
-        .sheet(item: $shareFile) { ShareSheet(url: $0.url) }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.item]) { result in
             guard case .success(let url) = result else { return }
             Task {
@@ -1882,9 +1873,8 @@ struct SeedSection: View {
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 do {
                     try await model.api.upload(url)
+                    // At home it installs by itself; away, its row gets Install once the Mac has signed it.
                     await model.refresh()
-                    // At home it installs by itself, and the new row says so.
-                    if !seed.reachable { handOff(url.lastPathComponent, row: url.lastPathComponent) }
                 }
                 catch { addFail = error.localizedDescription }
             }

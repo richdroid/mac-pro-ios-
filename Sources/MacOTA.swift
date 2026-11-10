@@ -538,8 +538,7 @@ struct VersionHistoryView: View {
         if b.isEmpty { return ("Not on this iPhone", .orange) }
         if b != a.build, ["waiting", "update", "installing"].contains(a.state) { return ("Build \(a.build) is ready", .secondary) }
         if a.state == "failed" { return ("Install failed", .red) }
-        guard let days = SeedSection.daysLeft(a) else { return ("On this iPhone", .secondary) }
-        let l = SeedSection.left(days)
+        guard let days = SeedSection.daysLeft(a), let l = SeedSection.left(days) else { return ("On this iPhone", .secondary) }
         return (l.0 + " on this iPhone", l.1)
     }
     // "Today, 10:16 AM", "Yesterday, 9:50 PM", "Nov 6": several builds can land in a day.
