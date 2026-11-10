@@ -524,19 +524,21 @@ struct FlickScreen: View {
             .opacity(arrived && !toRemote ? 1 : 0)
     }
 
+    // One control at the top of the bar, as the Duo reserves it (Richard, 2026-11-09, a show's page folded: "the buttons on
+    // sidebar r fucked", an X drawn twice over itself and a ">" with no meaning under it): Back while there's a step to go
+    // back to, else Close; Stop while the card is on its way. The X's label never changes words, so iOS has no two glyphs
+    // to crossfade (the doubled X); what it does is said to VoiceOver instead.
     @ToolbarContentBuilder var bar: some ToolbarContent {
-        if let previous {
+        if flown {
+            ToolbarItem(placement: .cancellationAction) {
+                Button { callOff() } label: { Label("Close", systemImage: "xmark") }.accessibilityLabel("Stop")
+            }
+        } else if let previous {
             ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
-        }
-        // Only back to an episode already chosen. On the streams, "Choose on the TV" is the way on without one.
-        if let next, step == .episodes {
-            ToolbarItem(placement: .primaryAction) { Button { go(next) } label: { Label("Next", systemImage: "chevron.right") } }
-        }
-        ToolbarItem(placement: .cancellationAction) {
-            // While the card is on its way or held in the TV, the X calls it off. It goes with the rest of the bar as the
-            // move to the Remote starts; the Remote's eye is on its own picture.
-            let stops = flown
-            Button { stops ? callOff() : leave() } label: { Label(stops ? "Stop" : "Close", systemImage: "xmark") }
+        } else {
+            ToolbarItem(placement: .cancellationAction) {
+                Button { leave() } label: { Label("Close", systemImage: "xmark") }
+            }
         }
     }
 
