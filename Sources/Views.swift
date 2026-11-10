@@ -1092,7 +1092,11 @@ struct LimitsSection: View {
     static func money(_ v: Double) -> String { v.formatted(.currency(code: "USD").precision(.fractionLength(v >= 100 ? 0 : 2))) }
     // A Mac that has answered and still has nothing to say about the API (an older one) gets no dial for it, rather than
     // a grey placeholder that never fills in.
-    var showsAPI: Bool { api != nil || !model.gotFresh }
+    var showsAPI: Bool { Self.showsAPI(s, model) }
+    static func showsAPI(_ s: Status, _ model: AppModel) -> Bool { s.apiUsage != nil || !model.gotFresh }
+    // A lone dial (the week, on a Mac that reports no API) would sit in the middle of a wide card: this Mac's own figures
+    // go beside it, as the plan card had them, and the list further down leaves them out.
+    static func lone(_ s: Status, _ model: AppModel) -> Bool { s.usage.plan?.fiveHour == nil && !showsAPI(s, model) }
     // One dial: the gauge, its name, and a line under it. Every dial on the card is this one.
     func dial(_ value: Double, tint: Color, title: Text, line: Text, @ViewBuilder centre: () -> some View) -> some View {
         VStack(spacing: 5) {
@@ -1150,6 +1154,13 @@ struct LimitsSection: View {
                 if u.plan?.fiveHour != nil { planDial("5 hours", u.plan?.fiveHour, u.plan?.fiveHourResets) }
                 planDial("This week", u.plan?.sevenDay, u.plan?.sevenDayResets)
                 if showsAPI { apiDial }
+                if Self.lone(s, model) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        UsageFigure(title: "Last 5 hours", value: Format.count(u.fiveHours.tokens), detail: "tokens on this Mac")
+                        UsageFigure(title: "Last 7 days", value: Format.count(u.week.tokens), detail: "tokens on this Mac")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             .padding(.vertical, 4)
             // What went wrong reading the API, said under the dials, without the Mac's "Couldn't read API usage:" lead-in.
@@ -1183,6 +1194,7 @@ enum APIUsageNotes {
 // The figures behind the limits, under the sessions (open flat, the right pane): tokens per hour, this Mac's totals, the
 // API's day and week, and by model.
 struct UsageDetail: View {
+    @EnvironmentObject var model: AppModel
     let s: Status
     var u: Status.Usage { s.usage }
     var models: [(key: String, value: Status.ModelTally)] { u.week.models.filter { $0.value.tokens > 0 }.sorted { $0.value.tokens > $1.value.tokens } }
@@ -1202,9 +1214,11 @@ struct UsageDetail: View {
             }
         }
         .id("detail")
-        Section("Tokens on this Mac") {
-            LabeledContent("Last 5 hours", value: Format.count(u.fiveHours.tokens))
-            LabeledContent("Last 7 days", value: Format.count(u.week.tokens))
+        if !LimitsSection.lone(s, model) {
+            Section("Tokens on this Mac") {
+                LabeledContent("Last 5 hours", value: Format.count(u.fiveHours.tokens))
+                LabeledContent("Last 7 days", value: Format.count(u.week.tokens))
+            }
         }
         if let a = s.apiUsage, a.configured, a.month != nil {
             Section("API spend") {
