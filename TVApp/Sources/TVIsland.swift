@@ -20,6 +20,8 @@ struct TVIslandAttributes: ActivityAttributes {
         var end: Date?
         var progress: Double?
         var length: Double?
+        // When it was paused, kept across readings while it stays paused: five minutes on, the card goes.
+        var pausedSince: Date?
     }
 }
 
@@ -36,6 +38,21 @@ enum TVIsland {
     // With no way to push updates, it can only say when its picture may be out of date, and soon, as a film can be
     // paused or stopped from the TV's own remote.
     static let staleAfter: TimeInterval = 90
+    // Paused this long, the card leaves the island and the Lock Screen (Richard, 2026-11-10: "the dynamic island and like
+    // now playing should leave once it has been paused for like 5 mins"). Nothing can wake the app at that moment (no push
+    // with a free Apple ID), so it goes at the first chance after: the app open, the island's button, the grace after
+    // leaving, or the background refresh asked for at that time (TVBackground.schedule). Until then it reads as stale.
+    static let pausedFor: TimeInterval = 300
+    static func pausedOut(_ st: TVIslandAttributes.ContentState, at now: Date = Date()) -> Bool {
+        guard !st.playing, let since = st.pausedSince else { return false }
+        return now.timeIntervalSince(since) >= pausedFor
+    }
+    // Stale after 90 s as before, and never later than the moment a pause runs out.
+    static func staleDate(_ st: TVIslandAttributes.ContentState) -> Date {
+        let soon = Date().addingTimeInterval(staleAfter)
+        guard !st.playing, let since = st.pausedSince else { return soon }
+        return min(soon, since.addingTimeInterval(pausedFor))
+    }
 
     static func state(_ s: TVStatus) -> TVIslandAttributes.ContentState? {
         guard s.online, s.airplay?.active != true else { return nil }
@@ -119,12 +136,15 @@ enum TVIsland {
             return
         }
         // The cover rides along: new art when there is some, else the one already shown, if it's still the same thing.
+        // A pause keeps the moment it began; playing clears it.
+        if !next.playing { next.pausedSince = (current?.content.state.playing == false ? current?.content.state.pausedSince : nil) ?? Date() }
+        if pausedOut(next) { await current?.end(nil, dismissalPolicy: .immediate); return }
         if let t = await thumbnail(art) { next.art = t.0; next.artKey = t.1 }
         else if let old = current?.content.state, old.title == next.title { next.art = old.art; next.artKey = old.artKey }
         if let current {
-            if !same(current.content.state, next) || (current.content.staleDate ?? .distantPast) < Date().addingTimeInterval(staleAfter / 2) { await current.update(ActivityContent(state: next, staleDate: Date().addingTimeInterval(staleAfter))) }
+            if !same(current.content.state, next) || (current.content.staleDate ?? .distantPast) < Date().addingTimeInterval(staleAfter / 2) { await current.update(ActivityContent(state: next, staleDate: staleDate(next))) }
         } else if next.playing, ActivityAuthorizationInfo().areActivitiesEnabled {
-            _ = try? Activity.request(attributes: TVIslandAttributes(), content: ActivityContent(state: next, staleDate: Date().addingTimeInterval(staleAfter)), pushType: nil)
+            _ = try? Activity.request(attributes: TVIslandAttributes(), content: ActivityContent(state: next, staleDate: staleDate(next)), pushType: nil)
         }
     }
 }
@@ -137,6 +157,7 @@ struct TVIslandPlayPause: LiveActivityIntent {
         let current = TVIsland.live, before = current?.content.state
         if let current, var flipped = before {
             flipped.playing.toggle()
+            flipped.pausedSince = flipped.playing ? nil : Date()
             // The bar stops where it is, or runs on from there.
             if let len = flipped.length, let p = before?.progress {
                 let at = before?.start.map { min(max(Date().timeIntervalSince($0), 0), len) } ?? p * len
@@ -144,11 +165,11 @@ struct TVIslandPlayPause: LiveActivityIntent {
                 flipped.start = flipped.playing ? Date().addingTimeInterval(-at) : nil
                 flipped.end = flipped.start?.addingTimeInterval(len)
             }
-            await current.update(ActivityContent(state: flipped, staleDate: Date().addingTimeInterval(TVIsland.staleAfter)))
+            await current.update(ActivityContent(state: flipped, staleDate: TVIsland.staleDate(flipped)))
         }
         do { try await TVBridge.post("key", ["key": "play"]) }
         catch {
-            if let current, let before { await current.update(ActivityContent(state: before, staleDate: Date().addingTimeInterval(TVIsland.staleAfter))) }
+            if let current, let before { await current.update(ActivityContent(state: before, staleDate: TVIsland.staleDate(before))) }
             throw error
         }
         try? await Task.sleep(nanoseconds: 1_500_000_000)

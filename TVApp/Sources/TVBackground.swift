@@ -33,7 +33,12 @@ enum TVBackground {
     static func schedule() {
         guard TVIsland.live != nil else { BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: refresh); return }
         let r = BGAppRefreshTaskRequest(identifier: refresh)
-        r.earliestBeginDate = Date(timeIntervalSinceNow: 120)
+        // Paused, the next look is due when the pause runs out (TVIsland.pausedFor), to take the card down then.
+        var wait: TimeInterval = 120
+        if let st = TVIsland.live?.content.state, !st.playing, let since = st.pausedSince {
+            wait = max(60, since.addingTimeInterval(TVIsland.pausedFor).timeIntervalSinceNow + 5)
+        }
+        r.earliestBeginDate = Date(timeIntervalSinceNow: wait)
         try? BGTaskScheduler.shared.submit(r)
     }
 }
