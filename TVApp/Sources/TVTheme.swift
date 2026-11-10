@@ -279,6 +279,12 @@ struct Wall: View {
 }
 
 #if os(iOS)
+// The app wires these to NavTransit (Shared/Duo.swift) at launch. This file is also built into the widget and the CI
+// gallery, which don't have Duo.swift, so it can't name NavTransit itself.
+enum TVNavHook {
+    @MainActor static var register: ((UINavigationController) -> Void)?
+    @MainActor static var began: ((UIViewControllerTransitionCoordinator) -> Void)?
+}
 // A pushed page hides the navigation bar (its title is drawn on the page, Back is the side bar's), and UIKit turns the
 // swipe from the left edge off with the bar. Back on, for any page with one under it (Richard, 2026-11-07: "the back
 // button behavior is awful rn"; a swipe from the edge is the other way back every iPhone page has).
@@ -288,11 +294,11 @@ extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
         interactivePopGestureRecognizer?.delegate = self
         // So FoldSplit holds its split while a page slides on or off (NavTransit): only the Mac Pro app registered before,
         // and open flat a page re-split as it was swiped off (Richard, 2026-11-09: "the elements compact as u do so").
-        NavTransit.shared.register(self)
+        TVNavHook.register?(self)
         interactivePopGestureRecognizer?.addTarget(self, action: #selector(tvEdgeSwipeMoved(_:)))
     }
     @objc func tvEdgeSwipeMoved(_ g: UIGestureRecognizer) {
-        if g.state == .began, let c = transitionCoordinator { NavTransit.shared.begin(c) }
+        if g.state == .began, let c = transitionCoordinator { TVNavHook.began?(c) }
     }
     public func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         g === interactivePopGestureRecognizer ? viewControllers.count > 1 : true

@@ -11,6 +11,8 @@ struct TVApp: App {
     init() {
         // Neither is needed for the first frame, so neither holds it up.
         #if os(iOS)
+        TVNavHook.register = { NavTransit.shared.register($0) }
+        TVNavHook.began = { NavTransit.shared.begin($0) }
         // Long-form audio is what lets the AirPlay list move the whole phone's audio, not only this app's.
         DispatchQueue.global(qos: .userInitiated).async {
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio)
