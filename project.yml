@@ -118,7 +118,7 @@ targets:
     info:
       path: TVApp/Info.plist
       properties:
-        CFBundleDisplayName: TV
+        CFBundleDisplayName: Mint Remote
         CFBundleURLTypes: [{ CFBundleURLName: tvremoteapp, CFBundleURLSchemes: [tvremoteapp] }]
         CADisableMinimumFrameDurationOnPhone: true
         NSSupportsLiveActivities: true
