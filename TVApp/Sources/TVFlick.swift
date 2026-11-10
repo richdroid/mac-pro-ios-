@@ -721,13 +721,10 @@ struct FlickScreen: View {
     func badge(_ text: String) -> some View {
         Text(text).font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(TVLook.accent, in: Capsule()).foregroundStyle(.black)
     }
-    // His first three flicks are told how; after that the page is wordless (§2.5a C2).
+    // The page is wordless: Richard, choice screen 2026-11-10, "No hints" (tapping a stream is obvious enough). Kept as a
+    // no-op so the call sites read as where a hint would have been.
     @AppStorage("flicksDone") private var flicksDone = 0
-    @ViewBuilder func hint(_ words: String) -> some View {
-        if flicksDone < 3 && !flown {
-            Text(words).font(.footnote.weight(.medium)).foregroundStyle(.secondary).transition(.opacity)
-        }
-    }
+    @ViewBuilder func hint(_ words: String) -> some View { EmptyView() }
     // Next: which stream, or leave that to the TV. The pick is the flick: a tap sends it, and so does holding a row and
     // flicking it up.
     var streamsStep: some View {
