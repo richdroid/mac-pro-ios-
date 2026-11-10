@@ -288,6 +288,10 @@ jobs:
             shot history$x $d 8 -tab 0 -openHistory cpu
             shot processes$x $d 8 -tab 0 -openProcesses cpu
           }
+          # The keyboard key on the cover (folded upright), first, while the Duo is still closed, as it was and as it is: the keyboard up and away twice, judged in
+          # frames (Richard, 2026-11-10: "when i select keyboard in folded portrait from the toolbar theres a weird animation").
+          film screen-kbkey-before 1 17 -tab 0 -pose screenkbfilm -openScreen YES -kbOld YES
+          film screen-kbkey-after 1 17 -tab 0 -pose screenkbfilm -openScreen YES
           # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10

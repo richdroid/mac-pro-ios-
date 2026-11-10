@@ -57,6 +57,12 @@ struct RemoteScreenView: View {
     @State private var canvasSize = CGSize.zero
     @State private var typing = false
     @State private var keyboardHeight: CGFloat = 0
+    // How the parts move to a new plan: the posture's spring, or, while the system keyboard comes or goes, the keyboard's
+    // own duration and curve, so the row riding on it moves with it (Richard, 2026-11-10: "when i select keyboard in
+    // folded portrait from the toolbar theres a weird animation").
+    @State private var planMotion = RemoteScreenView.posture
+    // The build's film of the keyboard as it was, for comparison (-kbOld YES).
+    static let kbOld = UserDefaults.standard.bool(forKey: "kbOld")
     @State private var dockOpen = true
     @State private var loginPassword = ""
     @State private var loggingIn = false
@@ -98,7 +104,7 @@ struct RemoteScreenView: View {
             let (f, force) = effectiveFold(fold(full), full.size)
             let insets = ScreenInsets.current
             let p = Self.plan(area: full.size, fold: f, aspect: aspect, top: insets.top, bottom: insets.bottom,
-                              keyboard: typing ? keyboardHeight : 0, force: force)
+                              keyboard: Self.kbOld ? (typing ? keyboardHeight : 0) : keyboardHeight, force: force)
             let _ = RegionLog.note("plan \(p.kind) top \(Int(insets.top)) picture \(p.picture.debugDescription) fnRow \(p.fnRow.debugDescription) tools \(p.tools.count) \(p.tools.first?.debugDescription ?? "") dock \(p.dock.debugDescription) keyboard \(Int(typing ? keyboardHeight : 0))")
             stage(p, area: full.size)
                 // A change of posture puts the system keyboard away: it was left up over the open display, covering the
@@ -124,6 +130,10 @@ struct RemoteScreenView: View {
             switch model.pose {
             case "screen", "transitions", "screenhint", "screenfold", "screenpadtip": screen.showSample()
             case "screentyping": screen.showSample(); typing = true
+            // The build's film of the keyboard key pressed, as the toolbar's key does it: up at 4 s, away at 7 s, twice.
+            case "screenkbfilm":
+                screen.showSample()
+                Task { for _ in 0..<4 { try? await Task.sleep(nanoseconds: (typing ? 3 : 4) * 1_000_000_000); typing.toggle() } }
             case "screenzoomed":
                 screen.showSample()
                 Task { try? await Task.sleep(nanoseconds: 1_500_000_000); zoom = 2.2; pan = clampedPan(.zero) }
@@ -148,13 +158,18 @@ struct RemoteScreenView: View {
         }
         #if canImport(UIKit)
         .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in checkPhoneClipboard() }
+        // The layout follows the keyboard itself, not the key that asked for it: the row rides up as the keyboard rises
+        // and comes down as it goes, on the keyboard's own timing. It flipped with the key before, so the row sprang down
+        // ahead of the keyboard going away. Only this screen's own typing counts (a sheet's field has its own keyboard).
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
             guard let end = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
             let screenHeight = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.bounds.height }.first ?? end.maxY
-            withAnimation(Self.posture) { keyboardHeight = max(0, screenHeight - end.minY) }
+            let height = max(0, screenHeight - end.minY)
+            guard typing || height == 0 || Self.kbOld else { return }
+            followKeyboard(n, to: height)
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            withAnimation(Self.posture) { keyboardHeight = 0 }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { n in
+            followKeyboard(n, to: 0)
         }
         #endif
         .onDisappear {
@@ -175,6 +190,19 @@ struct RemoteScreenView: View {
         }
     }
     var aspect: CGFloat { screen.size.width > 0 ? screen.size.height / screen.size.width : 0.625 }
+    #if canImport(UIKit)
+    // The keyboard's own move: its duration, on a curve close to the system's (iOS's keyboard curve isn't public), for
+    // the plan change it causes; the posture's spring again once it's done.
+    func followKeyboard(_ n: Notification, to height: CGFloat) {
+        guard abs(height - keyboardHeight) > 0.5 else { return }
+        if Self.kbOld { withAnimation(Self.posture) { keyboardHeight = height }; return }
+        let d = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double).flatMap { $0 > 0 ? $0 : nil } ?? 0.25
+        let motion = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: d)
+        planMotion = motion
+        withAnimation(motion) { keyboardHeight = height }
+        Task { try? await Task.sleep(nanoseconds: UInt64((d + 0.1) * 1e9)); planMotion = Self.posture }
+    }
+    #endif
 
     // Where the hinge runs, in this view's own space, and whether the Duo is partly folded there (the region is active)
     // or open flat. With it, what covers the display right now: the outer camera (always, on the cover) and the inner
@@ -477,13 +505,10 @@ struct RemoteScreenView: View {
                 .frame(width: 1, height: 1).opacity(0.01)
         }
         .frame(width: area.width, height: area.height, alignment: .topLeading)
-        .animation(Self.posture, value: p)
+        .animation(Self.kbOld ? Self.posture : planMotion, value: p)
     }
     func place<V: View>(_ v: V, _ r: CGRect) -> some View {
-        v.frame(width: max(r.width, 0), height: max(r.height, 0))
-            .opacity(r.isEmpty ? 0 : 1)
-            .allowsHitTesting(!r.isEmpty)
-            .position(x: r.midX, y: r.midY)
+        Placed(content: v, rect: r, old: Self.kbOld)
     }
 
     // MARK: The function row
@@ -2537,5 +2562,25 @@ struct HingeReader: ViewModifier {
         #else
         content
         #endif
+    }
+}
+
+// A part of the Screen at its place in the plan. A part the plan puts away (the trackpad, the Mac's keys and the
+// modifier row under the system keyboard; the function row when the tools go up the side) fades where it was, under
+// whatever covers it, and comes back the same way. Its place was a zero rect at the top-left corner, so it shrank into
+// that corner as it went and grew out of it as it came back (the "weird animation" of the keyboard key, 2026-11-10).
+struct Placed<V: View>: View {
+    let content: V
+    let rect: CGRect
+    var old = false
+    @State private var last: CGRect?
+    var body: some View {
+        let shown = !rect.isEmpty
+        let r = shown || old ? rect : (last ?? rect)
+        content.frame(width: max(r.width, 0), height: max(r.height, 0))
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            .position(x: r.midX, y: r.midY)
+            .onChange(of: rect, initial: true) { _, n in if !n.isEmpty { last = n } }
     }
 }
