@@ -92,7 +92,7 @@ jobs:
             local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES "${@:3}"
             sleep 25
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
@@ -104,8 +104,11 @@ jobs:
             tourfilm tour 1
             $D "$DEVICE" pose open; sleep 5
             $D "$DEVICE" rotate 1; sleep 5
+            # Each twice, with the warm-up and without, turn about: the first visits' slow frames side by side.
             tourfilm tour-portrait 3
+            tourfilm tour-portrait-nowarm 3 -noWarm YES
             tourfilm tour-portrait2 3
+            tourfilm tour-portrait2-nowarm 3 -noWarm YES
           fi
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist

@@ -222,6 +222,7 @@ struct RootView: View {
         }
         // What follows the status lives in small views of its own, so only they redraw when it changes.
         .background { StatusFollower(playingSymbol: $playingSymbol) }
+        .background { if !Warmup.off { Warmup() } }
         .overlay(alignment: .top) { ProblemBanner() }
         .overlay(alignment: .bottom) { ToastBubble() }
         .onAppear { followRequest(); poseForShots(); TabTour.run([0, 1, 2, 3, 5, 9]) { model.tab = $0 } }
@@ -262,6 +263,59 @@ private struct StatusFollower: View {
                 }
             }
             .allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+// A moment after launch, out of sight: one of each kind of thing the other tabs are made of (a row of banners, a shelf
+// of cards, the keys and the bar, a settings list), built once and thrown away, a kind at a time. A tab's first visit
+// was two to four times slower than its later ones (the tour's slow-frame log: 0.6–1.2 s against 0.1–0.3 s in the
+// build's simulator), much of it the first use of each kind of view; paid here instead, before his first tap, in slices
+// too short to feel. Nothing here can be touched, read out or seen, and nothing in it asks the TV for anything the tabs
+// wouldn't. "-noWarm YES" turns it off, for the build's before-and-after films.
+private struct Warmup: View {
+    @Environment(TVModel.self) var model
+    @ObservedObject private var home = BrowseStore.shared(.stremio)
+    @State private var stage = 0
+    @State private var kind = "song"
+    static let off = UserDefaults.standard.bool(forKey: "noWarm")
+    var body: some View {
+        Group {
+            switch stage {
+            case 1: BannerRow(title: "Watch", apps: Array((model.status?.apps ?? []).prefix(5)))
+            case 2:
+                VStack(alignment: .leading) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 10) {
+                            ForEach(Array((home.rows.first?.items ?? []).prefix(4))) { FlickCardButton(item: $0, source: .stremio, width: 124) }
+                        }
+                    }
+                    .rowEdge()
+                    PlaceholderShelf()
+                }
+            case 3:
+                VStack {
+                    Picker("Kind", selection: $kind) { Text("Song").tag("song"); Text("Album").tag("album") }.pickerStyle(.segmented).labelsHidden()
+                    ProgressPlaceholder()
+                    Transport()
+                    DPad().frame(width: 200, height: 200)
+                }
+            case 4:
+                Form {
+                    Section { Label("Apps on the TV", systemImage: "square.grid.2x2"); Label("TV settings", systemImage: "slider.horizontal.3") }.listRowBackground(TVLook.glassRow)
+                }
+                .scrollContentBackground(.hidden)
+            default: EmptyView()
+            }
+        }
+        .frame(width: 360, height: 560)
+        .hidden().allowsHitTesting(false).accessibilityHidden(true)
+        .task {
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            for s in 1...4 {
+                stage = s
+                try? await Task.sleep(nanoseconds: 220_000_000)
+            }
+            stage = 0
+        }
     }
 }
 private struct ProblemBanner: View {
