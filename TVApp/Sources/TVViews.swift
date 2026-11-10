@@ -76,6 +76,11 @@ struct RootView: View {
         }
         // A title's details page, pushed over Stremio's page (AppBrowse opens it once the rows are in).
         if pose == "details" { model.tab = 1; model.browsing = .stremio; return }
+        // A link pasted into the Remote's field: its card comes up, and the flick's own demo throws it.
+        if pose == "flick-link" {
+            Task { try? await Task.sleep(nanoseconds: 3_000_000_000); model.send("https://www.youtube.com/watch?v=dQw4w9WgXcQ") }
+            return
+        }
         // The real-data flows (CI's /real scene): each taps through the same code a finger would.
         if pose == "realtap" {
             Task {
@@ -3176,7 +3181,9 @@ struct UnderFlick: ViewModifier {
     // 2026-11-08), but carries no title, so the heading isn't printed twice.
     var barHidden = false
     func body(content: Content) -> some View {
-        let covered = model.flickChoosing || model.flickCovering
+        // Not once a pick is on its way to the Remote (flickHandoff): the Remote's tab is up under the flick's page then,
+        // and must be drawn there for the picture to land on, while the page's own rail stays beside it.
+        let covered = (model.flickChoosing && !model.flickHandoff) || model.flickCovering
         content
             .opacity(covered ? 0 : 1)
             // Black under the side bar too while covered: the strip beside a show's or stream's page showed whatever lay

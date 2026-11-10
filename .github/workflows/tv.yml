@@ -85,15 +85,23 @@ jobs:
             grep focus /tmp/tv-home-applied.log > dist/tv-focus-remotesearch$x.log 2>/dev/null || echo "no focus line" > dist/tv-focus-remotesearch$x.log
             # A show's page, on the real bridge's answers.
             curl -s $M/real/reset > /dev/null; shot realseries-end$x $d 14 $M/real -tab 3 -pose realseries
-            # The flick's stage with the card in the hand, and the catch filmed.
+            # The flick is the pick on the streams page (2026-11-10: no stage). At rest, the streams page; filmed: the
+            # first row held and flicked up (tv-flick), the first row tapped (tv-flicktap, the quick way, with the timing
+            # line: the list within 150 ms of the press when cached, the Remote within 400 ms of the tap), and a pasted link's
+            # card thrown from the Remote (tv-flicklink).
             curl -s $M/fnormal/reset > /dev/null; shot flick-stage$x $d 10 $M/fnormal -tab 1 -pose flick-stage
-            curl -s $M/fnormal/reset > /dev/null
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-flick$x.mp4 > /dev/null 2>&1 & REC=$!
-            sleep 4
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose flick-starting
-            sleep 18
-            kill -INT $REC; wait $REC
-            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            local P
+            for P in "flick flick-starting 1" "flicktap flick-tap 1" "flicklink flick-link 0"; do
+              set -- $P
+              curl -s $M/fnormal/reset > /dev/null
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-$1$x.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 4
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab $3 -pose $2
+              sleep 16
+              xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$1$x-end.png
+              kill -INT $REC; wait $REC
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            done
           }
           # Real touches through Device Hub, filmed: six flings down, a slow pull past the end and let go, seven flings back up,
           # a slow pull past the top. The spring-back he says still snaps (2026-11-08: "the bounch back issie still happwns").
@@ -138,22 +146,25 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             if [ "$(stat -f %z dist/tv-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
           }
-          # The flick by a real finger, filmed: the stage at rest with the card in the hand, then one fast upward drag on the
-          # card (y 0.85 → 0.35 in 0.15 s, about 2,300 pt/s folded), so the throw's own physics show: the release speed
-          # carried, the arrival timed by it, the catch, the hold and the move onto the Remote (Richard, 2026-11-09:
-          # "animation is still fucked when flicking"). The scripted flick films carry the card onto the TV before letting
-          # go, so none of that is in them. Judged in frames against §2.5a C4.
+          # The flick by a real finger, filmed: the streams page at rest, then one real touch on the first stream row (where
+          # the app says it is: what=row in the mock's log, as fractions of the display), so the pick's own path shows: the
+          # tap felt at once, the picture into the Remote within 0.4 s, the Remote with the start on it (§2.5b). The
+          # scripted films hold and flick a row instead.
           flickfilm() {
             local name=$1 display=$2 address=$3; shift 3
             local D=/tmp/dh/.build/release/devicehubctl
+            rm -f /tmp/tv-home-applied.log
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $address -tab 1 -pose flick-stage
-            sleep 13
-            $D "$DEVICE" drag 0.5 0.85 0.5 0.35 0.15 || echo "flick drag failed"
-            # Device Hub delivered the tv20 drag about ten seconds after it was asked for (the throw at 26 s, the stage up
-            # from 10 s), and the folded film ended before any throw: room for that, so the film always holds the throw.
-            sleep 16
+            sleep 12
+            local at x y
+            at=$(grep -o 'what=row&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            x=${at#*x=}; x=${x%%&*}; y=${at##*y=}
+            if [ -n "$x" ] && [ -n "$y" ]; then $D "$DEVICE" touch $x $y 0.08 || echo "flick touch failed"; else echo "no row position for $name"; fi
+            # Device Hub delivered the tv20 drag about ten seconds after it was asked for: room for that, so the film always
+            # holds the pick.
+            sleep 14
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
@@ -180,7 +191,7 @@ jobs:
           backfilm back-details-portrait 3 13 $M -tab 1 -pose details
           backfilm back-browse-portrait 3 9 $M -tab 1 -pose browse
           backfilm back-row-portrait 3 12 $M -tab 1 -pose stremiorow
-          # The card thrown by a real drag, open upright.
+          # A stream picked by a real touch, open upright.
           curl -s $M/fnormal/reset > /dev/null; flickfilm flickreal-portrait 3 $M/fnormal
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
@@ -241,7 +252,7 @@ jobs:
               if [ "$(stat -f %z dist/tv-$name-$pass.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name-$pass empty"; fi
             done
           }
-          # 1. The flick's stage with the card in the hand: folded, opened flat, turned upright, half closed, closed again.
+          # 1. The flick's streams page: folded, opened flat, turned upright, half closed, closed again.
           curl -s $M/fnormal/reset > /dev/null
           posturefilm posture-stage "landscape:1 open:6 portrait:6 partial:6 closed:6" $M/fnormal -tab 1 -pose flick-stage
           # 2. The Remote with a film on: opened upright, turned flat, half closed, closed, opened again.
@@ -262,7 +273,7 @@ jobs:
           backfilm back-details 1 13 $M -tab 1 -pose details
           backfilm back-browse 1 9 $M -tab 1 -pose browse
           backfilm back-row 1 12 $M -tab 1 -pose stremiorow
-          # And the card thrown by a real drag, folded upright.
+          # And a stream picked by a real touch, folded upright.
           curl -s $M/fnormal/reset > /dev/null; flickfilm flickreal 1 $M/fnormal
           # The Remote's picture with a film on, hidden at 7 s and shown again at 10 s (the "mirror" pose does what the
           # held menu does), filmed: each change must crossfade, never cut, and the keys under it must not move.

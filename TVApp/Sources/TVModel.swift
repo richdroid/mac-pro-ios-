@@ -697,6 +697,9 @@ final class TVModel {
     }
     // Links, search words, or anything else from the phone. The Mac decides where it goes.
     func send(_ text: String) {
+        // A link flicks like anything else: its card, named for the site and the page, is a tap or a flick from the TV
+        // (the 2026-11-10 ruling), never straight there.
+        if SendBar.isLink(text) { flick(FlickTarget.link(text)); return }
         guard let r = request("send", ["text": text]) else { return }
         tick()
         Task {
