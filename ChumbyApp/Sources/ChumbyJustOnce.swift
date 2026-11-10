@@ -194,7 +194,7 @@ struct JustOnceMenu: View {
                 }
                 .disabled(busy)
                 .accessibilityHint("Moves the \(due.formatted(date: .omitted, time: .shortened)) alarm later, or changes its sound, for this time only")
-                .sheet(isPresented: $model.justOnceSheetOpen) { JustOnceSheet(original: a, due: due).environmentObject(model) }
+                .fillCover(isPresented: $model.justOnceSheetOpen) { JustOnceSheet(original: a, due: due).environmentObject(model) }
                 .onAppear { if ChumbyModel.pose == "justonce" && model.tab == 0 && !posed { posed = true; model.justOnceSheetOpen = true } }
             }
             if let problem { FailNote(text: problem) }
@@ -252,11 +252,13 @@ struct JustOnceSheet: View {
             Form { sections.listRowBackground(GlassRow()) }
                 .seaList().background { SeaBackground().ignoresSafeArea() }
                 .navigationTitle("Just this once").navigationBarTitleDisplayMode(.inline)
+                // Edge to edge (fillCover, from Home and the editor), Cancel and Set in the Duo's side bar as the alarm
+                // editor's Cancel and Save are: the system's items, each with a glyph (2026-11-10).
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving) }
                     ToolbarItem(placement: .confirmationAction) {
                         if saving { ProgressView() } else {
-                            Button("Set") { if !original.isCalendar, model.pinWarning != nil { confirm = true } else { save(replacing: false) } }.fontWeight(.semibold)
+                            Button { if !original.isCalendar, model.pinWarning != nil { confirm = true } else { save(replacing: false) } } label: { Label("Set", systemImage: "checkmark") }.fontWeight(.semibold)
                                 .confirmationDialog(model.pinWarning ?? "", isPresented: $confirm, titleVisibility: .visible) {
                                     Button("Replace and set") { save(replacing: true) }
                                 }

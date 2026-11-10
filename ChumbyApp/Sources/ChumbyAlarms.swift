@@ -573,7 +573,8 @@ struct AlarmsTab: View {
         .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !wide }, set: { model.alarmsPage = $0 })) {
             Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
         }
-        .sheet(item: $editing) { t in AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
+        // Edge to edge (fillCover), with the zoom from its row.
+        .fillCover(item: $editing) { t in AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
         .refreshable { await model.loadState() }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
         // The hinge or a turn mid-page keeps the page (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios
@@ -1176,25 +1177,31 @@ struct AlarmEditor: View {
                 .onDisappear { model.editingAlarm = false }
                 // On this one row, never on the group: inside the pane's list a modifier on the group lands on every
                 // row, and a sheet bound to the same state from many rows presents from none (build 204, open flat).
-                .sheet(isPresented: $justOnce) { justOnceSheet }
+                .fillCover(isPresented: $justOnce) { justOnceSheet }
                 sections
             }
         } else {
+            // Presented edge to edge (fillCover, from Alarms and the calendar's sound row), with Cancel and Save as the
+            // system's items, each with a glyph, so on the Duo they take the side bar, Cancel at the top where Back goes
+            // and Save under it, and the form has the whole width (Richard, 2026-11-10: "not edge to edge … utilize
+            // sidebar"). As words alone iOS kept them in a row across the top: it sets no title-only item vertically.
             NavigationStack {
                 Form { sections.listRowBackground(GlassRow()) }
                 .seaList().background { SeaBackground().ignoresSafeArea() }
                 // The system's own title (its face set once in ChumbyApp.dressBars), never a text item in the bar (ruling 11-09).
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { stopTest(); dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button { stopTest(); dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving)
+                    }
                     ToolbarItem(placement: .confirmationAction) {
-                        if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
+                        if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold) }
                     }
                 }
                 .interactiveDismissDisabled(saving)
                 .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
                 .onDisappear { model.editingAlarm = false }
-                .sheet(isPresented: $justOnce) { justOnceSheet }
+                .fillCover(isPresented: $justOnce) { justOnceSheet }
             }
         }
     }

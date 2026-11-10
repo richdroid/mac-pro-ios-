@@ -775,7 +775,7 @@ struct CalendarSoundRow: View {
         }
         .buttonStyle(.plain)
         .zoomSource("template", in: editNS)
-        .sheet(isPresented: $editing) { AlarmEditor(calendarTemplate: true).environmentObject(model).zoomed(from: "template", in: editNS) }
+        .fillCover(isPresented: $editing) { AlarmEditor(calendarTemplate: true).environmentObject(model).zoomed(from: "template", in: editNS) }
         .onAppear { if autoOpen && !opened && openTemplate == nil { opened = true; editing = true } }
     }
 }

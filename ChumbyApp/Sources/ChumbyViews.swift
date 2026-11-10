@@ -174,6 +174,34 @@ extension View {
     func glass(_ radius: CGFloat = 26) -> some View { self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous)) }
     func glassCircle() -> some View { self.glassEffect(.regular.interactive(), in: Circle()) }
     func seaList() -> some View { self.scrollContentBackground(.hidden).listSectionSpacing(14).roomyIndicators() }
+    // A modal that fills the display up to the Duo's side column, in every posture: a full-screen cover on the phone,
+    // never the system's sheet, which the Duo draws as an inset card with a gap at the left and top (Richard,
+    // 2026-11-10, Add alarm folded: "i dont like thats its not edge to edge"). The zoom from the row that opened it
+    // carries over, and with it the drag back down. The Mac check has no covers, so there it's a sheet.
+    @ViewBuilder func fillCover<Item: Identifiable, C: View>(item: Binding<Item?>, @ViewBuilder content: @escaping (Item) -> C) -> some View {
+        #if os(iOS)
+        fullScreenCover(item: item, content: content)
+        #else
+        sheet(item: item, content: content)
+        #endif
+    }
+    @ViewBuilder func fillCover<C: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> C) -> some View {
+        #if os(iOS)
+        fullScreenCover(isPresented: isPresented, content: content)
+        #else
+        sheet(isPresented: isPresented, content: content)
+        #endif
+    }
+    // A modal with one button (Connect, Done): its bar stays across the top with its title, as Apple's Duo talks have it
+    // for a sheet with a single close button, rather than a side column holding one glyph. On the root of the modal's
+    // stack, where the presentation reads it.
+    @ViewBuilder func horizontalBars() -> some View {
+        #if os(iOS)
+        if #available(iOS 27.1, *) { toolbarVerticalBehavior(.disabled) } else { self }
+        #else
+        self
+        #endif
+    }
     // No scroll bars in any Chumby list or scroll. Inset 7 pt they only hung as a grey line against the cards, by the rail
     // (Richard, 2026-11-05: "the scroll bar is too close to the screen for my eyes", then "the scroll bar dude"); the pages
     // are short and their content shows where you are.
@@ -333,7 +361,7 @@ struct RootView: View {
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
         }
-        .sheet(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
+        .fillCover(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
     }
 }
 // "Offline · last seen 7:12" as a row under a page's title, never floating over the list; a tap says what to do.
@@ -384,6 +412,7 @@ struct ConnectionView: View {
             }
             .scrollIndicators(.hidden)
             .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
+            // Its one button, Connect, in a bar across the top with the title (horizontalBars).
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Connect") {
@@ -394,6 +423,7 @@ struct ConnectionView: View {
             }
             .onAppear { address = model.address }
         }
+        .horizontalBars()
     }
 }
 
@@ -1425,10 +1455,11 @@ struct ChannelsTab: View {
         .accessibilityLabel(isIn ? "\(w.name), in this channel" : "Add \(w.name)")
     }
     var catalogItems: [MoreItem] { catalog.map { MoreItem(id: $0.0, name: $0.1, own: 0) } }
-    // One Done for the picker, folded or open: the same glass capsule in the page's ink.
+    // One Done for the picker, folded or open: the system's own word, tinted, as Done is on Calendar settings' pane and in
+    // every bar of the app. It was a glass capsule in Trebuchet, a pill of this page's own (ruling 2026-11-10: never
+    // hand-built pills in a bar).
     func doneButton(_ action: @escaping () -> Void) -> some View {
-        Button(action: action) { Text("Done").font(.custom("Trebuchet MS", size: 17).weight(.bold)).padding(.horizontal, 6) }
-            .buttonStyle(.glass).foregroundStyle(ChumbyPalette.ink(scheme == .dark))
+        Button("Done", action: action).fontWeight(.semibold).foregroundStyle(.tint)
     }
     var pickedTitle: String { channels.first { $0.id == picked }.map(title) ?? "this channel" }
     // The picker's sections: his Chumby's own widgets first, then the catalog by category.
@@ -1579,7 +1610,9 @@ struct ChannelsTab: View {
         } right: {
             if adding && wide { addSections } else { onScreen }
         }
-        .sheet(isPresented: Binding(get: { adding && !wide }, set: { if !$0 { closeAdd(scroll) } })) {
+        // Edge to edge, like every modal (fillCover). Its one button, Done, stays in a bar across the top with the
+        // channel's name, as a single-button sheet does on the Duo (horizontalBars); the list has the whole width.
+        .fillCover(isPresented: Binding(get: { adding && !wide }, set: { if !$0 { closeAdd(scroll) } })) {
             NavigationStack {
                 List { addSections.listRowBackground(GlassRow()) }
                     .seaList().background { SeaBackground().ignoresSafeArea() }
@@ -1588,6 +1621,7 @@ struct ChannelsTab: View {
                         ToolbarItem(placement: .confirmationAction) { doneButton { closeAdd(scroll) } }
                     }
             }
+            .horizontalBars()
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
             .environment(\.colorScheme, scheme)

@@ -411,7 +411,7 @@ jobs:
             for V in "calday 2 - -pose calday" "caldayedit 2 - -pose caldayedit" "caldayown 2 - -pose caldayown" "justonce 0 - -pose justonce" \
                      "skipped 0 skipped" "alarmsmine 2 - -pose alarmsmine" "calsettings 2 - -pose calsettings" \
                      "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce" \
-                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor"; do
+                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "editornew 2 - -pose editornew"; do
               set -- $V
               ADDR=http://127.0.0.1:9000; [ "$3" != "-" ] && ADDR=$ADDR/$3
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $2 "${@:4}"
