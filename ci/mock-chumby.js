@@ -364,7 +364,7 @@ function chumbyScene(q, s) {
           return json({ ok: true, pending: false, skipped: live.state.skipped });
         }
         if (a === 'unskip') { live.state.skipped = null; return json({ ok: true, pending: false, skipped: null }); }
-        // A channel chosen in the app stays chosen, so Now playing doesn't snap back on the next reading.
+        // A channel chosen in the app stays chosen, so the channel shown doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
         if (a === 'save') {
           const why = saveProblem(f);

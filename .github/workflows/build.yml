@@ -320,7 +320,7 @@ jobs:
             # 10-minute nap started and cancelled. The mock's live scenes keep what's saved and flip what's ringing.
             if [ -z "$2" ]; then
               # alarmsdemo runs 20 s so the nap's countdown and its cancel stay on film after the scroll down to Quick nap.
-              # chdemo: a channel chosen in Now playing moves the editor to it, then Add widgets opens the picker, a widget is
+              # chdemo: a channel chosen in the header switches the Chumby and the list to it, then Add widgets opens the picker, a widget is
               # added and ticked, and on Done the list scrolls to it and it glows.
               # skipdemo: Home's Skip next alarm tapped, then Undo.
               # songchange: Sounds open while a wake-up's first song arrives in the Chumby's state; "Woke up to" gains it live.

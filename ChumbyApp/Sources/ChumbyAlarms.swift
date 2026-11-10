@@ -525,8 +525,7 @@ struct AlarmsTab: View {
         }
     }
     // Folded, top to bottom as he uses it: what rings next (with Skip), then the calendar's alarms, then his own, then a
-    // nap. Open, the calendar's sit under the hero on the left and his own and the nap on the right, so both panes carry
-    // weight. The two kinds never look alike: the calendar's have a coral page-of-a-calendar tile and say which event and
+    // nap. Open, the calendar's sit under the hero on the left and his own and the nap on the right, always. The two kinds never look alike: the calendar's have a coral page-of-a-calendar tile and say which event and
     // how long before it; his own have a blue alarm tile and say when they repeat (Richard, 2026-11-05: "theres little to
     // no distinction between daily alarms and calendar alarms its just super unintuitive"). Night times moved to Tinker,
     // and "Woke up to" to Sounds.
@@ -553,13 +552,13 @@ struct AlarmsTab: View {
                 } footer: { Text("The Chumby was frozen or off when these came due.") }
             }
             calendar
-            // Open, with no calendar list under the hero, the nap sits here so neither pane is mostly empty.
-            if wide && !calendarListed { nap }
         } right: {
             switch paneShown {
             case .schedule:
+                // The nap always sits under his own alarms, open or folded, whatever the calendar's doing: it used to cross
+                // to the left pane whenever the calendar had nothing listed, so it was never in one place.
                 yours
-                if !(wide && !calendarListed) { nap }
+                nap
             case .settings: CalendarSettingsSections()
             case .editor(let a): AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new")
             case .napEditor(let a): AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new"))
@@ -813,7 +812,6 @@ struct AlarmsTab: View {
             SectionHead(icon: "zzz", text: model.napDue == nil ? "Nap, wake me in" : "Nap", color: ChumbyPalette.sub(scheme == .dark))
         }
     }
-    var calendarListed: Bool { wake.rules.enabled && wake.allowed && !wake.plan.isEmpty }
     // The rule first, said plainly, and changed only as a rule; then the alarms it has set, checked against what the
     // Chumby really holds. A row opens that day, which is also changed only as "how long before".
     var ruleRow: some View {
@@ -1038,6 +1036,8 @@ struct SoundRows: View {
     @EnvironmentObject var model: ChumbyModel
     @Binding var choice: SoundChoice
     @Binding var alarm: Alarm
+    // Laid under the last row, for a sheet that measures where its rows end (a calendar day's).
+    var tail: AnyView? = nil
     var stations: [NamedID] { model.pandoraStations }
     var body: some View {
         Picker("Plays", selection: $choice.kind) {
@@ -1070,6 +1070,7 @@ struct SoundRows: View {
             ForEach(SoundRows.snoozes(including: alarm.snooze), id: \.self) { Text("\($0) min").tag($0) }
         }
         Toggle("Stop on its own", isOn: Binding(get: { alarm.auto_dismiss == "1" }, set: { alarm.auto_dismiss = $0 ? "1" : "0" }))
+            .background { tail }
     }
     // The usual lengths, and the alarm's own if it's another (set on the Chumby), so the picker never shows nothing.
     static func snoozes(including s: String) -> [String] {

@@ -1380,9 +1380,8 @@ struct ChannelsTab: View {
         catalog += matches(#"/guide/([0-9A-F-]+)/widget">([^<]+)</a>"#, t).filter { seen.insert($0.0).inserted }
         more = t.contains("category?page=\(page + 1)")
     }
-    // Choosing what plays, here or on Home (model.chosenChannel), also selects it on the editing side. Changing `picked`
-    // runs pick(), which sends any waiting edit first. The reverse never happens: picking a channel to edit doesn't touch
-    // what plays.
+    // The channel showing, chosen here or on Home (model.chosenChannel) or switched by the Chumby itself, is the one
+    // listed. Changing `picked` runs pick(), which sends any waiting edit first.
     func channelID(named name: String) -> String? {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return channels.first { title($0).trimmingCharacters(in: .whitespacesAndNewlines) == n }?.id
@@ -1399,7 +1398,7 @@ struct ChannelsTab: View {
     // From what was kept last time, so the editor is whole from the first frame: the channel chosen or playing, if known.
     func startFromCache() {
         guard picked.isEmpty else { return }
-        picked = model.chosenChannel.flatMap { channelID(named: $0.name) } ?? channelID(named: model.state.channel) ?? (model.channelData?.cur ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        picked = channelID(named: showing) ?? channelID(named: model.state.channel) ?? (model.channelData?.cur ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if picked.isEmpty { picked = channels.first?.id ?? "" }
         pick()
     }
@@ -1490,91 +1489,95 @@ struct ChannelsTab: View {
         .buttonStyle(.plain)
         .moveDisabled(true).deleteDisabled(true)
     }
-    // For the build: a channel chosen in Now playing (chsync); then the picker opened and a widget added (chdemo), or the
+    // For the build: a channel chosen in the header (chsync); then the picker opened and a widget added (chdemo), or the
     // picker left open for its shot (chadd).
     @State private var posed = false
 
+    // The channel the Chumby is showing, by the same reading Home's capsule uses: his own tap first, then the Chumby's
+    // live status, then the saved list.
+    var showing: String {
+        if let c = model.chosenChannel, Date().timeIntervalSince(c.at) < 20 { return c.name }
+        return !model.sys.chan.isEmpty ? model.sys.chan : model.state.channel
+    }
+    // One channel on this page: the one the Chumby is showing is the one whose widgets are listed, and choosing another
+    // here switches the Chumby to it. It was two controls that both read "Default ⌃⌄", one for what plays and one for what
+    // was being edited (Richard, 2026-11-03: "be logical", when the two didn't move together; 2026-11-09: "the logic of all
+    // the layouts … some of it is confusing"). Editing follows what plays (followPlaying), so there is nothing left for a
+    // second chooser to choose.
+    var channelSection: some View {
+        Section {
+            if shown.isEmpty && !picked.isEmpty { Text("Nothing in this channel yet.").foregroundStyle(.secondary) }
+            // By id, never by index: following the playing channel swaps `rows` under the list.
+            ForEach(shown, id: \.id) { widgetRow($0) }
+                .onMove { from, to in
+                    var on = shown
+                    on.move(fromOffsets: from, toOffset: to)
+                    rows = on + rows.filter { !$0.on }
+                    changed()
+                }
+                .deleteDisabled(true)
+            if !picked.isEmpty && !reordering { addRow }
+            if let f = model.failed("chedit") { FailNote(text: f) }
+            if let f = model.failed("nowPlaying") { FailNote(text: f) }
+        } header: {
+            // The channel is the header itself: its name, with the others in its menu (the tick on the one showing).
+            HStack(alignment: .firstTextBaseline) {
+                Menu {
+                    Section("Channel") {
+                        ForEach(channels, id: \.id) { c in
+                            let name = title(c)
+                            Button { model.tick(); model.playChannel(name, id: "nowPlaying") } label: {
+                                if name.trimmingCharacters(in: .whitespacesAndNewlines) == showing.trimmingCharacters(in: .whitespacesAndNewlines) { Label(name, systemImage: "checkmark") } else { Text(name) }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(channels.first { $0.id == picked }.map(title) ?? "Choose a channel").font(.custom("Trebuchet MS", size: 22).weight(.bold)).lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.semibold))
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .accessibilityLabel("Channel, \(pickedTitle)")
+                .accessibilityHint("Choose the channel the Chumby shows")
+                Spacer()
+                if shown.count > 1 {
+                    Button(reordering ? "Done" : "Reorder") { withAnimation(.snappy) { reordering.toggle() } }
+                        .font(.body.weight(.semibold)).foregroundStyle(.tint)
+                }
+            }
+            .textCase(nil)
+            .frame(minHeight: 32, alignment: .bottom)
+        } footer: {
+            if model.state.shuffle == 1 { Text("Shuffle is on, so your order won’t show until you turn it off.") }
+        }
+    }
+    // What the screen is doing right now, apart from which channel: a jump to one widget, and shuffle. Named for the screen,
+    // not "Now playing", which on Sounds means music.
+    var onScreen: some View {
+        Section {
+            Menu("Jump to a widget") {
+                ForEach(model.state.widgetNames.sorted(), id: \.self) { n in Button(n) { model.cmd("widget", n, id: "nowPlaying") } }
+            }.foregroundStyle(.tint)
+            Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
+        } header: {
+            // Open, as tall as the channel header across the fold, so the two panes' cards start level.
+            Text("On screen").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
+                .frame(minHeight: wide ? 32 : 0, alignment: .bottomLeading)
+        }
+    }
+
     var body: some View {
         ScrollViewReader { scroll in
+        // The channel and its widgets lead, folded and in the left pane open; the screen's other controls follow, or the
+        // Add widgets picker takes their pane while it's open, with the channel's list live beside it.
         TwoPane(rightTitle: adding && wide ? "Add to \(pickedTitle)" : " ",
                 rightTrailing: adding && wide ? AnyView(doneButton { closeAdd(scroll) }) : nil) {
             PageTitle("Channels")
             ReachRow()
-            Section {
-                Picker("Channel", selection: Binding(get: { model.state.channel }, set: { model.playChannel($0, id: "nowPlaying") })) {
-                    ForEach(model.state.channelNames, id: \.self) { Text($0).tag($0) }
-                    if !model.state.channelNames.contains(model.state.channel) { Text(model.state.channel).tag(model.state.channel) }
-                }
-                Menu("Jump to a widget") {
-                    ForEach(model.state.widgetNames.sorted(), id: \.self) { n in Button(n) { model.cmd("widget", n, id: "nowPlaying") } }
-                }.foregroundStyle(.tint)
-                Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
-                if let f = model.failed("nowPlaying") { FailNote(text: f) }
-            } header: {
-                // Open, as tall as the channel header across the fold, so the two panes' cards start level (r27: ~15 px apart).
-                Text("Now playing").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
-                    .frame(minHeight: wide ? 32 : 0, alignment: .bottomLeading)
-            }
-            // Adding, open: what's already in the channel stays in view on this side, and each add lands here live.
-            if adding && wide {
-                Section {
-                    if shown.isEmpty { Text("Nothing in this channel yet.").foregroundStyle(.secondary) }
-                    ForEach(shown, id: \.id) { w in
-                        HStack {
-                            Text(w.name).lineLimit(1)
-                            Spacer(minLength: 12)
-                            Text(w.secs == 0 ? (w.own > 0 ? "Auto · \(w.own)s" : "Auto") : timeText(w.secs)).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-                        }
-                        .frame(minHeight: 34)
-                        .listRowBackground(GlassRow().overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
-                } header: {
-                    Text("In \(pickedTitle)").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
-                }
-            }
+            channelSection
         } right: {
-            if adding && wide {
-                addSections
-            } else {
-            Section {
-                if shown.isEmpty && !picked.isEmpty { Text("Nothing in this channel yet.").foregroundStyle(.secondary) }
-                // By id, never by index: following the playing channel swaps `rows` under the list.
-                ForEach(shown, id: \.id) { widgetRow($0) }
-                    .onMove { from, to in
-                        var on = shown
-                        on.move(fromOffsets: from, toOffset: to)
-                        rows = on + rows.filter { !$0.on }
-                        changed()
-                    }
-                    .deleteDisabled(true)
-                if !picked.isEmpty && !reordering { addRow }
-                if let f = model.failed("chedit") { FailNote(text: f) }
-            } header: {
-                // The channel being edited is the header itself, so there's one "Default" here, not two.
-                HStack(alignment: .firstTextBaseline) {
-                    Menu {
-                        Picker("Editing", selection: $picked) { ForEach(channels, id: \.id) { Text(title($0)).tag($0.id) } }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(channels.first { $0.id == picked }.map(title) ?? "Choose a channel").font(.custom("Trebuchet MS", size: 22).weight(.bold)).lineLimit(1)
-                            Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.semibold))
-                        }
-                        .foregroundStyle(.primary)
-                    }
-                    .accessibilityLabel("Channel to edit")
-                    Spacer()
-                    if shown.count > 1 {
-                        Button(reordering ? "Done" : "Reorder") { withAnimation(.snappy) { reordering.toggle() } }
-                            .font(.body.weight(.semibold)).foregroundStyle(.tint)
-                    }
-                }
-                .textCase(nil)
-                .frame(minHeight: 32, alignment: .bottom)
-            } footer: {
-                if model.state.shuffle == 1 { Text("Shuffle is on, so your order won’t show until you turn it off.") }
-            }
-            }
+            if adding && wide { addSections } else { onScreen }
         }
         .sheet(isPresented: Binding(get: { adding && !wide }, set: { if !$0 { closeAdd(scroll) } })) {
             NavigationStack {
@@ -1610,6 +1613,9 @@ struct ChannelsTab: View {
         .dragToReorder(reordering)
         .onChange(of: picked) { _, _ in pick() }
         .onChange(of: model.chosenChannel) { _, c in if let c { followPlaying(c.name) } }
+        // The Chumby's own switches too (its nightly times, a tap on the device), so the list is always the channel showing.
+        .onChange(of: model.sys.chan) { _, _ in followPlaying(showing) }
+        .onChange(of: model.state.channel) { _, _ in followPlaying(showing) }
         .task { await model.loadChannels(); if rows.isEmpty { startFromCache(); if rows.isEmpty { pick() } }; await loadCategories() }
         .onDisappear { flush() }
         .refreshable { flush(); edited = [:]; await model.loadChannels(); await model.loadState(); pick() }
@@ -2103,7 +2109,9 @@ struct NightSettings: View {
                 model.state.schedule.append(e); model.state.reindex(); Task { await model.saveSchedule() }
             } label: { Label("Add a time", systemImage: "plus.circle.fill") }.foregroundStyle(.tint)
             if let f = model.failed("schedule") { FailNote(text: f) }
-        } header: { SectionHead(icon: "moon.fill", text: "Night", color: ChumbyPalette.sub(scheme == .dark)) }
+        // Named for all it holds: the night style, and the times the Chumby switches night, day, screen and channel by
+        // itself. Headed "Night", a 7:00 AM "Day starts" or a channel switch read as being in the wrong section.
+        } header: { SectionHead(icon: "moon.fill", text: "Day and night", color: ChumbyPalette.sub(scheme == .dark)) }
     }
     static func date(_ s: String) -> Date {
         let p = s.split(separator: ":").compactMap { Int($0) }

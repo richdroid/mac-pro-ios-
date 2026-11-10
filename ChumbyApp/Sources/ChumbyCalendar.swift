@@ -616,10 +616,12 @@ struct CalendarDaySheet: View {
             soundSection(item)
             if item.custom || model.state.justOnce(for: item) != nil {
                 Section {
-                    Button("Use the usual settings") { useUsual(item) }.foregroundStyle(.tint).disabled(undoing)
+                    Button("Use the usual settings") { useUsual(item) }.foregroundStyle(.tint).disabled(undoing).background { foot }
                 } footer: { Text("This day wakes and rings like every other again.") }
             }
-            Section { CalendarSoundRow().background { foot } } header: { Text("How they all ring") }
+            // No "How they all ring" here: a day's page changes that day alone, and the shared sound is set in Calendar
+            // settings (and shown under Sounds). A control for every day on one day's page read as one more place the same
+            // thing was set (Richard, 2026-11-09: "the logic of all the layouts … some of it is confusing").
         } else {
             Text("That day is no longer on your calendar.").foregroundStyle(.secondary).background { foot }
         }
@@ -650,11 +652,11 @@ struct CalendarDaySheet: View {
             }
             .pickerStyle(.segmented)
             if edit.own != nil {
-                SoundRows(choice: $ownSound, alarm: $ownAlarm)
+                SoundRows(choice: $ownSound, alarm: $ownAlarm, tail: AnyView(foot))
             } else {
                 let r = wake.ringsWith(model.state)
-                LabeledContent("Plays", value: r.sound).lineLimit(1)
-                if let z = r.snooze { LabeledContent("Snooze", value: "\(z) min") }
+                LabeledContent("Plays", value: r.sound).lineLimit(1).background { foot }
+                if let z = r.snooze { LabeledContent("Snooze", value: "\(z) min").background { foot } }
             }
             if let j = model.state.justOnce(for: item) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -665,24 +667,29 @@ struct CalendarDaySheet: View {
                     Spacer(minLength: 8)
                     if undoing { ProgressView() } else { Button("Undo") { undo() }.font(.subheadline.weight(.semibold)).foregroundStyle(.tint).buttonStyle(.borderless) }
                 }
+                .background { foot }
             }
         } header: { Text("Sound for this day") }
         .onChange(of: ownSound) { _, _ in commitOwn() }
         .onChange(of: ownAlarm) { _, _ in commitOwn() }
     }
     // Folded, where the last row ends, so the sheet can stop just under it. onGeometryChange reports the first layout too,
-    // which onScrollGeometryChange never did, so the sheet used to stay at its first guess.
+    // which onScrollGeometryChange never did, so the sheet used to stay at its first guess. Several rows carry it (whichever
+    // of them is last depends on the day), and the lowest one wins (fitTo).
     @ViewBuilder var foot: some View {
         if close == nil {
             Color.clear.onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("daySheet")).maxY } action: { fitTo($0) }
         }
     }
+    @State private var measured = false
     func fitTo(_ rowBottom: CGFloat) {
         // Only as it opens: later the row moves because the list is being scrolled, not because the sheet is the wrong size.
         guard Date().timeIntervalSince(openedAt) < 1.5 else { return }
         // The row's own bottom padding and a little air under the last card.
         let h = (rowBottom + 11 + 24).rounded()
-        guard h > 200, abs(h - fit) > 1 else { return }
+        // The first row to report replaces the guess; after that only a lower row may move it, so the sheet fits the last.
+        guard h > 200, abs(h - fit) > 1, !measured || h > fit else { return }
+        measured = true
         let onFit = detent == .height(fit)
         fit = h
         // The new height is in the detents before it's chosen.
@@ -703,7 +710,7 @@ struct CalendarDaySheet: View {
                 List { sections.listRowBackground(GlassRow()) }
                 .coordinateSpace(.named("daySheet"))
                 .seaList().background { SeaBackground().ignoresSafeArea() }
-                .onAppear { openedAt = Date(); labelText = edit.label ?? ""; loadOwn() }
+                .onAppear { openedAt = Date(); measured = false; labelText = edit.label ?? ""; loadOwn() }
                 .onDisappear { commitLabel() }
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
