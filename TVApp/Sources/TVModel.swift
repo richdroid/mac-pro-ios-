@@ -318,7 +318,7 @@ final class TVModel {
     // Changing tab puts the keyboard away, except when the change is for a search field about to take it (the Remote's
     // field opening the Apps page): resigning the responder in the same turn raced the field's own focus.
     var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t }() { didSet { if tab != oldValue, !SendDraft.shared.wantsFocus { Keyboard.dismiss() } } }
-    var address: String { didSet { UserDefaults.standard.set(address, forKey: "address") } }
+    var address: String { didSet { SavedAddress.save(address) } }
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var lastKeyAt = Date.distantPast
@@ -329,8 +329,9 @@ final class TVModel {
     private static var cacheFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("tv.json") }
 
     init() {
-        let stored = UserDefaults.standard.string(forKey: "address") ?? ""
-        address = stored.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : stored
+        address = SavedAddress.value
+        // Kept in the Keychain from the first launch, so a reinstall finds it even if it was never typed.
+        if !address.isEmpty { SavedAddress.save(address) }
         // Open with what was last known; the live state replaces it moments later. A small file, read before the first
         // frame on purpose, so the app opens showing what it knew rather than empty.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(TVStatus.self, from: d) }

@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import Security
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -128,11 +129,43 @@ enum Wording {
     }
 }
 
+// The address the app reaches the Mac (or the Chumby) through, kept in the Keychain as well as the app's settings. A new
+// install of the same app (a TestFlight build replacing a Mac-signed one, or the app deleted and put back) starts with
+// empty settings, but the Keychain keeps its items for the same team and bundle, so the address comes back on its own
+// (Richard, 2026-11-10: "make sure that doesnt happen in the future").
+enum SavedAddress {
+    private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address", kSecAttrAccount as String: "address"]
+    // Settings first, then the Keychain, then the address baked into this build.
+    static var value: String {
+        let stored = UserDefaults.standard.string(forKey: "address") ?? ""
+        if !stored.isEmpty { return stored }
+        if let k = keychain(), !k.isEmpty { return k }
+        return Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? ""
+    }
+    static func save(_ s: String) {
+        UserDefaults.standard.set(s, forKey: "address")
+        guard keychain() != s else { return }
+        SecItemDelete(base as CFDictionary)
+        guard !s.isEmpty else { return }
+        var add = base
+        add[kSecValueData as String] = Data(s.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(add as CFDictionary, nil)
+    }
+    static func keychain() -> String? {
+        var q = base
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+}
+
 // What widgets, Control Center and Shortcuts use to reach the TV. They run outside the app, so they carry their own address.
 enum TVBridge {
     static var address: String {
-        let stored = UserDefaults.standard.string(forKey: "address") ?? ""
-        return stored.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : stored
+        SavedAddress.value
     }
     static func url(_ path: String) -> URL? { URL(string: address.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) }
     struct Gone: Error {}

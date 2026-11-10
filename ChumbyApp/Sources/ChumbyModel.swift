@@ -109,7 +109,7 @@ final class ChumbyModel: ObservableObject {
     @Published var offline = false
     @Published var needsAddress = false
     @Published var tab = UserDefaults.standard.integer(forKey: "tab")
-    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); api = Self.makeAPI(address); usingFallback = false; failures = 0 } }
+    @Published var address: String { didSet { SavedAddress.save(address); api = Self.makeAPI(address); usingFallback = false; failures = 0 } }
     @Published var failure: Failure?
     @Published var marks: [String: AlarmMark] = [:]
     @Published var dead = false        // the Mac answers, but the Chumby itself has gone quiet
@@ -168,9 +168,10 @@ final class ChumbyModel: ObservableObject {
     private static func cache(_ name: String) -> URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("chumby-" + name) }
 
     init() {
-        let stored = UserDefaults.standard.string(forKey: "address") ?? ""
-        let saved = stored.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : stored
+        let saved = SavedAddress.value
         address = saved
+        // Kept in the Keychain from the first launch, so a reinstall finds it even if it was never typed.
+        if !saved.isEmpty { SavedAddress.save(saved) }
         api = Self.makeAPI(saved)
         needsAddress = api == nil
         #if canImport(UIKit)

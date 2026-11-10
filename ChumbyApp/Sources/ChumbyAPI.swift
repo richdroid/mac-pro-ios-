@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 // The Chumby's own CGI API. Reads are open on the network; writes need the device's token.
 struct Sys: Decodable, Equatable {
@@ -589,5 +590,38 @@ extension ChumbyState {
         let skip = skipped.flatMap { $0.date > now ? $0 : nil }
         let pinned = best.map { b in skip.map { $0.name == b.0.name && abs($0.date.timeIntervalSince(b.1)) < 60 } ?? false } ?? false
         return JustOnceNow(alarm: one, at: at, original: best?.0, usual: best?.1, pinned: pinned, skip: skip)
+    }
+}
+
+// The address the app reaches the Mac (or the Chumby) through, kept in the Keychain as well as the app's settings. A new
+// install of the same app (a TestFlight build replacing a Mac-signed one, or the app deleted and put back) starts with
+// empty settings, but the Keychain keeps its items for the same team and bundle, so the address comes back on its own
+// (Richard, 2026-11-10: "make sure that doesnt happen in the future").
+enum SavedAddress {
+    private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address", kSecAttrAccount as String: "address"]
+    // Settings first, then the Keychain, then the address baked into this build.
+    static var value: String {
+        let stored = UserDefaults.standard.string(forKey: "address") ?? ""
+        if !stored.isEmpty { return stored }
+        if let k = keychain(), !k.isEmpty { return k }
+        return Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? ""
+    }
+    static func save(_ s: String) {
+        UserDefaults.standard.set(s, forKey: "address")
+        guard keychain() != s else { return }
+        SecItemDelete(base as CFDictionary)
+        guard !s.isEmpty else { return }
+        var add = base
+        add[kSecValueData as String] = Data(s.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(add as CFDictionary, nil)
+    }
+    static func keychain() -> String? {
+        var q = base
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
     }
 }
