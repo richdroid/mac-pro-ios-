@@ -17,7 +17,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,7 +36,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 60
+        timeout-minutes: 75
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -131,6 +131,37 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
+          # A pushed page swiped off from the left edge, slowly (2.5 s), so every frame of the slide is on film: it must go
+          # whole, nothing squeezing or re-flowing as it moves (Richard, 2026-11-09: "when u swipe a page off screen the
+          # elements compact as u do so"). The page's readings and the move's start and end go to a log beside it.
+          # name, display, then the app's own arguments.
+          backfilm() {
+            local name=$1 display=$2; shift 2
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -swipeLog YES "$@"
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-start.png
+            echo "$name drag at $(date +%s.%N | cut -c1-14)"
+            $D "$DEVICE" drag 0.01 0.5 0.9 0.5 2.5 || echo "drag failed"
+            sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0
+            [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/macpro-$name-swipe.log || true
+          }
+          # Every pushed page, swiped off (display, suffix); "before" ones with the hold off, as the pages were.
+          backfilms() {
+            local d=$1 x=$2
+            backfilm back-history$x $d -tab 0 -openHistory cpu
+            backfilm back-processes$x $d -tab 0 -openProcesses cpu
+            backfilm back-versions$x $d -tab 1 -pose versions
+            backfilm back-session$x $d -tab 2 -pose session
+            backfilm back-history-before$x $d -tab 0 -openHistory cpu -noHold YES
+            backfilm back-versions-before$x $d -tab 1 -pose versions -noHold YES
+          }
           # Everything that changed, in one posture (display, suffix).
           poses() {
             local d=$1 x=$2
@@ -153,9 +184,13 @@ jobs:
             shot screen-shift$x $d 8 -tab 0 -pose screenshift -openScreen YES
             shot screen-pinch$x $d 9 -tab 0 -pose screenpinch -openScreen YES
             shot screen-typing$x $d 8 -tab 0 -pose screentyping -openScreen YES
+            # The pad's right-click tip, held up for the shot (on the phone it shows a few seconds, his first sessions only);
+            # every other Screen shot shows the pad clean (Richard, 2026-11-09: "this message shouldnt be persistent").
+            shot screen-padtip$x $d 8 -tab 0 -pose screenpadtip -openScreen YES
             # A page open over a tab, Back the side bar's first item (along the foot open in portrait, Settings out).
             shot session$x $d 9 -tab 2 -pose session
             shot history$x $d 8 -tab 0 -openHistory cpu
+            shot processes$x $d 8 -tab 0 -openProcesses cpu
           }
           # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
@@ -170,6 +205,7 @@ jobs:
           shot screen-laptop-typing-portrait 3 8 -tab 0 -pose screentyping -openScreen YES -screenPosture laptop
           # A session half open upright (stood in for): its screen above the crease, its keys and box below.
           shot session-laptop-portrait 3 9 -tab 2 -pose session -screenPosture laptop
+          shot screen-laptop-padtip-portrait 3 8 -tab 0 -pose screenpadtip -openScreen YES -screenPosture laptop
           # An app's row on Apps pressed (On this iPhone, and an update's row): the list's own highlight, inside the card's
           # corners; the -after shot is the page it opened. Then the Update capsule tapped on its own: the row's page must
           # not open from it.
@@ -189,6 +225,7 @@ jobs:
           FILM_PORT=9021 swipefilm statusbounce-portrait 3 0.5 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
           FILM_PORT=9021 swipefilm appsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -fullEvery 1 -frameLog YES
           FILM_PORT=9021 swipefilm versionsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -fullEvery 1 -frameLog YES
+          backfilms 3 -portrait
           python3 ci/title-check.py dist/macpro-tab*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
@@ -197,16 +234,25 @@ jobs:
           shot screen-open 3 8 -tab 0 -pose screen -openScreen YES
           shot screen-book-open 3 8 -tab 0 -pose screen -openScreen YES -screenPosture book
           shot session-open 3 9 -tab 2 -pose session
+          shot history-open 3 8 -tab 0 -openHistory cpu
+          shot processes-open 3 8 -tab 0 -openProcesses cpu
+          backfilm back-history-open 3 -tab 0 -openHistory cpu
+          backfilm back-versions-open 3 -tab 1 -pose versions
+          backfilm back-session-open 3 -tab 2 -pose session
+          backfilm back-history-before-open 3 -tab 0 -openHistory cpu -noHold YES
           # Partly folded.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
           shot screen-partial 3 8 -tab 0 -pose screen -openScreen YES
           shot session-partial 3 9 -tab 2 -pose session
+          shot history-partial 3 8 -tab 0 -openHistory cpu
+          shot versions-partial 3 9 -tab 1 -pose versions
           # Folded, the outer display, last.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
           poses 1 ""
           slowfilms 1 ""
           film scrollfilm 1 30 -tab 0 -pose scrollfilm
           swipefilm versionsfling 1 0.45 0.8 0.28 -tab 1 -pose versionsfilm
+          backfilms 1 ""
           # The hinge moved with a page up (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios across
           # everything"): both displays filmed while a pushed page and then Status are flung, the phone opened, turned,
           # half closed and closed again, so each change is judged moving, place and state kept or not. One display per

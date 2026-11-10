@@ -19,11 +19,114 @@ struct PaneReader<C: View>: View {
     }
 }
 
+// Whether a navigation stack is pushing or popping a page right now (Back tapped, or the edge swipe under the finger).
+// A page sliding on or off is moved by UIKit, and what it reads of itself while it moves (its safe area, where the fold is
+// in its own space) is the slide's, not the scene's: read as layout, it squeezed and re-flowed the page as it went
+// (Richard, 2026-11-09: "when u swipe a page off screen the elements compact as u do so"). Pages hold what they read at
+// rest until the move is over. Only stacks that register (the Mac Pro app's) count; elsewhere it's never in flight.
+@MainActor @Observable final class NavTransit {
+    static let shared = NavTransit()
+    private(set) var active = false
+    #if canImport(UIKit)
+    @ObservationIgnored private let stacks = NSHashTable<UINavigationController>.weakObjects()
+    @ObservationIgnored private weak var current: AnyObject?
+    // The build's "before" films turn the hold off (-noHold YES), to film a page swiped off as it was.
+    @ObservationIgnored private let off = UserDefaults.standard.bool(forKey: "noHold")
+    func register(_ n: UINavigationController) { if !off { stacks.add(n) } }
+    // Marks the move in flight until its coordinator says it's over (finished, or the swipe let go and sprang back).
+    func begin(_ c: UIViewControllerTransitionCoordinator) {
+        guard !off, current !== (c as AnyObject) else { return }
+        current = c as AnyObject
+        if !active { active = true }
+        let queued = c.animate(alongsideTransition: nil) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.current === (c as AnyObject) else { return }
+                self.end()
+            }
+        }
+        // Never stuck holding: if the coordinator can't report its end, or the move is over without saying so, the hold
+        // ends once no stack is moving (checked a few times a second while it lasts).
+        if !queued { Task { @MainActor in self.end() }; return }
+        Task { @MainActor [weak self] in
+            while let self, self.active {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if self.active, !self.stacks.allObjects.contains(where: { $0.transitionCoordinator != nil }) { self.end() }
+            }
+        }
+    }
+    private func end() { current = nil; if active { active = false } }
+    // Asked as a reading lands: true while any registered stack is mid-move, and the move is noted if it wasn't yet.
+    func moving() -> Bool {
+        if let c = stacks.allObjects.lazy.compactMap(\.transitionCoordinator).first { begin(c); return true }
+        return active
+    }
+    #else
+    func moving() -> Bool { false }
+    #endif
+}
+
+// A pushed page laid out from what it reads at rest while a push or pop moves it: the same size and safe area from the
+// first frame of the slide to the last, so it goes off whole, rows and cards as they were. At rest it reads the system as
+// usual (a turn, a fold, the keyboard), since nothing then is moving it.
+struct HoldsWhileMoving: ViewModifier {
+    let name: String
+    private var transit = NavTransit.shared
+    @State private var box = Box()
+    struct Reading: Equatable { var size: CGSize; var insets: EdgeInsets }
+    @MainActor final class Box { var rest: Reading?; var latest: Reading? }
+    init(name: String) { self.name = name }
+    func body(content: Content) -> some View {
+        let hold = transit.active ? box.rest : nil
+        content
+            .safeAreaPadding(hold?.insets ?? EdgeInsets())
+            .frame(width: hold?.size.width, height: hold?.size.height, alignment: .topLeading)
+            .ignoresSafeArea(.all, edges: hold == nil ? [] : .all)
+            // The page's whole area and its safe area, as the system gives them.
+            .background {
+                Color.clear.ignoresSafeArea()
+                    .onGeometryChange(for: Reading.self) { Reading(size: $0.size, insets: $0.safeAreaInsets) } action: { r in
+                        box.latest = r
+                        let moving = NavTransit.shared.moving()
+                        if !moving { box.rest = r }
+                        SwipeLog.note("\(name) \(moving ? "moving" : "rest") size \(Int(r.size.width))x\(Int(r.size.height)) insets t\(Int(r.insets.top)) l\(Int(r.insets.leading)) b\(Int(r.insets.bottom)) r\(Int(r.insets.trailing))")
+                    }
+            }
+            // Pushed in mid-move, it had no reading at rest yet: the last one counts once the move is over.
+            .onChange(of: transit.active) { _, now in
+                if !now, let l = box.latest { box.rest = l }
+                SwipeLog.note("\(name) transit \(now ? "began" : "ended")")
+            }
+    }
+}
+extension View {
+    func holdsWhileMoving(_ name: String) -> some View { modifier(HoldsWhileMoving(name: name)) }
+}
+
+// For the build's films of a page swiped off (-swipeLog YES, never on the phone): every reading a page takes and when the
+// move began and ended, to Caches/swipe-log.txt, so a page that changes as it slides is caught in numbers, not only seen.
+enum SwipeLog {
+    static let on = UserDefaults.standard.bool(forKey: "swipeLog")
+    static let start = Date()
+    static func note(_ s: String) {
+        guard on, let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let line = String(format: "%.3f ", Date().timeIntervalSince(start)) + s + "\n"
+        let url = dir.appendingPathComponent("swipe-log.txt")
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+        else { try? Data(line.utf8).write(to: url) }
+    }
+}
+
 // Two panes, in Apple's container: side by side when wide, stacked when tall, and clear of the fold when partly closed.
 // Lying flat it would split the area left of the side bars, putting the seam off the crease, so it's told where the hinge is.
 struct FoldSplit<L: View, R: View>: View {
     let left: L, right: R
     init(@ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) { self.left = left(); self.right = right() }
+    struct Split: Equatable { var ratio: CGFloat?; var gutter: CGFloat; var outer: CGFloat }
+    // The split as last read at rest. The fold is read in the view's own space, so while a page slides off (or the page
+    // under it slides back) the crease seemed to travel across it, and the seam followed: the left pane narrowed to a
+    // third as the page went. Held while a move is in flight.
+    @State private var held: Split?
+    private var transit = NavTransit.shared
     var body: some View {
         #if os(iOS)
         if #available(iOS 27.1, *) {
@@ -39,12 +142,19 @@ struct FoldSplit<L: View, R: View>: View {
                 // Open, the left pane meets the display's bare outer edge (no safe area there), so its cards and titles get
                 // the same air from that edge as the right pane has from the side column.
                 let outer: CGFloat = wide && !folded ? 14 : 0
+                let live = Split(ratio: ratio, gutter: gutter, outer: outer)
+                let use = transit.active ? (held ?? live) : live
                 ArrangementView {
-                    left.padding(.leading, outer).padding(.trailing, gutter).splitArrangementLayoutRatio(ratio)
+                    left.padding(.leading, use.outer).padding(.trailing, use.gutter).splitArrangementLayoutRatio(use.ratio)
                 } secondary: {
-                    right.padding(.leading, gutter)
+                    right.padding(.leading, use.gutter)
                 }
                 .arrangementViewStyle(.split)
+                .onChange(of: live, initial: true) { _, v in
+                    if !NavTransit.shared.moving() { held = v }
+                    SwipeLog.note("split ratio \(v.ratio.map { String(format: "%.3f", $0) } ?? "nil") gutter \(Int(v.gutter))\(transit.active ? " (held)" : "")")
+                }
+                .onChange(of: transit.active) { _, now in if !now { held = live } }
             }
         } else { sideBySide }
         #else

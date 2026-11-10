@@ -54,8 +54,12 @@ struct SessionTerminal: View {
     @State private var starting = false
     // Following the newest line, unless scrolled back to read what came before.
     @State private var following = true
-    // The "Waiting for you" chip's height, so the choices across the fold start level with the screen under it.
-    @State private var chipHeight: CGFloat = 0
+    // Where the screen starts in its column (under the name and the "Waiting for you" chip), so the choices across the fold
+    // start level with it.
+    @State private var screenTop: CGFloat = 0
+    // The posture's layout as last read at rest: the fold is read in the page's own space, which moves as the page slides
+    // off, so it's held while a push or pop is in flight (NavTransit).
+    @State private var heldMode: SessionFoldLayout.Mode?
     // Glyphs short enough for a sixth of the folded width, each with its full name for VoiceOver.
     static let keys: [(String, String, String)] = [("esc", "esc", "Escape"), ("enter", "⏎", "Enter"), ("up", "↑", "Up"), ("down", "↓", "Down"), ("left", "←", "Left"), ("right", "→", "Right"),
                                                    ("1", "1", "1"), ("2", "2", "2"), ("3", "3", "3"), ("tab", "⇥", "Tab"), ("shift-tab", "⇧⇥", "Shift Tab"), ("ctrl-c", "⌃C", "Control C")]
@@ -257,9 +261,12 @@ struct SessionTerminal: View {
     // the foot up: the box, the keys, then the menu's choices.
     var terminalColumn: some View {
         VStack(spacing: 8) {
-            stateChip.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chipHeight = $0 }
-            screen
+            // Open flat the bar's title is empty and the name heads the screen's pane, as on every pushed page.
+            if panes { PaneHeading(title: session.name) }
+            stateChip
+            screen.onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("termcol")).minY } action: { screenTop = $0 }
         }
+        .coordinateSpace(.named("termcol"))
     }
     // The menu's choices at the top, level with the screen's top beside it (under the chip, which only the screen's side
     // has), the keys and the box at the foot. In one column the space between is nothing, so they sit together as before.
@@ -301,23 +308,25 @@ struct SessionTerminal: View {
         // folded or open in portrait it's one column; partly open it keeps to either side of the crease. One layout for
         // all of them, so the box is the same view through every change of posture, with its text and focus.
         GeometryReader { g in
-            let mode = arrangement(g)
+            let live = arrangement(g)
+            let mode = NavTransit.shared.active ? (heldMode ?? live) : live
             SessionFoldLayout(mode: mode) {
                 terminalColumn
-                controls(lead: { if case .panes = mode, waiting { return chipHeight + 8 } else { return 0 } }())
+                controls(lead: { if case .panes = mode { return screenTop } else { return 0 } }())
             }
             // The parts move to their new places in the Screen's own spring as the hinge moves.
             .animation(RemoteScreenView.posture, value: mode)
+            .onChange(of: live, initial: true) { _, m in if !NavTransit.shared.moving() { heldMode = m } }
+            .onChange(of: NavTransit.shared.active) { _, now in if !now { heldMode = live } }
         }
+        .holdsWhileMoving("session")
         .animation(Motion.fade, value: options)
         .animation(Motion.fade, value: waiting)
         .background(Color.black.ignoresSafeArea())
-        .navigationTitle(session.name)
-        .toolbarVisibility(.visible, for: .navigationBar)
         // The system's own Back: on the Duo it lays out at the top of the side strip, along the top open in portrait, and
         // the edge swipe goes with it (Apple's HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the back
-        // button is retarded and not iphone duo standard").
-        .navigationBarTitleDisplayMode(.inline)
+        // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
+        .pushedTitle(session.name, panes: panes)
         .preferredColorScheme(.dark)
         .sensoryFeedback(trigger: sends) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
         .task {

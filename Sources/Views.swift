@@ -383,12 +383,51 @@ extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
     override open func viewDidLoad() {
         super.viewDidLoad()
         interactivePopGestureRecognizer?.delegate = self
+        // A page swiped off holds its layout from the moment the finger takes it (HoldsWhileMoving, FoldSplit).
+        NavTransit.shared.register(self)
+        interactivePopGestureRecognizer?.addTarget(self, action: #selector(edgeSwipeMoved(_:)))
+    }
+    // Called after the stack's own handler, which has begun the pop by now.
+    @objc func edgeSwipeMoved(_ g: UIGestureRecognizer) {
+        if g.state == .began, let c = transitionCoordinator { NavTransit.shared.begin(c) }
     }
     public func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         g === interactivePopGestureRecognizer ? viewControllers.count > 1 : true
     }
 }
 #endif
+
+// Every pushed page names itself the same way (Richard, 2026-11-09: the Back and titles were "not up to code" for the Duo).
+// One pane: the system's own large title, so iOS lays out the bar and its Back where the Duo puts them (top of the side
+// strip folded and open flat, the bar along the top open upright) and the name leads the page as each tab's does. Two
+// panes: the bar's title is empty and the left pane's first line is the name (PaneHeading), as the tabs do there, since a
+// large title collapsing as one pane scrolled slid the other (2026-11-06). History and Processes were the small bar title
+// beside Version History's large one, so the name sat in a different place on each page.
+extension View {
+    @ViewBuilder func pushedTitle(_ title: String, panes: Bool) -> some View {
+        #if os(iOS)
+        self.navigationTitle(panes ? "" : title)
+            .toolbarVisibility(.visible, for: .navigationBar)
+            .navigationBarTitleDisplayMode(panes ? .inline : .large)
+        #else
+        self.navigationTitle(panes ? "" : title)
+        #endif
+    }
+}
+// A page's name as its first line, at the tabs' size and height (paneTitle). The right pane carries it unseen, so both
+// panes' first cards start level.
+struct PaneHeading: View {
+    let title: String
+    var shown = true
+    var body: some View {
+        Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, TopEdge.statusBar < 20 ? 14 : 0)
+            .opacity(shown ? 1 : 0)
+            .accessibilityHidden(!shown)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
 
 // The Mac reports some states in capitals or lower case; the app says them one way.
 func sentenceCase(_ t: String) -> String { t.prefix(1).uppercased() + t.dropFirst().lowercased() }

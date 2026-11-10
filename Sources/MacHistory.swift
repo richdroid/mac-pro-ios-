@@ -230,11 +230,17 @@ struct HistoryView: View {
         ScrollViewReader { proxy in
         Group {
             if panes {
+                // The name first in the left pane, carried unseen in the right so both start level (PaneHeading).
                 FoldSplit {
-                    VStack(spacing: 14) { readout; chart.frame(maxHeight: .infinity) }.padding(20)
+                    VStack(spacing: 14) { PaneHeading(title: metric.title); readout; chart.frame(maxHeight: .infinity) }
+                        .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 20)
                 } right: {
-                    ScrollView { VStack(spacing: 14) { range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }.padding(20) }.scrollsUnder()
-                        .keepsPlace("history-\(metric.key)", proxy)
+                    ScrollView {
+                        VStack(spacing: 14) { PaneHeading(title: metric.title, shown: false); range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
+                            .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 20)
+                    }
+                    .scrollsUnder()
+                    .keepsPlace("history-\(metric.key)", proxy)
                 }
             } else {
                 ScrollView {
@@ -245,14 +251,13 @@ struct HistoryView: View {
             }
         }
         }
+        .holdsWhileMoving("history")
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
-        .navigationTitle(metric.title)
-        .toolbarVisibility(.visible, for: .navigationBar)
         // The system's own Back: on the Duo it lays out at the top of the side strip, along the top open in portrait, and
         // the edge swipe goes with it (Apple's HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the back
-        // button is retarded and not iphone duo standard").
-        .navigationBarTitleDisplayMode(.inline)
+        // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
+        .pushedTitle(metric.title, panes: panes)
         .animation(.easeOut(duration: 0.2), value: hours)
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }
         .navigationDestination(item: $model.processes) { ProcessesView(first: $0, model: model) }

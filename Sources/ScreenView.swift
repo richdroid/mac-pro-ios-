@@ -68,6 +68,12 @@ struct RemoteScreenView: View {
     @State private var phoneHasText = true
     @AppStorage("screenGesturesSeen") private var gesturesSeen = false
     @AppStorage("screenRightClickLearned") private var rightClickLearned = false
+    // The pad's right-click tip: how many Screen sessions have shown it, and whether this one still does. It shows for his
+    // first three sessions only, goes after a few seconds or at the first touch of the pad, and never again once two
+    // fingers have tapped (Richard, 2026-11-09: "this message shouldnt be persistent the right click thing").
+    @AppStorage("screenPadTipSessions") private var padTipSessions = 0
+    @State private var padTip = false
+    @State private var padTipAsked = false
     @State private var rate = (frames: 0, updates: 0)
     // Touch bookkeeping that changes on every sample, kept out of SwiftUI's state so a moving finger never rebuilds the view.
     @State private var pad = TrackpadBox()
@@ -103,8 +109,9 @@ struct RemoteScreenView: View {
         .persistentSystemOverlays(.hidden)
         .onAppear {
             screen.heldModifiers = []
+            showPadTip()
             switch model.pose {
-            case "screen", "transitions", "screenhint", "screenfold": screen.showSample()
+            case "screen", "transitions", "screenhint", "screenfold", "screenpadtip": screen.showSample()
             case "screentyping": screen.showSample(); typing = true
             case "screenzoomed":
                 screen.showSample()
@@ -875,7 +882,26 @@ struct RemoteScreenView: View {
         if abs(clamped.width - pan.width) > 0.5 || abs(clamped.height - pan.height) > 0.5 { pan = clamped }
     }
     func tick(_ style: ScreenHaptic) { ScreenHaptics.play(style) }
-    func learnedRightClick() { if !rightClickLearned, model.pose.isEmpty { withAnimation(Motion.fade) { rightClickLearned = true } } }
+    func learnedRightClick() {
+        if padTip, model.pose != "screenpadtip" { withAnimation(Motion.fade) { padTip = false } }
+        if !rightClickLearned, model.pose.isEmpty { withAnimation(Motion.fade) { rightClickLearned = true } }
+    }
+    // Once per Screen session, for the first three: up for 4 s, then it fades. The build's "screenpadtip" pose holds it up
+    // for its shot; every other pose shows the pad clean.
+    func showPadTip() {
+        guard !padTipAsked else { return }
+        padTipAsked = true
+        if model.pose == "screenpadtip" { padTip = true; return }
+        guard model.pose.isEmpty, !rightClickLearned, padTipSessions < 3 else { return }
+        padTipSessions += 1
+        padTip = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            withAnimation(.easeOut(duration: 0.6)) { padTip = false }
+        }
+    }
+    // The first touch of the pad means he's found it: the tip makes way. Read on every sample, so it only writes once.
+    func padTouched() { if padTip, model.pose.isEmpty { withAnimation(Motion.fade) { padTip = false } } }
 
     // MARK: First use
     // Once, the first time the screen opens: what the fingers do, in the Mac's own words. Gone for good on Got it.
@@ -951,17 +977,18 @@ struct RemoteScreenView: View {
             mode: .trackpad,
             macWidth: screen.size.width,
             edgeBack: !observed.pixelScrollAvailable,
-            onTrack: { track($0) },
-            onScroll: { d, step in scroll(d, step, onPicture: false) },
+            onTrack: { padTouched(); track($0) },
+            onScroll: { d, step in padTouched(); scroll(d, step, onPicture: false) },
             // Pinching the trackpad zooms around the pointer.
             onPinch: { phase, scale, _ in pinch(phase, scale, viewPoint(screen.cursor)) },
             onSwipe: { swipe($0) }
         )
         .background(Color.clear.glassEffect(.regular.tint(.white.opacity(0.04)), in: shape))
         // Until the first right click, the trackpad says how, quietly, in its middle (Richard, 2026-11-07: "idk how u do
-        // right clicking"). It goes for good the first time two fingers tap, here or on the picture.
+        // right clicking"), but only for a moment at the start of his first few sessions (showPadTip), never as a fixture.
+        // It goes for good the first time two fingers tap, here or on the picture.
         .overlay {
-            if !rightClickLearned, !showHint {
+            if padTip, !rightClickLearned || model.pose == "screenpadtip", !showHint {
                 VStack(spacing: 6) {
                     Image(systemName: "hand.tap").font(.system(size: 20, weight: .regular))
                     Text("Tap with two fingers to right-click").font(.footnote.weight(.medium)).multilineTextAlignment(.center)

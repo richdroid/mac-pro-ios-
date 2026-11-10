@@ -560,15 +560,12 @@ struct VersionHistoryView: View {
             if panes { FoldSplit { pane(header: true, showBuilds: false) } right: { pane(header: false, showBuilds: true, afterNewest: true) } }
             else { pane(header: true, showBuilds: true) }
         }
+        .holdsWhileMoving("versions")
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
         // The page's name as large as every tab's, never the small bar title it was (17 pt, under the 20 pt app name in the
-        // card below it, beside a 34 pt "Apps" one Back away). One pane: the system's large title, no hand-made item in
-        // the bar, so iOS lays out Back the Duo's way (ruling 2026-11-09). Two panes: the left pane's first line, as each
-        // tab does there, because a large title collapsing as the builds scroll slid the other pane with it (2026-11-06).
-        .navigationTitle(panes ? "" : "Version History")
-        .toolbarVisibility(.visible, for: .navigationBar)
-        .navigationBarTitleDisplayMode(panes ? .inline : .large)
+        // card below it, beside a 34 pt "Apps" one Back away), and placed as every pushed page's is (pushedTitle).
+        .pushedTitle("Version History", panes: panes)
         .task { await load() }
     }
     private func pane(header: Bool, showBuilds: Bool, afterNewest: Bool = false) -> some View {
@@ -576,14 +573,7 @@ struct VersionHistoryView: View {
         List {
             if panes {
                 // As a tab's paneTitle: at the cards' edge, the same height in both panes so their first cards start level.
-                Section {
-                    Text("Version History").font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, TopEdge.statusBar < 20 ? 14 : 0)
-                        .opacity(header ? 1 : 0)
-                        .accessibilityHidden(!header)
-                        .accessibilityAddTraits(.isHeader)
-                }
+                Section { PaneHeading(title: "Version History", shown: header) }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
             }
             if header, let app {

@@ -66,6 +66,11 @@ struct ProcessesView: View {
     func list(_ by: ProcessSort, chooser: Bool, notes: Bool) -> some View {
         ScrollViewReader { proxy in
         List {
+            // Open flat, the page's name heads the left pane, carried unseen in the right (PaneHeading).
+            if panes {
+                Section { PaneHeading(title: "Processes", shown: by == .cpu) }
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+            }
             if chooser {
                 Section {
                     Picker("Sort by", selection: $sort) { ForEach(ProcessSort.allCases) { Text($0.title).tag($0) } }
@@ -117,14 +122,13 @@ struct ProcessesView: View {
                 list(sort, chooser: true, notes: true)
             }
         }
+        .holdsWhileMoving("processes")
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
-        .navigationTitle("Processes")
-        .toolbarVisibility(.visible, for: .navigationBar)
         // The system's own Back: on the Duo it lays out at the top of the side strip, along the top open in portrait, and
         // the edge swipe goes with it (Apple's HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the back
-        // button is retarded and not iphone duo standard").
-        .navigationBarTitleDisplayMode(.inline)
+        // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
+        .pushedTitle("Processes", panes: panes)
         .task {
             while !Task.isCancelled {
                 // The list stays put while a dialog is asking about one of its rows.
