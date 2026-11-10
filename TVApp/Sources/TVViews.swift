@@ -17,12 +17,26 @@ struct TVApp: App {
         }
         #endif
         Task.detached(priority: .utility) { TVShortcuts.updateAppShortcutParameters() }
+        // Must be known before launch finishes: the Now Playing card's occasional refresh while the app is closed.
+        #if os(iOS)
+        TVBackground.register()
+        #endif
     }
     var body: some Scene {
         WindowGroup {
             RootView().environment(model).preferredColorScheme(.dark).tint(TVLook.accent)
                 // Once, as the app comes up (initial), then on every change: not also on appear, which started it twice.
-                .onChange(of: phase, initial: true) { _, p in if p == .active { model.start() } else { model.stop() } }
+                // Inactive (Notification Centre pulled down, the app switcher, a call) keeps polling: stopping there froze
+                // the Remote's picture and the Now Playing card the moment he glanced at a notification. Only leaving the
+                // app hands over to the background grace (Richard, 2026-11-09: "the notif like for now playing doesnt
+                // update automatically").
+                .onChange(of: phase, initial: true) { _, p in
+                    switch p {
+                    case .active: model.start()
+                    case .background: model.background()
+                    default: break
+                    }
+                }
                 .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t == 4 ? 1 : t } }
         }
     }

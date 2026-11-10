@@ -355,6 +355,8 @@ final class TVModel {
     func url(_ path: String) -> URL? { URL(string: address.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) }
     func start() {
         stop()
+        // Back in the foreground: the polls take over from the background grace.
+        grace?.cancel(); grace = nil
         #if canImport(UIKit)
         Haptics.warm()
         #endif
@@ -399,6 +401,39 @@ final class TVModel {
         loops.forEach { $0.cancel() }; loops = []
         #if os(iOS)
         live.stop()
+        #endif
+    }
+    // Leaving the app. The pictures stop at once (nobody is looking), but the Now Playing card on the Lock Screen and in
+    // the island is still looked at, and with the polls gone it froze on whatever the TV was doing at that moment
+    // (Richard, 2026-11-09: "the notif like for now playing doesnt update automatically"). iOS allows about half a minute
+    // of work after the app leaves the screen, and with the app signed by a free Apple ID there is no push to wake it
+    // later: so that half minute is spent keeping the card true (a film he has just thrown reaching "playing", a stop or
+    // pause made from the phone a moment before it was locked), and then a background refresh is asked for (TVBackground),
+    // which iOS grants when it chooses. Between those the card's bar runs on its own clock (ProgressView(timerInterval:))
+    // and the staleDate dims what may no longer be true.
+    @ObservationIgnored private var grace: Task<Void, Never>?
+    func background() {
+        stop()
+        #if os(iOS)
+        grace?.cancel()
+        guard TVIsland.live != nil || status?.session?.playing == true || status?.music?.playing == true else { TVBackground.schedule(); return }
+        let token = BackgroundGrace()
+        token.begin { [weak self] in self?.grace?.cancel() }
+        grace = Task { [weak self] in
+            // Every five seconds for as long as iOS lets it (about 30 s): the first reading two seconds in, when a stop or
+            // pause sent just before leaving has reached the TV's own report.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            for _ in 0..<6 where !Task.isCancelled {
+                if let s = await TVBridge.status(timeout: 5) {
+                    await TVIsland.sync(s, art: self?.islandArt(s))
+                    // Nothing on the Lock Screen any more: nothing left to keep true.
+                    if TVIsland.live == nil { break }
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+            TVBackground.schedule()
+            token.end()
+        }
         #endif
     }
     var liveShowing: Bool {

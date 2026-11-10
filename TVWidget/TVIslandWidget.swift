@@ -40,7 +40,9 @@ private struct IslandButton: View {
         .buttonStyle(.plain).foregroundStyle(.white).accessibilityLabel(playing ? "Pause the TV" : "Play the TV")
     }
 }
-// Out of date, only the title is still worth showing: whether it's playing, and which episode, may have changed.
+// Out of date (the app has been closed a while and iOS hasn't let it look since), the card says what it last knew, dimmed:
+// the title and the episode stay (they don't change by themselves), the bar runs on as its best guess, and the play state
+// and its button go, since a pause from the TV's own remote is exactly what it can't have seen.
 private struct IslandText: View {
     let state: TVIslandAttributes.ContentState
     var stale = false
@@ -48,7 +50,7 @@ private struct IslandText: View {
         VStack(alignment: .leading, spacing: 1) {
             Text(state.title).font(.headline).lineLimit(1)
             // The episode (or the artist), never the app doing the playing: that's plumbing.
-            if !stale, !state.subtitle.isEmpty, state.subtitle != state.title, state.subtitle != state.app {
+            if !state.subtitle.isEmpty, state.subtitle != state.title, state.subtitle != state.app {
                 Text(state.subtitle).font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
             }
         }
@@ -77,7 +79,7 @@ private struct IslandCard: View {
             Cover(state: state, radius: 12, height: cover)
             VStack(alignment: .leading, spacing: 6) {
                 IslandText(state: state, stale: stale)
-                if !stale { IslandBar(state: state) }
+                IslandBar(state: state)
             }
             .frame(maxWidth: .infinity, alignment: .leading).opacity(stale ? 0.55 : 1)
             if !stale { IslandButton(playing: state.playing) }

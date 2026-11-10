@@ -99,11 +99,19 @@ enum TVIsland {
         if drift < 3 || (a.start == nil && b.start == nil) { x.start = nil; y.start = nil; x.end = nil; y.end = nil; x.progress = nil; y.progress = nil }
         return x == y
     }
+    // The real picture of what's on as the Mac reports it (the poster it found, the album), never an app's icon. For a
+    // reading made without the model (the background refresh); the model's islandArt adds what was last flicked.
+    static func art(_ s: TVStatus) -> String? {
+        let a = s.session.flatMap { $0.pkg == mint ? nil : $0.art } ?? s.music?.art
+        return a?.isEmpty == false && a?.contains("/api/tv/icon") != true ? a : nil
+    }
     // `art` is the cover's address when the app knows it; nil keeps the cover already shown for the same title.
     static func sync(_ status: TVStatus, art: String? = nil) async {
-        // One gone stale (the app was closed while it played) is ended rather than left showing old news.
-        for old in shown where sample || (old.content.staleDate ?? .distantFuture) < Date() { await old.end(nil, dismissalPolicy: .immediate) }
+        // The build's sample TV: nothing there is really playing, so nothing stays up.
+        for old in shown where sample { await old.end(nil, dismissalPolicy: .immediate) }
         if sample { return }
+        // One gone stale (the app was closed while it played) is brought up to date below, in place, or taken down if the
+        // TV has stopped: ending it and starting another made the card vanish and come back on every return after 90 s.
         let all = shown, current = all.first
         for extra in all.dropFirst() { await extra.end(nil, dismissalPolicy: .immediate) }
         guard var next = state(status) else {

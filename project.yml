@@ -122,6 +122,9 @@ targets:
         CFBundleURLTypes: [{ CFBundleURLName: tvremoteapp, CFBundleURLSchemes: [tvremoteapp] }]
         CADisableMinimumFrameDurationOnPhone: true
         NSSupportsLiveActivities: true
+        # The Now Playing card's occasional refresh while the app is closed (TVBackground); no push with a free Apple ID.
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [local.macpro.TV.nowplaying]
         NSAppleMusicUsageDescription: Sees the song playing on this iPhone, so you can flick it to the TV and play, pause or skip it from here while it plays there.
         UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
