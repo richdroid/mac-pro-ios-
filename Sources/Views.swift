@@ -15,7 +15,7 @@ struct MacProApp: App {
                 .otaOffer(model)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in
-                    if p == .active { model.start() } else { model.stop() }
+                    if p == .active { Reach.shared.cameForward(); model.start() } else { model.stop() }
                     #if os(iOS)
                     if p == .background { AlertWatch.shared.scheduleRefresh() }
                     #endif

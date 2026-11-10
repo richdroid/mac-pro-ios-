@@ -46,7 +46,10 @@ struct MacProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> MacEntry { MacEntry(date: Date(), state: .sample) }
     func snapshot(for c: WidgetAddress, in context: Context) async -> MacEntry { context.isPreview ? MacEntry(date: Date(), state: .sample) : await load(c) }
     func timeline(for c: WidgetAddress, in context: Context) async -> Timeline<MacEntry> {
-        Timeline(entries: [await load(c)], policy: .after(Date().addingTimeInterval(15 * 60)))
+        let e = await load(c)
+        // Unreachable, it looks again in 2 minutes rather than saying so for a quarter of an hour.
+        if case .unreachable = e.state { return Timeline(entries: [e], policy: .after(Date().addingTimeInterval(120))) }
+        return Timeline(entries: [e], policy: .after(Date().addingTimeInterval(15 * 60)))
     }
     private func load(_ c: WidgetAddress) async -> MacEntry {
         var text = (c.address ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -54,10 +57,15 @@ struct MacProvider: AppIntentTimelineProvider {
         if text.isEmpty { return MacEntry(date: Date(), state: .noAddress) }
         if !text.contains("://") { text = "https://" + text }
         guard let url = URL(string: text + "/api/status") else { return MacEntry(date: Date(), state: .noAddress) }
-        var r = URLRequest(url: url); r.timeoutInterval = 15; r.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
-              let s = try? JSONDecoder().decode(WidgetStatus.self, from: d) else { return MacEntry(date: Date(), state: .unreachable) }
-        return MacEntry(date: Date(), state: .ok(s))
+        var r = URLRequest(url: url); r.timeoutInterval = 8; r.cachePolicy = .reloadIgnoringLocalCacheData
+        // One missed answer isn't the Mac being away (the app's rule, 2026-11-10: unreachable after 8 s of failures): asked
+        // again a few seconds later before the widget says it.
+        for attempt in 0..<3 {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 3_000_000_000) }
+            if let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
+               let s = try? JSONDecoder().decode(WidgetStatus.self, from: d) { return MacEntry(date: Date(), state: .ok(s)) }
+        }
+        return MacEntry(date: Date(), state: .unreachable)
     }
 }
 

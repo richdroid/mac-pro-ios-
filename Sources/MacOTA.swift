@@ -499,6 +499,7 @@ struct VersionHistoryView: View {
     let file: String
     @State private var builds: [BuildNotes]?
     @State private var failed: String?
+    @State private var misses = MissClock()
     // Kept on the phone, so opening it again (or after a relaunch) shows the list from its first frame while the Mac is
     // asked again; never a "Loading…" row that swaps out in front of him.
     @MainActor static var known: [String: [BuildNotes]] = {
@@ -678,9 +679,15 @@ struct VersionHistoryView: View {
         .accessibilityElement(children: .combine)
     }
 
+    // A Mac that doesn't answer is asked again every 2 s, and only said to be unreachable after 8 s of it (MissClock).
     func load() async {
+        while !Task.isCancelled, !(await loadOnce()) { try? await Task.sleep(nanoseconds: 2_000_000_000) }
+    }
+    // True once there's nothing more to ask: the list came, or the Mac has been away long enough to say so.
+    func loadOnce() async -> Bool {
         do {
             let got = try await model.api.history(file)
+            misses.hit()
             failed = nil
             if got != builds { builds = got }
             if got != Self.known[file] {
@@ -689,13 +696,18 @@ struct VersionHistoryView: View {
                 Task.detached(priority: .utility) { try? JSONEncoder().encode(all).write(to: to, options: .atomic) }
             }
         }
-        catch is CancellationError {}
-        catch let e as URLError where e.code == .cancelled {}
+        catch is CancellationError { return true }
+        catch let e as URLError where e.code == .cancelled { return true }
         catch {
             // A list already here stays; with none, say why: no answer at all is the Mac, an answer that isn't the list
             // is the Mac not having it right now.
-            guard builds == nil else { return }
-            failed = error is URLError ? "Can’t reach the Mac" : "The Mac couldn’t read the history"
+            guard builds == nil else { return true }
+            if error is URLError {
+                guard misses.miss() else { return false }
+                failed = "Can’t reach the Mac"
+            } else { failed = "The Mac couldn’t read the history" }
+            return true
         }
+        return true
     }
 }

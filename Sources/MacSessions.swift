@@ -48,6 +48,7 @@ struct SessionTerminal: View {
         _loaded = State(initialValue: kept != nil)
     }
     @State private var message = ""
+    @State private var misses = MissClock()
     @State private var note: String?
     @State private var sends = 0
     @State private var width: CGFloat = 0
@@ -103,8 +104,9 @@ struct SessionTerminal: View {
         }
     }
     func load() async {
-        do { show(try await model.api.termScreen(key)); if note == "Can’t reach the Mac" { note = nil } }
-        catch { if !loaded { note = "Can’t reach the Mac" } }
+        do { show(try await model.api.termScreen(key)); misses.hit(); if note == "Can’t reach the Mac" { note = nil } }
+        // Only after 8 s without an answer (MissClock): one missed screen said it at once.
+        catch { if misses.miss(), !loaded { note = "Can’t reach the Mac" } }
     }
     // One after another, in the order pressed: ↓ then Enter must never reach the Mac as Enter then ↓.
     @State private var queue: Task<Void, Never>?

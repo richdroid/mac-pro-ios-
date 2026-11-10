@@ -81,6 +81,7 @@ struct HistoryView: View {
     @State private var points: [TrendPoint]
     @State private var loaded: Bool
     @State private var failed = false
+    @State private var misses = MissClock()
     init(metric: HistoryMetric) {
         self.metric = metric
         let kept = TrendCache.points[metric.key] ?? []
@@ -271,9 +272,13 @@ struct HistoryView: View {
         }
     }
     func load() async {
-        do { points = try await model.api.trend(metric.key); failed = false; TrendCache.points[metric.key] = points }
+        do { points = try await model.api.trend(metric.key); misses.hit(); failed = false; TrendCache.points[metric.key] = points }
         catch is CancellationError { return }
-        catch { failed = points.isEmpty }
+        catch {
+            // Said only after 8 s without an answer; until then the wait shows as waiting, not as "Collecting".
+            guard misses.miss() else { return }
+            failed = points.isEmpty
+        }
         loaded = true
     }
 }

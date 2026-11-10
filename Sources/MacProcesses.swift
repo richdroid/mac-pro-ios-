@@ -25,6 +25,7 @@ struct ProcessesView: View {
     @State private var sort: ProcessSort
     @State private var report: ProcessReport?
     @State private var failed = false
+    @State private var misses = MissClock()
     @State private var pending: Pending?
     @State private var working: Int?
     @State private var note: String?
@@ -94,9 +95,10 @@ struct ProcessesView: View {
     }
 
     func load() async {
-        do { report = try await model.api.processes(); failed = false }
+        do { report = try await model.api.processes(); misses.hit(); failed = false }
         catch is CancellationError {}
-        catch { failed = report == nil }
+        // Said only after 8 s without an answer; until then it's still connecting.
+        catch { if misses.miss() { failed = report == nil } }
     }
 
     func quit(_ p: Pending) async {

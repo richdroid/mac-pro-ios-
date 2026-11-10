@@ -35,6 +35,10 @@ final class AppModel: ObservableObject {
     @Published var screenOpen = false { didSet { screen.paused = !screenOpen } }
     @Published var signingIn = false
     @Published var status: Status? { didSet { seedStore.set(status?.iosApps); sessionStore.set(status?.claude.sessions ?? []) } }
+    // Can't reach the Mac: said only once it has failed to answer for 8 s straight, and never in the first 6 s back in
+    // front (Tailscale wakes up after the app does), so one missed reading or the bridge restarting never flips the app to
+    // unreachable (Richard, 2026-11-10, of the TV app: "cant reach the mac is tailscale on keeps happening"). An answer
+    // the app couldn't read isn't the Mac being away and never counts. Every view that says it reads this (or Reach).
     @Published var problem: String?
     // The Mac wants its access code. Shown as a row at the top of each tab; the sheet only opens by itself when there's
     // no address at all, so pressing Cancel is respected.
@@ -187,6 +191,12 @@ final class AppModel: ObservableObject {
         ]
     }
     func stop() { loops.forEach { $0.cancel() }; loops = [] }
+    // One missed answer from the Mac: unreachable once they've run 8 s with nothing between.
+    private func missed() {
+        guard Reach.shared.miss(), problem == nil else { return }
+        problem = "Mac Pro is unreachable. It may be restarting, or Tailscale may be off."
+        liveStore.live = nil
+    }
 
     // Tests whether code fetched from the Mac can run here, and tells the Mac what happened.
     func hotProbeOnce() async -> Bool {
@@ -224,10 +234,12 @@ final class AppModel: ObservableObject {
         guard tab == 0, problem == nil, !address.isEmpty else { return }
         // A reading that failed to come back drops the last one, so the tiles fall back to the full status
         // rather than holding an old number over newer ones.
+        // Missed once, the last reading stays: it's dropped only when the Mac counts as unreachable (missed).
         guard let l = try? await api.live() else {
-            if liveStore.live != nil, !Task.isCancelled { liveStore.live = nil }
+            if !Task.isCancelled { missed() }
             return
         }
+        Reach.shared.hit()
         // Not while a page is moving under his finger: a row changing height mid-bounce snaps the page back.
         if parks { heldLive = l; return }
         if liveStore.live != l { SwipeLog.note("live landed"); liveStore.live = l }
@@ -237,6 +249,7 @@ final class AppModel: ObservableObject {
         if address.isEmpty { if !needsSignIn { needsSignIn = true }; return }
         do {
             let data = try await api.statusData()
+            Reach.shared.hit()
             pulse.lastFresh = Date(); pulse.beats &+= 1
             if problem != nil { problem = nil }
             if needsSignIn { needsSignIn = false }
@@ -273,10 +286,12 @@ final class AppModel: ObservableObject {
             lastData = nil
         } catch is CancellationError {
         } catch let e as URLError where e.code == .cancelled {
-        } catch {
-            if problem == nil { problem = "Mac Pro is unreachable. It may be restarting, or Tailscale may be off." }
+        } catch is DecodingError {
+            // The Mac answered with something this build can't read: it's there, and the last status stands.
             lastData = nil
-            liveStore.live = nil
+        } catch {
+            lastData = nil
+            missed()
         }
     }
 
@@ -385,4 +400,31 @@ final class Drafts: ObservableObject {
     static let shared = Drafts()
     @Published var typed = ""
     @Published var macPassword = ""
+}
+
+// Whether the Mac counts as unreachable yet, for the model and for each page that reads from the Mac on its own: a run
+// of failures 8 s long, with nothing answered between, and not in the first 6 s after the app came back to the front.
+@MainActor final class Reach {
+    static let shared = Reach()
+    private var since: Date?
+    private(set) var foregroundAt = Date()
+    func cameForward() { foregroundAt = Date(); since = nil }
+    func hit() { since = nil }
+    // A miss; true once they add up to unreachable.
+    func miss() -> Bool {
+        let now = Date()
+        if since == nil { since = now }
+        return now.timeIntervalSince(since!) >= 8 && now.timeIntervalSince(foregroundAt) >= 6
+    }
+}
+// The same rule for a page's own reading (a history, the processes, a session's screen): its misses, counted from its
+// first, with the app's grace after coming back to the front.
+struct MissClock {
+    private var since: Date?
+    mutating func hit() { since = nil }
+    @MainActor mutating func miss() -> Bool {
+        let now = Date()
+        if since == nil { since = now }
+        return now.timeIntervalSince(since!) >= 8 && now.timeIntervalSince(Reach.shared.foregroundAt) >= 6
+    }
 }
