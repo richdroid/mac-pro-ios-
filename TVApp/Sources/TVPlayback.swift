@@ -752,20 +752,25 @@ struct LoadingRing: View {
         .accessibilityLabel("Loading")
     }
 }
-// The one line under the Remote's picture while a start runs: what the TV is doing now, as the Mac reports each step.
-// Plain words for each, and after a long wait in one step, that it's still at it. Nothing here is a guess: no step, no
-// claim beyond "Sending".
+// The one line under the Remote's picture while a start runs: what the TV is doing, in his terms. Two lines on a plain
+// start ("Sending to the TV…", then "Loading the stream…"), never the name of the app doing the work, and a second try's
+// reason held until that try's player is up, so it can be read. "Still" counts from the step, not from the send.
 enum StartingWords {
-    static func line(_ phase: String?, waited: TimeInterval) -> String {
-        switch phase {
+    static func line(_ s: TVModel.Starting, now: Date) -> String {
+        let inStep = now.timeIntervalSince(s.phaseAt)
+        switch s.phase {
         case "waking": return "Waking the TV…"
-        case "awake", "opening", "sent", "refetch": return "Opening Stremio…"
-        case "player": return waited >= 12 ? "Still loading the stream…" : "Loading the stream…"
-        case "retry": return "That stream didn’t start. Trying the next…"
-        case "again": return "Trying that stream again…"
-        case "covered": return "Bringing Stremio back to the front…"
+        case "player":
+            if inStep >= 8 { return "Still loading…" }
+            return s.tryKind == "retry" ? "Loading the next stream…" : "Loading the stream…"
         case "playing": return "Playing"
-        default: return waited >= 8 ? "Still sending to the TV…" : "Sending to the TV…"
+        default:
+            switch s.tryKind {
+            case "retry": return "That stream didn’t start. Trying the next…"
+            case "again": return "Trying that stream again…"
+            case "covered": return "Something else came up on the TV. Starting again…"
+            default: return "Sending to the TV…"
+            }
         }
     }
 }

@@ -203,6 +203,12 @@ final class TVModel {
         var failed = false
         var played = false
         var token: String?
+        // When the step it's on arrived, so "Still…" counts from that step and not from the send; and what a later try
+        // is (the next stream, the same one again, or after something covered it), kept until that try's player is up
+        // so its line can be read: on its own it lasted 0.3 s before the next step replaced it.
+        var phaseAt = Date()
+        var tryKind: String?
+        var tries = 1
     }
     var starting: Starting?
     // What to reopen for "Choose another", with the streams that didn't start set apart.
@@ -214,6 +220,8 @@ final class TVModel {
     }
     func startPhase(_ p: String) {
         guard starting != nil else { return }
+        if ["retry", "again", "covered"].contains(p) { starting?.tryKind = p; if p == "retry" { starting?.tries += 1 } }
+        if starting?.phase != p { starting?.phaseAt = Date() }
         starting?.phase = p
     }
     // Playing: the light finishes its lap, then the picture is the TV's own again. The yes is felt here.

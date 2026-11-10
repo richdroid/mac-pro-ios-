@@ -1675,7 +1675,7 @@ struct StartingNote: View {
         if let s = model.starting, !s.played {
             if s.failed {
                 Button { model.tick(); model.chooseAnother() } label: {
-                    Text("That stream didn’t start · Choose another").font(.subheadline.weight(.semibold)).padding(.horizontal, 18).frame(height: 44)
+                    Text(s.tries > 1 ? "None of those started · Choose another" : "That stream didn’t start · Choose another").font(.subheadline.weight(.semibold)).padding(.horizontal, 18).frame(height: 44)
                 }
                 .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
                 .transition(.opacity)
@@ -1683,8 +1683,9 @@ struct StartingNote: View {
                 // What the TV is doing, from the first moment, in the Mac's own steps: a start takes 4 to 20 s, and a poster
                 // with a light round it and no word read as nothing happening (Richard, 2026-11-10: "tv app is still slow").
                 TimelineView(.periodic(from: s.since, by: 1)) { ctx in
-                    let words = StartingWords.line(s.phase, waited: ctx.date.timeIntervalSince(s.since))
+                    let words = StartingWords.line(s, now: ctx.date)
                     Text(words).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                        .lineLimit(1).minimumScaleFactor(0.75)
                         .contentTransition(.opacity)
                         .animation(.easeOut(duration: 0.25), value: words)
                 }
