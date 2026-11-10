@@ -261,8 +261,8 @@ struct SessionTerminal: View {
     // the foot up: the box, the keys, then the menu's choices.
     var terminalColumn: some View {
         VStack(spacing: 8) {
-            // Open flat the bar's title is empty and the name heads the screen's pane, as on every pushed page.
-            if panes { PaneHeading(title: session.name) }
+            // The name heads the screen's column (its pane open flat), as on every pushed page.
+            PaneHeading(title: session.name)
             stateChip
             screen.onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("termcol")).minY } action: { screenTop = $0 }
         }
@@ -326,7 +326,7 @@ struct SessionTerminal: View {
         // The system's own Back: on the Duo it lays out at the top of the side strip, along the top open in portrait, and
         // the edge swipe goes with it (Apple's HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the back
         // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
-        .pushedTitle(session.name, panes: panes)
+        .pushedTitle()
         .preferredColorScheme(.dark)
         .sensoryFeedback(trigger: sends) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
         .task {

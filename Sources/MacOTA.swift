@@ -565,17 +565,15 @@ struct VersionHistoryView: View {
         .topEdge()
         // The page's name as large as every tab's, never the small bar title it was (17 pt, under the 20 pt app name in the
         // card below it, beside a 34 pt "Apps" one Back away), and placed as every pushed page's is (pushedTitle).
-        .pushedTitle("Version History", panes: panes)
+        .pushedTitle()
         .task { await load() }
     }
     private func pane(header: Bool, showBuilds: Bool, afterNewest: Bool = false) -> some View {
         ScrollViewReader { proxy in
         List {
-            if panes {
-                // As a tab's paneTitle: at the cards' edge, the same height in both panes so their first cards start level.
-                Section { PaneHeading(title: "Version History", shown: header) }
+            // As a tab's paneTitle: at the cards' edge, the same height in both panes so their first cards start level.
+            Section { PaneHeading(title: "Version History", shown: header) }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
-            }
             if header, let app {
                 Section {
                     // Beside the name when the line fits whole; folded, "Build 11 on this iPhone" wrapped to two lines
@@ -601,7 +599,7 @@ struct VersionHistoryView: View {
                 let here = app.flatMap { Self.hereBuild(Self.phoneBuild($0), in: builds) }
                 Section("What’s New") { entry(newest, here: newest.build == here).place(newest.id) }
             }
-            // The bar already says Version History; the builds follow the app without a heading saying it again.
+            // The page already says Version History; the builds follow the app without a heading saying it again.
             if showBuilds {
             Section {
                 if let builds {

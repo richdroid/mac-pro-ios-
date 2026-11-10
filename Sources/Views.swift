@@ -397,20 +397,21 @@ extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
 }
 #endif
 
-// Every pushed page names itself the same way (Richard, 2026-11-09: the Back and titles were "not up to code" for the Duo).
-// One pane: the system's own large title, so iOS lays out the bar and its Back where the Duo puts them (top of the side
-// strip folded and open flat, the bar along the top open upright) and the name leads the page as each tab's does. Two
-// panes: the bar's title is empty and the left pane's first line is the name (PaneHeading), as the tabs do there, since a
-// large title collapsing as one pane scrolled slid the other (2026-11-06). History and Processes were the small bar title
-// beside Version History's large one, so the name sat in a different place on each page.
+// Every pushed page names itself the way every tab does (Richard, 2026-11-09: the Back and titles were "not up to code"
+// for the Duo): its name is its first line (PaneHeading), large, in one pane or two, and the system's bar holds only its
+// Back, which iOS lays out where the Duo puts it (top of the side strip folded and open flat, the bar along the top open
+// upright). No hand-made item in the bar. The system's large title was tried (CI f074caa): swiping a page back to a tab,
+// whose bar is hidden, the bar shrank away under it and clipped the title's top half for most of the slide, the very
+// "elements compact as u do so" he saw on Version History. A small bar title sat in a different place from the tabs'
+// names and from Version History's. Named in the page, it slides off whole with the page.
 extension View {
-    @ViewBuilder func pushedTitle(_ title: String, panes: Bool) -> some View {
+    @ViewBuilder func pushedTitle() -> some View {
         #if os(iOS)
-        self.navigationTitle(panes ? "" : title)
+        self.navigationTitle("")
             .toolbarVisibility(.visible, for: .navigationBar)
-            .navigationBarTitleDisplayMode(panes ? .inline : .large)
+            .navigationBarTitleDisplayMode(.inline)
         #else
-        self.navigationTitle(panes ? "" : title)
+        self.navigationTitle("")
         #endif
     }
 }

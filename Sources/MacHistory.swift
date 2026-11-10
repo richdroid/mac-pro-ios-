@@ -244,7 +244,8 @@ struct HistoryView: View {
                 }
             } else {
                 ScrollView {
-                    VStack(spacing: 14) { readout.place("readout"); range.place("range"); chart.frame(height: 260).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }.padding(.horizontal, 16).padding(.vertical, 8)
+                    VStack(spacing: 14) { PaneHeading(title: metric.title).place("title"); readout.place("readout"); range.place("range"); chart.frame(height: 260).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
+                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
                 }
                 .scrollsUnder()
                 .keepsPlace("history-\(metric.key)", proxy)
@@ -257,7 +258,7 @@ struct HistoryView: View {
         // The system's own Back: on the Duo it lays out at the top of the side strip, along the top open in portrait, and
         // the edge swipe goes with it (Apple's HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the back
         // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
-        .pushedTitle(metric.title, panes: panes)
+        .pushedTitle()
         .animation(.easeOut(duration: 0.2), value: hours)
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }
         .navigationDestination(item: $model.processes) { ProcessesView(first: $0, model: model) }
