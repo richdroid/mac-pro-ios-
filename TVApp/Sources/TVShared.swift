@@ -284,7 +284,7 @@ enum FlickRequest {
 // A flick without looking: assign it to the Action Button or Control Center. Apple Music goes straight across; anything else opens AirPlay.
 struct FlickToTV: AppIntent {
     static var title: LocalizedStringResource = "Flick to the TV"
-    static var description = IntentDescription("Sends what’s playing on this iPhone to the TV.")
+    static var description = IntentDescription("Sends what’s playing on this phone to the TV.")
     static var openAppWhenRun = true
     @MainActor func perform() async throws -> some IntentResult {
         #if canImport(UIKit)
