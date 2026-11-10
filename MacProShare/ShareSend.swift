@@ -110,6 +110,10 @@ final class ShareModel: ObservableObject {
     let queue = SendQueue(base: { ShareAddress.base })
     // Everything shared has been looked at (and the jobs made), so an empty list means there was nothing to send.
     @Published var started = false
+    // Looks at everything shared, makes a job for each thing that can go, then says it's done looking.
+    func begin(_ items: [NSExtensionItem]) {
+        Task { await ShareItems.jobs(from: items, into: queue); started = true }
+    }
 }
 
 struct ShareSendView: View {

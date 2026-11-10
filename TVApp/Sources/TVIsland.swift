@@ -48,11 +48,26 @@ enum TVIsland {
         guard !st.playing, let since = st.pausedSince else { return false }
         return now.timeIntervalSince(since) >= pausedFor
     }
-    // Stale after 90 s as before, and never later than the moment a pause runs out.
+    // Whether the Mac has said it pushes this card's changes as they happen (its answer to island-state): then the card
+    // is as true as the Mac's own reading, and only goes stale when what it shows has run out.
+    static var pushed = false
+    // Without pushes: stale after 90 s, and never later than the moment a pause runs out. With them: when the film or
+    // song would have ended (two minutes' grace), a quarter of an hour on for something with no length, or as the
+    // pause runs out.
     static func staleDate(_ st: TVIslandAttributes.ContentState) -> Date {
-        let soon = Date().addingTimeInterval(staleAfter)
-        guard !st.playing, let since = st.pausedSince else { return soon }
-        return min(soon, since.addingTimeInterval(pausedFor))
+        if !st.playing, let since = st.pausedSince { return min(pushed ? .distantFuture : Date().addingTimeInterval(staleAfter), since.addingTimeInterval(pausedFor)) }
+        guard pushed else { return Date().addingTimeInterval(staleAfter) }
+        return st.end.map { max($0.addingTimeInterval(120), Date().addingTimeInterval(staleAfter)) } ?? Date().addingTimeInterval(900)
+    }
+    // What the card now shows, handed to the Mac with the cover the phone made for it, so the Mac's pushes can carry the
+    // same cover; a Mac from before this doesn't know the address, and nothing changes.
+    static func tell(_ id: String, _ st: TVIslandAttributes.ContentState) {
+        guard !sample, let d = try? JSONEncoder().encode(st), let j = try? JSONSerialization.jsonObject(with: d) else { return }
+        Task {
+            let a = try? await TVBridge.post("island-state", ["id": id, "state": j], timeout: 10)
+            let live = (a.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })?["live"] as? Bool == true
+            if live != pushed { pushed = live }
+        }
     }
 
     static func state(_ s: TVStatus) -> TVIslandAttributes.ContentState? {
@@ -169,13 +184,15 @@ enum TVIsland {
         if let t = await thumbnail(art) { next.art = t.0; next.artKey = t.1 }
         else if let old = current?.content.state, old.title == next.title { next.art = old.art; next.artKey = old.artKey }
         if let current {
-            if !same(current.content.state, next) || (current.content.staleDate ?? .distantPast) < Date().addingTimeInterval(staleAfter / 2) { await current.update(ActivityContent(state: next, staleDate: staleDate(next))) }
+            let changed = !same(current.content.state, next)
+            if changed || (current.content.staleDate ?? .distantPast) < Date().addingTimeInterval(staleAfter / 2) { await current.update(ActivityContent(state: next, staleDate: staleDate(next))) }
+            if changed { tell(current.id, next) }
         } else if next.playing, ActivityAuthorizationInfo().areActivitiesEnabled {
             let content = ActivityContent(state: next, staleDate: staleDate(next))
             // With a push token the Mac can end it at five minutes paused even with the app closed; a build signed without
             // push (no aps-environment) can't ask for one, and gets the card all the same.
             if let made = (try? Activity.request(attributes: TVIslandAttributes(), content: content, pushType: .token))
-                ?? (try? Activity.request(attributes: TVIslandAttributes(), content: content, pushType: nil)) { listen(made) }
+                ?? (try? Activity.request(attributes: TVIslandAttributes(), content: content, pushType: nil)) { listen(made); tell(made.id, next) }
         }
     }
 

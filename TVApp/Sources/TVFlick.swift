@@ -59,6 +59,9 @@ struct StremioStream: Decodable, Identifiable, Hashable {
     var gb: Double?
     var instant: Bool?
     var lang: String?
+    // From the Mac: a file named as a dub of a title made in English, and one that was sent lately and never played.
+    var dubbed: Bool?
+    var stalled: Bool?
     var id: String { token }
     // "2.1 GB · Ready now". Where it came from is added only to tell apart two rows that would otherwise read the same.
     var size: String? { gb.flatMap { $0 > 0 ? ($0 < 1 ? "\(Int($0 * 1024)) MB" : String(format: "%.1f GB", $0)) : nil } }
@@ -230,6 +233,12 @@ struct FlickScreen: View {
     @State private var liftScale: CGFloat = 1
     // When a lifted row was last put down short of a throw, so the tap that iOS reports with the same release does nothing.
     @State private var settledAt = Date.distantPast
+    // When the row in the hand was lifted: let go where it is within a moment of that, it was a tap that ran long.
+    @State private var liftedAt = Date.distantPast
+    // When the lifted row first left its place under the finger (10 pt), if it has.
+    @State private var movedAt: Date?
+    // Another stream of what's already on, picked on purpose: sent, at the spot he's at.
+    @State private var switching = false
     // A link's page name and picture, as fetched.
     @State private var linkTitle: String?
     @State private var linkArt: String?
@@ -759,11 +768,13 @@ struct FlickScreen: View {
             }
             let shown = streams.filter { streamFilter == "All" || $0.quality == streamFilter }
             // Best is the top one that hasn't already failed to start.
-            let best = streamFilter == "All" ? streams.first { !failedTokens.contains($0.token) } : nil
+            let best = streamFilter == "All" ? streams.first { !failedTokens.contains($0.token) && $0.stalled != true && $0.dubbed != true } : nil
+            // The stream that's on the TV now, when this is its own list: it says so, and a tap on it is the Remote.
+            let onNow = alreadyOnTitle ? PlayedStream.file(playedKey) : nil
             // Rows that would read exactly the same say where each came from.
             let looks = Dictionary(shown.map { ($0.look, 1) }, uniquingKeysWith: +)
             ForEach(Array(shown.enumerated()), id: \.element.id) { i, s in
-                streamRow(s, best: s == best, failed: failedTokens.contains(s.token), twin: (looks[s.look] ?? 0) > 1).transition(arriving(i))
+                streamRow(s, best: s == best, failed: failedTokens.contains(s.token), twin: (looks[s.look] ?? 0) > 1, playing: onNow != nil && onNow == s.description).transition(arriving(i))
             }
         }
         .task(id: episode?.id) { await loadRuntime() }
@@ -822,7 +833,7 @@ struct FlickScreen: View {
     }
     // A stream's row: the pick, by a tap, or lifted (held a moment) and flicked up. Lifted, it rises off the list, follows
     // the finger exactly and swells as it goes up; let go upward it's sent, let go short of that it settles back.
-    func streamRow(_ s: StremioStream, best: Bool, failed: Bool, twin: Bool) -> some View {
+    func streamRow(_ s: StremioStream, best: Bool, failed: Bool, twin: Bool, playing: Bool = false) -> some View {
         let up = liftedID == s.id
         return row(selected: false) {
             // The tap iOS reports with the release of a lifted row that was put back is that put-back, not a pick.
@@ -833,9 +844,11 @@ struct FlickScreen: View {
                 HStack(spacing: 6) {
                     Text(s.name.isEmpty ? s.addon : s.name).font(.subheadline.weight(.bold)).lineLimit(1)
                     // The list comes best first, for this box and what's being watched.
-                    if best { badge("Best") }
-                    // Tried, and the TV couldn't get it going, twice: left in place so the list doesn't jump, but out of reach.
-                    if failed {
+                    if playing { badge("Playing") } else if best { badge("Best") }
+                    // Tried, and the TV couldn't get it going: left in place so the list doesn't jump. One that failed in
+                    // this very sitting is out of reach; one the Mac remembers from the last few days says so and can
+                    // still be picked.
+                    if failed || s.stalled == true {
                         Text("Didn’t start").font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 2).background(.white.opacity(0.14), in: Capsule()).foregroundStyle(.secondary)
                     }
                 }
@@ -875,11 +888,12 @@ struct FlickScreen: View {
     // The hold and the flick, on a row or the card: lifted after a fifth of a second under the finger, moved with it, and
     // let go upward (fast, or far enough) as the pick. Let go any other way it settles back where it was.
     func holdAndThrow(_ id: String, failed: Bool = false, send: @escaping () -> Void) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.2, maximumDistance: 14)
+        LongPressGesture(minimumDuration: 0.3, maximumDistance: 10)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("flick")))
             .onChanged { v in
                 guard !failed, !flown, case .second(true, let d) = v else { return }
-                if liftedID != id { lift.drag = .zero; lift.lean = 0; liftedID = id; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.04 } }
+                if liftedID != id { lift.drag = .zero; lift.lean = 0; liftedID = id; liftedAt = Date(); movedAt = nil; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.04 } }
+                if let d, movedAt == nil, abs(d.translation.width) > 10 || abs(d.translation.height) > 10 { movedAt = Date() }
                 if let d {
                     lift.drag = d.translation
                     lift.lean = max(-6, min(6, Double(d.velocity.width) / 200 + Double(d.translation.width) / 60))
@@ -887,12 +901,32 @@ struct FlickScreen: View {
             }
             .onEnded { v in
                 guard liftedID == id else { return }
-                if case .second(true, let d?) = v, -d.translation.height >= 90 || d.velocity.height <= -500 {
+                if case .second(true, let d?) = v, -d.translation.height >= 90 || d.velocity.height <= -500, Self.meantThrow(liftedAt: liftedAt, movedAt: movedAt) {
                     // The pick, from where the row is now.
                     rects.map[id] = (rects.map[id] ?? .zero).offsetBy(dx: d.translation.width, dy: d.translation.height)
                     send()
+                } else if Self.longTap(v) {
+                    // A press that ran long and was let go where it landed is a tap, and a tap is the pick, however long
+                    // it was held: lifted and put straight back, it did nothing, and a deliberate press read as a dead
+                    // row. Carried off and let go is the way to change his mind, as on any button.
+                    settledAt = Date()
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { liftedID = nil; lift.drag = .zero; lift.lean = 0; liftScale = 1 }
+                    send()
                 } else { settle() }
             }
+    }
+    // Let go without having moved it (10 pt, the system's own slop for a tap): a tap, not a row picked up and put back.
+    static func longTap(_ v: SequenceGesture<LongPressGesture, DragGesture>.Value) -> Bool {
+        guard case .second(true, let d) = v else { return false }
+        guard let d else { return true }
+        return abs(d.translation.width) < 10 && abs(d.translation.height) < 10
+    }
+    // A throw is meant only when the row was in the hand first: still for a beat (80 ms) after it lifted, or carried for
+    // a quarter of a second. A thumb resting on a row and then swiping the list up lifts the row just as the swipe
+    // begins; that's a scroll that came late, and it must never send a stream to the TV.
+    static func meantThrow(liftedAt: Date, movedAt: Date?) -> Bool {
+        guard let movedAt else { return false }
+        return movedAt.timeIntervalSince(liftedAt) >= 0.08 || Date().timeIntervalSince(liftedAt) >= 0.25
     }
     // Let go short of a throw: back to rest, with one soft touch.
     func settle() {
@@ -906,7 +940,13 @@ struct FlickScreen: View {
         guard !flown else { return }
         stream = s; choseOnTV = false
         FlickHaptic.caught()
-        if alreadyOn { toRemoteNow(); return }
+        if alreadyOn {
+            // The stream that's on, or which one is on isn't known: the Remote, nothing sent (ruling 11). Another row
+            // of the same list is a different stream picked on purpose (the dub that was Best, a file that stutters):
+            // that one is sent, and carries on where he is.
+            guard let on = PlayedStream.file(playedKey), on != s.description else { toRemoteNow(); return }
+            switching = true
+        }
         send(from: rects.map[s.id] ?? rects.map["poster"])
     }
     func findStreams(again: Bool = false) async {
@@ -931,7 +971,7 @@ struct FlickScreen: View {
         streamsAt = Date()
         // How long he waited for the list, from the card's press and from this page opening, into the Mac's timing log, so
         // the phone's own share of "the stremio streams take much too long" is measured on his phone (2026-11-07).
-        if !again, openedAt != .distantPast {
+        if !again, openedAt != .distantPast, !leaving {
             let now = Date()
             var e: [String: Any] = ["name": "streams-shown", "at": now.timeIntervalSince1970 * 1000, "sinceOpen": Int(now.timeIntervalSince(openedAt) * 1000), "count": found.count]
             if let p = StreamCache.pressedAt, now.timeIntervalSince(p) < 30 { e["sincePress"] = Int(now.timeIntervalSince(p) * 1000) }
@@ -1273,7 +1313,8 @@ struct FlickScreen: View {
             // so one that won't start is replaced on the Mac without coming back to the phone (§2.5a C8).
             var body: [String: Any] = ["token": stream.token, "imdb": ref.imdb]
             if ref.type == "series", let video = episode?.id ?? ref.video { body["video"] = video }
-            if hasResume && startOver { body["restart"] = true }
+            if switching { body["switch"] = true; if let at = livePosition, at > 30_000 { body["resumeMs"] = at.rounded() } }
+            else if hasResume && startOver { body["restart"] = true }
             // Where he was in it, as a share of its length, so the Mac can make sure it opens there and not at 0:00 (r24:
             // "85 min left" opened at 0:08). Not for a start over.
             else {
@@ -1281,7 +1322,10 @@ struct FlickScreen: View {
                 // rec carries on where he was too.
                 if let p = savedProgress, p > 0.01, p < 0.97 { body["resume"] = (p * 1000).rounded() / 1000 }
             }
-            let spare = streams.filter { $0.token != stream.token && !failedTokens.contains($0.token) }.prefix(2).map(\.token)
+            // What stands in if this one won't start is the nearest thing to what he chose: the same quality, within the
+            // filter he has on, never one that failed or a dub he didn't pick. A 1080p pick is never swapped for a 4K file.
+            let spare = streams.filter { $0.token != stream.token && !failedTokens.contains($0.token) && $0.quality == stream.quality && $0.stalled != true
+                && (stream.dubbed == true || $0.dubbed != true) }.prefix(2).map(\.token)
             if !spare.isEmpty { body["fallbacks"] = Array(spare) }
             return ("play-stream", body)
         }
@@ -1314,18 +1358,25 @@ struct FlickScreen: View {
             answered = true
             return
         }
-        let order = order
         let early = order.0 == "play-stream"
         if model.starting != nil { model.starting?.token = stream?.token }
         FlickClock.current.mark("request")
         written = true
         var resent = false
+        // How many times the line to the Mac dropped under this send, and whether the Mac had begun to answer by then.
+        var dropped = 0
+        let heard = HeardBox()
         while true {
+            // Made afresh each time round: after a list fetched again, the pick has a new token.
+            var order = order
+            // The line dropped after the Mac had the send (the app put away, the tailnet blinking): asked how it went,
+            // which joins that start or hears its answer again. Nothing is started twice.
+            if dropped > 0, heard.yes { order.1["again"] = true }
             do {
                 let answer: Data
                 if early {
                     answer = try await TVBridge.playStream(order.1, opened: { _ in
-                        answered = true; FlickClock.current.mark("first-byte")
+                        answered = true; heard.yes = true; FlickClock.current.mark("first-byte")
                     }, phase: { p in took(p) })
                 } else {
                     answer = try await TVBridge.post(order.0, order.1, timeout: 60)
@@ -1342,6 +1393,12 @@ struct FlickScreen: View {
                         FlickClock.current.mark("failed"); FlickClock.current.finished(); return
                     }
                 }
+                // The stream that really played (a fallback, when his pick wouldn't start) is the one this page holds from
+                // here on, and the one remembered as what's on.
+                if early, let j = try? JSONSerialization.jsonObject(with: answer) as? [String: Any] {
+                    if let t = j["token"] as? String, t != stream?.token, let played = streams.first(where: { $0.token == t }) { stream = played }
+                    if let s = stream { PlayedStream.set(playedKey, s.description) }
+                }
                 target.sent?()
                 remember()
                 flicksDone += 1
@@ -1351,6 +1408,8 @@ struct FlickScreen: View {
                 return
             } catch {
                 if Task.isCancelled || cancelled { return }
+                // Called off on the TV's side (his own Home or another app, a newer send): not a failure, nothing to say.
+                if error is CancellationError { if ownsStart { model.clearStart() }; FlickClock.current.mark("called-off"); FlickClock.current.finished(); return }
                 // Gone: the list is fetched afresh and the same file (or the next best) sent once more, silently.
                 if error is TVBridge.Gone, !resent, early, let ref = item.stremioRef {
                     resent = true
@@ -1360,8 +1419,19 @@ struct FlickScreen: View {
                     stream = streams.first { $0.description == was?.description && !failedTokens.contains($0.token) } ?? streams.first { !failedTokens.contains($0.token) }
                     if stream != nil { continue }
                 }
+                // The line itself dropped, not the start: the TV may well be playing it (2026-11-10: the Remote said
+                // "didn't start" over an episode that was on). Twice more, a moment apart, before that's believed.
+                if early, error is URLError, dropped < 2 {
+                    dropped += 1
+                    FlickClock.current.mark("line-lost")
+                    try? await Task.sleep(nanoseconds: UInt64(dropped) * 700_000_000)
+                    if Task.isCancelled || cancelled { return }
+                    continue
+                }
                 FlickClock.current.mark("failed"); FlickClock.current.finished()
                 if let s = stream { failedTokens.insert(s.token) }
+                // And every fallback the Mac tried after it, so "Choose another" doesn't offer what failed a moment ago.
+                if error is TVBridge.DidNotStart { failedTokens.formUnion(TriedStreams.last); TriedStreams.last = [] }
                 // On the Remote: the poster dims, with one way on (Choose another). A plain send that failed is said once.
                 if ownsStart { if video { model.startFailed(tokens: Array(failedTokens)) } else { model.clearStart(); model.say("The TV didn’t get that") } }
                 else if !video { model.say("The TV didn’t get that") }
@@ -1388,12 +1458,25 @@ struct FlickScreen: View {
     // start over.
     var alreadyOn: Bool {
         guard source == .stremio, target.send == nil, let ref = item.stremioRef, model.videoIsCurrent,
-              let s = model.status?.session, s.pkg == "com.stremio.one", !(nearEnd && startOver && stream != nil) else { return false }
+              let s = model.status?.session, s.pkg == "com.stremio.one", !(nearEnd && startOver && stream != nil), !switching else { return false }
         if ref.type == "series" {
             guard let v = episode?.id ?? ref.video else { return false }
             return model.isOn(imdb: ref.imdb, title: item.title, episode: v)
         }
         return model.isOn(imdb: ref.imdb, title: item.title, episode: nil) && isThisFilm(s)
+    }
+    // This title (at this episode) is what the TV has on, whichever stream of it: for marking the row that's playing.
+    var alreadyOnTitle: Bool {
+        guard source == .stremio, target.send == nil, let ref = item.stremioRef, model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one" else { return false }
+        if ref.type == "series" { guard let v = episode?.id ?? ref.video else { return false }; return model.isOn(imdb: ref.imdb, title: item.title, episode: v) }
+        return model.isOn(imdb: ref.imdb, title: item.title, episode: nil) && isThisFilm(s)
+    }
+    var playedKey: String { (item.stremioRef?.imdb ?? "") + "/" + (episode?.id ?? item.stremioRef?.video ?? "") }
+    // Where the TV is in what's on, in ms, carried on from its last reading while it plays.
+    var livePosition: Double? {
+        guard let s = model.status?.session, let p = s.position else { return nil }
+        let since = s.playing ? (s.sampledAt.map { max(0, Date().timeIntervalSince1970 * 1000 - $0) } ?? 0) : 0
+        return p + since
     }
     // Whether a Stremio player is the film just sent, by its title.
     func isThisFilm(_ p: TVStatus.Session) -> Bool {
@@ -1415,6 +1498,15 @@ struct FlickScreen: View {
     }
 }
 
+// Which file of a title was last started from this phone, by title and episode: so its row can say "Playing", and a pick
+// of another row is known to be another stream.
+@MainActor enum PlayedStream {
+    private static var files: [String: String] = [:]
+    static func file(_ key: String) -> String? { files[key] }
+    static func set(_ key: String, _ file: String) { if files.count > 40 { files.removeAll() }; files[key] = file }
+}
+// Whether the Mac had begun to answer a send, kept by the send itself: it runs on after the flick screen has closed.
+@MainActor final class HeardBox { var yes = false }
 // Where the rows and the card sit, kept without redrawing anything while the list scrolls.
 final class RectBox { var map: [String: CGRect] = [:] }
 

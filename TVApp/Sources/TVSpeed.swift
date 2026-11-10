@@ -101,6 +101,8 @@ final class FlickClock {
     }
 }
 
+// The streams the Mac tried under the last send that failed (the pick and its fallbacks).
+@MainActor enum TriedStreams { static var last: [String] = [] }
 extension TVBridge {
     // The start of a stream, followed as the Mac reports it: a line as the TV wakes, as Stremio opens, as its player
     // comes up and as the film plays, then the answer. A Mac from before this answers once, at the end, in the old way,
@@ -130,7 +132,10 @@ extension TVBridge {
             if let p = j["phase"] as? String { await phase(p); continue }
             if j["ok"] as? Bool == true { return d }
             if j["error"] != nil || j["failed"] != nil {
-                if j["failed"] as? String == "start" { throw DidNotStart() }
+                // Every stream the Mac tried, kept for the flick to set apart; and a start called off (his own Home, another
+                // app, a newer send) is not a failure.
+                if j["failed"] as? String == "start" { await MainActor.run { TriedStreams.last = (j["tried"] as? [String]) ?? [] }; throw DidNotStart() }
+                if j["error"] as? String == "Stopped" { throw CancellationError() }
                 if j["retry"] as? Bool == true { throw Slow() }
                 if j["failed"] as? String == "gone" || j["gone"] as? Bool == true { throw Gone() }
                 throw TVIntentError.noAnswer

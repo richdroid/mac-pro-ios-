@@ -203,6 +203,12 @@ final class TVModel {
         var failed = false
         var played = false
         var token: String?
+        // When the step it's on arrived, so "Still…" counts from that step and not from the send; and what a later try
+        // is (the next stream, the same one again, or after something covered it), kept until that try's player is up
+        // so its line can be read: on its own it lasted 0.3 s before the next step replaced it.
+        var phaseAt = Date()
+        var tryKind: String?
+        var tries = 1
     }
     var starting: Starting?
     // What to reopen for "Choose another", with the streams that didn't start set apart.
@@ -214,6 +220,8 @@ final class TVModel {
     }
     func startPhase(_ p: String) {
         guard starting != nil else { return }
+        if ["retry", "again", "covered"].contains(p) { starting?.tryKind = p; if p == "retry" { starting?.tries += 1 } }
+        if starting?.phase != p { starting?.phaseAt = Date() }
         starting?.phase = p
     }
     // Playing: the light finishes its lap, then the picture is the TV's own again. The yes is felt here.
@@ -338,6 +346,17 @@ final class TVModel {
         // mini player shows only when Mint is what's playing (ruling 6, 2026-11-05).
         guard let m = nowMusic, !videoIsCurrent, starting == nil else { return false }
         return m.playing || status?.app == "com.codex.musicwebtv"
+    }
+    // The app a tile's press has asked the TV to open, until the TV says which is in front (or six seconds).
+    private(set) var openingApp: (pkg: String, at: Date)?
+    var frontApp: String? { openingApp?.pkg ?? status?.app }
+    func opening(_ pkg: String) {
+        let at = Date()
+        openingApp = (pkg, at)
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if let self, let o = self.openingApp, o.at == at { self.openingApp = nil }
+        }
     }
     var toast: String?
     var filmsNote: String? = "Loading your films…"
@@ -544,11 +563,40 @@ final class TVModel {
         if heldStatus != nil { heldStatus = nil; SwipeLog.note("held status landed") } else if !unchanged, s != status { SwipeLog.note("status landed") }
         publish(s, data: d)
     }
+    // A reading that only says the clock has run on as it was already running: the same thing playing (or paused) at
+    // the spot the last reading put it by now, give or take a second and a half. Every page works the spot out from
+    // the reading's time, so it shows nothing new, and published it redrew every view that reads the status once a
+    // second for as long as anything played.
+    static func onlyTheClock(_ old: TVStatus, _ new: TVStatus) -> Bool {
+        var a = old, b = new
+        func runsOn(_ playing: Bool, _ p0: Double?, _ t0: Double?, _ p1: Double?, _ t1: Double?) -> Bool {
+            guard let p0, let p1 else { return p0 == nil && p1 == nil }
+            guard playing else { return abs(p1 - p0) < 1 }
+            guard let t0, let t1 else { return false }
+            return abs(p1 - (p0 + (t1 - t0))) < 1500
+        }
+        if let x = a.session, let y = b.session, x.playing == y.playing, runsOn(x.playing, x.position, x.sampledAt, y.position, y.sampledAt) {
+            b.session?.position = x.position; b.session?.sampledAt = x.sampledAt
+        }
+        if let x = a.music, let y = b.music, x.playing == y.playing, runsOn(x.playing, x.position, x.sampledAt, y.position, y.sampledAt) {
+            a.music = y
+            // Everything else about the song must match too.
+            if x.title != y.title || x.artist != y.artist || x.album != y.album || x.art != y.art || x.duration != y.duration { return false }
+        }
+        return a == b
+    }
     private func publish(_ s: TVStatus, data d: Data) {
         let unchanged = d == lastStatusBytes && status != nil
         lastStatusBytes = d
+        if !unchanged, s != status, !staleStatus, starting == nil, playHeld == nil, let old = status, Self.onlyTheClock(old, s) {
+            // Nothing to show; the checks below still read this reading's own times.
+            settlePlayHold(s)
+            if openingApp != nil, s.app == openingApp?.pkg { openingApp = nil }
+            return
+        }
         if !unchanged && s != status {
             status = s
+            if openingApp != nil, s.app == openingApp?.pkg { openingApp = nil }
             // Every app's banner fetched once, as soon as the list first comes, so the Apps tab and the Remote's tiles
             // never wait on one.
             if !bannersWarm, let apps = s.apps, !apps.isEmpty {

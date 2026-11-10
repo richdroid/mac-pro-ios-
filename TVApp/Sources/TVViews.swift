@@ -1675,15 +1675,19 @@ struct StartingNote: View {
         if let s = model.starting, !s.played {
             if s.failed {
                 Button { model.tick(); model.chooseAnother() } label: {
-                    Text("That stream didn’t start · Choose another").font(.subheadline.weight(.semibold)).padding(.horizontal, 18).frame(height: 44)
+                    Text(s.tries > 1 ? "None of those started · Choose another" : "That stream didn’t start · Choose another").font(.subheadline.weight(.semibold)).padding(.horizontal, 18).frame(height: 44)
                 }
                 .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
                 .transition(.opacity)
             } else {
+                // What the TV is doing, from the first moment, in the Mac's own steps: a start takes 4 to 20 s, and a poster
+                // with a light round it and no word read as nothing happening (Richard, 2026-11-10: "tv app is still slow").
                 TimelineView(.periodic(from: s.since, by: 1)) { ctx in
-                    Text("Still starting").font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-                        .opacity(ctx.date.timeIntervalSince(s.since) >= 8 ? 1 : 0)
-                        .animation(.easeOut(duration: 0.3), value: ctx.date.timeIntervalSince(s.since) >= 8)
+                    let words = StartingWords.line(s, now: ctx.date)
+                    Text(words).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                        .lineLimit(1).minimumScaleFactor(0.75)
+                        .contentTransition(.opacity)
+                        .animation(.easeOut(duration: 0.25), value: words)
                 }
                 .frame(height: 18)
             }
@@ -1908,8 +1912,10 @@ struct Banner: View {
     var browses = false
     // Its width where a row fits its tiles to the room (the Remote's tiles, three across); the launcher's own otherwise.
     var width: CGFloat = TVLook.bannerSize.width
-    var current: Bool { model.status?.app == app.pkg }
-    func open() { model.tick(); model.post("open", ["pkg": app.pkg]) }
+    // The press shows at once: the ring goes to the tile pressed and stays until the TV says which app is in front
+    // (it took the open's round trip, 0.8 s and the next reading, about two seconds, with nothing on the tile to say
+    // the press had landed).
+    func open() { model.tick(); model.opening(app.pkg); model.post("open", ["pkg": app.pkg]) }
     var body: some View {
         Button {
             // An app with something to choose from opens that here; the rest go straight to the TV.
@@ -1936,12 +1942,23 @@ struct Banner: View {
             }
             .frame(width: width, height: width * TVLook.bannerSize.height / TVLook.bannerSize.width)
             .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
-            .overlay {
-                if current { RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2.5) }
-            }
+            .overlay { FrontRing(pkg: app.pkg) }
         }
-        .buttonStyle(PressCard()).accessibilityLabel(app.name).accessibilityAddTraits(current ? .isSelected : [])
+        .buttonStyle(PressCard()).accessibilityLabel(app.name)
         .contextMenu { if browses { Button("Open on TV", systemImage: "tv") { open() } } }
+    }
+}
+// The ring round the app in front on the TV. A view of its own, so the TV's status changing redraws the rings, not
+// every banner and its picture.
+private struct FrontRing: View {
+    @Environment(TVModel.self) var model
+    let pkg: String
+    var body: some View {
+        let on = model.frontApp == pkg
+        RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2.5)
+            .opacity(on ? 1 : 0)
+            .animation(.easeOut(duration: 0.15), value: on)
+            .accessibilityHidden(!on).accessibilityLabel("In front on the TV")
     }
 }
 // A banner drawn here, for an app whose own is missing or came out blank: its brand's colour, its mark where it has a
@@ -2767,6 +2784,9 @@ struct DiscoverColumn: View {
     @State private var built: [MediaRow]?
     var rows: [MediaRow] { built ?? computeRows() }
     func computeRows() -> [MediaRow] {
+        // What a search found is shown as found, under its own name, however few: regrouped like the shelves, one show
+        // found came out as "More to watch".
+        if !store.query.trimmingCharacters(in: .whitespaces).isEmpty { return store.rows }
         func key(_ i: MediaItem) -> String { i.stremioRef?.imdb ?? i.id }
         let mine = Set((continuing?.items ?? []).map(key))
         let kept = store.rows.filter { $0.title != Self.continueTitle }.compactMap { r -> MediaRow? in

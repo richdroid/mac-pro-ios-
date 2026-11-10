@@ -556,6 +556,14 @@ final class ChumbyModel: ObservableObject {
         let id = pending[i].id
         Task { await send(id) }
     }
+    // Let a change that didn't get through go (Richard, 2026-11-10: the alarm update note "should be dismissable"). The
+    // control already shows what the Chumby really holds, so dropping the change leaves nothing out of step.
+    func dismiss(_ mark: String) {
+        tick()
+        pending.removeAll { $0.change.mark == mark }
+        withAnimation(.snappy) { marks[mark] = nil }
+        relay()
+    }
     private func send(_ id: UUID) async {
         guard let p = pending.first(where: { $0.id == id }) else { return }
         do {

@@ -44,6 +44,8 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryTV.app
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          date
           rm -f /tmp/tv-hitches.log
           node ci/mock-chumby.js &
           sleep 2
@@ -59,9 +61,11 @@ jobs:
               xcrun simctl terminate "$DEVICE" local.macpro.GalleryTV || true
             done
           fi
+          date
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
+          date
           if has island; then
             # And the real one, where the simulator will show it: the app up on a show playing (its "island" pose lets
             # the card start against the build's stand-in Mac), then left for Settings (the small island), the island
@@ -69,8 +73,8 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/real -tab 2 -pose island
             sleep 12
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-islandreal-app.png
-            xcrun simctl launch "$DEVICE" com.apple.Preferences
-            sleep 5
+            xcrun simctl launch "$DEVICE" com.apple.mobilesafari
+            sleep 6
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-islandreal-compact.png
             $D "$DEVICE" touch 0.5 0.035 1.2 || echo "island hold failed"
             sleep 2
@@ -80,8 +84,8 @@ jobs:
             sleep 3
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-islandreal-lock.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
-            xcrun simctl terminate "$DEVICE" com.apple.Preferences || true
-            xcrun simctl spawn "$DEVICE" log show --last 2m --predicate 'process == "TV" OR subsystem CONTAINS "activitykit"' --style compact 2>/dev/null | grep -i -E "activit|island" | tail -40 > dist/tv-islandreal.log
+            xcrun simctl terminate "$DEVICE" com.apple.mobilesafari || true
+            date
           fi
           tourfilm() {
             local name=$1 display=$2

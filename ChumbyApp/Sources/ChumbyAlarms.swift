@@ -32,6 +32,14 @@ struct MarkNote: View {
                     Text(head).fontWeight(.semibold).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
                     Text("·").foregroundStyle(.secondary)
                     Button("Retry") { model.retry(mark) }.buttonStyle(.borderless).fontWeight(.semibold).foregroundStyle(.tint)
+                    Spacer(minLength: 8)
+                    // Or let it go: the control beside it already shows what the Chumby holds.
+                    Button { model.dismiss(mark) } label: {
+                        Image(systemName: "xmark.circle.fill").font(.body).foregroundStyle(.secondary)
+                            .frame(minWidth: 44, minHeight: 32, alignment: .trailing).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Dismiss")
                 }
                 Text(why).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
             }
