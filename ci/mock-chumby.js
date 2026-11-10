@@ -200,7 +200,7 @@ http.createServer((q, s) => {
   // Frames the app took longer than 34 ms to draw, in any scene, kept for the build (r21: stalls as numbers).
   if (q.method === 'POST' && /\/api\/tv\/hitch$/.test(q.url)) {
     let body = ''; q.on('data', c => body += c);
-    q.on('end', () => { try { for (const h of JSON.parse(body).hitches || []) require('fs').appendFileSync('/tmp/tv-hitches.log', `${new Date(h.at).toISOString()} ${h.note ? 'ASSERT ' + h.note : h.ms + ' ms'}\n`); } catch {} s.setHeader('content-type', 'application/json'); s.end('{"ok":true}'); });
+    q.on('end', () => { try { for (const h of JSON.parse(body).hitches || []) require('fs').appendFileSync('/tmp/tv-hitches.log', `${new Date(h.at).toISOString()} ${h.note ? 'ASSERT ' + h.note : h.mark ? 'MARK ' + h.mark : h.ms + ' ms'}\n`); } catch {} s.setHeader('content-type', 'application/json'); s.end('{"ok":true}'); });
     return;
   }
   if (tvPose(q, s)) return;

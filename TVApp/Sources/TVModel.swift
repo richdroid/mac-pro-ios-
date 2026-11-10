@@ -27,6 +27,20 @@ final class TVModel {
     #endif
     // Where the Remote's picture of the TV is on the display, while it's there. Not published: only read, never drawn.
     @ObservationIgnored var mirrorSlot: CGRect?
+    // Where a pick last landed on the Remote, by the screen's size and what kind of thing it was, kept between launches:
+    // the launch's first pick aims there at once, the Remote not yet built to say where its picture is (it waited on
+    // that, up to a second), and follows the real place as soon as it's known.
+    @ObservationIgnored private var landedSlots: [String: [Double]] = UserDefaults.standard.dictionary(forKey: "mirrorSlots") as? [String: [Double]] ?? [:]
+    func rememberedSlot(_ key: String) -> CGRect? {
+        guard let v = landedSlots[key], v.count == 4, v[2] > 20 else { return nil }
+        return CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
+    }
+    func rememberSlot(_ r: CGRect, _ key: String) {
+        let v = [r.minX, r.minY, r.width, r.height].map { Double($0) }
+        guard r.width > 20, landedSlots[key] != v else { return }
+        landedSlots[key] = v
+        UserDefaults.standard.set(landedSlots, forKey: "mirrorSlots")
+    }
     @ObservationIgnored private var mirrorViewers = 0
     // The poster standing in on the Remote's picture for a film just flicked, until the TV's own word catches up.
     private(set) var standInArt: String?

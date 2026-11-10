@@ -224,8 +224,9 @@ struct FlickScreen: View {
     @State private var rects = RectBox()
     // The row (or the card) held and in the hand: it follows the finger, and let go upward it's the pick.
     @State private var liftedID: String?
-    @State private var drag = CGSize.zero
-    @State private var lean = 0.0
+    // Where the finger has it and how it leans, in a box only the lifted thing's own look reads (LiftedLook): as state of
+    // this screen, every point the finger moved redrew the whole streams page under the row in the hand.
+    @State private var lift = LiftBox()
     @State private var liftScale: CGFloat = 1
     // When a lifted row was last put down short of a throw, so the tap that iOS reports with the same release does nothing.
     @State private var settledAt = Date.distantPast
@@ -823,8 +824,6 @@ struct FlickScreen: View {
     // the finger exactly and swells as it goes up; let go upward it's sent, let go short of that it settles back.
     func streamRow(_ s: StremioStream, best: Bool, failed: Bool, twin: Bool) -> some View {
         let up = liftedID == s.id
-        let rise = up ? max(0, -drag.height) : 0
-        let grow: CGFloat = up ? liftScale + 0.1 * min(1, rise / 260) : 1
         return row(selected: false) {
             // The tap iOS reports with the release of a lifted row that was put back is that put-back, not a pick.
             guard liftedID == nil, Date().timeIntervalSince(settledAt) > 0.3 else { return }
@@ -865,11 +864,7 @@ struct FlickScreen: View {
         // Where it rests, measured outside everything that moves it.
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map[s.id] = $0 }
         // Lifted: up off the list on a bigger, lower shadow, lit round its edge more and more as it rises.
-        .shadow(color: .black.opacity(up ? 0.5 : 0), radius: up ? 24 : 0, y: up ? 16 : 0)
-        .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(TVLook.accent.opacity(up ? 0.8 * min(1, rise / 200) : 0), lineWidth: 1.5) }
-        .scaleEffect(grow)
-        .rotationEffect(.degrees(up ? lean : 0))
-        .offset(up ? drag : .zero)
+        .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16)))
         .zIndex(up ? 1 : 0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: up)
         // Held a moment, it's in the hand: from then the finger moves it, and the list under it holds still. The row's
@@ -884,10 +879,10 @@ struct FlickScreen: View {
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("flick")))
             .onChanged { v in
                 guard !failed, !flown, case .second(true, let d) = v else { return }
-                if liftedID != id { liftedID = id; drag = .zero; lean = 0; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.04 } }
+                if liftedID != id { lift.drag = .zero; lift.lean = 0; liftedID = id; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.04 } }
                 if let d {
-                    drag = d.translation
-                    lean = max(-6, min(6, Double(d.velocity.width) / 200 + Double(d.translation.width) / 60))
+                    lift.drag = d.translation
+                    lift.lean = max(-6, min(6, Double(d.velocity.width) / 200 + Double(d.translation.width) / 60))
                 }
             }
             .onEnded { v in
@@ -903,7 +898,7 @@ struct FlickScreen: View {
     func settle() {
         settledAt = Date()
         FlickHaptic.settle()
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.6)) { liftedID = nil; drag = .zero; lean = 0; liftScale = 1 }
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.6)) { liftedID = nil; lift.drag = .zero; lift.lean = 0; liftScale = 1 }
     }
     // A stream picked: felt at once, and sent. What's already on the TV is never sent again; the pick goes straight to
     // the Remote (Richard, 2026-11-05: "the episode restarted i think because of the app").
@@ -950,19 +945,13 @@ struct FlickScreen: View {
         let wide = g.size.width > g.size.height
         let width: CGFloat = wide ? 150 : 136
         let up = liftedID == "card"
-        let rise = up ? max(0, -drag.height) : 0
-        let grow: CGFloat = up ? liftScale + 0.12 * min(1, rise / 260) : 1
         return VStack(spacing: 22) {
             Spacer(minLength: 0)
             hint("Tap it, or flick it up to the TV.")
                 .opacity(up ? 0 : 1)
                 .animation(.easeOut(duration: 0.15), value: up)
             MediaCard(item: shown, source: source, width: width, image: target.image)
-                .shadow(color: .black.opacity(up ? 0.55 : 0.45), radius: up ? 30 : 18, y: up ? 22 : 10)
-                .overlay { RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(TVLook.accent.opacity(up ? 0.8 * min(1, rise / 200) : 0), lineWidth: 1.5) }
-                .scaleEffect(grow)
-                .rotationEffect(.degrees(up ? lean : 0))
-                .offset(up ? drag : .zero)
+                .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.12, corner: 6, rest: (0.45, 18, 10), raised: (0.55, 30, 22)))
                 .animation(.spring(response: 0.3, dampingFraction: 0.7), value: up)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map["card"] = $0 }
                 // In the hand from the first touch: nothing under it scrolls, so no hold is needed.
@@ -970,8 +959,8 @@ struct FlickScreen: View {
                     .onChanged { d in
                         guard !flown else { return }
                         if liftedID != "card" { liftedID = "card"; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.05 } }
-                        drag = d.translation
-                        lean = max(-8, min(8, Double(d.velocity.width) / 180 + Double(d.translation.width) / 50))
+                        lift.drag = d.translation
+                        lift.lean = max(-8, min(8, Double(d.velocity.width) / 180 + Double(d.translation.width) / 50))
                     }
                     .onEnded { d in
                         guard !flown else { return }
@@ -1032,8 +1021,8 @@ struct FlickScreen: View {
             try? await Task.sleep(nanoseconds: 800_000_000)
             liftedID = "card"; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.05 }
             try? await Task.sleep(nanoseconds: 350_000_000)
-            for i in 1...24 { drag = CGSize(width: 10 * sin(CGFloat(i) / 24 * .pi), height: -9 * CGFloat(i)); try? await Task.sleep(nanoseconds: 16_000_000) }
-            rects.map["card"] = (rects.map["card"] ?? .zero).offsetBy(dx: drag.width, dy: drag.height)
+            for i in 1...24 { lift.drag = CGSize(width: 10 * sin(CGFloat(i) / 24 * .pi), height: -9 * CGFloat(i)); try? await Task.sleep(nanoseconds: 16_000_000) }
+            rects.map["card"] = (rects.map["card"] ?? .zero).offsetBy(dx: lift.drag.width, dy: lift.drag.height)
             FlickHaptic.caught(); send(from: rects.map["card"])
             return
         }
@@ -1044,16 +1033,16 @@ struct FlickScreen: View {
         liftedID = first.id; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.04 }
         try? await Task.sleep(nanoseconds: 400_000_000)
         if pose == "flick-putback" {
-            for i in 1...30 { drag = CGSize(width: 0, height: 3 * CGFloat(i)); try? await Task.sleep(nanoseconds: 16_000_000) }
+            for i in 1...30 { lift.drag = CGSize(width: 0, height: 3 * CGFloat(i)); try? await Task.sleep(nanoseconds: 16_000_000) }
             settle()
             return
         }
         for i in 1...24 {
-            drag = CGSize(width: 12 * sin(CGFloat(i) / 24 * .pi), height: -8 * CGFloat(i))
-            lean = Double(cos(CGFloat(i) / 24 * .pi)) * 3
+            lift.drag = CGSize(width: 12 * sin(CGFloat(i) / 24 * .pi), height: -8 * CGFloat(i))
+            lift.lean = Double(cos(CGFloat(i) / 24 * .pi)) * 3
             try? await Task.sleep(nanoseconds: 16_000_000)
         }
-        rects.map[first.id] = (rects.map[first.id] ?? .zero).offsetBy(dx: drag.width, dy: drag.height)
+        rects.map[first.id] = (rects.map[first.id] ?? .zero).offsetBy(dx: lift.drag.width, dy: lift.drag.height)
         pick(first)
     }
     // The Remote's tab was brought up under this screen for a pick that didn't go on to it: the page he picked from comes
@@ -1139,6 +1128,13 @@ struct FlickScreen: View {
             // The same place on two reads in a row, so the move aims at where the picture settles, not at its first layout.
             // Known already from the last visit to the Remote, the move starts at once; the loop below follows any late change.
             var slot: CGRect? = model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil }, seen: CGRect?
+            // The launch's first pick, the Remote not built yet: where a pick like this one last landed on this screen,
+            // so the move starts as soon as any other, and follows the real place below once the Remote gives it. Only
+            // with neither (the first pick ever in this posture) is the Remote waited for.
+            let size = (held ?? flickFrame).size
+            let slotKey = "\(Int(size.width))x\(Int(size.height))\(video ? "v" : "")"
+            var remembered = false
+            if slot == nil, let m = model.rememberedSlot(slotKey) { slot = m; remembered = true }
             for _ in 0..<(slot == nil ? 40 : 0) {
                 if let s = model.mirrorSlot, s.width > 20 {
                     if let p = seen, abs(p.minX - s.minX) + abs(p.minY - s.minY) + abs(p.width - s.width) < 0.5 { slot = s; break }
@@ -1154,6 +1150,11 @@ struct FlickScreen: View {
             remoteSlot = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
             // A frame, so the Remote's first layout is done before anything moves.
             try? await Task.sleep(nanoseconds: 17_000_000)
+            if remembered {
+                // The Remote, built in that frame, may already say where its picture really is.
+                if let live = model.mirrorSlot, live.width > 20 { remoteSlot = live.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y) }
+                FlickClock.current.mark("aim-remembered")
+            }
             FlickClock.current.mark("move")
             model.remoteMoveAt = Date()
             // The page dissolves over the move's first half, the Remote's keys coming up through it; the picture travels on
@@ -1185,6 +1186,7 @@ struct FlickScreen: View {
             // over 0.15 s while this one, opaque, still sits exactly on it; then this one goes in one frame, the Remote's
             // fully under it, so nothing is drawn twice and nothing fades in sight.
             FlickClock.current.remoteLanded()
+            if let live = model.mirrorSlot, live.width > 20 { model.rememberSlot(live, slotKey) }
             // The pages he picked from may show again (this screen is about to go), and the Remote stays drawn.
             var landed = Transaction(); landed.disablesAnimations = true
             withTransaction(landed) { landedOnRemote = true }
@@ -1415,6 +1417,35 @@ struct FlickScreen: View {
 
 // Where the rows and the card sit, kept without redrawing anything while the list scrolls.
 final class RectBox { var map: [String: CGRect] = [:] }
+
+// Where the finger has the lifted row (or the card), and its lean. Observed, and read only in LiftedLook's own body and
+// only by the one that's up, so a finger moving redraws that one row and nothing else on the page.
+@Observable final class LiftBox {
+    var drag = CGSize.zero
+    var lean = 0.0
+}
+// A row or the card in the hand: its shadow, the light round its edge as it rises, its swell, its lean and its place
+// under the finger. At rest it reads nothing from the box.
+struct LiftedLook: ViewModifier {
+    let lift: LiftBox
+    let up: Bool
+    let scale: CGFloat
+    // How much more it grows on its way up, and its corner, for the lit edge.
+    let swell: CGFloat, corner: CGFloat
+    // The shadow at rest and lifted: opacity, radius, drop.
+    let rest: (Double, CGFloat, CGFloat), raised: (Double, CGFloat, CGFloat)
+    func body(content: Content) -> some View {
+        let drag = up ? lift.drag : .zero
+        let rise = max(0, -drag.height)
+        let shade = up ? raised : rest
+        content
+            .shadow(color: .black.opacity(shade.0), radius: shade.1, y: shade.2)
+            .overlay { RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(TVLook.accent.opacity(up ? 0.8 * min(1, rise / 200) : 0), lineWidth: 1.5) }
+            .scaleEffect(up ? scale + swell * min(1, rise / 260) : 1)
+            .rotationEffect(.degrees(up ? lift.lean : 0))
+            .offset(drag)
+    }
+}
 
 // The picked thing's picture on its way into the Remote's picture of the TV, from one number: 0 at the row (or card) it
 // was picked from, 1 on the Remote. The poster fills the row's shape at the start and opens into the Remote's own look

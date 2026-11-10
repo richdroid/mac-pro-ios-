@@ -195,7 +195,10 @@ struct RootView: View {
                 // Last, so it sits at the foot of the side bar, as in the other apps.
                 Tab(value: 9) { TVSettingsTab(retaps: resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
             }
-            .onChange(of: model.tab) { _, t in
+            .onChange(of: model.tab) { was, t in
+                #if os(iOS)
+                HitchLog.shared.note("tab \(was)→\(t)")
+                #endif
                 UserDefaults.standard.set(t, forKey: "tab")
                 // Opening Playing shows what's on now, not what was on at the last look.
                 if t == 2 { Task { await model.load() } }
@@ -382,7 +385,12 @@ struct Page<C: View>: View {
         // A list opened from the tab closes first; once on the tab's own page, it goes to the top.
         .onChange(of: retaps) { _, _ in if path.isEmpty { top += 1 } else { path = NavigationPath() } }
         // A page opened from a search leaves the keyboard behind.
-        .onChange(of: path) { _, _ in Keyboard.dismiss() }
+        .onChange(of: path) { was, now in
+            Keyboard.dismiss()
+            #if os(iOS)
+            HitchLog.shared.note("\(title) \(now.count > was.count ? "push" : "pop") \(was.count)→\(now.count)")
+            #endif
+        }
     }
 }
 
@@ -649,6 +657,9 @@ struct TVSettingsTab: View {
             // The same title as every other tab: large, folded or open.
             .navigationBarTitleDisplayMode(.large)
         }
+        #if os(iOS)
+        .onChange(of: path) { was, now in HitchLog.shared.note("Settings \(now.count > was.count ? "push" : "pop") \(was.count)→\(now.count)") }
+        #endif
     }
 }
 
@@ -2019,6 +2030,9 @@ struct AppsTab: View {
     }
     var body: some View {
         content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).modifier(TypingHidesTabBar()) }
+            #if os(iOS)
+            .onChange(of: model.browsing) { _, b in HitchLog.shared.note(b == nil ? "Apps pop app page" : "Apps push app page") }
+            #endif
     }
     @ViewBuilder var content: some View {
         if all.isEmpty {
@@ -2028,11 +2042,7 @@ struct AppsTab: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
                         SendBar().padding(.horizontal, 20)
-                        if let query { EverywhereSearch(text: query) } else {
-                            row("Watch", watch)
-                            row("Listen", listen)
-                            row("Tools and settings", tools)
-                        }
+                        if let query { EverywhereSearch(text: query) } else { row("Watch", watch) }
                     }
                     .padding(.vertical, 12)
                     // The rows give way to the results with the same fade as folded: open, they vanished and the results'
@@ -2042,16 +2052,16 @@ struct AppsTab: View {
                 .scrollDismissesKeyboard(.immediately)
                 .backToTop(posed: false)
             } right: {
-                // Unfolded, the other side picks up where you left off, ready to flick.
+                // Unfolded, the apps go on across the fold: what he watches with the search on the left, what he listens
+                // with and the TV's tools on the right. Only apps on this tab (Richard's choice, 2026-11-10): Continue
+                // watching is Watch's and Recently played is Playing's.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
-                        Shelf(source: .stremio, title: "Continue watching")
-                        Shelf(source: .mint, title: "Recently played")
+                        row("Listen", listen)
+                        row("Tools and settings", tools)
                     }
-                    .scrollTargetLayout()
                     .padding(.vertical, 12)
                 }
-                .restsOnRows()
                 .backToTop()
             }
         } else {
@@ -2060,9 +2070,7 @@ struct AppsTab: View {
                     SendBar().padding(.horizontal, 20)
                     if let query { EverywhereSearch(text: query) } else {
                         row("Watch", watch)
-                        Shelf(source: .stremio, title: "Continue watching")
                         row("Listen", listen)
-                        Shelf(source: .mint, title: "Recently played")
                         row("Tools and settings", tools)
                     }
                 }
@@ -2118,7 +2126,8 @@ private struct SpinRing: View {
     }
 }
 
-// One row from an app's own page, on the Apps tab: where you left off in Stremio, what you last played in Mint.
+// One row from an app's own home, by its name, with its place kept while it comes: what was last played in Mint, on
+// Playing (on the Apps tab until 2026-11-10, with Stremio's Continue watching, which is Watch's).
 struct Shelf: View {
     @Environment(TVModel.self) var model
     @ObservedObject var store: BrowseStore
@@ -2490,6 +2499,13 @@ struct PlayingTab: View {
             Button { model.tick(); model.post("music-now") } label: { Label("Show the song on the TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
         }
     }
+    // Mint's Recently played lives here, off the Apps tab (Richard's choice, 2026-11-10): first under what's on when that's
+    // music or nothing, and after what's next and what was flicked under a film. Its place is kept while Mint's home
+    // comes, and closed if Mint couldn't be asked or has no such row, so no gap is left for it.
+    static let recentTitle = "Recently played"
+    var showsRecent: Bool {
+        mintHome.rows.isEmpty ? !mintHome.failed : mintHome.rows.contains { $0.title == Self.recentTitle && !$0.items.isEmpty }
+    }
     var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
     // Shuffle only means something for these; a song or an album plays as it is.
     var shuffles: Bool { ["artist", "playlist", "station"].contains(kind) }
@@ -2518,6 +2534,9 @@ struct PlayingTab: View {
     var send: some View {
         VStack(alignment: .leading, spacing: 18) {
             FlickCard()
+            // What he last played, first under what's on: a cover tapped has it playing again, before any typing. The row
+            // runs to the page's edges, as rows do, out of this stack's 20 pt.
+            if showsRecent { Shelf(source: .mint, title: Self.recentTitle).padding(.horizontal, -20) }
             VStack(alignment: .leading, spacing: 10) {
                 RowTitle("Play on TV").padding(.bottom, -4)
                 Picker("Kind", selection: $kind) {
@@ -2541,17 +2560,10 @@ struct PlayingTab: View {
                 .animation(.easeOut(duration: 0.2), value: pending)
             }
             if results.isEmpty {
-                ForEach(Array(mintHome.rows.prefix(3))) { row in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(row.title).font(.headline)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 10) {
-                                ForEach(row.items) { item in FlickCardButton(item: item, source: .mint, width: 112) }
-                            }
-                        }
-                        .rowEdge()
-                    }
-                    .transition(.opacity)
+                // Mint's other rows, in the same shape as Recently played above the field: one kind of shelf on the page.
+                ForEach(Array(mintHome.rows.filter { $0.title != Self.recentTitle && !$0.items.isEmpty }.prefix(2))) { row in
+                    Shelf(source: .mint, title: row.title).padding(.horizontal, -20)
+                        .transition(.opacity)
                 }
             }
             ForEach(results) { row in
@@ -2570,6 +2582,9 @@ struct PlayingTab: View {
         }
         .task { if mintHome.rows.isEmpty { await mintHome.load() } }
         .settledAnimation(.spring(response: 0.4, dampingFraction: 0.85), value: results.map(\.id))
+        // Mint's rows arriving, and Recently played's place closing if Mint has none, fade rather than cut.
+        .settledAnimation(.easeOut(duration: 0.25), value: mintHome.rows.map(\.title))
+        .settledAnimation(.easeOut(duration: 0.25), value: showsRecent)
         .onChange(of: query) { _, _ in
             if pending { pendingWait?.cancel(); pending = false }
             guard trimmed.count >= 2 else { return }
@@ -2605,6 +2620,8 @@ struct PlayingTab: View {
                 }
             }
             RecentRow()
+            // Music is still a tap away with a film on: the search isn't offered here, his last albums are.
+            if showsRecent { Shelf(source: .mint, title: Self.recentTitle) }
             // Only ever shows when the phone itself is playing a song, and keeps AirPlay in reach for Siri. Last, so its
             // empty place never pushes the episodes down below the picture's top line (r21).
             FlickCard().padding(.horizontal, 20)
@@ -2733,8 +2750,10 @@ struct DiscoverColumn: View {
     @ObservedObject private var home = BrowseStore.shared(.stremio)
     @FocusState private var searchFocused: Bool
     static let continueTitle = "Continue watching"
-    // Films and shows together, so it sits above the switch and belongs to neither. Only ever the row on Apps and Playing,
-    // so there's one list of where he is everywhere: nothing until that one is in, never a different list that then swaps.
+    // Films and shows together, so it sits above the switch and belongs to neither: the page's first row, and its home
+    // since it left the Apps tab (Richard's choice, 2026-11-10). Only ever Stremio's own row, the one under a film on
+    // Playing and on Stremio's page, so there's one list of where he is everywhere: nothing until that one is in, never a
+    // different list that then swaps.
     var continuing: MediaRow? {
         guard store.query.isEmpty else { return nil }
         return home.rows.first { $0.title == Self.continueTitle && !$0.items.isEmpty }

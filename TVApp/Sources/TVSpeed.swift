@@ -173,6 +173,23 @@ final class HitchLog: NSObject {
         print("ASSERT \(note)")
         Task { _ = try? await TVBridge.post("hitch", ["hitches": [["ms": 0, "at": Date().timeIntervalSince1970 * 1000, "note": note]]], timeout: 5) }
     }
+    // What he just did (a tab changed, a page pushed or popped), written between the slow frames with its own time, so the
+    // log says which move each stall belongs to. Only in the build's films run with -swipeLog YES; never on the phone.
+    func note(_ text: String) {
+        guard link != nil, SwipeLog.on else { return }
+        hitches.append(["ms": 0, "at": Date().timeIntervalSince1970 * 1000, "mark": text])
+        SwipeLog.note(text)
+        flushSoon()
+    }
+    private func flushSoon() {
+        guard flushing == nil else { return }
+        flushing = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard let self else { return }
+            let batch = self.hitches; self.hitches = []; self.flushing = nil
+            if !batch.isEmpty { _ = try? await TVBridge.post("hitch", ["hitches": batch], timeout: 5) }
+        }
+    }
     @objc private func tick(_ l: CADisplayLink) {
         defer { last = l.timestamp }
         guard last > 0 else { return }
@@ -180,14 +197,7 @@ final class HitchLog: NSObject {
         guard gap > 34 else { return }
         hitches.append(["ms": Int(gap), "at": Date().timeIntervalSince1970 * 1000])
         print("HITCH \(Int(gap)) ms")
-        if flushing == nil {
-            flushing = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                guard let self else { return }
-                let batch = self.hitches; self.hitches = []; self.flushing = nil
-                if !batch.isEmpty { _ = try? await TVBridge.post("hitch", ["hitches": batch], timeout: 5) }
-            }
-        }
+        flushSoon()
     }
 }
 #endif

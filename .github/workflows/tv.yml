@@ -45,6 +45,7 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
           xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          rm -f /tmp/tv-hitches.log
           node ci/mock-chumby.js &
           sleep 2
           M=http://127.0.0.1:9002
@@ -91,7 +92,10 @@ jobs:
             # card thrown from the Remote (tv-flicklink).
             curl -s $M/fnormal/reset > /dev/null; shot flick-stage$x $d 10 $M/fnormal -tab 1 -pose flick-stage
             local P
-            for P in "flick flick-starting 1" "flicktap flick-tap 1" "flicklink flick-link 0"; do
+            # tv-flicktapwarm is the same tap with the Remote already built (launched on it): the later picks of a launch,
+            # to set beside tv-flick and tv-flicktap, which launch on Apps and so are each a launch's first pick (the
+            # posture's first film with no landing remembered, the ones after it aiming at the remembered place).
+            for P in "flick flick-starting 1" "flicktap flick-tap 1" "flicktapwarm flick-tap 0" "flicklink flick-link 0"; do
               set -- $P
               curl -s $M/fnormal/reset > /dev/null
               xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-$1$x.mp4 > /dev/null 2>&1 & REC=$!
@@ -137,13 +141,35 @@ jobs:
             local D=/tmp/dh/.build/release/devicehubctl
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            # With the swipe log on: each page's push and pop, and what it read as it slid, in the app's own times.
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address -swipeLog YES "$@"
             sleep $wait
             $D "$DEVICE" drag 0.01 0.5 0.7 0.5 1.5 || echo "back drag failed"
             sleep 2.5
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/tv-$name-swipe.log || true
+            if [ "$(stat -f %z dist/tv-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
+          }
+          # Every tab in turn, twice, on the scene whose readings change every two seconds, filmed: going to a tab and
+          # coming back to it must show the same page, nothing drawing in, fading late or settling in front of him (the
+          # "settled" rule: a change made while a tab was away must not animate as he arrives). The slow frames of the
+          # tour, each tab change marked between them, are kept beside the film (tv-NAME-hitches.log).
+          tourfilm() {
+            local name=$1 display=$2
+            local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES
+            # 2.5 s, then twelve tabs 1.6 s apart.
+            sleep 25
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            sleep 2
+            tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-$name-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-$name-hitches.log
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/tv-$name-swipe.log || true
             if [ "$(stat -f %z dist/tv-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
           }
           # The flick by a real finger, filmed: the streams page at rest, then one real touch on the first stream row (where
@@ -179,7 +205,7 @@ jobs:
           # Open portrait first.
           poses 3 -portrait
           # Positions are fractions of the screenshot (0 to 1), not points: points failed every drag (ca86a09).
-          # Watch (tab 3) and the Stremio and Continue watching pages, the long ones; Apps for its view-aligned right pane.
+          # Watch (tab 3) and the Stremio and Continue watching pages, the long ones; Apps, which is only apps now.
           swipefilm fling3-portrait 3 0.5 0.8 0.25 $M -tab 3
           swipefilm flingbrowse-portrait 3 0.5 0.8 0.25 $M -tab 1 -pose browse
           swipefilm flingrow-portrait 3 0.5 0.8 0.25 $M -tab 1 -pose stremiorow
@@ -193,9 +219,17 @@ jobs:
           backfilm back-row-portrait 3 12 $M -tab 1 -pose stremiorow
           # A stream picked by a real touch, open upright.
           curl -s $M/fnormal/reset > /dev/null; flickfilm flickreal-portrait 3 $M/fnormal
+          # The tab tour, in the posture he holds.
+          tourfilm tour-portrait 3
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -open
+          # The same pages swiped off open flat, where each is two panes: the split must hold while the page slides
+          # (the TV's stacks register with NavTransit since 156f333; never filmed before).
+          backfilm back-details-open 3 13 $M -tab 1 -pose details
+          backfilm back-browse-open 3 9 $M -tab 1 -pose browse
+          backfilm back-row-open 3 12 $M -tab 1 -pose stremiorow
+          tourfilm tour-open 3
           # Folded, the outer display, last.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1 || true; sleep 3
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
@@ -267,6 +301,7 @@ jobs:
           posturefilm posture-watch "portrait:1 open:6 drag:2 drag:2 landscape:6 portrait:6 partial:6 closed:6" $M -tab 3
           swipefilm fling3 1 0.5 0.8 0.25 $M -tab 3
           swipefilm flingbrowse 1 0.5 0.8 0.25 $M -tab 1 -pose browse
+          tourfilm tour 1
           # Folded, Apps fits the screen and can't be pulled; Playing can, and its player follows the song's playing and pausing.
           swipefilm flinglive 1 0.5 0.8 0.25 $M/live -tab 2
           # And folded: the same pages swiped off by the outer display's left edge.
@@ -285,6 +320,8 @@ jobs:
           kill -INT $REC; wait $REC
           xcrun simctl terminate "$DEVICE" local.macpro.TV || true
           if [ "$(stat -f %z dist/tv-mirror.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film mirror empty"; fi
+          # Every frame over 34 ms the app reported in any pose, with the marks and failed checks between them.
+          cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || echo "no hitches reported" > dist/tv-hitches.log
           ls dist
       - name: Publish
         if: always()
