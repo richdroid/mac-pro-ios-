@@ -1278,6 +1278,8 @@ struct FlickScreen: View {
             // 0.32 s clock of its own, a hard throw landed with the card still tipped and a soft one lay flat long before
             // it arrived.
             .modifier(Tilt(amount: becoming))
+            // The impact is the frame the card is drawn at the TV (its own spring's completion ran 300–400 ms late).
+            .modifier(Arrival(amount: becoming, at: 0.99) { arrivedAtTV() })
             .scaleEffect(size)
             .scaleEffect(liftScale)
             // At the impact the TV's own screen takes over in the same place: no fade.
@@ -1544,8 +1546,8 @@ struct FlickScreen: View {
             // the same ground with the same light), and the bar and the line beneath arrive as a fade rather than a
             // pop, which is what an unanimated swap of all three was (tv19 tv-flick-portrait, 16.47 → 16.63 s, the bar
             // and line there in one frame).
-            withAnimation(.easeOut(duration: 0.2)) { model.flickHandoff = false }
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            withAnimation(.easeOut(duration: 0.15)) { model.flickHandoff = false }
+            try? await Task.sleep(nanoseconds: 150_000_000)
             // Then this screen's picture goes in one frame, the Remote's now fully under it: nothing is drawn twice.
             var swap = Transaction(); swap.disablesAnimations = true
             withTransaction(swap) { onRemote = true; screenOut = true }
@@ -1703,7 +1705,8 @@ struct FlickScreen: View {
         // flick arriving in a fifth of a second and a lob, or a card carried most of the way and let go, in two fifths.
         // One 0.32 s for every throw (§2.5a C4) read as the same canned path whatever the hand did.
         let way = max(1, from - to), speed = max(0, -velocity.height)
-        let flightTime = min(0.40, max(0.20, way / max(speed, 1)))
+        // Capped at 0.32: at 0.40 a soft release crept its last few points for a third of a second (tv20).
+        let flightTime = min(0.32, max(0.20, way / max(speed, 1)))
         answered = false; written = false; caught = false
         if target.image == nil, let u = screenURL ?? URL(string: item.art) {
             heldImage = ImageStore.shared.cached(u)
@@ -1734,8 +1737,9 @@ struct FlickScreen: View {
         flight = Task { await start() }
     }
     // The card reaches the TV: the hit, felt and seen, then the second tick; and at 600 ms on into the Remote.
+    // Called by the first frame drawn at the TV (Arrival) and again by the spring's completion: the second is nothing.
     func arrivedAtTV() {
-        guard flown, !cancelled, !returning else { return }
+        guard flown, !cancelled, !returning, !landed else { return }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { landed = true }
         FlickClock.current.mark("impact")
@@ -1745,6 +1749,10 @@ struct FlickScreen: View {
             await Task.yield()
             impacts += 1
             withAnimation(.easeOut(duration: 0.2)) { sending = true; caught = true }
+            // The Remote's keys come up now, under the opaque stage where nothing of it shows: drawn for the first time
+            // as the move began, their glass took the main thread for the move's first frames and the picture ran on
+            // black (tv20 tv-flickreal-portrait, 26.82–26.99 s). By the move they are already there.
+            model.remoteMoveAt = Date()
             try? await Task.sleep(nanoseconds: 110_000_000)
             guard !cancelled else { return }
             FlickHaptic.caught()
@@ -2010,6 +2018,21 @@ private struct MorphFrame: ViewModifier, Animatable {
             .frame(width: max(0, card.width * (1 - a) + tv.width * a / s), height: max(0, card.height * (1 - a) + tv.height * a / s))
             .clipShape(RoundedRectangle(cornerRadius: max(0, cardRadius * (1 - a) + tvRadius * a / s), style: .continuous))
             .opacity(Becoming.picture(amount))
+    }
+}
+// The catch, from the flight itself: the first frame the card is drawn within a hundredth of the way of the TV is the
+// impact. The spring's own completion came 300–400 ms after the eye saw the card home (tv20 tv-flickreal-portrait: in the
+// TV at 26.10 s, `landed` at 26.49), the last fraction of a critically damped spring being a creep too slow to see; so
+// the picture sat dead in the TV with no ring. Fired from the interpolated value, on the main queue a tick later, never
+// from inside a body.
+private struct Arrival: ViewModifier, Animatable {
+    var amount: CGFloat
+    let at: CGFloat
+    let fire: @MainActor () -> Void
+    var animatableData: CGFloat { get { amount } set { amount = newValue } }
+    func body(content: Content) -> some View {
+        if amount >= at { let f = fire; DispatchQueue.main.async { f() } }
+        return content
     }
 }
 // The card tipping away into the throw (12° at the middle of the way) and lying flat again as it lands in the screen,

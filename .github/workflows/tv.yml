@@ -147,7 +147,9 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $address -tab 1 -pose flick-stage
             sleep 13
             $D "$DEVICE" drag 0.5 0.85 0.5 0.35 0.15 || echo "flick drag failed"
-            sleep 6
+            # Device Hub delivered the tv20 drag about ten seconds after it was asked for (the throw at 26 s, the stage up
+            # from 10 s), and the folded film ended before any throw: room for that, so the film always holds the throw.
+            sleep 16
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
