@@ -1648,20 +1648,32 @@ struct GestureClassifier {
 // Launchpad and the desktop. A finger that lands a moment late still counts, until the hand has really moved. Pure:
 // fingers, positions and movement in, scrolls and swipes out, so the build can run scripted hands through it.
 struct MultiFingerClassifier {
-    enum Out: Equatable { case scroll(CGSize, ScrollStep), swipe(MacSwipe), glide(CGPoint) }
+    enum Out: Equatable { case scroll(CGSize, ScrollStep), swipe(MacSwipe), glide(CGPoint), pinch }
     enum Mode: Equatable { case none, scroll, edge(back: Bool), three, four }
+    // Two fingers are a scroll or a pinch, decided by their first few points and held until they lift, as on a MacBook:
+    // no zoom mid-scroll, no scroll mid-pinch, never both (Richard, 2026-11-10: "touchpad behavior is still fucked
+    // particularly as it relates to scrolling vs pinching screen"; both ran at once, whichever passed its own bar).
+    enum Two: Equatable { case undecided, scroll, pinch }
     private(set) var mode = Mode.none
     private(set) var fingers = 0
+    private(set) var two = Two.undecided
     private var travel = CGPoint.zero
     private var fired = false
     private var startSpread: CGFloat = 0
+    private var twoSpread: CGFloat = 0
     private var axis = 0                 // 0 not yet, 1 sideways, 2 up and down, 3 both
     private(set) var scrolling = false
     // Whether the left edge goes back (only while smooth scrolling can't carry the swipe between pages itself).
     var edgeBack = false
     static let edge: CGFloat = 22
+    var pinchLocked: Bool { two == .pinch }
 
     mutating func began() { mode = .none; fingers = 0; travel = .zero; fired = false; axis = 0; scrolling = false }
+    // A new hand on the glass: scroll or pinch is open again. Kept apart from began(), because a pinch can be settled by
+    // the pinch alone before the fingers' middle has moved far enough for a pan to begin.
+    mutating func newHand() { two = .undecided; twoSpread = 0 }
+    // The pinch itself saw the fingers part or close before any scroll was decided.
+    mutating func lockPinch() { if two == .undecided { two = .pinch } }
     // `count` is real fingers (less a resting thumb); `touches` all of them; `spread` their mean distance from their centre.
     mutating func changed(count: Int, touches: Int, at: CGPoint, width: CGFloat, delta: CGSize, spread: CGFloat, pinching: Bool) -> [Out] {
         travel.x += delta.width; travel.y += delta.height
@@ -1709,7 +1721,19 @@ struct MultiFingerClassifier {
     private mutating func step(_ d: CGSize, touches: Int, spread: CGFloat, pinching: Bool, into out: inout [Out]) {
         switch mode {
         case .scroll:
-            guard !pinching else { return }
+            var d = d
+            if two == .undecided {
+                // Each finger's own way: a pinch moves them apart or together (the spread) while their middle stays; a
+                // scroll moves the middle while the spread stays. Whichever shows first decides, from about 8 pt.
+                if twoSpread <= 0 { twoSpread = spread }
+                let moved = hypot(travel.x, travel.y), spreadMoved = abs(spread - twoSpread)
+                if spreadMoved >= 6, spreadMoved > moved * 0.75 { two = .pinch; out.append(.pinch); return }
+                guard moved >= 8 else { return }
+                two = .scroll
+                // The points it took to decide aren't lost: the scroll begins with all of them.
+                d = CGSize(width: travel.x, height: travel.y)
+            }
+            guard two == .scroll else { return }
             if axis == 0, hypot(travel.x, travel.y) > 10 {
                 axis = abs(travel.x) > abs(travel.y) * 1.7 ? 1 : abs(travel.y) > abs(travel.x) * 1.7 ? 2 : 3
             }
@@ -1852,6 +1876,20 @@ enum ScreenTrace {
         HandScript(name: "right-edge-in", hands: strokes(10, count: 2, d: CGSize(width: -9, height: 0), at: CGPoint(x: 438, y: 125))) { o in
             (o == ["swipe notifications"], "two fingers in from the right edge: Notification Centre, exactly once, no scroll")
         },
+        // Richard, 2026-11-10: scrolling and pinching got mixed up. A scroll whose fingers drift apart stays a scroll, a
+        // pinch whose fingers drift sideways stays a pinch, and neither turns into the other halfway.
+        HandScript(name: "scroll-fingers-drifting-apart", hands: strokes(14, count: 2, d: CGSize(width: 0, height: -7), spread: { 60 + CGFloat($0) * 0.9 })) { o in
+            let ok = o.first?.hasPrefix("scroll began") == true && o.last?.hasPrefix("scroll ended") == true && count(o, "pinch") == 0
+                && count(o, "scroll changed") >= 11
+            return (ok, "two fingers moving up while slowly parting: a scroll from start to end, never a zoom")
+        },
+        HandScript(name: "pinch-drifting-sideways", hands: strokes(14, count: 2, d: CGSize(width: 1.2, height: 0.4), spread: { 60 + CGFloat($0) * 3 })) { o in
+            (o == ["pinch"], "two fingers spreading while drifting sideways: a zoom from start to end, no scroll at all")
+        },
+        HandScript(name: "pinch-then-move-together", hands: strokes(4, count: 2, d: .zero, spread: { 60 + CGFloat($0) * 4 })
+                   + strokes(10, count: 2, from: 0.07, d: CGSize(width: 0, height: -9), spread: { _ in 72 })) { o in
+            (o == ["pinch"], "a pinch that turns into fingers moving together stays a pinch until they lift")
+        },
         HandScript(name: "resting-thumb-and-finger", hands: strokes(12, count: 1, d: CGSize(width: 5, height: -3), touches: 2)) { o in
             (o.isEmpty, "a resting thumb plus one moving finger is the pointer, never a scroll or a swipe")
         },
@@ -1861,6 +1899,7 @@ enum ScreenTrace {
         case .scroll(let d, let step): return String(format: "scroll \(step == .began ? "began" : step == .ended ? "ended" : "changed") %.1f %.1f", d.width, d.height)
         case .swipe(let s): return "swipe \(s)"
         case .glide(let v): return String(format: "glide %.0f %.0f", v.x, v.y)
+        case .pinch: return "pinch"
         }
     }
     static func runHands() -> [String] {
@@ -2135,6 +2174,7 @@ struct TouchSurface: UIViewRepresentable {
         multi.minimumNumberOfTouches = 2; multi.maximumNumberOfTouches = 5
         let pinch = UIPinchGestureRecognizer(target: c, action: #selector(Coordinator.pinch(_:)))
         multi.delegate = c; pinch.delegate = c
+        c.multiG = multi; c.pinchG = pinch
         // On the trackpad a lift goes straight to the one-finger reading, not held back while these decide.
         if mode == .trackpad { multi.delaysTouchesEnded = false; pinch.delaysTouchesEnded = false }
         recognizers += [multi, pinch]
@@ -2253,7 +2293,11 @@ struct TouchSurface: UIViewRepresentable {
         // The two-to-five-finger rules live in MultiFingerClassifier, pure, so the build can run them; this feeds it.
         private var multiC = MultiFingerClassifier()
         private var pinching = false
-        private var pinchAmount: CGFloat = 0
+        // The pinch's scale when it was decided, so the zoom starts from the fingers as they were then.
+        private var pinchBase: CGFloat = 1
+        weak var multiG: UIGestureRecognizer?
+        weak var pinchG: UIGestureRecognizer?
+        static func active(_ g: UIGestureRecognizer?) -> Bool { g?.state == .began || g?.state == .changed }
 
         private func spread(_ g: UIGestureRecognizer) -> CGFloat {
             let n = g.numberOfTouches
@@ -2271,7 +2315,12 @@ struct TouchSurface: UIViewRepresentable {
             multiC.edgeBack = parent.edgeBack
             switch g.state {
             case .began, .changed:
-                if g.state == .began { stopGlide(); multiC.began() }
+                if g.state == .began {
+                    stopGlide()
+                    // A new hand unless its pinch is already under way (that pinch stays a pinch).
+                    if !Self.active(pinchG) { multiC.newHand() }
+                    multiC.began()
+                }
                 let t = g.translation(in: g.view)
                 g.setTranslation(.zero, in: g.view)
                 apply(multiC.changed(count: count(g), touches: g.numberOfTouches, at: g.location(in: g.view), width: g.view?.bounds.width ?? 0,
@@ -2287,6 +2336,7 @@ struct TouchSurface: UIViewRepresentable {
                 case .scroll(let d, let step): parent.onScroll(d, step)
                 case .swipe(let s): parent.onSwipe(s)
                 case .glide(let v): glide(v)
+                case .pinch: stopGlide()
                 }
             }
         }
@@ -2323,21 +2373,22 @@ struct TouchSurface: UIViewRepresentable {
             let at = g.location(in: g.view)
             // Three or more fingers are a gesture of their own, never a zoom.
             if g.numberOfTouches > 2 || multiC.fingers >= 3 {
-                if pinching { pinching = false; parent.onPinch(.ended, g.scale, at) }
+                if pinching { pinching = false; parent.onPinch(.ended, g.scale / max(pinchBase, 0.01), at) }
                 return
             }
+            // Zooms only once the two fingers' first points have made this a pinch (MultiFingerClassifier.two), and from
+            // the scale it had then, so the zoom starts where the fingers are, without a jump; a scroll never zooms.
             switch g.state {
-            case .began: pinchAmount = 0; parent.onPinch(.began, 1, at)
-            case .changed:
-                // Fingers spreading apart are a pinch, not a scroll.
-                pinchAmount = max(pinchAmount, abs(g.scale - 1))
-                if pinchAmount >= 0.08 {
-                    if !pinching { pinching = true; stopGlide() }
-                    parent.onPinch(.changed, g.scale, at)
-                }
+            case .began, .changed:
+                if g.state == .began, !Self.active(multiG) { multiC.newHand() }
+                // Before the fingers' middle has moved enough for a scroll to start, a clear parting or closing is a pinch.
+                if multiC.two == .undecided, !Self.active(multiG), abs(g.scale - 1) >= 0.08 { multiC.lockPinch() }
+                guard multiC.pinchLocked else { return }
+                if !pinching { pinching = true; pinchBase = g.scale; stopGlide(); parent.onPinch(.began, 1, at) }
+                parent.onPinch(.changed, g.scale / max(pinchBase, 0.01), at)
             case .ended, .cancelled, .failed:
-                pinching = false; pinchAmount = 0
-                parent.onPinch(.ended, g.scale, at)
+                if pinching { parent.onPinch(.ended, g.scale / max(pinchBase, 0.01), at) }
+                pinching = false; pinchBase = 1
             default: break
             }
         }
