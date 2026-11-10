@@ -1,0 +1,118 @@
+name: TV quick checks
+# A short run for the TV app's work in progress, pushed to the tv-quick branch (never main): the Now Playing card in
+# every state (the gallery's drawing of it, and the real island and Lock Screen card where the simulator will show
+# them), and the tab tour with its slow-frame log, in minutes rather than the full run's hour and a half. Published to
+# the tv-quick release.
+on:
+  push:
+    branches: [tv-quick]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tv-quick
+  cancel-in-progress: true
+jobs:
+  quick:
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          for APP in TV GalleryTV; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+          done
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 35
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryTV.app
+          rm -f /tmp/tv-hitches.log
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          WHAT=$(cat ci/tv-quick.txt 2>/dev/null)
+          has() { case " $WHAT " in *" $1 "*) return 0;; esac; return 1; }
+          if has island; then
+            # The card as the gallery draws it, each state in the frame iOS gives it.
+            for P in island island-open1 island-open2 island-lock0 island-lock1; do
+              xcrun simctl launch "$DEVICE" local.macpro.GalleryTV -page $P
+              sleep 6
+              xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-$P.png
+              xcrun simctl terminate "$DEVICE" local.macpro.GalleryTV || true
+            done
+          fi
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          if has island; then
+            # And the real one, where the simulator will show it: the app up on a show playing (its "island" pose lets
+            # the card start against the build's stand-in Mac), then left for Settings (the small island), the island
+            # held (opened), and the cover sheet pulled down (the Lock Screen's card).
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/real -tab 2 -pose island
+            sleep 12
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-islandreal-app.png
+            xcrun simctl launch "$DEVICE" com.apple.Preferences
+            sleep 5
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-islandreal-compact.png
+            $D "$DEVICE" touch 0.5 0.035 1.2 || echo "island hold failed"
+            sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-islandreal-open.png
+            sleep 4
+            $D "$DEVICE" drag 0.2 0.002 0.2 0.8 0.5 || echo "cover sheet drag failed"
+            sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-islandreal-lock.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            xcrun simctl terminate "$DEVICE" com.apple.Preferences || true
+            xcrun simctl spawn "$DEVICE" log show --last 2m --predicate 'process == "TV" OR subsystem CONTAINS "activitykit"' --style compact 2>/dev/null | grep -i -E "activit|island" | tail -40 > dist/tv-islandreal.log
+          fi
+          tourfilm() {
+            local name=$1 display=$2
+            local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES
+            sleep 25
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            sleep 2
+            tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-$name-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-$name-hitches.log
+          }
+          if has tour; then
+            tourfilm tour 1
+            $D "$DEVICE" pose open; sleep 5
+            $D "$DEVICE" rotate 1; sleep 5
+            tourfilm tour-portrait 3
+            tourfilm tour-portrait2 3
+          fi
+          cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../quick.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../quick.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-quick >/dev/null 2>&1 || gh release create tv-quick --prerelease --title "TV quick checks" --notes "Work in progress on the TV app: shots and logs from the tv-quick branch."
+          for f in quick.zip status.txt; do
+            for i in 1 2 3; do gh release upload tv-quick "$f" --clobber && break; sleep 15; done
+          done

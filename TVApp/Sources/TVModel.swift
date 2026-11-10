@@ -496,6 +496,8 @@ final class TVModel {
     @ObservationIgnored private var loading: Task<Void, Never>?
     // The last answer's bytes, so an unchanged answer is neither decoded nor compared field by field.
     @ObservationIgnored private var lastStatusBytes: Data?
+    @ObservationIgnored private var islandSync: Task<Void, Never>?
+    @ObservationIgnored private var islandNext: (status: TVStatus, art: String?)?
     func load(polled: Bool = false) async {
         if let l = loading { await l.value; return }
         let t = Task { await reload(polled: polled) }
@@ -521,7 +523,20 @@ final class TVModel {
         failingSince = nil
         if !reachable { reachable = true }
         #if os(iOS)
-        await TVIsland.sync(s, art: islandArt(s))
+        // The Now Playing card follows on its own, one reading after another, never ahead of the page: awaited here, a
+        // new cover's fetch and shrinking (and every update iOS takes its time over) held this reading back from the
+        // screen, so what's on changed on the Lock Screen's card before it did on the Remote he was looking at.
+        // Only the newest reading waits its turn: one still on its way when the next lands is passed over.
+        islandNext = (s, islandArt(s))
+        if islandSync == nil {
+            islandSync = Task { [weak self] in
+                while let self, let next = self.islandNext {
+                    self.islandNext = nil
+                    await TVIsland.sync(next.status, art: next.art)
+                }
+                self?.islandSync = nil
+            }
+        }
         #endif
         // Polled while a page is moving: kept until it settles (releaseHeld), so nothing changes height under his finger.
         // Never the first answer since launch (every page is waiting on it), and never one with nothing shown yet.
