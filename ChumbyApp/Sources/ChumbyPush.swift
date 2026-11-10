@@ -21,7 +21,7 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
 
     var enabled: Bool { UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true }
     // The build's simulator shots launch with -address or a pose: no prompt over them, and no Mac to tell.
-    private var staged: Bool {
+    var staged: Bool {
         let args = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
         return args["address"] != nil || args["pose"] != nil
     }
@@ -29,9 +29,6 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
     func install() {
         center.delegate = self
         guard !staged else { return }
-        #if canImport(UIKit)
-        UIApplication.shared.registerForRemoteNotifications()
-        #endif
         if enabled, !UserDefaults.standard.bool(forKey: Self.askedKey) { Task { await ask() } }
     }
     @discardableResult func ask() async -> Bool {
@@ -135,6 +132,11 @@ struct NotifySettings: View {
 #if canImport(UIKit)
 // Only for the notification token iOS hands to an app delegate.
 final class ChumbyPushDelegate: NSObject, UIApplicationDelegate {
+    // Asked for at every launch: iOS answers with the current token, which can change after a restore.
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        if !ChumbyNotify.shared.staged { application.registerForRemoteNotifications() }
+        return true
+    }
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         ChumbyNotify.shared.got(deviceToken.map { String(format: "%02x", $0) }.joined())
     }

@@ -180,7 +180,6 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
         center.delegate = self
         let install = UNNotificationAction(identifier: "install", title: "Install", options: [.foreground], icon: UNNotificationActionIcon(systemImageName: "arrow.down.circle"))
         center.setNotificationCategories([UNNotificationCategory(identifier: OTAInstaller.alertID, actions: [install], intentIdentifiers: [], options: [])])
-        PushToken.ask()
     }
     // Put away in the app: its notification goes from the Lock Screen too.
     func putAway(_ id: String) { center.removeDeliveredNotifications(withIdentifiers: [id]) }
@@ -289,13 +288,8 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
 enum PushToken {
     static let key = "pushToken"
     private static var sent: String?
-    static func ask() {
-        #if canImport(UIKit)
-        // Simulator shots have no push service, and no Mac to tell.
-        guard UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["address"] == nil else { return }
-        UIApplication.shared.registerForRemoteNotifications()
-        #endif
-    }
+    // Simulator shots have no push service, and no Mac to tell.
+    static var staged: Bool { UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["address"] != nil }
     static func got(_ token: String) {
         UserDefaults.standard.set(token, forKey: key)
         guard let base = URL(string: SavedAddress.value), base.host != nil else { return }
@@ -315,6 +309,11 @@ enum PushToken {
 
 #if canImport(UIKit)
 final class PushDelegate: NSObject, UIApplicationDelegate {
+    // Asked for at every launch: iOS answers with the current token, which can change after a restore.
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        if !PushToken.staged { application.registerForRemoteNotifications() }
+        return true
+    }
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         PushToken.got(deviceToken.map { String(format: "%02x", $0) }.joined())
     }
