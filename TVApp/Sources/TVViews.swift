@@ -2410,11 +2410,14 @@ struct PlayingTab: View {
         .contentTransition(.opacity)
         .animation(.easeInOut(duration: 0.25), value: title)
     }
-    // Only when Mint isn't already the app on the TV's screen, and never for the song the TV is playing now: nothing to
-    // send that's already happening (r21).
+    // Brings Mint's screen for this song (art, lyrics) to the front of the TV; it sends nothing, the song is already the
+    // TV's. So it shows whenever there is a song and Mint isn't the app on the TV's screen, playing or paused: the old
+    // test hid it exactly while the song played behind the launcher, which is when he reaches for it, because "Show on
+    // TV" had been read as sending the song (r21). Said in full, so it can't be read that way again (layout logic
+    // review, 2026-11-09).
     @ViewBuilder var showOnTV: some View {
-        if model.status?.app != "com.codex.musicwebtv", model.nowMusic.map({ model.songPlaying($0) != true }) ?? true {
-            Button { model.tick(); model.post("music-now") } label: { Label("Show on TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+        if model.status?.app != "com.codex.musicwebtv", model.nowMusic != nil || phone.drives {
+            Button { model.tick(); model.post("music-now") } label: { Label("Show the song on the TV", systemImage: "tv") }.font(.footnote.weight(.medium)).foregroundStyle(.secondary)
         }
     }
     var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
