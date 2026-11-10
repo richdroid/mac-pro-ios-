@@ -74,17 +74,17 @@ struct MacClaudeUsageIntent: AppIntent {
 }
 struct MacDisplayOffIntent: AppIntent {
     static var title: LocalizedStringResource = "Turn Off the Mac Pro Display"
-    static var description = IntentDescription("Darkens the Mac’s display. It keeps running.")
+    static var description = IntentDescription("Darkens the computer’s display. It keeps running.")
     func perform() async throws -> some IntentResult { try await MacBridge.action("display-off"); return .result() }
 }
 struct MacRenewAppsIntent: AppIntent {
     static var title: LocalizedStringResource = "Renew iPhone Apps"
-    static var description = IntentDescription("Asks the Mac to sign and reinstall your apps. The iPhone must be on the same Wi-Fi.")
+    static var description = IntentDescription("Asks the computer to sign and reinstall your apps. This phone must be on the same Wi-Fi.")
     func perform() async throws -> some IntentResult { try await MacBridge.action("ios-resign"); return .result() }
 }
 struct MacOpenScreenIntent: AppIntent {
     static var title: LocalizedStringResource = "Show the Mac Pro Screen"
-    static var description = IntentDescription("Opens straight into the Mac’s screen.")
+    static var description = IntentDescription("Opens straight into the computer’s screen.")
     static var openAppWhenRun = true
     @MainActor func perform() async throws -> some IntentResult {
         ScreenRequest.wanted = true
@@ -94,7 +94,7 @@ struct MacOpenScreenIntent: AppIntent {
 }
 struct MacCopyIntent: AppIntent {
     static var title: LocalizedStringResource = "Copy from the Mac"
-    static var description = IntentDescription("Puts the Mac’s clipboard on this iPhone, and returns it.")
+    static var description = IntentDescription("Puts the computer’s clipboard on this phone, and returns it.")
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         struct Clip: Decodable { let text: String }
         let text = try JSONDecoder().decode(Clip.self, from: try await MacBridge.get("/api/clipboard")).text
@@ -106,7 +106,7 @@ struct MacCopyIntent: AppIntent {
 }
 struct MacSendIntent: AppIntent {
     static var title: LocalizedStringResource = "Send to the Mac"
-    static var description = IntentDescription("Puts text on the Mac’s clipboard.")
+    static var description = IntentDescription("Puts text on the computer’s clipboard.")
     @Parameter(title: "Text") var text: String
     func perform() async throws -> some IntentResult { try await MacBridge.send("/api/clipboard", body: Data(text.utf8), json: false); return .result() }
 }

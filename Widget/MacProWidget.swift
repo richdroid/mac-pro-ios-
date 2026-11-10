@@ -4,7 +4,7 @@ import WidgetKit
 
 struct WidgetAddress: WidgetConfigurationIntent {
     static var title: LocalizedStringResource = "Mac Pro"
-    static var description = IntentDescription("Shows your Mac Pro.")
+    static var description = IntentDescription("Shows your computer at a glance.")
     @Parameter(title: "Different address (optional)") var address: String?
 }
 
