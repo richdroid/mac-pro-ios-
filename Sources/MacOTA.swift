@@ -536,6 +536,7 @@ struct VersionHistoryView: View {
     static func onPhoneLine(_ a: Status.SeedApp) -> (String, Color) {
         let b = phoneBuild(a)
         if b.isEmpty { return ("Not on this iPhone", .orange) }
+        if let tf = a.tfNewer { return ("Build \(tf) in TestFlight", .secondary) }
         if b != a.build, ["waiting", "update", "installing"].contains(a.state) { return ("Build \(a.build) is ready", .secondary) }
         if a.state == "failed" { return ("Install failed", .red) }
         guard let days = SeedSection.daysLeft(a), let l = SeedSection.left(days) else { return ("On this iPhone", .secondary) }

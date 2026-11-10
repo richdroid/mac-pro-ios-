@@ -445,14 +445,12 @@ struct RemoteScreenView: View {
         return slots.count == count ? slots : nil
     }
 
-    // A MacBook Pro 14's trackpad against its keyboard: about 54 % of the keys' width, 1.56 wide to 1 high. Where the base
-    // is too short for that height, it keeps the height there is and widens to keep the room for gestures, never past
-    // 72 % of the keys.
+    // The trackpad under the keys: 72 % of their width, 1.56 wide to 1 high, or as tall as the base has room for. A MacBook
+    // Pro 14's own share (54 %) left it "a bit small" on a phone (Richard, 2026-11-10), with palm rest he has no palms
+    // for; the deck's full width was "way too wide" (2026-11-07). Open upright the picture gives up the height it takes.
     static func macPad(keys: CGFloat, room: CGFloat) -> CGSize {
-        let w = (keys * 0.54).rounded(), hgt = (w / 1.56).rounded()
-        if hgt <= room { return CGSize(width: w, height: hgt) }
-        let short = max(room, 60)
-        return CGSize(width: min((keys * 0.72).rounded(), max((short * 1.56).rounded(), w)), height: short)
+        let w = (keys * 0.72).rounded(), hgt = (w / 1.56).rounded()
+        return CGSize(width: w, height: min(hgt, max(room, 60)))
     }
 
     @ViewBuilder func stage(_ p: ScreenPlan, area: CGSize) -> some View {
@@ -1523,6 +1521,12 @@ struct GestureClassifier {
     private var follower: Int?
     private var holding = false
     private var pressed = false
+    // A drag begun by tap-and-a-half, and, after its finger lifts, how long it waits for the finger to come back and carry
+    // on (a Mac's own drag "without drag lock": a moment to reposition, then the button goes up).
+    private var tapDrag = false
+    private var grace: Double?
+    static let dragGrace = 0.6
+
     private var samples: [(t: Double, p: CGPoint)] = []
     static let tapWindow = 0.28, pressDelay = 0.35, edge: CGFloat = 16
 
@@ -1530,21 +1534,27 @@ struct GestureClassifier {
     var fingers: Int { touches.values.filter { $0.palm == false }.count }
     var palms: Int { touches.values.filter { $0.palm == true }.count }
     var undecided: Int { touches.values.filter { $0.palm == nil }.count }
-    var idle: Bool { touches.isEmpty && pendingUp == nil && !holding }
+    var idle: Bool { touches.isEmpty && pendingUp == nil && !holding && grace == nil }
 
     static func smoothstep(_ a: CGFloat, _ b: CGFloat, _ x: CGFloat) -> CGFloat {
         let t = min(max((x - a) / (b - a), 0), 1)
         return t * t * (3 - 2 * t)
     }
     // Mac pixels per point of finger travel, for a finger moving at v points a second: slow is precise enough for a
-    // 3-pixel window edge, a flick crosses the screen.
+    // 3-pixel window edge, a flick crosses the screen. macOS's own curve rises from the first easy moves, not only at a
+    // flick: the smoothstep it was left ordinary moves (200 to 500 pt/s) at 0.5 to 0.8 of their slow gain's double,
+    // which read as a pointer that drags behind the finger (Richard, 2026-11-10: "trackpad behavior is still off").
+    // A power curve now: 0.4 at a crawl, about 1 at 300 pt/s, 1.9 at 800, 2.8 from 1440 up.
     static func gain(speed v: CGFloat, macWidth: CGFloat, padWidth: CGFloat) -> CGFloat {
         let k = macWidth / max(padWidth, 1) * 0.55
-        return k * (0.45 + 2.1 * smoothstep(60, 1500, v))
+        let x = min(max((v - 40) / 1400, 0), 1)
+        return k * (0.4 + 2.4 * pow(x, 0.8))
     }
 
     mutating func began(_ id: Int, at p: CGPoint, t: Double) -> [Out] {
         if touches.isEmpty { gestureBegan = t; maxFingers = 0; gestureMoved = 0; samples = [] }
+        // Back on the pad within the moment a lifted tap-drag waits: the same drag carries on, button still down.
+        if grace != nil { grace = nil }
         let atEdge = p.y > pad.height - Self.edge || p.x < Self.edge || p.x > pad.width - Self.edge
         touches[id] = Touch(start: p, at: p, began: t, palm: atEdge ? nil : false)
         if pendingUp != nil, follower == nil { follower = id }
@@ -1563,7 +1573,7 @@ struct GestureClassifier {
         // Only one finger moves the pointer; two or more are a scroll or a gesture, which the recognisers have.
         guard touch.palm == false, fingers == 1 else { samples = []; return [] }
         // A finger that landed while a tap's button was still held, and moves: that's a drag with the same press.
-        if follower == id, pendingUp != nil, touch.moved > 4 { pendingUp = nil; holding = true }
+        if follower == id, pendingUp != nil, touch.moved > 4 { pendingUp = nil; holding = true; tapDrag = true }
         samples.append((t, p))
         if samples.count > 4 { samples.removeFirst() }
         let g = Self.gain(speed: speed(), macWidth: macWidth, padWidth: pad.width)
@@ -1579,10 +1589,18 @@ struct GestureClassifier {
         guard touches.isEmpty else { return [] }
         defer { follower = nil; samples = [] }
         if holding {
+            // A tap-and-a-half drag lifted: held a moment for the finger to come back, as a Mac's drag does. A plain tap in
+            // that moment ends it there, as on a Mac.
+            if tapDrag, !pressed {
+                if touch.moved > 4 { grace = t + Self.dragGrace; return [] }
+                holding = false; tapDrag = false
+                return [.button(down: false)]
+            }
             holding = false
             if pressed { pressed = false; return [.button(down: false), .haptic(.soft)] }
             return [.button(down: false)]
         }
+
         let quick = t - gestureBegan < 0.25
         if maxFingers == 2, quick, gestureMoved < 8 { return [.rightClick, .haptic(.medium)] }
         if maxFingers <= 1, touch.palm != true, quick, gestureMoved < 6 {
@@ -1599,7 +1617,7 @@ struct GestureClassifier {
     mutating func cancelled(_ id: Int) -> [Out] {
         touches.removeValue(forKey: id)
         guard touches.isEmpty else { return [] }
-        follower = nil; samples = []
+        follower = nil; samples = []; grace = nil; tapDrag = false
         if holding { holding = false; pressed = false; return [.button(down: false)] }
         return []
     }
@@ -1611,6 +1629,9 @@ struct GestureClassifier {
         }
         maxFingers = max(maxFingers, fingers)
         if let due = pendingUp, t >= due, !holding { pendingUp = nil; follower = nil; out.append(.button(down: false)) }
+        // The lifted drag's moment is up with no finger back: the button goes up where the pointer is.
+        if let g = grace, t >= g, touches.isEmpty { grace = nil; holding = false; tapDrag = false; out.append(.button(down: false)) }
+
         let still = touches.values.filter { $0.palm == false }
         if !holding, pendingUp == nil, maxFingers <= 1, still.count == 1, let only = still.first, only.moved < 4, t - only.began >= Self.pressDelay {
             // Press to click: held still, the button goes down with a firmer tick, and moving now drags.
@@ -1751,6 +1772,14 @@ enum ScreenTrace {
         ("thumb-at-edge-and-pointer", [Step(t: 0, kind: "down", id: 9, p: CGPoint(x: 220, y: 245)), Step(t: 0.05, kind: "down", p: CGPoint(x: 150, y: 100))]
             + (1...10).map { Step(t: 0.2 + Double($0) * 0.016, kind: "move", p: CGPoint(x: 150 + CGFloat($0) * 6, y: 100)) }
             + ticks(0.16, 0.2) + [Step(t: 0.5, kind: "up"), Step(t: 0.6, kind: "up", id: 9)] + ticks(0.65, 1.0)),
+        // Tap-and-a-half drag, lifted at the pad's edge and carried on: the button stays down through the moment between.
+        ("tap-drag-lift-and-carry-on", [Step(t: 0, kind: "down", p: CGPoint(x: 200, y: 120)), Step(t: 0.1, kind: "up"),
+                                        Step(t: 0.2, kind: "down", id: 1, p: CGPoint(x: 200, y: 120))]
+            + (1...10).map { Step(t: 0.2 + Double($0) * 0.02, kind: "move", id: 1, p: CGPoint(x: 200 + CGFloat($0) * 8, y: 120)) }
+            + [Step(t: 0.45, kind: "up", id: 1)] + ticks(0.5, 0.6)
+            + [Step(t: 0.65, kind: "down", id: 2, p: CGPoint(x: 150, y: 120))]
+            + (1...6).map { Step(t: 0.65 + Double($0) * 0.02, kind: "move", id: 2, p: CGPoint(x: 150 + CGFloat($0) * 8, y: 120)) }
+            + [Step(t: 0.85, kind: "up", id: 2)] + ticks(0.9, 1.6)),
         ("press-to-click-and-drag", [Step(t: 0, kind: "down", p: CGPoint(x: 200, y: 120))] + ticks(0.05, 0.45)
             + (1...8).map { Step(t: 0.45 + Double($0) * 0.02, kind: "move", p: CGPoint(x: 200, y: 120 + CGFloat($0) * 5)) }
             + [Step(t: 0.7, kind: "up")]),

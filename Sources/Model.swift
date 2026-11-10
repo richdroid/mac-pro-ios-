@@ -60,15 +60,18 @@ final class AppModel: ObservableObject {
     func show(tab t: Int) {
         if t == 3 { tab = 2; usageAsked += 1 } else { tab = t }
     }
-    @Published var address: String { didSet { UserDefaults.standard.set(address, forKey: "address"); liveStore.live = nil; lastData = nil; IconCache.api = api } }
+    // Kept in the Keychain too, so a reinstall finds it (SavedAddress).
+    @Published var address: String { didSet { SavedAddress.save(address); liveStore.live = nil; lastData = nil; IconCache.api = api } }
 
     var api: API { API(base: URL(string: address) ?? URL(string: "https://invalid.invalid")!) }
     private var loops: [Task<Void, Never>] = []
 
     // The Mac bakes its address into the build when it collects it, so it never has to live in the source.
     init() {
-        let saved = UserDefaults.standard.string(forKey: "address") ?? ""
-        address = saved.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : saved
+        address = SavedAddress.value
+        // On first launch too, so a baked-in address (or one the Keychain kept) is in both stores from then on. Not for the
+        // build's shots, launched with their own address.
+        if UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["address"] == nil { SavedAddress.save(address) }
         needsSignIn = address.isEmpty
         signInSheet = address.isEmpty
         // Usage was a tab of its own until 2026-11-07; a start tab set to it opens on Claude, where it now lives.
@@ -295,6 +298,20 @@ final class AppModel: ObservableObject {
                 }
                 s.iosApps = Status.SeedStatus(reachable: seed.reachable, via: seed.via, checkedAt: seed.checkedAt, seeding: "", fetch: seed.fetch, apps: apps)
             }
+        // His three apps from TestFlight, as the Mac reports them since 2026-11-10: quiet rows, Mac Pro with a newer
+        // build waiting in TestFlight, and one app he added himself with an update the Mac signed for this iPhone.
+        case "testflight", "testflighttip":
+            let mine = Int(OTAInstaller.thisBuild) ?? 12
+            func tf(_ file: String, _ name: String, _ phone: String, _ tf: String, _ id: String) -> Status.SeedApp {
+                Status.SeedApp(file: file, name: name, version: "1.0", build: tf, phoneBuild: phone, installedAt: 1, expires: 0, state: "testflight", message: "", own: true,
+                               ota: "itms-beta://beta.itunes.apple.com/v1/app/\(id)", notes: tf != phone ? ["Pages you swipe away slide off whole"] : nil,
+                               builtAt: Date().timeIntervalSince1970 * 1000 - 3_600_000, icon: "/ios/icon/\(file)", tfBuild: tf)
+            }
+            let added = Status.SeedApp(file: "Delta.ipa", name: "Delta", version: "1.6", build: "107", phoneBuild: "106", installedAt: 1, expires: Date().timeIntervalSince1970 * 1000 + 20 * 86_400_000, state: "waiting", message: "", own: true,
+                                       ota: "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac-pro.example.ts.net%2Fota%2FDelta.plist", notes: ["Smoother scrolling in the library"], builtAt: Date().timeIntervalSince1970 * 1000 - 7_200_000, icon: nil)
+            s.iosApps = Status.SeedStatus(reachable: false, via: "", checkedAt: 1, seeding: "", fetch: nil,
+                                          apps: [tf("MacPro.ipa", "Mac Pro", "\(mine)", "\(mine + 1)", "6740000001"), tf("TV.ipa", "TV Remote", "204", "204", "6740000002"), tf("Chumby.ipa", "Chumby", "12", "12", "6740000003"), added])
+            if pose == "testflighttip" { UserDefaults.standard.removeObject(forKey: "tfAutoTipDone") } else { UserDefaults.standard.set(true, forKey: "tfAutoTipDone") }
         case "otaready", "otaoffer", "otasent", "otahome", "versionsupdate":
             let mine = Int(OTAInstaller.thisBuild) ?? 12
             func link(_ n: String) -> String { "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac-pro.example.ts.net%2Fota%2F\(n).plist" }

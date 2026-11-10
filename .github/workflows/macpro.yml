@@ -233,6 +233,10 @@ jobs:
             shot otasent$x $d 9 -tab 1 -pose otasent
             shot uptodate$x $d 9 -tab 1 -pose uptodate
             shot otahome$x $d 9 -tab 1 -pose otahome
+            # His three apps from TestFlight (quiet rows, one Open TestFlight) beside one he added with an update, and
+            # the once-only Automatic Updates tip (Richard, 2026-11-10).
+            shot apps-testflight$x $d 9 -tab 1 -pose testflight
+            shot apps-testflight-tip$x $d 9 -tab 1 -pose testflighttip
             # Each app's Version History, opened from the Apps tab (Richard, 2026-11-08: "duos changelogs in mac pro app").
             shot versions$x $d 9 -tab 1 -pose versions
             shot versionsupdate$x $d 9 -tab 1 -pose versionsupdate
@@ -309,6 +313,7 @@ jobs:
           kbfilm
           shot claude-usage-open 3 9 -tab 2 -pose scrolled
           shot claude-api-open 3 9 -tab 2 -pose api-live
+          shot apps-testflight-open 3 9 -tab 1 -pose testflight
           # Partly folded.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
           shot screen-partial 3 8 -tab 0 -pose screen -openScreen YES

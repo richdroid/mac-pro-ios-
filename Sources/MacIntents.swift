@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import Security
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -15,8 +16,7 @@ enum MacBridge {
         let uptime: Double; let cpu: CPU; let mem: Memory; let temps: [Temp]?; let usage: Usage
     }
     static var base: URL? {
-        let stored = UserDefaults.standard.string(forKey: "address") ?? ""
-        return URL(string: stored.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : stored)
+        URL(string: SavedAddress.value)
     }
     private static func origin(_ u: URL) -> String { "\(u.scheme ?? "https")://\(u.host ?? "")\(u.port.map { ":\($0)" } ?? "")" }
     static func send(_ path: String, body: Data, json: Bool = true) async throws {
@@ -109,4 +109,38 @@ struct MacSendIntent: AppIntent {
     static var description = IntentDescription("Puts text on the computer’s clipboard.")
     @Parameter(title: "Text") var text: String
     func perform() async throws -> some IntentResult { try await MacBridge.send("/api/clipboard", body: Data(text.utf8), json: false); return .result() }
+}
+
+// The address the app reaches the Mac through, kept in the Keychain as well as the app's settings. A new install of the
+// same app (a TestFlight build replacing a Mac-signed one, or the app deleted and put back) starts with empty settings,
+// but the Keychain keeps its items for the same team and bundle, so the address comes back on its own (Richard,
+// 2026-11-10: the Mac Pro app asked for its address again after a reinstall). The TV and Chumby apps keep theirs the
+// same way (b7ee5f4). Here, not in the app's sources alone, because shortcuts and the widget read it too.
+enum SavedAddress {
+    private static let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address", kSecAttrAccount as String: "address"]
+    // Settings first, then the Keychain, then the address baked into this build.
+    static var value: String {
+        let stored = UserDefaults.standard.string(forKey: "address") ?? ""
+        if !stored.isEmpty { return stored }
+        if let k = keychain(), !k.isEmpty { return k }
+        return Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? ""
+    }
+    static func save(_ s: String) {
+        UserDefaults.standard.set(s, forKey: "address")
+        guard keychain() != s else { return }
+        SecItemDelete(base as CFDictionary)
+        guard !s.isEmpty else { return }
+        var add = base
+        add[kSecValueData as String] = Data(s.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(add as CFDictionary, nil)
+    }
+    static func keychain() -> String? {
+        var q = base
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
 }

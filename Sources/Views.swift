@@ -933,7 +933,11 @@ struct AppsTab: View {
     var body: some View {
         if side != .right {
             // Updates first, as in the App Store, then what's on the iPhone.
-            if let seed = s.iosApps { UpdatesSection(seed: seed); SeedSection(seed: seed) }
+            // Updates are for apps he added himself; his own three come from TestFlight, which updates them (2026-11-10).
+            if let seed = s.iosApps {
+                if seed.apps.contains(where: { $0.own && !$0.testFlight }) { UpdatesSection(seed: seed) }
+                SeedSection(seed: seed)
+            }
         }
         if side != .left {
             // Only apps that are really running: an older Mac listed ones that had quit, with no figures (Calendar and
@@ -1728,6 +1732,8 @@ struct SeedSection: View {
     @State private var uploading = false
     // What went wrong, said in the row it happened to.
     @State private var rowFail: [String: String] = [:]
+    // The TestFlight tip, shown once until he puts it away.
+    @AppStorage("tfAutoTipDone") private var autoTipDone = false
     @State private var addFail: String?
     @ObservedObject private var ota = OTAInstaller.shared
 
@@ -1745,6 +1751,12 @@ struct SeedSection: View {
     // up to date), "1.0 (12)" in a second numbering, and the chevron. Colour only for what needs him.
     func label(_ a: Status.SeedApp) -> (String, Color) {
         let build = "Build \(a.phoneBuild.isEmpty ? a.build : a.phoneBuild)"
+        // From TestFlight: quiet. The version and build on the phone, or the newer build waiting in TestFlight. No days
+        // left, no Install or Update: TestFlight installs and renews them (Richard, 2026-11-10).
+        if a.testFlight {
+            if let tf = a.tfNewer { return ("Build \(tf) in TestFlight", .secondary) }
+            return ("\(a.version) · \(build)", .secondary)
+        }
         // This app, already at the build the Mac still thinks is waiting (it can't see the phone away from home).
         if OTAInstaller.isThisApp(a), a.build == OTAInstaller.thisBuild, ["waiting", "update"].contains(a.state) {
             return ("Build \(a.build)" + (daysLeft(a).flatMap(Self.left).map { " · " + $0.0 } ?? ""), .secondary)
@@ -1827,6 +1839,31 @@ struct SeedSection: View {
                 // them; designer HOLD 2026-11-08).
                 .accessibilityHint("Opens its version history")
                 .place("seed-\(a.id)")
+            }
+            // His TestFlight apps: one way into TestFlight on the page, and once, the tip that makes it hands-off.
+            if let tf = seed.apps.first(where: { $0.tfNewer != nil }) ?? seed.apps.first(where: { $0.testFlight }), let url = URL(string: tf.ota ?? "") {
+                if !autoTipDone {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "arrow.triangle.2.circlepath").font(.title3).foregroundStyle(macBlue).frame(width: 58)
+                        Text("Turn on Automatic Updates for each app in TestFlight, and new builds arrive by themselves.")
+                            .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        Button { withAnimation(Motion.quick) { autoTipDone = true } } label: {
+                            Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).frame(width: 30, height: 30).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Dismiss")
+                    }
+                    .padding(.vertical, 4)
+                    .transition(.opacity)
+                }
+                Link(destination: url) {
+                    HStack(spacing: 14) {
+                        Image(systemName: "arrow.up.forward.app").font(.title3.weight(.semibold)).frame(width: 58)
+                        Text("Open TestFlight")
+                    }
+                }
+                .place("testflight")
             }
             Menu {
                 Button { picking = true } label: { Label("From Files", systemImage: "folder") }

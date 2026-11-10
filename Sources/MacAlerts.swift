@@ -154,8 +154,7 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
 
     func backgroundCheck() async {
         guard enabled else { return }
-        let saved = UserDefaults.standard.string(forKey: "address") ?? ""
-        let address = saved.isEmpty ? (Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "") : saved
+        let address = SavedAddress.value
         guard let base = URL(string: address), base.host != nil else { return }
         // Not reaching the Mac says nothing: the iPhone may just have Tailscale off.
         guard let alerts = try? await API(base: base).alerts() else { return }

@@ -41,7 +41,17 @@ struct Status: Decodable {
         var notes: [String]?
         var builtAt: Double?
         var icon: String?
+        // His three apps come from TestFlight now (state "testflight"): the build waiting there, when there is one.
+        var tfBuild: String? = nil
         var id: String { file.isEmpty ? name : file }
+        var testFlight: Bool { state == "testflight" }
+        // A TestFlight build newer than the one on the phone, if any.
+        var tfNewer: String? {
+            guard testFlight, let tf = tfBuild, !tf.isEmpty else { return nil }
+            let here = phoneBuild.isEmpty ? build : phoneBuild
+            if let a = Int(tf), let b = Int(here) { return a > b ? tf : nil }
+            return tf != here ? tf : nil
+        }
     }
     struct SeedStatus: Decodable { let reachable: Bool; let via: String; let checkedAt: Double; let seeding: String; let fetch: Fetch?; let apps: [SeedApp] }
     struct Fetch: Decodable { let state: String; let message: String }
