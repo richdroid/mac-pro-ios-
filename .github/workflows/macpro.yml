@@ -159,8 +159,26 @@ jobs:
             backfilm back-processes$x $d -tab 0 -openProcesses cpu
             backfilm back-versions$x $d -tab 1 -pose versions
             backfilm back-session$x $d -tab 2 -pose session
-            backfilm back-history-before$x $d -tab 0 -openHistory cpu -noHold YES
-            backfilm back-versions-before$x $d -tab 1 -pose versions -noHold YES
+          }
+          # A page's first open since launch beside its second, the same page, pushed as a tap pushes it (the app's -reopen
+          # pose: pushed at 12 s, once a cold launch has drawn the tab, closed at 18 s, pushed again at 19.5 s), so the two are compared pixel for pixel (Richard,
+          # 2026-11-10: "certain elements open with the text too close to edge but correct themselves on subsequent presses").
+          # name, display, then the app's own arguments. Shots 1.5 s into each push and 4.5 s in (at rest).
+          reopenshot() {
+            local name=$1 display=$2; shift 2
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -reopen YES "$@"
+            sleep 13.5; xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-first-early.png
+            sleep 3; xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-first.png
+            sleep 4.5; xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-second-early.png
+            sleep 3; xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-second.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          reopenshots() {
+            local d=$1 x=$2
+            reopenshot reopen-history$x $d -tab 0 -openHistory cpu
+            reopenshot reopen-processes$x $d -tab 0 -openProcesses cpu
+            reopenshot reopen-versions$x $d -tab 1 -pose versions
+            reopenshot reopen-session$x $d -tab 2 -pose session
           }
           # Everything that changed, in one posture (display, suffix).
           poses() {
@@ -226,6 +244,7 @@ jobs:
           FILM_PORT=9021 swipefilm appsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -fullEvery 1 -frameLog YES
           FILM_PORT=9021 swipefilm versionsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -fullEvery 1 -frameLog YES
           backfilms 3 -portrait
+          reopenshots 3 -portrait
           python3 ci/title-check.py dist/macpro-tab*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
@@ -240,6 +259,8 @@ jobs:
           backfilm back-versions-open 3 -tab 1 -pose versions
           backfilm back-session-open 3 -tab 2 -pose session
           backfilm back-history-before-open 3 -tab 0 -openHistory cpu -noHold YES
+          reopenshots 3 -open
+          shot claude-usage-open 3 9 -tab 2 -pose scrolled
           # Partly folded.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
           shot screen-partial 3 8 -tab 0 -pose screen -openScreen YES
@@ -253,6 +274,7 @@ jobs:
           film scrollfilm 1 30 -tab 0 -pose scrollfilm
           swipefilm versionsfling 1 0.45 0.8 0.28 -tab 1 -pose versionsfilm
           backfilms 1 ""
+          reopenshots 1 ""
           # The hinge moved with a page up (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios across
           # everything"): both displays filmed while a pushed page and then Status are flung, the phone opened, turned,
           # half closed and closed again, so each change is judged moving, place and state kept or not. One display per

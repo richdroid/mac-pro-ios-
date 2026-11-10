@@ -75,6 +75,7 @@ final class AppModel: ObservableObject {
         if UserDefaults.standard.integer(forKey: "startTab") == 3 { UserDefaults.standard.set(2, forKey: "startTab") }
         history = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         processes = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
+        if Self.reopen { reopenForShots() }
         // Show the last known state at once; fresh numbers replace it moments later.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(Status.self, from: d) }
         seedStore.set(status?.iosApps); sessionStore.set(status?.claude.sessions ?? [])
@@ -98,6 +99,26 @@ final class AppModel: ObservableObject {
     }
 
     // A session's page, from its row: its text read ahead for a moment at most, so the page arrives drawn.
+    // For the build's shots of a page's first open beside its second (-reopen YES, never on the phone): the page the
+    // launch asked for is pushed as a tap would push it 12 s in (its first open since launch, once a cold launch has
+    // drawn the tab), closed at 18 s and pushed again at 19.5 s, so the two can be compared pixel for pixel (Richard, 2026-11-10: "certain elements open with the
+    // text too close to edge but correct themselves on subsequent presses").
+    static let reopen = UserDefaults.standard.bool(forKey: "reopen")
+    private func reopenForShots() {
+        let h = history, p = processes
+        history = nil; processes = nil
+        Task { @MainActor in
+            @MainActor func push() {
+                if let h { tab = 0; history = h }
+                else if let p { tab = 0; processes = p }
+                else if pose == "session" { tab = 2; openSession(key: "chumby") }
+                else if pose.hasPrefix("versions") { tab = 1; appHistory = "TV.ipa" }
+            }
+            try? await Task.sleep(nanoseconds: 12_000_000_000); push()
+            try? await Task.sleep(nanoseconds: 6_000_000_000); history = nil; processes = nil; sessionScreen = nil; appHistory = nil
+            try? await Task.sleep(nanoseconds: 1_500_000_000); push()
+        }
+    }
     func open(session s: Status.Session) {
         guard let key = s.key else { return }
         Task { await TermCache.warm(api, key, within: 0.15); sessionScreen = s }
@@ -234,9 +255,9 @@ final class AppModel: ObservableObject {
             var fresh = decoded
             Self.applyPose(pose, to: &fresh)
             // The build's shot of a session's own page, opened as from the Claude tab.
-            if pose == "session", sessionScreen == nil { pendingSession = "chumby"; tab = 2 }
+            if pose == "session", sessionScreen == nil, !Self.reopen { pendingSession = "chumby"; tab = 2 }
             // The build's shot of an app's Version History, opened as from the Apps tab.
-            if ["versions", "versionsfilm", "versionsupdate"].contains(pose), !posedHistory {
+            if ["versions", "versionsfilm", "versionsupdate"].contains(pose), !posedHistory, !Self.reopen {
                 posedHistory = true; tab = 1
                 // "versionsupdate": an app with a newer build ready over the air, so the page's Update shows.
                 appHistory = pose == "versionsupdate" ? "Chumby.ipa" : "TV.ipa"

@@ -73,10 +73,14 @@ struct HoldsWhileMoving: ViewModifier {
     private var transit = NavTransit.shared
     @State private var box = Box()
     struct Reading: Equatable { var size: CGSize; var insets: EdgeInsets }
-    @MainActor final class Box { var rest: Reading?; var latest: Reading? }
+    // `settled` once the page has been still on screen: after the move that brought it ends, or 0.6 s after it appears
+    // with nothing moving. Until then it holds nothing. A page's very first reading can come before its push has a
+    // coordinator, laid out before the bars and margins it will have; held through the push, that put its first open's
+    // text against the edges, right only from the second open on.
+    @MainActor final class Box { var rest: Reading?; var latest: Reading?; var settled = false }
     init(name: String) { self.name = name }
     func body(content: Content) -> some View {
-        let hold = transit.active ? box.rest : nil
+        let hold = transit.active && box.settled ? box.rest : nil
         content
             .safeAreaPadding(hold?.insets ?? EdgeInsets())
             .frame(width: hold?.size.width, height: hold?.size.height, alignment: .topLeading)
@@ -87,14 +91,18 @@ struct HoldsWhileMoving: ViewModifier {
                     .onGeometryChange(for: Reading.self) { Reading(size: $0.size, insets: $0.safeAreaInsets) } action: { r in
                         box.latest = r
                         let moving = NavTransit.shared.moving()
-                        if !moving { box.rest = r }
+                        if !moving, box.settled { box.rest = r }
                         SwipeLog.note("\(name) \(moving ? "moving" : "rest") size \(Int(r.size.width))x\(Int(r.size.height)) insets t\(Int(r.insets.top)) l\(Int(r.insets.leading)) b\(Int(r.insets.bottom)) r\(Int(r.insets.trailing))")
                     }
             }
             // Pushed in mid-move, it had no reading at rest yet: the last one counts once the move is over.
             .onChange(of: transit.active) { _, now in
-                if !now, let l = box.latest { box.rest = l }
+                if !now, let l = box.latest { box.rest = l; box.settled = true }
                 SwipeLog.note("\(name) transit \(now ? "began" : "ended")")
+            }
+            .task {
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                if !NavTransit.shared.moving(), let l = box.latest { box.rest = l; box.settled = true; SwipeLog.note("\(name) settled") }
             }
     }
 }

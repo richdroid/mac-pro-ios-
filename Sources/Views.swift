@@ -503,7 +503,7 @@ struct Screen<Content: View>: View {
             // Asked for the usage (the Claude widget, or an old link to the Usage tab): the Claude tab opens at it.
             .task(id: model.usageAsked) {
                 // Once per ask, so coming back to the tab later finds it where it was left.
-                guard tab == 2, side != .left, model.usageAsked > model.usageShown else { return }
+                guard tab == 2, side != .right, model.usageAsked > model.usageShown else { return }
                 for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 model.usageShown = model.usageAsked
@@ -513,7 +513,7 @@ struct Screen<Content: View>: View {
                 // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
                 guard model.pose != "scrolled" || tab == 0 else {
-                    guard side != .left, let to = [1: "open", 2: "usage"][tab] else { return }
+                    guard side != .left, let to = [1: "open", 2: "detail"][tab] else { return }
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     proxy.scrollTo(to, anchor: .top)
@@ -990,9 +990,12 @@ struct ClaudeTab: View {
         } catch { sessionNote = error.localizedDescription }
         await model.refresh()
     }
-    // Sessions are what this tab is for, so they come first, and get the left pane when the Duo is open.
+    // The limits first, the sessions straight under them, then the figures and the service (Richard, 2026-11-10: "also
+    // have limits on top sessions below but be smart with how its laid out"). Open flat: limits, sessions and the service
+    // on the left, the figures on the right.
     var body: some View {
         if side != .right {
+            LimitsSection(s: s)
             Section("Sessions on this Mac (\(s.claude.sessions.count))") {
                 if s.claude.sessions.isEmpty { Text("None running").foregroundStyle(.secondary) }
                 ForEach(s.claude.sessions) { x in
@@ -1013,8 +1016,7 @@ struct ClaudeTab: View {
             // Each session's screen read ahead, so a tap pushes a page that's already drawn.
             .task(id: s.claude.sessions.compactMap(\.key)) { await TermCache.warm(model.api, s.claude.sessions.compactMap(\.key)) }
         }
-        // The usage: on the right pane open, between the sessions and the service folded.
-        if side != .left { UsageTab(s) }
+        if side != .left { UsageDetail(s: s) }
         if side != .right {
             Section("Claude Code") {
                 StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
@@ -1065,189 +1067,149 @@ struct UsageFigure: View {
     }
 }
 
-struct UsageTab: View {
+// The limits, first on the Claude tab (Richard, 2026-11-10: "also have limits on top sessions below but be smart with how
+// its laid out"): one card of dials side by side, the plan's week (and its 5 hours, only when Claude sends one) and the
+// API's month, each the same dial with its name and when it resets under it, so the sessions come straight after
+// instead of under two big cards. The figures behind them (tokens per hour, this Mac's totals, the API's day and week,
+// by model) are further down, in UsageDetail.
+struct LimitsSection: View {
+    @EnvironmentObject var model: AppModel
     let s: Status
-    var side: Side = .all
-    init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
+    // Watched, so a new budget in Settings shows on the dial at once.
+    @AppStorage("apiBudget") private var savedBudget = 200.0
     var u: Status.Usage { s.usage }
-    func limit(_ title: String, _ pct: Double?, _ resets: Double?) -> some View {
-        let now = Date().timeIntervalSince1970 * 1000
-        let over = (resets ?? .infinity) <= now
-        let live = !over && pct != nil
-        let v = pct ?? 0
-        return VStack(spacing: 6) {
-            ArcGauge(live ? v / 100 : 0, tint: v > 90 ? .red : v > 75 ? .orange : macBlue, ticks: 36, length: 9, width: 2.6) {
-                Text(live ? "\(Int(v.rounded()))%" : "–").font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit()
-            }
-            .frame(maxWidth: 110)
-            Text(title).font(.footnote.weight(.medium))
-            Text(over ? "Reset" : live ? (resets.map(resetsIn) ?? "") : "No reading").font(.caption).foregroundStyle(.secondary)
+    var api: Status.APIUsage? { s.apiUsage }
+    var budget: Double { savedBudget > 0 ? savedBudget : MacPrefs.apiBudget }
+    // Whole dollars once it's big enough that cents would crowd the dial.
+    static func money(_ v: Double) -> String { v.formatted(.currency(code: "USD").precision(.fractionLength(v >= 100 ? 0 : 2))) }
+    // A Mac that has answered and still has nothing to say about the API (an older one) gets no dial for it, rather than
+    // a grey placeholder that never fills in.
+    var showsAPI: Bool { api != nil || !model.gotFresh }
+    // One dial: the gauge, its name, and a line under it. Every dial on the card is this one.
+    func dial(_ value: Double, tint: Color, title: Text, line: Text, @ViewBuilder centre: () -> some View) -> some View {
+        VStack(spacing: 5) {
+            ArcGauge(value, tint: tint, ticks: 36, length: 9, width: 2.6) { centre() }
+                .frame(maxWidth: 104)
+            title.font(.footnote.weight(.medium)).lineLimit(1).minimumScaleFactor(0.85)
+            line.font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
         }
         .frame(maxWidth: .infinity)
     }
-    var models: [(key: String, value: Status.ModelTally)] { u.week.models.filter { $0.value.tokens > 0 }.sorted { $0.value.tokens > $1.value.tokens } }
-    var body: some View {
-        if side != .right {
-            Section {
-                // Only the limits Claude reports. It has stopped sending a 5-hour one for this plan; it shows again if that
-                // returns. With one dial, the card is laid out as the API card under it: the dial left, this Mac's figures
-                // right, so the two read as one pair rather than a lone dial in a wide card.
-                HStack(alignment: .center, spacing: 16) {
-                    if u.plan?.fiveHour != nil { limit("5 hours", u.plan?.fiveHour, u.plan?.fiveHourResets) }
-                    limit("This week", u.plan?.sevenDay, u.plan?.sevenDayResets)
-                    if u.plan?.fiveHour == nil {
-                        VStack(alignment: .leading, spacing: 14) {
-                            UsageFigure(title: "Last 5 hours", value: Format.count(u.fiveHours.tokens), detail: "tokens on this Mac")
-                            UsageFigure(title: "Last 7 days", value: Format.count(u.week.tokens), detail: "tokens on this Mac")
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .padding(.vertical, 4)
-            } header: { Text("Plan limits") } footer: {
-                // Its age only once it's old enough to doubt: "Updated 43m ago" under a live reading read as stale (2026-11-07).
-                if let p = u.plan, let age = Format.staleAge(ms: p.at) { Text("Last read \(age)") }
-            }
-            .id("usage")
-            APIUsageSection(usage: s.apiUsage)
-            Section("Tokens per hour, last 24 hours") {
-                VStack(alignment: .leading) {
-                    Text(Format.count(u.day.tokens)).font(.title2.weight(.semibold)).monospacedDigit()
-                    Text("\(u.day.messages.formatted()) replies on this Mac").font(.footnote).foregroundStyle(.secondary)
-                    Chart(u.hours) { h in
-                        BarMark(x: .value("Hour", Date(timeIntervalSince1970: h.t / 1000), unit: .hour), y: .value("Tokens", h.tokens), width: .ratio(0.7))
-                            .foregroundStyle(macBlue).clipShape(RoundedRectangle(cornerRadius: 2))
-                    }
-                    .chartYAxis(.hidden)
-                    .chartXAxis { AxisMarks(values: .stride(by: .hour, count: 6)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.hour()) } }
-                    .frame(height: 90)
-                }
-            }
+    static func level(_ v: Double) -> Color { v > 0.9 ? .red : v > 0.75 ? .orange : macBlue }
+    func planDial(_ title: String, _ pct: Double?, _ resets: Double?) -> some View {
+        let over = (resets ?? .infinity) <= Date().timeIntervalSince1970 * 1000
+        let live = !over && pct != nil, v = (pct ?? 0) / 100
+        return dial(live ? v : 0, tint: Self.level(v), title: Text(title), line: Text(over ? "Reset" : live ? (resets.map(resetsIn) ?? "") : "No reading")) {
+            Text(live ? "\(Int((v * 100).rounded()))%" : "–").font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit()
         }
-        if side != .left {
-            // With two plan dials there's no room for this Mac's figures beside them, so they're a list here instead.
-            if u.plan?.fiveHour != nil {
-                Section("Tokens on this Mac") {
-                    LabeledContent("Last 5 hours", value: Format.count(u.fiveHours.tokens))
-                    LabeledContent("Last 7 days", value: Format.count(u.week.tokens))
-                }
-            }
-            if !models.isEmpty {
-                Section("By model, last 7 days") {
-                    ForEach(models, id: \.key) { name, v in
-                        LabeledContent(modelName(name), value: "\(Format.count(v.tokens)) tokens · \(v.messages.formatted()) replies")
-                    }
-                }
-            }
-        }
-    }
-}
-
-// What the API key has cost this billing period, as a dial against a monthly budget drawn like the plan limits above
-// it, with today and the week beside it.
-struct APIUsageSection: View {
-    @EnvironmentObject var model: AppModel
-    let usage: Status.APIUsage?
-    // Watched, so a new budget in Settings shows on the dial at once.
-    @AppStorage("apiBudget") private var savedBudget = 200.0
-    // Whole dollars once it's big enough that cents would crowd the dial.
-    static func money(_ v: Double) -> String { v.formatted(.currency(code: "USD").precision(.fractionLength(v >= 100 ? 0 : 2))) }
-    var budget: Double { savedBudget > 0 ? savedBudget : MacPrefs.apiBudget }
-    func figure(_ title: String, _ s: Status.APIUsage.Spend?) -> some View {
-        UsageFigure(title: title, value: s.map { Self.money($0.cost) } ?? "–", detail: "\(Format.count(s?.tokens ?? 0)) tokens")
     }
     // Until the credit renews: the Mac says when (the 19th), and older Macs fall back to the month's end.
-    var resets: String {
-        if let r = usage?.renewsAt { return resetsIn(r) }
+    var renews: String {
+        if let r = api?.renewsAt { return resetsIn(r) }
         guard let end = Calendar.current.dateInterval(of: .month, for: Date())?.end else { return "" }
         return resetsIn(end.timeIntervalSince1970 * 1000)
     }
-    func block(_ u: Status.APIUsage) -> some View {
-        let spent = u.month?.cost ?? 0, v = spent / budget
-        return HStack(alignment: .center, spacing: 16) {
-            VStack(spacing: 6) {
-                ArcGauge(min(v, 1), tint: v > 0.9 ? .red : v > 0.75 ? .orange : macBlue, ticks: 36, length: 9, width: 2.6) {
-                    Text(u.month.map { Self.money($0.cost) } ?? "–").font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit()
-                        .minimumScaleFactor(0.7).lineLimit(1).padding(.horizontal, 10)
+    // The API's month, in whatever state the Mac reports it. One that needs the key added again opens the place to add it.
+    @ViewBuilder var apiDial: some View {
+        if let a = api, !a.configured {
+            // A Mac that hasn't counted anything yet: the dial's shape, waiting, not a chore.
+            dial(0, tint: macBlue, title: Text("API"), line: Text("Not counted yet")) { Text("–").font(.system(.title3, design: .rounded).weight(.semibold)) }
+        } else if let a = api, let e = a.error, APIUsageNotes.refused(e) {
+            Button { withAnimation(Motion.quick) { model.apiSetup = true } } label: {
+                dial(0, tint: macBlue, title: Text("API"), line: Text("Key turned down").foregroundStyle(.red)) {
+                    Text("Add again").font(.footnote.weight(.semibold)).foregroundStyle(macBlue).multilineTextAlignment(.center).padding(.horizontal, 8)
                 }
-                .frame(maxWidth: 110)
-                // Spent, by Anthropic's own word: the key has stopped working until the credit renews (2026-11-06).
-                if u.outOfCredit { Text("Credit used up").font(.footnote.weight(.semibold)).foregroundStyle(.red) }
-                else { Text("of \(Self.money(budget))").font(.footnote.weight(.medium)) }
-                Text(resets).font(.caption).foregroundStyle(.secondary)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity)
-            VStack(alignment: .leading, spacing: 14) { figure("Today", u.today); figure("This week", u.week) }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(PressStyle())
+            .accessibilityLabel("Add your Admin key again")
+        } else {
+            // Before the Mac's first answer this launch, the dial's shape with made-up figures, redacted, so nothing moves
+            // when the numbers come.
+            let a = api ?? .placeholder, spent = a.month?.cost ?? 0, v = spent / budget
+            // Spent, by Anthropic's own word: the key has stopped working until the credit renews (2026-11-06).
+            let title = a.outOfCredit ? Text("Credit used up").foregroundStyle(.red) : Text("API of \(Self.money(budget))")
+            dial(min(v, 1), tint: Self.level(v), title: title, line: Text(renews)) {
+                Text(a.month.map { Self.money($0.cost) } ?? "–").font(.system(.title3, design: .rounded).weight(.semibold)).monospacedDigit()
+                    .minimumScaleFactor(0.6).lineLimit(1).padding(.horizontal, 10)
+            }
+            .redacted(reason: api == nil ? .placeholder : [])
         }
-        .padding(.vertical, 4)
     }
-    // Before a key, or after Anthropic turned one down: the same dial, empty and dimmed, so the section keeps its shape,
-    // and the whole of it opens the place to add the key.
-    func empty(_ centre: String, _ line: String, _ note: String?, opensSetup: Bool = true) -> some View {
-        Button { if opensSetup { withAnimation(Motion.quick) { model.apiSetup = true } } } label: {
-            HStack(alignment: .center, spacing: 16) {
-                VStack(spacing: 6) {
-                    ArcGauge(0, ticks: 36, length: 9, width: 2.6) {
-                        Text(centre).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).multilineTextAlignment(.center).padding(.horizontal, 8)
-                    }
-                    .frame(maxWidth: 110)
-                    Text(line).font(.footnote.weight(.medium)).multilineTextAlignment(.center)
-                    if let note { Text(note).font(.caption).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3) }
-                    else { Text("of \(Self.money(budget)) a month").font(.caption).foregroundStyle(.secondary) }
-                }
-                .frame(maxWidth: .infinity)
-                VStack(alignment: .leading, spacing: 14) { figure("Today", nil); figure("This week", nil) }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(0.4)
+    var body: some View {
+        Section {
+            HStack(alignment: .top, spacing: 8) {
+                if u.plan?.fiveHour != nil { planDial("5 hours", u.plan?.fiveHour, u.plan?.fiveHourResets) }
+                planDial("This week", u.plan?.sevenDay, u.plan?.sevenDayResets)
+                if showsAPI { apiDial }
             }
             .padding(.vertical, 4)
-            .contentShape(Rectangle())
+            // What went wrong reading the API, said under the dials, without the Mac's "Couldn't read API usage:" lead-in.
+            if let a = api, let e = a.error, !APIUsageNotes.refused(e) { Text(APIUsageNotes.plain(e)).font(.footnote).foregroundStyle(.red).lineLimit(3) }
+            if model.apiSetup { APIKeyRow().transition(.opacity) }
+        } header: { Text("Limits") } footer: {
+            VStack(alignment: .leading, spacing: 6) {
+                // Its age only once it's old enough to doubt: "Updated 43m ago" under a live reading read as stale (2026-11-07).
+                if let p = u.plan, let age = Format.staleAge(ms: p.at) { Text("Plan last read \(age)") }
+                if model.apiSetup {
+                    Text("Made in the Claude Console under an organization. It goes to the Mac’s keychain and isn’t kept on this phone.")
+                } else if let a = api, a.configured, a.estimated {
+                    // Counted from the Mac's own sessions on the key. The Admin key is only an offer, for exact figures.
+                    Button("API counted on the Mac. For exact numbers, add an Admin key") { withAnimation(Motion.quick) { model.apiSetup = true } }
+                        .buttonStyle(.plain).foregroundStyle(macBlue).multilineTextAlignment(.leading)
+                } else if let at = api?.at, api?.configured == true, let age = Format.staleAge(ms: at) { Text("API last read \(age)") }
+            }
         }
-        .buttonStyle(PressStyle())
-        .allowsHitTesting(opensSetup)
-        .accessibilityLabel(line)
+        .id("usage")
     }
+}
+enum APIUsageNotes {
     // A key Anthropic turned down needs adding again; anything else is just said.
     static func refused(_ e: String) -> Bool { ["refused", "invalid", "401", "unauthorized"].contains { e.localizedCaseInsensitiveContains($0) } }
-    // The Mac's wording, without its "Couldn't read API usage:" lead-in, which the section header already says.
     static func plain(_ e: String) -> String {
         let t = e.replacingOccurrences(of: "Couldn’t read API usage: ", with: "").replacingOccurrences(of: "Couldn't read API usage: ", with: "")
-        return "Couldn’t read the usage: " + t + "."
+        return "Couldn’t read the API’s usage: " + t + "."
     }
-    // A Mac that has answered and still has nothing to say about the API (an older one, or its first read isn't done)
-    // gets no section at all, rather than a grey placeholder that never fills in.
+}
+
+// The figures behind the limits, under the sessions (open flat, the right pane): tokens per hour, this Mac's totals, the
+// API's day and week, and by model.
+struct UsageDetail: View {
+    let s: Status
+    var u: Status.Usage { s.usage }
+    var models: [(key: String, value: Status.ModelTally)] { u.week.models.filter { $0.value.tokens > 0 }.sorted { $0.value.tokens > $1.value.tokens } }
+    func spend(_ x: Status.APIUsage.Spend?) -> String { x.map { "\(LimitsSection.money($0.cost)) · \(Format.count($0.tokens)) tokens" } ?? "–" }
     var body: some View {
-        if usage != nil || !model.gotFresh { section }
-    }
-    var section: some View {
-        Section {
-            if let u = usage, !u.configured {
-                // A Mac that hasn't counted anything yet (an older dashboard): the dial's shape, waiting, not a chore.
-                empty("–", "Not counted yet", nil, opensSetup: false)
-            } else if let u = usage, let e = u.error, Self.refused(e) {
-                empty("Add again", "Add your Admin key again", "Anthropic turned the last one down.")
-            } else if let u = usage, let e = u.error, u.month == nil {
-                Text(Self.plain(e)).font(.footnote).foregroundStyle(.red).lineLimit(3)
-            } else if let u = usage {
-                block(u)
-                if let e = u.error { Text(Self.plain(e)).font(.footnote).foregroundStyle(.red).lineLimit(3) }
-            } else {
-                // Before the Mac's first answer this launch: the dial's shape, so nothing moves when the numbers come.
-                block(.placeholder).redacted(reason: .placeholder)
-            }
-            if model.apiSetup { APIKeyRow().transition(.opacity) }
-        } header: { Text("API usage") } footer: {
-            if model.apiSetup {
-                Text("Made in the Claude Console under an organization. It goes to the Mac’s keychain and isn’t kept on this phone.")
-            } else if let u = usage, u.estimated || !u.configured {
-                // Counted from the Mac's own sessions on the key. The Admin key is only an offer, for exact figures.
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(u.at.flatMap { Format.staleAge(ms: $0) }.map { "Counted on the Mac, \($0)" } ?? "Counted on the Mac")
-                    Button("For exact numbers, add an Admin key") { withAnimation(Motion.quick) { model.apiSetup = true } }
-                        .buttonStyle(.plain).foregroundStyle(macBlue)
+        Section("Tokens per hour, last 24 hours") {
+            VStack(alignment: .leading) {
+                Text(Format.count(u.day.tokens)).font(.title2.weight(.semibold)).monospacedDigit()
+                Text("\(u.day.messages.formatted()) replies on this Mac").font(.footnote).foregroundStyle(.secondary)
+                Chart(u.hours) { h in
+                    BarMark(x: .value("Hour", Date(timeIntervalSince1970: h.t / 1000), unit: .hour), y: .value("Tokens", h.tokens), width: .ratio(0.7))
+                        .foregroundStyle(macBlue).clipShape(RoundedRectangle(cornerRadius: 2))
                 }
-            } else if let at = usage?.at, usage?.configured == true, let age = Format.staleAge(ms: at) { Text("Last read \(age)") }
+                .chartYAxis(.hidden)
+                .chartXAxis { AxisMarks(values: .stride(by: .hour, count: 6)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.hour()) } }
+                .frame(height: 90)
+            }
+        }
+        .id("detail")
+        Section("Tokens on this Mac") {
+            LabeledContent("Last 5 hours", value: Format.count(u.fiveHours.tokens))
+            LabeledContent("Last 7 days", value: Format.count(u.week.tokens))
+        }
+        if let a = s.apiUsage, a.configured, a.month != nil {
+            Section("API spend") {
+                LabeledContent("Today", value: spend(a.today))
+                LabeledContent("This week", value: spend(a.week))
+            }
+        }
+        if !models.isEmpty {
+            Section("By model, last 7 days") {
+                ForEach(models, id: \.key) { name, v in
+                    LabeledContent(modelName(name), value: "\(Format.count(v.tokens)) tokens · \(v.messages.formatted()) replies")
+                }
+            }
         }
     }
 }

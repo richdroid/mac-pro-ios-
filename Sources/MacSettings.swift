@@ -72,8 +72,8 @@ struct MacSettings: View {
                     Picker("Monthly API budget", selection: Binding(get: { apiBudget }, set: { v in
                         if v < 0 { budgetDraft = apiBudget; customBudget = true } else { apiBudget = v }
                     })) {
-                        ForEach(Self.budgets, id: \.self) { Text(APIUsageSection.money($0)).tag($0) }
-                        if !Self.budgets.contains(apiBudget) { Text(APIUsageSection.money(apiBudget)).tag(apiBudget) }
+                        ForEach(Self.budgets, id: \.self) { Text(LimitsSection.money($0)).tag($0) }
+                        if !Self.budgets.contains(apiBudget) { Text(LimitsSection.money(apiBudget)).tag(apiBudget) }
                         Text("Custom…").tag(-1.0)
                     }
                     .alert("Monthly API budget", isPresented: $customBudget) {
