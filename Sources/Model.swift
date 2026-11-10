@@ -51,6 +51,7 @@ final class AppModel: ObservableObject {
     @Published var processes: ProcessSort?
     @Published var sessionScreen: Status.Session?  // a session's own screen, on the Claude tab's stack
     @Published var appHistory: String?  // the package (TV.ipa) whose Version History is open on the Apps tab's stack
+    @Published var macPage: MacPage?  // Everything on the Mac, or Restart the Mac, on the Control tab's stack
     private var posedHistory = false
     private var pendingSession: String?
     private var lastData: Data?
@@ -82,6 +83,9 @@ final class AppModel: ObservableObject {
         if UserDefaults.standard.integer(forKey: "startTab") == 3 { UserDefaults.standard.set(2, forKey: "startTab") }
         history = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         processes = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
+        // The build's shots of the Control tab's pushed pages (health, a fix under way, back from a restart, the checks).
+        if ["health", "healthbad", "healthfixing", "healthback"].contains(pose) { macPage = .health }
+        if ["restart", "restartred"].contains(pose) { macPage = .restart }
         if Self.reopen { reopenForShots() }
         // Show the last known state at once; fresh numbers replace it moments later.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(Status.self, from: d) }

@@ -16,6 +16,8 @@ targets:
     sources: [Sources, Shared, Assets.xcassets]
     dependencies:
       - target: MacProWidget
+      # Send to Mac Pro in the share sheet, embedded as TV embeds Send to TV.
+      - target: MacProShare
       - target: HotProbe
         embed: true
         link: false
@@ -56,6 +58,35 @@ targets:
         CFBundleDisplayName: Mac Pro Status
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  # Send to Mac Pro, from any app's share sheet: files, photos, videos, links (as .webloc) and text (as .txt), straight to
+  # the bridge over the tailnet. No App Group or other entitlements: its App Store profile has only the defaults.
+  MacProShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - MacProShare
+      - path: Sources/MacSend.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.MacPro.Share
+        INFOPLIST_KEY_CFBundleDisplayName: Send to Mac Pro
+    info:
+      path: MacProShare/Info.plist
+      properties:
+        CFBundleDisplayName: Send to Mac Pro
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsAttachmentsWithMaxCount: 20
+              NSExtensionActivationSupportsFileWithMaxCount: 20
+              NSExtensionActivationSupportsImageWithMaxCount: 20
+              NSExtensionActivationSupportsMovieWithMaxCount: 20
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
   Chumby:
     type: application
     platform: iOS

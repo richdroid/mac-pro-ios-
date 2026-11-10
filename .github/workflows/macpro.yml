@@ -286,6 +286,17 @@ jobs:
             # A page open over a tab, Back the side bar's first item (along the foot open in portrait, Settings out).
             shot session$x $d 9 -tab 2 -pose session
             shot history$x $d 8 -tab 0 -openHistory cpu
+            # Send to Mac and Restart the Mac on Control (Richard, 2026-11-10): sends in flight (one going, one sent, one
+            # failed) over the recent sends; the tab scrolled to Health and Power; each part of the Mac by name, all up,
+            # two red, a fix under way and back from a restart; the restart's checks all green and with one red.
+            shot control-send$x $d 9 -tab 5 -pose send
+            shot control-scrolled$x $d 9 -tab 5 -pose scrolled
+            shot health$x $d 9 -tab 5 -pose health
+            shot health-bad$x $d 9 -tab 5 -pose healthbad
+            shot health-fixing$x $d 9 -tab 5 -pose healthfixing
+            shot health-back$x $d 9 -tab 5 -pose healthback
+            shot restart$x $d 9 -tab 5 -pose restart
+            shot restart-red$x $d 9 -tab 5 -pose restartred
             shot processes$x $d 8 -tab 0 -openProcesses cpu
           }
           # The keyboard key on the cover (folded upright), first, while the Duo is still closed, as it was and as it is: the keyboard up and away twice, judged in

@@ -319,11 +319,12 @@ struct RootView: View {
                 // system's animated pop (the pushed page holding its layout as it slides, NavTransit). The tab was rebuilt
                 // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
                 // button again it jankily goes back no animation"). Only a tab already at its start is rebuilt at the top.
-                let open = (t == 0 && (model.history != nil || model.processes != nil)) || (t == 1 && model.appHistory != nil) || (t == 2 && model.sessionScreen != nil)
+                let open = (t == 0 && (model.history != nil || model.processes != nil)) || (t == 1 && model.appHistory != nil) || (t == 2 && model.sessionScreen != nil) || (t == 5 && model.macPage != nil)
                 if open {
                     if t == 0 { model.history = nil; model.processes = nil }
                     if t == 1 { model.appHistory = nil }
                     if t == 2 { model.sessionScreen = nil }
+                    if t == 5 { model.macPage = nil }
                 } else {
                     resets[t, default: 0] += 1
                 }
@@ -503,7 +504,7 @@ struct Screen<Content: View>: View {
                 // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
                 guard model.pose != "scrolled" || tab == 0 else {
-                    guard side != .left, let to = [1: "open", 2: "detail"][tab] else { return }
+                    guard side != .left, let to = [1: "open", 2: "detail", 5: "power"][tab] else { return }
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     proxy.scrollTo(to, anchor: .top)
@@ -576,6 +577,10 @@ struct Screen<Content: View>: View {
             .navigationDestination(item: tab == 0 && model.history == nil ? $model.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
             .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
             .navigationDestination(item: tab == 1 ? $model.appHistory : Binding<String?>.constant(nil)) { VersionHistoryView(file: $0, model: model) }
+            // Everything on the Mac, or Restart the Mac, from the Control tab.
+            .navigationDestination(item: tab == 5 ? $model.macPage : Binding<MacPage?>.constant(nil)) { p in
+                if p == .health { MacHealthView(model: model) } else { MacRestartView(model: model) }
+            }
         }
     }
 }
@@ -1508,7 +1513,6 @@ struct ControlTab: View {
     @State private var appleEmail = ""
     @State private var applePassword = ""
     @State private var appleCode = ""
-    @State private var confirmRestart = false
     @State private var confirmForget = false
     @State private var reveal = false
     @State private var restartService: Status.Service?
@@ -1575,6 +1579,7 @@ struct ControlTab: View {
             Section {
                 Button("Open screen") { model.screenOpen = true }
             } header: { Text("Remote desktop") } footer: { Text("Tap to click · drag to move things · two fingers to scroll · pinch to zoom") }
+            SendSection(route: model.route)
             Section {
                 Button { model.signingIn = true } label: { Label("Fill a saved login", systemImage: "key.fill") }
                     .disabled(!typingReady)
@@ -1659,13 +1664,8 @@ struct ControlTab: View {
                 if s.tailscale.peers.isEmpty { Text("No other devices yet").foregroundStyle(.secondary) }
                 ForEach(s.tailscale.peers) { p in StateRow(label: p.name, good: p.online, value: p.os) }
             }
-            Section("Power") {
-                Button("Restart Mac", role: .destructive) { confirmRestart = true }
-                    .confirmationDialog("Restart the Mac in one minute?", isPresented: $confirmRestart, titleVisibility: .visible) {
-                        Button("Restart", role: .destructive) { act("restart") { await model.run("mac-restart") } }
-                    }
-                failLine("restart")
-            }
+            // Health and Restart the Mac, last and apart from the everyday buttons, each its own page.
+            MacPowerSections()
         }
     }
 }
