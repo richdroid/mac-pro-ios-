@@ -139,14 +139,6 @@ final class TVModel {
         guard let now = s.description.first, !now.isEmpty else { return false }
         return TVStatus.Session.sameName(now, title)
     }
-    // A YouTube card from Continue watching: the video opens in YouTube on the TV where he left it, the way a pasted link
-    // does, and the Remote comes up to show it. Under half a minute in isn't worth resuming: it starts from the top.
-    func openYouTube(_ item: MediaItem) {
-        Keyboard.dismiss()
-        let at = item.resume ?? 0
-        send("https://www.youtube.com/watch?v=\(item.id)" + (at >= 30 ? "&t=\(at)" : ""))
-        tab = 0
-    }
     func showOnRemote() {
         Keyboard.dismiss()
         tick()

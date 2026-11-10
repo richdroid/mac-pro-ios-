@@ -146,7 +146,9 @@ struct TitleInfoPage: View {
         // folded, the whole bar's height open upright), which read as a bar of its own colour with Back stuck in it
         // (Richard, 2026-11-09: "the back button looks off … not iphone duo").
         .ignoresSafeArea(edges: .top)
-        .background { Color.clear.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 } }
+        // Measured on a layer under every inset: read inside the bars, the height changed as the bar came and went through
+        // a push or the back swipe, and the banner shrank while the page slid (Richard, 2026-11-09: "the elements compact").
+        .background { Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if abs(pageHeight - $0) > 0.5 { pageHeight = $0 } } }
         // The key in the page's foot inset: the page scrolls above it, never under it.
         .safeAreaInset(edge: .bottom) {
             if !fromFlick {

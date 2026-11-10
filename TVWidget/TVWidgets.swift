@@ -50,19 +50,31 @@ struct TVProvider: TimelineProvider {
             completion(Timeline(entries: entries, policy: .after(Date().addingTimeInterval(e.music?.playing == true ? 600 : 1800))))
         }
     }
+    // The reload after a press reads what the press left (WidgetFresh) and asks the network for nothing; a timed reload
+    // asks, with short waits, and keeps the last status rather than wiping it when the Mac can't be reached.
     func load() async -> TVEntry {
         var e = TVEntry()
-        let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("widget-tv.json")
-        if let d = await TVBridge.data(TVBridge.url("/api/tv/status")), let s = try? JSONDecoder().decode(TVStatus.self, from: d), s.online {
+        let cache = WidgetFresh.statusFile
+        if let d = WidgetFresh.fresh(cache), let s = try? JSONDecoder().decode(TVStatus.self, from: d), s.online {
+            e.status = s
+        } else if let d = await TVBridge.data(TVBridge.url("/api/tv/status"), timeout: 5), let s = try? JSONDecoder().decode(TVStatus.self, from: d), s.online {
             e.status = s
             try? d.write(to: cache, options: .atomic)
         } else {
             e.reachable = false
-            // Keep the last song on show rather than wiping it.
             if let d = try? Data(contentsOf: cache) { e.status = try? JSONDecoder().decode(TVStatus.self, from: d) }
         }
-        if art, let url = e.music?.art, let d = await TVBridge.data(URL(string: url)), let i = Self.thumbnail(d, 320) { e.cover = i; e.wall = Self.shrunk(i, to: 16) }
-        if mirror, e.reachable, !e.asleep, let d = await TVBridge.data(TVBridge.url("/api/tv/shot"), timeout: 15), let i = TVImage(data: d) { e.mirror = i }
+        // The cover is the same picture for the whole song, so it comes from the cache after the first time.
+        if art, let url = e.music?.art, let d = await TVBridge.data(URL(string: url), timeout: 6, cached: true), let i = Self.thumbnail(d, 320) { e.cover = i; e.wall = Self.shrunk(i, to: 16) }
+        if mirror, e.reachable, !e.asleep {
+            // Never decoded at the Mac's full size: widgets get very little memory.
+            if let d = WidgetFresh.fresh(WidgetFresh.shotFile), let i = Self.thumbnail(d, 640) { e.mirror = i }
+            else if let d = await TVBridge.data(TVBridge.url("/api/tv/shot"), timeout: 6), let i = Self.thumbnail(d, 640) {
+                e.mirror = i
+                // So the next press knows to fetch a picture of its own.
+                try? d.write(to: WidgetFresh.shotFile, options: .atomic)
+            }
+        }
         return e
     }
     static let favourites = ["com.codex.musicwebtv", "com.mint.letterboxd", "com.stremio.one", "com.google.android.youtube.tv", "com.netflix.ninja", "com.apple.atve.androidtv.appletv"]

@@ -167,6 +167,31 @@ enum TVBridge {
     static func status(timeout: TimeInterval = 8) async -> TVStatus? { (await data(url("/api/tv/status"), timeout: timeout)).flatMap { try? JSONDecoder().decode(TVStatus.self, from: $0) } }
 }
 
+// What a widget's press leaves behind for the reload WidgetKit runs once the press is done: the TV's status and, where
+// the picture widget is in use, its picture taken after the key, fetched by the press itself with short waits and put on
+// disk. The reload then reads them without asking the network (TVProvider.load), so the widget is up and taking the next
+// press within a moment. Before this the press returned after its key, and every reload asked for the status (8 s wait)
+// and the picture (15 s) afresh, on a session that waits 30 s for a key: on a slow tunnel the widget sat in its pressed
+// state for the whole of that, its buttons taking nothing (Richard, 2026-11-09: "stops accepting inputs after the first
+// three taps"), and the picture it then showed was from before the key.
+enum WidgetFresh {
+    static var dir: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0] }
+    static var statusFile: URL { dir.appendingPathComponent("widget-tv.json") }
+    static var shotFile: URL { dir.appendingPathComponent("widget-shot.jpg") }
+    // Written moments ago by a press: good as it is.
+    static func fresh(_ f: URL, within s: TimeInterval = 12) -> Data? {
+        guard let at = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate, Date().timeIntervalSince(at) < s else { return nil }
+        return try? Data(contentsOf: f)
+    }
+    // The picture only for a phone that has the picture widget (it's the one that ever writes the file).
+    static func refresh(after pressed: Date) async {
+        let picture = FileManager.default.fileExists(atPath: shotFile.path)
+        async let status = TVBridge.data(TVBridge.url("/api/tv/status"), timeout: 3)
+        async let shot: Data? = picture ? TVBridge.data(TVBridge.url("/api/tv/shot?after=\(Int(pressed.timeIntervalSince1970 * 1000))"), timeout: 5) : nil
+        if let d = await status { try? d.write(to: statusFile, options: .atomic) }
+        if let d = await shot, d.count > 100 { try? d.write(to: shotFile, options: .atomic) }
+    }
+}
 struct TVPress: AppIntent {
     static var title: LocalizedStringResource = "Press a key on the TV"
     static var isDiscoverable = false
@@ -174,9 +199,10 @@ struct TVPress: AppIntent {
     init() {}
     init(key: String) { self.key = key }
     func perform() async throws -> some IntentResult {
-        try await TVBridge.post("key", ["key": key])
-        // Long enough that the widget's refresh shows what the press did.
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        let pressed = Date()
+        // A short wait: a key answers in milliseconds, and a tunnel that's down shouldn't hold the widget's buttons.
+        try await TVBridge.post("key", ["key": key], timeout: 6)
+        await WidgetFresh.refresh(after: pressed)
         return .result()
     }
 }
@@ -184,8 +210,10 @@ struct TVPower: AppIntent {
     static var title: LocalizedStringResource = "Turn the TV on or off"
     static var description = IntentDescription("Wakes the TV if it’s asleep, and puts it to sleep if it’s on.")
     func perform() async throws -> some IntentResult {
+        let pressed = Date()
         // The Mac asks the TV which it is, so this never guesses.
-        try await TVBridge.post("power-toggle")
+        try await TVBridge.post("power-toggle", timeout: 20)
+        await WidgetFresh.refresh(after: pressed)
         return .result()
     }
 }
@@ -195,7 +223,14 @@ struct TVOpenApp: AppIntent {
     @Parameter(title: "App") var pkg: String
     init() {}
     init(pkg: String) { self.pkg = pkg }
-    func perform() async throws -> some IntentResult { try await TVBridge.post("open", ["pkg": pkg]); return .result() }
+    func perform() async throws -> some IntentResult {
+        let pressed = Date()
+        try await TVBridge.post("open", ["pkg": pkg], timeout: 10)
+        // The app takes a moment to be the one in front.
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        await WidgetFresh.refresh(after: pressed)
+        return .result()
+    }
 }
 struct TVOpenRemote: AppIntent {
     static var title: LocalizedStringResource = "Open the TV remote"

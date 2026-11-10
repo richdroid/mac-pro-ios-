@@ -404,7 +404,14 @@ struct FlickCardButton: View {
     // What a tap on a card does; the build's real-data flows tap through here too.
     @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil) {
         if model.isOnTV(item, source) { model.showOnRemote(); return }
-        if item.isYouTube { model.openYouTube(item); return }
+        if item.isYouTube {
+            // A YouTube video from Continue watching: thrown like anything else, and on the TV it opens in YouTube where
+            // he left it, the way a pasted link does. Under half a minute in isn't worth resuming: it starts from the top.
+            let at = item.resume ?? 0
+            let link = "https://www.youtube.com/watch?v=\(item.id)" + (at >= 30 ? "&t=\(at)" : "")
+            model.flick(FlickTarget(item: item, source: source, send: ("send", ["text": link]), lands: "com.google.android.youtube.tv", origin: origin))
+            return
+        }
         model.flick(FlickTarget(item: item, source: source, ready: ready, origin: origin))
     }
     var body: some View {

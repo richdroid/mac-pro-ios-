@@ -12,6 +12,11 @@ struct FlickTarget: Identifiable {
     var image: Image?
     var send: (String, [String: Any])?
     var sent: (() -> Void)?
+    // The app a plain send puts in front (YouTube for a video from Continue watching); Mint when nil.
+    var lands: String?
+    // Kept by `again` (the target "Choose another" starts from), so a start stays this flick's own through its retries:
+    // a fresh id there meant no flick ever owned its start, and the Mac's "playing" line never reached the Remote.
+    var lineage = UUID()
     // Straight to the card in the hand, with the best stream found for it: a re-flick, or the next episode.
     var ready = false
     // And thrown by itself once it's found, for the next episode, which is one tap.
@@ -232,11 +237,15 @@ struct FlickScreen: View {
         self.target = target
         let ref = target.source == .stremio && target.send == nil ? target.item.stremioRef : nil
         let posed = ["lift", "flickdemo", "flickdemo-stream"].contains(Self.pose) || Self.pose?.hasPrefix("flick-") == true
-        // A card that already names its episode, from Continue watching or a re-flick, needs no episode picked.
-        let ready = target.ready && (ref?.type == "movie" || ref?.video != nil)
-        // A show always opens on its own page, its episodes there to pick from with where he is in view, even from
-        // Continue watching: going straight to one episode's streams was "so static" (Richard, 2026-11-05).
-        _step = State(initialValue: ref == nil || posed || ready ? .flick : ref?.type == "series" ? .episodes : .streams)
+        // Anything that can be thrown as it is opens on the card in the hand, its best stream found for it: a film, or a
+        // card that already names its episode (Continue watching, Recently flicked, a re-flick). The streams and the
+        // show's page are a Back away (Richard, 2026-11-09: "whenever i click content i should be able to FLICK no matter
+        // what"). Only a show with no episode on its card opens on its own page first, its episodes there to pick from
+        // with where he is in view (Richard, 2026-11-05: one episode's streams straight away was "so static").
+        let direct = ref?.type == "movie" || ref?.video != nil
+        _step = State(initialValue: ref == nil || posed || direct ? .flick : .episodes)
+        // The streams page itself, for the build's shot of it.
+        if Self.pose == "streams" && ref != nil { _step = State(initialValue: .streams) }
         // After a start that failed, "Choose another" comes straight to the streams, the ones that didn't start set apart.
         if target.streamsFirst && ref != nil { _step = State(initialValue: .streams) }
         _failedTokens = State(initialValue: target.avoid)
@@ -448,7 +457,7 @@ struct FlickScreen: View {
             info = SeriesInfo.cached(ref.imdb)
             if info == nil { Task { let i = await SeriesInfo.load(ref.imdb); withAnimation(.easeOut(duration: 0.2)) { info = i } } }
         }
-        if target.ready { await pickBest() }
+        if step == .flick && video && stream == nil && !onTV { await pickBest() }
         else if step == .streams && streams.isEmpty { await findStreams() }
         await details
     }
@@ -689,10 +698,12 @@ struct FlickScreen: View {
             .transition(.opacity)
         }
     }
-    // An episode picked, from its row or the big key: its streams next.
+    // An episode picked, from its row or the big key: straight to the card with its best stream in hand (its streams
+    // were asked for as the page opened), the list of them a Back away; the list itself only when none is found.
     func choose(_ e: StremioEpisode) {
         if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All"; picked = false; runtime = nil; startOverChoice = nil; choseOnTV = false }
-        go(.streams)
+        go(.flick)
+        if stream == nil { Task { await pickBest() } }
     }
     func row<L: View>(selected: Bool, action: @escaping () -> Void, @ViewBuilder label: () -> L) -> some View {
         Button(action: action) {
@@ -1000,7 +1011,21 @@ struct FlickScreen: View {
                 .position(x: s.cardX, y: min(s.cardTop + cardHeight, s.floor))
             card(s.cardWidth)
                 .position(x: s.cardX, y: s.cardTop + cardHeight / 2)
+            // Where it'll start, and the other way, whenever he's been in it before: this sat by the stream rows, which
+            // the card no longer passes through, so it sits between the TV and the hand (Richard, 2026-11-07: "obv when
+            // i flick it should start from where i was"). Gone as the card lifts, so nothing sits under the throw; and
+            // not at all where the half in the hand leaves no room between the two.
+            if hasResume && !choseOnTV && video {
+                Chips(options: [(false, resumeLabel), (true, "Start over")], selected: Binding(get: { startOver }, set: { startOverChoice = $0 }))
+                    .fixedSize()
+                    .position(x: s.cardX, y: s.cardTop - 34)
+                    .opacity(arrived && !lifted && !flown && !returning && s.cardTop - s.tvBottom > 84 ? 1 : 0)
+                    .animation(.easeOut(duration: 0.15), value: lifted || flown)
+                    .accessibilityLabel(startOver ? "Starts over" : resumeLabel)
+            }
         }
+        // The running time, for the chip's "Resumes at 42:10", now that the card is the first thing he sees.
+        .task(id: episode?.id) { await loadRuntime() }
     }
     var screenURL: URL? { URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : item.art) }
     // What the TV's screen shows from 200 ms into the flight to the Remote: the Remote's own poster sat on a blur of
@@ -1333,7 +1358,7 @@ struct FlickScreen: View {
         // Stop only what this throw put on the TV (r24: a cancel before the request had left sent stop-playing and would
         // have closed a film he already had on). Never sent: nothing to stop. Sent but not on yet: stop it only if it turns
         // up there in the next 20 s.
-        let pkg = source == .mint || target.send != nil ? "com.codex.musicwebtv" : "com.stremio.one"
+        let pkg = target.lands ?? (source == .mint || target.send != nil ? "com.codex.musicwebtv" : "com.stremio.one")
         if written {
             let mine = target.send != nil || source == .mint ? true : alreadyOn
             if mine { model.post("stop-playing", ["pkg": pkg]) }
@@ -1620,7 +1645,9 @@ struct FlickScreen: View {
         if let ref = item.stremioRef, ref.type == "series", let v = episode?.id ?? ref.video {
             item = MediaItem(title: item.title, subtitle: item.subtitle, art: item.art, id: "stremio:///detail/series/\(ref.imdb)/" + (v.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? v), kind: item.kind)
         }
-        return FlickTarget(item: item, source: source)
+        var t = FlickTarget(item: item, source: source, image: target.image, send: target.send, lands: target.lands)
+        t.lineage = target.lineage
+        return t
     }
     // The throw (§2.5a C4). t = 0 at release: the request leaves now; the card flies for 320 ms, tipping in and flat
     // again as it lands, and from 200 ms it becomes the TV's picture; the impact is the end of that flight, not a clock;
@@ -1773,7 +1800,7 @@ struct FlickScreen: View {
     // while the start is still this flick's: a second flick (the next episode, one picked from the list) begins its own,
     // and the first's request runs on in the background; its "playing" marked the second's start as played before the TV
     // had it, so the Remote showed live keys and a bar for a film not yet on (2026-11-08, "the remote is still fucked").
-    var ownsStart: Bool { model.startingTarget?.id == target.id }
+    var ownsStart: Bool { model.startingTarget?.lineage == target.lineage }
     func took(_ p: String) {
         FlickClock.current.mark("phase-" + p)
         phase = p

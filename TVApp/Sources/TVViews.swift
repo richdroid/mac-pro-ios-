@@ -2558,7 +2558,7 @@ struct FilmCard: View {
     @Environment(TVModel.self) var model
     let film: Film
     var body: some View {
-        Button { model.tick(); model.flick(FlickTarget(item: film.media, source: .stremio)) } label: {
+        Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                     .frame(width: 118, height: 177).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -2589,7 +2589,7 @@ struct FilmList: View {
     var body: some View {
         RowList(title: title) {
             ForEach(films) { film in
-                Button { model.tick(); model.flick(FlickTarget(item: film.media, source: .stremio)) } label: {
+                Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio) } label: {
                     HStack(spacing: 12) {
                         Art(url: URL(string: film.poster)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                             .frame(width: 50, height: 75).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))

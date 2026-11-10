@@ -117,6 +117,23 @@ jobs:
               echo "film $name empty, once more"; RETRIED=1 swipefilm "$name" "$display" "$x" "$lo" "$hi" "$address" "$@"
             fi
           }
+          # A pushed page swiped off by its left edge, slowly, filmed: it must slide away whole, nothing on it compacting,
+          # wrapping or re-flowing as it goes (Richard, 2026-11-09: "when u swipe a page off screen the elements compact as
+          # u do so ... make sure that doesnt occur anywhere"). Judged in frames, never from one still.
+          backfilm() {
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $wait
+            $D "$DEVICE" drag 0.01 0.5 0.7 0.5 1.5 || echo "back drag failed"
+            sleep 2.5
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            if [ "$(stat -f %z dist/tv-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
+          }
           # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
@@ -134,6 +151,10 @@ jobs:
           # The same pulls with the readings changing every two seconds under the finger (the mock's /live scene): the
           # static scenes' releases decayed over 0.4–0.7 s; a reading landing as the finger lifts is the remaining suspect.
           swipefilm flinglive-portrait 3 0.5 0.8 0.25 $M/live -tab 1
+          # The details page, the Stremio page and the Continue watching list swiped off slowly, open upright.
+          backfilm back-details-portrait 3 13 $M -tab 1 -pose details
+          backfilm back-browse-portrait 3 9 $M -tab 1 -pose browse
+          backfilm back-row-portrait 3 12 $M -tab 1 -pose stremiorow
           # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -open
@@ -206,6 +227,10 @@ jobs:
           swipefilm flingbrowse 1 0.5 0.8 0.25 $M -tab 1 -pose browse
           # Folded, Apps fits the screen and can't be pulled; Playing can, and its player follows the song's playing and pausing.
           swipefilm flinglive 1 0.5 0.8 0.25 $M/live -tab 2
+          # And folded: the same pages swiped off by the outer display's left edge.
+          backfilm back-details 1 13 $M -tab 1 -pose details
+          backfilm back-browse 1 9 $M -tab 1 -pose browse
+          backfilm back-row 1 12 $M -tab 1 -pose stremiorow
           ls dist
       - name: Publish
         if: always()
