@@ -903,8 +903,10 @@ struct HomeTab: View {
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
-                            // The same top line as the left pane's first thing, the wordmark, rather than a guessed gap.
-                            Color.clear.frame(height: Self.wordTop)
+                            // Level with the device, not the wordmark: the controls are the Chumby's, so they start where its
+                            // picture does, and the two panes read as one (Richard, 2026-11-09, open flat: "the stuff on the
+                            // right side is like too far up"). The same sum as the stage's top padding, at rest.
+                            Color.clear.frame(height: Self.wordTop + Self.wordHeight + restGap + octLift)
                             controls
                             more.padding(.top, Self.sectionGap)
                         }.padding(.horizontal, 12)
