@@ -284,7 +284,7 @@ jobs:
                      "homeplaying 0 playing" "homenight 0 night" "caldayedit 2 - -pose caldayedit" "justonce 0 - -pose justonce" \
                      "caldayown 2 - -pose caldayown" "reskip 2 skipped -pose reskip" "orphan 0 orphan" "orphan-alarms 2 orphan" \
                      "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce" \
-                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor"; do
+                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "napset-home 0 nap"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
@@ -411,7 +411,7 @@ jobs:
             for V in "calday 2 - -pose calday" "caldayedit 2 - -pose caldayedit" "caldayown 2 - -pose caldayown" "justonce 0 - -pose justonce" \
                      "skipped 0 skipped" "alarmsmine 2 - -pose alarmsmine" "calsettings 2 - -pose calsettings" \
                      "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce" \
-                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "editornew 2 - -pose editornew"; do
+                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "editornew 2 - -pose editornew" "napset-home 0 nap"; do
               set -- $V
               ADDR=http://127.0.0.1:9000; [ "$3" != "-" ] && ADDR=$ADDR/$3
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $2 "${@:4}"
@@ -823,6 +823,11 @@ jobs:
             $D "$DEVICE" tap "Tone" || true; sleep 2.5
             $D "$DEVICE" tap "Repeat" || true; sleep 2.5
             $D "$DEVICE" tap "Once" || true; sleep 3
+            $D "$DEVICE" tap "Plays" || true; sleep 2.5
+            $D "$DEVICE" tap "Pandora" || true; sleep 2.5
+            $D "$DEVICE" tap "Plays for" || true; sleep 2.5
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/chumby-pose-playsfor.png
+            $D "$DEVICE" tap "Until I stop it" || true; sleep 3
             kill -INT $REC; wait $REC; echo "chumby menufilm editor exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/chumby-menufilm-channels.mp4 > /dev/null 2>&1 & REC=$!
@@ -831,6 +836,9 @@ jobs:
             sleep 8
             $D "$DEVICE" tap "Channel, Default" || true; sleep 2.5
             $D "$DEVICE" tap "News" || true; sleep 4
+            $D "$DEVICE" tap "Time on screen" || true; sleep 2.5
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/chumby-pose-widgettime.png
+            $D "$DEVICE" tap "Auto" || true; sleep 3
             kill -INT $REC; wait $REC; echo "chumby menufilm channels exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }

@@ -524,11 +524,12 @@ struct AlarmsTab: View {
             page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
         }
     }
-    // Folded, top to bottom as he uses it: what rings next (with Skip), then the calendar's alarms, then his own, then a
-    // nap. Open, the calendar's sit under the hero on the left and his own and the nap on the right, always. The two kinds never look alike: the calendar's have a coral page-of-a-calendar tile and say which event and
-    // how long before it; his own have a blue alarm tile and say when they repeat (Richard, 2026-11-05: "theres little to
-    // no distinction between daily alarms and calendar alarms its just super unintuitive"). Night times moved to Tinker,
-    // and "Woke up to" to Sounds.
+    // Folded, top to bottom as he uses it: what rings next (with Skip), then his own alarms, then the calendar's, then a
+    // nap. Open, his own sit under the hero on the left and the calendar's and the nap on the right, always: My alarms
+    // first and Calendar under it in every posture (Richard, 2026-11-10). The two kinds never look alike: the calendar's
+    // have a coral page-of-a-calendar tile and say which event and how long before it; his own have a blue alarm tile
+    // and say when they repeat (Richard, 2026-11-05: "theres little to no distinction between daily alarms and calendar
+    // alarms its just super unintuitive"). Night times moved to Tinker, and "Woke up to" to Sounds.
     var page: some View {
         TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
             // Add alarm is never a loose circle: it's the last row of My alarms (below).
@@ -551,13 +552,13 @@ struct AlarmsTab: View {
                     }
                 } footer: { Text("The Chumby was frozen or off when these came due.") }
             }
-            calendar
+            yours
         } right: {
             switch paneShown {
             case .schedule:
-                // The nap always sits under his own alarms, open or folded, whatever the calendar's doing: it used to cross
-                // to the left pane whenever the calendar had nothing listed, so it was never in one place.
-                yours
+                // The nap keeps one place, under the calendar's, open or folded, whatever the calendar's doing: it used to
+                // cross panes whenever the calendar had nothing listed, so it was never in one place.
+                calendar
                 nap
             case .settings: CalendarSettingsSections()
             case .editor(let a): AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new")
@@ -721,6 +722,18 @@ struct AlarmsTab: View {
                         }
                         .buttonStyle(.glass).disabled(skipping || model.unreachable)
                         .accessibilityLabel("Back to the usual \(u.formatted(date: .omitted, time: .shortened)) alarm")
+                    } else if n.alarm.name == "Nap", model.sys.ringing == nil {
+                        // A nap isn't skipped, it's called off: the same as the nap row's switch and its editor (Richard,
+                        // 2026-11-10: a nap's card says "Cancel nap").
+                        Button {
+                            skipping = true
+                            Task { await model.cancelNap(); skipping = false }
+                        } label: {
+                            Group { if skipping { ProgressView() } else { Label("Cancel nap", systemImage: "xmark") } }
+                                .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
+                        }
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .accessibilityLabel("Cancel the nap")
                     } else if model.state.skipKnown && !skippedNow && model.sys.ringing == nil {
                         // The one thing he'd reach for here: let it pass. Only on a Chumby that can skip, and not twice.
                         Button {
@@ -735,7 +748,7 @@ struct AlarmsTab: View {
                     }
                 }
                 if let f = model.failed("skip") { FailNote(text: f) }
-                JustOnceMenu()
+                // No "just this once" door here: Home's card and the alarm's own editor have it (Richard, 2026-11-10).
             }
             .padding(.vertical, 2)
             // A nap starting or called off rolls the time over rather than swapping it.
@@ -1028,11 +1041,23 @@ struct SoundChoice: Equatable {
         default: break
         }
         if kind == "none" { a.duration = "0" } else if a.duration == "0" { a.duration = "30" }
+        // The control panel never rings a tone marked to end by itself (Alarm.ringAlarm: "cannot autoDismiss Beep-type
+        // alarm!", and nothing plays), so a tone is always written as waiting to be stopped. Music keeps what was chosen.
+        if kind == "beep" { a.auto_dismiss = "0" }
         return nil
     }
+    // Whether the sound is music (a stream or Pandora), the only kind the Chumby can end by itself.
+    var isMusic: Bool { kind == "stream" || kind == "pandora" }
 }
-// The editor's sound rows: what it plays (with a try on the Chumby for a tone), for how long, the snooze, and whether
-// it stops on its own. `alarm` holds the length, snooze and stop; `choice` the sound.
+// The editor's sound rows: what it plays (with a try on the Chumby for a tone), for how long, and the snooze. `alarm`
+// holds the length and snooze; `choice` the sound.
+// "Plays for" is one control (Richard, 2026-11-10: "Plays for 30 minutes" beside "Stop on its own: off" read as a
+// contradiction). What the Chumby's control panel does, read from Alarm.ringAlarm and stepAlarmSoundContinuous: the sound
+// plays for `duration` minutes (-1: until stopped) and then goes quiet, and the alarm screen (Snooze, Stop) stays up until
+// he stops it; with auto_dismiss, music plays that long and the alarm then ends by itself, with no screen and no
+// snooze, and its "after" action is skipped. So the lengths are the choices, "Until I stop it" is -1, and for music
+// only, a second group of lengths "ends by itself" sets auto_dismiss. The same fields and values as before for the same
+// choices.
 struct SoundRows: View {
     @EnvironmentObject var model: ChumbyModel
     @Binding var choice: SoundChoice
@@ -1067,17 +1092,40 @@ struct SoundRows: View {
         }
         if kind == "keep" { LabeledContent("Plays", value: alarm.soundText) }
         if kind != "none" {
-            Picker("Plays for", selection: $alarm.duration) {
-                ForEach([("1", "1 minute"), ("5", "5 minutes"), ("10", "10 minutes"), ("15", "15 minutes"), ("30", "30 minutes"), ("60", "1 hour"), ("120", "2 hours"), ("-1", "Until stopped")], id: \.0) { Text($0.1).tag($0.0) }
+            let music = choice.isMusic || kind == "keep"
+            Picker("Plays for", selection: playsFor) {
+                ForEach(SoundRows.lengths(including: alarm.duration), id: \.0) { Text($0.1).tag($0.0) }
+                Text("Until I stop it").tag("-1")
+                // Only music can end by itself; the Chumby never rings a tone marked that way.
+                if music {
+                    Section {
+                        ForEach(SoundRows.lengths(including: alarm.duration).filter { $0.0 != "1" }, id: \.0) { Text("\($0.1), ends by itself").tag("auto:" + $0.0) }
+                    }
+                }
             }
         }
         Picker("Snooze", selection: $alarm.snooze) {
             ForEach(SoundRows.snoozes(including: alarm.snooze), id: \.self) { Text("\($0) min").tag($0) }
         }
-        Toggle("Stop on its own", isOn: Binding(get: { alarm.auto_dismiss == "1" }, set: { alarm.auto_dismiss = $0 ? "1" : "0" }))
-            .background { tail }
+        .background { tail }
+    }
+    // The one choice over the alarm's length and whether it ends by itself: "30" plays 30 minutes and waits to be
+    // stopped; "auto:30" plays 30 minutes and ends; "-1" plays until stopped.
+    var playsFor: Binding<String> {
+        Binding(get: {
+            let d = alarm.duration
+            return alarm.auto_dismiss == "1" && d != "-1" && (choice.isMusic || kind == "keep") ? "auto:" + d : d
+        }, set: { v in
+            if v.hasPrefix("auto:") { alarm.duration = String(v.dropFirst(5)); alarm.auto_dismiss = "1" }
+            else { alarm.duration = v; alarm.auto_dismiss = "0" }
+        })
     }
     // The usual lengths, and the alarm's own if it's another (set on the Chumby), so the picker never shows nothing.
+    static func lengths(including d: String) -> [(String, String)] {
+        let usual = [("1", "1 minute"), ("5", "5 minutes"), ("10", "10 minutes"), ("15", "15 minutes"), ("30", "30 minutes"), ("60", "1 hour"), ("120", "2 hours")]
+        guard let m = Int(d), m > 0, !usual.contains(where: { $0.0 == d }) else { return usual }
+        return (usual + [(d, m % 60 == 0 ? "\(m / 60) hours" : "\(m) minutes")]).sorted { (Int($0.0) ?? 0) < (Int($1.0) ?? 0) }
+    }
     static func snoozes(including s: String) -> [String] {
         let usual = ["1", "3", "5", "9", "10", "15", "20", "30", "60"]
         return usual.contains(s) || Int(s) == nil ? usual : (usual + [s]).sorted { (Int($0) ?? 0) < (Int($1) ?? 0) }

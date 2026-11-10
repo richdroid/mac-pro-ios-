@@ -654,9 +654,12 @@ struct CalendarDaySheet: View {
             if edit.own != nil {
                 SoundRows(choice: $ownSound, alarm: $ownAlarm, tail: AnyView(foot))
             } else {
+                // The shared set, as information: dimmed, nothing to tap, and where it's changed (Richard, 2026-11-10:
+                // read-only rows look read-only).
                 let r = wake.ringsWith(model.state)
-                LabeledContent("Plays", value: r.sound).lineLimit(1).background { foot }
-                if let z = r.snooze { LabeledContent("Snooze", value: "\(z) min").background { foot } }
+                LabeledContent("Plays", value: r.sound).lineLimit(1).foregroundStyle(.secondary).background { foot }
+                if let z = r.snooze { LabeledContent("Snooze", value: "\(z) min").foregroundStyle(.secondary).background { foot } }
+                Text("How every calendar alarm rings; change it in Calendar settings.").font(.footnote).foregroundStyle(.secondary).background { foot }
             }
             if let j = model.state.justOnce(for: item) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {

@@ -259,7 +259,9 @@ struct JustOnceSheet: View {
                     ToolbarItem(placement: .confirmationAction) {
                         if saving { ProgressView() } else {
                             Button { if !original.isCalendar, model.pinWarning != nil { confirm = true } else { save(replacing: false) } } label: { Label("Set", systemImage: "checkmark") }.fontWeight(.semibold)
-                                .confirmationDialog(model.pinWarning ?? "", isPresented: $confirm, titleVisibility: .visible) {
+                                // What it replaces is said once, in the note at the top of the sheet; this only asks
+                                // (Richard, 2026-11-10: the same sentence twice).
+                                .confirmationDialog("Replace that skip?", isPresented: $confirm, titleVisibility: .visible) {
                                     Button("Replace and set") { save(replacing: true) }
                                 }
                         }

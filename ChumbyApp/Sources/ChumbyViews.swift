@@ -1513,7 +1513,8 @@ struct ChannelsTab: View {
             if let f = model.failed("catalog") { FailNote(text: f) }
         } header: { Text("From the catalog").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil) }
     }
-    // A widget in the channel: its name, and its time on screen on the right, well clear of it. Swipe (or hold) to remove.
+    // A widget in the channel: its name, its time on screen on the right, well clear of it, and the mark that takes it out
+    // of the channel at the row's end (Richard, 2026-11-10: the ⊖, not a Remove in the time's menu too).
     func widgetRow(_ w: EditorRow) -> some View {
         HStack(alignment: .center, spacing: 14) {
             Text(w.name).lineLimit(1)
@@ -1523,9 +1524,6 @@ struct ChannelsTab: View {
                     Text(w.own > 0 ? "Auto (\(w.own)s)" : "Auto").tag(0)
                     ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
                 }
-                // Taking it out lives with its other choice, not behind a swipe that slides the row off its card.
-                Divider()
-                Button("Remove from \(pickedTitle)", systemImage: "minus.circle", role: .destructive) { MenuClose.then { remove(w.id) } }
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "timer")
@@ -1538,9 +1536,9 @@ struct ChannelsTab: View {
             }
             .accessibilityLabel("Time on screen")
             .onChange(of: w.secs) { _, _ in changed() }
+            RowRemove(label: "Remove \(w.name) from \(pickedTitle)") { remove(w.id) }
         }
         .padding(.vertical, 4)
-        .contextMenu { Button("Remove from \(pickedTitle)", systemImage: "minus.circle", role: .destructive) { remove(w.id) } }
         .listRowBackground(GlassRow().overlay(ChumbyPalette.acc(scheme == .dark).opacity(justAdded == w.id ? 0.22 : 0)))
     }
     // The end of the list: one row, tapped anywhere, that opens the picker.
@@ -1845,7 +1843,7 @@ struct SoundsTab: View {
             Section { NowPlaying(tab: 3, failID: "sounds") } header: { SectionHead(icon: "speaker.wave.2.fill", text: "Now", color: ChumbyPalette.sub(dark)) }
             Section {
                 Toggle(isOn: Binding(get: { model.sys.airplayOn }, set: { on in model.sys.airplayOn = on; model.cmd("airplay", on ? "1" : "0", id: "airplay") })) {
-                    Label("AirPlay to Chumby", systemImage: "airplayaudio")
+                    Label("Accept AirPlay", systemImage: "airplayaudio")
                 }
                 if let f = model.failed("airplay") { FailNote(text: f) }
             }
@@ -2170,7 +2168,8 @@ struct NightSettings: View {
                         }
                         .accessibilityElement(children: .contain)
                     Spacer(minLength: 8)
-                    // What happens at that time, and taking the time out, in one menu.
+                    // What happens at that time. Taking the time out is the mark at the row's end alone (Richard,
+                    // 2026-11-10: keep the ⊖, not "Remove this time" in the menu too).
                     Menu {
                         Picker("What happens", selection: Binding(get: { tag(e) }, set: { v in
                             let parts = v.split(separator: ":", maxSplits: 1).map(String.init)
@@ -2179,8 +2178,6 @@ struct NightSettings: View {
                         })) {
                             ForEach(actions, id: \.0) { Text($0.1).tag($0.0) }
                         }
-                        Divider()
-                        Button("Remove this time", systemImage: "trash", role: .destructive) { MenuClose.then { remove(e.id) } }
                     } label: {
                         // In a word or two: beside the time, folded, "Night starts" was cut to "Night st…" (build 241). The
                         // menu itself says it in full.
@@ -2194,8 +2191,8 @@ struct NightSettings: View {
                         .layoutPriority(1)
                     }
                     .accessibilityLabel("At \(e.time): \(words(e))")
-                    // Taking a time out is a control he can see in the row, as on the X widget's rows; it was only at the
-                    // foot of the menu (Richard, 2026-11-09: "i should be able to delete an entry for the night time thing").
+                    // Taking a time out is a control he can see in the row, as on the X widget's rows (Richard, 2026-11-09:
+                    // "i should be able to delete an entry for the night time thing").
                     RowRemove(label: "Remove the \(words(e).lowercased()) time") { remove(e.id) }
                 }
             }
@@ -2297,6 +2294,9 @@ struct SkipCard: View {
     private var movedOne: JustOnceNow? { model.state.justOnce().flatMap { $0.pinned ? $0 : nil } }
     private var moved: Date? { movedOne?.at }
     private var usual: Date? { movedOne?.usual }
+    // The nap set, when it's what rings next: it's called off, never skipped, the same way the nap row and its editor
+    // call it off (Richard, 2026-11-10: a nap's card says "Cancel nap").
+    private var napNext: Bool { moved == nil && skipped == nil && model.nextRing()?.alarm.name == "Nap" }
     private func send(_ skip: Bool) {
         // The same ask twice in a row (two taps on Undo) is one ask.
         if pending && lastAsked == skip { return }
@@ -2305,7 +2305,8 @@ struct SkipCard: View {
         let before = queue
         queue = Task {
             await before?.value
-            if skip { await model.skipNext() }
+            if skip && napNext { await model.cancelNap() }
+            else if skip { await model.skipNext() }
             else if moved != nil { if let why = await model.undoJustOnce() { model.fail("skip", why) } }
             else { await model.unskip() }
             inflight -= 1
@@ -2319,7 +2320,7 @@ struct SkipCard: View {
             HStack(spacing: 7) {
                 ZStack(alignment: .leading) {
                     if struck { Text("Skipped").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
-                    else { Text(moved != nil ? "Just this once" : "Skip next alarm").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
+                    else { Text(moved != nil ? "Just this once" : napNext ? "Cancel nap" : "Skip next alarm").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
                 }
                 .font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
                 if pending { ProgressView().controlSize(.mini).tint(.white.opacity(0.85)).transition(.opacity) }
@@ -2364,7 +2365,7 @@ struct SkipCard: View {
                             SleepyOctopus(asleep: asleep, tint: .white)
                             lines(next.0, next.1, struck: asleep)
                             Spacer(minLength: 8)
-                            Image(systemName: "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
+                            Image(systemName: napNext ? "xmark" : "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
                                 .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
                                 .opacity(asleep || moved != nil ? 0 : 1)
                                 // Room for Undo, which sits over this end of the slab.
@@ -2378,7 +2379,7 @@ struct SkipCard: View {
                 }
                 .buttonStyle(GelPress(enabled: !asleep && moved == nil))
                 .disabled(asleep || moved != nil)
-                .accessibilityLabel(moved != nil ? "Just this once, \(time(next.0)) alarm" : asleep ? "Skipped, \(time(next.0)) alarm" : "Skip the \(time(next.0)) alarm, \(day(next.0))")
+                .accessibilityLabel(moved != nil ? "Just this once, \(time(next.0)) alarm" : asleep ? "Skipped, \(time(next.0)) alarm" : napNext ? "Cancel the nap" : "Skip the \(time(next.0)) alarm, \(day(next.0))")
                 .overlay(alignment: .trailing) {
                     if asleep && moved == nil {
                         Button { send(false) } label: {
