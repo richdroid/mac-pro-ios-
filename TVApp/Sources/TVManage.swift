@@ -73,8 +73,25 @@ struct SettingsAction: View {
 }
 
 struct ManageAppsView: View {
+    @Environment(TVModel.self) private var model
     @ObservedObject var store: ManageStore
     @State private var removing: ManageState.App?
+    #if os(iOS)
+    @Environment(\.editMode) private var editMode
+    #endif
+    // Edit, then Done: the list's own edit mode, switched the way EditButton switches it, but as an item with a glyph, so
+    // on the Duo it sits in the side bar under Back as the HIG orders a page's prominent action. EditButton is its words
+    // alone, and iOS sets no title-only item vertically.
+    @ViewBuilder var editToggle: some View {
+        #if os(iOS)
+        let on = editMode?.wrappedValue.isEditing == true
+        Button { model.tick(); withAnimation(.snappy) { editMode?.wrappedValue = on ? .inactive : .active } } label: {
+            Label(on ? "Done" : "Edit", systemImage: on ? "checkmark" : "pencil")
+        }
+        #else
+        EmptyView()
+        #endif
+    }
     func rows(_ s: ManageState) -> [String] {
         var seen = Set<String>()
         return s.apps.map { $0.row ?? "APPS" }.filter { seen.insert($0).inserted }
@@ -140,8 +157,11 @@ struct ManageAppsView: View {
         .summonsBar()
         .topShade().topFade()
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-        // Edit sits in the page's bar, beside the way back.
-        .barPage { if store.state?.canArrange == true { EditButton().font(.subheadline.weight(.semibold)).padding(.leading, 6).padding(.trailing, 16).frame(height: 50) } }
+        // Edit is the system's own item in the page's bar: on the Duo, in the side bar under Back (folded, and open in
+        // landscape), in the top bar open in portrait. It sat in a glass capsule of this page's own at the foot (ruling
+        // 2026-11-10: a page's actions go through the system's bar, never a hand-built pill).
+        .barPage()
+        .toolbar { if store.state?.canArrange == true { ToolbarItem(placement: .primaryAction) { editToggle } } }
         .refreshable { await store.load() }
         .task { await store.load() }
         // Asked from a swipe, which leaves nothing to point at, so it's a plain question in the middle.
