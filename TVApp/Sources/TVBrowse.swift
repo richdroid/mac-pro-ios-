@@ -350,6 +350,7 @@ struct BrowseColumn: View {
                         .onChange(of: store.query) { _, _ in store.searchSoon() }
                     if !store.query.isEmpty {
                         Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search")
+                            .transition(.opacity)
                     }
                 }
                 .padding(.horizontal, 16).frame(height: 46)
@@ -378,6 +379,10 @@ struct BrowseColumn: View {
             }
             .scrollTargetLayout()
             .padding(.vertical, 12)
+            // The rows arrive, and give way to what a search finds, with a fade: the lists are set outside any animation,
+            // so they cut in and out (the 2026-11-10 motion pass).
+            .animation(.easeOut(duration: 0.25), value: shown.map(\.title))
+            .animation(.easeOut(duration: 0.25), value: store.query.isEmpty)
         }
         .restsOnRows()
         // Scrolling the results puts the keyboard away, as does opening one.

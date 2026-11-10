@@ -903,6 +903,9 @@ struct ShowEpisodes: View {
                     }
                 }
             }
+            // The episodes fade in over their waiting rows, which they replace in place, rather than cutting in (the
+            // 2026-11-10 motion pass).
+            .animation(.easeOut(duration: 0.25), value: meta == nil)
             .task(id: nextUp.series) {
                 guard let s = nextUp.series else { return }
                 info = SeriesInfo.cached(s.imdb)

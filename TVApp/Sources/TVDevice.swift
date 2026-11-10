@@ -104,6 +104,8 @@ struct DeviceTab: View {
                 Text(failed ? "Can’t reach it" : model.status?.screen == "asleep" ? "Asleep" : "Awake")
             }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).tvCard(14).padding(.top, 6)
+            // The dot's colour eases between green and orange, as the tiles do, rather than switching in a frame.
+            .animation(.easeOut(duration: 0.3), value: failed)
         }
         .frame(maxWidth: .infinity)
     }
@@ -195,6 +197,9 @@ struct DeviceTab: View {
             } right: {
                 ScrollView {
                     VStack(spacing: 18) { if let info { tiles(info); details(info) } else if !failed { waitingTiles } }.padding(20)
+                        // The tiles fade in over their waiting shapes (the first answer is set with no animation, so the
+                        // name over them doesn't crossfade; the shapes here are theirs to replace).
+                        .animation(.easeOut(duration: 0.25), value: info == nil)
                         .task(id: phase) { await poll() }
                 }
                 .backToTop()
@@ -203,7 +208,9 @@ struct DeviceTab: View {
             ScrollView {
                 VStack(spacing: 18) {
                     hero
-                    if let info { tiles(info); details(info) } else if !failed { waitingTiles }
+                    // As open: the tiles fade in over their shapes; the name above stays out of the fade.
+                    Group { if let info { tiles(info); details(info) } else if !failed { waitingTiles } }
+                        .animation(.easeOut(duration: 0.25), value: info == nil)
                 }
                 .padding(.horizontal, 16).padding(.bottom, 16)
                 .task(id: phase) { await poll() }

@@ -64,6 +64,16 @@ struct RootView: View {
         }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
         if ["tour", "type", "episodes", "scrub", "island"].contains(pose) { return }
+        // The Remote's picture hidden, then shown again, as its held menu does it: filmed, so each change is seen to fade.
+        if pose == "mirror" {
+            Task {
+                try? await Task.sleep(nanoseconds: 7_000_000_000)
+                model.setMirror(false)
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                model.setMirror(true)
+            }
+            return
+        }
         // A title's details page, pushed over Stremio's page (AppBrowse opens it once the rows are in).
         if pose == "details" { model.tab = 1; model.browsing = .stremio; return }
         // The real-data flows (CI's /real scene): each taps through the same code a finger would.
@@ -252,11 +262,16 @@ private struct ProblemBanner: View {
         return nil
     }
     var body: some View {
-        if let problem {
-            // Snug to the top edge, so its foot stays clear of the title under it.
-            Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 6)
-                .background(Color.red.opacity(0.85), in: Capsule())
+        ZStack {
+            if let problem {
+                // Snug to the top edge, so its foot stays clear of the title under it.
+                Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 6)
+                    .background(Color.red.opacity(0.85), in: Capsule())
+                    // In from the top edge and back out, never popped on and off over the title.
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
+        .animation(.spring(response: 0.4, dampingFraction: 0.9), value: problem)
     }
 }
 private struct ToastBubble: View {
@@ -723,6 +738,10 @@ struct SendBar: View {
         }
         .frame(height: 50)
         .glassEffect(.regular, in: Capsule())
+        // The glyph at the front and the key at the end follow what's typed (search, a link, nothing): the front's symbol
+        // replace only runs inside an animation, and the end's key popped from clipboard to x as the first letter went in.
+        .animation(.easeOut(duration: 0.2), value: link)
+        .animation(.easeOut(duration: 0.2), value: draft.text.isEmpty)
     }
     func submit() { if link { model.send(draft.text); draft.text = "" } }
 }
@@ -802,6 +821,12 @@ struct MirrorView: View {
     // The picture drawn, which only moves on to a new one once it's loaded, then fades in over what was there: the
     // flicked poster gives way to the TV's own without a frame of empty glass between. Unset until first drawn.
     @State private var drawn: URL??
+    // Which of the pictures below is up, apart from the poster itself (that's `film`).
+    var look: Int {
+        if !model.mirrorLive { return 0 }
+        if let s = model.starting, !s.played { return 1 }
+        return model.filmOnScreen ? 2 : 3
+    }
     var body: some View {
         let film = drawn ?? self.film
         ZStack {
@@ -848,10 +873,15 @@ struct MirrorView: View {
             if closable, model.mirrorLive {
                 Button { model.setMirror(false) } label: { Image(systemName: "eye.slash").font(.system(size: 15, weight: .semibold)).frame(width: 40, height: 40).contentShape(Circle()) }
                     .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).padding(10).accessibilityLabel("Hide the TV’s screen")
+                    .transition(.opacity)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
         .animation(.easeOut(duration: 0.25), value: film)
+        // Every other change of what the picture is (the live screen to a poster's place, hidden and shown again) fades
+        // the same way: the live picture cut to the TV glyph the frame a film's status came in, before its poster was
+        // known (tv21 posture-remote 9.06 → 9.15 s), and hiding the screen swapped it for the blurred art in one frame.
+        .animation(.easeOut(duration: 0.25), value: look)
         .task(id: self.film) {
             let next = self.film
             guard let current = drawn else { drawn = .some(next); return }
@@ -1098,6 +1128,9 @@ struct PlayKey: View {
             Image(systemName: playing == true ? "pause.fill" : "play.fill")
                 .font(.system(size: size * 0.36, weight: .semibold)).foregroundStyle(.black.opacity(0.85))
                 .contentTransition(.symbolEffect(.replace))
+                // The swap is the symbol's own, on the press and on the TV's word alike: neither set the glyph inside an
+                // animation, so the replace never ran and ▶ cut to ⏸ (tv21 realpause 8.49 → 8.59 s, no frame between).
+                .animation(.snappy(duration: 0.25), value: playing)
                 .frame(width: size, height: size).background(tint, in: Circle())
                 .shadow(color: tint.opacity(glow ? 0.45 : 0), radius: 14, y: 4)
                 .animation(.easeOut(duration: 0.2), value: glow)
@@ -1220,15 +1253,8 @@ struct RemoteTab: View {
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: dark)
-            // Held, the picture offers to show or hide itself: the one place for it, folded and open, instead of an eye
-            // floating over the side bar (review of dfd490e).
-            .contextMenu {
-                if !dark {
-                    Button { model.tick(); model.setMirror(!model.mirrorLive) } label: {
-                        Label(model.mirrorLive ? "Hide the TV’s screen" : "Show the TV’s screen", systemImage: model.mirrorLive ? "eye.slash" : "eye")
-                    }
-                }
-            }
+            // One door each way: the eye at the picture's corner hides it, and the one key on the hidden picture shows it.
+            // A held menu on the picture offered both a second time (the 2026-11-10 logic pass).
             .opacity(model.flickHandoff ? 0 : 1)
             // Laid out first, at the full width, so the bar or a player coming in under it never shrinks it, and a flick's
             // screen moving onto it lands where it stays.
@@ -1265,6 +1291,9 @@ struct RemoteTab: View {
             if session && !(typing && size != .regular) { transport.transition(.opacity) }
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
         }
+        // The TV's status is never set inside an animation, so the row came and went in one frame as something started
+        // or ended on the TV. It fades, like the lines under the picture (the 2026-11-10 motion pass).
+        .animation(.easeOut(duration: 0.25), value: session)
     }
     // The one transport, the same as Playing's, on the top row's five places.
     var transport: some View { Transport(glow: !typing) }
@@ -1322,6 +1351,10 @@ struct RemoteTab: View {
             Spacer(minLength: 0)
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
+        // The bar and the episode line come and go with the TV's status, which is set with no animation: faded in and
+        // out here rather than popped (the 2026-11-10 motion pass). Their room is kept either way (PictureColumn).
+        .animation(.easeOut(duration: 0.25), value: session)
+        .animation(.easeOut(duration: 0.25), value: seriesOn)
         .padding(.horizontal, 20).padding(.bottom, 16)
     }
     // The pad and the keys, the second column wherever the Remote has two.
@@ -1370,6 +1403,9 @@ struct RemoteTab: View {
                     .modifier(KeysArrive(gate: keysGate))
                 }
                 .animation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
+                // As open: the lines under the picture fade with the TV's status rather than pop.
+                .animation(.easeOut(duration: 0.25), value: session)
+                .animation(.easeOut(duration: 0.25), value: seriesOn)
                 .padding(.horizontal, 14).padding(.bottom, 12)
             }
         }
@@ -1803,6 +1839,9 @@ struct Transport: View {
         .allowsHitTesting(!connecting)
         // Coming up only once ⏯ has swapped to what the TV said: as one, the bright ▶ showed for a frame before ⏸ (r34).
         .animation(.easeOut(duration: 0.2).delay(connecting ? 0 : 0.3), value: connecting)
+        // The outer keys change kind with the app on the TV (Stremio's own seek and episode keys, else the TV's media
+        // keys): a crossfade, not a swap, as the status comes in.
+        .animation(.easeOut(duration: 0.2), value: stremio)
     }
     var connecting: Bool { playing == nil && starting == nil && model.staleStatus }
 }
@@ -1982,6 +2021,9 @@ struct AppsTab: View {
                         }
                     }
                     .padding(.vertical, 12)
+                    // The rows give way to the results with the same fade as folded: open, they vanished and the results'
+                    // box popped in (tv21 realsearch-open 16.65 → 17.71 s, no frame between).
+                    .animation(.snappy, value: query == nil)
                 }
                 .scrollDismissesKeyboard(.immediately)
                 .backToTop(posed: false)
@@ -2089,6 +2131,8 @@ struct Shelf: View {
                 PlaceholderShelf(cardWidth: w, cardHeight: MediaCard.height(w, store.source), headed: true)
             } else { Color.clear.frame(height: 0) }
         }
+        // The row fades in over its waiting shapes, which it replaces in place, rather than cutting in.
+        .animation(.easeOut(duration: 0.25), value: row == nil)
         .task { await store.load() }
     }
 }
@@ -2222,9 +2266,8 @@ struct FlickCard: View {
                 Text(title.isEmpty ? "Tap to AirPlay" : "Tap to send to the TV").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
-            // The same thing as a flick, for when a flick isn't handy.
-            Button(action: flick) { Image(systemName: "arrow.up.circle.fill").font(.title2).frame(width: 44, height: 44).contentShape(Rectangle()) }
-                .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Send to the TV")
+            // No arrow key beside the words: a tap anywhere on the card sends, as the line under the title says, and the
+            // key did the very same thing (Richard, 2026-11-02: "the arrow button is unnecessary"; the 2026-11-10 logic pass).
             #if os(iOS)
             if reach.inReach { RoutePicker().frame(width: 44, height: 44).accessibilityLabel("AirPlay").transition(.opacity) }
             #endif
@@ -2233,6 +2276,8 @@ struct FlickCard: View {
         .tvCard()
         .contentShape(Rectangle())
         .onTapGesture(perform: flick)
+        // The card is the key now: said so to VoiceOver, which the arrow used to say.
+        .accessibilityAddTraits(.isButton).accessibilityHint("Sends it to the TV")
     }
 }
 struct NowControls: View {
@@ -2379,6 +2424,17 @@ struct PlayingTab: View {
             }
         }
         .frame(maxWidth: .infinity)
+        // What's on changing kind (a song ends and a film starts, AirPlay comes and goes) crossfades the stack rather than
+        // swapping it in one frame: the status is set with no animation of its own (the 2026-11-10 motion pass).
+        .animation(.easeOut(duration: 0.3), value: nowKind)
+    }
+    // Which of the stacks above is up.
+    var nowKind: Int {
+        if model.otherAirPlay, model.status?.airplay != nil { return 0 }
+        if phone.drives, phone.song != nil, !otherAppIsActive { return 1 }
+        if music != nil, !otherAppIsActive { return 2 }
+        if model.status?.session != nil { return 3 }
+        return 4
     }
     static func atEnd(_ s: TVStatus.Session) -> Bool {
         guard s.playing, let p = s.position, let d = s.duration, d > 0 else { return false }
@@ -2547,7 +2603,7 @@ struct PlayingTab: View {
             if panes {
                 FoldSplit { ScrollView { now.padding(20) }.backToTop() } right: {
                     // The same 20 pt from the top as the picture beside it, so the two panes' first lines sit level (r21).
-                    ScrollView { if watching { upNext.padding(.top, 20) } else { send.padding(20) } }.backToTop()
+                    ScrollView { Group { if watching { upNext.padding(.top, 20) } else { send.padding(20) } }.animation(.easeOut(duration: 0.3), value: watching) }.backToTop()
                 }
             } else {
                 // The rows under a film run to the screen's edges, as rows do everywhere else.
@@ -2557,7 +2613,8 @@ struct PlayingTab: View {
                         // 20 pt in, the page title's own inset, so everything starts on the title's line (review of
                         // dfd490e: the content sat 3 pt left of "Playing").
                         now.padding(.horizontal, 20)
-                        if watching { upNext } else { send.padding(.horizontal, 20) }
+                        // What's under it follows what's on, with the same fade.
+                        Group { if watching { upNext } else { send.padding(.horizontal, 20) } }.animation(.easeOut(duration: 0.3), value: watching)
                     }
                     .padding(.bottom, 16)
                 }
@@ -2740,6 +2797,7 @@ struct DiscoverColumn: View {
                 .onChange(of: store.query) { _, _ in store.searchSoon() }
             if !store.query.isEmpty {
                 Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search")
+                    .transition(.opacity)
             }
         }
         .padding(.horizontal, 16).frame(height: 46)
@@ -2776,6 +2834,12 @@ struct DiscoverColumn: View {
             }
             .padding(.vertical, 12)
             .animation(.easeInOut(duration: 0.25), value: kind)
+            // Typing in the search takes the chips and Recently flicked away and brings the found rows; Continue watching
+            // fills in over its waiting shapes; the catalogue's rows arrive. Each a fade, where each was a cut: the lists
+            // are set outside any animation (the 2026-11-10 motion pass).
+            .animation(.easeOut(duration: 0.25), value: store.query.isEmpty)
+            .animation(.easeOut(duration: 0.25), value: continuing == nil)
+            .animation(.easeOut(duration: 0.25), value: shown.map(\.title))
         }
         // No row snapping here: aligning a row to the scroll view's top as the page first filled in pulled the content up
         // under the large title, which then opened folded on some launches and large on others (r26). Nor a scroll target

@@ -133,10 +133,15 @@ struct ManageAppsView: View {
                 // An app can only move within its own row on the TV, so that's how they're grouped here.
                 ForEach(rows(s), id: \.self) { row in
                     Section(rowTitle(row)) {
-                        ForEach(s.apps.filter { ($0.row ?? "APPS") == row }) { app in
-                            appRow(app)
+                        let inRow = s.apps.filter { ($0.row ?? "APPS") == row }
+                        ForEach(inRow) { app in
+                            // Edit shows the system's minus on the apps that can go, and nothing on the locked ones.
+                            appRow(app).deleteDisabled(!app.removable)
                         }
                         .onMove(perform: s.canArrange ? { from, to in move(in: row, from: from, to: to) } : nil)
+                        // Deleting from Edit mode asks the same question as the swipe: Edit showed only drag handles, and
+                        // the one way to delete was a swipe the footer had to explain (the 2026-11-10 logic pass).
+                        .onDelete { at in if let i = at.first, inRow[i].removable { removing = inRow[i] } }
                     }
                 }
                 Section {
@@ -146,7 +151,7 @@ struct ManageAppsView: View {
                         }
                     }
                 } footer: {
-                    Text((s.canArrange ? "Tap Edit to drag apps into your order on the TV’s home screen. " : "") + "Swipe an app to delete it from the TV. Locked apps are what this setup depends on.")
+                    Text((s.canArrange ? "Tap Edit to drag apps into your order on the TV’s home screen, or to delete one. " : "Swipe an app to delete it from the TV. ") + "Locked apps are what this setup depends on.")
                 }
             } else if store.failed {
                 ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again."))
@@ -154,6 +159,10 @@ struct ManageAppsView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }
             }
         }
+        // The rows fade in over the spinner, and the one that's deleted goes with the list's own motion, rather than the
+        // list redrawing in a frame (the 2026-11-10 motion pass).
+        .animation(.easeOut(duration: 0.25), value: store.state == nil)
+        .animation(.easeOut(duration: 0.25), value: store.state?.apps.map(\.pkg))
         .summonsBar()
         .topShade().topFade()
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
@@ -209,6 +218,8 @@ struct ManageSettingsView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }
             }
         }
+        // As the apps page: the settings fade in over the spinner.
+        .animation(.easeOut(duration: 0.25), value: store.state == nil)
         .summonsBar()
         .topShade().topFade()
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)

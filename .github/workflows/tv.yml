@@ -260,6 +260,16 @@ jobs:
           backfilm back-row 1 12 $M -tab 1 -pose stremiorow
           # And the card thrown by a real drag, folded upright.
           curl -s $M/fnormal/reset > /dev/null; flickfilm flickreal 1 $M/fnormal
+          # The Remote's picture with a film on, hidden at 7 s and shown again at 10 s (the "mirror" pose does what the
+          # held menu does), filmed: each change must crossfade, never cut, and the keys under it must not move.
+          xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/tv-mirror.mp4 > /dev/null 2>&1 & REC=$!
+          sleep 3
+          xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/rfilm -tab 0 -pose mirror
+          sleep 14
+          xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-mirror-end.png
+          kill -INT $REC; wait $REC
+          xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          if [ "$(stat -f %z dist/tv-mirror.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film mirror empty"; fi
           ls dist
       - name: Publish
         if: always()
