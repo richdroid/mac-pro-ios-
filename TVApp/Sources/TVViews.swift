@@ -1680,10 +1680,13 @@ struct StartingNote: View {
                 .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
                 .transition(.opacity)
             } else {
+                // What the TV is doing, from the first moment, in the Mac's own steps: a start takes 4 to 20 s, and a poster
+                // with a light round it and no word read as nothing happening (Richard, 2026-11-10: "tv app is still slow").
                 TimelineView(.periodic(from: s.since, by: 1)) { ctx in
-                    Text("Still starting").font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-                        .opacity(ctx.date.timeIntervalSince(s.since) >= 8 ? 1 : 0)
-                        .animation(.easeOut(duration: 0.3), value: ctx.date.timeIntervalSince(s.since) >= 8)
+                    let words = StartingWords.line(s.phase, waited: ctx.date.timeIntervalSince(s.since))
+                    Text(words).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                        .contentTransition(.opacity)
+                        .animation(.easeOut(duration: 0.25), value: words)
                 }
                 .frame(height: 18)
             }

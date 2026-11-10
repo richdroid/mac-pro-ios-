@@ -230,6 +230,8 @@ struct FlickScreen: View {
     @State private var liftScale: CGFloat = 1
     // When a lifted row was last put down short of a throw, so the tap that iOS reports with the same release does nothing.
     @State private var settledAt = Date.distantPast
+    // When the row in the hand was lifted: let go where it is within a moment of that, it was a tap that ran long.
+    @State private var liftedAt = Date.distantPast
     // A link's page name and picture, as fetched.
     @State private var linkTitle: String?
     @State private var linkArt: String?
@@ -879,7 +881,7 @@ struct FlickScreen: View {
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("flick")))
             .onChanged { v in
                 guard !failed, !flown, case .second(true, let d) = v else { return }
-                if liftedID != id { lift.drag = .zero; lift.lean = 0; liftedID = id; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.04 } }
+                if liftedID != id { lift.drag = .zero; lift.lean = 0; liftedID = id; liftedAt = Date(); withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.04 } }
                 if let d {
                     lift.drag = d.translation
                     lift.lean = max(-6, min(6, Double(d.velocity.width) / 200 + Double(d.translation.width) / 60))
@@ -891,8 +893,21 @@ struct FlickScreen: View {
                     // The pick, from where the row is now.
                     rects.map[id] = (rects.map[id] ?? .zero).offsetBy(dx: d.translation.width, dy: d.translation.height)
                     send()
+                } else if Self.longTap(v, liftedAt: liftedAt) {
+                    // A press that ran a little long and was let go where it landed is a tap, and a tap is the pick:
+                    // lifted and put straight back, it did nothing, and a deliberate press read as a dead row.
+                    settledAt = Date()
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { liftedID = nil; lift.drag = .zero; lift.lean = 0; liftScale = 1 }
+                    send()
                 } else { settle() }
             }
+    }
+    // Let go within 0.45 s of the lift without having moved it (8 pt): a slow tap, not a row picked up and put back.
+    static func longTap(_ v: SequenceGesture<LongPressGesture, DragGesture>.Value, liftedAt: Date) -> Bool {
+        guard Date().timeIntervalSince(liftedAt) < 0.45 else { return false }
+        guard case .second(true, let d) = v else { return false }
+        guard let d else { return true }
+        return abs(d.translation.width) < 8 && abs(d.translation.height) < 8
     }
     // Let go short of a throw: back to rest, with one soft touch.
     func settle() {
@@ -931,7 +946,7 @@ struct FlickScreen: View {
         streamsAt = Date()
         // How long he waited for the list, from the card's press and from this page opening, into the Mac's timing log, so
         // the phone's own share of "the stremio streams take much too long" is measured on his phone (2026-11-07).
-        if !again, openedAt != .distantPast {
+        if !again, openedAt != .distantPast, !leaving {
             let now = Date()
             var e: [String: Any] = ["name": "streams-shown", "at": now.timeIntervalSince1970 * 1000, "sinceOpen": Int(now.timeIntervalSince(openedAt) * 1000), "count": found.count]
             if let p = StreamCache.pressedAt, now.timeIntervalSince(p) < 30 { e["sincePress"] = Int(now.timeIntervalSince(p) * 1000) }
@@ -1314,18 +1329,25 @@ struct FlickScreen: View {
             answered = true
             return
         }
-        let order = order
         let early = order.0 == "play-stream"
         if model.starting != nil { model.starting?.token = stream?.token }
         FlickClock.current.mark("request")
         written = true
         var resent = false
+        // How many times the line to the Mac dropped under this send, and whether the Mac had begun to answer by then.
+        var dropped = 0
+        let heard = HeardBox()
         while true {
+            // Made afresh each time round: after a list fetched again, the pick has a new token.
+            var order = order
+            // The line dropped after the Mac had the send (the app put away, the tailnet blinking): asked how it went,
+            // which joins that start or hears its answer again. Nothing is started twice.
+            if dropped > 0, heard.yes { order.1["again"] = true }
             do {
                 let answer: Data
                 if early {
                     answer = try await TVBridge.playStream(order.1, opened: { _ in
-                        answered = true; FlickClock.current.mark("first-byte")
+                        answered = true; heard.yes = true; FlickClock.current.mark("first-byte")
                     }, phase: { p in took(p) })
                 } else {
                     answer = try await TVBridge.post(order.0, order.1, timeout: 60)
@@ -1359,6 +1381,15 @@ struct FlickScreen: View {
                     await findStreams(again: true)
                     stream = streams.first { $0.description == was?.description && !failedTokens.contains($0.token) } ?? streams.first { !failedTokens.contains($0.token) }
                     if stream != nil { continue }
+                }
+                // The line itself dropped, not the start: the TV may well be playing it (2026-11-10: the Remote said
+                // "didn't start" over an episode that was on). Twice more, a moment apart, before that's believed.
+                if early, error is URLError, dropped < 2 {
+                    dropped += 1
+                    FlickClock.current.mark("line-lost")
+                    try? await Task.sleep(nanoseconds: UInt64(dropped) * 700_000_000)
+                    if Task.isCancelled || cancelled { return }
+                    continue
                 }
                 FlickClock.current.mark("failed"); FlickClock.current.finished()
                 if let s = stream { failedTokens.insert(s.token) }
@@ -1415,6 +1446,8 @@ struct FlickScreen: View {
     }
 }
 
+// Whether the Mac had begun to answer a send, kept by the send itself: it runs on after the flick screen has closed.
+@MainActor final class HeardBox { var yes = false }
 // Where the rows and the card sit, kept without redrawing anything while the list scrolls.
 final class RectBox { var map: [String: CGRect] = [:] }
 

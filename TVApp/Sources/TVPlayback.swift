@@ -752,6 +752,23 @@ struct LoadingRing: View {
         .accessibilityLabel("Loading")
     }
 }
+// The one line under the Remote's picture while a start runs: what the TV is doing now, as the Mac reports each step.
+// Plain words for each, and after a long wait in one step, that it's still at it. Nothing here is a guess: no step, no
+// claim beyond "Sending".
+enum StartingWords {
+    static func line(_ phase: String?, waited: TimeInterval) -> String {
+        switch phase {
+        case "waking": return "Waking the TV…"
+        case "awake", "opening", "sent", "refetch": return "Opening Stremio…"
+        case "player": return waited >= 12 ? "Still loading the stream…" : "Loading the stream…"
+        case "retry": return "That stream didn’t start. Trying the next…"
+        case "again": return "Trying that stream again…"
+        case "covered": return "Bringing Stremio back to the front…"
+        case "playing": return "Playing"
+        default: return waited >= 8 ? "Still sending to the TV…" : "Sending to the TV…"
+        }
+    }
+}
 // A quarter of a rounded edge, starting a given way round it, carried on over the start when it runs past the end.
 struct RunningEdge: Shape {
     var radius: CGFloat
