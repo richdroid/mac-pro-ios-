@@ -131,6 +131,7 @@ enum TVIsland {
         // TV has stopped: ending it and starting another made the card vanish and come back on every return after 90 s.
         let all = shown, current = all.first
         for extra in all.dropFirst() { await extra.end(nil, dismissalPolicy: .immediate) }
+        if let current { listen(current) }
         guard var next = state(status) else {
             if status.online { await current?.end(nil, dismissalPolicy: .immediate) }
             return
@@ -144,7 +145,24 @@ enum TVIsland {
         if let current {
             if !same(current.content.state, next) || (current.content.staleDate ?? .distantPast) < Date().addingTimeInterval(staleAfter / 2) { await current.update(ActivityContent(state: next, staleDate: staleDate(next))) }
         } else if next.playing, ActivityAuthorizationInfo().areActivitiesEnabled {
-            _ = try? Activity.request(attributes: TVIslandAttributes(), content: ActivityContent(state: next, staleDate: staleDate(next)), pushType: nil)
+            let content = ActivityContent(state: next, staleDate: staleDate(next))
+            // With a push token the Mac can end it at five minutes paused even with the app closed; a build signed without
+            // push (no aps-environment) can't ask for one, and gets the card all the same.
+            if let made = (try? Activity.request(attributes: TVIslandAttributes(), content: content, pushType: .token))
+                ?? (try? Activity.request(attributes: TVIslandAttributes(), content: content, pushType: nil)) { listen(made) }
+        }
+    }
+
+    // Each card's push token goes to the Mac as soon as iOS hands it over, and again whenever iOS changes it. Listened to
+    // once per card.
+    private static var listening: Set<String> = []
+    static func listen(_ a: Activity<TVIslandAttributes>) {
+        guard !sample, listening.insert(a.id).inserted else { return }
+        Task {
+            for await t in a.pushTokenUpdates {
+                let hex = t.map { String(format: "%02x", $0) }.joined()
+                try? await TVBridge.post("island-token", ["id": a.id, "token": hex, "bundle": Bundle.main.bundleIdentifier ?? ""], timeout: 10)
+            }
         }
     }
 }
