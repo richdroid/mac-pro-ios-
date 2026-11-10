@@ -841,6 +841,48 @@ jobs:
             $D "$DEVICE" tap "Auto" || true; sleep 3
             kill -INT $REC; wait $REC; echo "chumby menufilm channels exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            # The menus whose own capsule changes with the pick, and the rest of the 11-10 motion list:
+            #   menufilm-sounds:  Sounds scrolled to "Alarms play", the 6:45's capsule picked to Jazz Radio and back to Beep.
+            #   menufilm-night:   Tinker's 10:30 PM time picked to "Screen off" and back to "Night starts".
+            #   menufilm-justonce: Home's "Later or another sound" menu, +10 min picked (the glyph must not turn while it closes).
+            #   reachfilm:        Alarms read through a relay that is stopped mid-film, so "Offline" arrives on screen.
+            #   alarmsdemo-open:  the alarmsdemo script open flat: the right pane to Calendar settings, a day and the editor and
+            #                     back, then the nap set and called off.
+            mfilm() { # name, display, seconds to settle, launch args...
+              local name=$1 disp=$2 settle=$3; shift 3
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$disp --force dist/chumby-$name.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby "$@"
+              sleep $settle
+            }
+            mdone() { kill -INT $REC; wait $REC; echo "chumby $1 exit $?"; xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true; }
+            mfilm menufilm-sounds 1 8 -address http://127.0.0.1:9000/live -tab 3
+            $D "$DEVICE" drag 0.4 0.8 0.4 0.3 || true; sleep 3
+            $D "$DEVICE" tap "What 6:45 AM plays" || true; sleep 2.5
+            $D "$DEVICE" tap "Jazz Radio" || true; sleep 3
+            $D "$DEVICE" tap "What 6:45 AM plays" || true; sleep 2.5
+            $D "$DEVICE" tap "Beep" || true; sleep 3
+            mdone menufilm-sounds
+            mfilm menufilm-night 1 8 -address http://127.0.0.1:9000/live -tab 4
+            $D "$DEVICE" tap "At 22:30: Night starts" || true; sleep 2.5
+            $D "$DEVICE" tap "Screen off" || true; sleep 3
+            $D "$DEVICE" tap "At 22:30: Screen off" || true; sleep 2.5
+            $D "$DEVICE" tap "Night starts" || true; sleep 3
+            mdone menufilm-night
+            mfilm menufilm-justonce 1 8 -address http://127.0.0.1:9000/live -tab 0
+            $D "$DEVICE" drag 0.4 0.8 0.4 0.45 || true; sleep 3
+            $D "$DEVICE" tap "Later or another sound, just tomorrow" || $D "$DEVICE" tap "Later or another sound, just today" || true; sleep 2.5
+            $D "$DEVICE" tap "+10 min · 6:55 AM" || true; sleep 5
+            mdone menufilm-justonce
+            node -e "const h=require('http');h.createServer((q,s)=>{const u=h.request({port:9000,path:q.url,method:q.method,headers:q.headers},r=>{s.writeHead(r.statusCode,r.headers);r.pipe(s)});u.on('error',()=>s.destroy());q.pipe(u)}).listen(9010,'127.0.0.1')" & RELAY=$!
+            sleep 1
+            mfilm reachfilm 1 8 -address http://127.0.0.1:9010 -tab 2
+            kill $RELAY || true; sleep 25
+            mdone reachfilm
+            $D "$DEVICE" pose open || true; sleep 5
+            mfilm alarmsdemo-open 3 27 -address http://127.0.0.1:9000/live -tab 2 -pose alarmsdemo
+            mdone alarmsdemo-open
+            $D "$DEVICE" pose closed || true; sleep 4
           }
           chumby_menufilms || echo "Chumby menu films incomplete"
       - name: Collect crash reports

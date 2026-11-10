@@ -231,15 +231,19 @@ struct NapSection: View {
     @AppStorage("napSetAt") private var napSetAt = 0.0
     @State private var sending: Int?
     static let lengths = [10, 20, 30, 60]
+    // Which rows the list holds, and whether they're drawn, while a nap is set or called off (AlarmsTab.napMoves); `due`
+    // is the nap's time, kept while its row fades out.
+    let row: Bool
+    let faded: Bool
+    let due: Date?
     // Opens the nap's editor: for the nap set, or a new one.
     let edit: (Alarm?) -> Void
     var body: some View {
-        let due = model.napDue
         Group {
-            if let due {
-                napRow(due)
+            if row, let due {
+                napRow(due).opacity(faded ? 0 : 1)
             } else {
-                chips
+                chips.opacity(faded ? 0 : 1)
                 Button { edit(nil) } label: {
                     Label("Another time or sound", systemImage: "slider.horizontal.3").font(.body.weight(.semibold))
                         .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
@@ -247,6 +251,7 @@ struct NapSection: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Set a nap with another time or sound")
+                .opacity(faded ? 0 : 1)
             }
             if let f = model.failed("nap") { FailNote(text: f) }
         }
@@ -284,6 +289,25 @@ struct NapSection: View {
                      toggle: Binding(get: { true }, set: { on in if !on { Task { await model.cancelNap() } } })) { EmptyView() }
         }
         .accessibilityHint(own ? "" : "Opens the nap to change it")
+    }
+}
+// The nap's heading: "Nap" stands still, and ", wake me in" fades away with the chips as a nap is set and back in with
+// them when it's called off (it swapped whole in one frame). Timed to NapSection's three moves.
+struct NapHead: View {
+    let set: Bool
+    let color: Color
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "zzz").font(.subheadline.weight(.semibold))
+            HStack(spacing: 0) {
+                Text("Nap")
+                Text(", wake me in").opacity(set ? 0 : 1)
+                    .animation(set ? .easeOut(duration: AlarmsTab.napFade) : .easeIn(duration: 0.16).delay(AlarmsTab.napFade + AlarmsTab.napSettle), value: set)
+            }
+            .font(.custom("Trebuchet MS", size: 16).weight(.bold))
+        }
+        .foregroundStyle(color).textCase(nil)
+        .accessibilityElement(children: .ignore).accessibilityLabel(set ? "Nap" : "Nap, wake me in")
     }
 }
 // The nap's tile: zzz on the Chumby's blue, with the time left as a lighter tide that falls as the nap runs down.
@@ -501,7 +525,24 @@ struct AlarmsTab: View {
         default: return nil
         }
     }
-    func show(_ p: Pane) { withAnimation(.snappy) { pane = p } }
+    // The right pane changing pages: the page there fades out, the next takes its place while nothing is drawn, and fades
+    // in. Changed inside one animation, the list traded the two pages' rows through each other.
+    @State private var paneFaded = false
+    @State private var paneSwap: Task<Void, Never>?
+    func show(_ p: Pane) {
+        paneSwap?.cancel(); paneSwap = nil
+        guard p != pane else { if paneFaded { withAnimation(.easeOut(duration: 0.2)) { paneFaded = false } }; return }
+        paneSwap = Task { @MainActor in
+            withAnimation(.easeOut(duration: 0.12)) { paneFaded = true }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            pane = p
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { paneFaded = false }
+            paneSwap = nil
+        }
+    }
     func edit(_ a: Alarm?) { if wide { show(.editor(a)) } else { editing = EditTarget(alarm: a) } }
     // The nap's editor: the nap set, or a new one.
     func editNap(_ a: Alarm?) { if wide { show(.napEditor(a)) } else { editing = EditTarget(alarm: a, nap: true) } }
@@ -531,7 +572,7 @@ struct AlarmsTab: View {
     // and say when they repeat (Richard, 2026-11-05: "theres little to no distinction between daily alarms and calendar
     // alarms its just super unintuitive"). Night times moved to Tinker, and "Woke up to" to Sounds.
     var page: some View {
-        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil) {
+        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !(wide && paneFaded)) {
             // Add alarm is never a loose circle: it's the last row of My alarms (below).
             PageTitle("Alarms")
             ReachRow()
@@ -570,6 +611,9 @@ struct AlarmsTab: View {
         .seaList()
         // A nap set or called off moves anything it touches (the next alarm, the chip) in one spring, never in one frame.
         .animation(.snappy, value: model.napDue)
+        .onChange(of: model.napDue) { _, _ in napMoves() }
+        // Back on this tab with the rows behind the Chumby (a change that came while it was away): put right at once.
+        .onAppear { if napSwap == nil, napRowShown != (model.napDue != nil) { napRows = model.napDue != nil; napFaded = false } }
         .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
         .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !wide }, set: { model.alarmsPage = $0 })) {
             Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
@@ -583,6 +627,7 @@ struct AlarmsTab: View {
         // right pane, and an editor opened there goes back to a sheet when the phone is folded or turned upright; a
         // sheet already up stays a sheet. Never a page lost to a fold.
         .onChange(of: wide) { _, w in
+            paneSwap?.cancel(); paneSwap = nil; paneFaded = false
             if w {
                 if model.alarmsPage { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false }
                 else { pane = .schedule }
@@ -819,11 +864,44 @@ struct AlarmsTab: View {
         }
     }
 
+    // A nap set or called off is three moves, one after the other, never two sets of rows drawn over each other (the
+    // list's own row change crossfaded the chips and the nap's row for about a tenth of a second): what's there fades
+    // out, the rows change places while nothing is drawn in them, and what's new fades in. `napRows` is which rows the
+    // list holds; until the first change it's as the Chumby said when the tab was first drawn (`napFirst`), so the rows
+    // only ever change inside the three moves; its `due` keeps the row's time while the row fades out.
+    final class NapFirst { var row: Bool?; var due: Date? }
+    @State private var napFirst = NapFirst()
+    @State private var napRows: Bool?
+    @State private var napFaded = false
+    @State private var napSwap: Task<Void, Never>?
+    static let napFade = 0.12, napSettle = 0.22
+    var napRowShown: Bool {
+        if napFirst.row == nil { napFirst.row = model.napDue != nil }
+        return napRows ?? napFirst.row ?? false
+    }
+    var napDueShown: Date? {
+        if let d = model.napDue { napFirst.due = d }
+        return model.napDue ?? napFirst.due
+    }
+    func napMoves() {
+        guard (model.napDue != nil) != napRowShown || napSwap != nil else { return }
+        napSwap?.cancel()
+        napSwap = Task { @MainActor in
+            withAnimation(.easeOut(duration: Self.napFade)) { napFaded = true }
+            try? await Task.sleep(nanoseconds: UInt64(Self.napFade * 1e9))
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy(duration: Self.napSettle)) { napRows = model.napDue != nil }
+            try? await Task.sleep(nanoseconds: UInt64(Self.napSettle * 1e9))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.16)) { napFaded = false }
+            napSwap = nil
+        }
+    }
     // The heading says what a chip does, so "20 min" reads as a nap that rings in 20 minutes, not a setting; with a nap
     // set, the row says the rest.
     var nap: some View {
-        Section { NapSection(edit: editNap).id("nap").zoomSource("nap-" + (model.napAlarm?.key ?? "new"), in: editNS) } header: {
-            SectionHead(icon: "zzz", text: model.napDue == nil ? "Nap, wake me in" : "Nap", color: ChumbyPalette.sub(scheme == .dark))
+        Section { NapSection(row: napRowShown, faded: napFaded, due: napDueShown, edit: editNap).id("nap").zoomSource("nap-" + (model.napAlarm?.key ?? "new"), in: editNS) } header: {
+            NapHead(set: model.napDue != nil, color: ChumbyPalette.sub(scheme == .dark))
         }
     }
     // The rule first, said plainly, and changed only as a rule; then the alarms it has set, checked against what the

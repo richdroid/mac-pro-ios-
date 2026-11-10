@@ -167,6 +167,9 @@ extension ChumbyModel {
 struct JustOnceMenu: View {
     @EnvironmentObject var model: ChumbyModel
     @State private var busy = false
+    // The menu's own label shows it's working only once its menu has gone: the glyph turning into a spinner (and the
+    // label dimming) the instant a time was picked changed the anchor under the closing menu and cut the close (MenuClose).
+    @State private var spinning = false
     @State private var problem: String?
     @State private var posed = false
     @State private var confirmReskip = false
@@ -184,7 +187,7 @@ struct JustOnceMenu: View {
                     Button { model.justOnceSheetOpen = true } label: { Label("Another time or sound…", systemImage: "slider.horizontal.3") }
                 } label: {
                     HStack(spacing: 6) {
-                        if busy { ProgressView().controlSize(.small) } else { Image(systemName: "clock.arrow.circlepath") }
+                        if spinning { ProgressView().controlSize(.small) } else { Image(systemName: "clock.arrow.circlepath") }
                         // Said as the two things he'd do, scoped to the day: "Later or different, just this once" named neither
                         // (Richard, 2026-11-09: "the alarm stuff is still a bit unintuitive and confusing at points").
                         Text("Later or another sound, just \(justDay(due))")
@@ -192,7 +195,7 @@ struct JustOnceMenu: View {
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
                     .frame(minHeight: 30).contentShape(Rectangle())
                 }
-                .disabled(busy)
+                .disabled(spinning)
                 .accessibilityHint("Moves the \(due.formatted(date: .omitted, time: .shortened)) alarm later, or changes its sound, for this time only")
                 .fillCover(isPresented: $model.justOnceSheetOpen) { JustOnceSheet(original: a, due: due).environmentObject(model) }
                 .onAppear { if ChumbyModel.pose == "justonce" && model.tab == 0 && !posed { posed = true; model.justOnceSheetOpen = true } }
@@ -222,8 +225,11 @@ struct JustOnceMenu: View {
         }
     }
     func run(_ work: @escaping () async -> String?) {
-        busy = true; problem = nil
-        Task { problem = await work(); busy = false }
+        guard !busy else { return }
+        busy = true
+        Task { let why = await work(); withAnimation(.snappy) { problem = why; busy = false; spinning = false } }
+        // An older note goes, and the spinner comes, after the close; nothing at all if the Chumby has answered by then.
+        MenuClose.then { if busy { problem = nil; spinning = true } }
     }
     // "just today", "just tomorrow", "just Friday": the day in the sentence, a weekday keeping its capital.
     func justDay(_ d: Date) -> String { let w = dayWord(d); return w == "Today" || w == "Tomorrow" ? w.lowercased() : w }

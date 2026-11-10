@@ -293,13 +293,16 @@ struct PageTitle<Trailing: View>: View {
 struct TwoPane<L: View, R: View>: View {
     @Environment(\.paneLayout) private var panes
     @Environment(\.horizontalSizeClass) private var size
+    @EnvironmentObject private var model: ChumbyModel
     let left: L, right: R
     // The right pane's own title, when it shows a page of its own (Calendar settings), with its way back. Nil when the
     // page brings its own title row (the alarm editor, a calendar day).
     var rightTitle: String? = " "
     var rightTrailing: AnyView?
-    init(rightTitle: String? = " ", rightTrailing: AnyView? = nil, @ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) {
-        self.rightTitle = rightTitle; self.rightTrailing = rightTrailing; self.left = left(); self.right = right()
+    // False for the moment the right pane changes pages (Alarms' show), so one page fades out before the next fades in.
+    var rightShown = true
+    init(rightTitle: String? = " ", rightTrailing: AnyView? = nil, rightShown: Bool = true, @ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) {
+        self.rightTitle = rightTitle; self.rightTrailing = rightTrailing; self.rightShown = rightShown; self.left = left(); self.right = right()
     }
     var body: some View {
         if panes {
@@ -308,12 +311,17 @@ struct TwoPane<L: View, R: View>: View {
             } right: {
                 // A title row, blank unless the pane holds a page, so both panes start level.
                 List { if let rightTitle { PageTitle(rightTitle) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
+                    .opacity(rightShown ? 1 : 0)
             }
             .seaList()
+            .animation(.snappy, value: model.unreachable)
         } else {
             // Open in portrait the status bar has the top to itself, so the list's own top margin is left off there.
             List { Group { left; right }.listRowBackground(GlassRow()) }
                 .contentMargins(.top, size == .regular ? 0 : nil, for: .scrollContent)
+                // "Offline" (ReachRow) arriving or going moves the rows under it in one spring, never in one frame; the
+                // readings that decide it are left alone.
+                .animation(.snappy, value: model.unreachable)
         }
     }
 }
@@ -1812,8 +1820,12 @@ struct SoundsTab: View {
             }
             Spacer(minLength: 12)
             Menu {
+                // The capsule is the menu's anchor, and its words change its width: so the pick lands once the menu has
+                // gone (MenuClose), never while it closes, which cut the close short.
                 Picker("Plays", selection: Binding(get: { a.soundTag(streams: model.state.streams) }, set: { t in
-                    var b = a; b.setSound(t, streams: model.state.streams, stations: model.pandoraStations); choose(b)
+                    guard t != a.soundTag(streams: model.state.streams) else { return }
+                    var b = a; b.setSound(t, streams: model.state.streams, stations: model.pandoraStations)
+                    MenuClose.then { choose(b) }
                 })) {
                     Section("Tones") { ForEach(model.state.tones, id: \.self) { Text($0).tag("beep:" + $0) } }
                     if !model.state.streams.isEmpty { Section("Radio") { ForEach(model.state.streams, id: \.key) { Text($0.name.isEmpty ? $0.url : $0.name).tag("stream:" + $0.key) } } }
@@ -1823,12 +1835,13 @@ struct SoundsTab: View {
                 }
             } label: {
                 HStack(spacing: 5) {
-                    Text(a.soundText).lineLimit(1)
+                    Text(a.soundText).lineLimit(1).contentTransition(.opacity)
                     Image(systemName: "chevron.up.chevron.down").imageScale(.small)
                 }
                 .font(.subheadline.weight(.medium))
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(.white.opacity(0.12), in: Capsule())
+                .animation(.snappy, value: a.soundText)
             }
             .accessibilityLabel("What \(title) plays")
             .overlay(alignment: .top) { if let mark { LandBubble(mark: mark) } }
@@ -2171,10 +2184,18 @@ struct NightSettings: View {
                     // What happens at that time. Taking the time out is the mark at the row's end alone (Richard,
                     // 2026-11-10: keep the ⊖, not "Remove this time" in the menu too).
                     Menu {
+                        // As Sounds' capsules: the anchor's words (and the row's glyph) change once the menu has gone. The
+                        // row is found again by what it held, since a time's place can move in the meantime.
                         Picker("What happens", selection: Binding(get: { tag(e) }, set: { v in
-                            let parts = v.split(separator: ":", maxSplits: 1).map(String.init)
-                            e.cmd = parts[0]; e.val = parts.count > 1 ? (parts[1] == "night" ? model.nightStyle : parts[1]) : ""
-                            Task { await model.saveSchedule() }
+                            guard v != tag(e) else { return }
+                            let was = e
+                            MenuClose.then {
+                                guard let i = model.state.schedule.firstIndex(of: was) else { return }
+                                let parts = v.split(separator: ":", maxSplits: 1).map(String.init)
+                                model.state.schedule[i].cmd = parts[0]
+                                model.state.schedule[i].val = parts.count > 1 ? (parts[1] == "night" ? model.nightStyle : parts[1]) : ""
+                                Task { await model.saveSchedule() }
+                            }
                         })) {
                             ForEach(actions, id: \.0) { Text($0.1).tag($0.0) }
                         }
@@ -2182,7 +2203,7 @@ struct NightSettings: View {
                         // In a word or two: beside the time, folded, "Night starts" was cut to "Night st…" (build 241). The
                         // menu itself says it in full.
                         HStack(spacing: 5) {
-                            Text(short(e)).lineLimit(1)
+                            Text(short(e)).lineLimit(1).contentTransition(.opacity)
                             Image(systemName: "chevron.up.chevron.down").imageScale(.small)
                         }
                         .font(.subheadline.weight(.medium))
