@@ -1934,6 +1934,25 @@ struct TinkerTab: View {
             catch { model.sys.tw = before; model.fail("twset", "Couldn’t save. \(AlarmWriter.explain(error))") }
         }
     }
+    // The order the widget shows each account's tweets in, saved the moment it's picked.
+    static let orders: [(id: String, name: String, says: String)] = [
+        ("latest", "Latest", "Newest first."),
+        ("popular", "Most popular", "Most liked and reposted, the last few weeks first."),
+        ("random", "Random", "Shuffled; nothing repeats until every tweet has shown."),
+    ]
+    var order: Binding<String> {
+        Binding(get: { model.sys.xorder }, set: { v in
+            let before = model.sys.xorder
+            guard v != before else { return }
+            model.tick()
+            model.sys.xorder = v
+            model.hold(8)
+            Task {
+                do { _ = try await model.api?.post("xorder", extra: "&v=\(v)") }
+                catch { model.sys.xorder = before; model.fail("xorder", "Couldn’t save. \(AlarmWriter.explain(error))") }
+            }
+        })
+    }
     func addAccount() {
         let h = newAccount.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "@"))
         newAccount = ""
@@ -1961,7 +1980,14 @@ struct TinkerTab: View {
                         .submitLabel(.done).onSubmit(addAccount)
                 }
                 if let f = model.failed("twset") { FailNote(text: f) }
+                Picker("Tweet order", selection: order) {
+                    ForEach(Self.orders, id: \.id) { Text($0.name).tag($0.id) }
+                    if model.sys.xorder == "oldest" { Text("Oldest first").tag("oldest") }
+                }
+                .pickerStyle(.menu)
+                if let f = model.failed("xorder") { FailNote(text: f) }
             } header: { SectionHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X widget", color: ChumbyPalette.sub(dark)) }
+            footer: { Text(Self.orders.first { $0.id == model.sys.xorder }?.says ?? "Oldest first.") }
             } right: {
             Section {
                 Button { confirm = "restart" } label: {

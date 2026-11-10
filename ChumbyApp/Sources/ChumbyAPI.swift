@@ -13,6 +13,8 @@ struct Sys: Decodable, Equatable {
     // How often the watchdog has had to unfreeze it, and when it last did.
     var resets = 0, resetAt = 0
     var tw: [String] = []
+    // How the X widget goes through each account's tweets: latest, popular or random (oldest only if the old web page set it).
+    var xorder = "latest"
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: Key.self)
@@ -35,8 +37,9 @@ struct Sys: Decodable, Equatable {
         resets = (try? c.decodeIfPresent(Int.self, forKey: .resets)) ?? 0
         resetAt = (try? c.decodeIfPresent(Int.self, forKey: .resetAt)) ?? 0
         tw = try c.decodeIfPresent([String].self, forKey: .tw) ?? []
+        xorder = (try? c.decodeIfPresent(String.self, forKey: .xorder)) ?? "latest"
     }
-    enum Key: String, CodingKey { case up, memFree, memTotal, pspFree, wifi, vol, shuffle, wall, night, load, airplayOn, chan, cp, lock, tw, ring, nap, resets, resetAt }
+    enum Key: String, CodingKey { case up, memFree, memTotal, pspFree, wifi, vol, shuffle, wall, night, load, airplayOn, chan, cp, lock, tw, xorder, ring, nap, resets, resetAt }
     // The alarm ringing or snoozing right now, from the panel's own report.
     struct Ringing: Equatable { var snoozed: Bool; var name: String; var sound: String }
     var ringing: Ringing? {
