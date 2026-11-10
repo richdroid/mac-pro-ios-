@@ -273,6 +273,8 @@ jobs:
           # its dialog (reskip); and a one-off whose skip has moved, so both would ring, on Home and Alarms (orphan). From
           # 11-08: Work moved for one ring by "just this once", on Home and Alarms (moved), and a calendar day moved for
           # that day (calonce).
+          # From 11-09: a nap set, as an alarm row with its ring time and what it plays (napset), and that nap open in its
+          # editor (napeditor); both folded, open, and open in portrait.
           chumby_poses() { # display, file suffix
             for V in "ringing 0 ringing" "ringing-alarms 2 ringing" "snoozed 0 snoozed" "dead 0 dead" "dead-alarms 2 dead" \
                      "firstrun 2 slow -pose firstrun" "firstrun-home 0 slow -pose firstrun" "calsettings 2 - -pose calsettings" \
@@ -281,7 +283,8 @@ jobs:
                      "nighthold 0 - -pose nighthold" "alarmsmine 2 - -pose alarmsmine" "chadd 1 - -pose chadd" "playing 3 playing" \
                      "homeplaying 0 playing" "homenight 0 night" "caldayedit 2 - -pose caldayedit" "justonce 0 - -pose justonce" \
                      "caldayown 2 - -pose caldayown" "reskip 2 skipped -pose reskip" "orphan 0 orphan" "orphan-alarms 2 orphan" \
-                     "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce"; do
+                     "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce" \
+                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
@@ -407,7 +410,8 @@ jobs:
             xcrun simctl ui "$DEVICE" appearance light
             for V in "calday 2 - -pose calday" "caldayedit 2 - -pose caldayedit" "caldayown 2 - -pose caldayown" "justonce 0 - -pose justonce" \
                      "skipped 0 skipped" "alarmsmine 2 - -pose alarmsmine" "calsettings 2 - -pose calsettings" \
-                     "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce"; do
+                     "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce" \
+                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor"; do
               set -- $V
               ADDR=http://127.0.0.1:9000; [ "$3" != "-" ] && ADDR=$ADDR/$3
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $2 "${@:4}"

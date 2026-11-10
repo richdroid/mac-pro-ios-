@@ -21,6 +21,9 @@ enum AlarmChange {
     case volume(Int)
     case fade(Int)
     case nap(at: Int)          // minutes since 1970
+    // A nap with its own sound, length, snooze and ring time (the nap editor); still the one Nap alarm, so the Chumby's
+    // helper rule (never counted by newest_wins, never pinned) and one-nap-at-a-time both hold.
+    case setNap(Alarm)
     case cancelNap
     static func find(_ a: Alarm, in s: ChumbyState) -> Int? { s.alarms.firstIndex { $0.same(a) } ?? s.alarms.firstIndex { $0.key == a.key } }
     func apply(_ s: inout ChumbyState) {
@@ -41,6 +44,11 @@ enum AlarmChange {
             let now = Int(Date().timeIntervalSince1970 / 60)
             s.alarms.removeAll { $0.name == "Nap" && $0.when == "once" && (Int($0.time) ?? 0) > now && $0.time != String(at) }
             if !s.alarms.contains(where: { $0.name == "Nap" && $0.when == "once" && $0.time == String(at) }) { s.addNap(at: at) }
+        case .setNap(let a):
+            // The one nap: any other still to come goes, and this one takes its place (or the first free one).
+            let now = Int(Date().timeIntervalSince1970 / 60)
+            s.alarms.removeAll { $0.name == "Nap" && $0.when == "once" && (Int($0.time) ?? 0) > now && !$0.same(a) }
+            if !s.alarms.contains(where: { $0.same(a) }) { Self.add(a, to: &s) }
         case .cancelNap:
             let now = Int(Date().timeIntervalSince1970 / 60)
             s.alarms.removeAll { $0.name == "Nap" && $0.when == "once" && (Int($0.time) ?? 0) > now }
@@ -57,7 +65,7 @@ enum AlarmChange {
         switch self {
         case .toggle(let a, let on): if !on { p.userOff.insert(a.key) }
         case .replace(let old, _), .delete(let old): p.userOff.insert(old.key)
-        case .nap, .cancelNap: for a in s.alarms where a.name == "Nap" && a.when == "once" { p.userOff.insert(a.key) }
+        case .nap, .setNap, .cancelNap: for a in s.alarms where a.name == "Nap" && a.when == "once" { p.userOff.insert(a.key) }
         case .add, .volume, .fade: break
         }
         return p
@@ -79,7 +87,7 @@ enum AlarmChange {
         case .delete(let a): return a.key
         case .volume: return "alarmVolume"
         case .fade: return "fade"
-        case .nap, .cancelNap: return "nap"
+        case .nap, .setNap, .cancelNap: return "nap"
         }
     }
 }
@@ -591,12 +599,30 @@ final class ChumbyModel: ObservableObject {
     func nap(_ minutes: Int) async {
         tick()
         let at = Int((Date().timeIntervalSince1970 / 60).rounded(.up)) + minutes
+        Self.napSet()
         if let why = await save(.nap(at: at)) { fail("nap", why) }
+    }
+    // When the nap was set from this phone, so its row can show how much of it is left (a nap set elsewhere has no start).
+    static func napSet() { UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "napSetAt") }
+    // The nap as the editor set it: its ring time, sound, length and snooze, in place of any nap still to come.
+    func setNap(_ a: Alarm) async -> String? {
+        tick()
+        Self.napSet()
+        let why = await save(.setNap(a))
+        if let why { fail("nap", why) }
+        return why
     }
     func cancelNap() async {
         tick()
         if sys.nap > 0 { try? await api?.cmd("nap", "0"); sys.nap = 0 }
         if state.alarms.contains(where: { $0.name == "Nap" && $0.when == "once" }), let why = await save(.cancelNap) { fail("nap", why) }
+    }
+    // The Nap alarm still to come, if the nap was set as one (from the app, the widget or Control Center); a nap set on the
+    // Chumby itself (cmd nap) has no alarm and nothing to edit.
+    var napAlarm: Alarm? {
+        let now = Date()
+        return state.alarms.filter { $0.name == "Nap" && $0.isOn && $0.when == "once" && $0.nextFire(after: now) != nil }
+            .min { ($0.nextFire(after: now) ?? now) < ($1.nextFire(after: now) ?? now) }
     }
     // The nap on its way, from the Chumby's own nap or the Nap alarm.
     var napDue: Date? {

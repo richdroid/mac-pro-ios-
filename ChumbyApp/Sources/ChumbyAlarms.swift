@@ -219,75 +219,93 @@ extension AnyTransition {
 }
 
 // MARK: - Naps
-// Four lengths. The one running becomes its own countdown, filled with the accent and draining like water, with × to
-// call it off. A nap set elsewhere shows in the chip that holds it, so there's never a row to come and go under the chips.
-struct NapChips: View {
+// A nap is a real alarm he can set and then change (Richard, 2026-11-09: "i should be able to set a nap alarm and edit it
+// based on like whatever"). With none set: four lengths, one tap each, and a row for another time or sound, which opens
+// the nap's editor. Set, it's an alarm row like his own: when it rings, what it plays, how long is left (the tide in its
+// tile), tapped to change, switched off to call it off. It stays the one "Nap" alarm on the Chumby, so the Chumby's helper
+// rule still holds: it never turns his other alarms off and is never pinned.
+struct NapSection: View {
     @EnvironmentObject var model: ChumbyModel
+    @Environment(\.colorScheme) private var scheme
     @AppStorage("napLength") private var napLength = 0
+    @AppStorage("napSetAt") private var napSetAt = 0.0
     @State private var sending: Int?
     static let lengths = [10, 20, 30, 60]
-    // The chip tapped, while the time left still fits it; otherwise the shortest one the time left fits in.
-    func chip(for due: Date) -> Int {
-        let left = due.timeIntervalSinceNow / 60
-        if Self.lengths.contains(napLength), left <= Double(napLength) + 1 { return napLength }
-        return Self.lengths.first { Double($0) >= left } ?? 60
-    }
+    // Opens the nap's editor: for the nap set, or a new one.
+    let edit: (Alarm?) -> Void
     var body: some View {
         let due = model.napDue
-        let running = due.map(chip(for:))
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                ForEach(Self.lengths, id: \.self) { m in
-                    if let due, m == running { countdown(due, total: m) } else {
-                        Button {
-                            napLength = m; sending = m
-                            Task { await model.nap(m); sending = nil }
-                        } label: {
-                            // While a nap runs its chip says "min", so the others say just the number and all four stay equal.
-                            Group { if sending == m { ProgressView() } else { Text(running == nil ? "\(m) min" : "\(m)").lineLimit(1).minimumScaleFactor(0.8) } }.frame(maxWidth: .infinity, minHeight: 34)
-                        }
-                        .buttonStyle(.bordered).disabled(sending != nil)
-                        .accessibilityLabel("\(m) minute nap")
-                    }
+        Group {
+            if let due {
+                napRow(due)
+            } else {
+                chips
+                Button { edit(nil) } label: {
+                    Label("Another time or sound", systemImage: "slider.horizontal.3").font(.body.weight(.semibold))
+                        .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
+                        .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Set a nap with another time or sound")
             }
             if let f = model.failed("nap") { FailNote(text: f) }
         }
-        // The chip turning into its countdown and back, never a swap in one frame.
-        .animation(.snappy, value: due)
     }
-    func countdown(_ due: Date, total: Int) -> some View {
-        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            let left = max(due.timeIntervalSince(ctx.date), 0)
-            let k = min(left / Double(total * 60), 1)
-            // Whole minutes left, rounded up, so it never reads as a time of day beside the clock. Never more than the nap
-            // chosen: the Chumby rings on a whole minute, so a 10-minute nap can be up to 10:59 away, and must still say 10.
-            let minutes = min(max(Int((left / 60).rounded(.up)), 1), total)
-            HStack(spacing: 3) {
-                // "left" is what the falling tide already says; with it the chip clipped to "11 min l…" beside the ×.
-                Text("\(minutes) min").monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
-                    .contentTransition(.numericText(countsDown: true)).animation(.snappy, value: minutes)
-                Button { Task { await model.cancelNap() } } label: { Image(systemName: "xmark").font(.caption2.weight(.heavy)) }
-                    .buttonStyle(.borderless).foregroundStyle(.white).accessibilityLabel("Cancel nap")
-            }
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(.white)
-            // The same breathing room inside as the chips beside it.
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, minHeight: 34)
-            // The accent, with the time left as a lighter tide that falls as the nap runs down.
-            .background {
-                ZStack(alignment: .bottom) {
-                    Rectangle().fill(.tint)
-                    GeometryReader { g in
-                        Rectangle().fill(.white.opacity(0.22))
-                            .frame(height: g.size.height * k).frame(maxHeight: .infinity, alignment: .bottom)
-                    }
+    var chips: some View {
+        HStack(spacing: 8) {
+            ForEach(Self.lengths, id: \.self) { m in
+                Button {
+                    napLength = m; sending = m
+                    Task { await model.nap(m); sending = nil }
+                } label: {
+                    Group { if sending == m { ProgressView() } else { Text("\(m) min").lineLimit(1).minimumScaleFactor(0.8) } }.frame(maxWidth: .infinity, minHeight: 34)
                 }
-                .clipShape(Capsule())
+                .buttonStyle(.bordered).disabled(sending != nil)
+                .accessibilityLabel("\(m) minute nap")
             }
-            .accessibilityLabel("Nap, \(minutes) minutes left")
         }
+    }
+    // The nap set, as an alarm: the Nap alarm's own sound and length, or the Chumby's own nap (cmd nap), which has none
+    // and nothing to change. The time left is said in whole minutes and moves once a minute, so the row never flickers.
+    func napRow(_ due: Date) -> some View {
+        let nap = model.napAlarm
+        let own = nap == nil
+        return TimelineView(.periodic(from: .now, by: 30)) { ctx in
+            let left = max(due.timeIntervalSince(ctx.date), 0)
+            let minutes = max(Int((left / 60).rounded(.up)), 1)
+            // Its whole length, from when this phone set it; set elsewhere, an hour stands in, so the tide still falls.
+            let set = Date(timeIntervalSince1970: napSetAt)
+            let total = set < due && due.timeIntervalSince(set) < 12 * 3600 ? due.timeIntervalSince(set) : 3600
+            AlarmRow(clock: clockParts(due), title: "Nap",
+                     detail: [left < 60 ? "Rings any moment" : "Rings in \(minutes) min", own ? "set on the Chumby" : nap?.soundText ?? ""].filter { !$0.isEmpty }.joined(separator: " · "),
+                     on: true, mark: "nap",
+                     tile: AnyView(NapTile(left: min(left / total, 1))),
+                     tap: { if let nap { edit(nap) } },
+                     toggle: Binding(get: { true }, set: { on in if !on { Task { await model.cancelNap() } } })) { EmptyView() }
+        }
+        .accessibilityHint(own ? "" : "Opens the nap to change it")
+    }
+}
+// The nap's tile: zzz on the Chumby's blue, with the time left as a lighter tide that falls as the nap runs down.
+struct NapTile: View {
+    let left: Double
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        let c = ChumbyPalette.sub(scheme == .dark)
+        ZStack(alignment: .bottom) {
+            c.opacity(0.18)
+            GeometryReader { g in
+                Rectangle().fill(c.opacity(0.28)).frame(height: g.size.height * left).frame(maxHeight: .infinity, alignment: .bottom)
+            }
+            Image(systemName: "zzz").font(.system(size: 20, weight: .semibold)).foregroundStyle(c)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(width: 44, height: 48)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(.white.opacity(0.14), lineWidth: 1))
+        .animation(.smooth(duration: 0.6), value: left)
+        .accessibilityHidden(true)
     }
 }
 
@@ -457,13 +475,13 @@ struct AlarmsTab: View {
     @Environment(\.colorScheme) private var scheme
     @State private var editing: EditTarget?
     // Open, the right pane holds whatever would otherwise be a sheet, so nothing sits across the fold.
-    enum Pane: Equatable { case schedule, settings, editor(Alarm?), day(String), template }
+    enum Pane: Equatable { case schedule, settings, editor(Alarm?), napEditor(Alarm?), day(String), template }
     @State private var pane: Pane = .schedule
     @State private var paneBack: Pane = .schedule
     @State private var removing: String?
     @State private var posed = false
     @AppStorage("missedDismissed") private var dismissedRaw = ""
-    struct EditTarget: Identifiable { let alarm: Alarm?; var id: String { alarm?.key ?? "new" } }
+    struct EditTarget: Identifiable { let alarm: Alarm?; var nap = false; var id: String { (nap ? "nap-" : "") + (alarm?.key ?? "new") } }
     // Each editor grows out of the row that opened it and shrinks back into it, the iOS zoom, rather than a sheet rising
     // from the foot with no tie to what was tapped (Richard, 2026-11-07: "the animation to edit like the calendar alarm
     // sucks").
@@ -485,6 +503,8 @@ struct AlarmsTab: View {
     }
     func show(_ p: Pane) { withAnimation(.snappy) { pane = p } }
     func edit(_ a: Alarm?) { if wide { show(.editor(a)) } else { editing = EditTarget(alarm: a) } }
+    // The nap's editor: the nap set, or a new one.
+    func editNap(_ a: Alarm?) { if wide { show(.napEditor(a)) } else { editing = EditTarget(alarm: a, nap: true) } }
     // Folded, and open in portrait, a day is a page pushed over Alarms like Calendar settings; open in landscape it fills
     // the right pane.
     func openDay(_ k: String) { if wide { show(.day(k)) } else { dayPage = k; model.alarmsPage = true } }
@@ -496,7 +516,9 @@ struct AlarmsTab: View {
     // Calendar settings or a day over Alarms is a real push, with the system's own Back and its edge swipe, laid out by
     // iOS the Duo's way (the top of the side strip folded and open in landscape, the top bar open in portrait): Apple's
     // HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08: "the back button is retarded and not iphone duo
-    // standard". The page grows out of the row that opened it and shrinks back into it (the zoom, 11-07).
+    // standard". It slides as the system's pages do, whole: the zoom (11-07) resized the page as it went, so its rows
+    // re-laid themselves out under the finger (Richard, 2026-11-09: "when u swipe a page off screen the elements
+    // compact as u do so … make sure that doesnt occur anywhere"). The zoom stays on the sheets, which aren't swiped off.
     var body: some View {
         ScrollViewReader { proxy in
             page.onChange(of: scrollTo) { _, id in if let id { withAnimation(.smooth(duration: 0.6)) { proxy.scrollTo(id, anchor: .center) } } }
@@ -540,6 +562,7 @@ struct AlarmsTab: View {
                 if !(wide && !calendarListed) { nap }
             case .settings: CalendarSettingsSections()
             case .editor(let a): AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new")
+            case .napEditor(let a): AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new"))
             case .day(let k): CalendarDaySheet(key: k, close: { show(.schedule) }).id(k)
             case .template: AlarmEditor(calendarTemplate: true, close: { show(paneBack) })
             }
@@ -550,9 +573,8 @@ struct AlarmsTab: View {
         .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
         .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !wide }, set: { model.alarmsPage = $0 })) {
             Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
-                .zoomed(from: dayPage ?? "calendar", in: editNS)
         }
-        .sheet(item: $editing) { t in AlarmEditor(original: t.alarm).environmentObject(model).zoomed(from: t.id, in: editNS) }
+        .sheet(item: $editing) { t in AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
         .refreshable { await model.loadState() }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
         // The hinge or a turn mid-page keeps the page (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios
@@ -568,6 +590,7 @@ struct AlarmsTab: View {
                 case .settings: dayPage = nil; model.alarmsPage = true
                 case .day(let k): dayPage = k; model.alarmsPage = true
                 case .editor(let a): editing = EditTarget(alarm: a)
+                case .napEditor(let a): editing = EditTarget(alarm: a, nap: true)
                 case .template, .schedule: break
                 }
                 pane = .schedule
@@ -604,7 +627,13 @@ struct AlarmsTab: View {
             case "editor": edit(mine.first ?? Alarm())
             case "editornew": edit(nil)
             // His own alarms and the nap brought on screen, folded, for their shot.
-            case "alarmsmine": Task { try? await Task.sleep(nanoseconds: 1_500_000_000); scrollTo = "nap" }
+            case "alarmsmine", "napset": Task { try? await Task.sleep(nanoseconds: 1_500_000_000); scrollTo = "nap" }
+            // The nap set (the mock's nap scene) opened in its editor.
+            case "napeditor":
+                Task {
+                    for _ in 0..<30 where model.napAlarm == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+                    editNap(model.napAlarm)
+                }
             case "failure":
                 Task {
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
@@ -777,8 +806,13 @@ struct AlarmsTab: View {
         }
     }
 
-    // The heading says what a chip does, so "20 min" reads as a nap that rings in 20 minutes, not a setting.
-    var nap: some View { Section { NapChips().id("nap") } header: { SectionHead(icon: "zzz", text: "Nap, wake me in", color: ChumbyPalette.sub(scheme == .dark)) } }
+    // The heading says what a chip does, so "20 min" reads as a nap that rings in 20 minutes, not a setting; with a nap
+    // set, the row says the rest.
+    var nap: some View {
+        Section { NapSection(edit: editNap).id("nap").zoomSource("nap-" + (model.napAlarm?.key ?? "new"), in: editNS) } header: {
+            SectionHead(icon: "zzz", text: model.napDue == nil ? "Nap, wake me in" : "Nap", color: ChumbyPalette.sub(scheme == .dark))
+        }
+    }
     var calendarListed: Bool { wake.rules.enabled && wake.allowed && !wake.plan.isEmpty }
     // The rule first, said plainly, and changed only as a rule; then the alarms it has set, checked against what the
     // Chumby really holds. A row opens that day, which is also changed only as "how long before".
@@ -1048,15 +1082,21 @@ struct SoundRows: View {
 struct AlarmEditor: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
     // The alarm as it was when opened, or nil for a new one. Saved by what it is, never by its place in the list.
     var original: Alarm?
     // The settings every calendar alarm shares: how it sounds and what it does, never when it rings or what it's called,
     // which the calendar decides.
     var calendarTemplate = false
+    // The nap: a one-off named "Nap", so the Chumby treats it as its nap (never counted by newest_wins, never pinned). Its
+    // name stays "Nap" for that reason, so there's no label; it has no repeat; its time is also set as a length from now.
+    var nap = false
     // Set when it's shown in the open Duo's right pane rather than as a sheet: how to go back.
     var close: (() -> Void)?
-    init(original: Alarm? = nil, calendarTemplate: Bool = false, close: (() -> Void)? = nil) { self.original = original; self.calendarTemplate = calendarTemplate; self.close = close }
-    var title: String { calendarTemplate ? "How they ring" : original != nil ? "Edit alarm" : "Add alarm" }
+    init(original: Alarm? = nil, calendarTemplate: Bool = false, nap: Bool = false, close: (() -> Void)? = nil) { self.original = original; self.calendarTemplate = calendarTemplate; self.nap = nap; self.close = close }
+    var title: String { nap ? "Nap" : calendarTemplate ? "How they ring" : original != nil ? "Edit alarm" : "Add alarm" }
+    @AppStorage("napLength") private var napLength = 0
+    static let napLengths = [10, 20, 30, 45, 60, 90]
     @State private var alarm = Alarm()
     @State private var time = Date()
     @State private var date = Date()
@@ -1088,7 +1128,10 @@ struct AlarmEditor: View {
     // What Save would send, or why it can't.
     var draft: Result<Alarm, ChumbyError> {
         var a = alarm
-        if !calendarTemplate {
+        if nap {
+            a.name = "Nap"; a.when = "once"; a.enabled = "1"
+            a.time = String(Int((onceAt.timeIntervalSince1970 / 60).rounded()))
+        } else if !calendarTemplate {
             let c = Calendar.current.dateComponents([.hour, .minute], from: time)
             if repeatMode == "once" { a.when = "once"; a.time = String(Int((onceAt.timeIntervalSince1970 / 60).rounded())) }
             else { a.when = repeatMode == "day" ? Alarm.dayKeys[day] : repeatMode; a.time = String((c.hour ?? 7) * 60 + (c.minute ?? 0)) }
@@ -1102,6 +1145,7 @@ struct AlarmEditor: View {
     }
     var change: AlarmChange? {
         guard !calendarTemplate, case .success(let a) = draft else { return nil }
+        if nap { return .setNap(a) }
         return original.map { .replace($0, a) } ?? .add(a)
     }
     // Rick's rule, worked out before Save: a new alarm, or one whose time or label changes, switches the others off.
@@ -1138,9 +1182,9 @@ struct AlarmEditor: View {
             NavigationStack {
                 Form { sections.listRowBackground(GlassRow()) }
                 .seaList().background { SeaBackground().ignoresSafeArea() }
+                // The system's own title (its face set once in ChumbyApp.dressBars), never a text item in the bar (ruling 11-09).
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .principal) { Text(title).font(.custom("Trebuchet MS", size: 18).weight(.bold)) }
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { stopTest(); dismiss() }.disabled(saving) }
                     ToolbarItem(placement: .confirmationAction) {
                         if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
@@ -1174,10 +1218,27 @@ struct AlarmEditor: View {
                         if let problem { FailNote(text: problem) }
                         let off = switchesOff
                         if !off.isEmpty { RowNote(icon: "alarm", text: "Saving turns off \(Self.list(off)).") }
-                        if !calendarTemplate, let o = original, !o.isOn { RowNote(icon: "alarm.fill", text: "Saving turns this alarm on.", color: .secondary) }
+                        if !calendarTemplate && !nap, let o = original, !o.isOn { RowNote(icon: "alarm.fill", text: "Saving turns this alarm on.", color: .secondary) }
                     }
                 }
-                if !calendarTemplate {
+                if nap {
+                    // When it rings, as a time or as a length from now; the two always agree.
+                    Section {
+                        DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute).datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity)
+                        HStack(spacing: 8) {
+                            ForEach(Self.napLengths, id: \.self) { m in
+                                Button { withAnimation(.snappy) { setNapLength(m) } } label: {
+                                    Text("\(m)").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity, minHeight: 34)
+                                }
+                                .buttonStyle(.bordered).tint(napMinutes == m ? ChumbyPalette.acc(scheme == .dark) : nil)
+                                .accessibilityLabel("In \(m) minutes")
+                            }
+                        }
+                        .listRowSeparator(.hidden)
+                        Text(napIn).font(.subheadline).foregroundStyle(.secondary).contentTransition(.numericText())
+                    } header: { Text("Wake me in") } footer: { if nap && original == nil { Text("Rings once, as your other alarms do, and never turns them off.") } }
+                }
+                if !calendarTemplate && !nap {
                 Section { DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute).datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity) }
                 Section {
                     Picker("Repeat", selection: $repeatMode) {
@@ -1237,6 +1298,10 @@ struct AlarmEditor: View {
                         Task { let why = await model.undoJustOnce(); saving = false; if let why { problem = why } else { finish() } }
                     }.foregroundStyle(.tint).disabled(saving)
                 } footer: { Text("The usual alarm rings again and this one goes.") } }
+                else if nap, original != nil { Section {
+                    // Calling the nap off, from its editor too; it goes without asking, since it was one tap to set.
+                    Button("Cancel nap", role: .destructive) { run(.cancelNap) }.foregroundStyle(.red).disabled(saving)
+                } }
                 else if let original, !calendarTemplate { Section {
                     // The question hangs off the button that asked it, so it points at what was tapped.
                     Button("Delete alarm", role: .destructive) { confirmDelete = true }.foregroundStyle(.red).disabled(saving)
@@ -1247,8 +1312,33 @@ struct AlarmEditor: View {
             }
     }
     func stopTest() { Task { try? await model.api?.post("test", extra: "&stop=1") } }
+    // The nap's length from now, in whole minutes (rounded up: the Chumby rings on the minute), and the time to match it.
+    var napMinutes: Int { max(Int((onceAt.timeIntervalSinceNow / 60).rounded(.up)), 1) }
+    var napIn: String {
+        let m = napMinutes
+        return m >= 60 ? "In \(m / 60) h\(m % 60 > 0 ? " \(m % 60) min" : "")" : "In \(m) min"
+    }
+    func setNapLength(_ m: Int) {
+        napLength = m
+        time = Date().addingTimeInterval(Double(m) * 60)
+        date = time
+    }
 
     func load() {
+        if nap {
+            if let original { alarm = original } else {
+                // A new nap: the last length chosen, a short ring, the Chumby's first tone (as the chips make one).
+                alarm = Alarm(); alarm.name = "Nap"; alarm.when = "once"; alarm.duration = "5"
+                let tone = model.state.tones.first ?? "Beep"
+                alarm.type = "beep"; alarm.arg = tone; alarm.param_description = tone
+                alarm.time = String(Int((Date().timeIntervalSince1970 / 60).rounded(.up)) + (NapSection.lengths.contains(napLength) ? napLength : 20))
+            }
+            time = Date(timeIntervalSince1970: (Double(alarm.time) ?? 0) * 60); date = time
+            repeatMode = "once"
+            sound = SoundChoice(alarm, state: model.state, stations: stations)
+            after = alarm.action.isEmpty ? "" : alarm.action + "|" + alarm.action_param
+            return
+        }
         if calendarTemplate {
             // The saved set if there is one, else how the first calendar alarm rings now.
             if let t = model.state.calTpl ?? CalendarWake.shared.storedSettings ?? model.state.alarms.first(where: { $0.isCalendar && !$0.isOwn }) { alarm = t }

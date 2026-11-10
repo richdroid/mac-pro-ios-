@@ -339,7 +339,7 @@ function chumbyScene(q, s) {
   // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
   const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap)\//);
   if (!m) return false;
   const scene = m[1];
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
@@ -414,6 +414,10 @@ function chumbyScene(q, s) {
     const song = Date.now() - songScene.at > 8000 ? { t: fire * 60 + 40, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' } : null;
     // The wake-up's music is still playing, so Now and Woke up to tell the same story.
     return json({ ...stateNow(data.state), alarms: [...data.state.alarms, wake], song, music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
+  }
+  // A nap set 20 minutes from now, as the app's chips or Control Center leave it: the one "Nap" one-off, a short Beep.
+  if (scene === 'nap' && a === 'state') {
+    return json({ ...stateNow(data.state), alarms: [...data.state.alarms, alarm({ name: 'Nap', when: 'once', time: String(Math.floor(Date.now() / 60000) + 20), duration: '5' })] });
   }
   // Pandora playing a song it started a minute and a half ago, for Sounds' Now.
   if (scene === 'playing' && a === 'state') return json({ ...stateNow(data.state), music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
