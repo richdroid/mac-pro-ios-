@@ -52,14 +52,16 @@ struct ChumbyApp: App {
 
 extension ChumbyApp {
     // A pushed page's title is the system's own large title (so Back and the title are laid out by iOS the Duo's way),
-    // in the face every tab's title wears: Trebuchet, bold, 30 pt, and 18 pt once it has collapsed into the bar.
+    // in the face every tab's title wears: Trebuchet, bold, 30 pt, and 18 pt once it has collapsed into the bar, and in
+    // the tabs' ink rather than the system's black (build 241: "Calendar settings" sat black over navy rows).
     static func dressBars() {
         #if canImport(UIKit)
         let bar = UINavigationBar.appearance()
+        let ink = UIColor { $0.userInterfaceStyle == .dark ? UIColor(ChumbyPalette.ink(true)) : UIColor(ChumbyPalette.ink(false)) }
         if let big = UIFont(name: "Trebuchet MS", size: 30), let small = UIFont(name: "Trebuchet MS", size: 18) {
             let bold = UIFontDescriptor.SymbolicTraits.traitBold
-            bar.largeTitleTextAttributes = [.font: UIFont(descriptor: big.fontDescriptor.withSymbolicTraits(bold) ?? big.fontDescriptor, size: 30)]
-            bar.titleTextAttributes = [.font: UIFont(descriptor: small.fontDescriptor.withSymbolicTraits(bold) ?? small.fontDescriptor, size: 18)]
+            bar.largeTitleTextAttributes = [.font: UIFont(descriptor: big.fontDescriptor.withSymbolicTraits(bold) ?? big.fontDescriptor, size: 30), .foregroundColor: ink]
+            bar.titleTextAttributes = [.font: UIFont(descriptor: small.fontDescriptor.withSymbolicTraits(bold) ?? small.fontDescriptor, size: 18), .foregroundColor: ink]
         }
         #endif
     }
@@ -383,7 +385,6 @@ struct ConnectionView: View {
             .scrollIndicators(.hidden)
             .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) { Text("Connection").font(.custom("Trebuchet MS", size: 18).weight(.bold)) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Connect") {
                         model.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1581,7 +1582,6 @@ struct ChannelsTab: View {
                     .seaList().background { SeaBackground().ignoresSafeArea() }
                     .navigationTitle("Add to \(pickedTitle)").navigationBarTitleDisplayMode(.inline)
                     .toolbar {
-                        ToolbarItem(placement: .principal) { Text("Add to \(pickedTitle)").font(.custom("Trebuchet MS", size: 18).weight(.bold)).lineLimit(1) }
                         ToolbarItem(placement: .confirmationAction) { doneButton { closeAdd(scroll) } }
                     }
             }
@@ -2015,6 +2015,17 @@ struct NightSettings: View {
     }
     func tag(_ e: ScheduleItem) -> String { e.cmd == "night" ? (e.val == "off" ? "night:off" : "night:night") : e.cmd + ":" + e.val }
     func words(_ e: ScheduleItem) -> String { actions.first { $0.0 == tag(e) }?.1 ?? (e.cmd + " " + e.val) }
+    // The same, short enough to sit beside the time: "Night", "Day", "Bright", "Dim", "Screen off", or the channel's name.
+    func short(_ e: ScheduleItem) -> String {
+        switch tag(e) {
+        case "night:night": return "Night"
+        case "night:off": return "Day"
+        case "screen:bright": return "Bright"
+        case "screen:dim": return "Dim"
+        case "screen:off": return "Screen off"
+        default: return e.cmd == "channel" ? e.val : words(e)
+        }
+    }
     // A new style is used everywhere at once: the Chumby's own nightly times, and the Chumby itself if it's night now.
     func choose(_ style: String) {
         kind = style
@@ -2044,10 +2055,19 @@ struct NightSettings: View {
                     Image(systemName: e.cmd == "night" ? (e.val == "off" ? "sun.max.fill" : "moon.fill") : e.cmd == "screen" ? "sun.min" : "tv")
                         .font(.body.weight(.semibold)).frame(width: 24)
                         .foregroundStyle(e.cmd == "night" && e.val == "off" ? ChumbyPalette.hex(0xe59a2e) : ChumbyPalette.hex(0xa4b7d6))
-                    // In the accent, so the time reads as something to tap, not a grey chip saying when (Richard, 2026-11-09:
-                    // "i should be able to delete an entry for the night time thing or edit it").
-                    DatePicker("Time", selection: Binding(get: { NightSettings.date(e.time) }, set: { e.time = NightSettings.hhmm($0); model.saveScheduleSoon() }), displayedComponents: .hourAndMinute).labelsHidden()
-                        .tint(ChumbyPalette.acc(scheme == .dark))
+                    // The time as a control he can see: the accent's words on the accent's own capsule, as "Turn on" and the
+                    // Add rows, with the system's time picker under it to take the tap (Richard, 2026-11-09: "i should be
+                    // able to delete an entry for the night time thing or edit it"; the compact picker's grey chip in ink
+                    // read as a label saying when, build 241).
+                    Text(NightSettings.date(e.time).formatted(date: .omitted, time: .shortened))
+                        .font(.body.weight(.semibold)).monospacedDigit().foregroundStyle(ChumbyPalette.acc(scheme == .dark))
+                        .padding(.horizontal, 12).frame(height: 34)
+                        .background(ChumbyPalette.acc(scheme == .dark).opacity(0.14), in: Capsule())
+                        .overlay {
+                            DatePicker("Time", selection: Binding(get: { NightSettings.date(e.time) }, set: { e.time = NightSettings.hhmm($0); model.saveScheduleSoon() }), displayedComponents: .hourAndMinute)
+                                .labelsHidden().opacity(0.015)
+                        }
+                        .accessibilityElement(children: .contain)
                     Spacer(minLength: 8)
                     // What happens at that time, and taking the time out, in one menu.
                     Menu {
@@ -2061,13 +2081,16 @@ struct NightSettings: View {
                         Divider()
                         Button("Remove this time", systemImage: "trash", role: .destructive) { remove(e.id) }
                     } label: {
+                        // In a word or two: beside the time, folded, "Night starts" was cut to "Night st…" (build 241). The
+                        // menu itself says it in full.
                         HStack(spacing: 5) {
-                            Text(words(e)).lineLimit(1)
+                            Text(short(e)).lineLimit(1)
                             Image(systemName: "chevron.up.chevron.down").imageScale(.small)
                         }
                         .font(.subheadline.weight(.medium))
                         .padding(.horizontal, 10).padding(.vertical, 6)
                         .background(.white.opacity(0.12), in: Capsule())
+                        .layoutPriority(1)
                     }
                     .accessibilityLabel("At \(e.time): \(words(e))")
                     // Taking a time out is a control he can see in the row, as on the X widget's rows; it was only at the

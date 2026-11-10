@@ -707,7 +707,6 @@ struct CalendarDaySheet: View {
                 .onDisappear { commitLabel() }
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .principal) { Text(title).font(.custom("Trebuchet MS", size: 18).weight(.bold)) }
                     // Tinted, the same as Done in the open pane.
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { commitLabel(); dismiss() }.fontWeight(.semibold).foregroundStyle(.tint) }
                 }

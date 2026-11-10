@@ -253,7 +253,6 @@ struct JustOnceSheet: View {
                 .seaList().background { SeaBackground().ignoresSafeArea() }
                 .navigationTitle("Just this once").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .principal) { Text("Just this once").font(.custom("Trebuchet MS", size: 18).weight(.bold)) }
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
                     ToolbarItem(placement: .confirmationAction) {
                         if saving { ProgressView() } else {
