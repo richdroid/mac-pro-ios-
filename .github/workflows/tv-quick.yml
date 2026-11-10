@@ -54,9 +54,9 @@ jobs:
           has() { case " $WHAT " in *" $1 "*) return 0;; esac; return 1; }
           if has island; then
             # The card as the gallery draws it, each state in the frame iOS gives it.
-            for P in island island-open1 island-open2 island-lock0 island-lock1; do
+            for P in island island-open1 island-open2 island-open3 island-lock0 island-lock1 island-lock2 island-art; do
               xcrun simctl launch "$DEVICE" local.macpro.GalleryTV -page $P
-              sleep 6
+              sleep 14
               xcrun simctl io "$DEVICE" screenshot --display=1 dist/tv-$P.png
               xcrun simctl terminate "$DEVICE" local.macpro.GalleryTV || true
             done
