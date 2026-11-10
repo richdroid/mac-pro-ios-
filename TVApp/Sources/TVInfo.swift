@@ -135,7 +135,7 @@ struct TitleInfoPage: View {
                     }
                 }
                 .padding(.horizontal, 22)
-                .animation(.easeOut(duration: 0.25), value: info == nil)
+                .settledAnimation(.easeOut(duration: 0.25), value: info == nil)
             }
             .padding(.bottom, 24)
         }

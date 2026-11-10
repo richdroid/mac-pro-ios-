@@ -381,7 +381,7 @@ struct BrowseColumn: View {
             .padding(.vertical, 12)
             // The rows arrive, and give way to what a search finds, with a fade: the lists are set outside any animation,
             // so they cut in and out (the 2026-11-10 motion pass).
-            .animation(.easeOut(duration: 0.25), value: shown.map(\.title))
+            .settledAnimation(.easeOut(duration: 0.25), value: shown.map(\.title))
             .animation(.easeOut(duration: 0.25), value: store.query.isEmpty)
         }
         .restsOnRows()
@@ -528,7 +528,8 @@ struct EverywhereSearch: View {
             }
             if !Task.isCancelled { settledFor = text }
         }
-        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: films.answerRows.map(\.id) + music.answerRows.map(\.id))
+        // Keyed on the rows shown, not the answers: they changed before `settled` let the rows on, so the rows cut in (tv21 realsearch-open).
+        .settledAnimation(.spring(response: 0.4, dampingFraction: 0.85), value: settled ? films.answerRows.map(\.id) + music.answerRows.map(\.id) : [])
         .onChange(of: text, initial: true) { _, t in
             for s in stores { s.query = t; s.searchSoon() }
         }

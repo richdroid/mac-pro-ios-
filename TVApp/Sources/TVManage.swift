@@ -161,8 +161,8 @@ struct ManageAppsView: View {
         }
         // The rows fade in over the spinner, and the one that's deleted goes with the list's own motion, rather than the
         // list redrawing in a frame (the 2026-11-10 motion pass).
-        .animation(.easeOut(duration: 0.25), value: store.state == nil)
-        .animation(.easeOut(duration: 0.25), value: store.state?.apps.map(\.pkg))
+        .settledAnimation(.easeOut(duration: 0.25), value: store.state == nil)
+        .settledAnimation(.easeOut(duration: 0.25), value: store.state?.apps.map(\.pkg))
         .summonsBar()
         .topShade().topFade()
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
@@ -219,7 +219,7 @@ struct ManageSettingsView: View {
             }
         }
         // As the apps page: the settings fade in over the spinner.
-        .animation(.easeOut(duration: 0.25), value: store.state == nil)
+        .settledAnimation(.easeOut(duration: 0.25), value: store.state == nil)
         .summonsBar()
         .topShade().topFade()
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)

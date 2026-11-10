@@ -344,7 +344,7 @@ struct FlickScreen: View {
             // close (Apple's HIG for iPhone Duo, "Vertical controls"; Richard, 2026-11-08). The bar stays through the move
             // and fades with the rest of this screen: taken off as the move began, iOS kept its glass disc and dropped the
             // glyph, an empty circle until the Remote came.
-            .toolbar { if barShown && !fadingOut { bar } }
+            .toolbar { if barShown { bar } }
             .environment(\.pageBar, pageBar)
             // Open, the show's one big key sits at the left pane's foot, level with Back at the right's: the same height,
             // the same baseline.
@@ -1070,7 +1070,8 @@ struct FlickScreen: View {
         if !toRemote { backToThrownFrom() }
         leaving = true; closing = true
         if restoreMood, let prior = priorMood { model.mood = prior }
-        withAnimation(.easeOut(duration: 0.2)) { arrived = false; barShown = false }
+        // The whole screen, bar included, fades as one: its item taken off alone left its glass disc behind.
+        withAnimation(.easeOut(duration: 0.2)) { arrived = false; fadingOut = true }
         Task {
             try? await Task.sleep(nanoseconds: 200_000_000)
             model.closeFlick()
@@ -1157,7 +1158,8 @@ struct FlickScreen: View {
             model.remoteMoveAt = Date()
             // The page dissolves over the move's first half, the Remote's keys coming up through it; the picture travels on
             // its own spring. Two animations side by side, never one inside the other (the review of e59620e).
-            withAnimation(.easeOut(duration: 0.2)) { arrived = false; barShown = false }
+            // The bar stays (a tap on it does nothing once flown) and goes with the whole screen, disc and glyph together.
+            withAnimation(.easeOut(duration: 0.2)) { arrived = false }
             withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { toRemote = true; moveT = 1 }
             // The Remote's picture can still settle as its page lays out, so the move keeps aiming at where it is now,
             // place and size, until the spring has run its course and the picture has stopped moving. Every change of aim

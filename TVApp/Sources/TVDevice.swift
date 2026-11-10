@@ -105,7 +105,7 @@ struct DeviceTab: View {
             }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).tvCard(14).padding(.top, 6)
             // The dot's colour eases between green and orange, as the tiles do, rather than switching in a frame.
-            .animation(.easeOut(duration: 0.3), value: failed)
+            .settledAnimation(.easeOut(duration: 0.3), value: failed)
         }
         .frame(maxWidth: .infinity)
     }
@@ -124,7 +124,8 @@ struct DeviceTab: View {
         // shape's natural width is next to nothing.
         .frame(maxWidth: .infinity)
         .opacity(breathe ? 1 : 0.5)
-        .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true } }
+        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: breathe)
+        .onAppear { breathe = true }
         .accessibilityHidden(true)
     }
     @ViewBuilder func tiles(_ i: DeviceInfo) -> some View {
@@ -141,7 +142,7 @@ struct DeviceTab: View {
         // Out of touch, the last numbers stay but step back, so they aren't read as live.
         .opacity(failed ? 0.4 : 1)
         .saturation(failed ? 0 : 1)
-        .animation(.easeOut(duration: 0.3), value: failed)
+        .settledAnimation(.easeOut(duration: 0.3), value: failed)
     }
     @ViewBuilder func details(_ i: DeviceInfo) -> some View {
         VStack(spacing: 0) {
@@ -199,7 +200,7 @@ struct DeviceTab: View {
                     VStack(spacing: 18) { if let info { tiles(info); details(info) } else if !failed { waitingTiles } }.padding(20)
                         // The tiles fade in over their waiting shapes (the first answer is set with no animation, so the
                         // name over them doesn't crossfade; the shapes here are theirs to replace).
-                        .animation(.easeOut(duration: 0.25), value: info == nil)
+                        .settledAnimation(.easeOut(duration: 0.25), value: info == nil)
                         .task(id: phase) { await poll() }
                 }
                 .backToTop()
@@ -210,7 +211,7 @@ struct DeviceTab: View {
                     hero
                     // As open: the tiles fade in over their shapes; the name above stays out of the fade.
                     Group { if let info { tiles(info); details(info) } else if !failed { waitingTiles } }
-                        .animation(.easeOut(duration: 0.25), value: info == nil)
+                        .settledAnimation(.easeOut(duration: 0.25), value: info == nil)
                 }
                 .padding(.horizontal, 16).padding(.bottom, 16)
                 .task(id: phase) { await poll() }

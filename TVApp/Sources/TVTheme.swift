@@ -286,9 +286,36 @@ extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
     override open func viewDidLoad() {
         super.viewDidLoad()
         interactivePopGestureRecognizer?.delegate = self
+        // So FoldSplit holds its split while a page slides on or off (NavTransit): only the Mac Pro app registered before,
+        // and open flat a page re-split as it was swiped off (Richard, 2026-11-09: "the elements compact as u do so").
+        NavTransit.shared.register(self)
+        interactivePopGestureRecognizer?.addTarget(self, action: #selector(tvEdgeSwipeMoved(_:)))
+    }
+    @objc func tvEdgeSwipeMoved(_ g: UIGestureRecognizer) {
+        if g.state == .began, let c = transitionCoordinator { NavTransit.shared.begin(c) }
     }
     public func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         g === interactivePopGestureRecognizer ? viewControllers.count > 1 : true
     }
 }
 #endif
+
+// A fade for a change that comes from data (the TV's status, rows arriving), only once the view has been on screen a
+// moment. SwiftUI defers a tab's or a covered page's updates until it is shown again, so a change that landed while he
+// was elsewhere animated in the tab switch or the pop itself (the row fading in, the pad resizing, the stack crossfading
+// as the page arrived); and a page's own load arriving mid-push animated its layout during the slide. Arriving, a page
+// is simply there, as Ambience already is; from 0.4 s on (past a push or a tab change) every change fades as before.
+struct SettledAnimation<V: Equatable>: ViewModifier {
+    let animation: Animation
+    let value: V
+    @State private var settled = false
+    func body(content: Content) -> some View {
+        content
+            .animation(settled ? animation : nil, value: value)
+            .task { try? await Task.sleep(nanoseconds: 400_000_000); if !Task.isCancelled { settled = true } }
+            .onDisappear { settled = false }
+    }
+}
+extension View {
+    func settledAnimation<V: Equatable>(_ animation: Animation, value: V) -> some View { modifier(SettledAnimation(animation: animation, value: value)) }
+}

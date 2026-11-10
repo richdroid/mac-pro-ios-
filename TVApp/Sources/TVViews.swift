@@ -891,11 +891,11 @@ struct MirrorView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
-        .animation(.easeOut(duration: 0.25), value: film)
+        .settledAnimation(.easeOut(duration: 0.25), value: film)
         // Every other change of what the picture is (the live screen to a poster's place, hidden and shown again) fades
         // the same way: the live picture cut to the TV glyph the frame a film's status came in, before its poster was
         // known (tv21 posture-remote 9.06 → 9.15 s), and hiding the screen swapped it for the blurred art in one frame.
-        .animation(.easeOut(duration: 0.25), value: look)
+        .settledAnimation(.easeOut(duration: 0.25), value: look)
         .task(id: self.film) {
             let next = self.film
             guard let current = drawn else { drawn = .some(next); return }
@@ -1144,7 +1144,7 @@ struct PlayKey: View {
                 .contentTransition(.symbolEffect(.replace))
                 // The swap is the symbol's own, on the press and on the TV's word alike: neither set the glyph inside an
                 // animation, so the replace never ran and ▶ cut to ⏸ (tv21 realpause 8.49 → 8.59 s, no frame between).
-                .animation(.snappy(duration: 0.25), value: playing)
+                .settledAnimation(.snappy(duration: 0.25), value: playing)
                 .frame(width: size, height: size).background(tint, in: Circle())
                 .shadow(color: tint.opacity(glow ? 0.45 : 0), radius: 14, y: 4)
                 .animation(.easeOut(duration: 0.2), value: glow)
@@ -1234,7 +1234,7 @@ struct RemoteTab: View {
             .frame(height: Self.barSlot)
             .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1)
             .allowsHitTesting(!unreachable)
-            .animation(.easeOut(duration: 0.2), value: model.starting?.played)
+            .settledAnimation(.easeOut(duration: 0.2), value: model.starting?.played)
         }
     }
     // The episode line's place is kept from the start of an episode's flick, so it fills in rather than pushes in.
@@ -1254,7 +1254,7 @@ struct RemoteTab: View {
             // A start the flick sent: its poster in the picture, with the light lapping its edge, until it plays and the
             // TV's own picture takes over (§2.5a C5). The flick's screen lands on exactly this.
             .overlay { if let s = model.starting { StartingPicture(start: s).transition(.opacity) } }
-            .animation(.easeOut(duration: 0.25), value: model.starting?.played)
+            .settledAnimation(.easeOut(duration: 0.25), value: model.starting?.played)
             .overlay {
                 if dark {
                     ZStack {
@@ -1266,7 +1266,7 @@ struct RemoteTab: View {
                     .transition(.opacity)
                 }
             }
-            .animation(.easeInOut(duration: 0.3), value: dark)
+            .settledAnimation(.easeInOut(duration: 0.3), value: dark)
             // One door each way: the eye at the picture's corner hides it, and the one key on the hidden picture shows it.
             // A held menu on the picture offered both a second time (the 2026-11-10 logic pass).
             .opacity(model.flickHandoff ? 0 : 1)
@@ -1307,7 +1307,7 @@ struct RemoteTab: View {
         }
         // The TV's status is never set inside an animation, so the row came and went in one frame as something started
         // or ended on the TV. It fades, like the lines under the picture (the 2026-11-10 motion pass).
-        .animation(.easeOut(duration: 0.25), value: session)
+        .settledAnimation(.easeOut(duration: 0.25), value: session)
     }
     // The one transport, the same as Playing's, on the top row's five places.
     var transport: some View { Transport(glow: !typing) }
@@ -1327,7 +1327,7 @@ struct RemoteTab: View {
     var pad: some View {
         DPad(bare: asleep).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep)
             .overlay { wake }
-            .animation(.easeInOut(duration: 0.25), value: asleep)
+            .settledAnimation(.easeInOut(duration: 0.25), value: asleep)
     }
     // Only when the music is what's on: a song's player beside a film's was two now-playings on one TV.
     // Dimmed and out of reach with every other key while the TV can't be reached (its ▶ stayed bright and live, r32).
@@ -1357,18 +1357,18 @@ struct RemoteTab: View {
                 // front with them (r33: bright, Stremio's ring lit, beside a dimmed pad).
                 if apps, model.status?.apps?.isEmpty == false {
                     QuickApps().opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
-                        .animation(.easeInOut(duration: 0.3), value: unreachable).columnRole(.aligned)
+                        .settledAnimation(.easeInOut(duration: 0.3), value: unreachable).columnRole(.aligned)
                 }
                 // Right under the tiles, not pushed to the foot with dead space above it.
                 SendBar(opensSearch: true).columnRole(.aligned)
             }
             Spacer(minLength: 0)
         }
-        .animation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
+        .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
         // The bar and the episode line come and go with the TV's status, which is set with no animation: faded in and
         // out here rather than popped (the 2026-11-10 motion pass). Their room is kept either way (PictureColumn).
-        .animation(.easeOut(duration: 0.25), value: session)
-        .animation(.easeOut(duration: 0.25), value: seriesOn)
+        .settledAnimation(.easeOut(duration: 0.25), value: session)
+        .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
         .padding(.horizontal, 20).padding(.bottom, 16)
     }
     // The pad and the keys, the second column wherever the Remote has two.
@@ -1416,10 +1416,10 @@ struct RemoteTab: View {
                     }
                     .modifier(KeysArrive(gate: keysGate))
                 }
-                .animation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
+                .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
                 // As open: the lines under the picture fade with the TV's status rather than pop.
-                .animation(.easeOut(duration: 0.25), value: session)
-                .animation(.easeOut(duration: 0.25), value: seriesOn)
+                .settledAnimation(.easeOut(duration: 0.25), value: session)
+                .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
                 .padding(.horizontal, 14).padding(.bottom, 12)
             }
         }
@@ -1650,7 +1650,7 @@ private struct StartingPicture: View {
         .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
         // Playing: the light finishes, and the picture under it is the TV's own.
         .opacity(start.played ? 0 : 1)
-        .animation(.easeOut(duration: 0.3), value: start.played)
+        .settledAnimation(.easeOut(duration: 0.3), value: start.played)
         .allowsHitTesting(false)
         .accessibilityLabel(start.failed ? "\(start.title) didn’t start" : "\(start.title) is starting")
     }
@@ -1852,10 +1852,10 @@ struct Transport: View {
         .opacity(failed || connecting ? 0.4 : 1)
         .allowsHitTesting(!connecting)
         // Coming up only once ⏯ has swapped to what the TV said: as one, the bright ▶ showed for a frame before ⏸ (r34).
-        .animation(.easeOut(duration: 0.2).delay(connecting ? 0 : 0.3), value: connecting)
+        .settledAnimation(.easeOut(duration: 0.2).delay(connecting ? 0 : 0.3), value: connecting)
         // The outer keys change kind with the app on the TV (Stremio's own seek and episode keys, else the TV's media
         // keys): a crossfade, not a swap, as the status comes in.
-        .animation(.easeOut(duration: 0.2), value: stremio)
+        .settledAnimation(.easeOut(duration: 0.2), value: stremio)
     }
     var connecting: Bool { playing == nil && starting == nil && model.staleStatus }
 }
@@ -2146,7 +2146,7 @@ struct Shelf: View {
             } else { Color.clear.frame(height: 0) }
         }
         // The row fades in over its waiting shapes, which it replaces in place, rather than cutting in.
-        .animation(.easeOut(duration: 0.25), value: row == nil)
+        .settledAnimation(.easeOut(duration: 0.25), value: row == nil)
         .task { await store.load() }
     }
 }
@@ -2440,7 +2440,7 @@ struct PlayingTab: View {
         .frame(maxWidth: .infinity)
         // What's on changing kind (a song ends and a film starts, AirPlay comes and goes) crossfades the stack rather than
         // swapping it in one frame: the status is set with no animation of its own (the 2026-11-10 motion pass).
-        .animation(.easeOut(duration: 0.3), value: nowKind)
+        .settledAnimation(.easeOut(duration: 0.3), value: nowKind)
     }
     // Which of the stacks above is up.
     var nowKind: Int {
@@ -2478,7 +2478,7 @@ struct PlayingTab: View {
             Text(more.filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
         }
         .contentTransition(.opacity)
-        .animation(.easeInOut(duration: 0.25), value: title)
+        .settledAnimation(.easeInOut(duration: 0.25), value: title)
     }
     // Brings Mint's screen for this song (art, lyrics) to the front of the TV; it sends nothing, the song is already the
     // TV's. So it shows whenever there is a song and Mint isn't the app on the TV's screen, playing or paused: the old
@@ -2569,7 +2569,7 @@ struct PlayingTab: View {
             }
         }
         .task { if mintHome.rows.isEmpty { await mintHome.load() } }
-        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: results.map(\.id))
+        .settledAnimation(.spring(response: 0.4, dampingFraction: 0.85), value: results.map(\.id))
         .onChange(of: query) { _, _ in
             if pending { pendingWait?.cancel(); pending = false }
             guard trimmed.count >= 2 else { return }
@@ -2617,7 +2617,7 @@ struct PlayingTab: View {
             if panes {
                 FoldSplit { ScrollView { now.padding(20) }.backToTop() } right: {
                     // The same 20 pt from the top as the picture beside it, so the two panes' first lines sit level (r21).
-                    ScrollView { Group { if watching { upNext.padding(.top, 20) } else { send.padding(20) } }.animation(.easeOut(duration: 0.3), value: watching) }.backToTop()
+                    ScrollView { Group { if watching { upNext.padding(.top, 20) } else { send.padding(20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching) }.backToTop()
                 }
             } else {
                 // The rows under a film run to the screen's edges, as rows do everywhere else.
@@ -2628,7 +2628,7 @@ struct PlayingTab: View {
                         // dfd490e: the content sat 3 pt left of "Playing").
                         now.padding(.horizontal, 20)
                         // What's under it follows what's on, with the same fade.
-                        Group { if watching { upNext } else { send.padding(.horizontal, 20) } }.animation(.easeOut(duration: 0.3), value: watching)
+                        Group { if watching { upNext } else { send.padding(.horizontal, 20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching)
                     }
                     .padding(.bottom, 16)
                 }
@@ -2852,8 +2852,8 @@ struct DiscoverColumn: View {
             // fills in over its waiting shapes; the catalogue's rows arrive. Each a fade, where each was a cut: the lists
             // are set outside any animation (the 2026-11-10 motion pass).
             .animation(.easeOut(duration: 0.25), value: store.query.isEmpty)
-            .animation(.easeOut(duration: 0.25), value: continuing == nil)
-            .animation(.easeOut(duration: 0.25), value: shown.map(\.title))
+            .settledAnimation(.easeOut(duration: 0.25), value: continuing == nil)
+            .settledAnimation(.easeOut(duration: 0.25), value: shown.map(\.title))
         }
         // No row snapping here: aligning a row to the scroll view's top as the page first filled in pulled the content up
         // under the large title, which then opened folded on some launches and large on others (r26). Nor a scroll target
@@ -2933,7 +2933,8 @@ struct PlaceholderShelf: View {
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
         // A plain repeating fade rather than a phase animator, which would lay this out at its natural size.
         .opacity(breathe ? 1 : 0.5)
-        .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true } }
+        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: breathe)
+        .onAppear { breathe = true }
         .accessibilityHidden(true)
     }
 }
@@ -3070,7 +3071,7 @@ struct VideoProgress: View {
             .animation(.snappy(duration: 0.25), value: seeker.pending)
             .animation(.spring(response: 0.5, dampingFraction: 0.88), value: locked)
         }
-        .animation(.spring(response: 0.45, dampingFraction: 0.9), value: duration > 0 && !model.staleStatus)
+        .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: duration > 0 && !model.staleStatus)
         // The build's shot of a drag along the bar, its bubble up ("-pose scrub"): held at 40 %, never let go.
         // Waits for the film's length (the real bridge's comes about 20 s in) rather than for the TV to allow seeking, which
         // the mock never said, so it was never shown (r18).
