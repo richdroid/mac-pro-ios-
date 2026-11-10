@@ -165,8 +165,8 @@ final class AppModel: ObservableObject {
         AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
     }
     private func releaseHeld() {
-        if let s = heldStatus { heldStatus = nil; apply(s) }
-        if let l = heldLive { heldLive = nil; if liveStore.live != l { liveStore.live = l } }
+        if let s = heldStatus { heldStatus = nil; SwipeLog.note("held status landed"); apply(s) }
+        if let l = heldLive { heldLive = nil; if liveStore.live != l { SwipeLog.note("held live landed"); liveStore.live = l } }
     }
 
     func start() {
@@ -230,7 +230,7 @@ final class AppModel: ObservableObject {
         }
         // Not while a page is moving under his finger: a row changing height mid-bounce snaps the page back.
         if parks { heldLive = l; return }
-        if liveStore.live != l { liveStore.live = l }
+        if liveStore.live != l { SwipeLog.note("live landed"); liveStore.live = l }
     }
 
     func refresh() async {
@@ -265,7 +265,8 @@ final class AppModel: ObservableObject {
                 // "versionsupdate": an app with a newer build ready over the air, so the page's Update shows.
                 appHistory = pose == "versionsupdate" ? "Chumby.ipa" : "TV.ipa"
             }
-            if parks { heldStatus = fresh; return }
+            if parks { SwipeLog.note("status held"); heldStatus = fresh; return }
+            SwipeLog.note("status landed")
             apply(fresh)
         } catch APIError.signInNeeded {
             if !needsSignIn { needsSignIn = true }

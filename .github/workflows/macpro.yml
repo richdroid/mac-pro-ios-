@@ -84,7 +84,7 @@ jobs:
             local D=/tmp/dh/.build/release/devicehubctl
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9001} "$@"
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9001} -swipeLog YES "$@"
             sleep 10
             for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x $lo $x $hi 0.12 || echo "drag failed"; sleep 1.4; done
             $D "$DEVICE" drag $x $lo $x $hi 0.9 || true; sleep 2.5
@@ -93,7 +93,34 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
-            framelog $name
+            framelog $name; swipelog $name
+          }
+          # The pull he makes, as near as a scripted finger gets: flung to its end, then drawn past the end slowly (3 s, the
+          # finger moving the whole way; the tool can't pause a drag) and let go, once more quickly, then back up and past
+          # the top the same way. The page's offset every frame, when the hold took and let go, and each reading's landing
+          # (held or not) go to the swipe log, so the spring is judged in the app's own frames: the recorder keeps only
+          # some of them (the 2026-11-10 bounce films showed a 320 px first step that was three frames in one).
+          pullfilm() {
+            local name=$1 display=$2 x=$3 lo=$4 hi=$5; shift 5
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9001} -swipeLog YES "$@"
+            sleep 10
+            for i in 1 2 3 4 5; do $D "$DEVICE" drag $x $lo $x $hi 0.12 || echo "drag failed"; sleep 1.4; done
+            $D "$DEVICE" drag $x 0.6 $x $hi 3 || true; sleep 3
+            $D "$DEVICE" drag $x 0.6 $x $hi 0.5 || true; sleep 3
+            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x $hi $x $lo 0.12 || true; sleep 1.4; done
+            $D "$DEVICE" drag $x 0.45 $x $lo 3 || true; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            framelog $name; swipelog $name
+          }
+          # The swipe log from the last run with -swipeLog YES (Caches/swipe-log.txt), copied out as a .log.
+          swipelog() {
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0
+            [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/macpro-$1-swipe.log || true
           }
           # The frame meter's log from the last run with -frameLog YES (Caches/frame-log.txt: frames, late frames and the
           # worst gap every 2 s), copied out as a .log so it's published with the build's logs.
@@ -291,7 +318,9 @@ jobs:
           swipefilm appsfling-portrait 3 0.5 0.8 0.28 -tab 1 -frameLog YES
           # The same flings against the Mac whose readings change every second, asked for every second, so readings land
           # as the finger lifts and while the page springs back, as on his phone (the still Mac above never changes a row).
-          FILM_PORT=9021 swipefilm statusbounce-portrait 3 0.5 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
+          # Status, the page he named, pulled his way (pullfilm) against that Mac: the log beside it must show every reading
+          # held while the page is past its end, and the spring in steps that shrink, never one move.
+          FILM_PORT=9021 pullfilm statuspull-portrait 3 0.5 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
           FILM_PORT=9021 swipefilm appsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -fullEvery 1 -frameLog YES
           FILM_PORT=9021 swipefilm versionsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -fullEvery 1 -frameLog YES
           backfilms 3 -portrait
