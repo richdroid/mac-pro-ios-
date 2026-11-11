@@ -49,7 +49,8 @@ struct MacProApp: App {
         AlertWatch.pending = nil
         // New apps waiting while he's away: straight to Apps, where the waiting ones start installing over the air (Richard,
         // 2026-11-07: "a method to remotely push updates").
-        if id.hasPrefix("session:") { model.openSession(key: String(id.dropFirst(8))) } else if id == "ios:waiting" { model.tab = 1 } else { model.tab = 0 }
+        // Usage near its limit: the Claude tab, scrolled to the usage.
+        if id.hasPrefix("session:") { model.openSession(key: String(id.dropFirst(8))) } else if id.hasPrefix("usage:") { model.show(tab: 3) } else if id == "ios:waiting" { model.tab = 1 } else { model.tab = 0 }
     }
     private func openScreenIfAsked() {
         if ScreenRequest.wanted || UserDefaults.standard.bool(forKey: "openScreen") { ScreenRequest.wanted = false; model.screenOpen = true }

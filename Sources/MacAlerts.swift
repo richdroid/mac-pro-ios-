@@ -14,6 +14,7 @@ extension Status.Alert {
         switch kind {
         case "temp": return "thermometer.high"
         case "disk": return "internaldrive.fill"
+        case "usage": return "gauge.with.dots.needle.67percent"
         default: return "exclamationmark.triangle.fill"
         }
     }
@@ -83,6 +84,8 @@ struct AlertBanner: View {
         if a.id.hasPrefix("session:") { model.openSession(key: String(a.id.dropFirst(8))) }
         // Updates waiting while he's away: Apps, and the install starts there.
         else if a.id == OTAInstaller.alertID { model.tab = 1; OTAInstaller.shared.wanted = true }
+        // Claude usage near its limit: the usage itself, on the Claude tab.
+        else if a.kind == "usage" { model.show(tab: 3) }
         else if let m = a.metric.flatMap(HistoryMetric.named) { model.history = m } else { model.tab = 5 }
     }
     func what(_ a: Status.Alert) -> some View {
@@ -273,7 +276,7 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
         // The Mac's notifications carry the alert's id; one made here is named by it.
         let id = response.notification.request.content.userInfo["alert"] as? String ?? response.notification.request.identifier
         AlertDismissals.restore(id: id)
-        UserDefaults.standard.set(id.hasPrefix("session:") ? 2 : id == OTAInstaller.alertID ? 1 : 0, forKey: "tab")
+        UserDefaults.standard.set(id.hasPrefix("session:") || id.hasPrefix("usage:") ? 2 : id == OTAInstaller.alertID ? 1 : 0, forKey: "tab")
         if id == OTAInstaller.alertID { Task { @MainActor in OTAInstaller.shared.wanted = true } }
         // Kept too, in case the tap launched the app and nothing is listening yet.
         Self.pending = id
