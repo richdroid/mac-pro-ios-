@@ -311,7 +311,7 @@ struct LogsHeight: ViewModifier {
     let id: AnyHashable
     func body(content: Content) -> some View {
         if SwipeLog.on {
-            content.onGeometryChange(for: CGFloat.self) { ($0.size.height * 2).rounded() / 2 } action: { old, new in
+            content.onGeometryChange(for: CGFloat.self) { ($0.size.height * 100).rounded() / 100 } action: { old, new in
                 SwipeLog.note("row \(id.base) h \(old) -> \(new)")
             }
         } else { content }

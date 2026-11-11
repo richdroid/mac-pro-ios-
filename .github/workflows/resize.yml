@@ -195,6 +195,19 @@ jobs:
           # A first launch with nothing kept from before (a fresh install): its first answer builds Status from nothing.
           C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data); rm -f "$C/Library/Caches/status.json"
           restfilm firstlaunch 1
+          # The same turns and fold on the tree before this branch (8cce1f3, with only the log added after it), to tell the
+          # freeze on a turn that this branch made from the one the system or the simulator makes (designer, regate).
+          git fetch -q --depth=1 origin 8cce1f3ccd3335884b676837ed75349348a6d1ec || git fetch -q origin
+          mkdir -p /tmp/base && git archive 8cce1f3ccd3335884b676837ed75349348a6d1ec | tar -x -C /tmp/base
+          cp Sources/FrameLog.swift /tmp/base/Sources/ 2>/dev/null; cp ci/mock-chumby.js /tmp/base/ci/
+          (cd /tmp/base && swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset > /dev/null 2>&1; xcodegen generate > /dev/null && \
+            xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Release -sdk iphonesimulator -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -1)
+          xcrun simctl install "$DEVICE" /tmp/base/build-sim/Build/Products/Release-iphonesimulator/MacPro.app && {
+            $D "$DEVICE" pose open || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5
+            turnfilm base-turn-flat 3 "" "rotate 1" "rotate 3" "rotate 1" "rotate 3"
+            $D "$DEVICE" pose closed || true; sleep 5
+            turnfilm base-fold-outer 1 "" "pose open" "pose closed"
+          }
           ls dist
       - name: Publish
         if: always()
