@@ -79,7 +79,15 @@ struct RemoteScreenView: View {
     @State private var padTip = false
     @State private var padTipAsked = false
     @State private var rate = (frames: 0, updates: 0)
-    final class RegionSeen { var since: [String: Date] = [:] }
+    final class RegionSeen {
+    var since: [String: Date] = [:]
+    // Whether the display's size has just changed (it turned), for the layout pass that first sees it.
+    private var area = CGSize.zero
+    func turned(_ now: CGSize) -> Bool {
+        defer { area = now }
+        return area != .zero && (abs(area.width - now.width) > 1 || abs(area.height - now.height) > 1)
+    }
+}
 
 // Touch bookkeeping that changes on every sample, kept out of SwiftUI's state so a moving finger never rebuilds the view.
     @State private var pad = TrackpadBox()
@@ -559,23 +567,29 @@ struct RemoteScreenView: View {
 
     @ViewBuilder func stage(_ p: ScreenPlan, area: CGSize) -> some View {
         ZStack(alignment: .topLeading) {
+            // The picture's space is seen from the first layout with a real size: the picture already held, or the
+            // waiting sign, where both will stay. Only the controls around it wait to be placed (it waited too, and a
+            // quick picture left half a second of bare black, the designer's fourth review).
             place(canvas(always: p.kind != .flatLandscape && p.kind != .closedLandscape), p.picture)
-            // Where there's a trackpad, the picture is one too: a finger glides the pointer, taps click, two fingers scroll
-            // and pinch zooms, so the whole screen is the control surface, not only the pad (Richard, 2026-11-06: "more
-            // integrated control").
-            if p.kind == .laptop || p.kind == .book || p.kind == .closed { place(pictureSurface, p.picture) }
-            // The first-use card sits over the picture's touch surface, so its Got it can be pressed: under it, the picture
-            // took the tap as a click on the Mac and the card could never be put away.
-            if showHint, screen.hasPicture { place(gestureHint, p.picture) }
-            place(functionRow(tight: p.fnRow.width > 0 && p.fnRow.width < 400, atTop: p.fnRow.minY < p.picture.minY), p.fnRow)
-            // Folded beside the camera, the same tools down the side, each in its own place.
-            ForEach(Array(zip(ScreenTool.allCases, p.tools)), id: \.0) { t, r in
-                tool(t).frame(width: r.width, height: r.height).position(x: r.midX, y: r.midY)
+            Group {
+                // Where there's a trackpad, the picture is one too: a finger glides the pointer, taps click, two fingers scroll
+                // and pinch zooms, so the whole screen is the control surface, not only the pad (Richard, 2026-11-06: "more
+                // integrated control").
+                if p.kind == .laptop || p.kind == .book || p.kind == .closed { place(pictureSurface, p.picture) }
+                // The first-use card sits over the picture's touch surface, so its Got it can be pressed: under it, the picture
+                // took the tap as a click on the Mac and the card could never be put away.
+                if showHint, screen.hasPicture { place(gestureHint, p.picture) }
+                place(functionRow(tight: p.fnRow.width > 0 && p.fnRow.width < 400, atTop: p.fnRow.minY < p.picture.minY), p.fnRow)
+                // Folded beside the camera, the same tools down the side, each in its own place.
+                ForEach(Array(zip(ScreenTool.allCases, p.tools)), id: \.0) { t, r in
+                    tool(t).frame(width: r.width, height: r.height).position(x: r.midX, y: r.midY)
+                }
+                place(MacKeyboardView(keys: keys), p.keyboard)
+                place(modifierRow, p.modRow)
+                place(trackpad, p.trackpad)
+                place(dock(area.width, crease: p.crease), p.dock)
             }
-            place(MacKeyboardView(keys: keys), p.keyboard)
-            place(modifierRow, p.modRow)
-            place(trackpad, p.trackpad)
-            place(dock(area.width, crease: p.crease), p.dock)
+            .opacity(placed ? 1 : 0)
             // The one field the system keyboard types into, wherever its button is.
             KeyCatcher(active: $typing, onText: typeText, onDelete: { keys.tap(MacKey.delete) })
                 .frame(width: 1, height: 1).opacity(0.01)
@@ -587,18 +601,11 @@ struct RemoteScreenView: View {
         // And only for what's meant to move: the system keyboard coming or going, and a change of posture. The camera's
         // region reaching the plan a second after opening, or the Mac's picture changing shape, re-places the parts
         // without a glide (the tools' row flew up the cover on every open, the designer's second review).
-        .animation(settled ? planMotion : nil, value: PlanMove(kind: p.kind, keyboard: keyboardHeight > 0))
-        // Nothing is seen of the opening's first layouts (an empty display, then one without its regions): the parts
-        // appear once the plan has held still for a moment.
-        .opacity(placed ? 1 : 0)
-        // But never bare black meanwhile: the same "Connecting…" the picture's space will show, where it will show it
-        // (half a second of nothing at all open upright read as the Screen drawing in slowly, the designer's third review).
-        .overlay(alignment: .topLeading) {
-            if !placed, !observed.hasPicture, p.picture.width > 1, p.picture.height > 1 {
-                status.frame(width: p.picture.width, height: p.picture.height).offset(x: p.picture.minX, y: p.picture.minY)
-                    .allowsHitTesting(false)
-            }
-        }
+        // Nor when the display itself turned (open flat, landscape to upright and back): the parts slid over each other
+        // for a third of a second after the turn (the designer's fourth review). The new plan is simply there.
+        .animation(settled && !regionSeen.turned(area) ? planMotion : nil, value: PlanMove(kind: p.kind, keyboard: keyboardHeight > 0))
+        // Nothing of the controls is seen in the opening's first layouts (an empty display, then one without its
+        // regions): they appear once the plan has held still for a moment (the opacity inside, above).
         .task(id: p) {
             guard area.width > 1, area.height > 1, !settled else { return }
             // Open flat sideways, not before the hinge is known: the dock splits about it (the 0.6 s below still shows
@@ -2173,7 +2180,9 @@ struct ScreenLayer: UIViewRepresentable {
             super.init(frame: frame)
             isUserInteractionEnabled = false
             backgroundColor = .black
-            layer.contentsGravity = .resize
+            // Never stretched: while the display turns, the layer's frame can lag the picture's shape for a moment, and
+            // the Mac's picture was drawn squeezed (the designer's fourth review).
+            layer.contentsGravity = .resizeAspect
             layer.minificationFilter = .linear
             layer.magnificationFilter = .linear
         }

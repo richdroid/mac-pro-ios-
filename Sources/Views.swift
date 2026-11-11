@@ -53,7 +53,7 @@ struct MacProApp: App {
         if id.hasPrefix("session:") { model.openSession(key: String(id.dropFirst(8))) } else if id.hasPrefix("usage:") { model.show(tab: 3) } else if id == "ios:waiting" { model.tab = 1 } else { model.tab = 0 }
     }
     private func openScreenIfAsked() {
-        if ScreenRequest.wanted || UserDefaults.standard.bool(forKey: "openScreen") { ScreenRequest.wanted = false; model.screenOpen = true }
+        if ScreenRequest.wanted || UserDefaults.standard.bool(forKey: "openScreen") { ScreenRequest.wanted = false; model.openScreen() }
     }
 }
 
@@ -65,7 +65,7 @@ enum TransitionTour {
         let steps: [(Double, () -> Void)] = [
             (3.0, { model.history = .cpu }), (5.0, { model.processes = .cpu }), (7.0, { model.processes = nil }), (8.5, { model.history = nil }),
             (10.0, { model.tab = 2 }), (11.0, { model.openSession(key: "chumby") }), (13.0, { model.sessionScreen = nil }),
-            (14.5, { model.tab = 0 }), (15.5, { model.screenOpen = true }), (18.5, { model.screenOpen = false }),
+            (14.5, { model.tab = 0 }), (15.5, { model.openScreen() }), (18.5, { model.screenOpen = false }),
         ]
         Task { @MainActor in
             var at = 0.0
@@ -786,7 +786,7 @@ struct QuickActions: View {
     }
     var body: some View {
         HStack(alignment: .top, spacing: 4) {
-            button("screen", "macwindow", "Screen") { model.screenOpen = true }
+            button("screen", "macwindow", "Screen") { model.openScreen() }
             // Dims itself, in its own colours, to match the other three.
             DisplayHoldButton().disabled(model.stale)
             button("copy", "doc.on.doc", "Copy from Mac") {
@@ -1589,7 +1589,7 @@ struct ControlTab: View {
                 Text(s.macLogin ? "It stays logged in after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
             }
             Section {
-                Button("Open screen") { model.screenOpen = true }
+                Button("Open screen") { model.openScreen() }
             } header: { Text("Remote desktop") } footer: { Text("Tap to click · drag to move things · two fingers to scroll · pinch to zoom") }
             SendSection(route: model.route)
             Section {
