@@ -169,7 +169,7 @@ struct DeviceTab: View {
             Divider()
             HStack { Text("Temperature"); Spacer(); Text("\(Int((i.tempC * 9 / 5 + 32).rounded()))°F").foregroundStyle(.secondary).monospacedDigit() }.padding(14)
             Divider()
-            HStack { Text("Resolution"); Spacer(); Text(i.resolution).foregroundStyle(.secondary) }.padding(14)
+            HStack { Text("Resolution"); Spacer(); Text(i.resolution.replacingOccurrences(of: "x", with: " × ")).foregroundStyle(.secondary) }.padding(14)
             Divider()
             // The television behind the box, as HDMI-CEC tells it: a row and its rule, or nothing while that isn't known.
             TelevisionRow(status: model.status)

@@ -68,6 +68,7 @@ jobs:
             shot settings$tag $display 7 $M -tab 9
             shot connection$tag $display 7 $M -tab 9 -pose connection
             shot tvsettings$tag $display 8 $M -tab 9 -pose tvsettings
+            shot tvapps$tag $display 8 $M -tab 9 -pose tvapps
             shot remote$tag $display 8 $M/repisode -tab 0
           }
           # Folded, then open upright, then open flat.

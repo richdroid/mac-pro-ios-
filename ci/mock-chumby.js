@@ -231,6 +231,8 @@ http.createServer((q, s) => {
     const hits = JSON.parse(tvStremio).rows.flatMap(r => r.items).filter(i => (i.kind === 'series') === series && i.kind !== 'youtube' && i.title.toLowerCase().includes(term) && !seen.has(i.title) && seen.add(i.title));
     return s.end(JSON.stringify({ rows: hits.length ? [{ title: 'Results', items: hits }] : [] }));
   }
+  // The TV's settings and its apps, for Settings' pages (TV settings, Apps on the TV).
+  if (q.url === '/api/tv/manage') { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ settings: { sleep_after: 3600000, screensaver_after: 600000, animations: 0.5, cec_auto_off: 1 }, volume: 8, volumeMax: 15, canArrange: true, apps: tvApps.filter(a => a[0] !== 'com.google.android.play.games').map((a, i) => ({ pkg: a[0], name: a[1], hasIcon: true, wide: true, removable: !['com.codex.musicwebtv', 'com.android.tv.settings', 'flar2.homebutton'].includes(a[0]), row: 'APPS' })) })); }
   if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' }))) })); }
   // Mint's own screen for the song on: its words, timed, and what plays after it (the Playing tab mirrors both).
   if (q.url.startsWith('/api/tv/music-detail')) {

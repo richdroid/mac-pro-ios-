@@ -488,7 +488,8 @@ struct KeyGlass: ViewModifier {
     @ObservedObject private var store = AmbienceStore.shared
     func body(content: Content) -> some View {
         let wall = model.mood ?? store.band ?? Color(hex: 0x4A1A5C)
-        content.glassEffect(.regular.tint(wall.mix(with: .black, by: 0.45).opacity(0.5)).interactive(), in: Circle())
+        // 80 %: at half, a wall of several colours still came through each key (third pass, the YouTube wall).
+        content.glassEffect(.regular.tint(wall.mix(with: .black, by: 0.45).opacity(0.8)).interactive(), in: Circle())
     }
 }
 extension View { func keyGlass() -> some View { modifier(KeyGlass()) } }
@@ -698,11 +699,11 @@ struct EpisodePicker: View {
                 VStack(alignment: .leading, spacing: 4) {
                     // Which one, always in the same place over its name, as the Apple TV app sets them; the name whole,
                     // up to three lines, never cut to "Fi…" (r26), or nothing when it has none of its own (gate 276).
-                    Text(e.season == 0 ? "Special \(e.episode)" : "Episode \(e.episode)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    if let own = e.ownName {
-                        Text(own).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    // With no name of its own, the number is its title (third pass: a caption alone read as a missing title).
+                    let number = e.season == 0 ? "Special \(e.episode)" : "Episode \(e.episode)"
+                    if e.ownName != nil { Text(number).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                    Text(e.ownName ?? number).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     // What it's about, in one line, so the row says more than its number.
                     if let about, !about.isEmpty { Text(about).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                     HStack(spacing: 6) {

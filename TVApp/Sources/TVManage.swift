@@ -130,10 +130,9 @@ struct TVActionSections: View {
         GlassSection(header: "On the TV") {
             // The one TV setting he goes looking for, a tap away rather than two pages down.
             SettingsAction(title: "Start the screensaver", icon: "photo") { model.post("settings-page", ["page": "screensaver"]) }
+            // The card's heading says where, so the words needn't (gate 276, second pass). Home screen settings is in TV
+            // settings with the TV's other settings screens (third pass): what's here happens at once.
             SettingsAction(title: "Refresh recommendations", icon: "arrow.clockwise") { model.post("refresh") }
-            // The launcher's own settings, on the TV's screen; the card's heading says where, so the words needn't
-            // (review of dfd490e; gate 276, second pass: "TV" twice and a wrapped line).
-            SettingsAction(title: "Home screen settings", icon: "rectangle.grid.1x2") { model.post("launcher-settings") }
         }
     }
 }
@@ -212,7 +211,7 @@ struct ManageAppsView: View {
                         let inRow = s.apps.filter { ($0.row ?? "APPS") == row }
                         ForEach(inRow) { app in
                             // Edit shows the system's minus on the apps that can go, and nothing on the locked ones.
-                            appRow(app).deleteDisabled(!app.removable)
+                            appRow(app).deleteDisabled(!app.removable).listRowBackground(TVLook.glassRow)
                         }
                         .onMove(perform: s.canArrange ? { from, to in move(in: row, from: from, to: to) } : nil)
                         // Deleting from Edit mode asks the same question as the swipe: Edit showed only drag handles, and
@@ -242,6 +241,9 @@ struct ManageAppsView: View {
         // list redrawing in a frame (the 2026-11-10 motion pass).
         .settledAnimation(.easeOut(duration: 0.25), value: store.state == nil)
         .settledAnimation(.easeOut(duration: 0.25), value: store.state?.apps.map(\.pkg))
+        // The same wall as the rest of Settings, its rows in the cards' glass.
+        .scrollContentBackground(.hidden)
+        .background { Ambience() }
         .summonsBar()
         .topShade().topFade()
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
@@ -294,11 +296,15 @@ struct ManageSettingsView: View {
                         Toggle("Turn off with the TV", isOn: Binding(get: { (s.settings["cec_auto_off"] ?? 0) == 1 }, set: { store.set("cec_auto_off", $0 ? 1 : 0) }))
                             .padding(.horizontal, GlassCard.inset).frame(minHeight: 52)
                     }
-                    GlassSection(header: "Open on the TV", footer: "These open the TV’s own settings screen, to use with the remote.") {
+                    GlassSection(header: "Open on the TV", footer: "These open the TV’s own settings screens, to use with the remote.") {
                         ForEach(Self.pages, id: \.1) { page in
                             Button { store.send("settings-page", ["page": page.1]) } label: { GlassRow(title: page.0, icon: page.2, acts: true) }
                                 .buttonStyle(GlassRowPress())
                         }
+                        // The launcher's own settings: one more of the TV's settings screens, so here with the rest rather
+                        // than a second door on Settings (gate 276, third pass).
+                        Button { store.send("launcher-settings", [:]) } label: { GlassRow(title: "Home screen settings", icon: "rectangle.grid.1x2", acts: true) }
+                            .buttonStyle(GlassRowPress())
                     }
                 } else if store.failed {
                     ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again."))
@@ -308,6 +314,8 @@ struct ManageSettingsView: View {
             }
             .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
         }
+        // The same wall as Settings and Connection behind it, never black.
+        .background { Ambience() }
         // As the apps page: the settings fade in over the spinner.
         .settledAnimation(.easeOut(duration: 0.25), value: store.state == nil)
         .summonsBar()

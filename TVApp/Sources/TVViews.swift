@@ -92,7 +92,7 @@ struct RootView: View {
             return
         }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
-        if ["tour", "type", "episodes", "scrub", "island", "connection", "tvsettings"].contains(pose) { return }
+        if ["tour", "type", "episodes", "scrub", "island", "connection", "tvsettings", "tvapps"].contains(pose) { return }
         // The Remote's picture hidden, then shown again, as its held menu does it: filmed, so each change is seen to fade.
         if pose == "mirror" {
             Task {
@@ -679,6 +679,7 @@ struct TVSettingsTab: View {
                 switch UserDefaults.standard.string(forKey: "pose") {
                 case "connection": path = [.connection]
                 case "tvsettings": path = [.settings]
+                case "tvapps": path = [.apps]
                 default: break
                 }
             }
@@ -2194,7 +2195,7 @@ struct AppsTab: View {
         }
     }
     // Open flat: two across each side, at one width.
-    var paneTile: CGFloat { BannerRow.width(2, in: max(min(leftWidth, rightWidth) - 40, 1)) }
+    var paneTile: CGFloat { BannerRow.width(2, in: max(min(leftWidth - 40, rightWidth - 60), 1)) }
     // Before the first answer, the shape of the page instead of a blank one.
     var waiting: some View {
         HStack(spacing: TVLook.gap) {
@@ -2240,7 +2241,8 @@ struct AppsTab: View {
                         row("Listen", listen, across: 2, width: paneTile)
                         row("Tools", tools, across: 2, width: paneTile)
                     }
-                    .padding(.horizontal, 20)
+                    // Clear of the side bar by the same room as Settings' cards open flat (gate 276, third pass: 4 pt).
+                    .padding(.leading, 20).padding(.trailing, 40)
                     .padding(.vertical, 12)
                     .background(alignment: .top) { measured($rightWidth) }
                 }
