@@ -122,6 +122,11 @@ const liveMacLive = () => { const m = liveMac(); return JSON.stringify({ uptime:
 http.createServer((q, s) => macRoutes(q, s, liveMacStatus, liveMacLive)).listen(9021, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
+// The same Mac opened while its display is asleep or waking, as Screen Sharing really answers then (2026-11-10): a 2 x 2
+// rectangle for the first whole-screen request, then only what changes, and the whole screen only when asked again.
+http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9012, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, true));
+// And that Mac sitting idle: after the 2 x 2 answer nothing on it changes, so it sends nothing until asked again.
+http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9013, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, 'idle'));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
 http.createServer((q, s) => { s.statusCode = 401; s.setHeader('content-type', 'application/json'); s.end('{"error":"Sign in to the Mac Pro."}'); }).listen(9003, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
@@ -809,7 +814,14 @@ function tvReal(q, s, path, query, json) {
 // A stand-in for the Mac's Screen Sharing. The app's pixel format is honoured (32-bit BGRX or 16-bit 5-6-5). With
 // `slow`, it behaves as the real Mac does over his link (2026-11-07): the whole screen as one ZRLE rectangle, a busy
 // wallpaper so it's about as big as the Mac's, and everything sent at 358 KB/s, the speed his sessions showed.
-function mockScreen(req, sock, slow = false) {
+// With `sleepy`, the first whole-screen request gets a 2 x 2 rectangle, as from a Mac whose display was asleep.
+function mockScreen(req, sock, slow = false, sleepy = false) {
+  // When each step happens, against the film's own launch time in the log, to tell the phone's wait from the stand-in's.
+  const opened = Date.now();
+  const stamp = what => console.log(`mock screen ${slow ? 'slow' : sleepy || 'plain'} ${what} at ${Date.now()} (+${Date.now() - opened} ms)`);
+  stamp('upgrade');
+  const busy = slow || sleepy;
+  let dozing = sleepy;
   const key = req.headers['sec-websocket-key'];
   if (!key || !req.url.startsWith('/novnc/ws/vnc')) return sock.destroy();
   const accept = require('crypto').createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
@@ -832,11 +844,15 @@ function mockScreen(req, sock, slow = false) {
       else { frame(b.subarray(0, budget)); outbox[0] = b.subarray(budget); budget = 0; }
     }
   }, 20) : null;
-  const later = data => setTimeout(() => (slow ? outbox.push(data) : frame(data)), LAG);
+  // Sleepy: in pieces of 32 KB, as the real bridge passes on what Screen Sharing writes. One 4 MB message took the
+  // app's WebSocket seconds to hand over (15 s and more in the build's simulator), and held up everything behind it.
+  const pieces = data => { for (let at = 0; at < data.length; at += 32768) frame(data.subarray(at, at + 32768)); };
+  const later = data => setTimeout(() => (slow ? outbox.push(data) : sleepy ? pieces(data) : frame(data)), LAG);
   // Colours as 0xRRGGBB, put in the app's pixel format when sent.
   let bpp = 32;
   const bg = 0x1c162c, bright = 0xebebf5, dim = 0x786e96, side = 0x121216;
-  const band = { x: 240, y: 120, w: 800, h: 560 };
+  // Sleepy: a small part of the screen changes a few times a second, as a quiet desktop does.
+  const band = sleepy ? { x: 440, y: 260, w: 400, h: 280 } : { x: 240, y: 120, w: 800, h: 560 };
   // The wallpaper of the slow stand-in: noise in 2 × 2 blocks over a gradient, which deflates about as well as a
   // real desktop does.
   const wall = (X, Y) => {
@@ -845,16 +861,30 @@ function mockScreen(req, sock, slow = false) {
     const r = 205 + (t * 30 | 0) + (n & 15), g = 120 + (t * 40 | 0) + ((n >> 4) & 31), b = 175 + ((n >> 9) & 31);
     return (Math.min(r, 255) << 16) | (Math.min(g, 255) << 8) | Math.min(b, 255);
   };
+  // Sleepy: the wallpaper is worked out once, when the first such session opens (it takes this script seconds), so the
+  // whole picture is ready as fast as the real Mac's when it's asked for.
+  if (sleepy && !mockScreen.wallpaper) {
+    const all = new Uint32Array(W * H);
+    for (let Y = 0; Y < H; Y++) for (let X = 0; X < W; X++) all[Y * W + X] = wall(X, Y);
+    mockScreen.wallpaper = all;
+  }
   const paint = (x0, y0, w, h, scroll) => {
     const out = new Uint32Array(w * h);
+    if (sleepy && w === W && h === H) {
+      // The saved wallpaper with the band's page on top.
+      out.set(mockScreen.wallpaper);
+      const inner = paint(band.x, band.y, band.w, band.h, scroll);
+      for (let y = 0; y < band.h; y++) out.set(inner.subarray(y * band.w, (y + 1) * band.w), (band.y + y) * W + band.x);
+      return out;
+    }
     for (let y = 0; y < h; y++) {
       const Y = y0 + y, row = y * w;
       if (Y < band.y || Y >= band.y + band.h) {
-        if (slow) for (let x = 0; x < w; x++) out[row + x] = wall(x0 + x, Y); else out.fill(side, row, row + w);
+        if (busy) for (let x = 0; x < w; x++) out[row + x] = wall(x0 + x, Y); else out.fill(side, row, row + w);
         continue;
       }
       out.fill(bg, row, row + w);
-      if (slow) for (let x = 0; x < w; x++) { const X = x0 + x; if (X < band.x || X >= band.x + band.w) out[row + x] = wall(X, Y); }
+      if (busy) for (let x = 0; x < w; x++) { const X = x0 + x; if (X < band.x || X >= band.x + band.w) out[row + x] = wall(X, Y); }
       // A line every 56 px, 22 px tall and of varying length; the one in the middle bright, the rest dim.
       const v = Y - band.y + scroll, k = Math.floor(v / 56);
       if (v % 56 >= 22) continue;
@@ -915,7 +945,8 @@ function mockScreen(req, sock, slow = false) {
   // Like a real server: an answer goes out when there's a request waiting and the page has moved since the last one.
   // Slow, the page holds still: a moving page there would only queue behind the first picture, as on the real link.
   const answer = () => { if (pending > 0 && sent !== scroll) { pending--; sent = scroll; count++; update(band.x, band.y, band.w, band.h, scroll); } };
-  const tick = setInterval(() => { if (!slow) scroll += 3; answer(); }, 16);
+  let ticks = 0;
+  const tick = setInterval(() => { if (!slow && sleepy !== 'idle' && (!sleepy || ++ticks % 12 === 0)) scroll += 3; answer(); }, 16);
   const report = setInterval(() => { if (count) console.log(`mock screen: ${Math.round(count / 2)} pictures a second`); count = 0; }, 2000);
   const stop = () => { clearInterval(tick); clearInterval(report); if (pump) clearInterval(pump); sock.destroy(); };
   sock.on('close', stop); sock.on('error', stop);
@@ -932,18 +963,22 @@ function mockScreen(req, sock, slow = false) {
         init.writeUInt16BE(W, 0); init.writeUInt16BE(H, 2);
         Buffer.from([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]).copy(init, 4);
         init.writeUInt32BE(4, 20); init.write('Mock', 24);
-        later(init);
+        later(init); stamp('server init');
         continue;
       }
       if (!msgs.length) return;
       const t = msgs[0];
       const need = t === 0 ? 20 : t === 2 ? (msgs.length >= 4 ? 4 + 4 * msgs.readUInt16BE(2) : 4) : t === 3 ? 10 : t === 4 ? 8 : t === 5 ? 6
-        : t === 6 ? (msgs.length >= 8 ? 8 + msgs.readUInt32BE(4) : 8) : 1;
+        // 250 and 251 are the app's own messages to the bridge (a smooth scroll, and its hello). Read as one byte each,
+        // the hello's three zero bytes began a 20-byte message that swallowed every request after it, three bytes out
+        // of step for good: the stand-in sent the first four pictures and then nothing, in every film since 2026-11-05.
+        : t === 6 ? (msgs.length >= 8 ? 8 + msgs.readUInt32BE(4) : 8) : t === 250 ? 8 : t === 251 ? 4 : 1;
       if (msgs.length < need) return;
       const m = msgs.subarray(0, need); msgs = msgs.subarray(need);
       if (t === 0) bpp = m[4] === 16 ? 16 : 32;
       if (t === 3) {
-        if (m[1] === 0) { count++; sent = scroll; update(0, 0, W, H, scroll); }
+        if (m[1] === 0 && dozing) { dozing = false; if (sleepy === 'idle') sent = scroll; update(0, 0, 2, 2, scroll); }
+        else if (m[1] === 0) { count++; sent = scroll; stamp('whole asked'); update(0, 0, W, H, scroll); }
         else { pending++; answer(); }
       }
     }
@@ -960,6 +995,10 @@ function mockScreen(req, sock, slow = false) {
       for (let i = 0; i < n; i++) data[i] ^= mask[i & 3];
       buf = buf.subarray(at + 4 + n);
       if (op === 8) return stop();
+      // A ping is answered, as the real bridge's WebSocket does. Unanswered, the app's check on coming to the front
+      // (2 s, no answer) dropped every film's first connection and opened a second, which looked like a 2 to 3 s
+      // sign-in on the open display (the designer's fourth review).
+      if (op === 9) { if (!sock.destroyed && n < 126) { sock.write(Buffer.from([0x8a, n])); sock.write(data); } stamp('ping answered'); continue; }
       if (op === 2 || op === 0) fromApp(data);
     }
   });
