@@ -1,20 +1,251 @@
 name: MacPro
 options:
   bundleIdPrefix: local.macpro
-  deploymentTarget: { iOS: "17.0" }
+  deploymentTarget: { iOS: "26.0" }
 settings:
   base:
     SWIFT_VERSION: "5"
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
-    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     GENERATE_INFOPLIST_FILE: YES
-    INFOPLIST_KEY_CFBundleDisplayName: Mac Pro
-    INFOPLIST_KEY_UILaunchScreen_Generation: YES
-    INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     TARGETED_DEVICE_FAMILY: "1"
 targets:
   MacPro:
     type: application
     platform: iOS
-    sources: [Sources, Assets.xcassets]
+    sources: [Sources, Shared, Assets.xcassets]
+    dependencies:
+      - target: MacProWidget
+      # Send to Mac Pro in the share sheet, embedded as TV embeds Send to TV.
+      - target: MacProShare
+      - target: HotProbe
+        embed: true
+        link: false
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: Mac Pro
+        INFOPLIST_KEY_UILaunchStoryboardName: LaunchScreen
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+    info:
+      path: MacProInfo.plist
+      properties:
+        CFBundleDisplayName: Mac Pro
+        CFBundleURLTypes: [{ CFBundleURLName: macproapp, CFBundleURLSchemes: [macproapp] }]
+        CADisableMinimumFrameDurationOnPhone: true
+        UIBackgroundModes: [fetch, remote-notification]
+        BGTaskSchedulerPermittedIdentifiers: [local.macpro.MacPro.alerts]
+        NSFaceIDUsageDescription: Unlocks your saved logins before filling them on the Mac.
+        # The Mac Pro's portrait on its glow from the first frame, pinned where Status draws it, so nothing jumps.
+        UILaunchStoryboardName: LaunchScreen
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+  MacProWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Widget
+      - path: Shared/Gauges.swift
+      - path: Sources/MacIntents.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.MacPro.Widget
+        INFOPLIST_KEY_CFBundleDisplayName: Mac Pro Status
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: Mac Pro Status
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  # Send to Mac Pro, from any app's share sheet: files, photos, videos, links (as .webloc) and text (as .txt), straight to
+  # the bridge over the tailnet. No App Group or other entitlements: its App Store profile has only the defaults.
+  MacProShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - MacProShare
+      - path: Sources/MacSend.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.MacPro.Share
+        INFOPLIST_KEY_CFBundleDisplayName: Send to Mac Pro
+    info:
+      path: MacProShare/Info.plist
+      properties:
+        CFBundleDisplayName: Send to Mac Pro
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsAttachmentsWithMaxCount: 20
+              NSExtensionActivationSupportsFileWithMaxCount: 20
+              NSExtensionActivationSupportsImageWithMaxCount: 20
+              NSExtensionActivationSupportsMovieWithMaxCount: 20
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
+  Chumby:
+    type: application
+    platform: iOS
+    sources: [ChumbyApp/Sources, Shared, ChumbyApp/Assets.xcassets]
+    dependencies:
+      - target: ChumbyWidget
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.Chumby
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: ChumbyApp/Info.plist
+      properties:
+        CFBundleDisplayName: Chumby
+        CFBundleURLTypes: [{ CFBundleURLName: chumbyapp, CFBundleURLSchemes: [chumbyapp] }]
+        CADisableMinimumFrameDurationOnPhone: true
+        # The sea and the wordmark from the first frame, the wordmark pinned where Home draws it (ChumbyLaunch.storyboard).
+        UILaunchStoryboardName: ChumbyLaunch
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSCalendarsFullAccessUsageDescription: Chumby sets your alarms from what's on your calendar. Nothing leaves your phone but the alarm times and titles sent to your Chumby.
+        BGTaskSchedulerPermittedIdentifiers: [local.macpro.Chumby.calendar]
+        NSLocalNetworkUsageDescription: Chumby connects to your Chumby on your home network.
+        # Where the app hands the Mac its notification token; baked in at signing, like DefaultAddress, never in the repo.
+        MacAddress: ""
+        UIBackgroundModes: [fetch, remote-notification]
+        NSBonjourServices: [_http._tcp]
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+  ChumbyWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - ChumbyWidget
+      - path: ChumbyApp/Sources/ChumbyAPI.swift
+      - path: ChumbyApp/Sources/ChumbyArt.swift
+      - path: ChumbyApp/Sources/ChumbyIntents.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.Chumby.Widget
+    info:
+      path: ChumbyWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Chumby Widgets
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  TV:
+    type: application
+    platform: iOS
+    sources:
+      - TVApp/Sources
+      - TVApp/Assets.xcassets
+      - path: Shared/Duo.swift
+    dependencies:
+      - target: TVShare
+      - target: TVWidget
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: TVApp/Info.plist
+      properties:
+        CFBundleDisplayName: Mint Remote
+        CFBundleURLTypes: [{ CFBundleURLName: tvremoteapp, CFBundleURLSchemes: [tvremoteapp] }]
+        CADisableMinimumFrameDurationOnPhone: true
+        NSSupportsLiveActivities: true
+        # The Now Playing card's occasional refresh while the app is closed (TVBackground); no push with a free Apple ID.
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [local.macpro.TV.nowplaying]
+        NSAppleMusicUsageDescription: Sees the song playing on this iPhone, so you can flick it to the TV and play, pause or skip it from here while it plays there.
+        UILaunchScreen: { UIColorName: LaunchColor }
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+  TVWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - TVWidget
+      - path: TVApp/Sources/TVShared.swift
+      - path: TVApp/Sources/TVTheme.swift
+      - path: TVApp/Sources/TVIsland.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV.Widget
+    info:
+      path: TVWidget/Info.plist
+      properties:
+        CFBundleDisplayName: TV Widgets
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  TVShare:
+    type: app-extension
+    platform: iOS
+    sources: [TVShare]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.TV.Share
+    info:
+      path: TVShare/Info.plist
+      properties:
+        CFBundleDisplayName: Send to TV
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
+  GalleryMac:
+    type: application
+    platform: iOS
+    sources:
+      - Widget/MacProWidget.swift
+      - Widget/Assets.xcassets
+      - Shared/Gauges.swift
+      - ci/gallery-mac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryMac
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+  GalleryChumby:
+    type: application
+    platform: iOS
+    sources:
+      - ChumbyWidget/ChumbyWidgets.swift
+      - ChumbyApp/Sources/ChumbyAPI.swift
+      - ChumbyApp/Sources/ChumbyArt.swift
+      - ChumbyApp/Sources/ChumbyIntents.swift
+      - ci/gallery-chumby
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryChumby
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+  GalleryTV:
+    type: application
+    platform: iOS
+    sources:
+      - TVWidget/TVWidgets.swift
+      - TVWidget/TVIslandWidget.swift
+      - TVApp/Sources/TVShared.swift
+      - TVApp/Sources/TVTheme.swift
+      - TVApp/Sources/TVIsland.swift
+      - ci/gallery-tv
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryTV
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+  HotProbe:
+    type: framework
+    platform: iOS
+    sources: [Hot]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.HotProbe
+        DEFINES_MODULE: NO

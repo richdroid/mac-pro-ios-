@@ -1,0 +1,421 @@
+name: Mac Pro app shots
+# The Mac Pro app alone, shot in every posture with open portrait (the posture Richard holds) first. The full build's
+# screenshot step ran out of time in the TV app's poses before it reached open portrait (2026-11-07, 4555275), so the
+# Mac Pro app's own changes get this short run of their own. Published to the macpro-latest release; the full build and
+# its latest release are untouched.
+on:
+  push:
+    branches: [main]
+    paths: ['Sources/**', 'Shared/**', 'Widget/**', 'Assets.xcassets/**', 'ci/mock-chumby.js', 'ci/title-check.py', 'project.yml', '.github/workflows/macpro.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: macpro-shots
+  # The running job always finishes; a newer push only replaces one still waiting (several sessions push the Mac Pro app).
+  cancel-in-progress: false
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Mac Pro launch glow
+        run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 82
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          node ci/mock-chumby.js &
+          sleep 2
+          # One shot: name, display, wait, then the app's own arguments.
+          shot() {
+            local name=$1 display=$2 wait=$3; shift 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # One film: name, display, length, then the app's own arguments. FILM_PORT picks the stand-in Mac (9011 is the
+          # one behind his link's speed).
+          film() {
+            local name=$1 display=$2 length=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9001} "$@"
+            sleep $length
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # Opening the Mac's screen on his link (358 KB/s), the way it was (32-bit, shown only once whole) and the way it
+          # is (16-bit, filling in as it arrives), with the timings on screen (Richard, 2026-11-07: "takes too long to
+          # remote in like the screen draws slowly").
+          slowfilms() {
+            local d=$1 x=$2
+            FILM_PORT=9011 film screen-slow-before$x $d 22 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoStream YES
+            FILM_PORT=9011 film screen-slow-after$x $d 22 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 16
+          }
+          # A page flung with real touches through DeviceHub (devicehubctl drag): quick flicks down to its end, a slow pull
+          # past the end and let go, flicks back up and a pull past the top, so the fling and the spring-back are judged
+          # moving, never from a scripted scroll. name, display, x, low y, high y (fractions of the screen, 0 to 1), then the app's own arguments.
+          # FILM_PORT picks the stand-in Mac (9021 is the one whose readings change every second).
+          swipefilm() {
+            local name=$1 display=$2 x=$3 lo=$4 hi=$5; shift 5
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9001} -swipeLog YES "$@"
+            sleep 10
+            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x $lo $x $hi 0.12 || echo "drag failed"; sleep 1.4; done
+            $D "$DEVICE" drag $x $lo $x $hi 0.9 || true; sleep 2.5
+            for i in 1 2 3 4 5 6 7; do $D "$DEVICE" drag $x $hi $x $lo 0.12 || true; sleep 1.4; done
+            $D "$DEVICE" drag $x $hi $x $lo 0.9 || true; sleep 2.5
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            framelog $name; swipelog $name
+          }
+          # The pull he makes, as near as a scripted finger gets: flung to its end, then drawn past the end slowly (3 s, the
+          # finger moving the whole way; the tool can't pause a drag) and let go, once more quickly, then back up and past
+          # the top the same way. The page's offset every frame, when the hold took and let go, and each reading's landing
+          # (held or not) go to the swipe log, so the spring is judged in the app's own frames: the recorder keeps only
+          # some of them (the 2026-11-10 bounce films showed a 320 px first step that was three frames in one).
+          pullfilm() {
+            local name=$1 display=$2 x=$3 lo=$4 hi=$5; shift 5
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9001} -swipeLog YES "$@"
+            sleep 10
+            for i in 1 2 3 4 5; do $D "$DEVICE" drag $x $lo $x $hi 0.12 || echo "drag failed"; sleep 1.4; done
+            $D "$DEVICE" drag $x 0.6 $x $hi 3 || true; sleep 3
+            $D "$DEVICE" drag $x 0.6 $x $hi 0.5 || true; sleep 3
+            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x $hi $x $lo 0.12 || true; sleep 1.4; done
+            $D "$DEVICE" drag $x 0.45 $x $lo 3 || true; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            framelog $name; swipelog $name
+          }
+          # The swipe log from the last run with -swipeLog YES (Caches/swipe-log.txt), copied out as a .log.
+          swipelog() {
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0
+            [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/macpro-$1-swipe.log || true
+          }
+          # The frame meter's log from the last run with -frameLog YES (Caches/frame-log.txt: frames, late frames and the
+          # worst gap every 2 s), copied out as a .log so it's published with the build's logs.
+          framelog() {
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0
+            [ -f "$c/Library/Caches/frame-log.txt" ] && mv "$c/Library/Caches/frame-log.txt" dist/macpro-$1-frames.log && tail -1 dist/macpro-$1-frames.log || true
+          }
+          # A shot with a finger held on the screen: name, display, wait, x, y (fractions), then the app's own arguments.
+          # The hold starts after the wait and lasts 6 s; shots 2 s and 4 s into it (the tool takes a moment to find the
+          # display before the finger lands, so the first shot can come before the press), then one after the finger lifts.
+          holdshot() {
+            local name=$1 display=$2 wait=$3 x=$4 y=$5; shift 5
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            /tmp/dh/.build/release/devicehubctl "$DEVICE" touch $x $y 6 & HOLD=$!
+            # A shot every 0.6 s while the hold lasts, timed in the log: the tool takes a while to find the display before
+            # the finger lands (shots 2 s and 3 s in were both before it, CI 6da2654), so one of these is the press.
+            local i=1
+            while kill -0 $HOLD 2>/dev/null; do
+              xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-$i.png > /dev/null 2>&1
+              echo "$name-$i at $(date +%s.%N | cut -c1-14)"; i=$((i + 1)); sleep 0.6
+            done
+            wait $HOLD || echo "hold failed"
+            sleep 1
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-after.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # A shot taken after a tap: name, display, wait, x, y (fractions), then the app's own arguments.
+          tapshot() {
+            local name=$1 display=$2 wait=$3 x=$4 y=$5; shift 5
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            /tmp/dh/.build/release/devicehubctl "$DEVICE" touch $x $y 0.08 || echo "tap failed"
+            sleep 1.5
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # A pushed page swiped off from the left edge, slowly (2.5 s), so every frame of the slide is on film: it must go
+          # whole, nothing squeezing or re-flowing as it moves (Richard, 2026-11-09: "when u swipe a page off screen the
+          # elements compact as u do so"). The page's readings and the move's start and end go to a log beside it.
+          # name, display, then the app's own arguments.
+          backfilm() {
+            local name=$1 display=$2; shift 2
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -swipeLog YES "$@"
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-start.png
+            echo "$name drag at $(date +%s.%N | cut -c1-14)"
+            $D "$DEVICE" drag 0.01 0.5 0.9 0.5 2.5 || echo "drag failed"
+            sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0
+            [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/macpro-$name-swipe.log || true
+          }
+          # Every pushed page, swiped off (display, suffix); "before" ones with the hold off, as the pages were.
+          backfilms() {
+            local d=$1 x=$2
+            backfilm back-history$x $d -tab 0 -openHistory cpu
+            backfilm back-processes$x $d -tab 0 -openProcesses cpu
+            backfilm back-versions$x $d -tab 1 -pose versions
+            backfilm back-session$x $d -tab 2 -pose session
+          }
+          # A page's first open since launch beside its second, the same page, pushed as a tap pushes it (the app's -reopen
+          # pose: pushed at 12 s, once a cold launch has drawn the tab, closed at 18 s, pushed again at 19.5 s), so the two are compared pixel for pixel (Richard,
+          # 2026-11-10: "certain elements open with the text too close to edge but correct themselves on subsequent presses").
+          # name, display, then the app's own arguments. Shots 1.5 s into each push and 4.5 s in (at rest).
+          reopenshot() {
+            local name=$1 display=$2; shift 2
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -reopen YES "$@"
+            sleep 13.5; xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-first-early.png
+            sleep 3; xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-first.png
+            sleep 4.5; xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-second-early.png
+            sleep 3; xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-second.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # A tab tapped again with a page open on it (open upright, the tab bar along the foot): Apps, then Status, which
+          # shows the page left open, then Status again, which must take the page back with the system's animated pop
+          # (Richard, 2026-11-10: "press the button again it jankily goes back no animation").
+          retapfilm() {
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/macpro-retap-portrait.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -swipeLog YES -tab 0 -openHistory cpu
+            sleep 12
+            $D "$DEVICE" touch 0.361 0.945 0.08 || echo "tap failed"; sleep 3
+            $D "$DEVICE" touch 0.268 0.945 0.08 || echo "tap failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-retap-portrait-page.png
+            echo "retap at $(date +%s.%N | cut -c1-14)"
+            $D "$DEVICE" touch 0.268 0.945 0.08 || echo "tap failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-retap-portrait-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0
+            [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/macpro-retap-portrait-swipe.log || true
+          }
+          # The Screen typing open flat (the dock riding on the keyboard), then the Duo closed, opened again and turned
+          # upright: each change of posture must put the system keyboard away and never bring it back by itself (Richard,
+          # 2026-11-10: "when i open mac screen flat the interface is fucked and the ios keyboard doesnt go away"). The
+          # inner display filmed, the cover shot while closed. Starts and ends open flat in landscape.
+          kbfilm() {
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/macpro-screen-kb-posture.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose screentyping -openScreen YES
+            sleep 9
+            xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-screen-kb-1-open-typing.png
+            $D "$DEVICE" pose closed || true; sleep 6
+            xcrun simctl io "$DEVICE" screenshot --display=1 dist/macpro-screen-kb-2-closed.png
+            $D "$DEVICE" pose open || true; sleep 6
+            xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-screen-kb-3-reopened.png
+            $D "$DEVICE" rotate 1 || true; sleep 5
+            xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-screen-kb-4-upright.png
+            $D "$DEVICE" rotate 3 || true; sleep 5
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0
+            [ -f "$c/Library/Caches/regions.txt" ] && cp "$c/Library/Caches/regions.txt" dist/macpro-screen-kb-posture-regions.log || true
+          }
+          reopenshots() {
+            local d=$1 x=$2
+            reopenshot reopen-history$x $d -tab 0 -openHistory cpu
+            reopenshot reopen-processes$x $d -tab 0 -openProcesses cpu
+            reopenshot reopen-versions$x $d -tab 1 -pose versions
+            reopenshot reopen-session$x $d -tab 2 -pose session
+          }
+          # Everything that changed, in one posture (display, suffix).
+          poses() {
+            local d=$1 x=$2
+            for T in 0 1 2 4 5 9; do shot tab$T$x $d 7 -tab $T; done
+            shot apps-scrolled$x $d 9 -tab 1 -pose scrolled
+            # His apps' updates, App Store style: two ready over the air (Update All), one already sent, all up to date.
+            shot otaready$x $d 9 -tab 1 -pose otaready
+            shot otasent$x $d 9 -tab 1 -pose otasent
+            shot uptodate$x $d 9 -tab 1 -pose uptodate
+            shot otahome$x $d 9 -tab 1 -pose otahome
+            # His three apps from TestFlight (quiet rows, one Open TestFlight) beside one he added with an update, and
+            # the once-only Automatic Updates tip (Richard, 2026-11-10).
+            shot apps-testflight$x $d 9 -tab 1 -pose testflight
+            shot apps-testflight-tip$x $d 9 -tab 1 -pose testflighttip
+            # Each app's Version History, opened from the Apps tab (Richard, 2026-11-08: "duos changelogs in mac pro app").
+            shot versions$x $d 9 -tab 1 -pose versions
+            shot versionsupdate$x $d 9 -tab 1 -pose versionsupdate
+            shot claude-usage$x $d 9 -tab 2 -pose scrolled
+            # The Claude tab's limits as his Mac has them (the plan's week and the API's month), and the API's other states.
+            shot claude-api$x $d 9 -tab 2 -pose api-live
+            shot claude-api-none$x $d 9 -tab 2 -pose api-none
+            shot claude-api-refused$x $d 9 -tab 2 -pose api-refused
+            shot usage-link$x $d 9 -tab 3
+            shot scrolled$x $d 9 -tab 0 -pose scrolled
+            # Alerts on Status, each with its own ✕ (Richard, 2026-11-10: "should be dismissable").
+            shot alerts$x $d 9 -tab 0 -pose alerts
+            shot displayhold$x $d 8 -tab 0 -pose displayhold
+            shot screen$x $d 8 -tab 0 -pose screen -openScreen YES
+            shot screenhint$x $d 8 -tab 0 -pose screenhint -openScreen YES
+            shot screen-shift$x $d 8 -tab 0 -pose screenshift -openScreen YES
+            shot screen-pinch$x $d 9 -tab 0 -pose screenpinch -openScreen YES
+            shot screen-typing$x $d 8 -tab 0 -pose screentyping -openScreen YES
+            # The pad's right-click tip, held up for the shot (on the phone it shows a few seconds, his first sessions only);
+            # every other Screen shot shows the pad clean (Richard, 2026-11-09: "this message shouldnt be persistent").
+            shot screen-padtip$x $d 8 -tab 0 -pose screenpadtip -openScreen YES
+            # A page open over a tab, Back the side bar's first item (along the foot open in portrait, Settings out).
+            shot session$x $d 9 -tab 2 -pose session
+            shot history$x $d 8 -tab 0 -openHistory cpu
+            # Send to Mac and Restart the Mac on Control (Richard, 2026-11-10): sends in flight (one going, one sent, one
+            # failed) over the recent sends; the tab scrolled to Health and Power; each part of the Mac by name, all up,
+            # two red, a fix under way and back from a restart; the restart's checks all green and with one red.
+            shot control-send$x $d 9 -tab 5 -pose send
+            shot control-scrolled$x $d 9 -tab 5 -pose scrolled
+            shot health$x $d 9 -tab 5 -pose health
+            shot health-bad$x $d 9 -tab 5 -pose healthbad
+            shot health-fixing$x $d 9 -tab 5 -pose healthfixing
+            shot health-back$x $d 9 -tab 5 -pose healthback
+            shot restart$x $d 9 -tab 5 -pose restart
+            shot restart-red$x $d 9 -tab 5 -pose restartred
+            shot processes$x $d 8 -tab 0 -openProcesses cpu
+          }
+          # The keyboard key on the cover (folded upright), first, while the Duo is still closed, as it was and as it is: the keyboard up and away twice, judged in
+          # frames (Richard, 2026-11-10: "when i select keyboard in folded portrait from the toolbar theres a weird animation").
+          film screen-kbkey-before 1 17 -tab 0 -pose screenkbfilm -openScreen YES -kbOld YES
+          film screen-kbkey-after 1 17 -tab 0 -pose screenkbfilm -openScreen YES
+          # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          open -a DeviceHub; sleep 10
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
+          sleep 5
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
+          # Open portrait first, the slow-link films before anything else.
+          slowfilms 3 -portrait
+          poses 3 -portrait
+          shot screen-laptop-portrait 3 8 -tab 0 -pose screen -openScreen YES -screenPosture laptop
+          shot screen-laptop-typing-portrait 3 8 -tab 0 -pose screentyping -openScreen YES -screenPosture laptop
+          # A session half open upright (stood in for): its screen above the crease, its keys and box below.
+          shot session-laptop-portrait 3 9 -tab 2 -pose session -screenPosture laptop
+          shot screen-laptop-padtip-portrait 3 8 -tab 0 -pose screenpadtip -openScreen YES -screenPosture laptop
+          # An app's row on Apps pressed (On this iPhone, and an update's row): the list's own highlight, inside the card's
+          # corners; the -after shot is the page it opened. Then the Update capsule tapped on its own: the row's page must
+          # not open from it.
+          holdshot rowpress-portrait 3 8 0.5 0.47 -tab 1
+          holdshot updatepress-portrait 3 8 0.3 0.33 -tab 1 -pose otaready
+          tapshot updatetap-portrait 3 8 0.88 0.265 -tab 1 -pose otaready
+          # Scrolling judged moving (the title now goes up with the page), and the tabs in turn, coming back to each.
+          film scrollfilm-portrait 3 30 -tab 0 -pose scrollfilm
+          # The first alert put away with its ✕: the row fades and the list closes up in one move.
+          film alertsdismiss-portrait 3 16 -tab 0 -pose alertsdismiss
+          film tour-portrait 3 26 -tab 0 -pose tour
+          # Each with the frame meter on, so a page's smoothness is counted in the app, not read off the recorder.
+          swipefilm versionsfling-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -frameLog YES
+          # Status and Apps flung the same way: the spring-back he says still snaps (2026-11-08: "the bounch back issie still happwns").
+          swipefilm statusfling-portrait 3 0.5 0.8 0.28 -tab 0 -frameLog YES
+          swipefilm appsfling-portrait 3 0.5 0.8 0.28 -tab 1 -frameLog YES
+          # The same flings against the Mac whose readings change every second, asked for every second, so readings land
+          # as the finger lifts and while the page springs back, as on his phone (the still Mac above never changes a row).
+          # Status, the page he named, pulled his way (pullfilm) against that Mac: the log beside it must show every reading
+          # held while the page is past its end, and the spring in steps that shrink, never one move.
+          FILM_PORT=9021 pullfilm statuspull-portrait 3 0.5 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
+          FILM_PORT=9021 swipefilm appsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -fullEvery 1 -frameLog YES
+          FILM_PORT=9021 swipefilm versionsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -fullEvery 1 -frameLog YES
+          backfilms 3 -portrait
+          reopenshots 3 -portrait
+          retapfilm
+          python3 ci/title-check.py dist/macpro-tab*-portrait.png || echo "::error::Mac Pro title missing in open portrait"
+          # Open landscape, two panes.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
+          for T in 0 1 2; do shot tab$T-open 3 7 -tab $T; done
+          shot versions-open 3 9 -tab 1 -pose versions
+          shot screen-open 3 8 -tab 0 -pose screen -openScreen YES
+          shot screen-book-open 3 8 -tab 0 -pose screen -openScreen YES -screenPosture book
+          shot session-open 3 9 -tab 2 -pose session
+          shot history-open 3 8 -tab 0 -openHistory cpu
+          shot processes-open 3 8 -tab 0 -openProcesses cpu
+          backfilm back-history-open 3 -tab 0 -openHistory cpu
+          backfilm back-versions-open 3 -tab 1 -pose versions
+          backfilm back-session-open 3 -tab 2 -pose session
+          kbfilm
+          shot claude-usage-open 3 9 -tab 2 -pose scrolled
+          shot claude-api-open 3 9 -tab 2 -pose api-live
+          shot apps-testflight-open 3 9 -tab 1 -pose testflight
+          # Partly folded.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose partial; sleep 5
+          shot screen-partial 3 8 -tab 0 -pose screen -openScreen YES
+          shot session-partial 3 9 -tab 2 -pose session
+          shot history-partial 3 8 -tab 0 -openHistory cpu
+          shot versions-partial 3 9 -tab 1 -pose versions
+          # Folded, the outer display, last.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
+          poses 1 ""
+          slowfilms 1 ""
+          film scrollfilm 1 30 -tab 0 -pose scrollfilm
+          swipefilm versionsfling 1 0.45 0.8 0.28 -tab 1 -pose versionsfilm
+          backfilms 1 ""
+          # The hinge moved with a page up (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios across
+          # everything"): both displays filmed while a pushed page and then Status are flung, the phone opened, turned,
+          # half closed and closed again, so each change is judged moving, place and state kept or not. One display per
+          # pass (two recorders at once kept only one film per run), so the sequence runs twice: name, display, suffix.
+          posturefilm() {
+            local name=$1 display=$2 side=$3; shift 3
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name-$side.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep 10
+            $D "$DEVICE" drag 0.45 0.8 0.3 0.12 || true; sleep 2
+            $D "$DEVICE" pose open || true; sleep 5
+            # Open flat, on the right pane, the long one (on the left pane's short list nothing moved).
+            $D "$DEVICE" drag 0.7 0.8 0.7 0.12 || true; sleep 2
+            $D "$DEVICE" rotate 1 || true; sleep 5
+            $D "$DEVICE" drag 0.5 0.8 0.3 0.12 || true; sleep 2
+            $D "$DEVICE" rotate 3 || true; sleep 5
+            $D "$DEVICE" pose partial || true; sleep 5
+            $D "$DEVICE" pose closed || true; sleep 5
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          for pass in "1 outer" "3 inner"; do
+            posturefilm posture-versions $pass -tab 1 -pose versionsfilm
+            posturefilm posture-status $pass -tab 0
+            posturefilm posture-session $pass -tab 2 -pose session
+          done
+          # The display's reserved regions as the Screen read them in each posture (Caches/regions.txt, written only in poses).
+          c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) && cp "$c/Library/Caches/regions.txt" dist/macpro-regions.log || true
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view macpro-latest >/dev/null 2>&1 || gh release create macpro-latest --prerelease --title "Mac Pro app shots" --notes "The Mac Pro app's own shots and films."
+          for f in shots.zip films.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload macpro-latest "$f" --clobber && break; sleep 15; done
+          done
