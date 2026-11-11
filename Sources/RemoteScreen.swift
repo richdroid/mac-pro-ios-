@@ -382,6 +382,7 @@ final class RemoteScreen: ObservableObject {
             // message on to the Mac, which ignores a type it doesn't know only if it never sees one, so only ask ours.
             send([251, 0, 0, 0])
             startMeasuring()
+            watchWhole()
         case .cursor(let image, let hotspot):
             cursorImage = image; cursorHotspot = hotspot
         case .resized(let w, let h):
@@ -394,6 +395,25 @@ final class RemoteScreen: ObservableObject {
 
     private func request(incremental: Bool) {
         send([3, incremental ? 1 : 0, 0, 0, 0, 0, UInt8(width >> 8), UInt8(width & 255), UInt8(height >> 8), UInt8(height & 255)])
+    }
+    // The clock behind the whole picture, for as long as this connection lasts: four times a second at first, then once
+    // a second. It asks the Mac again when that's due (an idle Mac sends nothing to prompt it), and 3 s in, if parts
+    // have come but no whole picture, it shows what there is.
+    private var wholeClock: Task<Void, Never>?
+    private func watchWhole() {
+        wholeClock?.cancel()
+        guard let watched = decoder else { return }
+        wholeClock = Task { [weak self] in
+            var waited = 0.0
+            while !Task.isCancelled {
+                let step = waited < 5 ? 0.25 : 1.0
+                try? await Task.sleep(nanoseconds: UInt64(step * 1_000_000_000)); waited += step
+                guard let self, !Task.isCancelled, self.running, self.decoder === watched else { return }
+                if watched.wholeSettled { continue }
+                watched.tickWhole()
+                if waited >= 3, !self.hasPicture, watched.presentHeld() { self.hasPicture = true }
+            }
+        }
     }
 
     // MARK: Input
@@ -717,13 +737,48 @@ final class ScreenDecoder: @unchecked Sendable {
     // The build's way to film the old behaviour beside the new: "screenNoReask" never asks again and shows patches.
     static let noReask = UserDefaults.standard.bool(forKey: "screenNoReask")
     private var seeded = false
-    private func askNext() {
+    // Whether the whole screen should be asked for again now, and if so the request to send. One gate for both
+    // askers: the receive loop after each update, and the owner's clock (`tickWhole`), because a Mac sitting idle sends
+    // no update to hang the asking on, and the phone would wait on black for as long as nothing on the Mac moved.
+    private let wholeLock = NSLock()
+    private var wholeRequest: [UInt8] = []
+    private var paintedAny = false
+    // Updates the Mac has finished sending since the whole screen was last asked for. One that wasn't the whole screen
+    // is the sign it isn't coming (when it is, it comes first). With none at all, the Mac may simply not have answered
+    // yet (on a slow link the whole picture is seconds in arriving), so the clock leaves it 4 s before asking again.
+    private var updatesSinceAsk = 0
+    private func takeWholeAsk() -> [UInt8]? {
+        wholeLock.lock(); defer { wholeLock.unlock() }
         let now = CFAbsoluteTimeGetCurrent()
-        if !haveWhole, !wholeBegun, !Self.noReask, now - askedWhole >= wholeAskGap {
-            askedWhole = now; wholeAsks += 1; wholeAskGap = max(3, wholeAskGap * 2)
-            request(incremental: false)
-        }
-        else { request(incremental: true) }
+        guard !haveWhole, !wholeBegun, !Self.noReask, !wholeRequest.isEmpty, now - askedWhole >= wholeAskGap,
+              updatesSinceAsk > 0 || now - askedWhole >= 4 else { return nil }
+        askedWhole = now; wholeAsks += 1; wholeAskGap = max(3, wholeAskGap * 2); updatesSinceAsk = 0
+        return wholeRequest
+    }
+    private func whole(_ change: () -> Void) { wholeLock.lock(); change(); wholeLock.unlock() }
+    private func askNext() {
+        if let again = takeWholeAsk() { send(again) } else { request(incremental: true) }
+    }
+    // From the owner's clock, a few times a second: asks again when it's due, whether or not the Mac has sent anything.
+    func tickWhole() { if let again = takeWholeAsk() { send(again) } }
+    // True once a whole picture has arrived or begun to.
+    var wholeSettled: Bool { wholeLock.lock(); defer { wholeLock.unlock() }; return haveWhole || wholeBegun }
+    // The hold on a first open is over (3 s) and the Mac has sent parts but no whole picture: what there is is shown,
+    // from the owner's clock, since no update may come to show it on. False when there's nothing to show, or no need.
+    func presentHeld() -> Bool {
+        wholeLock.lock(); let some = paintedAny; wholeLock.unlock()
+        lock.lock()
+        let source = shared, none = generation == 0
+        lock.unlock()
+        guard some, none, source.width > 0, source.height > 0 else { return false }
+        let copy = FrameBuffer(width: source.width, height: source.height, cleared: false)
+        memcpy(copy.bytes, source.bytes, source.size)
+        lock.lock()
+        defer { lock.unlock() }
+        guard generation == 0 else { return false }
+        generation += 1
+        ready.append((copy, generation)); latest = (copy, generation)
+        return true
     }
     // How many times the whole picture had to be asked for again, for the measuring badge.
     private(set) var wholeAsks = 0
@@ -825,7 +880,11 @@ final class ScreenDecoder: @unchecked Sendable {
                 send([2, 0, 0, 5,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33,  255, 255, 255, 17])
                 // The whole picture first, then a few requests already waiting, so each change on the Mac is sent as
                 // it happens instead of a round trip after the last one arrived.
-                askedWhole = CFAbsoluteTimeGetCurrent(); askedFirst = askedWhole
+                askedFirst = CFAbsoluteTimeGetCurrent()
+                whole {
+                    askedWhole = askedFirst
+                    wholeRequest = [3, 0, 0, 0, 0, 0, UInt8(width >> 8), UInt8(width & 255), UInt8(height >> 8), UInt8(height & 255)]
+                }
                 request(incremental: false)
                 for _ in 1..<pipeline { request(incremental: true) }
                 stage = .messages
@@ -886,7 +945,7 @@ final class ScreenDecoder: @unchecked Sendable {
                 guard x + w <= width, y + h <= height else { lose("a rectangle outside the screen"); return false }
                 drop(16)
                 painted = true; paintedArea += w * h
-                if w * h >= width * height * 3 / 4 { wholeBegun = true }
+                whole { if w * h > 16 { paintedAny = true }; if w * h >= width * height * 3 / 4 { wholeBegun = true } }
                 streaming = Streaming(x: x, y: y, w: w, h: h, left: length)
                 // The link's speed, from the first big rectangle streaming in: its bytes over the time they took.
                 if countingFirst, w * h >= width * height / 4 { bigStart = (CFAbsoluteTimeGetCurrent(), length) }
@@ -895,7 +954,8 @@ final class ScreenDecoder: @unchecked Sendable {
                 let length = w * h * bytesPerPixel
                 guard buffer.count >= 12 + length else { return false }
                 painted = true; paintedArea += w * h
-                if w * h >= width * height * 3 / 4 { wholeSeen = true; haveWhole = true; wholeBegun = true }
+                if w * h >= width * height * 3 / 4 { wholeSeen = true }
+                whole { if w * h > 16 { paintedAny = true }; if w * h >= width * height * 3 / 4 { haveWhole = true; wholeBegun = true } }
                 buffer.withUnsafeBytes { src in
                     let from = src.baseAddress! + 12
                     for row in 0..<h where y + row < height && x + w <= width {
@@ -924,7 +984,11 @@ final class ScreenDecoder: @unchecked Sendable {
                 events.append(.resized(w, h))
                 resized = true
                 // The new size starts black: its whole picture is asked for until it comes, as on opening.
-                haveWhole = false; wholeBegun = false; seeded = true; wholeAskGap = 0.3
+                seeded = true
+                whole {
+                    haveWhole = false; wholeBegun = false; wholeAskGap = 0.3
+                    wholeRequest = [3, 0, 0, 0, 0, 0, UInt8(w >> 8), UInt8(w & 255), UInt8(h >> 8), UInt8(h & 255)]
+                }
                 drop(12); rectsLeft -= 1
             default:
                 lose("encoding \(encoding)"); return false
@@ -949,7 +1013,8 @@ final class ScreenDecoder: @unchecked Sendable {
         }
         // One answered, one more asked for, so the same number always wait: the whole picture after a resize, and for as
         // long as this connection hasn't had one.
-        if resized { askedWhole = CFAbsoluteTimeGetCurrent(); request(incremental: false) } else { askNext() }
+        if resized { whole { askedWhole = CFAbsoluteTimeGetCurrent(); updatesSinceAsk = 0 }; request(incremental: false) }
+        else { whole { updatesSinceAsk += 1 }; askNext() }
         return true
     }
 
@@ -974,7 +1039,7 @@ final class ScreenDecoder: @unchecked Sendable {
         if done {
             guard s.left == 0 else { lose("a rectangle longer than its picture"); return false }
             streaming = nil; rectsLeft -= 1
-            if s.w * s.h >= width * height * 3 / 4 { wholeSeen = true; haveWhole = true }
+            if s.w * s.h >= width * height * 3 / 4 { wholeSeen = true; whole { haveWhole = true } }
             if let big = bigStart {
                 bigStart = nil
                 let span = CFAbsoluteTimeGetCurrent() - big.0

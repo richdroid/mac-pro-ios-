@@ -125,6 +125,8 @@ http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon
 // The same Mac opened while its display is asleep or waking, as Screen Sharing really answers then (2026-11-10): a 2 x 2
 // rectangle for the first whole-screen request, then only what changes, and the whole screen only when asked again.
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9012, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, true));
+// And that Mac sitting idle: after the 2 x 2 answer nothing on it changes, so it sends nothing until asked again.
+http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9013, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, 'idle'));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
 http.createServer((q, s) => { s.statusCode = 401; s.setHeader('content-type', 'application/json'); s.end('{"error":"Sign in to the Mac Pro."}'); }).listen(9003, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
@@ -922,7 +924,7 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
   // Slow, the page holds still: a moving page there would only queue behind the first picture, as on the real link.
   const answer = () => { if (pending > 0 && sent !== scroll) { pending--; sent = scroll; count++; update(band.x, band.y, band.w, band.h, scroll); } };
   let ticks = 0;
-  const tick = setInterval(() => { if (!slow && (!sleepy || ++ticks % 12 === 0)) scroll += 3; answer(); }, 16);
+  const tick = setInterval(() => { if (!slow && sleepy !== 'idle' && (!sleepy || ++ticks % 12 === 0)) scroll += 3; answer(); }, 16);
   const report = setInterval(() => { if (count) console.log(`mock screen: ${Math.round(count / 2)} pictures a second`); count = 0; }, 2000);
   const stop = () => { clearInterval(tick); clearInterval(report); if (pump) clearInterval(pump); sock.destroy(); };
   sock.on('close', stop); sock.on('error', stop);
@@ -953,7 +955,7 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
       const m = msgs.subarray(0, need); msgs = msgs.subarray(need);
       if (t === 0) bpp = m[4] === 16 ? 16 : 32;
       if (t === 3) {
-        if (m[1] === 0 && dozing) { dozing = false; update(0, 0, 2, 2, scroll); }
+        if (m[1] === 0 && dozing) { dozing = false; if (sleepy === 'idle') sent = scroll; update(0, 0, 2, 2, scroll); }
         else if (m[1] === 0) { count++; sent = scroll; update(0, 0, W, H, scroll); }
         else { pending++; answer(); }
       }

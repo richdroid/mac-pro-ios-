@@ -146,6 +146,9 @@ struct RemoteScreenView: View {
             case "screenclip":
                 screen.showSample()
                 copyState = .done; pasteState = .failed("Couldn’t reach the Mac")
+            case "screenclipnone":
+                screen.showSample()
+                copyState = .failed("Nothing new was copied on the Mac")
             case "screenlogin": screen.showNeedsLogin()
             default: screen.open(base: model.api.base)
             }
@@ -654,16 +657,20 @@ struct RemoteScreenView: View {
         setClip(false, .working)
         let api = model.api
         Task {
-            let before: String
-            do { before = try await api.clipboard() } catch { setClip(false, .failed("Couldn’t reach the Mac")); return }
+            let before: (text: String, count: Int?)
+            do { before = try await api.clipboardState() } catch { setClip(false, .failed("Couldn’t reach the Mac")); return }
             screen.key(0x63, with: [MacKey.command])
-            // The Mac takes a moment to copy. Only a clipboard that changed is a copy: with nothing selected the Mac's
-            // clipboard stays as it was, and handing that over said "done" for a copy that never happened.
+            // The Mac takes a moment to copy. A copy is the Mac's clipboard changing, by its own count, which rises even
+            // when the same text is copied again: with nothing selected it stays as it was, and handing that over said
+            // "done" for a copy that never happened. (A bridge that doesn't send the count yet: any text is handed over,
+            // as before.)
             var text: String?
             for _ in 0..<8 {
                 try? await Task.sleep(nanoseconds: 150_000_000)
-                if let t = try? await api.clipboard(), t != before { text = t; break }
+                guard let now = try? await api.clipboardState() else { continue }
+                if now.text != before.text || (now.count != nil && now.count != before.count) { text = now.text; break }
             }
+            if text == nil, before.count == nil { text = before.text }
             guard let text, !text.isEmpty else { setClip(false, .failed("Nothing new was copied on the Mac")); return }
             #if canImport(UIKit)
             UIPasteboard.general.string = text
@@ -1166,6 +1173,9 @@ struct RemoteScreenView: View {
     @ViewBuilder private var status: some View {
         switch screen.phase {
         case .connecting: ProgressView("Connecting…").tint(.white).foregroundStyle(.white)
+        // Signed in, the picture not here yet: the same word stays until the picture is. It used to vanish at sign-in
+        // and leave plain black for the half second to three that the first picture takes.
+        case .connected where !observed.hasPicture: ProgressView("Connecting…").tint(.white).foregroundStyle(.white)
         case .reconnecting where screen.slowReconnect:
             VStack {
                 Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath").font(.footnote.weight(.medium)).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 6).background(.black.opacity(0.65), in: Capsule()).padding(.top, 10)

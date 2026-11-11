@@ -282,6 +282,7 @@ jobs:
             shot screen-shift$x $d 8 -tab 0 -pose screenshift -openScreen YES
             shot screen-pinch$x $d 9 -tab 0 -pose screenpinch -openScreen YES
             shot screen-typing$x $d 8 -tab 0 -pose screentyping -openScreen YES
+            shot screen-clip-none$x $d 8 -tab 0 -pose screenclipnone -openScreen YES
             # The pad's right-click tip, held up for the shot (on the phone it shows a few seconds, his first sessions only);
             # every other Screen shot shows the pad clean (Richard, 2026-11-09: "this message shouldnt be persistent").
             shot screen-padtip$x $d 8 -tab 0 -pose screenpadtip -openScreen YES
@@ -309,6 +310,8 @@ jobs:
           # 2026-11-10: "sometimes theres issues drawing in the display").
           FILM_PORT=9012 film screen-wake-before 1 16 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoReask YES
           FILM_PORT=9012 film screen-wake-after 1 16 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
+          # The same from a Mac sitting idle: after its 2 x 2 answer it sends nothing at all until it's asked again.
+          FILM_PORT=9013 film screen-wake-idle 1 10 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
           # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
