@@ -186,9 +186,13 @@ final class SendQueue: ObservableObject {
     func fail(_ job: SendJob, _ why: String) { job.state = .failed(why) }
     func retry(_ job: SendJob) { guard job.failed, job.file != nil else { return }; job.state = .waiting; pump() }
     func remove(_ job: SendJob) {
-        if let f = job.file { try? FileManager.default.removeItem(at: f.deletingLastPathComponent()) }
+        let wasSending: Bool = { if case .sending = job.state { return true }; return false }()
         jobs.removeAll { $0.id == job.id }
+        if wasSending { current?.cancel(); current = nil; pumping = false }
+        if let f = job.file { try? FileManager.default.removeItem(at: f.deletingLastPathComponent()) }
+        job.file = nil
         busy = jobs.contains { $0.busy }
+        pump()
     }
     func cancelAll() {
         current?.cancel()
@@ -205,6 +209,7 @@ final class SendQueue: ObservableObject {
             while let self, !Task.isCancelled, let job = self.jobs.first(where: { $0.state == .waiting }) {
                 await self.send(job)
             }
+            guard !Task.isCancelled else { return }
             self?.pumping = false
             self?.busy = self?.jobs.contains { $0.busy } ?? false
         }
@@ -252,6 +257,8 @@ struct SendJobRow: View {
     @ObservedObject var job: SendJob
     let retry: () -> Void
     var tint: Color = .accentColor
+    // Stops a send, or clears one that failed; nil where there's nowhere for it to go.
+    var remove: (() -> Void)? = nil
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: MacFiles.symbol(job.name)).font(.body).foregroundStyle(.secondary).frame(width: 26)
@@ -268,11 +275,18 @@ struct SendJobRow: View {
             switch job.state {
             case .done: Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green).transition(.scale.combined(with: .opacity))
                 .accessibilityLabel("Sent")
-            case .failed: Button("Try again", action: retry).buttonStyle(.bordered).controlSize(.small).disabled(job.file == nil)
+            case .failed: if job.file != nil { Button("Try again", action: retry).buttonStyle(.bordered).controlSize(.small) }
             case .preparing: ProgressView().controlSize(.small)
             default: EmptyView()
             }
+            if let remove, !job.finished {
+                Button(action: remove) { Image(systemName: "xmark.circle.fill").font(.title3).symbolRenderingMode(.hierarchical).foregroundStyle(.primary) }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(job.failed ? "Remove" : "Stop sending")
+            }
         }
+        // The divider under a row starts at its name, as under every other row in the card.
+        .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] + 38 }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: job.state)
         .padding(.vertical, 2)
     }
