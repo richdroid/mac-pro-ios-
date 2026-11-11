@@ -607,16 +607,35 @@ struct Screen<Content: View>: View {
             // No bar title at all, in one pane or two: the page's first line carries the name (paneTitle).
             .navigationBarTitleDisplayMode(.large)
             .toolbarVisibility(.hidden, for: .navigationBar)
-            .navigationDestination(item: tab == 0 ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
+            .modifier(StackPages(tab: tab, model: model, nav: model.nav))
+        }
+    }
+}
+// The pages a tab's stack can show. Alone here, watching the open pages (NavStore), so a page opening or closing works
+// out this and nothing else: the tab under it is handed through untouched.
+struct StackPages: ViewModifier {
+    let tab: Int
+    let model: AppModel
+    @ObservedObject var nav: NavStore
+    func body(content: Content) -> some View {
+        content
+            .navigationDestination(item: tab == 0 ? $nav.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
             // All processes, from Status itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && model.history == nil ? $model.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
-            .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
-            .navigationDestination(item: tab == 1 ? $model.appHistory : Binding<String?>.constant(nil)) { VersionHistoryView(file: $0, model: model) }
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
+            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
+            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { VersionHistoryView(file: $0, model: model) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
-            .navigationDestination(item: tab == 5 ? $model.macPage : Binding<MacPage?>.constant(nil)) { p in
+            .navigationDestination(item: tab == 5 ? $nav.macPage : Binding<MacPage?>.constant(nil)) { p in
                 if p == .health { MacHealthView(model: model) } else { MacRestartView(model: model) }
             }
-        }
+    }
+}
+// Processes over a history, the same way.
+struct ProcessesOverHistory: ViewModifier {
+    let model: AppModel
+    @ObservedObject var nav: NavStore
+    func body(content: Content) -> some View {
+        content.navigationDestination(item: $nav.processes) { ProcessesView(first: $0, model: model) }
     }
 }
 
@@ -757,8 +776,9 @@ struct HeroChips: View {
     @AppStorage(AlertDismissals.key) private var dismissedRaw = ""
     @ObservedObject private var summary = HealthSummary.shared
     var openHealth: () -> Void = {}
-    func chip<D: View>(@ViewBuilder _ dot: () -> D, _ text: String) -> some View {
-        HStack(spacing: 6) { dot(); Text(text).lineLimit(1) }
+    // `opens`: the chip is a way in (Health, when parts need a look), and shows it the way a row does.
+    func chip<D: View>(@ViewBuilder _ dot: () -> D, _ text: String, opens: Bool = false) -> some View {
+        HStack(spacing: 6) { dot(); Text(text).lineLimit(1); if opens { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.secondary) } }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).background(Color(white: 0.16), in: Capsule())
     }
     var parts: Int? { healthBad ?? summary.bad }
@@ -787,7 +807,7 @@ struct HeroChips: View {
         } else {
             HStack(spacing: 8) {
                 if (parts ?? 0) > 0 {
-                    Button(action: openHealth) { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1) }
+                    Button(action: openHealth) { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1, opens: true) }
                         .buttonStyle(FlatStyle()).accessibilityHint("Opens Everything on the Mac")
                 } else { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1) }
                 // The dot beats each time the Mac answers.
@@ -1064,6 +1084,8 @@ struct AppsTab: View {
                 }
             } message: { Text("Unsaved work is lost.") }
             .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
+            // The build's shot of the second question, for an app that was asked to quit and stayed.
+            .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 1_500_000_000); forcing = open.first } }
         }
     }
 }
@@ -1650,6 +1672,8 @@ struct ControlTab: View {
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         if model.pose == "controlfail" { withAnimation(Motion.quick) { fails["forget"] = "The Mac didn’t answer. Check Tailscale and try again." } }
         if model.pose == "forget" { confirmForget = true }
+        // A secret on its way to the Mac (the arrow a spinner, no second tap), beside a failure that has stayed.
+        if model.pose == "controlbusy" { drafts.typed = "correct horse"; busy = ["type"]; fails["forget"] = Phrase.macAway }
     }
     var locked: Bool { s.screen == "locked" }
     var displayOn: Bool { s.displayOn ?? (s.screen != "display off") }
@@ -1795,7 +1819,13 @@ struct SignInView: View {
                     if probing { ProgressView() } else { Button("Connect") { Task { await connect() } }.disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
                 }
             }
-            .onAppear { address = model.address }
+            .onAppear {
+                address = model.address
+                // The build's shots of the sheet trying an address, and of one that didn't answer.
+                if model.pose == "signinprobe" { address = "mac-pro.example.ts.net"; probing = true }
+                if model.pose == "signinbad" { address = "https://mac-pro.exmaple.ts.net"; note = "Can’t reach a Mac at this address. Is Tailscale on?" }
+                if model.pose == "signincode" { note = "This address needs its access code." }
+            }
         }
     }
     // What was typed, as an address the app can use: the scheme put on when it's left off (https, or http for a bare
