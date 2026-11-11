@@ -1485,6 +1485,19 @@ struct RemoteTab: View {
     @State private var foldedGrid: RemoteGrid?
     // Open upright: one column, picture above the fold and the keys under it, in every state, typing included.
     var stackedUpright: Bool { size == .regular && !panes }
+    // Where the fold runs across this view open upright, in its own space: the hinge's own region when the system reports
+    // it, otherwise the middle of the screen, 40 pt wide (about the crease's width).
+    static func crease(in g: GeometryProxy) -> CGRect {
+        #if os(iOS)
+        if #available(iOS 27.1, *), let r = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame, r.width > r.height {
+            return CGRect(x: 0, y: r.minY - 4, width: g.size.width, height: r.height + 8)
+        }
+        let mid = UIScreen.main.bounds.height / 2 - g.frame(in: .global).minY
+        return CGRect(x: 0, y: mid - 20, width: g.size.width, height: 40)
+        #else
+        return CGRect(x: 0, y: g.size.height / 2 - 20, width: g.size.width, height: 40)
+        #endif
+    }
     // The bottom inset with the keyboard up and at rest: upright, the split ignores the keyboard (or it turned the page
     // into two columns as the keyboard came, Remote gate 3), and the keys' pane lifts its bar and keys by the difference.
     @State private var keyboardInset: CGFloat = 0
@@ -1493,7 +1506,20 @@ struct RemoteTab: View {
     @State private var pictureWidth: CGFloat = 0
     var body: some View {
         Group {
-            if size == .regular {
+            if stackedUpright {
+                // Open upright: the picture's pane above the fold and the keys' pane under it, laid out here rather than by
+                // the system's split, which turned the page into two columns side by side as the keyboard came up (Remote
+                // gate 3). The page ignores the keyboard, so it stays one column; the keys' pane lifts its bar and keys.
+                GeometryReader { g in
+                    let crease = Self.crease(in: g)
+                    VStack(spacing: 0) {
+                        side(apps: false).frame(height: max(0, crease.minY))
+                        Color.clear.frame(height: crease.height)
+                        keysColumn.frame(maxHeight: .infinity)
+                    }
+                }
+                .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
+            } else if size == .regular {
                 FoldSplit {
                     // The apps come along when there's room, and step aside when held in portrait.
                     side(apps: panes)
@@ -1501,7 +1527,6 @@ struct RemoteTab: View {
                         // rather than squeezing the screen and cutting its labels. Its own search box still lifts.
                         .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
                 } right: { keysColumn }
-                .ignoresSafeArea(typing && stackedUpright ? .keyboard : [], edges: .bottom)
             } else if vSize == .compact {
                 // Folded and turned sideways: the picture beside the pad, as open. Not through FoldSplit, whose split
                 // arrangement shows only its first pane on the folded display (54832f8's shot: no pad and no keys at all).
