@@ -248,6 +248,10 @@ http.createServer((q, s) => {
     return s.end(JSON.stringify({ rows: [{ title: 'Series', items: [{ title: 'Sample Series', subtitle: '2 seasons', art: tvBase + '/poster.png', id: 'tt1234567', kind: 'series' }] }] }));
   }
   // The app says Continue watching is on screen (r27: asked for, but never applied, open).
+  // What a held card sends from a shelf (the tv-flick shelf films): logged beside the app's own word of where it is.
+  if (q.method === 'POST' && /^\/api\/tv\/(flick-lift|flick-cancel|timing|play-stream|send|stremio-open|mint-open|flick|prepare)$/.test(q.url)) {
+    let b = ''; q.on('data', c => b += c); q.on('end', () => { try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' POST ' + q.url + ' ' + b.slice(0, 300) + '\n'); } catch {} });
+  }
   if (q.url.startsWith('/api/tv/applied')) { try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' ' + q.url + '\n'); } catch {} s.setHeader('content-type', 'application/json'); return s.end('{"ok":true}'); }
   if (q.url.startsWith('/api/tv/stremio')) {
     // Logged, so CI can assert the Watch tab really asked for Stremio's home (r26: open, Continue watching never loaded).

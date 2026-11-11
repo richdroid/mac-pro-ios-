@@ -14,7 +14,8 @@ if args[1] == "path" {
     var i = 3
     while i + 3 < n.count {
       let to = touchPoint((n[i], n[i + 1]), device.udid, on: d), seconds = n[i + 2], ease = n[i + 3] > 0
-      let steps = max(1, Int(seconds / 0.008))
+      // Each injected move takes Device Hub some 25–40 ms, so the steps are coarse: their count, not their pace, is asked.
+      let steps = max(1, Int(seconds / 0.03))
       let from = at
       for k in 1...steps {
         usleep(useconds_t(seconds / Double(steps) * 1_000_000))

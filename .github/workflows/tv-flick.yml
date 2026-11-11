@@ -88,11 +88,11 @@ jobs:
                 # Held, then: a short sharp flick (about 45 pt in 80 ms); a flick easing to a stop before it lifts; a
                 # slow carry well past the line and a rest; carried up then brought back down (must go back); a resting
                 # thumb that swipes as the row lifts (must not send).
-                shortflick) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.04" | bc -l) 0.08 0 || echo "path failed" ;;
-                easeflick) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.055" | bc -l) 0.13 1 $x $(echo "$y - 0.055" | bc -l) 0.03 0 || echo "path failed" ;;
-                carry) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.12" | bc -l) 0.5 0 $x $(echo "$y - 0.12" | bc -l) 0.3 0 || echo "path failed" ;;
-                backdown) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.12" | bc -l) 0.25 0 $x $y 0.3 0 || echo "path failed" ;;
-                latescroll) $D "$DEVICE" path $x $y 0.31 $x $(echo "$y - 0.15" | bc -l) 0.12 0 || echo "path failed" ;;
+                shortflick) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.13" | bc -l) 0.09 0 || echo "path failed" ;;
+                easeflick) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.15" | bc -l) 0.15 1 $x $(echo "$y - 0.15" | bc -l) 0.03 0 || echo "path failed" ;;
+                carry) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.3" | bc -l) 0.6 0 $x $(echo "$y - 0.3" | bc -l) 0.3 0 || echo "path failed" ;;
+                backdown) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.3" | bc -l) 0.4 0 $x $y 0.4 0 || echo "path failed" ;;
+                latescroll) $D "$DEVICE" path $x $y 0.31 $x $(echo "$y - 0.3" | bc -l) 0.12 0 || echo "path failed" ;;
               esac
             else echo "no row position for $name"; fi
             sleep 14
@@ -109,18 +109,23 @@ jobs:
             curl -s $M/fnormal/reset > /dev/null
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 3 -pose shelf
+            rm -f /tmp/tv-home-applied.log
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 3 -pose shelf
             sleep 10
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-start.png
+            # The first card's centre, as the app says it is (what=card).
+            local at; at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            if [ -n "$at" ]; then x=${at#*x=}; x=${x%%&*}; y=${at##*y=}; else echo "no card position for $name"; fi
             case $how in
-              throw) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.12" | bc -l) 0.18 0 || echo "path failed" ;;
-              back) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.1" | bc -l) 0.25 0 $x $y 0.3 0 || echo "path failed" ;;
+              throw) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.3" | bc -l) 0.3 0 $x $(echo "$y - 0.3" | bc -l) 0.2 0 || echo "path failed" ;;
+              back) $D "$DEVICE" path $x $y 0.45 $(echo "$x + 0.2" | bc -l) $y 0.4 0 || echo "path failed" ;;
             esac
             sleep 14
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
-            cp /tmp/tv-flick-sends.log dist/tv-$name-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$name-sends.log
+            cp /tmp/tv-home-applied.log dist/tv-$name-applied.log 2>/dev/null || true
+            cp /tmp/tv-home-fetches.log dist/tv-$name-fetches.log 2>/dev/null || true
           }
           posture() {
             local x=$1 d=$2

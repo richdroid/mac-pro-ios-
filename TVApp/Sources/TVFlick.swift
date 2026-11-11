@@ -2039,6 +2039,22 @@ struct ShelfFlick: ViewModifier {
                 Task { @MainActor in if up { _ = hands.hand.cancel(); end(.cancelled, translation: .zero) } }
             }
             .accessibilityAction(named: "Flick to the TV") { hands.hand = FlickHand(.list); throwIt(velocity: CGSize(width: 0, height: -800), translation: .zero) }
+            .task { await reportPlace() }
+    }
+    // The build's shelf films: the first card fully on screen says where it is, for a real finger to land on it.
+    @MainActor static var reported = false
+    func reportPlace() async {
+        #if canImport(UIKit)
+        guard UserDefaults.standard.string(forKey: "pose") == "shelf", !Self.reported else { return }
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        guard !Self.reported, let screen = (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?.screen.bounds,
+              screen.width > 0 else { return }
+        let r = rect()
+        let x = r.midX / screen.width, y = r.midY / screen.height
+        guard r.width > 0, x > 0.05, x < 0.6, y > 0.15, y < 0.8 else { return }
+        Self.reported = true
+        _ = await TVBridge.data(TVBridge.url(String(format: "/api/tv/applied?what=card&x=%.3f&y=%.3f", x, y)), timeout: 3)
+        #endif
     }
     var gesture: some Gesture {
         let rules = FlickHand.Rules.list
