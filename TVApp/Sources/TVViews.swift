@@ -700,7 +700,14 @@ struct ConnectionView: View {
     @State private var address = ""
     var body: some View {
         // Open flat, the page keeps to the left pane, never one card across the fold (gate 276, fifth pass).
-        if panes { FoldSplit { page } right: { Color.clear } } else { page }
+        Group { if panes { FoldSplit { page } right: { Color.clear } } else { page } }
+        // The wall behind the whole page, both panes, not only the one holding the card (sixth pass: the right half black).
+        .background { Ambience() }
+        // No title in the bar: the page draws its own large heading, and the system printed the title above it a second
+        // time (c2db3e9's and bff5ee8's runs; emptied from outside, the page's own won). Back over this page reads "Back".
+        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .barPage()
+        .onAppear { address = model.address }
     }
     var page: some View {
         // A glass section of the app's own, not a Form's one-row capsule (gate 276).
@@ -725,12 +732,6 @@ struct ConnectionView: View {
         .scrollDismissesKeyboard(.interactively)
         .topShade().topFade()
         .summonsBar()
-        .background { Ambience() }
-        // No title in the bar: the page draws its own large heading, and the system printed the title above it a second
-        // time (c2db3e9's and bff5ee8's runs; emptied from outside, the page's own won). Back over this page reads "Back".
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-        .barPage()
-        .onAppear { address = model.address }
     }
 }
 

@@ -219,7 +219,8 @@ struct ManageAppsView: View {
                             if let s = store.state {
                                 if s.canArrange {
                                     Button("Back to automatic order") { store.send("app-layout", ["order": [String]()]) { await store.load() } }
-                                        .foregroundStyle(TVLook.accent).frame(minHeight: 44)
+                                        // Its words' top on the list card's top (sixth pass: 14 pt lower), the 44 pt target below.
+                                        .foregroundStyle(TVLook.accent).frame(minHeight: 44, alignment: .top)
                                 }
                                 Text(note(s)).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             }
@@ -305,6 +306,9 @@ struct ManageAppsView: View {
         // The page's name where the other pushed pages put theirs: the list's own room above its first section set it
         // about 23 pt lower (fourth pass).
         .contentMargins(.top, 0, for: .scrollContent)
+        // Open flat, the same 20 pt page inset as TV settings beside it, so sibling pages' titles and cards share an edge
+        // (sixth pass: 20 pt further left, the card's right edge on the hinge's band).
+        .contentMargins(.horizontal, panes ? 20 : 0, for: .scrollContent)
         .listSectionSpacing(.compact)
     }
 }
@@ -332,7 +336,7 @@ struct ManageSettingsView: View {
         // Open flat it starts level with the card beside it, which has a heading.
         GlassSection(headerRoom: panes) {
             pick("TV sleeps after", "sleep_after", Self.sleep)
-            pick("Screensaver starts after", "screensaver_after", Self.saver)
+            pick("Screensaver after", "screensaver_after", Self.saver)
             pick("Animations", "animations", Self.speed)
             Toggle("Turn off with the TV", isOn: Binding(get: { (s.settings["cec_auto_off"] ?? 0) == 1 }, set: { store.set("cec_auto_off", $0 ? 1 : 0) }))
                 .padding(.horizontal, GlassCard.inset).frame(minHeight: 52)
