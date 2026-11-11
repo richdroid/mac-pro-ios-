@@ -29,7 +29,7 @@ struct ChumbyEntry: TimelineEntry {
     var deviceDown = false
     // When the Chumby was last heard from, for saying how long it's been gone rather than guessing why.
     var lastSeen: Date?
-    var problem: String { deviceDown ? "Chumby not answering" : "Can’t reach it" }
+    var problem: String { deviceDown ? "Chumby isn’t answering" : "Can’t reach it" }
     // Its own smaller line, so the time never reads as an alarm time.
     var lastSeenLine: String? {
         guard let lastSeen else { return nil }

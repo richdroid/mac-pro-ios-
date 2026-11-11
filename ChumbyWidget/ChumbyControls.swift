@@ -14,8 +14,12 @@ struct ChumbyNow {
         guard let both = try? await chumbyTry({ api -> (Sys, ChumbyState?) in
             // Not the Mac's old copy as it stands: Control Center asks after a quiet spell, and a skip or night mode set on
             // the Chumby itself would show the state from before it.
-            let sys = try JSONDecoder().decode(Sys.self, from: try await api.recent("sys").data)
-            let st = try? JSONDecoder().decode(ChumbyState.self, from: try await api.recent("state").data)
+            // Both asked for at once: each may wait a couple of seconds for the Mac's new copy, and one after the other
+            // that was twice the wait before Control Center drew the control.
+            async let sysData = api.recent("sys").data
+            async let stateData = api.recent("state").data
+            let sys = try JSONDecoder().decode(Sys.self, from: try await sysData)
+            let st = try? JSONDecoder().decode(ChumbyState.self, from: try await stateData)
             return (sys, st)
         }) else { return nil }
         var n = ChumbyNow(night: chumbyNightWanted() ?? (both.0.night == 1))

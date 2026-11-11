@@ -57,7 +57,9 @@ http.createServer((q, s) => {
   if (a === 'state') { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(stateNow(data.state))); return; }
   if (a === 'shot') { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); return; }
   if (a === 'cat') { s.end('<a href="/guide/AB-1/category"><img alt="Clocks"></a>'); return; }
-  if (q.method === 'POST') { s.end('{"ok":true}'); return; }
+  // Outside the live scenes nothing changes, so the two actions that are confirmed by reading the state back answer as an
+  // older Chumby does, and the app goes its older way.
+  if (q.method === 'POST') { s.end(a === 'once' || a === 'pstation' ? '{"ok":false,"error":"unknown action"}' : '{"ok":true}'); return; }
   if (data[a]) { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(data[a])); return; }
   s.statusCode = 404; s.end();
 }).listen(9000, '127.0.0.1');
@@ -373,6 +375,27 @@ function chumbyScene(q, s) {
           return json({ ok: true, pending: false, skipped: live.state.skipped });
         }
         if (a === 'unskip') { live.state.skipped = null; return json({ ok: true, pending: false, skipped: null }); }
+        // "Just this once" in one request, as the Chumby answers it (chumby 9d3c1a1): the one-off joins the list switched
+        // on, any earlier one by that name replaced, no other alarm touched, and the skip is pinned to the usual ring.
+        if (a === 'once') {
+          const name = f.get('name') || '', at = +f.get('at'), to = +f.get('to'), oname = f.get('oname') || '';
+          if (!/ \(just this once\)$/.test(oname) || / \(just this once\)$/.test(name)) return json({ ok: false, error: 'bad name' });
+          if (!(at > 0 && to >= at && to <= at + 720)) return json({ ok: false, error: 'bad time' });
+          const orig = live.state.alarms.find(x => x.name === name && x.enabled === '1');
+          if (!orig) return json({ ok: false, error: 'no such alarm' });
+          const one = { ...orig, name: oname, enabled: '1', when: 'once', time: String(to), backup: '0', backupDelay: '5', own: '' };
+          if (f.get('type') !== null) for (const k of ['type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss']) one[k] = f.get(k) || '';
+          live.state.alarms = [...live.state.alarms.filter(x => x.name !== oname), one];
+          live.state.skipped = pinned(live.state, name, at);
+          return json({ ok: true, confirmed: live.state.skipped !== null, pending: false, skipped: live.state.skipped });
+        }
+        // A Pandora station from its share link: the answer comes at once, the result in the state.
+        if (a === 'pstation') {
+          const id = ((f.get('u') || '').match(/station\/play\/(\d+)/) || [])[1], k = f.get('k') || '';
+          live.state.pandoraAdd = id ? `${k}\tok\t${id}\tDream Pop Radio` : `${k}\terr\tthat link isn't a Pandora station`;
+          if (id) live.state.pandora = [...live.state.pandora.filter(p => p.id !== id), { id, name: 'Dream Pop Radio' }];
+          return json({ ok: true, pending: true });
+        }
         // A channel chosen in the app stays chosen, so the channel shown doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
         if (a === 'save') {

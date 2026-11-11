@@ -741,7 +741,7 @@ struct HomeTab: View {
             if let b = model.busy, b.until > ctx.date {
                 Text(b.text)
             } else if model.unreachable {
-                Text(model.seenAt.map { "last seen " + seenText($0) } ?? (model.dead ? "not answering" : "can’t reach it"))
+                Text(model.seenAt.map { "last seen " + seenText($0) } ?? (model.dead ? "isn’t answering" : "can’t reach it"))
             }
         }
         .font(.custom("Trebuchet MS", size: 16).weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark))
@@ -844,15 +844,17 @@ struct HomeTab: View {
             MeterRow(label: "Memory", text: "\(Int((memoryUsed * 100).rounded()))%", value: memoryUsed, color: memoryUsed > 0.92 ? .red : memoryUsed > 0.8 ? .orange : ChumbyPalette.oct(dark))
             if model.sys.wifi >= 0 { MeterRow(label: "Wi-Fi", text: "\(model.sys.wifi)%", value: Double(model.sys.wifi) / 100, color: ChumbyPalette.oct(dark)) }
             else { infoRow("Wi-Fi", "Not connected") }
-            infoRow("Flash storage", "\(model.sys.pspFree) KB free", warn: model.sys.pspFree > 0 && model.sys.pspFree < 400)
+            // Amber under 100 KB, red under 60: the alarm list and the skip are written here, and stop being saved when it's
+            // full. (It warned under 400, so it had been amber since 11-02 and meant nothing.)
+            infoRow("Flash storage", "\(model.sys.pspFree) KB free", warn: model.sys.pspFree > 0 && model.sys.pspFree < 100, bad: model.sys.pspFree > 0 && model.sys.pspFree < 60)
             infoRow("Power", model.sys.wall == 1 ? "Wall power" : "Battery")
             infoRow("Unfroze itself", model.sys.resets == 0 ? "Never" : "\(model.sys.resets)× · last " + Date(timeIntervalSince1970: Double(model.sys.resetAt)).formatted(.dateTime.weekday(.abbreviated).hour().minute()))
         }
         .padding(.vertical, 6)
         .card().padding(.bottom, 20)
     }
-    func infoRow(_ k: String, _ v: String, warn: Bool = false) -> some View {
-        HStack { Text(k); Spacer(); Text(v).foregroundStyle(warn ? AnyShapeStyle(.orange) : AnyShapeStyle(ChumbyPalette.sub(dark))).multilineTextAlignment(.trailing) }
+    func infoRow(_ k: String, _ v: String, warn: Bool = false, bad: Bool = false) -> some View {
+        HStack { Text(k); Spacer(); Text(v).foregroundStyle(bad ? AnyShapeStyle(.red) : warn ? AnyShapeStyle(.orange) : AnyShapeStyle(ChumbyPalette.sub(dark))).multilineTextAlignment(.trailing) }
             .padding(.horizontal, 18).frame(minHeight: 44)
     }
     // Home in the order he uses it (Richard, 2026-11-05: "next alarm and right now like that whole section is too close
@@ -1811,6 +1813,8 @@ struct SoundsTab: View {
     @Environment(\.colorScheme) private var scheme
     @State private var alarmVolume = 100.0
     @State private var addStream = false
+    @State private var addStation = false
+    @State private var stationLink = ""
     @State private var streamURL = ""
     @State private var streamName = ""
     @State private var pendingRemoval: Stream?
@@ -1951,7 +1955,15 @@ struct SoundsTab: View {
                     }
                 } label: {
                     HStack(spacing: 10) {
-                        Label(model.state.pandora.isEmpty ? "Get my Pandora stations" : "Pandora · \(model.state.pandora.count) station\(model.state.pandora.count == 1 ? "" : "s")", systemImage: "antenna.radiowaves.left.and.right")
+                        // A station just added by its link is named here, on the row that counts them: the control shows
+                        // the state, and no separate line is left behind to be put away.
+                        // Inside the label's title, so both lines share the words' left edge, not the glyph's.
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(model.state.pandora.isEmpty ? "Get my Pandora stations" : "Pandora · \(model.state.pandora.count) station\(model.state.pandora.count == 1 ? "" : "s")")
+                                if let name = model.stationAdded { Text("Newest: \(name)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
+                            }
+                        } icon: { Image(systemName: "antenna.radiowaves.left.and.right") }
                         Spacer(minLength: 8)
                         if !model.state.pandora.isEmpty { Text("Update").font(.subheadline.weight(.semibold)).foregroundStyle(.tint) }
                     }
@@ -1959,11 +1971,28 @@ struct SoundsTab: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(model.state.pandora.isEmpty ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                 if let f = model.failed("pscan") { FailNote(text: f) }
+                // A new station without getting up: made in Pandora on the phone, its link pasted here. The Chumby looks
+                // the station up itself (Richard, 2026-11-10: "at least add new pandora stations from apps").
+                Button { stationLink = ""; addStation = true } label: {
+                    HStack(spacing: 10) {
+                        Label("Add a Pandora station", systemImage: "plus.circle.fill")
+                        Spacer(minLength: 8)
+                        if model.addingStation { Text("Looking it up…").font(.subheadline).foregroundStyle(.secondary); ProgressView() }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .foregroundStyle(.tint).disabled(model.addingStation || model.unreachable)
+                if let f = model.failed("pandora") { FailNote(text: f, dismiss: model.dismissal("pandora")) }
             } header: { SectionHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark)) } footer: { if let scanNote { Text(scanNote) } }
         }
         .seaList()
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
+        .alert("Add a Pandora station", isPresented: $addStation) {
+            TextField("Pandora link", text: $stationLink).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+            Button("Add") { let l = stationLink; stationLink = ""; Task { await model.addPandora(l) } }
+            Button("Cancel", role: .cancel) { stationLink = "" }
+        } message: { Text("In Pandora, open the station, tap Share, then Copy Link, and paste it here.") }
         .alert("Add a radio stream", isPresented: $addStream) {
             TextField("MP3 stream address", text: $streamURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
             TextField("Station name", text: $streamName)
@@ -2440,7 +2469,7 @@ struct SkipCard: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                     }
                 }
-                if let f = model.failed("skip") { FailNote(text: f) }
+                if let f = model.failed("skip") { FailNote(text: f, dismiss: model.dismissal("skip")) }
                 // Later or another sound for that one ring, under the slab it belongs to.
                 JustOnceMenu().padding(.leading, 18)
             }

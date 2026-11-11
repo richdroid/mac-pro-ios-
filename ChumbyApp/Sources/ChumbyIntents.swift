@@ -12,7 +12,12 @@ func chumbyRoutes(_ override: String?) -> [URL] {
 func chumbyTry<T>(_ work: (ChumbyAPI) async throws -> T) async throws -> T {
     var last: Error = ChumbyError.deviceDown
     for base in chumbyRoutes(nil) {
-        do { return try await work(ChumbyAPI(base: base)) } catch { last = error }
+        do { return try await work(ChumbyAPI(base: base)) }
+        // The Chumby answered and said no (the safety net, an alarm ringing, a skip it didn't confirm): that's the answer.
+        // Trying the other route would do the whole thing a second time.
+        catch ChumbyError.refused(let why) { throw ChumbyError.refused(why) }
+        catch ChumbyError.waiting(let why) { throw ChumbyError.waiting(why) }
+        catch { last = error }
     }
     throw last
 }
@@ -33,47 +38,85 @@ struct ChumbyPress: AppIntent {
 // The panel's own SKIP and its undo, from a widget, Control Center or Siri. The panel takes a couple of seconds to
 // confirm, so this waits (up to 4 s) for a read that shows it, keeps that read for the widgets, and refreshes them, so the
 // button never looks as if it did nothing.
-func chumbySetSkip(_ on: Bool) async throws {
+// Answers in words what happened, for Siri and Shortcuts: which alarm was skipped, or why nothing was (a skip already
+// set, no alarm ahead). It used to answer "done" either way. And a skip the Chumby never confirmed is an error said
+// aloud, never a button that quietly went back.
+@discardableResult
+func chumbySetSkip(_ on: Bool) async throws -> String {
+    var said = on ? "No alarm to skip." : "No alarm was skipped."
+    func when(_ d: Date) -> String { d.formatted(.dateTime.weekday(.wide).hour().minute()) }
     do {
         try await chumbyTry { api in
+            var asked = false
+            // The Chumby's own answer to the request says whether its panel took it (it waits up to 5 s for the panel);
+            // when it does, that's the confirmation, with no further reading needed.
+            var confirmed = false
+            func took(_ j: [String: Any]) -> Bool { (j["pending"] as? Bool) == false && (j["skipped"] is [String: Any]) == on }
             if on {
                 // Pinned by name to the ring the app shows as next (chumby 2c90cc9), and never over a skip already set: the
                 // Chumby holds one, and replacing it would bring back an alarm (or a "just this once" pair) skipped on purpose.
-                let s = try JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state"))
-                guard s.skipped.map({ $0.date > Date() }) != true, let n = s.nextRing() else { return }
-                _ = try await api.post("skip", extra: "&name=" + ChumbyAPI.enc(n.alarm.name) + "&at=\(Int((n.at.timeIntervalSince1970 / 60).rounded()))")
+                let s = try AlarmWriter.strict(await api.fresh("state"))
+                if let k = s.skipped, k.date > Date() { said = "The \(when(k.date)) alarm is already skipped. Nothing was changed."; return }
+                guard let n = s.nextRing() else { return }
+                confirmed = took(try await api.post("skip", extra: "&name=" + ChumbyAPI.enc(n.alarm.name) + "&at=\(Int((n.at.timeIntervalSince1970 / 60).rounded()))"))
+                said = "Skipped \(when(n.at))." + (s.ring(of: n.alarm, after: n.at.addingTimeInterval(60)).map { " It rings again \(when($0))." } ?? "")
+                asked = true
             } else {
                 // A "just this once" standing behind the skip goes back the app's way (ChumbyModel.undoJustOnce): the skip
                 // taken back first, so the usual ring is on again, then its one-off removed. Never neither.
-                let s = try JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state"))
-                _ = try await api.post("unskip")
+                let s = try AlarmWriter.strict(await api.fresh("state"))
+                guard let k = s.skipped, k.date > Date() else { return }
+                confirmed = took(try await api.post("unskip"))
+                said = "The \(when(k.date)) alarm will ring."
+                asked = true
                 if let j = s.justOnce(), j.pinned, j.canUndo {
+                    // Only once the Chumby itself says the skip is off: with the skip still on and the one-off gone,
+                    // nothing would ring. Unconfirmed, the one-off stays, and both ring.
+                    guard await chumbyUnskipConfirmed(api, since: s.chumbyNow) else { throw ChumbyError.refused(chumbyUnskipDoubt) }
                     _ = try await AlarmWriter.shared.edit(api, permit: SavePermit(userOff: [j.alarm.key])) { st in st.alarms.removeAll { $0.key == j.alarm.key } }
                 }
             }
-            for _ in 0..<6 {
+            guard asked else { return }
+            // The list read back for the widgets' own copy; and, when the answer above didn't settle it, until it does.
+            var cached = false
+            for i in 0..<12 where !cached && (!confirmed || i < 3) {
                 try? await Task.sleep(nanoseconds: 700_000_000)
-                guard let d = try? await api.fresh("state"), let s = try? JSONDecoder().decode(ChumbyState.self, from: d) else { continue }
-                if (s.skipped != nil) == on {
+                guard let d = try? await api.fresh("state"), let s = try? AlarmWriter.strict(d) else { continue }
+                if (s.skipped.map { $0.date > Date() } == true) == on {
                     try? d.write(to: chumbyWidgetCache, options: .atomic)
-                    break
+                    cached = true; confirmed = true
                 }
             }
+            if !confirmed { throw ChumbyError.refused(on ? "The Chumby didn’t confirm the skip. Check the alarm before you sleep." : "The Chumby didn’t confirm the undo. Check the alarm before you sleep.") }
         }
-    } catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
+    } catch { WidgetCenter.shared.reloadAllTimelines(); throw ChumbyError.message(AlarmWriter.explain(error)) }
     WidgetCenter.shared.reloadAllTimelines()
+    return said
+}
+// Reads the Chumby until it says no skip is set, in an answer made after `since` (its own clock when the undo was asked
+// for, so a copy from before the request is never taken as its answer). The panel takes a couple of seconds, longer
+// while it's loading a saved list. False when it never said so.
+let chumbyUnskipDoubt = "The skip wasn’t confirmed off, so the one-off was kept. Both may ring."
+func chumbyUnskipConfirmed(_ api: ChumbyAPI, since: Date?, tries: Int = 15) async -> Bool {
+    for _ in 0..<tries {
+        if let d = try? await api.fresh("state"), let s = try? AlarmWriter.strict(d), ChumbyState.answered(s, since: since) {
+            if s.skipped.map({ $0.date > Date() }) != true { return true }
+        }
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+    }
+    return false
 }
 // The widgets' copy of the alarm list, kept so they can still answer "when's the next one" with no connection.
 var chumbyWidgetCache: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("widget-state.json") }
 struct ChumbySkipIntent: AppIntent {
     static var title: LocalizedStringResource = "Skip Next Chumby Alarm"
     static var description = IntentDescription("Lets the next alarm pass without ringing, once.")
-    func perform() async throws -> some IntentResult { try await chumbySetSkip(true); return .result() }
+    func perform() async throws -> some IntentResult & ProvidesDialog { .result(dialog: IntentDialog(stringLiteral: try await chumbySetSkip(true))) }
 }
 struct ChumbyUnskipIntent: AppIntent {
     static var title: LocalizedStringResource = "Undo Chumby Alarm Skip"
     static var description = IntentDescription("Lets the skipped alarm ring after all.")
-    func perform() async throws -> some IntentResult { try await chumbySetSkip(false); return .result() }
+    func perform() async throws -> some IntentResult & ProvidesDialog { .result(dialog: IntentDialog(stringLiteral: try await chumbySetSkip(false))) }
 }
 // For Control Center's toggle: on skips, off undoes.
 struct ChumbySkipToggleIntent: SetValueIntent {
@@ -160,7 +203,9 @@ struct ChumbyNapIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         // A real alarm on the Chumby, so its backup and catch-up cover it, saved the one careful way.
         let minutes = minutes
-        do { _ = try await chumbyTry { try await AlarmWriter.shared.edit($0, permit: SavePermit()) { (s: inout ChumbyState) -> Void in s.addNap(minutes: minutes) } } }
+        // The nap already set is replaced, by his own press: said so to the safety net, or it refuses to take away an alarm
+        // due within three hours (a second press of the 20-minute control was turned down).
+        do { _ = try await chumbyTry { try await AlarmWriter.shared.edit($0, planned: { s in let permit = s.napPermit(); s.addNap(minutes: minutes); return permit }) } }
         catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
         WidgetCenter.shared.reloadAllTimelines()
         return .result(dialog: IntentDialog(stringLiteral: "Blub. Waking you in \(minutes) minutes."))
@@ -191,12 +236,31 @@ struct ChumbyStatusIntent: AppIntent {
 // The ringing alarm's own Stop, from Control Center or Siri: the same as pressing it on the Chumby.
 struct ChumbyStopAlarmIntent: AppIntent {
     static var title: LocalizedStringResource = "Stop Chumby Alarm"
-    static var description = IntentDescription("Stops the alarm that's ringing or snoozing.")
+    static var description = IntentDescription("Stops the alarm that’s ringing or snoozing.")
     func perform() async throws -> some IntentResult {
         do { try await chumbyTry { try await $0.cmd("ringoff") } }
         catch ChumbyError.message("not delivered") { throw ChumbyError.message("No Chumby alarm is ringing.") }
         catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
         return .result()
+    }
+}
+// The ringing alarm's own Snooze, by voice from bed: the same as pressing it on the Chumby. Says when it rings again.
+struct ChumbySnoozeAlarmIntent: AppIntent {
+    static var title: LocalizedStringResource = "Snooze Chumby Alarm"
+    static var description = IntentDescription("Snoozes the alarm that’s ringing.")
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        do {
+            let minutes = try await chumbyTry { api -> String? in
+                // How long its snooze is, from the alarm that's ringing, read before it's pressed.
+                let sys = try? JSONDecoder().decode(Sys.self, from: await api.fresh("sys"))
+                let state = try? JSONDecoder().decode(ChumbyState.self, from: await api.raw("state").data)
+                try await api.cmd("ringsnooze")
+                return sys?.ringing.flatMap { r in state?.alarms.first { $0.name == r.name }?.snooze }
+            }
+            return .result(dialog: IntentDialog(stringLiteral: minutes.map { "Snoozed for \($0) minutes." } ?? "Snoozed."))
+        }
+        catch ChumbyError.message("not delivered") { throw ChumbyError.message("No Chumby alarm is ringing.") }
+        catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
     }
 }
 struct ChumbyOpenIntent: AppIntent {
@@ -209,32 +273,4 @@ extension ChumbyState {
     // The kind of night he chose (Tinker's Night style): clock, dim or dark. Kept on the Chumby itself as the kind its own
     // nightly time switches to, so the widget and Control Center, which can't read the app's settings, night the same way.
     var nightStyle: String? { schedule.first { $0.cmd == "night" && $0.val != "off" }?.val }
-    mutating func addNap(minutes: Int) { addNap(at: Int((Date().timeIntervalSince1970 / 60).rounded(.up)) + minutes) }
-    // A one-off beep named Nap, due at `at` (minutes since 1970), in the first free place.
-    // One nap at a time, from wherever it's set (app, widget, Control Center, Shortcuts): any nap still to come is replaced,
-    // and the same minute twice is a no-op, so a double press can't leave two naps ringing one after the other.
-    mutating func addNap(at: Int) {
-        let now = Int(Date().timeIntervalSince1970 / 60)
-        alarms.removeAll { $0.name == "Nap" && $0.when == "once" && (Int($0.time) ?? 0) > now && $0.time != String(at) }
-        if alarms.contains(where: { $0.name == "Nap" && $0.when == "once" && $0.time == String(at) }) { return }
-        var a = Alarm()
-        a.name = "Nap"; a.when = "once"; a.enabled = "1"
-        a.time = String(at)
-        let tone = tones.first ?? "Beep"
-        a.type = "beep"; a.arg = tone; a.param_description = tone; a.duration = "5"
-        if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
-    }
-    func alarmForm() -> [(String, String)] {
-        var o: [(String, String)] = [("n", "\(alarms.count)")]
-        if volume >= 0 { o.append(("v", "\(volume)")) }
-        o.append(("f", "\(fade)"))   // -1 is a real choice here: the Chumby's own default
-        for (i, a) in alarms.enumerated() {
-            o += [("\(i)_name", a.name), ("\(i)_enabled", a.enabled), ("\(i)_time", a.time), ("\(i)_when", a.when), ("\(i)_type", a.type), ("\(i)_arg", a.arg),
-                  ("\(i)_param", a.param), ("\(i)_param_description", a.param_description), ("\(i)_duration", a.duration), ("\(i)_snooze", a.snooze),
-                  ("\(i)_auto_dismiss", a.auto_dismiss), ("\(i)_action", a.action), ("\(i)_action_param", a.action_param), ("\(i)_backup", a.backup), ("\(i)_backupDelay", a.backupDelay)]
-            // A calendar day with its own sound says so on every save, or the Chumby puts the shared set back on it.
-            if a.isOwn { o.append(("\(i)_own", "1")) }
-        }
-        return o
-    }
 }

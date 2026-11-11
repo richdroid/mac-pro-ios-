@@ -6,16 +6,30 @@ import UIKit
 
 // MARK: - Small pieces every tab uses
 // A failure, at the control it belongs to.
+// `dismiss`: for a note that stays until it's put away (one about tonight's alarm must not clear itself while the phone
+// is locked), the ✕ that does it, as on a change that didn't reach the Chumby (MarkNote).
 struct FailNote: View {
     @Environment(\.colorScheme) private var scheme
     let text: String
+    var dismiss: (() -> Void)?
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: "exclamationmark.circle.fill")
-            Text(text).fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "exclamationmark.circle.fill")
+                Text(text).fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.subheadline.weight(.medium)).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
+            .accessibilityElement(children: .combine)
+            if let dismiss {
+                Spacer(minLength: 8)
+                Button(action: dismiss) {
+                    Image(systemName: "xmark.circle.fill").font(.body).foregroundStyle(.secondary)
+                        .frame(minWidth: 44, minHeight: 32, alignment: .trailing).contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Dismiss")
+            }
         }
-        .font(.subheadline.weight(.medium)).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
-        .accessibilityElement(children: .combine)
     }
 }
 // A change that hasn't reached the Chumby, under the row it belongs to, with a way to send it again.
@@ -171,7 +185,7 @@ struct RingingCard: View {
             // An old reading: what it was doing when last heard from, and no buttons that can't reach it.
             VStack(spacing: 3) {
                 Text("Was \(s.ring.snoozed ? "snoozing" : "ringing")\(s.seen.map { " at " + seenText($0) } ?? "")").font(.custom("Trebuchet MS", size: 22).weight(.bold))
-                Text([name(s.ring), "can’t reach the Chumby"].filter { !$0.isEmpty }.joined(separator: " · ")).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Text([name(s.ring), "the Chumby isn’t answering"].filter { !$0.isEmpty }.joined(separator: " · ")).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(16).frame(maxWidth: .infinity)
         } else if let s = shown {
@@ -523,7 +537,9 @@ struct AlarmsTab: View {
     var missed: [ChumbyState.Missed] { model.state.missed.filter { Date().timeIntervalSince1970 - $0.at < 86400 && !dismissed.contains($0.id) }.suffix(3).reversed().map { $0 } }
     // A "just this once" standing in for one of these is told on that alarm's row, never listed as an alarm of its own.
     var folded: String? { model.state.justOnce().flatMap { $0.original != nil ? $0.alarm.key : nil } }
-    var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" && $0.key != folded }.sorted { $0.localMinutes < $1.localMinutes } }
+    // A one-off whose time is long gone can never ring again and is cleared at the next save; until then it isn't listed
+    // as an alarm that's "off" (11-10: yesterday's one-off and its "just this once" sat in his list as two dead rows).
+    var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" && $0.key != folded && !ChumbyState.isExpired($0, chumby: model.state.chumbyNow) }.sorted { $0.localMinutes < $1.localMinutes } }
     var paneShown: Pane { wide ? pane : .schedule }
     // Pages that bring their own title row (editor, day) have none from here.
     var rightTitle: String? {
@@ -628,7 +644,8 @@ struct AlarmsTab: View {
         }
         // Edge to edge (fillCover), with the zoom from its row.
         .fillCover(item: $editing) { t in AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
-        .refreshable { await model.loadState() }
+        // Pulled down, the calendar is read again too, so "Pull down to try again" under Calendar is true.
+        .refreshable { await model.loadState(); if wake.rules.enabled, wake.note != nil { await wake.sync() } }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
         // The hinge or a turn mid-page keeps the page (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios
         // across everything"): opened flat, what was pushed over the one list (Calendar settings, a day) moves to the
@@ -800,7 +817,7 @@ struct AlarmsTab: View {
                         .accessibilityLabel("Skip the \(clockParts(n.at).0) \(clockParts(n.at).1) alarm")
                     }
                 }
-                if let f = model.failed("skip") { FailNote(text: f) }
+                if let f = model.failed("skip") { FailNote(text: f, dismiss: model.dismissal("skip")) }
                 // No "just this once" door here: Home's card and the alarm's own editor have it (Richard, 2026-11-10).
             }
             .padding(.vertical, 2)
