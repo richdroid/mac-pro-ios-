@@ -654,6 +654,7 @@ function tvFlickStart(kind, q, s, path, json) {
   }
   if (q.method === 'POST' && path === '/api/tv/prepare') return read(b => { log('prepare', b); setTimeout(() => json({ ok: true, awake: true, fresh: !!b.token }), 300); });
   if (q.method === 'POST' && path === '/api/tv/key') return read(b => { log('key', b); json({ ok: true }); });
+  if (q.method === 'POST' && /^\/api\/tv\/flick-(lift|cancel)$/.test(path)) return read(b => { log(path.slice(8), b); json({ ok: true }); });
   // The app's hand-off timing (frame hitches from release to landing), so the build's log has a line to read.
   if (q.method === 'POST' && path === '/api/tv/timing') return read(b => { log('timing', b); json({ ok: true }); });
   if (q.method === 'POST' && /^\/api\/tv\/(flick|open|stremio-open|film|send|mint-open|music|stop-playing)$/.test(path)) return read(b => { log(path.slice(8), b); if (path.endsWith('stop-playing')) { st.result = 'stopped'; st.endedAt = Date.now(); } json({ ok: true }); });

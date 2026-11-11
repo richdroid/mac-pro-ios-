@@ -109,7 +109,7 @@ jobs:
             curl -s $M/fnormal/reset > /dev/null
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 3 -pose shelf
             sleep 10
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-start.png
             case $how in

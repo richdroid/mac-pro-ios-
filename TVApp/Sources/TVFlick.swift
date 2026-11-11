@@ -287,6 +287,10 @@ struct FlickScreen: View {
     @GestureState private var touching: String?
     // The row or card just thrown: hidden where it was, as its picture is what flies.
     @State private var thrownID: String?
+    // The list under a row in the hand holds still: its pan turned off in UIKit, never by redrawing the page (setting
+    // scrollDisabled as a row lifted rebuilt the scroll view under the finger, and iOS took the touch away the moment it
+    // moved: every real throw went back, CI 180efb2).
+    @State private var pageLock = ScrollLockBox()
     // Another stream of what's already on, picked on purpose: sent, at the spot he's at.
     @State private var switching = false
     // A link's page name and picture, as fetched.
@@ -408,6 +412,7 @@ struct FlickScreen: View {
                 if let id, video, step == .episodes, let t = resumeTarget, !isOn(t.episode) { Prepare.arm(prepareBody(for: id)) }
             }
             .onChange(of: liftedID != nil) { _, up in
+                ScrollLock.set(pageLock, up)
                 if up { FlickHaptic.lift(); FlickClock.touched(); liftedUp() }
                 // Down again without a throw: the TV lets its hint go. A throw clears the hand too, but it's `flown` by then.
                 else if !flown { FlickReceipt.cancel(receiptID) }
@@ -417,6 +422,7 @@ struct FlickScreen: View {
                 guard now == nil, let id = was else { return }
                 Task { @MainActor in
                     guard liftedID == id, !flown else { return }
+                    HandTrace.note("cancelled-by-system dy=\(Int(lift.drag.height))")
                     _ = hands.hand.cancel(); hands.id = nil
                     settle(quiet: true)
                 }
@@ -793,8 +799,8 @@ struct FlickScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) { content() }
                         .padding(.horizontal, 20).padding(.top, 36).padding(.bottom, 84)
+                        .background(ScrollLock(box: pageLock).allowsHitTesting(false))
                 }
-                .scrollDisabled(liftedID != nil)
                 .topFade().summonsBar()
             }
         } else {
@@ -804,8 +810,8 @@ struct FlickScreen: View {
                     .padding(.horizontal, 20).padding(.top, 32).padding(.bottom, 84)
                     .frame(maxWidth: 620, alignment: .leading)
                     .frame(maxWidth: .infinity)
+                    .background(ScrollLock(box: pageLock).allowsHitTesting(false))
             }
-            .scrollDisabled(liftedID != nil)
             .topFade().summonsBar()
         }
     }
@@ -1053,13 +1059,15 @@ struct FlickScreen: View {
     }
     // The finger moved: the thing follows it exactly, leaning the way it goes, and says when letting go would send it.
     func follow(_ d: DragGesture.Value, id: String) {
-        guard liftedID == id else { return }
+        guard liftedID == id else { HandTrace.note("move-unlifted"); return }
+        if lift.drag == .zero, d.translation != .zero { HandTrace.note("first-move") }
         handle(hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: d.time.timeIntervalSince(hands.base)), id: id)
         lift.drag = d.translation
         let card = id == "card"
         lift.lean = max(card ? -8 : -6, min(card ? 8 : 6, Double(d.velocity.width) / (card ? 180 : 200) + Double(d.translation.width) / (card ? 50 : 60)))
     }
     func handle(_ events: [FlickHand.Event], id: String, scale: CGFloat = 1.04) {
+        for e in events { HandTrace.note("\(e) \(id.prefix(6))") }
         for e in events {
             switch e {
             case .lifted:
@@ -1074,6 +1082,7 @@ struct FlickScreen: View {
         }
     }
     func finish(_ outcome: FlickHand.Outcome, id: String, translation: CGSize, send: () -> Void) {
+        HandTrace.note(String(format: "end %@ dy=%.0f vy=%.0f", "\(outcome)", translation.height, hands.hand.velocity.dy))
         hands.id = nil
         switch outcome {
         case .thrown:
@@ -1933,6 +1942,16 @@ struct AppBrowse: View {
     }
 }
 
+// The build's own record of what the hand made of a real finger (the films' touches), next to what was sent. Never on
+// his phone: only under a pose.
+@MainActor enum HandTrace {
+    static let on = UserDefaults.standard.string(forKey: "pose") != nil
+    static func note(_ what: String) {
+        guard on else { return }
+        let e: [String: Any] = ["name": "hand-" + what, "at": Date().timeIntervalSince1970 * 1000]
+        Task { _ = try? await TVBridge.post("timing", ["events": [e]], timeout: 5) }
+    }
+}
 // MARK: - The flick from where a thing lives
 // Every card that can go to the TV (a shelf's, a search result, Continue watching, Watch's films, Mint's albums) is
 // flicked the way a stream row is: held, it lifts off its shelf; thrown up, it goes; let go where it was, it's a tap
@@ -2052,6 +2071,7 @@ struct ShelfFlick: ViewModifier {
     }
     // In the hand: felt, drawn over everything, the shelf held still, and the TV told what's coming.
     func lifted() {
+        HandTrace.note("shelf-lifted")
         up = true
         FlickHaptic.lift(); FlickClock.touched()
         ScrollLock.set(lock, true)
@@ -2073,6 +2093,7 @@ struct ShelfFlick: ViewModifier {
                                  shape: kind == "song" ? "square" : kind == "video" ? "wide" : "poster")
     }
     func end(_ outcome: FlickHand.Outcome, translation: CGSize) {
+        HandTrace.note(String(format: "shelf-end %@ dy=%.0f", "\(outcome)", translation.height))
         ShelfHand.shared.handledAt = Date()
         ScrollLock.set(lock, false)
         switch outcome {
