@@ -1487,8 +1487,11 @@ struct RemoteTab: View {
     // Read as typing begins and kept while it lasts: the app's pane reading flipped to two panes as the keyboard took the
     // height, and the page went side by side (CI 1180364 and 5767dcc, type-portrait).
     var stackedUpright: Bool { size == .regular && !(typing ? calmPanes : panes) }
-    // The pane reading as last seen with no keyboard up.
+    // The pane reading as last seen with no keyboard up. The keyboard only ever turns one column into two (it takes
+    // height), never two into one, so a change to one column is always taken and a change to two only while not typing
+    // (CI d0327e7: going by the keyboard's own notice let the flip through, the notice coming after it).
     @State private var calmPanes = false
+    @State private var calmSet = false
     // Where the fold runs across this view open upright, in its own space: the hinge's own region when the system reports
     // it, otherwise the middle of the screen, 40 pt wide (about the crease's width).
     static func crease(in g: GeometryProxy) -> CGRect {
@@ -1600,7 +1603,7 @@ struct RemoteTab: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardTop = .infinity }
         #endif
-        .onChange(of: panes, initial: true) { _, p in if keyboardTop == .infinity { calmPanes = p } }
+        .onChange(of: panes, initial: true) { _, p in if !calmSet || !typing || !p { calmPanes = p; calmSet = true } }
         // The build's typing film ("-typeCycle YES"): the keyboard comes and goes every 5 s, as the keyboard key would
         // have it, so typing in and out is filmed in every posture without a tap (Remote gate 3).
         .task {
