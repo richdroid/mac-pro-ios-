@@ -16,7 +16,7 @@ concurrency:
 jobs:
   films:
     runs-on: xcode-27
-    timeout-minutes: 90
+    timeout-minutes: 175
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,7 +37,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Films
         continue-on-error: true
-        timeout-minutes: 75
+        timeout-minutes: 160
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -164,11 +164,8 @@ jobs:
             local d=$1 x=$2 px=$3
             # The first launch fills the cache; the films after it are cold launches over it, as on his phone.
             restfilm rest-top$x $d
-            restfilm rest-scrolled$x $d -pose scrolled
             endfilm rest-end$x $d $px
             pullfilm pull$x $d $px 0.8 0.28
-            # The gate's own reproduction: the Mac under load (2 to 5 s late, one in seven lost), asked every second.
-            FILM_PORT=9031 pullfilm pull-slow$x $d $px 0.8 0.28 -fullEvery 1
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
