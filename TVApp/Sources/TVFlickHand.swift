@@ -121,7 +121,8 @@ struct FlickHand {
         default: return []
         }
     }
-    mutating func up(_ p: CGPoint, at t: Double) -> Outcome {
+    // `fling`: the system's own reading of the finger's speed as it left, when there is one; either reading counts.
+    mutating func up(_ p: CGPoint, at t: Double, fling: CGVector? = nil) -> Outcome {
         switch phase {
         case .pressing:
             phase = .done
@@ -130,6 +131,7 @@ struct FlickHand {
             _ = move(p, at: t)
             phase = .done
             if wouldThrow(at: t) { return .thrown }
+            if let f = fling, flung(f, rise: -offset.height), meant(at: t), steepEnough { return .thrown }
             let o = offset
             if abs(o.width) < rules.still && abs(o.height) < rules.still && movedAt == nil { return .longTap }
             return .putBack
@@ -156,11 +158,13 @@ struct FlickHand {
         let o = offset
         let rise = -o.height
         guard rise > 0, rise >= rules.steep * abs(o.width) else { return false }
-        let v = velocity
-        let flung = -v.dy >= rules.fling && rise >= rules.flingRise && -v.dy >= rules.steep * abs(v.dx)
-        guard rise >= rules.carry || flung else { return false }
+        guard rise >= rules.carry || flung(velocity, rise: rise) else { return false }
         return meant(at: t)
     }
+    private func flung(_ v: CGVector, rise: CGFloat) -> Bool {
+        -v.dy >= rules.fling && rise >= rules.flingRise && -v.dy >= rules.steep * abs(v.dx)
+    }
+    private var steepEnough: Bool { let o = offset; return -o.height > 0 && -o.height >= rules.steep * abs(o.width) }
     private func meant(at t: Double) -> Bool {
         if rules.hold <= 0 { return true }
         guard let movedAt else { return false }
@@ -172,7 +176,7 @@ struct FlickHand {
 // Each is a finger's whole touch, sample by sample, and what the flick must make of it. A line with "pass":false is a
 // failure the build reports; ci/flick-hands/main.swift runs the same scripts on the Mac.
 extension FlickHand {
-    enum Step { case down(CGFloat, CGFloat), move(CGFloat, CGFloat), held, up(CGFloat, CGFloat), cancel }
+    enum Step { case down(CGFloat, CGFloat), move(CGFloat, CGFloat), held, up(CGFloat, CGFloat), upFling(CGFloat, CGFloat, CGFloat), cancel }
     struct Script { let name: String; let rules: Rules; let steps: [(Double, Step)]; let want: Outcome; let what: String; var events: [Event]? = nil }
     // A straight stroke from (x0, y0) by (dx, dy) over `ms`, at 120 samples a second.
     static func stroke(from t0: Double, _ x0: CGFloat, _ y0: CGFloat, by dx: CGFloat, _ dy: CGFloat, ms: Double, ease: Bool = false) -> [(Double, Step)] {
@@ -216,6 +220,14 @@ extension FlickHand {
         s.append(Script(name: "jitter-under-slop", rules: L,
                         steps: [(0, .down(200, 400)), (0.1, .move(203, 404)), (0.2, .move(198, 397)), (0.3, .held), (0.5, .up(201, 402))],
                         want: .longTap, what: "a press that wobbles a little and runs long: a tap, the pick"))
+        // The moves came bunched (the main thread busy as the row lifted), so the hand's own speed reads low; the system's
+        // reading of the release says it was flung.
+        s.append(Script(name: "bunched-moves-system-fling", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held), (0.55, .move(200, 395)), (0.56, .move(200, 380)), (0.57, .move(200, 362)), (0.75, .upFling(200, 355, -900))],
+                        want: .thrown, what: "a flick whose moves arrived bunched: the system's own speed at the release counts, sent"))
+        s.append(Script(name: "system-fling-sideways", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 120, -30, ms: 150) + [(0.62, .upFling(320, 370, -900))],
+                        want: .putBack, what: "flung, but carried sideways: back, nothing sent"))
         // Put back.
         s.append(Script(name: "hold-then-drag-down", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 0, 90, ms: 250) + [(0.72, .up(200, 490))],
@@ -262,6 +274,7 @@ extension FlickHand {
                 case .move(let x, let y): events += h.move(CGPoint(x: x, y: y), at: t)
                 case .held: events += h.held(at: t)
                 case .up(let x, let y): outcome = h.up(CGPoint(x: x, y: y), at: t)
+                case .upFling(let x, let y, let vy): outcome = h.up(CGPoint(x: x, y: y), at: t, fling: CGVector(dx: 0, dy: vy))
                 case .cancel: outcome = h.cancel()
                 }
             }

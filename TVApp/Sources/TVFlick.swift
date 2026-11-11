@@ -1033,9 +1033,12 @@ struct FlickScreen: View {
                 guard hands.id == id else { return }
                 var d: DragGesture.Value?
                 if case .second(true, let dv) = v { d = dv }
-                let t = d.map { $0.time.timeIntervalSince(hands.base) } ?? Date().timeIntervalSince(hands.base)
+                // One clock for the lift, every move and the release: this callback's own. The touch's timestamps run
+                // behind it whenever the lift's redraw holds the main thread, and mixed with it they put the moves before
+                // the lift: every throw read as a scroll come late (CI 638f7f6: carried 271 pt up, put back).
+                let t = Date().timeIntervalSince(hands.base)
                 let at = d.map { CGPoint(x: $0.translation.width, y: $0.translation.height) } ?? .zero
-                finish(hands.hand.up(at, at: t), id: id, translation: d?.translation ?? .zero, send: send)
+                finish(hands.hand.up(at, at: t, fling: d.map { CGVector(dx: $0.velocity.width, dy: $0.velocity.height) }), id: id, translation: d?.translation ?? .zero, send: send)
             }
     }
     // The card: nothing under it scrolls, so it's in the hand from the first touch; the throw, the put-back and the tap
@@ -1046,7 +1049,7 @@ struct FlickScreen: View {
             .onChanged { d in
                 guard !flown else { return }
                 if hands.id != "card" {
-                    hands.id = "card"; hands.base = d.time; hands.hand = FlickHand(.card)
+                    hands.id = "card"; hands.base = Date(); hands.hand = FlickHand(.card)
                     handle(hands.hand.down(.zero, at: 0), id: "card", scale: 1.05)
                 }
                 follow(d, id: "card")
@@ -1054,14 +1057,14 @@ struct FlickScreen: View {
             .onEnded { d in
                 guard !flown, hands.id == "card" else { return }
                 let at = CGPoint(x: d.translation.width, y: d.translation.height)
-                finish(hands.hand.up(at, at: d.time.timeIntervalSince(hands.base)), id: "card", translation: d.translation, send: send)
+                finish(hands.hand.up(at, at: Date().timeIntervalSince(hands.base), fling: CGVector(dx: d.velocity.width, dy: d.velocity.height)), id: "card", translation: d.translation, send: send)
             }
     }
     // The finger moved: the thing follows it exactly, leaning the way it goes, and says when letting go would send it.
     func follow(_ d: DragGesture.Value, id: String) {
         guard liftedID == id else { HandTrace.note("move-unlifted"); return }
         if lift.drag == .zero, d.translation != .zero { HandTrace.note("first-move") }
-        handle(hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: d.time.timeIntervalSince(hands.base)), id: id)
+        handle(hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: Date().timeIntervalSince(hands.base)), id: id)
         lift.drag = d.translation
         let card = id == "card"
         lift.lean = max(card ? -8 : -6, min(card ? 8 : 6, Double(d.velocity.width) / (card ? 180 : 200) + Double(d.translation.width) / (card ? 50 : 60)))
@@ -2070,7 +2073,7 @@ struct ShelfFlick: ViewModifier {
                     lifted()
                 }
                 guard let d else { return }
-                for e in hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: d.time.timeIntervalSince(hands.base)) {
+                for e in hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: Date().timeIntervalSince(hands.base)) {
                     if case .armed(let on) = e { ShelfHand.shared.armed = on; if on { FlickHaptic.detent() } }
                 }
                 ShelfHand.shared.drag = d.translation
@@ -2080,9 +2083,9 @@ struct ShelfFlick: ViewModifier {
                 guard up else { return }
                 var d: DragGesture.Value?
                 if case .second(true, let dv) = v { d = dv }
-                let t = d.map { $0.time.timeIntervalSince(hands.base) } ?? Date().timeIntervalSince(hands.base)
+                let t = Date().timeIntervalSince(hands.base)
                 let at = d.map { CGPoint(x: $0.translation.width, y: $0.translation.height) } ?? .zero
-                end(hands.hand.up(at, at: t), translation: d?.translation ?? .zero)
+                end(hands.hand.up(at, at: t, fling: d.map { CGVector(dx: $0.velocity.width, dy: $0.velocity.height) }), translation: d?.translation ?? .zero)
             }
     }
     // In the hand: felt, drawn over everything, the shelf held still, and the TV told what's coming.
