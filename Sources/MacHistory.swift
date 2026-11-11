@@ -270,7 +270,7 @@ struct HistoryView: View {
         .animation(.easeOut(duration: 0.2), value: hours)
         .animation(Motion.quick, value: stale)
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }
-        .navigationDestination(item: $model.processes) { ProcessesView(first: $0, model: model) }
+        .modifier(ProcessesOverHistory(model: model, nav: model.nav))
         .task {
             // A new reading arrives once a minute. Until the first one gets through, it keeps trying every few seconds.
             while !Task.isCancelled {

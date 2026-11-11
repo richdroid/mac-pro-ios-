@@ -248,7 +248,7 @@ struct MacPowerSections: View {
             }
         }
         // Back from its page: the summary says what that page last saw.
-        .onChange(of: model.macPage) { _, p in if p == nil { Task { await read() } } }
+        .onReceive(model.nav.$macPage.dropFirst()) { p in if p == nil { Task { await read() } } }
         Section {
             Button(role: .destructive) { model.macPage = .restart } label: {
                 HStack { Text("Restart the Mac…"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }

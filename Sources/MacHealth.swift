@@ -161,7 +161,7 @@ final class RestartWatch: ObservableObject {
         wentAway = d.bool(forKey: "restartWentAway")
         expire()
         // The build's shots start clean, apart from the one of a restart under way.
-        if let pose = d.string(forKey: "pose"), !pose.isEmpty, pose != "healthback", pose != "healthstuck" { askedAt = nil; wentAway = false }
+        if let pose = d.string(forKey: "pose"), !pose.isEmpty, pose != "healthback", pose != "healthstuck", pose != "didntconfirm" { askedAt = nil; wentAway = false }
     }
     // The build's poses set a restart up for one shot; it isn't kept for the next launch.
     private var posed: Bool { !(UserDefaults.standard.string(forKey: "pose") ?? "").isEmpty }
@@ -324,9 +324,9 @@ struct MacHealthView: View {
                 MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id), starting: startingWindow).place(id)
             }
         } header: {
-            // While the Mac is away nothing is known of its parts: the heading says so too, not what was last read.
-            if heading, down { Text("Waiting for the Mac") }
-            else if heading {
+            // While the Mac is away nothing is known of its parts: no heading then (each row says it's waiting), never
+            // what was last read.
+            if heading, !down {
                 Text(report.map { r in
                     let n = r.parts.filter(\.bad).count
                     return n == 0 ? "All running" : startingWindow ? "\(n) still starting" : "\(n) need\(n == 1 ? "s" : "") a look"
@@ -373,6 +373,8 @@ struct MacHealthView: View {
             report = posed.report
             if posed.fixing { fixing = Date().addingTimeInterval(-23) }
             // "healthstuck": gone twelve minutes and not back.
+            // "didntconfirm": the restart was sent and its answer never came.
+            if model.pose == "didntconfirm" { watch.asked(confirmed: false); watch.askedAt = Date().addingTimeInterval(-40) }
             if model.pose == "healthstuck" { watch.asked(); watch.askedAt = Date().addingTimeInterval(-720); watch.wentAway = true }
             if model.pose == "healthback" { watch.asked(); watch.askedAt = Date().addingTimeInterval(-200); watch.wentAway = true; watch.backAt = Date().addingTimeInterval(-20) }
             return
@@ -439,7 +441,7 @@ struct MacHealthView: View {
         case "health": return (r([:]), false)
         case "healthbad": return (r(two), false)
         case "healthfixing": return (r(two), true)
-        case "healthstuck": return (r([:]), false)
+        case "healthstuck", "didntconfirm": return (r([:]), false)
         case "healthback": return (r(["sessions": "3 of 6 running"], fixed: ["letterboxd": "Sign-in relay started"]), false)
         default: return nil
         }

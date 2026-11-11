@@ -118,6 +118,7 @@ struct SessionTerminal: View {
             if note == Phrase.macAway { note = nil }
         }
         catch is CancellationError {}
+        catch is DecodingError { misses.hit() }
         // Only after 8 s without an answer (MissClock): one missed screen said it at once.
         catch {
             guard misses.miss() else { return }

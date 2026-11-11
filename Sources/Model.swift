@@ -25,8 +25,22 @@ final class Pulse: ObservableObject {
     @Published var beats = 0
 }
 
+// Which page is open over each tab. Apart from the model, and watched only by the stacks (StackPages): on the model,
+// closing a page published to the whole app, so every tab was worked out and laid out again on the main thread before
+// the pop could move. That was the wait between Back lighting and the page moving (Richard's recording, 2026-11-10:
+// lit at 14.15, moving at 14.285; CI 1b744be: root, the tab's stack and both of Status's panes redrawn inside every pop).
+@MainActor
+final class NavStore: ObservableObject {
+    @Published var history: HistoryMetric?  // kept here, not in a view, so unfolding doesn't close it
+    @Published var processes: ProcessSort?
+    @Published var sessionScreen: Status.Session?  // a session's own screen, on the Claude tab's stack
+    @Published var appHistory: String?  // the package (TV.ipa) whose Version History is open on the Apps tab's stack
+    @Published var macPage: MacPage?  // Everything on the Mac, or Restart the Mac, on the Control tab's stack
+}
+
 @MainActor
 final class AppModel: ObservableObject {
+    let nav = NavStore()
     let liveStore = LiveStore()
     let seedStore = SeedStore()
     let sessionStore = SessionStore()
@@ -51,16 +65,30 @@ final class AppModel: ObservableObject {
     @Published var apiSetup = false      // the Admin key row in the Usage card; here, so leaving the tab doesn't lose it
     @Published var gotFresh = false      // the Mac has answered at least once since launch, not just the cache
     private var posedSheet = false
-    @Published var history: HistoryMetric?  // kept here so unfolding doesn't close it
-    @Published var processes: ProcessSort?
-    @Published var sessionScreen: Status.Session?  // a session's own screen, on the Claude tab's stack
-    @Published var appHistory: String?  // the package (TV.ipa) whose Version History is open on the Apps tab's stack
-    @Published var macPage: MacPage?  // Everything on the Mac, or Restart the Mac, on the Control tab's stack
+    // The open pages, by their old names: read and set through the model, published only by `nav`.
+    var history: HistoryMetric? { get { nav.history } set { nav.history = newValue } }
+    var processes: ProcessSort? { get { nav.processes } set { nav.processes = newValue } }
+    var sessionScreen: Status.Session? { get { nav.sessionScreen } set { nav.sessionScreen = newValue } }
+    var appHistory: String? { get { nav.appHistory } set { nav.appHistory = newValue } }
+    var macPage: MacPage? { get { nav.macPage } set { nav.macPage = newValue } }
+    // A page asked for before its tab has been on screen (a launch straight onto a page: a notification tapped, the
+    // build's -openHistory) is pushed once the tab has drawn. Pushed at once, the tab underneath was never drawn until
+    // Back first showed it, and it arrived late and in pieces, open flat a pane at a time (designer, CI 1b744be).
+    private var tabSince = Date()
+    private var drawnAt: Date?
+    func whenDrawn(_ push: @escaping @MainActor () -> Void) {
+        func wait() -> TimeInterval { drawnAt.map { max($0, tabSince).addingTimeInterval(0.6).timeIntervalSinceNow } ?? 1 }
+        if wait() <= 0 { push(); return }
+        Task { @MainActor in
+            while wait() > 0 { try? await Task.sleep(nanoseconds: 50_000_000) }
+            push()
+        }
+    }
     private var posedHistory = false
     private var pendingSession: String?
     private var lastData: Data?
     // The tab chosen to open on in Settings, or else the one last used.
-    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab
+    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab { didSet { if tab != oldValue { tabSince = Date() } } }
     // Counts each ask for the usage, which lives on the Claude tab: the Claude tab scrolls to it.
     @Published var usageAsked = AppModel.firstTab == 3 ? 1 : 0
     var usageShown = 0
@@ -85,14 +113,14 @@ final class AppModel: ObservableObject {
         signInSheet = address.isEmpty
         // Usage was a tab of its own until 2026-11-07; a start tab set to it opens on Claude, where it now lives.
         if UserDefaults.standard.integer(forKey: "startTab") == 3 { UserDefaults.standard.set(2, forKey: "startTab") }
-        history = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
-        processes = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
+        let h = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
+        let p = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // The build's shots of the Control tab's pushed pages (health, a fix under way, back from a restart, the checks).
-        if ["health", "healthbad", "healthfixing", "healthback", "healthstuck"].contains(pose) { macPage = .health }
-        if ["restart", "restartred"].contains(pose) { macPage = .restart }
-        if Self.reopen { reopenForShots() }
+        let page: MacPage? = ["health", "healthbad", "healthfixing", "healthback", "healthstuck"].contains(pose) || pose == "didntconfirm" ? .health : ["restart", "restartred"].contains(pose) ? .restart : nil
+        if Self.reopen { history = h; processes = p; reopenForShots() }
+        else if h != nil || p != nil || page != nil { whenDrawn { [weak self] in self?.history = h; self?.processes = p; self?.macPage = page } }
         // The build's shot of the Connection sheet.
-        if pose == "signin" { signInSheet = true }
+        if pose.hasPrefix("signin") { signInSheet = true }
         // Show the last known state at once; fresh numbers replace it moments later.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(Status.self, from: d) }
         seedStore.set(status?.iosApps); sessionStore.set(status?.claude.sessions ?? [])
@@ -138,7 +166,7 @@ final class AppModel: ObservableObject {
     }
     func open(session s: Status.Session) {
         guard let key = s.key else { return }
-        Task { await TermCache.warm(api, key, within: 0.15); sessionScreen = s }
+        Task { await TermCache.warm(api, key, within: 0.15); whenDrawn { self.sessionScreen = s } }
     }
     // A session's own page lives on the Claude tab, wherever it was asked for from.
     // Its text is asked for first, for a moment at most, so the page arrives drawn.
@@ -146,13 +174,13 @@ final class AppModel: ObservableObject {
         tab = 2
         guard let s = status?.claude.sessions.first(where: { $0.key == key }) else { pendingSession = key; return }
         pendingSession = nil
-        Task { await TermCache.warm(api, key, within: 0.15); sessionScreen = s }
+        Task { await TermCache.warm(api, key, within: 0.15); whenDrawn { self.sessionScreen = s } }
     }
 
     private func openPending() {
         if let key = pendingSession, let s = status?.claude.sessions.first(where: { $0.key == key }) {
             pendingSession = nil
-            Task { await TermCache.warm(api, key, within: 0.15); sessionScreen = s }
+            Task { await TermCache.warm(api, key, within: 0.15); whenDrawn { self.sessionScreen = s } }
         }
     }
 
@@ -182,7 +210,7 @@ final class AppModel: ObservableObject {
         // Status's histories read ahead, so a tile opens onto a drawn chart.
         if tab == 0 { let api = api; Task { await TrendCache.prefetch(api, fresh) } }
         // Status's health chip, from a Mac whose status doesn't count its parts yet: read from its Health now and then.
-        if tab == 0, fresh.healthBad == nil { HealthSummary.shared.refresh(api) }
+        if tab == 0, fresh.healthBad == nil, pose != "checking" { HealthSummary.shared.refresh(api) }
         AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
     }
     private func releaseHeld() {
@@ -191,6 +219,7 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        if drawnAt == nil { drawnAt = Date() }
         stop()
         ScrollHold.onRelease = { [weak self] in self?.releaseHeld() }
         // What waited for a slide lands as it ends, simply there: figures rolling into place on a page that has only just
@@ -228,8 +257,15 @@ final class AppModel: ObservableObject {
         // A reading that failed to come back drops the last one, so the tiles fall back to the full status
         // rather than holding an old number over newer ones.
         // Missed once, the last reading stays: it's dropped only when the Mac counts as unreachable (missed).
-        guard let l = try? await api.live() else {
-            if !Task.isCancelled { missed() }
+        let l: LiveStatus
+        do { l = try await api.live() }
+        catch {
+            // An answer this build can't read is the Mac there, as it is for the full status. It counted as a miss, once
+            // a second, so a Mac whose live figures the app couldn't read was "unreachable" 8 s after every full reading
+            // and back again at the next, for as long as that lasted (CI 1b744be against a stand-in Mac with no live
+            // figures: the red card on and off every 10 s; the brief's "cause unproven" flash).
+            if Task.isCancelled { return }
+            if error is DecodingError { Reach.shared.hit(); SwipeLog.note("live unread") } else { SwipeLog.note("live missed: \(error)"); missed() }
             return
         }
         Reach.shared.hit()
@@ -271,7 +307,8 @@ final class AppModel: ObservableObject {
             if ["versions", "versionsfilm", "versionsupdate"].contains(pose), !posedHistory, !Self.reopen {
                 posedHistory = true; tab = 1
                 // "versionsupdate": an app with a newer build ready over the air, so the page's Update shows.
-                appHistory = pose == "versionsupdate" ? "Chumby.ipa" : "TV.ipa"
+                let file = pose == "versionsupdate" ? "Chumby.ipa" : "TV.ipa"
+                whenDrawn { self.appHistory = file }
             }
             if parks { SwipeLog.note("status held"); heldStatus = fresh; return }
             SwipeLog.note("status landed")
@@ -288,6 +325,7 @@ final class AppModel: ObservableObject {
             if !unreadable { unreadable = true }
         } catch {
             lastData = nil
+            SwipeLog.note("status missed: \(error)")
             missed()
         }
     }
@@ -298,6 +336,8 @@ final class AppModel: ObservableObject {
         case "alerts", "alertsdismiss": s.alerts = Status.Alert.samples
         // Two parts of the Mac needing a look, as its bridge will count them: Status's chip says so and opens Health.
         case "needslook": s.healthBad = 2
+        // Before the Mac has said anything about itself: the chip is grey "Checking".
+        case "checking": s.alerts = nil; s.healthBad = nil
         case "api-none": s.apiUsage = Status.APIUsage(configured: false)
         case "api-refused": s.apiUsage = Status.APIUsage(configured: true, error: "Couldn’t read API usage: the Admin key was refused")
         case "api-live", "api-sheet": s.apiUsage = .sample

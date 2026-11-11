@@ -269,6 +269,23 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             swipelog $name
           }
+          # A launch straight onto a page (a session's, as a notification tapped opens it), then Back with a real tap: the
+          # tab underneath must be there whole from the pop's first frame (designer, 2026-11-10: it had never been drawn,
+          # and arrived in pieces). name, display, Back's x and y.
+          launchpop() {
+            local name=$1 display=$2 bx=$3 by=$4; shift 4
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9021 -fullEvery 1 -swipeLog YES -tab 0 -pose session
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-page.png
+            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 4
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            swipelog $name
+          }
           reopenshots() {
             local d=$1 x=$2
             reopenshot reopen-history$x $d -tab 0 -openHistory cpu
@@ -289,6 +306,17 @@ jobs:
             shot needslook$x $d 8 -tab 0 -pose needslook
             shot health-stuck$x $d 9 -tab 5 -pose healthstuck
             shot signin$x $d 8 -tab 0 -pose signin
+            # The sheet trying an address, one that didn't answer, and one that wants its code.
+            shot signin-probe$x $d 8 -tab 0 -pose signinprobe
+            shot signin-bad$x $d 8 -tab 0 -pose signinbad
+            shot signin-code$x $d 8 -tab 0 -pose signincode
+            # Before the Mac has said anything of itself (grey "Checking"); a secret on its way with a failure that stayed;
+            # the second question for an app that didn't quit; a restart whose answer never came; Claude's service rows.
+            shot checking$x $d 8 -tab 0 -pose checking
+            shot control-busy$x $d 9 -tab 5 -pose controlbusy
+            shot forcequit$x $d 9 -tab 1 -pose forcequit
+            shot didntconfirm$x $d 9 -tab 5 -pose didntconfirm
+            shot claude-scrolled$x $d 9 -tab 2 -pose scrolled
           }
           # Everything that changed, in one posture (display, suffix).
           poses() {
@@ -384,6 +412,7 @@ jobs:
           FILM_PORT=9021 swipefilm appsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -fullEvery 1 -frameLog YES
           FILM_PORT=9021 swipefilm versionsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -fullEvery 1 -frameLog YES
           popfilm pop-portrait 3 0.065 0.049 0.25 0.66 0.75
+          launchpop launchpop-portrait 3 0.065 0.049
           backfilms 3 -portrait
           reopenshots 3 -portrait
           retapfilm
@@ -398,6 +427,7 @@ jobs:
           shot history-open 3 8 -tab 0 -openHistory cpu
           shot processes-open 3 8 -tab 0 -openProcesses cpu
           popfilm pop-open 3 0.948 0.222 0.62 0.23 0.82
+          launchpop launchpop-open 3 0.948 0.222
           backfilm back-history-open 3 -tab 0 -openHistory cpu
           backfilm back-versions-open 3 -tab 1 -pose versions
           backfilm back-session-open 3 -tab 2 -pose session
@@ -418,6 +448,7 @@ jobs:
           film scrollfilm 1 30 -tab 0 -pose scrollfilm
           swipefilm versionsfling 1 0.45 0.8 0.28 -tab 1 -pose versionsfilm
           popfilm pop 1 0.895 0.292 0.23 0.81 0.62
+          launchpop launchpop 1 0.895 0.292
           backfilms 1 ""
           # The hinge moved with a page up (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios across
           # everything"): both displays filmed while a pushed page and then Status are flung, the phone opened, turned,
