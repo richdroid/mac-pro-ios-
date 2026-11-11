@@ -287,6 +287,8 @@ struct FlickScreen: View {
     @GestureState private var touching: String?
     // The row or card just thrown: hidden where it was, as its picture is what flies.
     @State private var thrownID: String?
+    // The row going back to its place after a put-back.
+    @State private var settling: String?
     // The list under a row in the hand holds still: its pan turned off in UIKit, never by redrawing the page (setting
     // scrollDisabled as a row lifted rebuilt the scroll view under the finger, and iOS took the touch away the moment it
     // moved: every real throw went back, CI 180efb2).
@@ -627,9 +629,10 @@ struct FlickScreen: View {
             ToolbarItem(placement: .cancellationAction) {
                 // Full strength, as every close in the app: in the accent on the bar's glass it read as greyed out.
                 Button { if !flown { leave() } } label: {
-                    Label { Text("Close") } icon: { Image(systemName: "xmark").font(.body.weight(.semibold)).foregroundStyle(.white) }
+                    Label { Text("Close") } icon: { Image(systemName: "xmark").font(.body.weight(.semibold)).symbolRenderingMode(.monochrome).foregroundStyle(Color.white) }
                 }
-                .tint(.white)
+                // The bar along the top (open upright) drew it grey through the tint alone.
+                .tint(.white).foregroundStyle(Color.white)
             }
         }
     }
@@ -907,7 +910,7 @@ struct FlickScreen: View {
                 Image(systemName: "tv").font(.system(size: 17, weight: .semibold)).foregroundStyle(TVLook.accent).frame(width: 28)
                 Text("Choose on the TV").font(.subheadline.weight(.semibold))
             }
-            .modifier(LiftedLook(lift: lift, up: liftedID == "tv", scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16), solid: true))
+            .modifier(LiftedLook(lift: lift, up: liftedID == "tv", scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16), solid: true, home: settling == "tv"))
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map["tv"] = $0 }
             .opacity(thrownID == "tv" ? 0 : 1)
             .zIndex(liftedID == "tv" ? 1 : 0)
@@ -1040,7 +1043,7 @@ struct FlickScreen: View {
         .opacity(failed ? 0.45 : 1)
         // Lifted: up off the list on a bigger, lower shadow, on its own solid ground (nothing under it reads through),
         // lit round its edge more and more as it rises.
-        .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16), solid: true))
+        .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16), solid: true, home: settling == s.id))
         // Where it rests, measured outside everything that moves it (inside the drag's offset, the throw's picture
         // started twice the drag away, near the top of the page).
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map[s.id] = $0 }
@@ -1150,9 +1153,13 @@ struct FlickScreen: View {
         case .cancelled, .none, .quickTap: if liftedID == id { settle(quiet: true) }
         }
     }
-    // Let go short of a throw: back to rest, with one soft touch (none when the system took the touch away).
+    // Let go short of a throw: back to rest, with one soft touch (none when the system took the touch away). Its solid
+    // ground stays until it's home, so it never shows through the row it passes over on the way back.
     func settle(quiet: Bool = false) {
         settledAt = Date()
+        let id = liftedID
+        settling = id
+        Task { try? await Task.sleep(nanoseconds: 450_000_000); if settling == id { settling = nil } }
         if !quiet { FlickHaptic.settle() }
         withAnimation(.spring(response: 0.38, dampingFraction: 0.6)) { liftedID = nil; lift.drag = .zero; lift.lean = 0; lift.armed = false; liftScale = 1 }
     }
@@ -1789,6 +1796,8 @@ struct LiftedLook: ViewModifier {
     let rest: (Double, CGFloat, CGFloat), raised: (Double, CGFloat, CGFloat)
     // A row's own ground is see-through; in the hand it's on a solid one, so the page under it never reads through.
     var solid = false
+    // On its way home after a put-back: the ground stays solid until it's there.
+    var home = false
     func body(content: Content) -> some View {
         let drag = up ? lift.drag : .zero
         let rise = max(0, -drag.height)
@@ -1796,7 +1805,7 @@ struct LiftedLook: ViewModifier {
         content
             // Always there, its opacity changing: put in and taken out inside the settle's spring, a block of the list
             // went black for six frames as a row was put back (CI 582cab5).
-            .background(RoundedRectangle(cornerRadius: corner, style: .continuous).fill(Color(white: 0.14)).opacity(solid && up ? 1 : 0))
+            .background(RoundedRectangle(cornerRadius: corner, style: .continuous).fill(Color(white: 0.14)).opacity(solid && (up || home) ? 1 : 0))
             .shadow(color: .black.opacity(shade.0), radius: shade.1, y: shade.2)
             // Lit as it rises, and all the way round once letting go would send it, so the line is seen as well as felt.
             .overlay { RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(TVLook.accent.opacity(up ? (lift.armed ? 1 : 0.45 * min(1, rise / 80)) : 0), lineWidth: up && lift.armed ? 2 : 1.5) }
