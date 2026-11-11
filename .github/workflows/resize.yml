@@ -31,7 +31,9 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p dist
-          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+          # Release, as TestFlight builds it, so a landing's cost is what his phone runs (Debug's unoptimised SwiftUI doubled
+          # it). The frame meter is Debug-only; the swipe log's late frames and main-thread turns are in both.
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Release -sdk iphonesimulator \
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Films
         continue-on-error: true
@@ -43,7 +45,7 @@ jobs:
           xcrun simctl list devices available | grep -m1 "$DEVICE"
           xcrun simctl boot "$DEVICE"
           xcrun simctl bootstatus "$DEVICE" -b
-          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Release-iphonesimulator/MacPro.app
           node ci/mock-chumby.js &
           sleep 2
           D=/tmp/dh/.build/release/devicehubctl
