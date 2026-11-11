@@ -176,10 +176,12 @@ extension View {
 enum SwipeLog {
     static let on = UserDefaults.standard.bool(forKey: "swipeLog")
     static let start = Date()
+    nonisolated(unsafe) private static var landedWatch: CFAbsoluteTime = 0
     // A view's body being worked out, for the build's logs: which pages a move or a reading made the app redraw.
     static func mark(_ s: String) { if on { note(s) } }
     static func note(_ s: String) {
         guard on, let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        if s.hasSuffix("landed") { landedWatch = CFAbsoluteTimeGetCurrent() + 0.5 }
         let line = String(format: "%.3f ", Date().timeIntervalSince(start)) + s + "\n"
         let url = dir.appendingPathComponent("swipe-log.txt")
         if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
@@ -199,6 +201,9 @@ enum SwipeLog {
                 let now = CFAbsoluteTimeGetCurrent()
                 if a == .afterWaiting { woke = now }
                 else if woke > 0, now - woke > 0.05 { note(String(format: "main busy %.0f ms", (now - woke) * 1000)); woke = 0 }
+                // Within half a second of a reading landing, every turn over 8 ms: what the landing cost the main thread,
+                // apart from what the simulator's drawing costs after it.
+                else if woke > 0, now < landedWatch, now - woke > 0.008 { note(String(format: "turn %.0f ms", (now - woke) * 1000)); woke = 0 }
             }
         }
         CFRunLoopAddObserver(CFRunLoopGetMain(), o, .commonModes)
