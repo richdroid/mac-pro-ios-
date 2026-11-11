@@ -151,7 +151,7 @@ struct AlertSettings: View {
     @EnvironmentObject var model: AppModel
     @AppStorage(AlertWatch.enabledKey) private var enabled = true
     @State private var denied = false
-    static let note = "Notify this iPhone sends an alert when the Mac is too hot, its disk is nearly full, something is down, or Claude usage is nearly out."
+    static let note = "Alerts when the Mac is too hot, its disk is nearly full, something is down, or Claude usage is nearly out."
     var body: some View {
         Toggle("Notify this iPhone", isOn: $enabled)
             .onChange(of: enabled) { _, on in

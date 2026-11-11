@@ -184,7 +184,7 @@ struct ProcessesLink: View {
 extension Status.Session {
     // The name as a word: its first letter capitalised and the rest as the Mac has it, so "build" reads "Build" and
     // "mac-dash" reads "Mac-dash", never "Mac-Dash" (designer, 2026-11-11).
-    var shownName: String { name.prefix(1).uppercased() + name.dropFirst() }
+    var shownName: String { appleCased(name) }
 }
 struct SessionRow: View {
     let session: Status.Session
