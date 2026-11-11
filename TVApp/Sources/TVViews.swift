@@ -1367,11 +1367,15 @@ struct RemoteTab: View {
             // Folded, typing takes the transport's room: the keyboard sliced it in half, and its glow smeared through.
             // Only with something on to play: idle on the home screen, five transport keys did nothing.
             // The one transport, the same as Playing's, on the top row's five places.
-            if session && !(typing && size != .regular) { Transport(glow: !typing, size: grid.key, playSize: grid.play).transition(.opacity) }
+            // Never under Mint's own player, online or dimmed out of reach: one condition in every state (gate, 2026-11-11).
+            if session && !musicShown && !(typing && size != .regular) { Transport(glow: !typing, size: grid.key, playSize: grid.play).transition(.opacity) }
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
         }
         // Five places of a key and a gap each: the first and last keys' edges land on the column's.
         .frame(width: grid.width + grid.gap)
+        // Laid out at exactly the column's width, so a column as wide as its room never pushes the keys past its edge
+        // (folded sideways and typing upright, Menu and ⏭ sat 13 pt from the right edge, gate 2026-11-11).
+        .padding(.horizontal, -grid.gap / 2)
         // The TV's status is never set inside an animation, so the row came and went in one frame as something started
         // or ended on the TV. It fades, like the lines under the picture (the 2026-11-10 motion pass).
         .settledAnimation(.easeOut(duration: 0.25), value: session)
@@ -1412,8 +1416,9 @@ struct RemoteTab: View {
         PictureColumn(spacing: 14, under: Self.underRoom) {
             picture(closable: true).columnRole(.picture)
             progress.columnRole(.under)
-            episodes.columnRole(.under)
-            music.columnRole(.under)
+            // Typing, the keyboard covers the pane from about here: the episode line and Mint's player step aside rather
+            // than sit half under it (open flat, gate 2026-11-11). Their room is kept, so the picture doesn't move.
+            if !typing { episodes.columnRole(.under); music.columnRole(.under) }
             // Typing, the keyboard comes up over this pane's foot: the tiles and the send box step aside rather than show
             // through it.
             if !typing {
@@ -1442,13 +1447,15 @@ struct RemoteTab: View {
     private var keysColumn: some View {
         GeometryReader { geo in
             let stacked = size == .regular && !panes
-            let grid = RemoteGrid.keys(min(geo.size.width, 380, stacked && pictureWidth > 120 ? pictureWidth : .infinity))
+            let grid = RemoteGrid.keys(min(geo.size.width, vSize == .compact ? 300 : 380, stacked && pictureWidth > 120 ? pictureWidth : .infinity))
             VStack(spacing: 14) { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity); keysBlock(grid) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(.horizontal, 20).padding(.bottom, 16)
         .modifier(KeysArrive(gate: keysGate))
     }
+    // The folded column as it was before typing began, kept while typing so the keys don't move or shrink.
+    @State private var foldedGrid: RemoteGrid?
     // How wide the picture is drawn, for the keys in the pane under it to take the same width.
     @State private var pictureWidth: CGFloat = 0
     var body: some View {
@@ -1479,26 +1486,36 @@ struct RemoteTab: View {
                 // film on).
                 // One column, worked out from the room there is (RemoteGrid.folded): the picture, the bar, the episode
                 // line, the pad and both rows of keys share its width and its edges, and the keys are sized to it.
+                // Every size is fixed per posture (gate, 2026-11-11): the room under the picture is always counted with Mint's
+                // player in it, so nothing moves as a song or a show starts; the pad is one diameter, and spare height is
+                // space either side of it, never pad. Typing keeps the column it had, so the keys stay where they were.
                 GeometryReader { geo in
-                    let grid = typing ? RemoteGrid.keys(min(geo.size.width, 380))
-                        : RemoteGrid.folded(width: geo.size.width, height: geo.size.height, under: musicShown ? Self.underRoom + 30 : Self.underRoom)
+                    let fresh = RemoteGrid.folded(width: geo.size.width, height: geo.size.height, under: Self.underRoom + 30)
+                    let grid = typing ? (foldedGrid ?? fresh) : fresh
                     VStack(spacing: 14) {
                         // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
                         // Always there, as open: hidden, it shows what's on blurred behind its own "Show the TV's screen".
                         if !typing {
                             picture(closable: true).frame(width: grid.width, height: grid.width * 9 / 16).transition(.opacity)
+                            // Mint's player is what's on when it shows: no empty bar's place above it (offline it left 70 pt).
+                            if !musicShown { progress.frame(width: grid.width) }
                             // Mint playing has no transport here, so its own player is the way to pause it.
-                            progress.frame(width: grid.width); episodes.frame(width: grid.width); music.frame(width: grid.width)
+                            episodes.frame(width: grid.width); music.frame(width: grid.width)
                         }
                         Group {
-                            // Clear of the title above it, which the keyboard pushes the page up under. It takes whatever
-                            // height is spare (all of the lines' and the transport's while nothing is on), up to the column's width.
-                            pad.frame(maxWidth: grid.width).frame(minHeight: 110, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
+                            Spacer(minLength: 0)
+                            // Clear of the title above it, which the keyboard pushes the page up under; while typing it gives
+                            // way first, so the bar and both rows of keys sit wholly above the keyboard.
+                            pad.frame(width: grid.width).frame(minHeight: typing ? 56 : grid.pad, maxHeight: grid.pad).padding(.top, typing ? 12 : 0)
+                            Spacer(minLength: 0)
                             keysBlock(grid)
                         }
                         .modifier(KeysArrive(gate: keysGate))
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // On the title's own inset, not floating between it and the rail.
+                    .padding(.leading, 6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .onChange(of: fresh, initial: true) { _, g in if !typing { foldedGrid = g } }
                 }
                 .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
                 // As open: the lines under the picture fade with the TV's status rather than pop.
@@ -1559,6 +1576,8 @@ private extension View {
 struct RemoteGrid: Equatable {
     var width: CGFloat, key: CGFloat, play: CGFloat
     var gap: CGFloat { (width - 5 * key) / 4 }
+    // Folded, the pad's one diameter: a little over half the column (gate, 2026-11-11: it was 108 to 277 pt by state).
+    var pad: CGFloat { max(110, (width * 0.54).rounded()) }
     static func keys(_ width: CGFloat) -> RemoteGrid {
         let w = max(width, 212)
         let k = min(54, max(40, ((w - 48) / 5).rounded(.down)))
@@ -1572,7 +1591,7 @@ struct RemoteGrid: Equatable {
         var w = min(width, 380)
         while w > 220 {
             let g = keys(w)
-            let need = w * 9 / 16 + under + 14 + max(110, w * 0.44) + 14 + g.key + 12 + g.play
+            let need = w * 9 / 16 + under + 14 + g.pad + 14 + g.key + 12 + g.play
             if need <= height { break }
             w -= 2
         }
