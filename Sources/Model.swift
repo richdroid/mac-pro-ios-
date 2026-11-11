@@ -18,6 +18,17 @@ final class SessionStore: ObservableObject {
     func set(_ s: [Status.Session]) { if s != sessions { sessions = s } }
 }
 
+// The Mac's status, kept apart from the model (gate 3, 2026-11-11). On the model, every landing published to the whole
+// app: the root, every tab's frame and the Status page were worked out again on the main thread, a 60 to 180 ms late frame
+// each time, and in the first frames of a pull's spring when held readings landed as it ended. Only each tab's frame takes
+// it (Screen, and only while its tab is the one in front) and the pages that ask for it.
+@MainActor
+final class StatusStore: ObservableObject {
+    @Published var status: Status?
+    // This landing adds or takes away a row: whoever takes it on screen does so in one animated move.
+    var moves = false
+}
+
 // When the Mac last answered. Kept apart from the model so the beat on each refresh redraws only the chip that shows it.
 @MainActor
 final class Pulse: ObservableObject {
@@ -45,10 +56,14 @@ final class AppModel: ObservableObject {
     let seedStore = SeedStore()
     let sessionStore = SessionStore()
     let pulse = Pulse()
+    let statusStore = StatusStore()
     let screen = RemoteScreen()
     @Published var screenOpen = false { didSet { screen.paused = !screenOpen } }
     @Published var signingIn = false
-    @Published var status: Status? { didSet { seedStore.set(status?.iosApps); sessionStore.set(status?.claude.sessions ?? []) } }
+    var status: Status? {
+        get { statusStore.status }
+        set { statusStore.status = newValue; seedStore.set(newValue?.iosApps); sessionStore.set(newValue?.claude.sessions ?? []) }
+    }
     // Can't reach the Mac: said only once it has failed to answer for 8 s straight, and never in the first 6 s back in
     // front (Tailscale wakes up after the app does), so one missed reading or the bridge restarting never flips the app to
     // unreachable (Richard, 2026-11-10, of the TV app: "cant reach the mac is tailscale on keeps happening"). An answer
@@ -209,9 +224,22 @@ final class AppModel: ObservableObject {
         // An app opening or quitting on the Mac, or one of his apps coming or going, slides its row in or out with the list's
         // own animation; put in at once, the rows under it jumped a row's height in one frame (designer, CI 836207d: the
         // foot of Apps went 90→76 between two frames as TextEdit came and went, the page at rest at its end).
-        func rows(_ s: Status?) -> [String] { (s?.apps.filter { $0.mem != nil }.map { "\($0.pid)" } ?? []) + (s?.iosApps?.apps.map(\.id) ?? []) }
-        if status != nil, rows(status) != rows(fresh) { withAnimation(Motion.quick) { status = fresh } }
-        else { status = fresh }
+        // The same for anything that adds or takes away a row or a card: an alert arriving or going at the top of Status (the
+        // whole page under it moved down a row in one frame), a session, a sensor, a top process.
+        func rows(_ s: Status?) -> [String] {
+            guard let s else { return [] }
+            var r: [String] = s.apps.filter { $0.mem != nil }.map { "\($0.pid)" }
+            r += (s.iosApps?.apps ?? []).map { $0.id }
+            r += (s.alerts ?? []).map { "alert:" + $0.id }
+            r += s.claude.sessions.map { "session:" + $0.id }
+            r += (s.temps ?? []).map { "temp:" + $0.name }
+            r.append("procs:\(s.procs.count)")
+            r.append("health:\(s.healthBad ?? -1)")
+            return r
+        }
+        statusStore.moves = status != nil && rows(status) != rows(fresh)
+        if statusStore.moves { withAnimation(Motion.quick) { status = fresh } } else { status = fresh }
+        statusStore.moves = false
         IconCache.prefetch(fresh, api: api)
         openPending()
         // Status's histories read ahead, so a tile opens onto a drawn chart.

@@ -15,7 +15,7 @@ struct MacProApp: App {
     init() { AlertWatch.shared.install() }
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(model).environmentObject(model.liveStore)
+            RootView(seeds: model.seedStore).environmentObject(model).environmentObject(model.liveStore)
                 .otaOffer(model)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in
@@ -362,7 +362,10 @@ struct RootView: View {
     @AppStorage("celsius") private var celsius = false
     @State private var resets: [Int: Int] = [:]
     @ObservedObject private var ota = OTAInstaller.shared
-    private var updateCount: Int { model.status?.iosApps.map { UpdatesSection.updates($0).count } ?? 0 }
+    // His apps, set only when they change: the root never redraws for a reading (StatusStore).
+    @ObservedObject private var seeds: SeedStore
+    init(seeds: SeedStore) { _seeds = ObservedObject(wrappedValue: seeds) }
+    private var updateCount: Int { seeds.seed.map { UpdatesSection.updates($0).count } ?? 0 }
     // A new colour redraws the other tabs; Settings, where it was picked, stays put so the swatch can animate.
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
     var body: some View {
@@ -536,6 +539,14 @@ struct Screen<Content: View>: View {
     init(tab: Int, title: String, listed: Bool = true, @ViewBuilder content: @escaping (Status, Side) -> Content) {
         self.tab = tab; self.title = title; self.listed = listed; self.content = content
     }
+    // The status this tab shows. Taken from the store (never watched through the model, whose every landing redrew the whole
+    // app), and only while this is the tab in front: a tab behind takes the latest as it comes forward.
+    @State private var shown: Status?
+    private func take(_ s: Status?) {
+        guard let s else { return }
+        guard model.tab == tab || shown == nil else { return }
+        if model.statusStore.moves { withAnimation(Motion.quick) { shown = s } } else { shown = s }
+    }
     @ViewBuilder var connecting: some View {
         if !Notice.shows(model) { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) } }
     }
@@ -548,7 +559,7 @@ struct Screen<Content: View>: View {
                 // At the cards' edge and as far down as the system's large title sat, so nothing moved but its behaviour.
                 Section { paneTitle(side).padding(.top, TopEdge.statusBar < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right, Notice.shows(model) { Section { Notice() } }
-                if let s = model.status { content(s, side) }
+                if let s = shown ?? model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
             }
             // One gap between the blocks on Status, where they sit on the page's own background.
@@ -622,7 +633,7 @@ struct Screen<Content: View>: View {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
                     .padding(.leading, 20)
             }
-            if let s = model.status { content(s, side) }
+            if let s = shown ?? model.status { content(s, side) }
             else if side != .right { connecting.frame(maxHeight: .infinity) }
         }
     }
@@ -651,6 +662,8 @@ struct Screen<Content: View>: View {
             .toolbarVisibility(.hidden, for: .navigationBar)
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
         }
+        .onReceive(model.statusStore.$status) { take($0) }
+        .onChange(of: model.tab) { _, t in if t == tab, let s = model.status { shown = s } }
     }
 }
 // The pages a tab's stack can show. Alone here, watching the open pages (NavStore), so a page opening or closing works
@@ -697,6 +710,11 @@ struct WebTile: View {
     var top: Double?
     var read: (Double) -> String = { _ in "" }
     var open: () -> Void = {}
+    var figure: Text {
+        let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
+        guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
+        return Text(value[..<gap]).font(big) + Text(value[gap...]).font(.system(size: 17, weight: .semibold))
+    }
     var body: some View {
         Button(action: open) {
             VStack(alignment: .leading, spacing: 1) {
@@ -706,11 +724,13 @@ struct WebTile: View {
                     Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
                 // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
-                Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
+                // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
+                // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
+                figure.lineLimit(1).contentTransition(.numericText())
                     // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                     // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                     .animation(NavTransit.shared.active ? nil : .easeOut(duration: 0.2), value: value)
-                Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
                 if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                     SparkLine(values: spark, top: top)
@@ -753,19 +773,14 @@ struct TempDials: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: LiveStore
     let s: Status
-    @State private var width: CGFloat = 0
-    // As many across as fit, then evened out, so the last row is never one short (eight dials are 4 + 4, not 3 + 3 + 2).
-    static func columns(_ n: Int, width: CGFloat) -> Int {
-        let fit = max(Int((width + 12) / 76), 1)
-        guard n > fit else { return max(n, 1) }
-        let rows = (n + fit - 1) / fit
-        return (n + rows - 1) / rows
-    }
     var body: some View {
         let _ = SwipeLog.mark("dials body")
-        let temps = store.live?.temps ?? s.temps ?? []
-        let across = width > 0 ? Self.columns(temps.count, width: width) : 3
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: across), spacing: 16) {
+        // The status's sensors, with the live reading's figures: a live reading with fewer (or none) never takes a row away.
+        let live = store.live?.temps ?? []
+        let temps = (s.temps ?? live).map { t in live.first { $0.name == t.name } ?? t }
+        // Laid out in the one pass from the width it is given (EvenGrid): read back with onGeometryChange, the grid was
+        // three across for its first frame each time it was built, then four, and the page grew and shrank by a row.
+        EvenGrid(spacing: 12, rowSpacing: 16) {
             ForEach(temps) { t in
                 VStack(spacing: 6) {
                     ArcGauge(Heat.level(t.c), heat: true, ticks: 32, length: 7, width: 2.2) {
@@ -780,7 +795,46 @@ struct TempDials: View {
             }
         }
         .padding(.vertical, 6)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+}
+
+// As many across as fit (76 pt each), then evened out, so the last row is never one short (eight dials are 4 + 4, not
+// 3 + 3 + 2). Columns are equal; each row is as tall as its tallest, items at its top.
+struct EvenGrid: Layout {
+    var spacing: CGFloat = 12
+    var rowSpacing: CGFloat = 16
+    static func columns(_ n: Int, width: CGFloat) -> Int {
+        let fit = max(Int((width + 12) / 76), 1)
+        guard n > fit else { return max(n, 1) }
+        let rows = (n + fit - 1) / fit
+        return (n + rows - 1) / rows
+    }
+    private func grid(_ width: CGFloat, _ subviews: Subviews) -> (across: Int, cell: CGFloat, rows: [CGFloat]) {
+        let across = Self.columns(subviews.count, width: width)
+        let cell = max((width - spacing * CGFloat(across - 1)) / CGFloat(across), 0)
+        var rows: [CGFloat] = []
+        for (i, v) in subviews.enumerated() {
+            let h = v.sizeThatFits(ProposedViewSize(width: cell, height: nil)).height
+            if i % across == 0 { rows.append(h) } else { rows[rows.count - 1] = max(rows[rows.count - 1], h) }
+        }
+        return (across, cell, rows)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 76 * 4
+        let g = grid(width, subviews)
+        return CGSize(width: width, height: g.rows.reduce(0, +) + rowSpacing * CGFloat(max(g.rows.count - 1, 0)))
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let g = grid(bounds.width, subviews)
+        var y = bounds.minY
+        for (r, h) in g.rows.enumerated() {
+            for c in 0..<g.across {
+                let i = r * g.across + c
+                guard i < subviews.count else { break }
+                subviews[i].place(at: CGPoint(x: bounds.minX + CGFloat(c) * (g.cell + spacing), y: y), proposal: ProposedViewSize(width: g.cell, height: h))
+            }
+            y += h + rowSpacing
+        }
     }
 }
 
@@ -796,7 +850,7 @@ struct Hero: View {
                 .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: 148))
                 .accessibilityLabel("Mac Pro, Late 2013")
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
-            Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
+            Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
             // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
             HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale || !model.gotFresh, route: model.route, pulse: model.pulse) {
                 model.tab = 5; model.macPage = .health
@@ -874,6 +928,9 @@ struct HeroChips: View {
 // The things reached for most, one tap from the top of the app. Done shows as a tick on the button; a problem, under it.
 struct QuickActions: View {
     @EnvironmentObject var model: AppModel
+    // The display's state as the last full status said, for the Display key between live readings.
+    var displayOn: Bool?
+    var displayOff = false
     @State private var done: Set<String> = []
     @State private var fails: [String: String] = [:]
     @State private var successes = 0
@@ -910,7 +967,7 @@ struct QuickActions: View {
             // 2026-11-11), and waits only when the Mac can't be reached or wants its code.
             button("screen", "macwindow", "Screen", waits: model.problem != nil || model.needsSignIn) { model.screenOpen = true }
             // Dims itself, in its own colours, to match the other three.
-            DisplayHoldButton().disabled(model.stale)
+            DisplayHoldButton(statusOn: displayOn, statusOff: displayOff).disabled(model.stale)
             button("copy", "doc.on.doc", "Copy from Mac") {
                 fails["copy"] = nil
                 Task {
@@ -1023,7 +1080,7 @@ struct StatusTab: View {
                 // (where a pull past the end rests) once a second. By place, a reading changes a row's words and nothing
                 // else; one line each, so no name can change a row's height either.
                 ForEach(Array(s.procs.prefix(8).enumerated()), id: \.offset) { i, p in
-                    LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)).lineLimit(1).place("proc-\(i)")
+                    LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)).lineLimit(1).monospacedDigit().place("proc-\(i)")
                 }
                 Button { model.processes = .cpu } label: {
                     HStack { Text("All processes").foregroundStyle(.primary); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
@@ -1041,7 +1098,7 @@ struct StatusTab: View {
             // Updates waiting are the number on the Apps tab, not a problem with the Mac.
             if let alerts = s.alerts?.filter({ $0.id != OTAInstaller.alertID }), !alerts.isEmpty { AlertBanner(alerts: alerts) }
             Section { Hero(s: s).place("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
-            if showQuick { Section { QuickActions().place("quick") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
+            if showQuick { Section { QuickActions(displayOn: s.displayOn, displayOff: s.screen == "display off").place("quick") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
         }
         if side != .left { graphics }
         if side != .right { text }
