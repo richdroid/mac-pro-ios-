@@ -79,7 +79,7 @@ struct RootView: View {
         // time, as a finger does: each keystroke's first results timed in the stand-in Mac's log.
         if pose == "searchempty" { SearchStore.shared.forgetAll(); for t in ["Sample Series", "Heat"] { SearchStore.shared.remember(t) }; SearchStore.show(model, text: ""); return }
         if pose.hasPrefix("searchtype") {
-            let words = pose == "searchtype-show" ? "sample series s1e2" : pose == "searchtype-slip" ? "haet" : "heat"
+            let words = pose == "searchtype-show" ? "alien s1e2" : pose == "searchtype-slip" ? "haet" : "heat"
             Task {
                 SearchStore.show(model, text: "")
                 try? await Task.sleep(nanoseconds: 3_500_000_000)

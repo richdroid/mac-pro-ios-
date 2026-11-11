@@ -38,7 +38,7 @@ enum SearchMatch {
         return out.trimmingCharacters(in: .whitespaces)
     }
     private nonisolated static let episodePattern = try! NSRegularExpression(
-        pattern: #"(?:^|\s)(?:s(?:eason)?\s*(\d{1,2})\s*(?:e(?:p(?:isode)?)?\s*(\d{1,3}))?|(\d{1,2})x(\d{1,3}))\s*$"#, options: .caseInsensitive)
+        pattern: #"(?:^|\s)(?:s(?:eason)?\s*(\d{1,2})\s*(?:e(?:p(?:isode)?)?\s*(\d{1,3})?)?|(\d{1,2})x(\d{1,3})?)\s*$"#, options: .caseInsensitive)
     nonisolated static func parse(_ text: String) -> SearchQuery {
         let f = fold(text)
         let ns = f as NSString
@@ -324,7 +324,9 @@ final class SearchStore: ObservableObject {
             }
             // The Mac's own answer found it by words the title may not hold (a show's original name): it stays, low.
             if m == nil, haystack != nil { m = 30 }
-            guard let m else { return }
+            guard var m else { return }
+            // An episode asked for: it's a show that's meant.
+            if query.season != nil, kind != .show { m -= 30 }
             seen.insert(k)
             var h = SearchHit(kind: kind, item: item, match: m, mine: mine.weight(item, kind), order: order)
             if kind == .show, let s = query.season { h.season = s; h.episode = query.episode }
@@ -532,6 +534,8 @@ struct SearchPage: View {
             }
         }
         .onChange(of: draft.text, initial: true) { _, t in store.typed(t, model: model) }
+        // The tab opened straight (at launch, or before anything asked for the keyboard): the field takes it.
+        .onAppear { if !draft.wantsFocus { draft.wantsFocus = true; draft.focusRequest += 1 } }
         .animation(.easeOut(duration: 0.2), value: draft.text.isEmpty)
     }
     var link: Bool { SendBar.isLink(draft.text) }
@@ -554,14 +558,17 @@ struct SearchPage: View {
                 }
                 // The keyboard comes up when the tab is opened from any other field, and when the tab itself is tapped:
                 // asked for until the field has it, as the Apps page's field did (open upright it came on some runs only).
+                // Open upright the field took the keyboard and lost it again half a second later as the tab settled
+                // (tv-search-ci 829e7c4: focus on, then off, in every open-upright pose), so it's held for the first
+                // three seconds, and given back if it goes.
                 .task(id: draft.focusRequest) {
                     guard draft.wantsFocus else { return }
-                    for _ in 0..<10 {
-                        try? await Task.sleep(nanoseconds: 250_000_000)
+                    var held = 0
+                    for _ in 0..<14 {
+                        try? await Task.sleep(nanoseconds: 220_000_000)
                         if Task.isCancelled { return }
-                        focused = true
-                        try? await Task.sleep(nanoseconds: 120_000_000)
-                        if focused { draft.wantsFocus = false; return }
+                        if !focused { focused = true; held = 0 } else { held += 1 }
+                        if held >= 8 { break }
                     }
                     draft.wantsFocus = false
                 }
@@ -609,16 +616,15 @@ struct OpensSearchField: View {
     }
 }
 
-// What's found, grouped. Open flat, shows and films on the left and the rest on the right.
+// What's found, grouped. Open flat, the top result on the left and the groups on the right.
 private struct ResultList: View {
     @Environment(TVModel.self) var model
     enum Part { case all, left, right }
     let results: SearchResults
     let part: Part
     @State private var opened: Set<SearchHit.Kind> = []
-    func inPart(_ k: SearchHit.Kind) -> Bool {
-        switch part { case .all: return true; case .left: return k == .show || k == .film; case .right: return !(k == .show || k == .film) }
-    }
+    // Open flat: the top result under the field on the left, every group on the right, so neither side sits empty.
+    func inPart(_ k: SearchHit.Kind) -> Bool { part != .left }
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             if SendBar.isLink(results.text) {
@@ -648,7 +654,7 @@ private struct ResultList: View {
                     }
                     .transition(.opacity)
                 }
-                if part != .right, results.isEmpty, !results.short {
+                if part != .left, results.isEmpty, !results.short {
                     if results.offline {
                         ContentUnavailableView("Can’t reach the Mac", systemImage: "wifi.exclamationmark", description: Text("Is Tailscale on?")).frame(maxWidth: .infinity).padding(.top, 30)
                     } else if results.settled {
