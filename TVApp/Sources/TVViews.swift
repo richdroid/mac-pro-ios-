@@ -2152,7 +2152,9 @@ struct BannerRow: View {
 private struct PaneRoom: ViewModifier {
     @Binding var width: CGFloat
     func body(content: Content) -> some View {
-        content.onGeometryChange(for: CGFloat.self) { $0.size.width - $0.safeAreaInsets.leading - $0.safeAreaInsets.trailing } action: { if abs($0 - width) > 0.5 { width = $0 } }
+        // The trailing inset capped at the side bar's own room, as Page caps it: the inset reported beside the bar is far
+        // wider than the bar (about 173 pt against 76), and taken whole it shrank the tiles (fifth pass).
+        content.onGeometryChange(for: CGFloat.self) { $0.size.width - $0.safeAreaInsets.leading - min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { if abs($0 - width) > 0.5 { width = $0 } }
     }
 }
 struct AppsTab: View {
