@@ -1472,7 +1472,7 @@ struct RemoteTab: View {
                     keysBlock(grid).frame(height: typing ? nil : grid.key + 12 + grid.play, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.bottom, typing ? max(0, keyboardInset - restInset) + 24 : 0)
+                .padding(.bottom, typing ? max(0, geo.frame(in: .global).maxY - keyboardTop) + 12 : 0)
             } else {
                 VStack(spacing: 14) { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity); keysBlock(grid) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1502,10 +1502,9 @@ struct RemoteTab: View {
         return CGRect(x: 0, y: g.size.height / 2 - 20, width: g.size.width, height: 40)
         #endif
     }
-    // The bottom inset with the keyboard up and at rest: upright, the split ignores the keyboard (or it turned the page
-    // into two columns as the keyboard came, Remote gate 3), and the keys' pane lifts its bar and keys by the difference.
-    @State private var keyboardInset: CGFloat = 0
-    @State private var restInset: CGFloat = 0
+    // Where the keyboard's top is on screen (infinity while it's down): upright the page ignores the keyboard, so the
+    // keys' pane lifts its bar and keys clear of it by what it covers (CI f4d20ff: an inset reading left the keys under it).
+    @State private var keyboardTop: CGFloat = .infinity
     // How wide the picture is drawn, for the keys in the pane under it to take the same width.
     @State private var pictureWidth: CGFloat = 0
     var body: some View {
@@ -1595,17 +1594,13 @@ struct RemoteTab: View {
         // Always a line under the title, blank when there's nothing to say, so "Remote" never moves as a show starts or
         // ends (r33: 7 pt up and down with the subtitle).
         .navigationSubtitle(state.isEmpty ? "\u{00A0}" : state)
-        // The page's bottom inset, the keyboard's included when it's up: for the keys' pane open upright, whose split
-        // ignores the keyboard so the page stays one column.
-        .background {
-            GeometryReader { g in
-                Color.clear.onChange(of: g.safeAreaInsets.bottom, initial: true) { _, b in
-                    keyboardInset = b
-                    if !typing { restInset = b }
-                }
-            }
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
+            if let r = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { keyboardTop = r.minY < UIScreen.main.bounds.height - 1 ? r.minY : .infinity }
         }
-        .onChange(of: panes, initial: true) { _, p in if keyboardInset - restInset < 50 { calmPanes = p } }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardTop = .infinity }
+        #endif
+        .onChange(of: panes, initial: true) { _, p in if keyboardTop == .infinity { calmPanes = p } }
         // The build's typing film ("-typeCycle YES"): the keyboard comes and goes every 5 s, as the keyboard key would
         // have it, so typing in and out is filmed in every posture without a tap (Remote gate 3).
         .task {
