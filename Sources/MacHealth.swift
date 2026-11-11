@@ -33,7 +33,7 @@ enum MacParts {
             case "oclp": return "OCLP patches"
             case "updates": return "macOS updates"
             case "filevault": return "FileVault"
-            case "autologin": return "Logs in by itself"
+            case "autologin": return "Auto-login"
             case "tailscale": return "Tailscale at login"
             case "work": return "Work in progress"
             case "keep": return "Files kept from /tmp"
@@ -42,7 +42,7 @@ enum MacParts {
         }
         switch p {
         case "tailscale": return "Tailscale"
-        case "serve": return "Tailscale address"
+        case "serve": return "Tailscale Serve"
         case "bridge": return "The bridge"
         case "sessions": return "Claude sessions"
         case "tv": return "TV link"
@@ -71,6 +71,22 @@ enum MacParts {
         case "keep": return "tray.full"
         default: return "circle"
         }
+    }
+    // The Mac's words for a part, in his: no capitals shouting, no paths or internal names, nothing the hint below repeats.
+    static func say(_ p: MacPart, check: Bool = false) -> String {
+        var t = p.say
+        if hand(p.part, check: check) != nil, let open = t.range(of: " (") { t = String(t[..<open.lowerBound]) }
+        if !check {
+            switch (p.part, p.bad) {
+            case ("serve", false): return "Points this app at the bridge"
+            case ("serve", true): return "Not pointing at the bridge"
+            case ("oclp", _):
+                if t.hasPrefix("HEALTHY: ") { t = "Healthy: " + t.dropFirst(9) }
+            default: break
+            }
+        } else if p.part == "keep", !p.bad { return "Saved, so nothing is lost in the restart" }
+        else if p.part == "oclp", t.hasPrefix("OCLP isn’t healthy: ") || t.hasPrefix("OCLP isn't healthy: ") { t = "Not healthy" }
+        return t
     }
     // What his hands would do, for a red part the Mac can't fix by itself.
     static func hand(_ p: String, check: Bool = false) -> String? {
@@ -160,6 +176,8 @@ struct MacPartRow: View {
     var check = false
     // Shown in place of the state: "Checking…", "Fixing…", "Waiting for the Mac".
     var pending: String?
+    // Red, but only because the Mac is still coming up after a restart: amber, with a spinner, not a failure yet.
+    var starting = false
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: MacParts.symbol(id)).font(.body).foregroundStyle(.secondary).frame(width: 26).padding(.top, 1)
@@ -167,8 +185,11 @@ struct MacPartRow: View {
                 Text(MacParts.name(id, check: check))
                 if let pending {
                     Text(pending).font(.footnote).foregroundStyle(.secondary)
+                } else if let p = part, starting, p.bad {
+                    Text("Still starting: " + MacParts.say(p, check: check)).font(.footnote).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else if let p = part {
-                    Text(p.state == "fixed" ? "Fixed: " + p.say : p.say).font(.footnote).foregroundStyle(p.bad ? Color.red : Color.secondary)
+                    Text(p.state == "fixed" ? "Fixed: " + MacParts.say(p, check: check) : MacParts.say(p, check: check)).font(.footnote).foregroundStyle(p.bad ? Color.red : Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if p.bad, let h = MacParts.hand(id, check: check) {
                         Text(h).font(.footnote).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
@@ -179,10 +200,12 @@ struct MacPartRow: View {
             sign.frame(width: 24)
         }
         .padding(.vertical, 2)
+        .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] + 38 }
         .accessibilityElement(children: .combine)
     }
     @ViewBuilder var sign: some View {
         if pending != nil, part == nil || pending == "Fixing…" { ProgressView().controlSize(.small) }
+        else if pending == nil, starting, part?.bad == true { ProgressView().controlSize(.small).tint(.orange) }
         else if pending != nil { Image(systemName: "circle.dashed").foregroundStyle(.secondary) }
         else if let p = part {
             Image(systemName: p.bad ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
@@ -214,6 +237,8 @@ struct MacHealthView: View {
         let known = report?.parts.map(\.part) ?? []
         return known.isEmpty ? MacParts.health : known
     }
+    // The first three minutes after the Mac answers again: a part not up yet is still starting.
+    var startingWindow: Bool { watch.backAt.map { now.timeIntervalSince($0) < 180 } ?? false }
     func pending(_ id: String) -> String? {
         if down { return "Waiting for the Mac" }
         if fixing != nil, bad.contains(where: { $0.part == id && MacParts.fixable.contains(id) }) { return "Fixing…" }
@@ -236,6 +261,7 @@ struct MacHealthView: View {
     struct Line { let symbol: String; let color: Color; let title: String; let detail: String }
     var bannerLine: Line? {
         func clock(_ s: TimeInterval) -> String { let t = max(0, Int(s)); return String(format: "%d:%02d", t / 60, t % 60) }
+        func minutes(_ s: TimeInterval) -> String { let m = max(1, Int((s / 60).rounded())); return m == 1 ? "1 minute" : "\(m) minutes" }
         if let a = watch.askedAt {
             let since = now.timeIntervalSince(a)
             if !watch.wentAway {
@@ -243,8 +269,8 @@ struct MacHealthView: View {
                 return Line(symbol: "arrow.clockwise.circle", color: .orange, title: "Restarting in about a minute", detail: since < 60 ? "Goes down in about \(clock(60 - since)). The app reconnects by itself." : "Going down any moment now. The app reconnects by itself.")
             }
             if let b = watch.backAt {
-                if bad.isEmpty, report != nil { return Line(symbol: "checkmark.circle.fill", color: .green, title: "Everything is up", detail: "Back \(clock(b.timeIntervalSince(a))) after the restart was asked.") }
-                return Line(symbol: "arrow.triangle.2.circlepath", color: .orange, title: "The Mac is back", detail: "Answering again after \(clock(b.timeIntervalSince(a))). Parts still starting are below.")
+                if bad.isEmpty, report != nil { return Line(symbol: "checkmark.circle.fill", color: .green, title: "Everything is up", detail: "Back \(minutes(b.timeIntervalSince(a))) after the restart was asked.") }
+                return Line(symbol: "arrow.triangle.2.circlepath", color: .orange, title: "The Mac is back", detail: "Back \(minutes(b.timeIntervalSince(a))) after the restart was asked. Parts still starting are below.")
             }
             return Line(symbol: "power.circle", color: .secondary, title: "The Mac is restarting", detail: "Asked \(clock(since)) ago. It usually takes three to five minutes; each part below fills in by itself as it comes back.")
         }
@@ -269,14 +295,26 @@ struct MacHealthView: View {
             } footer: { Text("Restarts what’s down on the Mac. Parts that need you say what to do.") }
         } else if let fixNote {
             Section { FailText(fixNote) }
+        } else if panes, let r = report, !down {
+            Section {
+                Label(bad.isEmpty ? "Nothing needs you" : "\(bad.count) need\(bad.count == 1 ? "s" : "") your hands", systemImage: bad.isEmpty ? "checkmark.circle" : "hand.raised")
+                Text("Checked \(Format.ago(ms: r.at)). It checks again every few seconds while this page is open.").font(.footnote).foregroundStyle(.secondary)
+            }
         }
     }
     func partsSection(heading: Bool) -> some View {
         Section {
             ForEach(ids, id: \.self) { id in
-                MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id)).place(id)
+                MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id), starting: startingWindow).place(id)
             }
-        } header: { if heading { Text(report.map { $0.parts.allSatisfy { !$0.bad } ? "All running" : "\($0.parts.filter(\.bad).count) need a look" } ?? "Checking") } }
+        } header: {
+            if heading {
+                Text(report.map { r in
+                    let n = r.parts.filter(\.bad).count
+                    return n == 0 ? "All running" : startingWindow ? "\(n) still starting" : "\(n) need\(n == 1 ? "s" : "") a look"
+                } ?? "Checking")
+            }
+        }
     }
     func list(_ side: Side) -> some View {
         ScrollViewReader { proxy in
@@ -284,8 +322,10 @@ struct MacHealthView: View {
                 Section { PaneHeading(title: title, shown: side != .right) }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right, bannerLine != nil { Section { banner } }
+                // Folded or upright, Fix comes before the parts, where he looks first; open flat it has the right pane.
+                if side == .all { fixSection }
                 if side != .right { partsSection(heading: true) }
-                if side != .left { fixSection }
+                if side == .right { fixSection }
             }
             .contentMargins(.top, 4, for: .scrollContent)
             .scrollsUnder(side == .right ? 1 : 0)
@@ -297,6 +337,7 @@ struct MacHealthView: View {
             if panes { FoldSplit { list(.left) } right: { list(.right) } } else { list(.all) }
         }
         .holdsWhileMoving("machealth")
+        .modifier(TabBarFade())
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
         .pushedTitle()
@@ -325,6 +366,11 @@ struct MacHealthView: View {
             misses.hit(); away = false
             report = r
             if watch.active {
+                // The Mac's uptime shorter than the time since he asked: it restarted, even if this page never saw it go.
+                if !watch.wentAway, let a = watch.askedAt, let up = model.status?.uptime, up + 30 < Date().timeIntervalSince(a) {
+                    watch.wentAway = true
+                    watch.backAt = Date().addingTimeInterval(-up)
+                }
                 if watch.wentAway, watch.backAt == nil { watch.backAt = Date() }
                 // All up after coming back: the restart is over; the page keeps saying so until he leaves.
                 if watch.backAt != nil, r.parts.allSatisfy({ !$0.bad }) { let b = watch.backAt; watch.done(); watch.backAt = b }
@@ -403,7 +449,7 @@ struct MacRestartView: View {
                 if side != .left {
                     Section {
                         if !red.isEmpty || (checks == nil && failure != nil && !checking) {
-                            if !red.isEmpty { Label(red.count == 1 ? "Fix \(MacParts.name(red[0].part, check: true).lowercased(with: nil)) first." : "Fix the \(red.count) red checks first.", systemImage: "exclamationmark.triangle.fill")
+                            if !red.isEmpty { Label(red.count == 1 ? "Restart waits until \(MacParts.name(red[0].part, check: true)) is green." : "Restart waits until the \(red.count) red checks are green.", systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.red) }
                             Button { Task { await check() } } label: { Label("Check again", systemImage: "arrow.clockwise") }.disabled(checking)
                         }
@@ -435,6 +481,7 @@ struct MacRestartView: View {
             else { list(.all) }
         }
         .holdsWhileMoving("macrestart")
+        .modifier(TabBarFade())
         .background(groupedBackground.ignoresSafeArea())
         .topEdge()
         .pushedTitle()

@@ -133,10 +133,10 @@ struct ShareSendView: View {
                 if ShareAddress.base == nil {
                     Section { Text("Open the Mac Pro app once so this knows where your Mac is.").foregroundStyle(.secondary) }
                 } else if queue.jobs.isEmpty {
-                    Section { HStack(spacing: 12) { ProgressView(); Text(started ? "Nothing here can be sent." : "Getting it ready…").foregroundStyle(.secondary) } }
+                    Section { HStack(spacing: 12) { if !started { ProgressView() }; Text(started ? "Nothing here can be sent." : "Getting it ready…").foregroundStyle(.secondary) } }
                 } else {
                     Section {
-                        ForEach(queue.jobs) { SendJobRow(job: $0, retry: { [queue, job = $0] in queue.retry(job) }, tint: blue) }
+                        ForEach(queue.jobs) { SendJobRow(job: $0, retry: { [queue, job = $0] in queue.retry(job) }, tint: blue, remove: { [queue, job = $0] in queue.remove(job) }) }
                     } footer: {
                         if allSent { Label("Sent to your Mac", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.body.weight(.semibold)).padding(.top, 6) }
                         else { Text("To Downloads › From iPhone on the Mac, over Tailscale.") }
