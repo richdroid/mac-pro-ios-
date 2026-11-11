@@ -1231,6 +1231,8 @@ struct RemoteTab: View {
         guard !model.staleStatus, let s = model.status else { return "Connecting…" }
         // The wake button says the rest.
         if s.screen == "asleep" { return "Asleep" }
+        // The box is up but the television isn't showing it (HDMI-CEC): that is what's true, not what the box has on.
+        if let a = s.away { return a.line }
         if s.screen == "screensaver" { return "Screensaver" }
         // What's playing, by name, rather than the app it's playing in. Only while it's what's on, never one left behind.
         if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty {
@@ -1259,6 +1261,8 @@ struct RemoteTab: View {
     }
     @State private var hadSession = false
     var asleep: Bool { !model.staleStatus && model.status?.screen == "asleep" }
+    // The television off, or on another input, while the box is awake: treated as asleep is, with its own one key.
+    var away: TVStatus.Away? { model.staleStatus ? nil : model.status?.away }
     // The Mac answers but the TV doesn't: the keys can't reach it, so they show it.
     var unreachable: Bool { model.status.map { !$0.online } ?? false }
     // While something plays, where it is and a bar to move it, right under the picture, as on the Playing tab.
@@ -1301,7 +1305,7 @@ struct RemoteTab: View {
         if session && seriesOn { ZStack { EpisodesLine() }.frame(height: 46) } else { EpisodesLine() }
     }
     // Asleep or out of reach, the picture is dark with a moon or a cut wire, not the last frame passed off as now.
-    var dark: Bool { asleep || unreachable }
+    var dark: Bool { asleep || unreachable || away != nil }
     static let dim = 0.35
     func picture(closable: Bool) -> some View {
         MirrorView(store: model.mirrorStore, closable: closable && !dark)
@@ -1314,7 +1318,7 @@ struct RemoteTab: View {
                     ZStack {
                         // Fully black: a faint last frame through it read as the TV still showing something (r26).
                         Color.black
-                        Image(systemName: unreachable ? "wifi.slash" : "moon.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+                        Image(systemName: unreachable ? "wifi.slash" : away?.glyph ?? "moon.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55))
                     }
                     .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
                     .transition(.opacity)
@@ -1330,11 +1334,14 @@ struct RemoteTab: View {
     }
     // Asleep, one big way to wake it over the pad, which wakes it too.
     @ViewBuilder var wake: some View {
-        if asleep {
-            Button { model.tick(); model.key("wake") } label: {
+        // The television off with the box still up is the same key, in the same place: it turns the television on.
+        if asleep || away == .off {
+            Button { model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") } } label: {
                 Label("Wake the TV", systemImage: "power").font(.title3.weight(.semibold)).padding(.horizontal, 26).frame(height: 60)
             }
             .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule()).transition(.opacity.combined(with: .scale(scale: 0.9)))
+        } else if let away, !unreachable {
+            TelevisionKey(away: away).transition(.opacity.combined(with: .scale(scale: 0.9)))
         }
     }
     var keys: some View {
@@ -1379,9 +1386,9 @@ struct RemoteTab: View {
     }
     // The pad, dimmed while the TV can't be reached. Asleep, its keys step back and the wake button sits in the empty ring.
     var pad: some View {
-        DPad(bare: asleep).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep)
+        DPad(bare: asleep || away != nil).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
             .overlay { wake }
-            .settledAnimation(.easeInOut(duration: 0.25), value: asleep)
+            .settledAnimation(.easeInOut(duration: 0.25), value: asleep || away != nil)
     }
     // Only when the music is what's on: a song's player beside a film's was two now-playings on one TV.
     // Dimmed and out of reach with every other key while the TV can't be reached (its ▶ stayed bright and live, r32).

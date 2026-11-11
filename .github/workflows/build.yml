@@ -542,7 +542,7 @@ jobs:
             # nothing on, its edges in line with the bar's), nothing on, asleep, a film with its poster, YouTube with none
             # (no launcher frame left from before), a stream with no picture to be had (a TV glyph, never a moon), the TV out
             # of reach (everything that acts on it dimmed, the app tiles included) and Mint's music on its own.
-            for S in repisode ridle rasleep rfilm ryoutube rstall roffline rmint; do
+            for S in repisode ridle rasleep rtvoff rtvaway rtvawayfilm rfilm ryoutube rstall roffline rmint; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 0
               sleep 8
               xcrun simctl io "$DEVICE" screenshot --display=3 dist/tv-remote-$S-portrait.png
@@ -588,10 +588,17 @@ jobs:
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-playing-$S$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             done
-            for S in rasleep roffline ryoutube rmint ridle repisode rfilm rstall; do
+            for S in rasleep rtvoff rtvaway rtvawayfilm roffline ryoutube rmint ridle repisode rfilm rstall; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 0
               sleep 8
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-remote-$S$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            done
+            # Status's row for the television behind the box (HDMI-CEC): on another device, off, and no row with CEC off on the box.
+            for S in rtvaway rtvoff rcecoff; do
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 5
+              sleep 8
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-status-$S$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             done
             # The episodes over the Remote, and a drag along the bar held with its time bubble up, while an episode plays.

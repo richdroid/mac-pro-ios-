@@ -481,7 +481,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutubebare|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; return tvReal(q, s, path, query, json); }
@@ -536,13 +536,20 @@ function tvPose(q, s) {
     q.on('close', () => { clearTimeout(wait); clearInterval(timer); });
     return true;
   }
-  if (/^r(asleep|offline|youtube|youtubebare|mint|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
+  if (/^r(tvoff|tvawayfilm|tvaway|cecoff|asleep|offline|youtube|youtubebare|mint|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
     const v = JSON.parse(tvStatus), now = Date.now();
     // Which scene's status the app really asked for, so a shot showing the sample's song can be told apart from one that
     // never reached its scene (review of dfd490e: ryoutubebare showed Mint's Sample Song).
     try { fs.appendFileSync('/tmp/tv-scene-status.log', scene + '\n'); } catch {}
     if (scene === 'rasleep') { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'roffline') { v.online = false; delete v.session; }
+    // The television behind the box, over HDMI-CEC: turned off with its own remote while the box is awake; on another
+    // device that names itself; and CEC off on the box (only Status says so).
+    if (scene === 'rtvoff') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'off', input: 'box', brand: 'Sony' }; }
+    if (scene === 'rtvaway') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'on', input: 'other', source: 'PlayStation 5', brand: 'Sony', keys: true, others: ['PlayStation 5'] }; }
+    // His real case: a film left paused for the PlayStation. The bar and keys stay under the dark picture; play brings the TV back.
+    if (scene === 'rtvawayfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: false, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; v.cec = { enabled: true, tv: 'on', input: 'other', source: 'PlayStation 5', brand: 'Sony' }; }
+    if (scene === 'rcecoff') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: false }; }
     // A video the Mac hasn't found yet: no still, no length, only where it's got to (the yt-dlp search can take half a
     // minute or miss; r35: the Playing tab showed an empty box).
     if (scene === 'ryoutubebare') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Lil B - Gotham City [ Music Video ] [ Official ]', 'Lil B'], position: 83000, sampledAt: now, canSeek: false }; }
