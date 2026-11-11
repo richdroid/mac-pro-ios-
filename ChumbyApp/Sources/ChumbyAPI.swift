@@ -500,6 +500,15 @@ extension ChumbyState {
         }
         return o
     }
+    // His usual alarm, for the one tap offered when nothing at all is set (the calendar's wake-ups switched off, and his
+    // own alarms off): of his own repeating alarms that are off, the one that rang most recently by the Chumby's ring
+    // log, else the first in his list. Never a calendar alarm, a nap, a catch-up or a one-off (which could be past).
+    func usualAlarm(rings: [Ring]) -> Alarm? {
+        let mine = alarms.filter { !$0.isOn && !$0.isCalendar && !$0.isHelper && !$0.isPlaceholder && $0.when != "once" }
+        func last(_ a: Alarm) -> Double { rings.filter { $0.name == a.name }.map(\.t).max() ?? 0 }
+        guard let newest = mine.max(by: { last($0) < last($1) }) else { return nil }
+        return last(newest) > 0 ? newest : mine.first
+    }
     // What setting or replacing a nap may cost: the nap still to come, taken away by the user's own press.
     func napPermit() -> SavePermit { SavePermit(userOff: Set(alarms.filter { $0.name == "Nap" && $0.when == "once" }.map(\.key))) }
     // Whether `s` was answered after `since` by the Chumby's own clock: a copy the Mac kept from before a request is

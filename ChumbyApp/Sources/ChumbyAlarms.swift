@@ -824,9 +824,27 @@ struct AlarmsTab: View {
             // A nap starting or called off rolls the time over rather than swapping it.
             .animation(.snappy, value: n.at)
         } else {
-            HStack(spacing: 10) {
-                OctopusMark(color: ChumbyPalette.hex(0x2c5bae).opacity(0.7), blink: 0.08).frame(width: 34)
-                Text("No alarm set. Sleep in.").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    OctopusMark(color: ChumbyPalette.hex(0x2c5bae).opacity(0.7), blink: 0.08).frame(width: 34)
+                    Text("No alarm set. Sleep in.").foregroundStyle(.secondary)
+                }
+                // With the calendar's wake-ups switched off and nothing else set, his usual alarm is one tap away, named,
+                // so "nothing set" is never where switching the calendar off quietly leaves him (2026-11-10). Switching
+                // on an alarm already in the list is not a new alarm, so nothing else is touched.
+                if !wake.rules.enabled, !model.unreachable, let a = model.deviceState.usualAlarm(rings: model.rings) {
+                    Button { model.change(.toggle(a, true)) } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Turn on \(a.spoken)", systemImage: "alarm.fill").font(.body.weight(.semibold))
+                                .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
+                            Text("\(a.clock) \(a.meridiem) · \(a.whenText) · \(a.soundText)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Switches that alarm on")
+                    MarkNote(mark: a.key)
+                }
             }
         }
     }

@@ -127,6 +127,22 @@ do {
     expect(AlarmChange.toggle(a, false).permit(in: s).userOff == [a.key] && AlarmChange.toggle(a, true).permit(in: s).userOff.isEmpty, "only switching off is a loss by hand")
 }
 
+section("his usual alarm")
+do {
+    let hell = alarm("hell nah", "weekday", "885", on: false), omg = alarm("omg", "daily", "660", on: false)
+    let cal = once("Calendar: Shift", at(2026, 11, 12, 14, 40), on: false), pastOne = once("", at(2026, 11, 10, 10), on: false)
+    var nap = once("Nap", at(2026, 11, 10, 16), on: false); nap.enabled = "0"
+    let s = state([pastOne, cal, nap, hell, omg])
+    expect(s.usualAlarm(rings: [])?.name == "hell nah", "with no ring on record, the first of his own repeating alarms")
+    expect(s.usualAlarm(rings: [Ring(t: 100, name: "hell nah"), Ring(t: 200, name: "omg"), Ring(t: 300, name: "Calendar: Shift"), Ring(t: 400, name: "")])?.name == "omg", "else the one that rang most recently; calendar alarms, naps and one-offs never count")
+    var on = omg; on.enabled = "1"
+    expect(state([hell, on]).usualAlarm(rings: [Ring(t: 200, name: "omg")])?.name == "hell nah", "an alarm already on isn't offered")
+    expect(state([cal, nap, pastOne]).usualAlarm(rings: []) == nil, "nothing of his own to offer, nothing offered")
+    var t = state([hell, omg]); let saved = t.alarms
+    AlarmChange.toggle(omg, true).apply(&t)
+    expect(ChumbyState.switchedOff(saved: saved, sending: t.alarms).isEmpty && t.alarms[1].isOn && !t.alarms[0].isOn, "turning it on touches no other alarm")
+}
+
 section("naps")
 do {
     let real = Int(Date().timeIntervalSince1970 / 60)
