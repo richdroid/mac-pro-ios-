@@ -798,6 +798,10 @@ function tvReal(q, s, path, query, json) {
 // wallpaper so it's about as big as the Mac's, and everything sent at 358 KB/s, the speed his sessions showed.
 // With `sleepy`, the first whole-screen request gets a 2 x 2 rectangle, as from a Mac whose display was asleep.
 function mockScreen(req, sock, slow = false, sleepy = false) {
+  // When each step happens, against the film's own launch time in the log, to tell the phone's wait from the stand-in's.
+  const opened = Date.now();
+  const stamp = what => console.log(`mock screen ${slow ? 'slow' : sleepy || 'plain'} ${what} at ${Date.now()} (+${Date.now() - opened} ms)`);
+  stamp('upgrade');
   const busy = slow || sleepy;
   let dozing = sleepy;
   const key = req.headers['sec-websocket-key'];
@@ -941,7 +945,7 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
         init.writeUInt16BE(W, 0); init.writeUInt16BE(H, 2);
         Buffer.from([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]).copy(init, 4);
         init.writeUInt32BE(4, 20); init.write('Mock', 24);
-        later(init);
+        later(init); stamp('server init');
         continue;
       }
       if (!msgs.length) return;
@@ -956,7 +960,7 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
       if (t === 0) bpp = m[4] === 16 ? 16 : 32;
       if (t === 3) {
         if (m[1] === 0 && dozing) { dozing = false; if (sleepy === 'idle') sent = scroll; update(0, 0, 2, 2, scroll); }
-        else if (m[1] === 0) { count++; sent = scroll; update(0, 0, W, H, scroll); }
+        else if (m[1] === 0) { count++; sent = scroll; stamp('whole asked'); update(0, 0, W, H, scroll); }
         else { pending++; answer(); }
       }
     }

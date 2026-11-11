@@ -33,6 +33,13 @@ final class AppModel: ObservableObject {
     let pulse = Pulse()
     let screen = RemoteScreen()
     @Published var screenOpen = false { didSet { screen.paused = !screenOpen } }
+    // The Screen opens in place, with no slide up from the foot: its parts appear where they belong as the slide was
+    // ending, so the open flat dock rose the last 49 pt into place (the designer's fourth review), and Status went
+    // under it piece by piece. Closing still slides away.
+    func openScreen() {
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { screenOpen = true }
+    }
     @Published var signingIn = false
     @Published var status: Status? { didSet { seedStore.set(status?.iosApps); sessionStore.set(status?.claude.sessions ?? []) } }
     // Can't reach the Mac: said only once it has failed to answer for 8 s straight, and never in the first 6 s back in
