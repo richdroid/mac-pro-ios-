@@ -898,7 +898,8 @@ struct QuickActions: View {
             Image(systemName: done.contains(id) ? "checkmark" : icon).font(.system(size: 20)).foregroundStyle(macBlue.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 52, height: 52).background(Color(white: 0.16).opacity(dim), in: Circle())
-            Text(title).font(.footnote).foregroundStyle(.primary.opacity(dim)).lineLimit(1).minimumScaleFactor(0.8)
+            // Two lines rather than shrunk: folded, "Copy from Mac" squeezed small against its neighbour.
+            Text(title).font(.footnote).foregroundStyle(.primary.opacity(dim)).multilineTextAlignment(.center).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             if let f = fails[id] {
                 Text(f).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                     .transition(.opacity)
@@ -1626,12 +1627,12 @@ struct UpdateLog: View {
                     }
                 }
                 // The list rows' insets, so its lines start where every card's text does (designer, 2026-11-11).
-                .padding(.horizontal, 20).padding(.vertical, 14)
+                .padding(.horizontal, 20)
                 .textSelection(.enabled)
             }
-            // A line scrolled up under the card's top fades out rather than being cut flat by the edge. The fade is
-            // within the top inset, so a short log's first line at rest is untouched.
-            // A full line deep, and only once the log is scrolled off its top, so a short log's first line is untouched.
+            // A line scrolled up fades out a full line deep, and only once the log is scrolled off its top, so a short
+            // log's first line is untouched. The scroll view stops 14 pt inside the card's top and foot, so the fade has
+            // reached nothing before any glyph meets the edge it's cut at.
             .mask {
                 VStack(spacing: 0) {
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: scrolledDown ? 30 : 0)
@@ -1643,7 +1644,8 @@ struct UpdateLog: View {
             .scrollEdgeEffectHidden(true, for: .top)
             .scrollBounceBehavior(.basedOnSize)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, h in contentHeight = h }
-            .frame(maxHeight: contentHeight ?? CGFloat(lines.count) * 21 + 28)
+            .frame(maxHeight: contentHeight ?? CGFloat(lines.count) * 21)
+            .padding(.vertical, 14)
             .background(Color(white: 0.06), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .task {
