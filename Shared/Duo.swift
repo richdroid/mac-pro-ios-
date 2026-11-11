@@ -38,6 +38,10 @@ struct PaneReader<C: View>: View {
     // back with Back keeps its size and safe area the whole way (CI 8b7b68e, the hold off: not one reading of a page's
     // size changed through five pops), so only the swipe needs a page's size held.
     private(set) var underFinger = false
+    // Posted as each move ends, for a view that wants the moment without being worked out again for it.
+    nonisolated static let ended = Notification.Name("duo.move.ended")
+    // Called as each move ends: what an app kept back while a page was moving (a reading from its device) lands then.
+    @ObservationIgnored var onEnd: (() -> Void)?
     #if canImport(UIKit)
     @ObservationIgnored private let stacks = NSHashTable<UINavigationController>.weakObjects()
     @ObservationIgnored private weak var current: AnyObject?
@@ -86,7 +90,13 @@ struct PaneReader<C: View>: View {
             }
         }
     }
-    private func end() { current = nil; SwipeLog.note("move ended"); if active { active = false }; if underFinger { underFinger = false } }
+    private func end() {
+        current = nil; SwipeLog.note("move ended")
+        if active { active = false }
+        if underFinger { underFinger = false }
+        onEnd?()
+        NotificationCenter.default.post(name: Self.ended, object: nil)
+    }
     // Asked as a reading lands: true while any known stack is mid-move, and the move is noted if it wasn't yet.
     func moving() -> Bool {
         if let c = stacks.allObjects.lazy.compactMap(\.transitionCoordinator).first { begin(c); return true }
@@ -278,11 +288,14 @@ struct FoldSplit<L: View, R: View>: View {
     let left: L, right: R
     init(@ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) { self.left = left(); self.right = right() }
     typealias Split = FoldSeenSplit
-    // The split as last read at rest. The fold is read in the view's own space, so while a page slides off (or the page
-    // under it slides back) the crease seemed to travel across it, and the seam followed: the left pane narrowed to a
-    // third as the page went. Held while a move is in flight.
-    @State private var held: Split?
-    private var transit = NavTransit.shared
+    // The split this page lays out by: the one it last read at rest with the crease in sight, for the size of page it
+    // was read for. The fold is read in the view's own space, so while a page slides off (or the page under it slides
+    // back) the crease seemed to travel across it, and the seam followed: the left pane narrowed to a third as the page
+    // went. A reading taken while a move is in flight, or with no crease in it, is never taken up.
+    // Laying out never asks whether a move is in flight, only each new reading does: a page that watched for moves was
+    // worked out again as every push and pop began and again as it ended, both panes of it, on the main thread at the
+    // moment the move should start (CI f7a119a: Status's two panes three times over in one pop).
+    @State private var held: (key: String, split: Split)?
     var body: some View {
         #if os(iOS)
         if #available(iOS 27.1, *) {
@@ -300,12 +313,20 @@ struct FoldSplit<L: View, R: View>: View {
                 let outer: CGFloat = wide && !folded ? 14 : 0
                 let read = Split(ratio: ratio, gutter: gutter, outer: outer)
                 // Open flat with no crease in the reading: covered, or not in front yet.
-                let blind = wide && !folded && crease == nil
-                let key = "\(Int(g.size.width))x\(Int(g.size.height))"
-                let known = FoldSeen.bySize[key] ?? FoldSeen.last
-                let live = blind ? (known ?? read) : read
-                // Asked here, as the split is laid out, so a move's first frame is already the held one.
-                let use = transit.inFlight ? (held ?? known ?? live) : live
+                let open = wide && !folded
+                let blind = open && crease == nil
+                // A split belongs to one size of page in one posture; turned or folded, the page reads afresh.
+                let key = "\(Int(g.size.width))x\(Int(g.size.height))\(open ? " open" : "")"
+                // Its own last reading at rest; else what a page this size last read (a tab first shown under a page);
+                // else what any page last read open flat; else, with nothing to go by yet, what it reads now.
+                let use = (held?.key == key ? held?.split : nil) ?? (open ? FoldSeen.bySize[key] ?? FoldSeen.last : nil) ?? read
+                // A reading at rest with the crease in sight (or where there's none to see: folded, upright) is the one to
+                // lay out by and to remember.
+                let take: () -> Void = {
+                    guard !blind, !NavTransit.shared.moving() else { return }
+                    if open { FoldSeen.bySize[key] = read; FoldSeen.last = read }
+                    if held?.key != key || held?.split != read { held = (key, read) }
+                }
                 ArrangementView {
                     left.padding(.leading, use.outer).padding(.trailing, use.gutter).splitArrangementLayoutRatio(use.ratio)
                 } secondary: {
@@ -313,15 +334,12 @@ struct FoldSplit<L: View, R: View>: View {
                 }
                 .arrangementViewStyle(.split)
                 .onChange(of: read, initial: true) { _, v in
-                    // Only a reading taken at rest with the crease in sight (or where there's none to see: folded, upright)
-                    // is one to hold or to remember.
-                    if !NavTransit.shared.moving(), !blind {
-                        held = v
-                        if wide, !folded { FoldSeen.bySize[key] = v; FoldSeen.last = v }
-                    }
-                    SwipeLog.note("split ratio \(v.ratio.map { String(format: "%.3f", $0) } ?? "nil") gutter \(Int(v.gutter))\(blind ? " (no crease)" : "")\(transit.inFlight ? " (held)" : "")")
+                    take()
+                    SwipeLog.note("split ratio \(v.ratio.map { String(format: "%.3f", $0) } ?? "nil") gutter \(Int(v.gutter))\(blind ? " (no crease)" : "")\(NavTransit.shared.inFlight ? " (moving)" : "") using \(use.ratio.map { String(format: "%.3f", $0) } ?? "nil")")
                 }
-                .onChange(of: transit.active) { _, now in if !now { held = live } }
+                .onChange(of: key) { _, _ in take() }
+                // What it read as a move ended is a reading at rest too, though it didn't change to become one.
+                .onReceive(NotificationCenter.default.publisher(for: NavTransit.ended)) { _ in take() }
             }
         } else { sideBySide }
         #else
