@@ -479,6 +479,10 @@ struct ProgressPlaceholder: View {
 }
 
 // A round glass button that does something here, rather than press a key on the TV.
+// The transport's and the pad's keys: glass with a neutral tint, so a row of them reads as one set over any background.
+// Clear glass took the wall's colours, so over a film's art ⏮ looked red and ⏭ purple, five keys in a row mismatched
+// (gate 276, Playing folded; decided with the designer).
+extension Glass { static var key: Glass { .regular.tint(Color(white: 0.16, opacity: 0.55)).interactive() } }
 struct GlassButton: View {
     @Environment(TVModel.self) var model
     let icon: String, label: String
@@ -488,7 +492,7 @@ struct GlassButton: View {
         Button { model.tick(); action() } label: {
             Image(systemName: icon).font(.system(size: size * 0.36, weight: .medium)).frame(width: size, height: size).contentShape(Circle())
         }
-        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
+        .buttonStyle(.plain).glassEffect(.key, in: Circle()).accessibilityLabel(label)
     }
 }
 
@@ -626,6 +630,13 @@ enum SeriesInfo {
     }
 }
 
+extension StremioEpisode {
+    // Its name as the list says it: "2 · The One Where…", the number once; "Episode 2" only when it has no name of its own
+    // (gate 276: rows mixed "Episode 1" with "Episode 2: The One…", which says the number twice).
+    var ownName: String? { Wording.episodeName(name, number: episode) }
+    var rowTitle: String { ownName.map { "\(episode) · \($0)" } ?? "Episode \(episode)" }
+}
+
 // One episode list for everywhere a show is picked from: the series page, and over the Remote and Playing while it's on.
 // Seasons as numbers after the word, then the episodes: a still, its number and name, how long it runs, a tick once
 // watched, and the bar of how far in on the one he's on. The list scrolls itself to that one.
@@ -679,7 +690,7 @@ struct EpisodePicker: View {
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
                     // Whole names: up to three lines, never cut to "Fi…" (r26).
-                    Text(e.title).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
+                    Text(e.rowTitle).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                     // What it's about, in one line, so the row says more than its number.
                     if let about, !about.isEmpty { Text(about).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
@@ -983,11 +994,19 @@ struct PlayingVideo: View {
     let ended: Bool
     @State private var still: String?
     @State private var about: String?
+    // The episode's own name from the show's list, when the TV's line has none ("S1 E2" alone) or a placeholder.
+    @State private var ownName: (season: Int, episode: Int, name: String)?
     @State private var pictureCap: CGFloat = 300
     var series: NextUp.Series? { session.pkg == "com.stremio.one" ? nextUp.series : nil }
     var body: some View {
         let name = session.showName
-        let episode = session.episodeLine
+        // The hero names the episode as its row does (gate 276: "S1 E2 · Episode 2" over a row "Episode 2: The One…").
+        let episode: String? = {
+            guard let line = session.episodeLine else { return nil }
+            // Only the name of this very episode: a moment after a change, the list may still be the last one's.
+            guard let own = ownName, let se = session.seasonEpisode, own.season == se.season, own.episode == se.episode else { return line }
+            return "S\(se.season) E\(se.episode) · \(own.name)"
+        }()
         VStack(alignment: .leading, spacing: 14) {
             // One 16:9 picture, never taller than about 38 % of the page, so the title, the bar and the keys are all on the
             // first screen (r19: a portrait poster filled the page and pushed everything under the fold). The episode's
@@ -1036,8 +1055,8 @@ struct PlayingVideo: View {
             Transport(ended: ended).padding(.top, 2)
         }
         .task(id: series) {
-            guard let s = series, let m = await NextUp.meta(s.imdb), let e = m.episodes.first(where: { $0.id == s.current }) else { still = nil; about = nil; return }
-            withAnimation(.easeOut(duration: 0.25)) { still = e.thumb }
+            guard let s = series, let m = await NextUp.meta(s.imdb), let e = m.episodes.first(where: { $0.id == s.current }) else { still = nil; about = nil; ownName = nil; return }
+            withAnimation(.easeOut(duration: 0.25)) { still = e.thumb; ownName = e.ownName.map { (e.season, e.episode, $0) } }
             let info = await SeriesInfo.load(s.imdb)
             withAnimation(.easeOut(duration: 0.25)) { about = info?.about[e.id] }
         }

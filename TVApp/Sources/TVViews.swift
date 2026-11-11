@@ -638,18 +638,10 @@ struct TVSettingsTab: View {
     // How far the list has scrolled, for the title going up with it, as on every other tab.
     @State private var scrolled = PageScrollY()
     var manage: some View { TVManageSections() }
-    // The launcher's own two jobs, then how the app reaches the TV, which is set once and lives on its own page.
-    @ViewBuilder var connection: some View {
-        Section {
-            SettingsAction(title: "Refresh the TV’s recommendations", icon: "arrow.clockwise") { model.post("refresh") }
-            // What it opens, said plainly: the launcher's own settings (review of dfd490e: "Home screen on the TV").
-            SettingsAction(title: "Home screen settings", icon: "rectangle.grid.1x2") { model.post("launcher-settings") }
-        }
-        .listRowBackground(TVLook.glassRow)
-        Section {
-            NavigationLink(value: ManagePage.connection) { Label("Connection", systemImage: "network") }
-        }
-        .listRowBackground(TVLook.glassRow)
+    // What the phone can have the TV do: the launcher's own two jobs and the screensaver, each said in full.
+    var actions: some View { TVActionSections() }
+    func page(_ content: some View) -> some View {
+        ScrollView { VStack(alignment: .leading, spacing: 26) { content }.padding(.horizontal, 20).padding(.top, 6).padding(.bottom, 24) }
     }
     var body: some View {
         NavigationStack(path: $path) {
@@ -657,11 +649,11 @@ struct TVSettingsTab: View {
                 Group {
                     // Unfolded, one list each side of the fold rather than one list across it.
                     if panes {
-                        FoldSplit { Form { manage }.scrollContentBackground(.hidden).modifier(FollowsScroll(scrolled: scrolled)) } right: {
-                            Form { connection }.scrollContentBackground(.hidden).poseScroll().modifier(FollowsScroll(scrolled: scrolled))
+                        FoldSplit { page(manage).modifier(FollowsScroll(scrolled: scrolled)) } right: {
+                            page(actions).poseScroll().modifier(FollowsScroll(scrolled: scrolled))
                         }
                     } else {
-                        Form { manage; connection }.scrollContentBackground(.hidden).poseScroll().modifier(FollowsScroll(scrolled: scrolled))
+                        page(Group { manage; actions }).poseScroll().modifier(FollowsScroll(scrolled: scrolled))
                     }
                 }
                 .topShade().topFade()
@@ -682,6 +674,14 @@ struct TVSettingsTab: View {
                 }
             }
             .background { Ambience() }
+            // The build's shots of the pages opened from here ("-pose connection", "-pose tvsettings").
+            .task {
+                switch UserDefaults.standard.string(forKey: "pose") {
+                case "connection": path = [.connection]
+                case "tvsettings": path = [.settings]
+                default: break
+                }
+            }
             .navigationTitle("Settings")
             // The same title as every other tab: large, folded or open.
             .navigationBarTitleDisplayMode(.large)
@@ -697,15 +697,26 @@ struct ConnectionView: View {
     @Environment(TVModel.self) var model
     @State private var address = ""
     var body: some View {
-        Form {
-            Section { PageHeading("Connection") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
-            Section {
-                TextField("Address", text: $address).autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
-                    .submitLabel(.done)
-                    .onSubmit { model.address = address.trimmingCharacters(in: .whitespacesAndNewlines); model.start() }
-            } header: { Text("Mac Pro address") } footer: { Text("Everything here works anywhere with Tailscale on, as long as the Mac is awake and can reach the TV.") }
+        // A glass section of the app's own, not a Form's one-row capsule (gate 276).
+        ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                PageHeading("Connection").padding(.horizontal, 4)
+                // One row, so its note is its second line rather than a footer under a lone capsule (the designer's cure
+                // for one-row sections, 2026-11-11).
+                GlassSection(header: "Mac Pro address") {
+                    VStack(alignment: .leading, spacing: 3) {
+                        TextField("Address", text: $address).autocorrectionDisabled().textInputAutocapitalization(.never).keyboardType(.URL)
+                            .submitLabel(.done)
+                            .onSubmit { model.address = address.trimmingCharacters(in: .whitespacesAndNewlines); model.start() }
+                        Text("Works anywhere with Tailscale on, as long as the Mac is awake and can reach the TV.")
+                            .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, GlassCard.inset).padding(.vertical, 12)
+                }
+            }
+            .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
         }
-        .scrollContentBackground(.hidden)
+        .scrollDismissesKeyboard(.interactively)
         .topShade().topFade()
         .summonsBar()
         .background { Ambience() }
@@ -1173,7 +1184,7 @@ struct GlassKey: View {
             Image(systemName: icon).font(.system(size: size * 0.36, weight: .medium)).frame(width: size, height: size).contentShape(Circle())
                 .scaleEffect(down ? 0.92 : 1).animation(TVLook.press, value: down)
         }
-        .glassEffect(.regular.interactive(), in: Circle())
+        .glassEffect(.key, in: Circle())
     }
 }
 struct PlayKey: View {
@@ -1975,7 +1986,8 @@ struct Banner: View {
             ZStack {
                 // Some banners are a white logo on nothing, meant for a dark tile, like YouTube Music's.
                 app.wide == true ? Color.black : TVLook.bannerTile
-                if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
+                if app.pkg == MintBanner.pkg { MintBanner() }
+                else if app.hasIcon, let u = model.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
                     Art(url: u) { i in
                         // A banner that came out blank, a white logo flattened onto white, is never shown as it is.
                         if ImageStore.shared.isFlat(u) { BannerFallback(app: app) }
@@ -1992,6 +2004,7 @@ struct Banner: View {
             .frame(width: width, height: width * TVLook.bannerSize.height / TVLook.bannerSize.width)
             .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
             .overlay { FrontRing(pkg: app.pkg) }
+            .overlay(alignment: .topTrailing) { OnTVMark(pkg: app.pkg) }
         }
         .buttonStyle(PressCard()).accessibilityLabel(app.name).accessibilityAddTraits(model.frontApp == app.pkg ? .isSelected : [])
         .contextMenu { if browses { Button("Open on TV", systemImage: "tv") { open() } } }
@@ -2011,6 +2024,41 @@ private struct FrontRing: View {
             // Settled: coming back to the page, the ring is simply where it is; it only moves in front of him.
             .settledAnimation(.easeOut(duration: 0.15), value: on)
             .accessibilityHidden(true)
+    }
+}
+// The ring's meaning, said on the tile: a small TV in the ring's cyan at its corner, once the TV says this app is in front
+// (gate 276: the cyan ring alone had no stated meaning). Not while a press is still waiting for the TV's word.
+private struct OnTVMark: View {
+    @Environment(TVModel.self) var model
+    let pkg: String
+    var body: some View {
+        let on = model.frontApp == pkg && model.openingApp?.pkg != pkg
+        Image(systemName: "tv.fill").font(.system(size: 9, weight: .bold)).foregroundStyle(.black.opacity(0.85))
+            .frame(width: 20, height: 20).background(TVLook.accent, in: Circle())
+            .padding(5)
+            .opacity(on ? 1 : 0)
+            .settledAnimation(.easeOut(duration: 0.15), value: on)
+            .accessibilityHidden(true)
+    }
+}
+// Mint's banner, made from Mint's own icon and its name, as YouTube Music's is its mark and its name: the banner Mint
+// ships is a play triangle on a dark block beside thin words on mint, which read as home-made beside the real ones
+// (gate 276, law 3).
+struct MintBanner: View {
+    static let pkg = "com.codex.musicwebtv"
+    var body: some View {
+        GeometryReader { g in
+            let h = g.size.height
+            HStack(spacing: h * 0.13) {
+                Image("MintIcon").resizable().interpolation(.high).scaledToFit().frame(width: h * 0.46, height: h * 0.46)
+                Text("Mint Music").font(.system(size: h * 0.2, weight: .bold)).tracking(-0.2).foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.6)
+            }
+            .padding(.horizontal, h * 0.16)
+            .frame(width: g.size.width, height: h)
+        }
+        .background(Color(hex: 0x263238))
+        .accessibilityHidden(true)
     }
 }
 private struct RingWaits: ViewModifier {
@@ -2065,15 +2113,17 @@ struct BannerFallback: View {
         .accessibilityHidden(true)
     }
 }
+// A section of the Apps tab: every app in it on the page, in rows that wrap, never a sideways row with its fifth tile cut
+// at the edge beside sections of two and an empty foot (gate 276). At least two across, the launcher's size where more fit.
 struct BannerRow: View {
     let title: String, apps: [TVStatus.App]
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             RowTitle(title).padding(.leading, 20)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: TVLook.gap) { ForEach(apps) { Banner(app: $0, browses: true) } }.padding(.horizontal, 20).scrollTargetLayout()
+            TileRows(tile: TVLook.bannerSize, gap: TVLook.gap, rows: (apps.count + 1) / 2, least: 2) { w in
+                ForEach(apps) { Banner(app: $0, browses: true, width: w) }
             }
-            .rowEdge()
+            .padding(.horizontal, 20)
         }
     }
 }
@@ -2192,7 +2242,7 @@ struct SeekButton: View {
         // Still on its way after a moment: a ring turning round the key that shows how far, easier to see than anything
         // on a long film's bar.
         .overlay { if mine && seeker.spinning { SpinRing().transition(.opacity) } }
-        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
+        .buttonStyle(.plain).glassEffect(.key, in: Circle()).accessibilityLabel(label)
         .accessibilityValue(mine ? "\(abs(net)) seconds" : "")
         .animation(.easeOut(duration: 0.2), value: mine && seeker.spinning)
         .animation(.snappy(duration: 0.2), value: net)
@@ -2698,45 +2748,46 @@ struct PlayingTab: View {
             if pending { pendingWait?.cancel(); withAnimation(.easeOut(duration: 0.2)) { pending = false }; query = "" }
         }
     }
-    // With a film, show or video on, what's under it is what comes after it: the next episode, ready to flick, or failing
-    // that where he is in other things, and what was flicked lately. Never a row of one, and never the music search,
-    // which is only for when Mint is what's on or nothing is.
+    // With a film, show or video on, what's under it is what comes after it: the next episode, ready to flick, and what was
+    // flicked and played lately. Never what's already on again, and never Continue watching, which is Watch's first row
+    // (the 11-10 shelf ruling; gate 276: under a YouTube video its first card was the same video). Never the music
+    // search either, which is only for when Mint is what's on or nothing is.
     @ObservedObject private var stremio = BrowseStore.shared(.stremio)
-    var continuing: [MediaItem] { Array((stremio.rows.first { $0.title == "Continue watching" }?.items ?? []).prefix(5)) }
     var watching: Bool { otherAppIsActive && model.status?.session != nil }
+    // Open flat, Recently played goes under the transport on the left, so the picture's pane isn't two-thirds empty
+    // beside a packed episode list (gate 276).
     var upNext: some View {
         VStack(alignment: .leading, spacing: 24) {
             // A show: its episodes, the one on marked Playing and the next Up next, in view, rather than a lone card
             // of the same poster again (Richard, 2026-11-05: "again looks bad").
             if model.status?.session?.pkg == "com.stremio.one", nextUp.series != nil {
                 ShowEpisodes(bringsIntoView: panes).padding(.horizontal, 20)
-            } else if continuing.count > 1 {
-                VStack(alignment: .leading, spacing: 0) {
-                    RowTitle("Continue watching").padding(.leading, 20)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        // A little smaller than elsewhere: a YouTube video's wide card at 124 filled the column, its neighbour a
-                        // sliver cut at the side bar (r35). At 100 the next card shows as a card, so it reads as a row.
-                        LazyHStack(alignment: .top, spacing: 10) { ForEach(continuing) { FlickCardButton(item: $0, source: .stremio, width: 100) } }
-                            .padding(.horizontal, 20)
-                    }
-                    .rowEdge()
-                }
             }
             RecentRow()
             // Music is still a tap away with a film on: the search isn't offered here, his last albums are.
-            if showsRecent { Shelf(source: .mint, title: Self.recentTitle) }
+            if showsRecent && !panes { Shelf(source: .mint, title: Self.recentTitle) }
             // Only ever shows when the phone itself is playing a song, and keeps AirPlay in reach for Siri. Last, so its
             // empty place never pushes the episodes down below the picture's top line (r21).
             FlickCard().padding(.horizontal, 20)
         }
-        .padding(.vertical, panes ? 20 : 0)
+        .padding(.bottom, panes ? 20 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    // The left pane open flat: what's on, and under a film, show or video, what he last played in Mint.
+    var nowPane: some View {
+        VStack(alignment: .leading, spacing: 32) {
+            now.padding(.horizontal, 20)
+            if watching && showsRecent { Shelf(source: .mint, title: Self.recentTitle).transition(.opacity) }
+        }
+        .padding(.vertical, 20)
+        .settledAnimation(.easeOut(duration: 0.3), value: watching)
     }
     var body: some View {
         Group {
             if panes {
-                FoldSplit { ScrollView { now.padding(20) }.backToTop() } right: {
-                    // The same 20 pt from the top as the picture beside it, so the two panes' first lines sit level (r21).
+                FoldSplit { ScrollView { nowPane }.backToTop() } right: {
+                    // The same 20 pt from the top as the picture beside it, so the picture's top and "Season" sit level
+                    // (r21; gate 276: the right pane was 40 pt down, the picture's top 20 above the season chips).
                     ScrollView { Group { if watching { upNext.padding(.top, 20) } else { send.padding(20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching) }.backToTop()
                 }
             } else {

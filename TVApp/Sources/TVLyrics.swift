@@ -297,7 +297,13 @@ private struct SyncedLyrics: View {
     @State private var position = ScrollPosition(idType: Int.self)
     @State private var placed = false
     static let glide = Animation.spring(response: 0.55, dampingFraction: 0.86)
-    static let anchor = UnitPoint(x: 0.5, y: 0.3)
+    // The sung line's place, in points from the window's top, the same in every window height: deep enough that the line
+    // before it has the whole top fade to go through, and the one before that is gone before the edge (gate 276: at 30 %
+    // of the window the line above sat half in the fade and showed as the foot of its letters under "Lyrics").
+    static let lead: CGFloat = 82
+    // Clear, then the fade: everything above `fadeEnd` is on its way out, nothing at the very edge shows at all.
+    static let clearTop: CGFloat = 10, fadeEnd: CGFloat = 60
+    var anchor: UnitPoint { UnitPoint(x: 0.5, y: min(Self.lead / max(height, 1), 0.6)) }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -315,26 +321,27 @@ private struct SyncedLyrics: View {
             .scrollTargetLayout()
             // The first line starts clear of the top fade, close under the heading; room under the last for it to sit
             // where the sung line sits.
-            .padding(.top, 44).padding(.bottom, height * 0.6)
+            .padding(.top, Self.fadeEnd + 2).padding(.bottom, height * 0.6)
             .animation(placed && !quiet ? Self.glide : nil, value: line)
         }
-        .scrollPosition($position, anchor: Self.anchor)
+        .scrollPosition($position, anchor: anchor)
         .scrollIndicators(.hidden)
         .scrollDisabled(true).allowsHitTesting(false)
         .frame(height: height)
         .mask {
             VStack(spacing: 0) {
-                // The top few points fully clear, then the fade: a line leaving the top is gone before the edge.
-                Color.clear.frame(height: 8)
-                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 36)
+                // The top few points fully clear, then a deep fade: the line before the sung one is passing through it,
+                // the one before that is gone before the edge, so nothing is ever cut flat under the heading.
+                Color.clear.frame(height: Self.clearTop)
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.fadeEnd - Self.clearTop)
                 Color.black
                 LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 56)
             }
         }
         .onChange(of: line, initial: true) { _, now in
             let to = max(now, 0)
-            if placed && !quiet { withAnimation(Self.glide) { position.scrollTo(id: to, anchor: Self.anchor) } }
-            else { position.scrollTo(id: to, anchor: Self.anchor); Task { placed = true } }
+            if placed && !quiet { withAnimation(Self.glide) { position.scrollTo(id: to, anchor: anchor) } }
+            else { position.scrollTo(id: to, anchor: anchor); Task { placed = true } }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Lyrics")

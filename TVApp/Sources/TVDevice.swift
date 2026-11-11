@@ -26,15 +26,27 @@ private struct Spark: View {
                 Path { p in p.move(to: CGPoint(x: 0, y: g.size.height - 1)); p.addLine(to: CGPoint(x: g.size.width, y: g.size.height - 1)) }
                     .stroke(.white.opacity(0.14), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [2, 5]))
             } else {
-            Path { p in
+            // Stood on the tile's foot: the line with its area filled down to the foot, so a low reading (CPU) and a high
+            // one (memory) read as levels on one floor, never as two lines floating at different heights (gate 276).
+            let line = Path { p in
                 guard values.count > 1 else { return }
                 p.move(to: point(0))
                 for i in 1..<values.count { p.addLine(to: point(i)) }
             }
-            .stroke(TVLook.accent, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+            let area = line.foot(g.size)
+            area.fill(LinearGradient(colors: [TVLook.accent.opacity(0.28), TVLook.accent.opacity(0.04)], startPoint: .top, endPoint: .bottom))
+            line.stroke(TVLook.accent, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
             }
         }
         .frame(height: 38)
+    }
+}
+private extension Path {
+    // The line closed down to the foot of a box this size, for the area under it.
+    func foot(_ size: CGSize) -> Path {
+        var p = self
+        p.addLine(to: CGPoint(x: size.width, y: size.height)); p.addLine(to: CGPoint(x: 0, y: size.height)); p.closeSubpath()
+        return p
     }
 }
 private struct Tile: View {
@@ -50,10 +62,12 @@ private struct Tile: View {
             Text(settled ? value : "—").font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
                 .opacity(settled ? 1 : breathe ? 0.75 : 0.35)
                 .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true } }
-            Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-            Spark(values: spark, top: top).padding(.top, 8)
+            if !detail.isEmpty { Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
+            // Each tile's spark on its foot, whatever the lines above it hold, so sibling tiles' sparks share one line.
+            Spacer(minLength: 8)
+            Spark(values: spark, top: top)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(14)
         .tvCard(16)
     }
@@ -136,7 +150,8 @@ struct DeviceTab: View {
             }
             GridRow {
                 Tile(title: "Download", value: rate(i.rxRate), detail: i.wifi.isEmpty ? "Wi-Fi" : i.wifi, spark: i.hist.rx)
-                Tile(title: "Upload", value: rate(i.txRate), detail: i.ip, spark: i.hist.tx)
+                // No subtitle: the box's IP address was plumbing (gate 276), and the network is said once, under Download.
+                Tile(title: "Upload", value: rate(i.txRate), detail: "", spark: i.hist.tx)
             }
         }
         // Out of touch, the last numbers stay but step back, so they aren't read as live.
