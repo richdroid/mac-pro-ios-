@@ -438,7 +438,12 @@ struct FlickScreen: View {
                 // The ground's soft picture and colour from memory, so the page arrives in its colour, not on black.
                 if softImage == nil, let u = screenURL ?? URL(string: item.art) { softImage = ImageStore.shared.small(u, 16) }
                 if tint == nil { tint = ImageStore.shared.cachedBand(URL(string: item.art)) }
-                withAnimation(.easeOut(duration: 0.18)) { arrived = true }
+                // Out of the quiet transaction that put the screen up (under it the fade didn't run: a cut), then the
+                // pages under it go once it's fully up.
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.18)) { arrived = true }
+                    Task { try? await Task.sleep(nanoseconds: 200_000_000); if !leaving { model.flickArrived = true } }
+                }
             }
     }
     var screen: some View {
@@ -491,7 +496,7 @@ struct FlickScreen: View {
                 }
             }
             .onChange(of: choosing, initial: true) { _, c in model.flickChoosing = c }
-            .onDisappear { model.flickChoosing = false; model.flickCovering = false }
+            .onDisappear { model.flickChoosing = false; model.flickCovering = false; model.flickArrived = false }
             // Another tab, from the side bar while choosing, leaves the page for it.
             .onChange(of: model.tab) { _, t in
                 // Its own putting back of the page he came from isn't him picking a tab, nor is the Remote being brought up
@@ -1460,7 +1465,9 @@ struct FlickScreen: View {
             if let live = model.mirrorSlot, live.width > 20 { model.rememberSlot(live, slotKey) }
             // The pages he picked from may show again (this screen is about to go), and the Remote stays drawn.
             var landed = Transaction(); landed.disablesAnimations = true
-            withTransaction(landed) { landedOnRemote = true }
+            // Choosing over in the same step as the hand-off: a frame later, the Remote's own page was briefly "covered"
+            // and dimmed just after landing (open flat, +0.15 s).
+            withTransaction(landed) { landedOnRemote = true; model.flickChoosing = false }
             withAnimation(.easeOut(duration: 0.15)) { model.flickHandoff = false }
             try? await Task.sleep(nanoseconds: 150_000_000)
             var swap = Transaction(); swap.disablesAnimations = true
@@ -1787,7 +1794,9 @@ struct LiftedLook: ViewModifier {
         let rise = max(0, -drag.height)
         let shade = up ? raised : rest
         content
-            .background { if solid && up { RoundedRectangle(cornerRadius: corner, style: .continuous).fill(Color(white: 0.14)) } }
+            // Always there, its opacity changing: put in and taken out inside the settle's spring, a block of the list
+            // went black for six frames as a row was put back (CI 582cab5).
+            .background(RoundedRectangle(cornerRadius: corner, style: .continuous).fill(Color(white: 0.14)).opacity(solid && up ? 1 : 0))
             .shadow(color: .black.opacity(shade.0), radius: shade.1, y: shade.2)
             // Lit as it rises, and all the way round once letting go would send it, so the line is seen as well as felt.
             .overlay { RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(TVLook.accent.opacity(up ? (lift.armed ? 1 : 0.45 * min(1, rise / 80)) : 0), lineWidth: up && lift.armed ? 2 : 1.5) }

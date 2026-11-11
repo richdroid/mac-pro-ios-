@@ -64,6 +64,9 @@ final class TVModel {
     var footBarRoom: CGFloat = 0
     // The flick screen is on a show's or a stream's page (not the card): the side bar stays usable, and a tab leaves it.
     var flickChoosing = false
+    // The flick's page is fully up: only then are the pages under it put out of sight, so nothing between them is ever
+    // black (the flick page fades up over what he tapped, which then goes unseen).
+    var flickArrived = false
     // The flick's stage is up over a page (not yet moving onto the Remote): the page steps out of sight under it, so its
     // rows never ghost through the stage's fade (r18).
     var flickCovering = false
@@ -139,7 +142,7 @@ final class TVModel {
         // Choosing from the first frame, in the same quiet transaction: set by the screen once it was up, the change
         // animated the host's inset and the new page's first layout with it, so the page grew in from a narrow column
         // ("Choos / e on / the TV", CI tv-flicktap at 13 s).
-        withTransaction(t) { flicking = target; flickRetired = false; flickChoosing = true }
+        withTransaction(t) { flicking = target; flickRetired = false; flickChoosing = true; flickArrived = false }
     }
     // The thing on a card is what the TV is playing now (the same film, or the episode named on the card): tapping it goes
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show

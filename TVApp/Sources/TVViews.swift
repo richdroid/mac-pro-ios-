@@ -3325,17 +3325,14 @@ struct UnderFlick: ViewModifier {
     func body(content: Content) -> some View {
         // Not once a pick is on its way to the Remote (flickHandoff): the Remote's tab is up under the flick's page then,
         // and must be drawn there for the picture to land on, while the page's own rail stays beside it.
-        let covered = (model.flickChoosing && !model.flickHandoff) || model.flickCovering
+        let covered = (model.flickChoosing && model.flickArrived && !model.flickHandoff) || model.flickCovering
         content
             .opacity(covered ? 0 : 1)
             // Black under the side bar too while covered: the strip beside a show's or stream's page showed whatever lay
             // under the faded page, a brown (28,16,10) against the page's near-black (8,5,4) edge, a band (r30).
             .overlay { Color.black.ignoresSafeArea().opacity(covered ? 1 : 0).allowsHitTesting(false) }
-            // Covered slowly at first while the flick's page comes up fast over it, both from the same frame, so the two
-            // cross with no black between them and the strip beside the side bar goes dark with them. Its own
-            // animation whatever the change came in: the flick is put up in a transaction with animations off (so its
-            // page lays out at full width at once), and under that the page cut to black in one frame.
-            .transaction(value: covered) { t in t.disablesAnimations = false; t.animation = covered ? .easeIn(duration: 0.2) : .easeOut(duration: 0.15) }
+            // Covered only once the flick's page is fully up over it (flickArrived), so it goes unseen; uncovered at once.
+            .animation(.easeOut(duration: 0.15), value: covered)
             .modifier(Untitled(on: barHidden))
             #if os(iOS)
             .toolbarVisibility(barHidden ? .visible : .automatic, for: .navigationBar)
