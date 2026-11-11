@@ -72,6 +72,7 @@ jobs:
             footshot settings-foot$x $d -tab 9
             shot alerts$x $d 8 -tab 0 -pose alerts
             shot status-live$x $d 14 -tab 0
+            shot disk-history$x $d 10 -tab 0 -openHistory disk
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
