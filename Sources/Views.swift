@@ -1143,13 +1143,13 @@ struct ClaudeTab: View {
                 StateRow(label: "Restarts by itself", good: s.claude.keepAlive, value: s.claude.keepAlive ? "On" : "Off").place("cc-restart")
                 StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
                 LabeledContent("Version", value: s.claude.version.replacingOccurrences(of: " (Claude Code)", with: ""))
-                LabeledContent("Service", value: sentenceCase(s.claude.service ?? "Unknown"))
+                LabeledContent("Its service on the Mac", value: sentenceCase(s.claude.service ?? "Unknown"))
                 Link(destination: URL(string: "https://claude.ai/code")!) {
                     HStack { Text("Open in the Claude app"); Spacer(); Image(systemName: "arrow.up.forward").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
                 }
                 // Each question hangs off the button that asked it, so it points at what was tapped.
-                Button("Restart remote control") { confirm = true }
-                    .confirmationDialog("Restart remote control?", isPresented: $confirm, titleVisibility: .visible) {
+                Button("Restart Claude remote sessions") { confirm = true }
+                    .confirmationDialog("Restart Claude remote sessions?", isPresented: $confirm, titleVisibility: .visible) {
                         Button("Restart", role: .destructive) {
                             rcFail = nil
                             Task { rcFail = await model.run("rc-restart") }
@@ -1648,13 +1648,23 @@ struct ControlTab: View {
         Task {
             let e = await work()
             busy.remove(key)
-            if let e { withAnimation(Motion.quick) { fails[key] = e }; return }
+            // Said with what it was that didn't happen: a bare "Can’t reach the Mac" under a red row read as another row.
+            if let e { withAnimation(Motion.quick) { fails[key] = Self.undone(key) + e }; return }
             withAnimation(Motion.quick) { _ = ticked.insert(key) }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             withAnimation(Motion.quick) { _ = ticked.remove(key) }
         }
     }
     @ViewBuilder func failLine(_ key: String) -> some View { if let f = fails[key] { FailText(f) } }
+    static func undone(_ key: String) -> String {
+        switch key {
+        case "unlock": return "Not unlocked: "
+        case "login": return "Not logged in: "
+        case "forget": return "Not forgotten: "
+        case "type": return "Not typed: "
+        default: return key.hasPrefix("svc:") ? "Not restarted: " : ""
+        }
+    }
     // A row's button with its action's state at the row's end: waiting, then done.
     func actButton(_ title: String, _ key: String, role: ButtonRole? = nil, _ action: @escaping () -> Void) -> some View {
         Button(role: role, action: action) {
@@ -1673,7 +1683,7 @@ struct ControlTab: View {
         if model.pose == "controlfail" { withAnimation(Motion.quick) { fails["forget"] = "The Mac didn’t answer. Check Tailscale and try again." } }
         if model.pose == "forget" { confirmForget = true }
         // A secret on its way to the Mac (the arrow a spinner, no second tap), beside a failure that has stayed.
-        if model.pose == "controlbusy" { drafts.typed = "correct horse"; busy = ["type"]; fails["forget"] = Phrase.macAway }
+        if model.pose == "controlbusy" { drafts.typed = "correct horse"; busy = ["type"]; fails["forget"] = Self.undone("forget") + Phrase.macAway }
     }
     var locked: Bool { s.screen == "locked" }
     var displayOn: Bool { s.displayOn ?? (s.screen != "display off") }

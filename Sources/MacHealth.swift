@@ -243,6 +243,8 @@ struct MacHealthView: View {
     // While the Mac is down every part waits for it; nothing pretends to know.
     var down: Bool { away || (watch.active && watch.wentAway && watch.backAt == nil) }
 
+    // A restart asked for that the Mac isn't back from yet.
+    var awaited: Bool { watch.active && watch.backAt == nil }
     var ids: [String] {
         let known = report?.parts.map(\.part) ?? []
         return known.isEmpty ? MacParts.health : known
@@ -311,7 +313,7 @@ struct MacHealthView: View {
             } footer: { Text("Restarts what’s down on the Mac. Parts that need you say what to do.") }
         } else if let fixNote {
             Section { FailText(fixNote) }
-        } else if panes, let r = report, !down {
+        } else if panes, let r = report, !down, !awaited {
             Section {
                 Label(bad.isEmpty ? "Nothing needs you" : "\(bad.count) need\(bad.count == 1 ? "s" : "") your hands", systemImage: bad.isEmpty ? "checkmark.circle" : "hand.raised")
                 Text("Checked \(Format.ago(ms: r.at)). It checks again every few seconds while this page is open.").font(.footnote).foregroundStyle(.secondary)
@@ -326,7 +328,9 @@ struct MacHealthView: View {
         } header: {
             // While the Mac is away nothing is known of its parts: no heading then (each row says it's waiting), never
             // what was last read.
-            if heading, !down {
+            // Nor while a restart is asked and the Mac isn't back from it: "All running" over a banner that says it may be
+            // restarting said two things at once (designer, 2026-11-11). The rows keep what was last read.
+            if heading, !down, !awaited {
                 Text(report.map { r in
                     let n = r.parts.filter(\.bad).count
                     return n == 0 ? "All running" : startingWindow ? "\(n) still starting" : "\(n) need\(n == 1 ? "s" : "") a look"
