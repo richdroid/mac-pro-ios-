@@ -953,6 +953,7 @@ struct ExpandingText<Extra: View>: View {
     var more = false
     @ViewBuilder var extra: () -> Extra
     @State private var open = false
+    @State private var closing = false
     @State private var full: CGFloat = 0
     @State private var short: CGFloat = 0
     var cut: Bool { more || full > short + 1 }
@@ -974,9 +975,27 @@ struct ExpandingText<Extra: View>: View {
         .onTapGesture {
             guard cut || open else { return }
             model.tick()
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) { open.toggle() }
+            toggle()
         }
         .modifier(ExpandingTail(cut: cut, open: $open, text: text))
+        // For the build's films: the words opened, then closed again, as a finger would.
+        .task {
+            guard UserDefaults.standard.string(forKey: "pose") == "blurbopen" else { return }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            toggle()
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            toggle()
+        }
+    }
+    func toggle() {
+        if open {
+            closing = true
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) { open = false } completion: {
+                withAnimation(.easeOut(duration: 0.15)) { closing = false }
+            }
+        } else {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) { open = true }
+        }
     }
     var words: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1010,8 +1029,10 @@ struct ExpandingText<Extra: View>: View {
                 }
             if open { extra().transition(.opacity.combined(with: .move(edge: .top))) }
             if cut || open {
+                // Away while the window closes and back once it has, so "More" never sits on words still showing (the
+                // review of 60af112).
                 Text(open ? "Less" : "More").font(.footnote.weight(.semibold)).foregroundStyle(TVLook.accent)
-                    .contentTransition(.opacity)
+                    .opacity(closing ? 0 : 1)
                     .animation(nil, value: cut)
             }
         }
@@ -1027,14 +1048,6 @@ private struct ExpandingTail: ViewModifier {
         .accessibilityAddTraits(cut || open ? .isButton : [])
         .accessibilityHint(cut ? (open ? "Shows less" : "Shows the whole description") : "")
         .onChange(of: text) { _, _ in if open { open = false } }
-        // For the build's films: the words opened, then closed again, as a finger would.
-        .task {
-            guard UserDefaults.standard.string(forKey: "pose") == "blurbopen" else { return }
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) { open = true }
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) { open = false }
-        }
     }
 }
 private struct Lines: ViewModifier {
