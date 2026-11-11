@@ -701,7 +701,8 @@ struct Hero: View {
                 .accessibilityLabel("Mac Pro, Late 2013")
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
-            HeroChips(alerts: (s.alerts ?? []).filter { $0.id != OTAInstaller.alertID }, offline: model.stale, route: model.route, pulse: model.pulse).padding(.top, 9)
+            // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
+            HeroChips(alerts: (s.alerts ?? []).filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, offline: model.stale, route: model.route, pulse: model.pulse).padding(.top, 9)
         }
         .frame(maxWidth: .infinity)
     }
@@ -713,13 +714,19 @@ struct HeroChips: View {
     let offline: Bool
     let route: String
     @ObservedObject var pulse: Pulse
+    @AppStorage(AlertDismissals.key) private var dismissedRaw = ""
     func chip<D: View>(@ViewBuilder _ dot: () -> D, _ text: String) -> some View {
         HStack(spacing: 6) { dot(); Text(text).lineLimit(1) }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).background(Color(white: 0.16), in: Capsule())
     }
     var health: (Color, String) {
         if alerts.isEmpty { return (.green, "All systems go") }
-        return (alerts.contains { $0.level == "critical" } ? .red : .orange, "Needs attention")
+        let tint: Color = alerts.contains { $0.level == "critical" } ? .red : .orange
+        // Every alert put away with its ✕: the problem is still there, so this names the worst of them rather than
+        // saying "Needs attention" over a page that no longer shows why. Never green while one is live.
+        let put = AlertDismissals.set(dismissedRaw)
+        if alerts.allSatisfy({ put.contains($0.dismissKey) }), let worst = alerts.first(where: { $0.level == "critical" }) ?? alerts.first { return (tint, worst.title) }
+        return (tint, "Needs attention")
     }
     var body: some View {
         if offline {
