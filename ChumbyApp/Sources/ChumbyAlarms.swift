@@ -1385,23 +1385,21 @@ struct AlarmEditor: View {
         if let close {
             // In the right pane: its own list, its title row with Cancel and Save, then the same sections, clear of the
             // fold. The title row stays pinned once the page is scrolled, so Save is always in reach.
-            let titleRow = PageTitle(title) {
-                HStack(spacing: 16) {
-                    Button("Cancel") { stopTest(); close() }.disabled(saving)
-                    if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
-                }
-                .foregroundStyle(.tint)
+            let buttons = HStack(spacing: 16) {
+                Button("Cancel") { stopTest(); close() }.disabled(saving)
+                if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
             }
+            .foregroundStyle(.tint)
             List {
-                titleRow.pinnedRow()
-                    .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
-                    .onDisappear { model.editingAlarm = false }
-                    // On this one row, never on the list: a sheet bound to the same state from many rows presents from none
-                    // (build 204, open flat).
-                    .fillCover(isPresented: $justOnce) { justOnceSheet }
+                PageTitle(title, pins: true) { buttons }
                 sections.listRowBackground(GlassRow())
             }
-            .pinsTitle { titleRow }
+            .pinsTitle { PageTitle(title) { buttons } }
+            // On the list, never on a row: a lazy row scrolled off would end the edit (held readings landing) or present
+            // nothing. (Build 204's "presents from none" was a sheet bound from many rows of the pane's shared list.)
+            .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
+            .onDisappear { model.editingAlarm = false }
+            .fillCover(isPresented: $justOnce) { justOnceSheet }
         } else {
             // Presented edge to edge (fillCover, from Alarms and the calendar's sound row), with Cancel and Save as the
             // system's items, each with a glyph, so on the Duo they take the side bar, Cancel at the top where Back goes

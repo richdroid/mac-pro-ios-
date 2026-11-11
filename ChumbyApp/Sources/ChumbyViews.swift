@@ -362,7 +362,9 @@ extension Binding where Value: Equatable {
 struct PageTitle<Trailing: View>: View {
     let title: String
     let trailing: Trailing
-    init(_ title: String, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) { self.title = title; self.trailing = trailing() }
+    // The row a pinned title (pinsTitle) takes over from: it reports where it is.
+    var pins = false
+    init(_ title: String, pins: Bool = false, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) { self.title = title; self.pins = pins; self.trailing = trailing() }
     var body: some View {
         HStack {
             Text(title).font(.custom("Trebuchet MS", size: 30).weight(.bold))
@@ -370,6 +372,7 @@ struct PageTitle<Trailing: View>: View {
             trailing
         }
         .frame(minHeight: 44)
+        .modifier(PinnedRowIf(on: pins))
         .pageLog("title \(title)")
         .listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 4, leading: 6, bottom: 0, trailing: 6))
     }
@@ -404,7 +407,7 @@ struct TwoPane<L: View, R: View>: View {
                         // A title row, blank unless the pane holds a page, so both panes start level. A real title (Calendar
                         // settings, with Done) stays pinned once the pane is scrolled.
                         let pinned = rightTitle.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
-                        List { if let rightTitle { PageTitle(rightTitle) { rightTrailing }.pinnedRow() }; Group { right }.listRowBackground(GlassRow()) }
+                        List { if let rightTitle { PageTitle(rightTitle, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
                             .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
                     }
                 }
@@ -425,63 +428,71 @@ struct TwoPane<L: View, R: View>: View {
 
 // A pane's title row with its buttons (Cancel and Save, Done), pinned once the pane is scrolled: open flat, a page's title
 // row was a list row and scrolled away, so a change at the foot meant scrolling back up to save (designer, 11-11).
-// The hand-over is exact (gate 5): the row reports where it rests (`pinnedRow()`), and the instant it starts to leave, the
+// The hand-over is exact (gate 5): the row reports where it rests (PageTitle pins: true), and the instant it starts to leave, the
 // same title is drawn at that very frame, above the list, while the list's rows (the row itself among them) are masked out
 // from that frame's foot up and fade in over the 18 pt under it. So the title never moves, never leaves, never shifts aside.
 @Observable final class PinnedRowFrame {
     var frame: CGRect = .zero
-    var rest: CGRect?
+    // Where the row rests, as its distance from the list's top: kept relative, so a fold or a turn mid-scroll moves it
+    // with the list rather than leaving it where the old layout had it.
+    var restY: CGFloat?
+    var box: CGRect = .zero
     var atTop = true
 }
 struct PinnedTitle<Bar: View>: ViewModifier {
     let on: Bool
     let bar: Bar
     @State private var row = PinnedRowFrame()
-    @State private var box: CGRect = .zero
     @State private var topInset: CGFloat = 0
     func body(content: Content) -> some View {
-        let rest = row.rest
-        let shown = on && rest != nil && row.frame.minY < (rest?.minY ?? 0) - 0.5
+        let box = row.box
+        let restY = row.restY
+        let shown = on && restY != nil && row.frame.minY - box.minY < (restY ?? 0) - 0.5
         content
             .environment(row)
             .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top <= 0.5 } action: { _, top in
                 row.atTop = top
-                if top, row.frame != .zero { row.rest = row.frame }
+                if top, row.frame != .zero { row.restY = row.frame.minY - row.box.minY }
             }
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { box = $0 }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { row.box = $0 }
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
             // Over the whole display, safe areas included: laid out inside them it clipped the rows flat above the
             // bottom edge, even at rest ("A mask on a scroll view covers the safe area, or it clips").
             .mask {
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: shown ? max(0, (rest?.maxY ?? 0) - (box.minY - topInset)) : 0)
+                    Color.clear.frame(height: shown ? max(0, topInset + (restY ?? 0) + row.frame.height) : 0)
                     LinearGradient(colors: [.black.opacity(shown ? 0 : 1), .black], startPoint: .top, endPoint: .bottom).frame(height: TabBarFade.fade)
                     Color.black
                 }
                 .ignoresSafeArea()
             }
             .overlay(alignment: .topLeading) {
-                if shown, let rest {
-                    bar.frame(width: rest.width, height: rest.height)
-                        .offset(x: rest.minX - box.minX, y: rest.minY - box.minY)
+                if shown, let restY {
+                    bar.frame(width: row.frame.width, height: row.frame.height)
+                        .offset(x: row.frame.minX - box.minX, y: restY)
                 }
             }
     }
 }
-// The title row's own report of where it is, for PinnedTitle; its resting frame is taken while the list is at its top.
+struct PinnedRowIf: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View { if on { content.modifier(PinnedRow()) } else { content } }
+}
+// The title row's own report of where it is, for PinnedTitle; its resting place is taken while the list is at its top.
+// Applied inside PageTitle (pins: true), under its row traits, so the list still sees those (clear, no separator, its
+// insets): wrapped from outside, the row lost them and drew a glass slab behind every title (gate 6).
 struct PinnedRow: ViewModifier {
     @Environment(PinnedRowFrame.self) private var row: PinnedRowFrame?
     func body(content: Content) -> some View {
         content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
             guard let row else { return }
             row.frame = f
-            if row.atTop || row.rest == nil { row.rest = f }
+            if row.atTop || row.restY == nil { row.restY = f.minY - row.box.minY }
         }
     }
 }
 extension View {
     func pinsTitle<B: View>(_ on: Bool = true, @ViewBuilder _ bar: () -> B) -> some View { modifier(PinnedTitle(on: on, bar: bar())) }
-    func pinnedRow() -> some View { modifier(PinnedRow()) }
 }
 
 // The page fades out just above the tab bar, so nothing reads through its glass ("Chumby Classic" did, on Home, under the

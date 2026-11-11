@@ -123,7 +123,9 @@ jobs:
           # pose), and the editor dragged slowly past its pinned title's 48 pt.
           film 3 panes-open live -tab 2 -pose alarmsdemo; sleep 20; endfilm panes-open
           film 3 pinned-editor-open - -tab 2 -pose editor; $D "$DEVICE" drag 0.75 0.8 0.75 0.45 2.5 || true; sleep 2; $D "$DEVICE" drag 0.75 0.45 0.75 0.8 2.5 || true; endfilm pinned-editor-open
-          film 3 pinned-day-open - -tab 2 -pose caldayown; $D "$DEVICE" drag 0.75 0.8 0.75 0.45 2.5 || true; sleep 2; $D "$DEVICE" drag 0.75 0.45 0.75 0.8 2.5 || true; endfilm pinned-day-open
+          # Dragged from low in the pane, clear of the segmented control and steppers, far enough to scroll past the title.
+          film 3 pinned-day-open - -tab 2 -pose caldayown; $D "$DEVICE" drag 0.75 0.9 0.75 0.3 2.5 || true; sleep 2; $D "$DEVICE" drag 0.75 0.3 0.75 0.9 2.5 || true; endfilm pinned-day-open
+          film 3 pinned-calsettings-open - -tab 2 -pose calsettings; $D "$DEVICE" drag 0.75 0.9 0.75 0.3 2.5 || true; sleep 2; $D "$DEVICE" drag 0.75 0.3 0.75 0.9 2.5 || true; endfilm pinned-calsettings-open
           # Last of all: Alarms' calendar switch tapped on, open in portrait then folded. It raises the system's calendar
           # permission alert, which stays up over everything after it, so nothing is shot after these.
           $D "$DEVICE" rotate 1; sleep 5

@@ -635,16 +635,16 @@ struct CalendarDaySheet: View {
     var body: some View {
         if let close {
             // Its own list in the pane, so the title row with Done stays pinned once scrolled (as the editor's does).
-            let titleRow = PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
+            let doneButton = Group { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
             // Always its own list, pushed too (CalendarDayPage puts nothing around it): a list inside a list's row
             // collapsed to one empty bar, and rows handed up loose took this page's onAppear each, so a section scrolling
             // back reloaded the label and wiped what was typed (designer, 11-11).
             List {
-                titleRow.pinnedRow()
+                PageTitle(title, pins: done) { doneButton }
                 sections.listRowBackground(GlassRow())
             }
             // Pinned only with its Done: a pushed page's way out is the system's Back.
-            .pinsTitle(done) { titleRow }
+            .pinsTitle(done) { PageTitle(title) { doneButton } }
             .onAppear { labelText = edit.label ?? ""; loadOwn() }
             .onDisappear { commitLabel() }
         } else {
