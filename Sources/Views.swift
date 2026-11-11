@@ -61,6 +61,15 @@ struct MacProApp: App {
 // and back, then the screen opening and closing. Only with the "transitions" pose; never on the phone.
 enum TransitionTour {
     @MainActor static func run(_ model: AppModel) {
+        // The resize check's film of a tab come back to: Status, Apps from 10 s to 42 s (an alert arrives meanwhile), then
+        // Status again. Set here rather than tapped: the simulator's taps on the tab bar landed on the wrong tab or not at all.
+        if model.pose == "tabback" {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 10_000_000_000); SwipeLog.note("tab to Apps"); model.tab = 1
+                try? await Task.sleep(nanoseconds: 32_000_000_000); SwipeLog.note("tab to Status"); model.tab = 0
+            }
+            return
+        }
         guard model.pose == "transitions" else { return }
         let steps: [(Double, () -> Void)] = [
             (3.0, { model.history = .cpu }), (5.0, { model.processes = .cpu }), (7.0, { model.processes = nil }), (8.5, { model.history = nil }),

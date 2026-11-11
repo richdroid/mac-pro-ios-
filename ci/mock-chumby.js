@@ -162,7 +162,7 @@ http.createServer((q, s) => {
 // Status for Apps while it comes, then goes back (resize regate: a tab coming back must not change in one frame).
 let alertFrom = 0, alertAsked = 0;
 const alertMac = () => { const m = realMac(); if (Date.now() - alertFrom > 20000) { m.alerts = [{ id: 'temp:CPU', level: 'warning', kind: 'temp', metric: 'CPU', title: 'CPU is hot', detail: '192°F', since: alertFrom + 20000, c: 89 }]; m.healthBad = 1; } return m; };
-http.createServer((q, s) => { if (!alertFrom || Date.now() - alertAsked > 4000) alertFrom = Date.now(); alertAsked = Date.now(); macRoutes(q, s, () => JSON.stringify(alertMac()), realLive); }).listen(9042, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+http.createServer((q, s) => { if (!alertFrom || Date.now() - alertAsked > 25000) alertFrom = Date.now(); alertAsked = Date.now(); macRoutes(q, s, () => JSON.stringify(alertMac()), realLive); }).listen(9042, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
