@@ -2045,7 +2045,9 @@ struct ShelfFlick: ViewModifier {
             .simultaneousGesture(gesture)
             .onChange(of: touching) { _, t in
                 guard !t else { return }
-                Task { @MainActor in if up { _ = hands.hand.cancel(); end(.cancelled, translation: .zero) } }
+                // Only a touch taken away mid-lift: one that ended normally has already been read (CI 083bfe0: every
+                // throw and put-back was followed by a second, "cancelled" end, a stray flick-cancel and a settle tap).
+                Task { @MainActor in if up, hands.hand.phase == .lifted { _ = hands.hand.cancel(); end(.cancelled, translation: .zero) } }
             }
             .accessibilityAction(named: "Flick to the TV") { hands.hand = FlickHand(.list); throwIt(velocity: CGSize(width: 0, height: -800), translation: .zero) }
             .task { await reportPlace() }
