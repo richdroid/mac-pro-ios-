@@ -296,6 +296,34 @@ struct SoloCard: ViewModifier {
 extension View {
     func soloCard(note: String? = nil, on: Bool = true) -> some View { modifier(SoloCard(note: note, on: on)) }
 }
+// A control's label in two lines: what it is, and what it does under it. For a switch or a menu, the note goes here, inside
+// the control's own label, never under the control (`soloCard(note:)` is for rows with nothing at their trailing end): so
+// the switch centres on both lines and the note stays left of it (designer, 11-11).
+struct TwoLine: View {
+    let title: String, note: String
+    init(_ title: String, _ note: String) { self.title = title; self.note = note }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+            Text(note).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+// A menu row whose label has two lines: the label left, the value always at the right, never stacked under the note as
+// the system's picker row does when the label runs long (the template's Afterwards, 11-11).
+struct MenuRow<V: Hashable, Options: View>: View {
+    let title: String, note: String
+    @Binding var selection: V
+    @ViewBuilder let options: () -> Options
+    var body: some View {
+        HStack(spacing: 12) {
+            TwoLine(title, note)
+            Spacer(minLength: 8)
+            Picker(title, selection: $selection, content: options).labelsHidden().pickerStyle(.menu).fixedSize()
+        }
+        .padding(.vertical, 2)
+    }
+}
 // A section's footer: a note under the card, smaller and quieter than the rows, never read as content. The app's font and
 // ink are set for everything at its root, footers included, which drew them at body size in the rows' own colour.
 struct SectionFoot: View {
@@ -1370,6 +1398,7 @@ struct ChannelsTab: View {
     @State private var adding = false
     @State private var offered: [MoreItem] = []
     @State private var lastAdded: String?
+    @Environment(\.horizontalSizeClass) private var size
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
 
@@ -1573,7 +1602,7 @@ struct ChannelsTab: View {
             ForEach(offered, id: \.id) { pickRow($0) }
         } header: { SectionHead(icon: "square.grid.2x2.fill", text: "On your Chumby") }
         Section {
-            Picker("Category", selection: $category) {
+            MenuRow(title: "Category", note: "Widgets made for the Chumby", selection: $category) {
                 Text("Choose one").tag("")
                 ForEach(categories, id: \.0) { Text($0.1).tag($0.0) }
             }
@@ -1691,7 +1720,8 @@ struct ChannelsTab: View {
     // not "Now playing", which on Sounds means music.
     var onScreen: some View {
         Section {
-            if wide { ScreenRow() }
+            // Open flat and open in portrait (the posture he holds, whose page was half bare sea); folded, Home has it.
+            if wide || size == .regular { ScreenRow() }
             Menu("Jump to a widget") {
                 ForEach(model.state.widgetNames.sorted(), id: \.self) { n in Button(n) { model.cmd("widget", n, id: "nowPlaying") } }
             }.foregroundStyle(.tint)
@@ -2187,10 +2217,13 @@ struct TinkerTab: View {
                     Button("Connect") { connect() }.disabled(address.isEmpty || address == model.address)
                     if let f = model.failed("connect") { FailNote(text: f) }
                 } label: {
-                    HStack(spacing: 10) {
-                        Circle().fill(model.unreachable ? Color.red : ChumbyPalette.on).frame(width: 9, height: 9)
-                        Text(model.unreachable ? "Can’t reach the Chumby" : "Connected")
+                    // A tile like Restart's and Reboot's above it, so its words start in their column.
+                    HStack(spacing: 14) {
+                        Image(systemName: model.unreachable ? "wifi.exclamationmark" : "wifi").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                            .frame(width: 32, height: 32).background(model.unreachable ? ChumbyPalette.remove(dark) : ChumbyPalette.on, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        Text(model.unreachable ? "Can’t reach the Chumby" : "Connected").font(.body.weight(.semibold))
                     }
+                    .padding(.vertical, 2)
                 }
             } header: { SectionHead(icon: "wrench.and.screwdriver.fill", text: "The Chumby") }
             Text("Black Chumby photo: Edward Yanquen, Wikimedia Commons, CC BY 2.0, cut out and retouched. Octopus and wordmark: Chumby’s own artwork, from this device.").font(.caption2).foregroundStyle(.secondary).listRowBackground(Color.clear)
@@ -2235,6 +2268,8 @@ struct RowRemove: View {
                 .frame(width: 44, height: 44).contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
+        // Laid out at 36 pt so a row with one is no taller than before; the 44 pt target hangs 4 pt past it all round.
+        .padding(-4)
         .accessibilityLabel(label)
     }
 }

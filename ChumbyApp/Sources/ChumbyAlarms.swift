@@ -751,7 +751,7 @@ struct AlarmsTab: View {
     @State private var skipping = false
     @ViewBuilder var glance: some View {
         if !model.stateKnown {
-            HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) }.padding(.vertical, 6)
+            HStack(spacing: 10) { ProgressView(); TwoLine("Reaching the Chumby…", "What rings next shows once it answers.").foregroundStyle(.secondary) }.padding(.vertical, 6)
         } else if let n = model.nextRing() {
             // A "just this once" standing behind the Chumby's skip is that alarm moved for one ring, never a skip: the
             // moved time leads, the usual one is said in words, and "Back to 6:45 AM" takes it back (Richard,
@@ -883,9 +883,6 @@ struct AlarmsTab: View {
     // His own alarms: blue alarm tiles, each saying when it repeats and what it plays.
     var yours: some View {
         Section {
-            if model.stateKnown && mine.isEmpty {
-                Text("None of your own yet.").foregroundStyle(.secondary)
-            }
             ForEach(mine, id: \.key) { a in
                 AlarmRow(clock: (a.clock, a.meridiem), title: a.name.isEmpty ? "Alarm" : a.name,
                          detail: [a.whenUnlessNamed, a.soundText].filter { !$0.isEmpty }.joined(separator: " · "), on: a.isOn, mark: a.key,
@@ -913,7 +910,15 @@ struct AlarmsTab: View {
             // The end of the card: one row, tapped anywhere, as Channels' Add widgets. Nothing floats over the page, so
             // nothing can cover the Nap chips under it (Richard's Alarms shot, 2026-11-05).
             Button { edit(nil) } label: {
-                Label("Add alarm", systemImage: "plus.circle.fill").font(.body.weight(.semibold))
+                // With none of his own, the row says so on its second line: one card row, never a lone capsule.
+                Label {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Add alarm").font(.body.weight(.semibold))
+                        if mine.isEmpty {
+                            Text(model.stateKnown ? "None of your own yet" : "Yours show once the Chumby answers").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    }
+                } icon: { Image(systemName: "plus.circle.fill").font(.body.weight(.semibold)) }
                     .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
                     .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
             }
@@ -1028,7 +1033,8 @@ struct AlarmsTab: View {
                 // Off, the row says what it is and that a tap turns it on; a bare label read as a row that opened something.
                 Button { Task { await wake.enable() } } label: {
                     HStack(spacing: 8) {
-                        Label("Wake me from my calendar", systemImage: "calendar.badge.clock")
+                        // What it does on the row's second line (it was the footer, under a near-capsule: designer, 11-11).
+                        Label { TwoLine("Wake me from my calendar", "Wakes you before the first thing each day.") } icon: { Image(systemName: "calendar.badge.clock") }
                         Spacer(minLength: 8)
                         Text("Turn on").font(.subheadline.weight(.semibold)).foregroundStyle(ChumbyPalette.cal(scheme == .dark))
                             .padding(.horizontal, 12).padding(.vertical, 6).background(ChumbyPalette.cal(scheme == .dark).opacity(0.14), in: Capsule())
@@ -1063,7 +1069,6 @@ struct AlarmsTab: View {
             // Only what's wrong or waiting, and what turning it on does. No reassurance (Richard, 2026-11-05: "i dont need
             // this message abt it ringing when my phone isnt on esp not twice").
             if let n = wake.note { SectionFoot(n) }
-            else if !wake.rules.enabled { SectionFoot("Wakes you before the first thing each day.") }
         }
     }
 }
@@ -1469,15 +1474,10 @@ struct AlarmEditor: View {
                     // No Backup beep switch: the Chumby saves every alarm with backup 0 whatever it's sent (do_save, since
                     // 11-05: the stock beeper killed the alarm panel), so turning it on here came back off after Save.
                     // What it's for, said in the row: alone, "Then" was a one-row capsule (designer, 11-11).
-                    // The note is the picker's own label's second line, so the row stays the system's picker row.
-                    Picker(selection: $after) { ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) } } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Then")
-                            Text(calendarTemplate ? "What the screen does once it stops ringing, for every alarm your calendar sets."
-                                 : "What the screen does once it stops ringing.").font(.subheadline).foregroundStyle(.secondary)
-                        }
+                    // The value stays at the right whatever the width (the system's row stacked it under a long label).
+                    MenuRow(title: "Then", note: "What the screen does once it stops ringing.", selection: $after) {
+                        ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) }
                     }
-                    .padding(.vertical, 2)
                 } header: { SectionHead(icon: "arrow.turn.down.right", text: "Afterwards") }
                 // One of his repeating alarms: later or another sound for its next ring only (the Chumby's skip is pinned by name,
                 // so it needn't be the next alarm to ring).

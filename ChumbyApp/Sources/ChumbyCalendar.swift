@@ -293,8 +293,8 @@ struct CalendarSettingsSections: View {
     var body: some View {
         Group {
             Section {
-                Toggle("Wake me from my calendar", isOn: $wake.rules.enabled)
-                    .soloCard(note: "An alarm before the first thing each day.")
+                Toggle(isOn: $wake.rules.enabled) { TwoLine("Wake me from my calendar", "An alarm before the first thing each day.") }
+                    .soloCard()
             }
             Section {
                 leadRow("Work", $wake.rules.workLead)
@@ -313,9 +313,11 @@ struct CalendarSettingsSections: View {
             // Only on a Chumby that knows how.
             if let on = model.state.calOverride {
                 Section {
-                    Toggle("Calendar days skip my other alarms", isOn: Binding(get: { on == 1 }, set: { v in Task { await model.setCalendarOverride(v) } }))
-                        .soloCard(note: on == 1 ? "On a day your calendar wakes you, your repeating alarms stay quiet. They ring as usual the day after."
-                                  : "Your repeating alarms ring as usual, even on days your calendar wakes you.", on: model.failed("calover") == nil)
+                    Toggle(isOn: Binding(get: { on == 1 }, set: { v in Task { await model.setCalendarOverride(v) } })) {
+                        TwoLine("Calendar days skip my other alarms", on == 1 ? "On a day your calendar wakes you, your repeating alarms stay quiet. They ring as usual the day after."
+                                : "Your repeating alarms ring as usual, even on days your calendar wakes you.")
+                    }
+                    .soloCard(on: model.failed("calover") == nil)
                     if let f = model.failed("calover") { FailNote(text: f) }
                 } header: { SectionHead(icon: "bell.slash.fill", text: "Skipping other alarms") }
             }

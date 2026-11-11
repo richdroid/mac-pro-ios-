@@ -385,6 +385,8 @@ struct JustOnceSheet: View {
                     .buttonStyle(.plain)
                 }
             }
+            // The line under the chips starts at the chips' own left edge, the text column every other row's line starts at.
+            .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
             DatePicker("Rings at", selection: Binding(get: { at }, set: { d in
                 // A time on the clock, the next one from the usual time.
                 var t = d
@@ -396,7 +398,7 @@ struct JustOnceSheet: View {
         Section { SoundRows(choice: $sound, alarm: $alarm) } header: { SectionHead(icon: "music.note", text: "Sound") }
         Section {} footer: {
             SectionFoot(original.isCalendar ? "That day’s alarm moves to \(at.formatted(date: .omitted, time: .shortened)). The other days are as they were."
-                 : "The usual \(due.formatted(date: .omitted, time: .shortened)) is skipped and this rings in its place. It repeats as usual after.")
+                 : "The usual one is skipped and this rings in its place. It repeats as usual after.")
         }
     }
     func load() {

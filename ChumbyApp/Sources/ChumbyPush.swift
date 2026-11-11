@@ -141,12 +141,12 @@ struct NotifySettings: View {
     var body: some View {
         Section {
             // What it sends, said in the row (it was the footer, under a one-row capsule: designer, 11-11).
-            Toggle("Notify this iPhone", isOn: $enabled)
+            Toggle(isOn: $enabled) { TwoLine("Notify this iPhone", "Only when an alarm was missed or may not ring.") }
                 .onChange(of: enabled) { _, on in
                     if on { Task { denied = !(await ChumbyNotify.shared.ask()) } }
                     ChumbyNotify.shared.share()
                 }
-                .soloCard(note: "Only when an alarm was missed or may not ring.", on: !askSettings)
+                .soloCard(on: !askSettings)
             #if canImport(UIKit)
             if askSettings, let u = URL(string: UIApplication.openSettingsURLString) {
                 Link("Allow notifications in Settings", destination: u)
