@@ -147,6 +147,16 @@ struct StatusBarTopReader: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(\.statusBarTop, top)
+            // The window's new size arrives as a turn starts; its new top inset only as it ends (CI 7169d6b: 0.45 s later),
+            // so the title moved after the page had settled. On the Duo the status bar is along the top only open upright
+            // (wide enough for two columns, taller than wide), so the new posture's value is taken from the size at once;
+            // the inset, when it comes, agrees.
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                guard size.width > 0 else { return }
+                let upright = size.width > 600 && size.height > size.width
+                let predicted: CGFloat = upright ? max(top, 20) : min(top, 19)
+                if (predicted < 20) != (top < 20) { top = predicted }
+            }
             // The system gives the new inset as a turn ends; the title's 14 pt step then eases rather than jumps.
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { v in
                 guard v != top else { return }
@@ -851,6 +861,9 @@ struct EvenGrid: Layout {
     // the page's width (a turn into open portrait laid the dials out at 311 pt, then 343 as the side bar's inset went to the
     // foot; designer, resize regate). Wide pages had over-large dials anyway; folded and in a pane they're narrower than this.
     var largest: CGFloat = 96
+    // To whole steps of 8 pt: the page's width settles a few points at a time after a turn (the side bar's inset arriving),
+    // and each step resized the dials and their row (CI 7169d6b: 220.5, 212.5, 212.0, 211.5 pt).
+    static func dial(_ cell: CGFloat, _ largest: CGFloat) -> CGFloat { min((cell / 8).rounded(.down) * 8, largest) }
     static func columns(_ n: Int, width: CGFloat) -> Int {
         let fit = max(Int((width + 12) / 76), 1)
         guard n > fit else { return max(n, 1) }
@@ -862,7 +875,7 @@ struct EvenGrid: Layout {
         let cell = max((width - spacing * CGFloat(across - 1)) / CGFloat(across), 0)
         var rows: [CGFloat] = []
         for (i, v) in subviews.enumerated() {
-            let h = v.sizeThatFits(ProposedViewSize(width: min(cell, largest), height: nil)).height
+            let h = v.sizeThatFits(ProposedViewSize(width: Self.dial(cell, largest), height: nil)).height
             if i % across == 0 { rows.append(h) } else { rows[rows.count - 1] = max(rows[rows.count - 1], h) }
         }
         return (across, cell, rows)
@@ -887,7 +900,7 @@ struct EvenGrid: Layout {
             for c in 0..<g.across {
                 let i = r * g.across + c
                 guard i < subviews.count else { break }
-                let w = min(g.cell, largest)
+                let w = Self.dial(g.cell, largest)
                 subviews[i].place(at: CGPoint(x: bounds.minX + CGFloat(c) * (g.cell + spacing) + (g.cell - w) / 2, y: y), proposal: ProposedViewSize(width: w, height: h))
             }
             y += h + rowSpacing
