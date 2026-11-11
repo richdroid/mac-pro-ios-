@@ -219,7 +219,16 @@ http.createServer((q, s) => {
     return s.end(JSON.stringify({ rows: items.length ? [{ title: 'Music', items }] : [] }));
   }
   if (q.url.startsWith('/api/tv/streams')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ streams: [['1080p', '1080p', 3.2, ''], ['1080p', '1080p', 1.4, ''], ['4K HDR', '4K', 18.4, 'HDR'], ['720p', '720p', 0.9, '']].map(([name, quality, gb, hdr], n) => ({ token: 's' + n, addon: 'Sample addon', name, description: 'Sample.Film.2024.' + quality + '.WEB-DL.x264', quality, hdr, gb, instant: n < 3 })) })); }
-  if (q.url.startsWith('/api/tv/discover')) { s.setHeader('content-type', 'application/json'); return s.end(tvStremio); }
+  if (q.url.startsWith('/api/tv/discover')) {
+    s.setHeader('content-type', 'application/json');
+    // A search of the catalogue answers as the real one does: one "Results" list of that kind (films or shows), the
+    // titles that hold the words. The Apps page's search asks this for films and for shows.
+    const u = new URL(q.url, 'http://x'), term = (u.searchParams.get('q') || '').trim().toLowerCase();
+    if (!term) return s.end(tvStremio);
+    const series = u.searchParams.get('type') === 'series', seen = new Set();
+    const hits = JSON.parse(tvStremio).rows.flatMap(r => r.items).filter(i => (i.kind === 'series') === series && i.kind !== 'youtube' && i.title.toLowerCase().includes(term) && !seen.has(i.title) && seen.add(i.title));
+    return s.end(JSON.stringify({ rows: hits.length ? [{ title: 'Results', items: hits }] : [] }));
+  }
   if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' }))) })); }
   if (q.url.startsWith('/api/tv/recs')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ films: ['Rope', 'Match Point', 'Blue Velvet', 'Klute'].map(title => ({ title, year: '1990', slug: title.toLowerCase(), imdb: 'tt1234567', art: tvBase + '/poster.png', why: 'Because you liked Heat' })) })); }
   // A search for the show on the TV finds it, as the real catalogue would (the app looks a series up by name when its
@@ -696,12 +705,14 @@ function tvReal(q, s, path, query, json) {
     const eps = [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' })));
     return late(3000, () => json({ about: 'A made-up comedy about a made-up family.', episodes: eps }));
   }
-  if (path === '/api/tv/stremio' || (path === '/api/tv/discover' && !query.get('q') && !query.get('genre'))) {
+  if (path === '/api/tv/stremio' || (path === '/api/tv/discover' && !query.get('genre'))) {
     const term = (query.get('q') || '').toLowerCase();
     if (!term) return late(700, () => json(home));
     const all = home.rows.flatMap(x => x.items), seen = new Set();
-    const hits = all.filter(i => i.title.toLowerCase().includes(term) && !seen.has(i.id) && seen.add(i.id));
-    return late(900, () => json({ rows: hits.length ? [{ title: 'Results', items: hits }] : [] }));
+    // The catalogue's own search (discover) answers one kind, and quickly; Stremio's answers both, slowly.
+    const kind = path === '/api/tv/discover' ? (query.get('type') === 'series' ? 'series' : 'movie') : null;
+    const hits = all.filter(i => i.title.toLowerCase().includes(term) && (!kind || (i.kind === 'series') === (kind === 'series')) && !seen.has(i.id) && seen.add(i.id));
+    return late(kind ? 150 : 900, () => json({ rows: hits.length ? [{ title: 'Results', items: hits }] : [] }));
   }
   if (q.method === 'POST' && path === '/api/tv/timing') return read(b => { log('timing', b); json({ ok: true }); });
   if (q.method === 'POST' && path === '/api/tv/key') return read(b => {

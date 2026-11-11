@@ -64,6 +64,12 @@ struct RootView: View {
             }
             return
         }
+        // Words typed into Watch's own search that find one film: it's shown, under its own name (fewer than eight used to
+        // come out as an empty page).
+        if pose == "watchsearch" {
+            Task { try? await Task.sleep(nanoseconds: 3_000_000_000); let s = BrowseStore.discover("movie"); s.query = "Heat"; s.searchSoon() }
+            return
+        }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
         if ["tour", "type", "episodes", "scrub", "island"].contains(pose) { return }
         // The Remote's picture hidden, then shown again, as its held menu does it: filmed, so each change is seen to fade.
