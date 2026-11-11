@@ -187,7 +187,7 @@ struct ManageAppsView: View {
             ZStack {
                 TVLook.bannerTile
                 // Mint's tile as the Apps tab draws it, not the APK's home-made banner.
-                if app.pkg == MintBanner.pkg { MintBanner() }
+                if app.pkg == MintBanner.pkg { MintBanner(iconOnly: true) }
                 else if app.hasIcon, let u = TVBridge.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
                     Art(url: u) { i in
                         if app.wide == true { i.resizable().scaledToFill() } else { i.resizable().scaledToFit().padding(5) }
@@ -209,16 +209,23 @@ struct ManageAppsView: View {
             if let s = store.state {
                 // An app can only move within its own row on the TV, so that's how they're grouped here.
                 ForEach(rows(s), id: \.self) { row in
-                    Section(rowTitle(row)) {
+                    // No heading when the TV has one row of apps ("Apps" under "Apps on the TV" said nothing); when it has
+                    // more, the same small heading as every other card's (gate 276, fourth pass).
+                    Section {
                         let inRow = s.apps.filter { ($0.row ?? "APPS") == row }
                         ForEach(inRow) { app in
                             // Edit shows the system's minus on the apps that can go, and nothing on the locked ones.
-                            appRow(app).deleteDisabled(!app.removable).listRowBackground(TVLook.glassRow)
+                            appRow(app).deleteDisabled(!app.removable)
+                                // One even fill, not a material per row: each row's blur sampled its own patch of the
+                                // wall, and the card read as two blocks with a line between (fourth pass).
+                                .listRowBackground(Color.white.opacity(0.09))
                         }
                         .onMove(perform: s.canArrange ? { from, to in move(in: row, from: from, to: to) } : nil)
                         // Deleting from Edit mode asks the same question as the swipe: Edit showed only drag handles, and
                         // the one way to delete was a swipe the footer had to explain (the 2026-11-10 logic pass).
                         .onDelete { at in if let i = at.first, inRow[i].removable { removing = inRow[i] } }
+                    } header: {
+                        if rows(s).count > 1 { Text(rowTitle(row)).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).textCase(nil) }
                     }
                 }
                 // Plain words under the groups, not a one-row glass section (iOS draws one as a capsule; gate 276).
@@ -245,6 +252,10 @@ struct ManageAppsView: View {
         .settledAnimation(.easeOut(duration: 0.25), value: store.state?.apps.map(\.pkg))
         // Its rows in the cards' glass, over the wall (set after the top fade, so the fade never blacks the wall out).
         .scrollContentBackground(.hidden)
+        // The page's name where the other pushed pages put theirs: the list's own room above its first section set it
+        // about 23 pt lower (fourth pass).
+        .contentMargins(.top, 0, for: .scrollContent)
+        .listSectionSpacing(.compact)
         .summonsBar()
         .topShade().topFade()
         // The same wall as the rest of Settings, outside the fade's mask so its top isn't a black band.

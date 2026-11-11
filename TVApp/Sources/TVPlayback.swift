@@ -489,7 +489,10 @@ struct KeyGlass: ViewModifier {
     func body(content: Content) -> some View {
         let wall = model.mood ?? store.band ?? Color(hex: 0x4A1A5C)
         // 80 %: at half, a wall of several colours still came through each key (third pass, the YouTube wall).
-        content.glassEffect(.regular.tint(wall.mix(with: .black, by: 0.45).opacity(0.8)).interactive(), in: Circle())
+        // And a solid disc of that colour under the key's face, so no wall, however busy, reaches through (fourth pass).
+        let tone = wall.mix(with: .black, by: 0.45)
+        content.background(Circle().fill(tone))
+            .glassEffect(.regular.tint(tone.opacity(0.8)).interactive(), in: Circle())
     }
 }
 extension View { func keyGlass() -> some View { modifier(KeyGlass()) } }

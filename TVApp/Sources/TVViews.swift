@@ -2047,15 +2047,17 @@ private struct OnTVMark: View {
 // (gate 276, law 3).
 struct MintBanner: View {
     static let pkg = "com.codex.musicwebtv"
+    // A thumbnail beside the app's own name: the icon alone, no words too small to read.
+    var iconOnly = false
     var body: some View {
         GeometryReader { g in
             let h = g.size.height
             HStack(spacing: h * 0.13) {
-                Image("MintIcon").resizable().interpolation(.high).scaledToFit().frame(width: h * 0.46, height: h * 0.46)
-                Text("Mint Music").font(.system(size: h * 0.2, weight: .bold)).tracking(-0.2).foregroundStyle(.white)
-                    .lineLimit(1).minimumScaleFactor(0.6)
+                Image("MintIcon").resizable().interpolation(.high).scaledToFit().frame(width: h * (iconOnly ? 0.66 : 0.46), height: h * (iconOnly ? 0.66 : 0.46))
+                if !iconOnly { Text("Mint Music").font(.system(size: h * 0.2, weight: .bold)).tracking(-0.2).foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.6) }
             }
-            .padding(.horizontal, h * 0.16)
+            .padding(.horizontal, iconOnly ? 0 : h * 0.16)
             .frame(width: g.size.width, height: h)
         }
         .background(Color(hex: 0x263238))
@@ -2195,7 +2197,9 @@ struct AppsTab: View {
         }
     }
     // Open flat: two across each side, at one width.
-    var paneTile: CGFloat { BannerRow.width(2, in: max(min(leftWidth - 40, rightWidth - 60), 1)) }
+    // The right pane's room measured runs under the side bar's edge: a further 24 pt keeps its tiles ending where
+    // Settings' cards do open flat (fourth pass: 13 pt from the rail).
+    var paneTile: CGFloat { BannerRow.width(2, in: max(min(leftWidth - 40, rightWidth - 84), 1)) }
     // Before the first answer, the shape of the page instead of a blank one.
     var waiting: some View {
         HStack(spacing: TVLook.gap) {
