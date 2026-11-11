@@ -375,7 +375,10 @@ final class ChumbyModel: ObservableObject {
     // one that cleared itself after six seconds was gone before a locked phone was looked at again.
     static let keptNotes: Set<String> = ["skip", "pandora"]
     @Published private(set) var kept: [String: String] = [:]
-    func letGo(_ id: String) { if kept[id] != nil { withAnimation(.snappy) { kept[id] = nil } } }
+    func letGo(_ id: String) {
+        if kept[id] != nil { withAnimation(.snappy) { kept[id] = nil } }
+        if id == "skip" { ChumbyNotify.shared.skipSettled() }
+    }
     // The ✕ for a note that stays; nil for one that clears itself.
     func dismissal(_ id: String) -> (() -> Void)? { kept[id] == nil ? nil : { [weak self] in self?.tick(); self?.letGo(id) } }
     func fail(_ id: String, _ text: String) {
@@ -687,7 +690,7 @@ final class ChumbyModel: ObservableObject {
             // once") reads it for itself.
             let wanted = state.skipped
             skipSettle?.cancel()
-            if settle { skipSettle = Task { await settleSkip(wanted: wanted) } }
+            if settle { holdForSkipCheck(); skipSettle = Task { await settleSkip(wanted: wanted, alarmAt: wanted?.date); if !Task.isCancelled { endSkipHold() } } }
             return nil
         }
         skipWanted = nil
@@ -701,7 +704,12 @@ final class ChumbyModel: ObservableObject {
         skipWanted = (nil, Date().addingTimeInterval(10))
         tick()
         hold(4)
-        guard let why = await sendInOrder("unskip", extra: "") else { skipSettle?.cancel(); if settle { skipSettle = Task { await settleSkip(wanted: nil) } }; return }
+        guard let why = await sendInOrder("unskip", extra: "") else {
+            skipSettle?.cancel()
+            // The alarm that stays skipped if this undo doesn't land: the one the skip was on.
+            if settle { holdForSkipCheck(); skipSettle = Task { await settleSkip(wanted: nil, alarmAt: before?.date); if !Task.isCancelled { endSkipHold() } } }
+            return
+        }
         skipWanted = nil
         state.skipped = before; deviceState.skipped = before
         fail("skip", "Couldn’t undo the skip. \(why)")
@@ -719,7 +727,23 @@ final class ChumbyModel: ObservableObject {
         guard let wanted else { return now == nil }
         return now.map { $0.name == wanted.name && abs($0.at - wanted.at) < 60 } ?? false
     }
-    private func settleSkip(wanted: SkippedAlarm?) async {
+    // The check outlives the app being left: he skips or undoes and locks the phone, and iOS would otherwise stop the
+    // app before the last reading, 22 s on. Held as the Mac Pro app holds a send (one hold; a newer check takes it over).
+    #if canImport(UIKit)
+    private var skipHold = UIBackgroundTaskIdentifier.invalid
+    #endif
+    private func holdForSkipCheck() {
+        #if canImport(UIKit)
+        endSkipHold()
+        skipHold = UIApplication.shared.beginBackgroundTask(withName: "Chumby skip check") { [weak self] in self?.endSkipHold() }
+        #endif
+    }
+    private func endSkipHold() {
+        #if canImport(UIKit)
+        if skipHold != .invalid { UIApplication.shared.endBackgroundTask(skipHold); skipHold = .invalid }
+        #endif
+    }
+    private func settleSkip(wanted: SkippedAlarm?, alarmAt: Date? = nil) async {
         func agrees() -> Bool { Self.skipAgrees(deviceState.skipped, wanted) }
         doubted = nil
         var ok = false
@@ -738,6 +762,8 @@ final class ChumbyModel: ObservableObject {
             skipWanted = nil
             relay()
             doubted = .some(wanted)
+            // Left the app by now: said as a notification too, since the note at the card is only seen on coming back.
+            if !running { await ChumbyNotify.shared.skipUnconfirmed(undo: wanted == nil, at: alarmAt) }
             fail("skip", wanted == nil ? "The Chumby didn’t confirm the undo. Check the alarm before you sleep." : "The Chumby didn’t confirm the skip. Check the alarm before you sleep.")
         }
         // The widgets show the skip too, so they mustn't wait for their next refresh to catch up.
