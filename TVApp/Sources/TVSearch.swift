@@ -114,8 +114,10 @@ struct SearchHit: Identifiable, Hashable {
     var id: String { kind.rawValue + ":" + (item.stremioRef?.imdb ?? item.id) }
     var source: MediaSource { kind == .music ? .mint : .stremio }
     // Exact first, then strong matches with his own first, then everything else.
-    var rank: (Int, Int, Int, Int, Int) {
-        (match >= 98 ? 1 : 0, match >= 72 ? 2 : match >= 60 ? 1 : 0, mine, match, -order)
+    // On a tie, an app named exactly, then a show or film, then a video, then music.
+    var rank: (Int, Int, Int, Int, Int, Int) {
+        let pref = kind == .app ? 3 : kind == .show || kind == .film ? 2 : kind == .video ? 1 : 0
+        return (match >= 98 ? 1 : 0, match >= 72 ? 2 : match >= 60 ? 1 : 0, mine, match, pref, -order)
     }
     static func better(_ a: SearchHit, _ b: SearchHit) -> Bool { a.rank > b.rank }
     // What one tap does, said on the top result.
@@ -303,7 +305,11 @@ final class SearchStore: ObservableObject {
         // The Mac's answer to these words, else to the nearest words asked before, part by part.
         let exact = answers[key]
         let near = answers.filter { $0.key != key && (key.hasPrefix($0.key) || $0.key.hasPrefix(key)) }.sorted { $0.key.count > $1.key.count }.map(\.value)
-        func part(_ get: (Answer) -> [MediaItem]?) -> [MediaItem] { (exact.flatMap(get) ?? near.lazy.compactMap(get).first) ?? [] }
+        // An answer to other words only keeps what these words still match; this one's own is shown whole.
+        func part(_ get: (Answer) -> [MediaItem]?) -> ([MediaItem], String?) {
+            if let e = exact.flatMap(get) { return (e, "") }
+            return (near.lazy.compactMap(get).first ?? [], nil)
+        }
         let mine = Mine.now()
         var seen = Set<String>()
         var hits: [SearchHit] = []
@@ -331,10 +337,10 @@ final class SearchStore: ObservableObject {
             return nil
         }
         // The Mac's answers first, in their own order.
-        for (n, i) in part(\.shows).enumerated() { add(i, .show, order: n, haystack: "") }
-        for (n, i) in part(\.films).enumerated() { add(i, .film, order: n, haystack: "") }
-        for (n, i) in part(\.music).enumerated() { add(i, .music, order: n, haystack: "") }
-        for (n, i) in part(\.youtube).enumerated() { add(i, .video, order: n, haystack: "") }
+        for (get, kind) in [(\Answer.films, SearchHit.Kind.film), (\.shows, .show), (\.music, .music), (\.youtube, .video)] {
+            let (list, whole) = part { $0[keyPath: get] }
+            for (n, i) in list.enumerated() { add(i, kind, order: n, haystack: whole) }
+        }
         // Then everything the phone knows, which answers the first key at once and forgives a slip.
         for (n, i) in Mine.corpus().enumerated() {
             if let k = i.1 ?? kindOf(i.0) { add(i.0, k, order: 1000 + n) }
@@ -345,7 +351,8 @@ final class SearchStore: ObservableObject {
         }
         // Words of one letter only find what's his or what starts with it.
         if q.count < 2 { hits.removeAll { $0.match < 90 && $0.mine == 0 } }
-        hits.sort(by: SearchHit.better)
+        // Stable, so on a full tie a film (asked first) leads a show of the same name.
+        hits = hits.enumerated().sorted { a, b in a.element.rank != b.element.rank ? a.element.rank > b.element.rank : a.offset < b.offset }.map(\.element)
         // The one he most likely means, when it's clear enough: an exact or strong match, or one of his own.
         if let first = hits.first, first.match >= 72 || (first.mine > 0 && first.match >= 55) {
             r.top = first
