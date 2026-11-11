@@ -1,7 +1,8 @@
 name: TV search (branch)
-# A working branch's own short run: the TV app's search, shot and filmed in every posture (open upright, the posture he
-# holds, first; then open flat; then folded). Only for pushes to tv-search-ci; published to the tv-search-ci release.
-# The full build, the TV app's own run and their releases are untouched.
+# A working branch's own short run: the TV app's one search and its descriptions that open in place, shot and filmed in
+# every posture (open upright, the posture he holds, first; then open flat; then folded). Only for pushes to
+# tv-search-ci; published to the tv-search-ci release. The full build, the TV app's own run and their releases are
+# untouched, and nothing here waits on or cancels them.
 on:
   push:
     branches: [tv-search-ci]
@@ -13,7 +14,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +31,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 45
+        timeout-minutes: 55
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -50,45 +51,57 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
           }
+          # A film of one pose: recorded from before the launch, a shot taken at `at` seconds, stopped at `len`.
+          film() {
+            local name=$1 display=$2 at=$3 len=$4 address=$5; shift 5
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $at
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            sleep $((len - at))
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
-          probe() {
+          posture() {
             local d=$1 x=$2
-            shot probe-tab0$x $d 7 $M -tab 0
-            shot probe-tab6$x $d 7 $M -tab 6
-            shot probe-focus$x $d 12 $M -tab 6 -pose searchfocus
-            # Real keys, filmed: the field takes the keyboard, then four letters typed through Device Hub.
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-probe-type$x.mp4 > /dev/null 2>&1 & REC=$!
-            sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 6 -pose searchfocus
-            sleep 8
-            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-probe-focus2$x.png
-            $D "$DEVICE" tree > dist/tv-probe-tree$x.log 2>&1 || echo "tree failed"
-            date +%s.%N; $D "$DEVICE" type "heat" || echo "type failed"; date +%s.%N
+            rm -f /tmp/tv-home-applied.log
+            # A simulator's first keyboard is slow: thrown away once, then the shots that count.
+            shot warm$x $d 10 $M -pose searchempty
+            shot search-empty$x $d 10 $M -pose searchempty
+            # Typed a key at a time from the first: H, He, Hea, Heat. Filmed, with the last frame shot.
+            film search-type$x $d 9 11 $M -pose searchtype
+            shot search-show$x $d 12 $M -pose searchtype-show
+            shot search-slip$x $d 10 $M -pose searchtype-slip
+            shot search-tab$x $d 8 $M -tab 6
+            # The Remote's search field, which opens the same search.
+            shot search-remote$x $d 12 $M -tab 0 -pose remotesearch
+            # Real keys through Device Hub, filmed: the search tab, then "heat" typed on the keyboard.
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-search-keys$x.mp4 > /dev/null 2>&1 & REC=$!
             sleep 2
-            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-probe-typed$x.png
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 6
+            sleep 8
+            date +%s.%N; $D "$DEVICE" type "heat" || echo "type failed"; date +%s.%N
+            sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-search-keys$x.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
-            # The system's own search field in the search tab, at rest and with its tree.
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 6 -searchProbe system
-            sleep 8
-            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-probe-system$x.png
-            $D "$DEVICE" tree > dist/tv-probe-system-tree$x.log 2>&1 || echo "tree failed"
-            $D "$DEVICE" tap "Search" || $D "$DEVICE" tap "Shows, films, music, apps" || echo "tap failed"
-            sleep 4
-            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-probe-system-tapped$x.png
-            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # A film's words opened in place on its streams page, then closed again.
+            film blurb$x $d 10 17 $M -tab 3 -pose blurbopen
+            grep -E 'what=(search|focus)' /tmp/tv-home-applied.log > dist/search-timings$x.log 2>/dev/null || echo "no timings" > dist/search-timings$x.log
           }
           $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
-          probe 3 -portrait
+          posture 3 -portrait
           $D "$DEVICE" rotate 3 || true; sleep 5
-          probe 3 -open
+          posture 3 -open
           $D "$DEVICE" rotate 1 || true; sleep 3
           $D "$DEVICE" pose closed || true; sleep 5
           $D "$DEVICE" rotate 1 || true; sleep 3
-          probe 1 ""
+          posture 1 ""
           ls dist
       - name: Publish
         if: always()

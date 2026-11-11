@@ -4,7 +4,7 @@ import UIKit
 #endif
 
 // Mint and Stremio, pared down: what they already show, on the phone, ready to flick to the TV.
-struct MediaItem: Decodable, Identifiable, Hashable {
+struct MediaItem: Codable, Identifiable, Hashable {
     let title: String, subtitle: String, art: String, id: String, kind: String
     var about: String?
     var progress: Double?
@@ -13,7 +13,7 @@ struct MediaItem: Decodable, Identifiable, Hashable {
     var resume: Int?
     var isYouTube: Bool { kind == "youtube" }
 }
-struct MediaRow: Decodable, Identifiable, Hashable {
+struct MediaRow: Codable, Identifiable, Hashable {
     let title: String, items: [MediaItem]
     var id: String { title }
 }
@@ -400,19 +400,8 @@ struct BrowseColumn: View {
             LazyVStack(alignment: .leading, spacing: 24) {
                 // The app's name leads the page. Unfolded, the other side keeps its room empty, so both sides' rows start level.
                 PageHeading(store.source.name).padding(.horizontal, 20).padding(.bottom, -10).opacity(part == .right ? 0 : 1).accessibilityHidden(part == .right)
-                if part != .right { HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField(store.source.prompt, text: $store.query).autocorrectionDisabled().submitLabel(.search)
-                        .focused($searchFocused).hidesTabBar(while: searchFocused, "browse")
-                        .onChange(of: store.query) { _, _ in store.searchSoon() }
-                    if !store.query.isEmpty {
-                        Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search")
-                            .transition(.opacity)
-                    }
-                }
-                .padding(.horizontal, 16).frame(height: 46)
-                .glassEffect(.regular, in: Capsule())
-                .padding(.horizontal, 20) }
+                // The one search (the Search tab), which finds this app's things among everything else.
+                if part != .right { OpensSearchField(prompt: store.source.prompt).padding(.horizontal, 20) }
                 if store.rows.isEmpty && part != .right {
                     Group {
                         if store.loading { VStack(spacing: 22) { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } } }
@@ -536,80 +525,4 @@ struct FreeScroll: ScrollTargetBehavior {
 // Up and down, a page of rows comes to rest with a row's heading at the top, never half under the bar.
 extension View {
     func restsOnRows() -> some View { scrollTargetBehavior(.viewAligned(limitBehavior: .never)) }
-}
-
-// Stremio and Mint searched together, from the bar on the Apps page. Every result flicks like a card on its own page.
-struct EverywhereSearch: View {
-    @Environment(TVModel.self) var model
-    let text: String
-    // Films and shows from the catalogue's own search, which answers in about a tenth of a second where Stremio's took
-    // about a second (measured on the Mac, 2026-11-10: 0.05–0.2 s against 0.6–1.4 s), each under its own name.
-    @StateObject private var films = BrowseStore(.stremio, base: "/api/tv/discover?type=movie", found: "Films")
-    @StateObject private var shows = BrowseStore(.stremio, base: "/api/tv/discover?type=series", found: "Shows")
-    @StateObject private var music = BrowseStore(.mint)
-    var stores: [BrowseStore] { [films, shows, music] }
-    var foundRows: [MediaRow] { films.answerRows + shows.answerRows + music.answerRows }
-    // Films and shows are shown together once both have answered, or after 2.5 s at most, and music joins under them
-    // when it comes: films never arrive later and push in above the music being looked at (r18). "No results" only once
-    // every store has answered (r19: it showed "No results for 'Heat'" while the films were still coming, because
-    // music's empty answer came first).
-    @State private var settledFor: String?
-    var settled: Bool { settledFor == text }
-    var allAnswered: Bool { films.answered(text) && shows.answered(text) && music.answered(text) }
-    // Films and shows are shown as soon as both have answered (about a fifth of a second); music, which sits under
-    // them, joins when it comes, so nothing ever arrives above what he's looking at.
-    var watchAnswered: Bool { films.answered(text) && shows.answered(text) }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            ForEach(Array(stores.enumerated()), id: \.offset) { _, store in
-                ForEach(settled ? store.answerRows : []) { row in
-                    VStack(alignment: .leading, spacing: 8) {
-                        // The row's own name only: what's in it says whether it's films or music, not the app it's from.
-                        Text(row.title).font(.title3.weight(.bold))
-                            .padding(.leading, 20)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 10) {
-                                ForEach(row.items) { item in FlickCardButton(item: item, source: store.source, width: store.source.cardWidth) }
-                            }
-                            .padding(.horizontal, 20)
-                        }
-                        .rowEdge()
-                    }
-                    .transition(.opacity.combined(with: .offset(y: 12)))
-                }
-            }
-            if !settled || foundRows.isEmpty {
-                Group {
-                    if settled && allAnswered { ContentUnavailableView.search(text: text) } else { ProgressView() }
-                }
-                .frame(maxWidth: .infinity, minHeight: 220)
-                // Its own ground, so it never reads over whatever the page had under it (r18: over Watch's banners).
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
-                .padding(.horizontal, 20).padding(.top, 10)
-                // In once the page it replaces has faded out, never over it.
-                .transition(.opacity.animation(.easeOut(duration: 0.2).delay(0.15)))
-            }
-        }
-        .task(id: text) {
-            settledFor = nil
-            // Films and shows answered for this text, or 2.5 s gone by.
-            for _ in 0..<25 {
-                if watchAnswered { break }
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-            if !Task.isCancelled { settledFor = text }
-        }
-        // Keyed on the rows shown, not the answers: they changed before `settled` let the rows on, so the rows cut in (tv21 realsearch-open).
-        .settledAnimation(.spring(response: 0.4, dampingFraction: 0.85), value: settled ? foundRows.map(\.id) : [])
-        .onChange(of: text, initial: true) { _, t in
-            for s in stores { s.query = t; s.searchSoon() }
-        }
-        // The first card, as the grid shows it, for the build's search flow to tap.
-        .onChange(of: settled ? foundRows.first?.items.first?.id : nil, initial: true) { _, _ in
-            guard settled, let store = stores.first(where: { !$0.answerRows.isEmpty }), let i = store.answerRows.first?.items.first else { SendDraft.shared.firstResult = nil; return }
-            SendDraft.shared.firstResult = (i, store.source)
-            // The first few films or shows found are the likely picks: their streams asked for now, not on the tap.
-            if store.source == .stremio { for f in store.answerRows[0].items.prefix(3) { StreamCache.shared.prefetch(f) } }
-        }
-    }
 }

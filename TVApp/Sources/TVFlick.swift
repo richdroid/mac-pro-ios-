@@ -177,8 +177,6 @@ enum FlickReceipt {
     @MainActor static func thrown(_ id: String) { if id == lifted { lifted = "" } }
 }
 struct FlickScreen: View {
-    // Its entry in the side bar's Back, while choosing.
-    @State private var showInfo = false
     @State private var openedAt = Date.distantPast
     // The stream whose full description is open under its row.
     @State private var streamOpen: String?
@@ -605,16 +603,16 @@ struct FlickScreen: View {
         VStack(alignment: .leading, spacing: 8) {
             // Its full height held from the start, whatever words are in it and while the catalogue's are on their way,
             // so the late description crossfades in place and nothing under it moves.
+            // Tapped, the words open right here, with who's in it and who made it under them, and close again: never a
+            // page pushed over the choosing (Richard, 2026-11-11: "the description like expansion shouldnt come via the
+            // form of like another screen"). That page was the "Details" key's.
             if let t = blurbText ?? (blurbComing ? "" : nil) {
-                Text(t).font(.subheadline).foregroundStyle(.secondary).lineLimit(lines, reservesSpace: true)
-                    .fixedSize(horizontal: false, vertical: true).contentTransition(.opacity)
+                ExpandingText(text: t, lines: lines, reserves: true) {
+                    if let ref = item.stremioRef { TitleFacts(type: ref.type, imdb: ref.imdb) }
+                }
+                .contentTransition(.opacity)
             }
             HStack(spacing: 18) {
-                // Everything about it, before choosing (Richard, 2026-11-07: "an i to see full details of each before i flick").
-                if item.stremioRef != nil {
-                    Button { model.tick(); showInfo = true } label: { Label("Details", systemImage: "info.circle") }
-                        .font(.footnote.weight(.semibold)).tint(TVLook.accent)
-                }
                 if let slug = item.slug, !slug.isEmpty {
                     Button { model.tick(); model.post("film", ["slug": slug]); leave() } label: {
                         Label("Letterboxd", systemImage: "film")
@@ -622,7 +620,6 @@ struct FlickScreen: View {
                 }
             }
         }
-        .navigationDestination(isPresented: $showInfo) { TitleInfoPage(item: item, source: source, fromFlick: true) }
         .animation(.easeOut(duration: 0.2), value: blurbText)
     }
     var heading: some View {
