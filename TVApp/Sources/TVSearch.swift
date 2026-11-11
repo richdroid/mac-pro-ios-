@@ -506,6 +506,7 @@ struct SearchPage: View {
     @ObservedObject private var draft = SendDraft.shared
     @ObservedObject private var store = SearchStore.shared
     @FocusState private var focused: Bool
+    @State private var barAway = false
     var body: some View {
         // The field stays put above what scrolls, as the system's own search does. Inside the scroll view, open upright
         // the keyboard's own lift scrolled the page, and a scroll that puts the keyboard away put it away at once
@@ -571,7 +572,13 @@ struct SearchPage: View {
             TextField(panes ? "Search" : "Shows, films, music, apps", text: $draft.text)
                 .focused($focused).autocorrectionDisabled().textInputAutocapitalization(.never)
                 .submitLabel(link ? .send : .search)
-                .hidesTabBar(while: focused, "search")
+                // The bar follows the keyboard only once it has settled: a focus that flickers on and off as the page lays
+                // out never flickers the bar (the review of 43a292b: an empty capsule open upright).
+                .hidesTabBar(while: barAway, "search")
+                .onChange(of: focused) { _, on in
+                    if on { barAway = true; return }
+                    Task { try? await Task.sleep(nanoseconds: 400_000_000); if !focused { barAway = false } }
+                }
                 .onChange(of: focused) { _, on in
                     if UserDefaults.standard.string(forKey: "pose") != nil { Task { _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=focus&on=\(on ? 1 : 0)"), timeout: 3) } }
                 }
@@ -973,21 +980,39 @@ struct ExpandingText<Extra: View>: View {
     }
     var words: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // The whole text, always, in a window whose height is what moves: the first lines, or all of it. Swapping the
+            // line limit drew the whole text over the page for a frame and then snapped (the review of 43a292b); this way
+            // the words open and close on the spring with everything under them, and never draw outside their block.
             Text(text).font(font).foregroundStyle(.secondary)
-                .modifier(Lines(limit: open ? nil : lines, reserves: false))
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if !open { short = $0 } }
-                // The whole of it, unseen, to know whether there's more than the lines shown.
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: open ? full : min(full, short), alignment: .top)
+                .clipped()
+                // Where the window cuts the words, they fade, as a cut line would end in "…".
+                .mask {
+                    VStack(spacing: 0) {
+                        Color.black
+                        LinearGradient(colors: [.black, .black.opacity(cut && !open ? 0 : 1)], startPoint: .top, endPoint: .bottom).frame(height: 18)
+                    }
+                }
+                // The text swaps in as one: a later, longer description never crossfades over the first.
+                .animation(nil, value: text)
+                // Unseen measures: the first lines, and the whole.
                 .background(alignment: .topLeading) {
-                    Text(text).font(font).fixedSize(horizontal: false, vertical: true).hidden()
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full = $0 }
-                        .allowsHitTesting(false).accessibilityHidden(true)
+                    ZStack(alignment: .topLeading) {
+                        Text(text).font(font).lineLimit(lines).fixedSize(horizontal: false, vertical: true)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { short = $0 }
+                        Text(text).font(font).fixedSize(horizontal: false, vertical: true)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full = $0 }
+                    }
+                    .hidden().allowsHitTesting(false).accessibilityHidden(true)
                 }
             if open { extra().transition(.opacity.combined(with: .move(edge: .top))) }
             if cut || open {
                 Text(open ? "Less" : "More").font(.footnote.weight(.semibold)).foregroundStyle(TVLook.accent)
                     .contentTransition(.opacity)
+                    .animation(nil, value: cut)
             }
         }
     }
