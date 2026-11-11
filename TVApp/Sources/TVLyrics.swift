@@ -222,17 +222,21 @@ struct MusicDetailWatch: View {
 // Under a song on Playing: its words and what's next. Only on the page at all when Mint has one or the other.
 struct MusicExtras: View {
     @ObservedObject private var store = MusicDetailStore.shared
-    // Open flat, the words have the right pane to themselves and stand taller.
+    // Open flat, in the right pane: the words keep a short window and the queue its first three, so what he played
+    // before and the field to play something stay in sight under them.
     var tall = false
     @State private var appearedAt = Date()
     @Environment(\.scenePhase) private var phase
+    var shown: Int { tall ? 3 : 5 }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             if let d = store.detail, !d.lines.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     RowTitle("Lyrics")
                     Group {
-                        if d.synced { SyncedLyrics(lines: d.lines, line: store.line, height: tall ? 380 : 250, quiet: Date().timeIntervalSince(appearedAt) < 0.4) }
+                        // A fixed window, 12 pt clear of the heading so no line is ever cut under it. Open flat it stays
+                        // short enough that Recently played and Play on TV are still in the pane (gate dd1a, 276).
+                        if d.synced { SyncedLyrics(lines: d.lines, line: store.line, height: tall ? 176 : 250, quiet: Date().timeIntervalSince(appearedAt) < 0.4).padding(.top, 12) }
                         else { PlainLyrics(lines: d.lines, showsAll: $store.showsAll) }
                     }
                     .opacity(store.waiting ? 0 : 1)
@@ -244,7 +248,7 @@ struct MusicExtras: View {
                     RowTitle("Up next")
                     VStack(alignment: .leading, spacing: 0) {
                         VStack(spacing: 10) {
-                            ForEach(d.queue.prefix(5)) { item in
+                            ForEach(d.queue.prefix(shown)) { item in
                                 HStack(spacing: 12) {
                                     Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: {
                                         // No cover yet, or none: a note on the tile, never an empty box.
@@ -260,8 +264,8 @@ struct MusicExtras: View {
                                 .accessibilityElement(children: .combine)
                             }
                         }
-                        if d.remaining > min(d.queue.count, 5) {
-                            Text("and \(d.remaining - min(d.queue.count, 5)) more").font(.footnote.weight(.medium)).foregroundStyle(.secondary).padding(.top, 10)
+                        if d.remaining > min(d.queue.count, shown) {
+                            Text("and \(d.remaining - min(d.queue.count, shown)) more").font(.footnote.weight(.medium)).foregroundStyle(.secondary).padding(.top, 10)
                         }
                     }
                     .opacity(store.waiting ? 0 : 1)
@@ -311,7 +315,7 @@ private struct SyncedLyrics: View {
             .scrollTargetLayout()
             // The first line starts clear of the top fade, close under the heading; room under the last for it to sit
             // where the sung line sits.
-            .padding(.top, 36).padding(.bottom, height * 0.6)
+            .padding(.top, 44).padding(.bottom, height * 0.6)
             .animation(placed && !quiet ? Self.glide : nil, value: line)
         }
         .scrollPosition($position, anchor: Self.anchor)
@@ -320,6 +324,8 @@ private struct SyncedLyrics: View {
         .frame(height: height)
         .mask {
             VStack(spacing: 0) {
+                // The top few points fully clear, then the fade: a line leaving the top is gone before the edge.
+                Color.clear.frame(height: 8)
                 LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 36)
                 Color.black
                 LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 56)

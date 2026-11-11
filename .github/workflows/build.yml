@@ -522,7 +522,7 @@ jobs:
             # one the Mac hasn't found yet (r35: "spacing here is fucked", and an empty picture box).
             # Each shot must be of its own scene: the mock logs whose status was asked for (review of dfd490e: the video
             # with no still showed Mint's Sample Song, the sample's own status).
-            for S in rmint ryoutube ryoutubebare repisode; do
+            for S in rmint rmintplain ryoutube ryoutubebare repisode; do
               rm -f /tmp/tv-scene-status.log
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 2
               sleep 8
@@ -582,7 +582,7 @@ jobs:
             # a Stremio episode part way through (its title line and the bar to move along it), a film with its poster,
             # and a stream with no picture to be had.
             # The Playing tab folded and open with a song, a video with and without its still.
-            for S in rmint ryoutube ryoutubebare; do
+            for S in rmint rmintplain ryoutube ryoutubebare; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/$S -tab 2
               sleep 8
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-playing-$S$2.png

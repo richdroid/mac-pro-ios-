@@ -486,9 +486,10 @@ function chumbyScene(q, s) {
 //                 the status goes from the home screen to Stremio open, its player paused, then playing.
 //   /blankbanner  YouTube Music's banner as it once came from the Mac, white on white, to show the app's drawn one.
 //   /cold         Status as the real box first answers after a quiet spell: no CPU reading, nothing moving, no history.
-//   /rasleep /roffline /ryoutube /rmint /ridle /repisode
+//   /rasleep /roffline /ryoutube /rmint /rmintplain /ridle /repisode
 //                 The Remote's states: the TV asleep, the TV not answering, a YouTube video playing, Mint's music only,
-//                 nothing on (the home screen), and a Stremio episode part way through.
+//                 nothing on (the home screen), and a Stremio episode part way through. rmintplain is rmint with a song
+//                 whose words have no times (Mint's untimed lyrics), for the Playing tab's plain words and Show all.
 //   /rfilm /rjoin /rstall
 //                 The live picture's own states: a Stremio film playing with its poster (the stream stops for it); joining
 //                 a recording under way, as the bridge does it (headers at once, then after 1.2 s everything since the last
@@ -512,7 +513,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; return tvReal(q, s, path, query, json); }
@@ -539,6 +540,14 @@ function tvPose(q, s) {
   if (/^\/art[0-2]\.png$/.test(path)) {
     const tones = [[[200, 60, 40], [40, 20, 90]], [[30, 150, 110], [10, 40, 60]], [[230, 190, 60], [120, 30, 120]]][+path[4]];
     s.setHeader('content-type', 'image/png'); s.end(png(300, 300, tones[0], tones[1])); return true;
+  }
+  // Mint's screen for a song whose words have no times: only the words, more than the dozen the Playing tab shows at first.
+  if (scene === 'rmintplain' && path === '/api/tv/music-detail') {
+    const verse = ['Words that come with no times at all', 'Set down plainly, one after another', 'A line about a long drive home', 'And another about the rain', ''];
+    const words = [...verse, ...verse, ...verse, 'And the last line, on its own'];
+    return json({ ok: true, title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', playing: true, position_ms: 40000, duration_ms: 180000, airplay: false, asked_at: Date.now(),
+      lyrics: { status: '', synced: false, lines: words.map(w => [0, 0, w]) },
+      queue: { remaining: 7, items: ['Next Song', 'Another Song', 'Third Song'].map(title => ({ title, artist: 'Sample Artist', album: 'Sample Album', duration_ms: 200000, art: tvBase + '/art.png' })) } });
   }
   // No picture to be had: the stream answers and stays silent, and no still comes either.
   if (scene === 'rstall' && path === '/api/tv/screen-live') { s.writeHead(200, { 'content-type': 'video/h264', 'cache-control': 'no-store' }); s.flushHeaders(); return true; }
@@ -567,7 +576,7 @@ function tvPose(q, s) {
     q.on('close', () => { clearTimeout(wait); clearInterval(timer); });
     return true;
   }
-  if (/^r(tvoff|tvawayfilm|tvaway|cecoff|asleep|offline|youtube|youtubebare|mint|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
+  if (/^r(tvoff|tvawayfilm|tvaway|cecoff|asleep|offline|youtube|youtubebare|mint|mintplain|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
     const v = JSON.parse(tvStatus), now = Date.now();
     // Which scene's status the app really asked for, so a shot showing the sample's song can be told apart from one that
     // never reached its scene (review of dfd490e: ryoutubebare showed Mint's Sample Song).
@@ -585,7 +594,9 @@ function tvPose(q, s) {
     // minute or miss; r35: the Playing tab showed an empty box).
     if (scene === 'ryoutubebare') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Lil B - Gotham City [ Music Video ] [ Official ]', 'Lil B'], position: 83000, sampledAt: now, canSeek: false }; }
     if (scene === 'ryoutube') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Sample Video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 610000, canSeek: false, art: tvBase + '/api/tv/shot' }; }
-    if (scene === 'rmint') { v.app = 'com.codex.musicwebtv'; delete v.session; }
+    // The song mid-play as the shot is taken: the sample's own reading is stamped when the mock started, so by the shot
+    // the song had run out (3:00 / -0:00, gate dd1a).
+    if (scene === 'rmint' || scene === 'rmintplain') { v.app = 'com.codex.musicwebtv'; delete v.session; v.music.sampledAt = now; }
     if (scene === 'ridle') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'rjoin' || scene === 'rstall') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'rfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; }
