@@ -302,7 +302,7 @@ final class AppModel: ObservableObject {
     // States the build's screenshots need that the sample Mac doesn't have. Only with a pose; never on the phone.
     static func applyPose(_ pose: String, to s: inout Status) {
         switch pose {
-        case "alerts": s.alerts = Status.Alert.samples
+        case "alerts", "alertsdismiss": s.alerts = Status.Alert.samples
         case "api-none": s.apiUsage = Status.APIUsage(configured: false)
         case "api-refused": s.apiUsage = Status.APIUsage(configured: true, error: "Couldn’t read API usage: the Admin key was refused")
         case "api-live", "api-sheet": s.apiUsage = .sample

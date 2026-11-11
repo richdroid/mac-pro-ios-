@@ -43,9 +43,29 @@ final class StreamCache {
     func prefetch(_ item: MediaItem) {
         Self.pressedAt = Date()
         guard let ref = item.stremioRef, ref.type == "movie" || ref.video != nil else { return }
+        // And its link resolved on the TV now (a details page opened, a card pressed, a search's first results): a pick
+        // whose link wasn't resolved ahead took 7.5 to 13 s to play, one that was, 3 to 4.5 s (real TV, 2026-11-10).
+        Warm.ask(type: ref.type, imdb: ref.imdb, video: ref.video)
         let k = Self.key(ref.type, ref.imdb, ref.video ?? ref.imdb)
         if let e = entries[k], Date().timeIntervalSince(e.at) < Self.fresh { return }
         Task { _ = await streams(type: ref.type, imdb: ref.imdb, video: ref.video ?? ref.imdb) }
+    }
+}
+
+// A title's link resolved on the TV ahead of a pick, wherever one can begin. Nothing else happens there: the TV isn't
+// woken and nothing opens. The Mac does one at a time and never while something plays; here, the same title isn't
+// asked for again within ten minutes.
+enum Warm {
+    @MainActor private static var asked: [String: Date] = [:]
+    @MainActor static func ask(type: String, imdb: String, video: String?) {
+        guard type == "movie" || video != nil else { return }
+        let key = "\(type)/\(imdb)/\(video ?? imdb)"
+        if let at = asked[key], Date().timeIntervalSince(at) < 600 { return }
+        if asked.count > 60 { asked.removeAll() }
+        asked[key] = Date()
+        var body: [String: Any] = ["type": type, "imdb": imdb]
+        if let video { body["video"] = video }
+        Task { _ = try? await TVBridge.post("warm", body, timeout: 15) }
     }
 }
 
@@ -102,7 +122,9 @@ final class FlickClock {
 }
 
 // The streams the Mac tried under the last send that failed (the pick and its fallbacks).
-@MainActor enum TriedStreams { static var last: [String] = [] }
+// Only those whose player came up and never played (or errored); one that never got a player isn't among them and stays
+// his to pick. Nil when the Mac didn't say (an older one).
+@MainActor enum TriedStreams { static var last: [String]? }
 extension TVBridge {
     // The start of a stream, followed as the Mac reports it: a line as the TV wakes, as Stremio opens, as its player
     // comes up and as the film plays, then the answer. A Mac from before this answers once, at the end, in the old way,
@@ -134,7 +156,7 @@ extension TVBridge {
             if j["error"] != nil || j["failed"] != nil {
                 // Every stream the Mac tried, kept for the flick to set apart; and a start called off (his own Home, another
                 // app, a newer send) is not a failure.
-                if j["failed"] as? String == "start" { await MainActor.run { TriedStreams.last = (j["tried"] as? [String]) ?? [] }; throw DidNotStart() }
+                if j["failed"] as? String == "start" { await MainActor.run { TriedStreams.last = j["tried"] as? [String] }; throw DidNotStart() }
                 if j["error"] as? String == "Stopped" { throw CancellationError() }
                 if j["retry"] as? Bool == true { throw Slow() }
                 if j["failed"] as? String == "gone" || j["gone"] as? Bool == true { throw Gone() }

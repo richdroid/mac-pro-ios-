@@ -32,12 +32,15 @@ struct IslandCover: View {
     let state: TVIslandAttributes.ContentState
     var height: CGFloat
     var square = false
+    // How wide a still may be for its height: 4:3 on the Lock Screen; square in the opened island, where the width is
+    // the name's (a video's name beside a 4:3 still and ⏯ was cut to "Every Frame a Painting:…").
+    var widest: CGFloat = 1.33
     var body: some View {
         let radius: CGFloat = height >= 40 ? 6 : 5
         if let d = state.art, let i = UIImage(data: d) {
             let shape = i.size.width / max(i.size.height, 1)
             Image(uiImage: i).resizable().aspectRatio(contentMode: .fill)
-                .frame(width: height * (square ? 1 : min(max(shape, 0.66), 1.33)), height: height)
+                .frame(width: height * (square ? 1 : min(max(shape, 0.66), widest)), height: height)
                 .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
                 .overlay { RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(0.14), lineWidth: 0.5) }
                 .accessibilityHidden(true)
@@ -57,7 +60,7 @@ struct IslandTitles: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(state.title).font(.system(size: under ? 16 : 15, weight: .semibold)).foregroundStyle(.white).lineLimit(under ? 1 : 2)
-                .multilineTextAlignment(.leading)
+                .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
             if under { Text(state.subtitle).font(.system(size: 13)).foregroundStyle(.white.opacity(0.62)).lineLimit(1) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -186,7 +189,7 @@ struct IslandOpenBottom: View {
     var body: some View {
         VStack(spacing: 6) {
             HStack(spacing: 12) {
-                IslandCover(state: state, height: 48)
+                IslandCover(state: state, height: 48, widest: 1)
                 IslandTitles(state: state)
                 if !stale, state.timed { IslandPlay(playing: state.playing).padding(.trailing, -10) }
             }

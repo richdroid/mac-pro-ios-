@@ -33,7 +33,7 @@ targets:
         CFBundleDisplayName: Mac Pro
         CFBundleURLTypes: [{ CFBundleURLName: macproapp, CFBundleURLSchemes: [macproapp] }]
         CADisableMinimumFrameDurationOnPhone: true
-        UIBackgroundModes: [fetch]
+        UIBackgroundModes: [fetch, remote-notification]
         BGTaskSchedulerPermittedIdentifiers: [local.macpro.MacPro.alerts]
         NSFaceIDUsageDescription: Unlocks your saved logins before filling them on the Mac.
         # The Mac Pro's portrait on its glow from the first frame, pinned where Status draws it, so nothing jumps.
@@ -107,9 +107,11 @@ targets:
         UILaunchStoryboardName: ChumbyLaunch
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSCalendarsFullAccessUsageDescription: Chumby sets your alarms from what's on your calendar. Nothing leaves your phone but the alarm times and titles sent to your Chumby.
-        UIBackgroundModes: [fetch]
         BGTaskSchedulerPermittedIdentifiers: [local.macpro.Chumby.calendar]
         NSLocalNetworkUsageDescription: Chumby connects to your Chumby on your home network.
+        # Where the app hands the Mac its notification token; baked in at signing, like DefaultAddress, never in the repo.
+        MacAddress: ""
+        UIBackgroundModes: [fetch, remote-notification]
         NSBonjourServices: [_http._tcp]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

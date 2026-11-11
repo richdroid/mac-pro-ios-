@@ -8,13 +8,17 @@ import UIKit.UIGestureRecognizerSubclass
 struct ChumbyApp: App {
     @StateObject private var model = ChumbyModel()
     @Environment(\.scenePhase) private var phase
+    #if canImport(UIKit)
+    @UIApplicationDelegateAdaptor(ChumbyPushDelegate.self) private var pushDelegate
+    #endif
+    init() { ChumbyNotify.shared.install() }
     var body: some Scene {
         WindowGroup {
             RootView().environmentObject(model)
                 .font(.custom("Trebuchet MS", size: 16))
                 .toggleStyle(SwitchToggleStyle(tint: ChumbyPalette.on))
                 .onChange(of: phase) { _, p in
-                    if p == .active { model.start(); CalendarWake.shared.syncIfDue(); Task { await model.loadSongs(force: true) } } else { model.stop() }
+                    if p == .active { model.start(); CalendarWake.shared.syncIfDue(); ChumbyNotify.shared.share(); if model.tab == 2 { ChumbyNotify.shared.clearDelivered() }; Task { await model.loadSongs(force: true) } } else { model.stop() }
                     #if os(iOS)
                     if p == .background { CalendarWake.shared.scheduleRefresh() }
                     #endif
@@ -31,6 +35,12 @@ struct ChumbyApp: App {
                     TabTour.run([0, 1, 2, 3, 4]) { model.tab = $0 }
                 }
                 .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
+                // A tapped notification: Alarms, and the calendar alarm that wasn't set is tried again at once.
+                .onReceive(NotificationCenter.default.publisher(for: ChumbyNotify.opened)) { n in
+                    model.tab = 2
+                    ChumbyNotify.shared.clearDelivered()
+                    if n.object as? String == ChumbyNotify.unsetID { Task { await CalendarWake.shared.sync() } }
+                }
                 // While music plays on the Chumby, "Woke up to" and its widget follow it song by song, on any tab.
                 .task(id: model.state.musicPlaying) {
                     while model.state.musicPlaying && !Task.isCancelled {
@@ -44,6 +54,7 @@ struct ChumbyApp: App {
         // iOS decides when, so this only helps; the alarms already on the Chumby ring regardless.
         .backgroundTask(.appRefresh(CalendarWake.refreshID)) {
             await CalendarWake.shared.sync()
+            await ChumbyNotify.shared.afterBackgroundSync()
             await CalendarWake.shared.scheduleRefresh()
         }
         #endif
@@ -397,7 +408,7 @@ struct RootView: View {
                     Tab(value: 3) { NavigationStack { SoundsTab().tabPage(3, model) }.id(resets[3, default: 0]) } label: { tabLabel("sounds", "music.note") }
                     Tab(value: 4) { NavigationStack { TinkerTab().tabPage(4, model) }.id(resets[4, default: 0]) } label: { tabLabel("tinker", "wrench.adjustable") }
                 }
-                .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab") }
+                .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab"); if t == 2 { ChumbyNotify.shared.clearDelivered() } }
             }
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
@@ -2012,6 +2023,7 @@ struct TinkerTab: View {
             PageTitle("Enjoy tinkering?")
             ReachRow()
             NightSettings()
+            NotifySettings()
             Section {
                 ForEach(model.sys.tw, id: \.self) { h in
                     HStack(spacing: 12) {

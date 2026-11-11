@@ -106,12 +106,20 @@ struct IslandPage: View {
     var body: some View {
         Group { if ready { GalleryApp.island(page, real) } else { Color.black } }
             .task {
-                var got: [String: UIImage] = [:]
-                for (name, address) in Self.poster { if let d = await Self.fetch(address), let i = UIImage(data: d) { got[name] = i } }
-                // An album's cover, found by name in the public catalogue.
-                if let d = await Self.fetch("https://itunes.apple.com/search?term=abbey+road+beatles&entity=album&limit=1"),
-                   let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let first = (j["results"] as? [[String: Any]])?.first,
-                   let small = first["artworkUrl100"] as? String, let a = await Self.fetch(small.replacingOccurrences(of: "100x100", with: "600x600")), let i = UIImage(data: a) { got["album"] = i }
+                // All at once, so the page is up within one wait however many don't come.
+                let got = await withTaskGroup(of: (String, UIImage?).self) { group -> [String: UIImage] in
+                    for (name, address) in Self.poster { group.addTask { (name, await Self.fetch(address).flatMap { UIImage(data: $0) }) } }
+                    // An album's cover, found by name in the public catalogue.
+                    group.addTask {
+                        guard let d = await Self.fetch("https://itunes.apple.com/search?term=abbey+road+beatles&entity=album&limit=1"),
+                              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let first = (j["results"] as? [[String: Any]])?.first,
+                              let small = first["artworkUrl100"] as? String, let a = await Self.fetch(small.replacingOccurrences(of: "100x100", with: "600x600")) else { return ("album", nil) }
+                        return ("album", UIImage(data: a))
+                    }
+                    var out: [String: UIImage] = [:]
+                    for await (name, image) in group { if let image { out[name] = image } }
+                    return out
+                }
                 real = got; ready = true
             }
     }

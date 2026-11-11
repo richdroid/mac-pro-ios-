@@ -608,7 +608,8 @@ jobs:
             # put the island up for a background shot: r18's was blank). Folded only.
             if [ -z "$2" ]; then
               xcrun simctl launch "$DEVICE" local.macpro.GalleryTV -page island
-              sleep 6
+              # The gallery fetches its real covers first (6 s at most each), then draws.
+              sleep 14
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-island$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.GalleryTV || true
             fi

@@ -770,7 +770,7 @@ struct FlickScreen: View {
             // Best is the top one that hasn't already failed to start.
             let best = streamFilter == "All" ? streams.first { !failedTokens.contains($0.token) && $0.stalled != true && $0.dubbed != true } : nil
             // The stream that's on the TV now, when this is its own list: it says so, and a tap on it is the Remote.
-            let onNow = alreadyOnTitle ? PlayedStream.file(playedKey) : nil
+            let onNow = alreadyOnTitle ? fileOnTV : nil
             // Rows that would read exactly the same say where each came from.
             let looks = Dictionary(shown.map { ($0.look, 1) }, uniquingKeysWith: +)
             ForEach(Array(shown.enumerated()), id: \.element.id) { i, s in
@@ -944,7 +944,7 @@ struct FlickScreen: View {
             // The stream that's on, or which one is on isn't known: the Remote, nothing sent (ruling 11). Another row
             // of the same list is a different stream picked on purpose (the dub that was Best, a file that stutters):
             // that one is sent, and carries on where he is.
-            guard let on = PlayedStream.file(playedKey), on != s.description else { toRemoteNow(); return }
+            guard let on = fileOnTV, on != s.description else { toRemoteNow(); return }
             switching = true
         }
         send(from: rects.map[s.id] ?? rects.map["poster"])
@@ -1313,7 +1313,8 @@ struct FlickScreen: View {
             // so one that won't start is replaced on the Mac without coming back to the phone (§2.5a C8).
             var body: [String: Any] = ["token": stream.token, "imdb": ref.imdb]
             if ref.type == "series", let video = episode?.id ?? ref.video { body["video"] = video }
-            if switching { body["switch"] = true; if let at = livePosition, at > 30_000 { body["resumeMs"] = at.rounded() } }
+            // Another stream of what's on carries on where he is, unless he chose Start over on this very page.
+            if switching { body["switch"] = true; if startOverChoice == true { body["restart"] = true } else if let at = livePosition, at > 30_000 { body["resumeMs"] = at.rounded() } }
             else if hasResume && startOver { body["restart"] = true }
             // Where he was in it, as a share of its length, so the Mac can make sure it opens there and not at 0:00 (r24:
             // "85 min left" opened at 0:08). Not for a start over.
@@ -1429,9 +1430,13 @@ struct FlickScreen: View {
                     continue
                 }
                 FlickClock.current.mark("failed"); FlickClock.current.finished()
-                if let s = stream { failedTokens.insert(s.token) }
-                // And every fallback the Mac tried after it, so "Choose another" doesn't offer what failed a moment ago.
-                if error is TVBridge.DidNotStart { failedTokens.formUnion(TriedStreams.last); TriedStreams.last = [] }
+                // Out of reach from here on: every stream whose player came up and never played, his pick or a fallback, so
+                // "Choose another" doesn't offer what stalled a moment ago. One that never got a player at all isn't
+                // among them: that says nothing about the stream, and it stays his to pick. A Mac that doesn't say
+                // which (an older one), or a failure of another kind: his pick, as before.
+                if error is TVBridge.DidNotStart, let stalled = TriedStreams.last { failedTokens.formUnion(stalled) }
+                else if let s = stream { failedTokens.insert(s.token) }
+                TriedStreams.last = nil
                 // On the Remote: the poster dims, with one way on (Choose another). A plain send that failed is said once.
                 if ownsStart { if video { model.startFailed(tokens: Array(failedTokens)) } else { model.clearStart(); model.say("The TV didn’t get that") } }
                 else if !video { model.say("The TV didn’t get that") }
@@ -1472,6 +1477,14 @@ struct FlickScreen: View {
         return model.isOn(imdb: ref.imdb, title: item.title, episode: nil) && isThisFilm(s)
     }
     var playedKey: String { (item.stremioRef?.imdb ?? "") + "/" + (episode?.id ?? item.stremioRef?.video ?? "") }
+    // Which file of this title is on the TV: what this phone last started, else what the Mac says it started (so the row
+    // says Playing after the app has been opened afresh, and another row is still known to be another stream).
+    var fileOnTV: String? {
+        if let f = PlayedStream.file(playedKey) { return f }
+        guard let s = model.status?.session, let f = s.streamFile, !f.isEmpty, let ref = item.stremioRef else { return nil }
+        let of = ref.type == "series" ? (episode?.id ?? ref.video) : ref.imdb
+        return s.streamOf == of ? f : nil
+    }
     // Where the TV is in what's on, in ms, carried on from its last reading while it plays.
     var livePosition: Double? {
         guard let s = model.status?.session, let p = s.position else { return nil }

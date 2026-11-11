@@ -710,7 +710,16 @@ struct EpisodePicker: View {
         }
         .onGeometryChange(for: Bool.self) { $0.size.width < 330 } action: { narrow = $0 }
         .animation(.easeInOut(duration: 0.2), value: season)
+        // The episode the list rests on, still the same a second later: its link is resolved on the TV, so picking it
+        // finds it answering rather than paying the cold 7 to 13 s.
+        .task(id: restsOn) {
+            guard part != .header, let id = restsOn, let imdb = id.split(separator: ":").first, imdb.hasPrefix("tt") else { return }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if !Task.isCancelled { Warm.ask(type: "series", imdb: String(imdb), video: id) }
+        }
     }
+    // The one he'd pick from here: the episode he's on, or the one after it while that one plays.
+    var restsOn: String? { currentLabel == "Playing" ? after : current }
 }
 
 // Something on its way: a light running round the card's whole rounded edge (Richard, 2026-11-05: "the loading like
