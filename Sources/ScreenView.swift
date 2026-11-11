@@ -79,7 +79,9 @@ struct RemoteScreenView: View {
     @State private var padTip = false
     @State private var padTipAsked = false
     @State private var rate = (frames: 0, updates: 0)
-    // Touch bookkeeping that changes on every sample, kept out of SwiftUI's state so a moving finger never rebuilds the view.
+    final class RegionSeen { var since: [String: Date] = [:] }
+
+// Touch bookkeeping that changes on every sample, kept out of SwiftUI's state so a moving finger never rebuilds the view.
     @State private var pad = TrackpadBox()
     // The build's way to shoot a posture the simulator can't fold into.
     @State private var postureOverride = UserDefaults.standard.string(forKey: "screenPosture")
@@ -91,6 +93,9 @@ struct RemoteScreenView: View {
     // The display has been its real size long enough for changes of plan to be moves rather than the opening layout.
     @State private var settled = false
     @State private var placed = false
+    // When each region over the open display was first reported, and a tick to look again once it has lasted.
+    @State private var regionSeen = RegionSeen()
+    @State private var regionTick = 0
 
     enum ClipState: Equatable {
         case idle, working, done, failed(String)
@@ -102,6 +107,7 @@ struct RemoteScreenView: View {
         // The whole display: the cover has no side bar of its own, so the picture gets that room too. The system
         // keyboard slides over the controls rather than squeezing them.
         GeometryReader { full in
+            let _ = regionTick
             let (f, force) = effectiveFold(fold(full), full.size)
             let insets = ScreenInsets.current
             let p = Self.plan(area: full.size, fold: f, aspect: aspect, top: insets.top, bottom: insets.bottom,
@@ -239,7 +245,37 @@ struct RemoteScreenView: View {
                     if (UserDefaults.standard.array(forKey: key) as? [[Double]]) != all { UserDefaults.standard.set(all, forKey: key) }
                 }
             }
-            return Fold(crease: g.reservedRegions(kind: .division, options: .includeInactive).first?.frame,
+            // The open display: as the Screen opens, the system briefly reports a region over its top corner (144 x 82
+            // upright, 84 x 124 lying sideways) that's gone a moment later, and the picture shrank around it and grew
+            // back, 669 → 525 → 669 pt across (the designer's third review). A region there only counts once it has
+            // lasted a second; the inner camera, when it's in use, still gets its room.
+            if w >= 600, h >= 600 {
+                let now = Date()
+                let keys = occ.map { "\(Int($0.frame.minX)),\(Int($0.frame.minY)),\(Int($0.frame.width)),\(Int($0.frame.height))" }
+                regionSeen.since = regionSeen.since.filter { keys.contains($0.key) }
+                var lasting: [Int] = []
+                for (i, k) in keys.enumerated() {
+                    let first = regionSeen.since[k] ?? now
+                    regionSeen.since[k] = first
+                    if now.timeIntervalSince(first) >= 1 { lasting.append(i) }
+                    else { DispatchQueue.main.asyncAfter(deadline: .now() + 1.05) { regionTick &+= 1 } }
+                }
+                covered = lasting.map { covered[$0] }; cores = lasting.map { cores[$0] }
+            }
+            // The hinge, likewise late as the Screen opens: until it came, open flat showed one capsule lying across the
+            // fold for a third of a second, then split into two (the designer's third review). Where it runs is kept, by
+            // the display's size, and used until the system says.
+            var crease = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame
+            if w >= 600, h >= 600 {
+                let key = "screenCrease \(Int(w))x\(Int(h))"
+                if let c = crease {
+                    let v = [Double(c.minX), Double(c.minY), Double(c.width), Double(c.height)]
+                    if (UserDefaults.standard.array(forKey: key) as? [Double]) != v { UserDefaults.standard.set(v, forKey: key) }
+                } else if let v = UserDefaults.standard.array(forKey: key) as? [Double], v.count == 4 {
+                    crease = CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
+                }
+            }
+            return Fold(crease: crease,
                         folded: hingeFolded ?? !g.reservedRegions(kind: .division).isEmpty,
                         covered: covered, cores: cores)
         }
@@ -555,8 +591,19 @@ struct RemoteScreenView: View {
         // Nothing is seen of the opening's first layouts (an empty display, then one without its regions): the parts
         // appear once the plan has held still for a moment.
         .opacity(placed ? 1 : 0)
+        // But never bare black meanwhile: the same "Connecting…" the picture's space will show, where it will show it
+        // (half a second of nothing at all open upright read as the Screen drawing in slowly, the designer's third review).
+        .overlay(alignment: .topLeading) {
+            if !placed, !observed.hasPicture, p.picture.width > 1, p.picture.height > 1 {
+                status.frame(width: p.picture.width, height: p.picture.height).offset(x: p.picture.minX, y: p.picture.minY)
+                    .allowsHitTesting(false)
+            }
+        }
         .task(id: p) {
             guard area.width > 1, area.height > 1, !settled else { return }
+            // Open flat sideways, not before the hinge is known: the dock splits about it (the 0.6 s below still shows
+            // everything on a display that has none).
+            if p.kind == .flatLandscape, p.crease == nil { return }
             if !placed {
                 try? await Task.sleep(nanoseconds: 120_000_000)
                 guard !Task.isCancelled else { return }
@@ -638,17 +685,19 @@ struct RemoteScreenView: View {
             pinch(.ended, 1.8, c)
         }
     }
-    // A round tool on a dark glass, the size of the row it sits in.
+    // A tool has a key's face, the size of the row it sits in: the same plate as the keys beside it, in every posture.
+    // There were three faces in one bar (plated keys, bare glyphs, a grey circle for Done) and a fourth, dark circles,
+    // folded (the designer's third review: "the bar is one family"). `on` (Done, the keyboard while it's up) is a
+    // brighter plate of the same shape.
     // `side`: the dock's own size for a tool, so everything in it is one height (its tools were 44 pt beside 40 pt keys).
     func toolButton(_ icon: String, _ a11y: String, on: Bool = false, tint: Color = .white, compact: Bool = false, side given: CGFloat? = nil, action: @escaping () -> Void) -> some View {
         let side: CGFloat = given ?? (compact ? 32 : 44)
         return Button { tick(.light); action() } label: {
-            Image(systemName: icon).font(.system(size: compact ? 14 : 17, weight: .semibold))
+            Image(systemName: icon).font(.system(size: compact ? 14 : 15, weight: .semibold))
                 .frame(width: side, height: side)
-                .background(Circle().fill(.white.opacity(on ? 0.24 : compact ? 0.1 : 0)))
-                .contentShape(Circle())
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain).foregroundStyle(tint).accessibilityLabel(a11y).accessibilityAddTraits(on ? .isSelected : [])
+        .buttonStyle(ToolPlateStyle(on: on)).foregroundStyle(tint).accessibilityLabel(a11y).accessibilityAddTraits(on ? .isSelected : [])
     }
     var zoomed: Bool { zoom > 1.01 }
     // The zoom that fills the space: the Mac's picture covers it edge to edge, cropped along one side.
@@ -1229,7 +1278,8 @@ struct RemoteScreenView: View {
                     Button { pasteFromPhone() } label: { Label("Paste on the Mac", systemImage: "doc.on.clipboard") }.disabled(!phoneHasText)
                     Button { signingIn = true } label: { Label("Sign in to the Mac", systemImage: "key.fill") }
                 } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).frame(width: k, height: k).contentShape(Circle())
+                    Image(systemName: "ellipsis").font(.system(size: 15, weight: .semibold)).frame(width: k, height: k)
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous)).contentShape(Rectangle())
                 }
                 .foregroundStyle(.white).accessibilityLabel("Clipboard and sign-in")
             } else {
@@ -1246,7 +1296,7 @@ struct RemoteScreenView: View {
             Image(systemName: dockOpen ? "chevron.down" : "chevron.up").font(.system(size: 13, weight: .bold))
                 .frame(width: k, height: k).contentShape(Rectangle())
         }
-        .buttonStyle(.plain).foregroundStyle(.white.opacity(0.7)).accessibilityLabel(dockOpen ? "Hide the keys" : "Show the keys")
+        .buttonStyle(ToolPlateStyle()).foregroundStyle(.white).accessibilityLabel(dockOpen ? "Hide the keys" : "Show the keys")
         // Done stays, at the right-hand end, even with the keys tucked away.
         toolButton("xmark", "Done", on: true, side: k) { model.screenOpen = false }
     }
@@ -1260,19 +1310,17 @@ struct RemoteScreenView: View {
 
     @ViewBuilder private var status: some View {
         switch screen.phase {
-        case .connecting: ProgressView("Connecting…").tint(.white).foregroundStyle(.white)
-        // Signed in, the picture not here yet: the same word stays until the picture is. It used to vanish at sign-in
-        // and leave plain black for the half second to three that the first picture takes.
-        // While the picture itself is on its way (seconds, on a slow link), how much of it has come.
-        case .connected where !observed.hasPicture:
+        // One waiting sign from the first moment to the picture: "Connecting…" over a thin line that fills as the first
+        // picture arrives. A spinner that turned into a bar halfway through was two waits in a row (the designer's third
+        // review). Signed in, the picture not here yet, the same sign stays until the picture is: it used to vanish at
+        // sign-in and leave plain black for the half second to three that the first picture takes.
+        case let ph where ph == .connecting || ((ph == .idle || ph == .connected) && !observed.hasPicture):
             TimelineView(.periodic(from: .now, by: 0.12)) { _ in
-                if let part = screen.firstPictureProgress, part > 0.03 {
-                    VStack(spacing: 10) {
-                        Text("Connecting…").foregroundStyle(.white)
-                        ProgressView(value: min(part, 1)).tint(.white).frame(width: 150)
-                    }
-                } else {
-                    ProgressView("Connecting…").tint(.white).foregroundStyle(.white)
+                let part = screen.phase != .connected ? 0 : min(max(screen.firstPictureProgress ?? 0, 0), 1)
+                VStack(spacing: 10) {
+                    Text("Connecting…").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85))
+                    ProgressView(value: part).tint(.white).frame(width: 150)
+                        .animation(Motion.quick, value: part)
                 }
             }
         case .reconnecting where screen.slowReconnect:
@@ -1620,12 +1668,23 @@ struct MacKeyboardView: View {
     }
 }
 
+// The app's own tools beside the keys: the keys' plate and corner, the glyph keeping its own colour.
+struct ToolPlateStyle: ButtonStyle {
+    var on = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color.white.opacity(configuration.isPressed ? 0.3 : on ? 0.24 : 0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .animation(Motion.press, value: configuration.isPressed)
+    }
+}
 struct MacKeyStyle: ButtonStyle {
     var on = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(on ? .black : .white)
-            .background(on ? Color.white : Color.white.opacity(configuration.isPressed ? 0.28 : 0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            // The same corner as the keyboard's keys (MacKeyCap) and the tools', so the row is one family.
+            .background(on ? Color.white : Color.white.opacity(configuration.isPressed ? 0.28 : 0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
             .animation(Motion.press, value: configuration.isPressed)
     }
