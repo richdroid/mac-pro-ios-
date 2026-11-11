@@ -69,6 +69,8 @@ jobs:
             shot control-scrolled$x $d 9 -tab 5 -pose scrolled
             shot settings-lower$x $d 9 -tab 9 -pose settings-lower
             footshot control-foot$x $d -tab 5
+            footshot settings-foot$x $d -tab 9
+            shot alerts$x $d 8 -tab 0 -pose alerts
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
