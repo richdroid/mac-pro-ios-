@@ -693,6 +693,8 @@ struct WebTile: View {
     var spark: [Double] = []
     var top: Double?
     var read: (Double) -> String = { _ in "" }
+    // A share of a whole (the disk), drawn as a bar where the others have their line.
+    var fill: Double?
     var open: () -> Void = {}
     var body: some View {
         Button(action: open) {
@@ -708,7 +710,9 @@ struct WebTile: View {
                     // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                     .animation(NavTransit.shared.active ? nil : .easeOut(duration: 0.2), value: value)
                 Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                if spark.count > 1 {
+                if let fill {
+                    ProgressView(value: min(max(fill, 0), 1)).tint(fill > 0.9 ? .red : macBlue).padding(.top, 10)
+                } else if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                     SparkLine(values: spark, top: top)
                         .frame(height: 42).padding(.top, 8)
@@ -742,6 +746,10 @@ struct LiveTiles: View {
                 WebTile(title: "Download", value: Format.rate(net.rxRate), detail: net.kind, spark: h.rx, read: Format.rate, open: { model.history = .download })
                 WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.kind, spark: h.tx, read: Format.rate, open: { model.history = .upload })
             }
+            // The disk across the foot of the grid, its free space at a glance, opening its history (Richard, 2026-11-11:
+            // "disk should have history and such").
+            WebTile(title: "Disk", value: "\(Format.bytes(s.disk.free)) free", detail: "\(Int((s.disk.used / max(s.disk.total, 1) * 100).rounded()))% used of \(Format.bytes(s.disk.total))", fill: s.disk.used / max(s.disk.total, 1), open: { model.history = .disk })
+                .place("disk")
         }
     }
 }
