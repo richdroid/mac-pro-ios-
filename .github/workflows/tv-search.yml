@@ -84,7 +84,7 @@ jobs:
             sleep 2
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 6
             sleep 8
-            date +%s.%N; $D "$DEVICE" type "heat" || echo "type failed"; date +%s.%N
+            date +%s.%N; timeout 30 $D "$DEVICE" type "heat" || echo "type failed"; date +%s.%N
             sleep 3
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-search-keys$x.png
             kill -INT $REC; wait $REC

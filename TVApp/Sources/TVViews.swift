@@ -251,9 +251,10 @@ struct RootView: View {
                 Tab(value: 5) { Page(title: "Status", retaps: resets[5, default: 0]) { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
                 // Last, so it sits at the foot of the side bar, as in the other apps.
                 Tab(value: 9) { TVSettingsTab(retaps: resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
-                // The one search, for everything (Richard, 2026-11-11): the system's own search tab, which iOS sets apart at
-                // the end of the bar.
-                Tab(value: 6, role: .search) { Page(title: "Search", retaps: resets[6, default: 0]) { SearchPage() } }
+                // The one search, for everything (Richard, 2026-11-11). A plain tab, not the system's search role: open
+                // upright the search-role tab took the keyboard from the page's own field the moment it had it (every
+                // open-upright run, 829e7c4 to c70f989: focus on, then off), and on the Duo it isn't set apart anyway.
+                Tab(value: 6) { Page(title: "Search", retaps: resets[6, default: 0]) { SearchPage() } } label: { tabLabel("Search", "magnifyingglass") }
             }
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
