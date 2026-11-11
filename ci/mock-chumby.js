@@ -120,6 +120,14 @@ const liveMac = () => {
 const liveMacStatus = () => JSON.stringify(liveMac());
 const liveMacLive = () => { const m = liveMac(); return JSON.stringify({ uptime: m.uptime, load: m.load, cpu: m.cpu, mem: m.mem, net: m.net, hist: m.hist, temps: m.temps, displayOn: m.displayOn }); };
 http.createServer((q, s) => macRoutes(q, s, liveMacStatus, liveMacLive)).listen(9021, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// The same Mac under load (9031), as his was on 2026-11-11: every reading takes 2 to 5 s to come and every seventh
+// never comes at all. The Mac is there the whole time, so the app must never say it can't reach it.
+let slowReads = 0;
+http.createServer((q, s) => {
+  if (!/^\/api\/(live|status)/.test(q.url)) return macRoutes(q, s, liveMacStatus, liveMacLive);
+  if (++slowReads % 7 === 0) return q.socket.destroy();
+  setTimeout(() => macRoutes(q, s, liveMacStatus, liveMacLive), 2000 + (slowReads * 733) % 3000);
+}).listen(9031, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.

@@ -113,7 +113,7 @@ struct MacSettings: View {
             .topEdge()
             .navigationTitle("Settings")
             .toolbarVisibility(.hidden, for: .navigationBar)
-            .sheet(isPresented: $connecting) { SignInView().environmentObject(model) }
+            .screenCover(isPresented: $connecting) { SignInView().environmentObject(model) }
             // New intervals take hold straight away rather than after the current wait.
             .onChange(of: liveEvery) { _, _ in model.start() }
             .onChange(of: fullEvery) { _, _ in model.start() }

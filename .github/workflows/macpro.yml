@@ -317,6 +317,11 @@ jobs:
             shot forcequit$x $d 9 -tab 1 -pose forcequit
             shot didntconfirm$x $d 9 -tab 5 -pose didntconfirm
             shot claude-scrolled$x $d 9 -tab 2 -pose scrolled
+            # The unreachable card as it's said now, with its ✕; Claude's service card wherever it sits; Apps with his three
+            # apps from TestFlight, as the stand-in Mac now reports them.
+            shot unreachable$x $d 8 -tab 0 -pose unreachable
+            shot claudecard$x $d 9 -tab 2 -pose claudecard
+            shot tab1$x $d 7 -tab 1
           }
           # Everything that changed, in one posture (display, suffix).
           poses() {
@@ -409,6 +414,10 @@ jobs:
           # Status, the page he named, pulled his way (pullfilm) against that Mac: the log beside it must show every reading
           # held while the page is past its end, and the spring in steps that shrink, never one move.
           FILM_PORT=9021 pullfilm statuspull-portrait 3 0.5 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
+          # And against the Mac under load (9031: every reading 2 to 5 s late, one in seven lost): it is there the whole
+          # time, so no "can't reach" card may come and go at the top of Status, at rest or mid-pull (Richard, 2026-11-11:
+          # "the top scroll shit happening"; the main build's own film showed the card twice in 16 s).
+          FILM_PORT=9031 pullfilm statuspull-slow-portrait 3 0.5 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
           FILM_PORT=9021 swipefilm appsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -fullEvery 1 -frameLog YES
           FILM_PORT=9021 swipefilm versionsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -fullEvery 1 -frameLog YES
           popfilm pop-portrait 3 0.065 0.049 0.25 0.66 0.75
@@ -447,6 +456,7 @@ jobs:
           slowfilms 1 ""
           film scrollfilm 1 30 -tab 0 -pose scrollfilm
           swipefilm versionsfling 1 0.45 0.8 0.28 -tab 1 -pose versionsfilm
+          FILM_PORT=9031 pullfilm statuspull-slow 1 0.45 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
           popfilm pop 1 0.895 0.292 0.23 0.81 0.62
           launchpop launchpop 1 0.895 0.292
           backfilms 1 ""

@@ -384,7 +384,7 @@ struct RootView: View {
         .onChange(of: celsius) { _, _ in MacPrefs.shareWithWidgets() }
         .onChange(of: model.address) { _, _ in MacPrefs.shareWithWidgets() }
         .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
-        .sheet(isPresented: $model.signInSheet) { SignInView().environmentObject(model) }
+        .screenCover(isPresented: $model.signInSheet) { SignInView().environmentObject(model) }
         // Up here, so unfolding doesn't close it and lose what's typed.
         .sheet(isPresented: $model.signingIn) {
             LoginSheet { u, p in
@@ -471,9 +471,16 @@ struct Notice: View {
                 Text("What’s here is the last it could read. Update the app in TestFlight.").font(.footnote).foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
-        } else if let p = model.problem {
+        } else if let p = model.problem, !model.problemPutAway {
             VStack(alignment: .leading, spacing: 10) {
-                Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.red)
+                HStack(alignment: .top, spacing: 8) {
+                    Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading)
+                    // One ✕, full strength, a 44 pt target: put away, the card comes back with the next run of misses.
+                    Button { withAnimation(Motion.quick) { model.problemPutAway = true } } label: {
+                        Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.white).frame(width: 44, height: 30).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Dismiss")
+                }
                 HStack(spacing: 10) {
                     Button("Open Tailscale") { if let u = URL(string: "tailscale://") { openURL(u) } }.buttonStyle(.bordered)
                     Button {
@@ -487,7 +494,7 @@ struct Notice: View {
             .padding(.vertical, 4)
         }
     }
-    static func shows(_ model: AppModel) -> Bool { model.needsSignIn || model.problem != nil || model.unreadable }
+    static func shows(_ model: AppModel) -> Bool { model.needsSignIn || (model.problem != nil && !model.problemPutAway) || model.unreadable }
 }
 
 // Shared frame for each tab: a large title, the notice above, and pull to refresh. Updates draws its own page, so its
@@ -537,6 +544,14 @@ struct Screen<Content: View>: View {
             .task {
                 // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
+                // And of a state that sits down the page: Force Quit's question hangs off Apps' open apps, the secret being
+                // typed is in Control's Passwords, Claude's service card is at the foot of its pane.
+                if let (t, to) = ["forcequit": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart")][model.pose], t == tab {
+                    for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    proxy.scrollTo(to, anchor: .top)
+                    return
+                }
                 guard model.pose != "scrolled" || tab == 0 else {
                     guard side != .left, let to = [1: "open", 2: "detail", 5: "power"][tab] else { return }
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
@@ -839,13 +854,13 @@ struct QuickActions: View {
         fails[id] = text
         Task { try? await Task.sleep(nanoseconds: 4_000_000_000); if fails[id] == text { fails[id] = nil } }
     }
-    func button(_ id: String, _ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+    func button(_ id: String, _ icon: String, _ title: String, waits: Bool? = nil, _ action: @escaping () -> Void) -> some View {
         // They all need the Mac, so they wait, dimmed, while it can't be reached. The dim is in the face's own colours,
         // the same values Display uses, so the system's disabled dimming isn't stacked on top.
-        Button(action: action) { face(id, icon, title) }.buttonStyle(FlatStyle()).disabled(model.stale)
+        Button(action: action) { face(id, icon, title, waits: waits ?? model.stale) }.buttonStyle(FlatStyle()).disabled(waits ?? model.stale)
     }
-    func face(_ id: String, _ icon: String, _ title: String) -> some View {
-        let dim = model.stale ? offlineDim : 1
+    func face(_ id: String, _ icon: String, _ title: String, waits: Bool) -> some View {
+        let dim = waits ? offlineDim : 1
         return VStack(spacing: 6) {
             Image(systemName: done.contains(id) ? "checkmark" : icon).font(.system(size: 20)).foregroundStyle(.white.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))
@@ -860,7 +875,9 @@ struct QuickActions: View {
     }
     var body: some View {
         HStack(alignment: .top, spacing: 4) {
-            button("screen", "macwindow", "Screen") { model.screenOpen = true }
+            // The Mac's screen has its own connection: it stays live while the status can't be read (Richard's ruling,
+            // 2026-11-11), and waits only when the Mac can't be reached or wants its code.
+            button("screen", "macwindow", "Screen", waits: model.problem != nil || model.needsSignIn) { model.screenOpen = true }
             // Dims itself, in its own colours, to match the other three.
             DisplayHoldButton().disabled(model.stale)
             button("copy", "doc.on.doc", "Copy from Mac") {
@@ -1085,7 +1102,7 @@ struct AppsTab: View {
             } message: { Text("Unsaved work is lost.") }
             .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
             // The build's shot of the second question, for an app that was asked to quit and stayed.
-            .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 1_500_000_000); forcing = open.first } }
+            .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 3_500_000_000); forcing = open.first } }
         }
     }
 }
@@ -1729,6 +1746,7 @@ struct ControlTab: View {
             Section {
                 Button { model.signingIn = true } label: { Label("Fill a saved login", systemImage: "key.fill") }
                     .disabled(!typingReady)
+                    .id("typebox")
                     .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
                 if typingReady {
                     HStack(spacing: 10) {
@@ -1809,18 +1827,34 @@ struct SignInView: View {
     @State private var code = ""
     @State private var note: String?
     @State private var probing = false
+    // Not a sheet: on the Duo a sheet is an inset card folded and sits across the crease open flat, its fields on the fold
+    // (Richard, 2026-11-10: sheets fill the screen up to the side column; designer, 2026-11-11). A cover the size of the
+    // screen, the page's name its first line as on every pushed page, Cancel and Connect the system's own bar items (the
+    // side strip folded and open flat, the bar along the top upright), and open flat a pane each side of the hinge: the
+    // address on the left, the code and what went wrong on the right.
+    @ViewBuilder var addressSection: some View {
+        Section {
+            TextField("https://your-mac.your-tailnet.ts.net", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+        } header: { Text("Mac Pro address") } footer: { Text("Tailscale works from anywhere with the Tailscale app on and needs no code. The public link changes when the Mac restarts.") }
+    }
+    @ViewBuilder var codeSection: some View {
+        Section {
+            SecureField("Access code", text: $code).textContentType(.oneTimeCode).textInputAutocapitalization(.characters)
+        } header: { Text("Public link only") }
+        if let note { Section { FailText(note) } }
+    }
+    func heading(shown: Bool) -> some View {
+        Section { PaneHeading(title: "Connection", shown: shown) }
+            .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+    }
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("https://your-mac.your-tailnet.ts.net", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                } header: { Text("Mac Pro address") } footer: { Text("Tailscale works from anywhere with the Tailscale app on and needs no code. The public link changes when the Mac restarts.") }
-                Section {
-                    SecureField("Access code", text: $code).textContentType(.oneTimeCode).textInputAutocapitalization(.characters)
-                } header: { Text("Public link only") }
-                if let note { Section { FailText(note) } }
+            PaneReader {
+                SignInPanes(left: { Form { heading(shown: true); addressSection } }, right: { Form { heading(shown: false); codeSection } },
+                            all: { Form { heading(shown: true); addressSection; codeSection } })
             }
-            .navigationTitle("Connection")
+            .background(groupedBackground.ignoresSafeArea())
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -1837,6 +1871,7 @@ struct SignInView: View {
                 if model.pose == "signincode" { note = "This address needs its access code." }
             }
         }
+        .preferredColorScheme(.dark)
     }
     // What was typed, as an address the app can use: the scheme put on when it's left off (https, or http for a bare
     // local address), no trailing slash. Nil when it still isn't one.
@@ -1876,6 +1911,18 @@ struct SignInView: View {
         } catch {
             note = "Can’t reach a Mac at this address. Is Tailscale on?"
         }
+    }
+}
+
+// One column, or a pane each side of the hinge open flat (FoldSplit), for a page that isn't one of the tabs.
+struct SignInPanes<L: View, R: View, A: View>: View {
+    @Environment(\.paneLayout) private var panes
+    @ViewBuilder let left: () -> L
+    @ViewBuilder let right: () -> R
+    @ViewBuilder let all: () -> A
+    var body: some View {
+        if panes { FoldSplit { left().scrollContentBackground(.hidden) } right: { right().scrollContentBackground(.hidden) } }
+        else { all().scrollContentBackground(.hidden) }
     }
 }
 

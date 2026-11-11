@@ -58,6 +58,9 @@ final class AppModel: ObservableObject {
     // enough). It's reachable, so not `problem`; but nothing on screen is live, and the app says so instead of freezing
     // every tab under a chip that read "Live" (audit, 2026-11-10).
     @Published var unreadable = false
+    // The unreachable card put away with its ✕ (a note that stays can be dismissed). The Mac is still away, and the chips
+    // and dimmed keys go on saying so; the card returns with the next run of misses, or the next launch.
+    @Published var problemPutAway = false
     private var unread = 0
     // The Mac wants its access code. Shown as a row at the top of each tab; the sheet only opens by itself when there's
     // no address at all, so pressing Cancel is respected.
@@ -121,6 +124,8 @@ final class AppModel: ObservableObject {
         let page: MacPage? = ["health", "healthbad", "healthfixing", "healthback", "healthstuck"].contains(pose) || pose == "didntconfirm" ? .health : ["restart", "restartred"].contains(pose) ? .restart : nil
         if Self.reopen { history = h; processes = p; reopenForShots() }
         else if h != nil || p != nil || page != nil { whenDrawn { [weak self] in self?.history = h; self?.processes = p; self?.macPage = page } }
+        // The build's shot of the unreachable card, as it is said now.
+        if pose == "unreachable" { problem = Phrase.macAway }
         // The build's shot of the Connection sheet.
         if pose.hasPrefix("signin") { signInSheet = true }
         // Show the last known state at once; fresh numbers replace it moments later.
@@ -250,6 +255,8 @@ final class AppModel: ObservableObject {
     private func missed() {
         guard Reach.shared.miss(), problem == nil else { return }
         problem = Phrase.macAway
+        // A new run of misses says it again, whatever was put away before.
+        problemPutAway = false
         liveStore.live = nil
     }
 
@@ -282,7 +289,7 @@ final class AppModel: ObservableObject {
             let data = try await api.statusData()
             // It answered: reachable, whatever it said. Fresh only once what it said has been read (below).
             Reach.shared.hit()
-            if problem != nil { problem = nil }
+            if problem != nil, pose != "unreachable" { problem = nil }
             if needsSignIn { needsSignIn = false }
             func markFresh() { unread = 0; pulse.lastFresh = Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable != (pose == "unreadable") { unreadable = pose == "unreadable" } }
             // The build's shot of the Admin key row, in place well before the picture is taken.
