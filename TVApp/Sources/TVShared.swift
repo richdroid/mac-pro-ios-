@@ -23,6 +23,9 @@ struct TVStatus: Decodable, Equatable {
         var art: String?
         // For an episode, said outright by the Mac: the show, which one, and its name.
         var show: String?; var season: Int?; var episode: Int?; var episodeTitle: String?
+        // The file the Mac itself started, while it's still what's on, and what it is a stream of (the episode's id, or the
+        // film's): so that file's row in the stream list can say Playing, also after the app has been opened afresh.
+        var streamFile: String?; var streamOf: String?
         // The show's name, the Mac's word first, else the first line of what the player says.
         var showName: String { show?.isEmpty == false ? show! : description.first ?? "" }
         // "S3 E4 · Notapusy", from the Mac's fields, else read off the player's second line. Nil for a film.
