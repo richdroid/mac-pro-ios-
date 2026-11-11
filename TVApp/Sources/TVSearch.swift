@@ -590,8 +590,11 @@ struct SearchPage: View {
                     var held = 0
                     for _ in 0..<12 {
                         try? await Task.sleep(nanoseconds: 200_000_000)
+                        // Taken down mid-ask (open upright the page is first laid out as two panes, then as one, and the
+                        // field is rebuilt): the request stays for the field that replaces it, which carries on with it.
+                        if Task.isCancelled { return }
                         // Never once he's tapped, scrolled or sent something, and never while a flick is up.
-                        if Task.isCancelled || store.touched || model.flicking != nil { break }
+                        if store.touched || model.flicking != nil { break }
                         if !focused { focused = true; held = 0 } else { held += 1 }
                         if held >= 6 { break }
                     }
