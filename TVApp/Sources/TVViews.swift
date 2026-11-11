@@ -74,12 +74,38 @@ struct RootView: View {
         #endif
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
         // Words typed into the Apps page's search: the keyboard up, as it is when he types them.
-        if pose == "search" { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; SendDraft.shared.text = "Heat"; return }
+        if pose == "search" { model.tab = 6; SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; SendDraft.shared.text = "Heat"; return }
+        // The search tab opened with nothing typed (recent searches and what he's in the middle of), then typed into a key at a
+        // time, as a finger does: each keystroke's first results timed in the stand-in Mac's log.
+        if pose == "searchempty" { SearchStore.shared.forgetAll(); for t in ["Sample Series", "Heat"] { SearchStore.shared.remember(t) }; SearchStore.show(model, text: ""); return }
+        // An app found and opened from the search: the keyboard goes and the Remote comes up, nothing left behind.
+        if pose == "searchapp" {
+            Task {
+                SearchStore.show(model, text: "")
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                SendDraft.shared.text = "netflix"
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if let h = SearchStore.shared.results.top { SearchStore.shared.open(h, model: model, origin: nil) }
+            }
+            return
+        }
+        if pose.hasPrefix("searchtype") {
+            let words = pose == "searchtype-show" ? "alien s1e2" : pose == "searchtype-slip" ? "haet" : "heat"
+            Task {
+                SearchStore.show(model, text: "")
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                for n in 1...words.count {
+                    SendDraft.shared.text = String(words.prefix(n))
+                    try? await Task.sleep(nanoseconds: 220_000_000)
+                }
+            }
+            return
+        }
         // The Remote's search field tapped, then words typed: the Apps page's search, keyboard up, results in.
         if pose == "remotesearch" {
             Task {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
-                SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; model.tab = 1
+                SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; model.tab = 6
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
                 SendDraft.shared.text = "Heat"
             }
@@ -126,9 +152,9 @@ struct RootView: View {
         if pose == "realsearch" {
             Task {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
-                model.tab = 1
+                model.tab = 6
                 try? await Task.sleep(nanoseconds: 800_000_000)
-                SendDraft.shared.focusRequest += 1
+                SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1
                 try? await Task.sleep(nanoseconds: 800_000_000)
                 SendDraft.shared.text = "Heat"
                 for _ in 0..<80 {
@@ -191,7 +217,7 @@ struct RootView: View {
         Task {
             // The page is loading the same list, so wait for it rather than asking again.
             for _ in 0..<40 {
-                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream"].contains(pose) || pose.hasPrefix("flick-") ? "movie" : "series") }) {
+                if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream", "blurbopen"].contains(pose) || pose.hasPrefix("flick-") ? "movie" : "series") }) {
                     // The stream flick goes as he does it most: the best stream found for him, in the hand, thrown.
                     // Through the card's own tap, as a finger would: what's already on goes to the Remote with nothing sent.
                     FlickCardButton.tap(model, item, .stremio, ready: pose == "flickdemo-stream" || pose.hasPrefix("flick-")); return
@@ -209,7 +235,9 @@ struct RootView: View {
             TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
                 // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
                 // rebuilt, so what was loaded, and the choices made on it, stay.
-                if t == 1 { model.browsing = nil; SendDraft.shared.text = "" }
+                if t == 1 { model.browsing = nil }
+                // The search tab tapped again: the field takes the keyboard, as Apple's own apps do.
+                if t == 6 { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1 }
                 resets[t, default: 0] += 1
             }) {
                 Tab(value: 0) { Page(title: "Remote", alwaysInline: true, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
@@ -223,6 +251,10 @@ struct RootView: View {
                 Tab(value: 5) { Page(title: "Status", retaps: resets[5, default: 0]) { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
                 // Last, so it sits at the foot of the side bar, as in the other apps.
                 Tab(value: 9) { TVSettingsTab(retaps: resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
+                // The one search, for everything (Richard, 2026-11-11). A plain tab, not the system's search role: open
+                // upright the search-role tab took the keyboard from the page's own field the moment it had it (every
+                // open-upright run, 829e7c4 to c70f989: focus on, then off), and on the Duo it isn't set apart anyway.
+                Tab(value: 6) { Page(title: "Search", retaps: resets[6, default: 0]) { SearchPage() } } label: { tabLabel("Search", "magnifyingglass") }
             }
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
@@ -231,6 +263,8 @@ struct RootView: View {
                 UserDefaults.standard.set(t, forKey: "tab")
                 // Opening Playing shows what's on now, not what was on at the last look.
                 if t == 2 { Task { await model.load() } }
+                // Opening Search brings the keyboard, unless it's already being asked for.
+                if t == 6, was != 6, !SendDraft.shared.wantsFocus { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1 }
             }
             // Over everything, side bar included, and edge to edge. Not a presented screen: the system slides those up
             // from the bottom, a blurred panel with a hard top edge. The flick fades its own way in and out.
@@ -754,8 +788,9 @@ struct SendBar: View {
             Image(systemName: link ? "paperplane" : "magnifyingglass").foregroundStyle(.secondary).padding(.leading, 14)
                 .contentTransition(.symbolEffect(.replace))
             if opensSearch {
-                Button { model.tick(); draft.wantsFocus = true; draft.focusRequest += 1; model.tab = 1 } label: {
-                    Text(draft.text.isEmpty ? "Search, or send a link" : draft.text).foregroundStyle(draft.text.isEmpty ? .tertiary : .primary)
+                Button { SearchStore.show(model) } label: {
+                    // Always its own words: the last search's words belong to the Search tab, not to this page.
+                    Text("Search, or send a link").foregroundStyle(.tertiary)
                         .lineLimit(1).frame(maxWidth: .infinity, minHeight: 50, alignment: .leading).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).accessibilityLabel("Search, or send a link")
@@ -790,13 +825,13 @@ struct SendBar: View {
                     draft.wantsFocus = false
                 }
             }
-            if draft.text.isEmpty {
+            if draft.text.isEmpty || opensSearch {
                 Button {
                     #if canImport(UIKit)
                     // A copied link goes to the TV; copied words are searched here, like typed ones.
                     if let s = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-                        if Self.isLink(s) { model.send(s) } else { draft.text = s; if opensSearch { model.tab = 1 } }
-                    } else if opensSearch { draft.wantsFocus = true; draft.focusRequest += 1; model.tab = 1 } else { focused = true }
+                        if Self.isLink(s) { model.send(s) } else if opensSearch { SearchStore.show(model, text: s) } else { draft.text = s }
+                    } else if opensSearch { SearchStore.show(model) } else { focused = true }
                     #endif
                 } label: { Image(systemName: "doc.on.clipboard").frame(width: 44, height: 44) }
                 .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Use what you copied")
@@ -2152,12 +2187,6 @@ struct BannerRow: View {
 struct AppsTab: View {
     @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
-    @ObservedObject private var draft = SendDraft.shared
-    // Words typed into the bar search Stremio and Mint as you type. A link is only ever sent.
-    var query: String? {
-        let t = draft.text.trimmingCharacters(in: .whitespaces)
-        return t.count >= 2 && !SendBar.isLink(t) ? t : nil
-    }
     static let listen = ["com.codex.musicwebtv", "com.google.android.youtube.tvmusic"]
     static let tools: Set<String> = ["com.android.tv.settings", "com.android.vending", "com.cxinventor.file.explorer", "com.esaba.downloader", "flar2.homebutton", "com.macropinch.axe"]
     // Never offered on the phone at all: no games.
@@ -2226,23 +2255,20 @@ struct AppsTab: View {
     }
     @ViewBuilder var content: some View {
         if all.isEmpty {
-            ScrollView { VStack(alignment: .leading, spacing: 24) { SendBar().padding(.horizontal, 20); waiting }.padding(.vertical, 12) }.backToTop()
+            ScrollView { VStack(alignment: .leading, spacing: 24) { SendBar(opensSearch: true).padding(.horizontal, 20); waiting }.padding(.vertical, 12) }.backToTop()
         } else if panes {
             FoldSplit {
                 ScrollView {
+                    // The field opens the one search (the Search tab); a copied link pasted here still goes to the TV.
                     VStack(alignment: .leading, spacing: 26) {
                         // The field as wide as the grid under it, so the column has one right edge (fifth pass).
-                        SendBar().frame(width: query == nil ? paneTile * 2 + TVLook.gap : nil).padding(.horizontal, 20)
+                        SendBar(opensSearch: true).frame(width: paneTile * 2 + TVLook.gap).padding(.horizontal, 20)
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if abs($0 - barRoom) > 0.5 { barRoom = $0 } }
-                        if let query { EverywhereSearch(text: query) } else { row("Watch", watch, across: 2, width: paneTile).padding(.horizontal, 20) }
+                        row("Watch", watch, across: 2, width: paneTile).padding(.horizontal, 20)
                     }
                     .padding(.vertical, 12)
                     .background(alignment: .top) { measured($leftWidth) }
-                    // The rows give way to the results with the same fade as folded: open, they vanished and the results'
-                    // box popped in (tv21 realsearch-open 16.65 → 17.71 s, no frame between).
-                    .animation(.snappy, value: query == nil)
                 }
-                .scrollDismissesKeyboard(.immediately)
                 .backToTop(posed: false)
             } right: {
                 // Unfolded, the apps go on across the fold: what he watches with the search on the left, what he listens
@@ -2265,14 +2291,12 @@ struct AppsTab: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
-                    SendBar().padding(.horizontal, 20)
-                    if let query { EverywhereSearch(text: query) } else { rows.padding(.horizontal, 20) }
+                    SendBar(opensSearch: true).padding(.horizontal, 20)
+                    rows.padding(.horizontal, 20)
                 }
                 .padding(.vertical, 12)
                 .background(alignment: .top) { measured($pageWidth) }
-                .animation(.snappy, value: query == nil)
             }
-            .scrollDismissesKeyboard(.immediately)
             .backToTop()
         }
     }
@@ -3054,19 +3078,9 @@ struct DiscoverColumn: View {
             .onChange(of: home.rows.isEmpty || !store.query.isEmpty ? nil : continuing != nil, initial: true) { _, v in
                 if let v { UserDefaults.standard.set(v, forKey: "hadContinueWatching") }
             }
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(kind == "movie" ? "Search films" : "Search shows", text: $store.query).autocorrectionDisabled().submitLabel(.search)
-                .focused($searchFocused).hidesTabBar(while: searchFocused, "watch")
-                .onChange(of: store.query) { _, _ in store.searchSoon() }
-            if !store.query.isEmpty {
-                Button { store.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search")
-                    .transition(.opacity)
-            }
-        }
-        .padding(.horizontal, 16).frame(height: 46)
-        .glassEffect(.regular, in: Capsule())
-        .padding(.horizontal, 20)
+        // The one search, in the Search tab, for films, shows and everything else (Richard, 2026-11-11): Watch's own
+        // searched only the kind the switch was on.
+        OpensSearchField().padding(.horizontal, 20)
         if store.query.isEmpty {
             // Inset inside the row, so the chips scroll on to the screen's edge rather than stopping short of it.
             Chips(options: [("", "All")] + FilmsTab.genres.map { ($0, $0) }, selected: Binding(get: { store.genre }, set: { g in

@@ -1071,7 +1071,8 @@ struct PlayingVideo: View {
                 if let over { Text(over).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1) }
                 Text(title).font(.title2.weight(.bold)).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 if let channel = session.channel { Text(channel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
-                if let about { Text(about).font(.footnote).foregroundStyle(.secondary).lineLimit(panes ? 4 : 3).padding(.top, 4) }
+                // A tap opens the rest of the words in place, and closes them again.
+                if let about { ExpandingText(text: about, lines: panes ? 4 : 3, font: .footnote).padding(.top, 4) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentTransition(.opacity)

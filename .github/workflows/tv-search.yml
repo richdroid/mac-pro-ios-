@@ -1,0 +1,123 @@
+name: TV search (branch)
+# A working branch's own short run: the TV app's one search and its descriptions that open in place, shot and filmed in
+# every posture (open upright, the posture he holds, first; then open flat; then folded). Only for pushes to
+# tv-search-ci; published to the tv-search-ci release. The full build, the TV app's own run and their releases are
+# untouched, and nothing here waits on or cancels them.
+on:
+  push:
+    branches: [tv-search-ci]
+permissions:
+  contents: write
+concurrency:
+  group: tv-search-ci
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 55
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          # No hardware keyboard: open upright (regular width) the simulator otherwise keeps the software one away.
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          shot() {
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # A film of one pose: recorded from before the launch, a shot taken at `at` seconds, stopped at `len`.
+          film() {
+            local name=$1 display=$2 at=$3 len=$4 address=$5; shift 5
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $at
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            sleep $((len - at))
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          posture() {
+            local d=$1 x=$2
+            rm -f /tmp/tv-home-applied.log
+            # A simulator's first keyboard is slow: thrown away once, then the shots that count.
+            shot warm$x $d 10 $M -pose searchempty
+            shot search-empty$x $d 10 $M -pose searchempty
+            # Typed a key at a time from the first: H, He, Hea, Heat. Filmed, with the last frame shot.
+            film search-type$x $d 9 11 $M -pose searchtype
+            shot search-show$x $d 12 $M -pose searchtype-show
+            shot search-slip$x $d 10 $M -pose searchtype-slip
+            shot search-tab$x $d 8 $M -tab 6
+            # The Remote's search field, which opens the same search.
+            shot search-remote$x $d 12 $M -tab 0 -pose remotesearch
+            # Real keys through Device Hub, filmed: the search tab, then "heat" typed on the keyboard.
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-search-keys$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 2
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 6
+            sleep 8
+            date +%s.%N; timeout 30 $D "$DEVICE" type "heat" || echo "type failed"; date +%s.%N
+            sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-search-keys$x.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # The top result tapped (the streams come up, the keyboard must not come back), and an app found and opened.
+            film search-tap$x $d 11 16 $M -pose realsearch
+            film search-app$x $d 10 13 $M -pose searchapp
+            # A film's words opened in place on its streams page, then closed again.
+            film blurb$x $d 10 17 $M/longabout -tab 3 -pose blurbopen
+            grep -E 'what=(search|focus)' /tmp/tv-home-applied.log > dist/search-timings$x.log 2>/dev/null || echo "no timings" > dist/search-timings$x.log
+          }
+          $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          posture 3 -portrait
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          posture 3 -open
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          $D "$DEVICE" pose closed || true; sleep 5
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          posture 1 ""
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-search-ci >/dev/null 2>&1 || gh release create tv-search-ci --prerelease --title "TV search (a working branch's shots)" --notes "Shots and films of the TV app's search, from a working branch."
+          for f in shots.zip films.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload tv-search-ci "$f" --clobber && break; sleep 15; done
+          done
