@@ -1,0 +1,97 @@
+name: Chumby polish (branch)
+# A working branch's own short run: the Chumby app alone, every tab and the sheets the 11-11 polish touched, light and dark,
+# folded, open in portrait (the posture he holds) and open flat. Only for pushes to chumby-polish2; published to the
+# chumby-polish2-shots release. The full build, its runs and its releases are untouched.
+on:
+  push:
+    branches: [chumby-polish2]
+permissions:
+  contents: write
+concurrency:
+  group: chumby-polish2
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 55
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          node ci/mock-chumby.js &
+          sleep 2
+          one() { # display, file name, wait, address suffix (- for none), launch args...
+            local d=$1 name=$2 wait=$3 sfx=$4; shift 4
+            local ADDR=http://127.0.0.1:9000; [ "$sfx" != "-" ] && ADDR=$ADDR/$sfx
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          # display, suffix: every tab light and dark, then the sheets and pages this pass changed (light), and Home and
+          # Sounds while music plays.
+          set_() {
+            local d=$1 x=$2
+            for M in light dark; do
+              xcrun simctl ui "$DEVICE" appearance $M
+              for T in 0 1 2 3 4; do one $d $T-$M$x 7 - -tab $T; done
+              one $d pose-justonce-$M$x 9 - -tab 0 -pose justonce
+              one $d pose-editor-$M$x 9 - -tab 2 -pose editor
+            done
+            xcrun simctl ui "$DEVICE" appearance light
+            for V in "calsettings 2 - -pose calsettings" "calday 2 - -pose calday" "caldayedit 2 - -pose caldayedit" "template 2 - -pose template" \
+                     "chadd 1 - -pose chadd" "playing 3 playing" "homeplaying 0 playing" "moved-alarms 2 moved" "firstrun 2 slow -pose firstrun"; do
+              set -- $V
+              one $d pose-$1$x 9 $3 -tab $2 "${@:4}"
+            done
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          # Open in portrait first, the posture he holds; then open flat; then folded.
+          $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          set_ 3 -portrait
+          $D "$DEVICE" rotate 3; sleep 5
+          set_ 3 -open
+          $D "$DEVICE" pose closed; sleep 5
+          set_ 1 ""
+      - name: Collect crash reports
+        if: always()
+        run: |
+          mkdir -p dist/crashes
+          cp ~/Library/Logs/DiagnosticReports/*.ips dist/crashes/ 2>/dev/null || true
+      - name: Publish the result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.ips' || zip -q ../shots.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-polish2-shots >/dev/null 2>&1 || gh release create chumby-polish2-shots --target chumby-polish2 --prerelease --title "Chumby polish (branch)" --notes "Branch-only shots."
+          for f in shots.zip status.txt; do
+            for i in 1 2 3 4; do gh release upload chumby-polish2-shots "$f" --clobber && break; echo "upload of $f failed, try $i"; sleep 20; done
+          done
