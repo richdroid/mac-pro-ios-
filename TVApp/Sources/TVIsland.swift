@@ -2,6 +2,7 @@
 import ActivityKit
 import AppIntents
 import Foundation
+import ImageIO
 import UIKit
 
 // What's playing on the TV, in the Dynamic Island, with a play and pause button.
@@ -47,18 +48,43 @@ enum TVIsland {
         guard !st.playing, let since = st.pausedSince else { return false }
         return now.timeIntervalSince(since) >= pausedFor
     }
-    // Stale after 90 s as before, and never later than the moment a pause runs out.
+    // Whether the Mac has said it pushes this card's changes as they happen (its answer to island-state): then the card
+    // is as true as the Mac's own reading, and only goes stale when what it shows has run out.
+    // Kept between launches: starting false each time, a card he had just paused went stale (dimmed, its keys gone) 90 s
+    // into every launch in which nothing else changed. Asked again on each launch's first reading (`asked`).
+    static var pushed = UserDefaults.standard.bool(forKey: "islandPushed") { didSet { if pushed != oldValue { UserDefaults.standard.set(pushed, forKey: "islandPushed") } } }
+    private static var asked = false
+    // Without pushes: stale after 90 s, and never later than the moment a pause runs out. With them: when the film or
+    // song would have ended (two minutes' grace), four hours on for something with no length, or as the
+    // pause runs out.
     static func staleDate(_ st: TVIslandAttributes.ContentState) -> Date {
-        let soon = Date().addingTimeInterval(staleAfter)
-        guard !st.playing, let since = st.pausedSince else { return soon }
-        return min(soon, since.addingTimeInterval(pausedFor))
+        if !st.playing, let since = st.pausedSince { return min(pushed ? .distantFuture : Date().addingTimeInterval(staleAfter), since.addingTimeInterval(pausedFor)) }
+        guard pushed else { return Date().addingTimeInterval(staleAfter) }
+        // No running time known: four hours, longer than anything runs; the Mac's pushes end the card when it stops.
+        return st.end.map { max($0.addingTimeInterval(120), Date().addingTimeInterval(staleAfter)) } ?? Date().addingTimeInterval(4 * 3600)
+    }
+    // What the card now shows, handed to the Mac with the cover the phone made for it, so the Mac's pushes can carry the
+    // same cover; a Mac from before this doesn't know the address, and nothing changes.
+    static func tell(_ id: String, _ st: TVIslandAttributes.ContentState) {
+        asked = true
+        guard !sample, let d = try? JSONEncoder().encode(st), let j = try? JSONSerialization.jsonObject(with: d) else { return }
+        Task {
+            let a = try? await TVBridge.post("island-state", ["id": id, "state": j], timeout: 10)
+            let live = (a.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })?["live"] as? Bool == true
+            if live != pushed { pushed = live }
+        }
     }
 
     static func state(_ s: TVStatus) -> TVIslandAttributes.ContentState? {
         guard s.online, s.airplay?.active != true else { return nil }
         // Mint's song, with its album, when Mint is what's on (or nothing else is).
-        if let m = s.music, s.session == nil || s.session?.pkg == mint, m.playing || s.app == mint, !(s.screen == "asleep" && !m.playing) {
-            var st = TVIslandAttributes.ContentState(title: m.title.isEmpty ? "Mint" : m.title, subtitle: m.artist, app: "Mint", playing: m.playing)
+        // Said to be playing but already past its end: an old report (the Mac keeps Mint's last song), shown as stopped,
+        // as the app's own pages do, so it never puts a song's card up over nothing.
+        let ended = s.music.map { $0.duration > 0 && $0.playing && $0.position + Date().timeIntervalSince1970 * 1000 - $0.sampledAt >= $0.duration } ?? false
+        if let m = s.music, s.session == nil || s.session?.pkg == mint, (m.playing && !ended) || s.app == mint, !(s.screen == "asleep" && !(m.playing && !ended)) {
+            // A card with no name says nothing: none until there is one.
+            guard !m.title.isEmpty else { return nil }
+            var st = TVIslandAttributes.ContentState(title: clip(m.title), subtitle: clip(m.artist), app: "Mint", playing: m.playing && !ended)
             timing(&st, position: m.position, sampledAt: m.sampledAt, duration: m.duration)
             return st
         }
@@ -67,10 +93,12 @@ enum TVIsland {
         if s.screen == "asleep" && !session.playing { return nil }
         // Nor does a paused player you've since left, which Android keeps reporting as active.
         if !session.playing && s.app != session.pkg { return nil }
-        // Under the title, the episode if there is one, and otherwise nothing: never the app doing the playing.
-        let title = session.description.first ?? ""
-        let under = session.description.dropFirst().first.map(Wording.episode) ?? ""
-        var st = TVIslandAttributes.ContentState(title: title.isEmpty ? app : title, subtitle: under == title ? "" : under, app: app, playing: session.playing)
+        // The show's name over its episode ("S3 E4 · Notapusy"), a video over its channel, a film alone: the same words as
+        // the Playing tab's, never the app doing the playing.
+        let title = session.showName
+        let under = session.episodeLine ?? session.channel ?? ""
+        guard !title.isEmpty else { return nil }
+        var st = TVIslandAttributes.ContentState(title: clip(title), subtitle: under == title ? "" : clip(under), app: app, playing: session.playing)
         timing(&st, position: session.position, sampledAt: session.sampledAt, duration: session.duration)
         return st
     }
@@ -83,22 +111,45 @@ enum TVIsland {
         if st.playing { st.start = Date().addingTimeInterval(-at); st.end = st.start!.addingTimeInterval(d / 1000) }
     }
 
-    // The cover, shrunk to a thumbnail the activity can carry: about 72 px tall, as JPEG, under 2.2 KB. Made once per cover.
+    // An activity's whole state is 4 KB at most, the cover in it included (as base64, a third bigger than its bytes), so
+    // a long episode name is cut before it can push a card's update over the limit, which iOS then drops without a word.
+    static func clip(_ t: String) -> String { t.count > 70 ? String(t.prefix(69)) + "…" : t }
+    // The cover, shrunk to a thumbnail the activity can carry. HEIC first: at these sizes it keeps a poster's faces and
+    // lettering where the 96 px JPEG it replaces was a smear at the size the Lock Screen draws it (Richard, 2026-11-10:
+    // "dynamic island is not fixed its ugly as is"). The biggest that fits in 2.3 KB, from 168 px on its longer side
+    // down; JPEG where the phone can't write HEIC. Made once per cover.
+    static let thumbBytes = 2300
     private static var thumbs: [String: Data] = [:]
+    nonisolated static func heic(_ image: UIImage, quality: Double) -> Data? {
+        guard let cg = image.cgImage else { return nil }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, "public.heic" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        return CGImageDestinationFinalize(dest) ? out as Data : nil
+    }
+    nonisolated static func shrink(_ image: UIImage) -> Data? {
+        let longer = max(image.size.width, image.size.height, 1)
+        func scaled(_ side: Double) -> UIImage {
+            let k = min(1, side / longer)
+            let size = CGSize(width: max(1, (image.size.width * k).rounded()), height: max(1, (image.size.height * k).rounded()))
+            let f = UIGraphicsImageRendererFormat(); f.scale = 1; f.opaque = true
+            return UIGraphicsImageRenderer(size: size, format: f).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+        }
+        for side in [168.0, 144, 120, 96] {
+            let small = scaled(side)
+            for q in [0.6, 0.45, 0.3] { if let d = heic(small, quality: q), d.count <= thumbBytes { return d } }
+        }
+        for side in [104.0, 88, 72, 56] {
+            let small = scaled(side)
+            for q in [0.7, 0.55, 0.4] { if let j = small.jpegData(compressionQuality: q), j.count <= thumbBytes { return j } }
+        }
+        return nil
+    }
     static func thumbnail(_ url: String?) async -> (Data, String)? {
         guard let url, let u = URL(string: url) else { return nil }
         if let d = thumbs[url] { return (d, url) }
         guard let image = await ImageStore.shared.load(u) else { return nil }
-        let data: Data? = await Task.detached(priority: .utility) { () -> Data? in
-            for height in [96.0, 78.0, 64.0, 52.0] {
-                let k = height / max(image.size.height, 1)
-                let size = CGSize(width: max(1, (image.size.width * k).rounded()), height: height)
-                let f = UIGraphicsImageRendererFormat(); f.scale = 1; f.opaque = true
-                let small = UIGraphicsImageRenderer(size: size, format: f).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
-                for q in [0.7, 0.55, 0.4] { if let j = small.jpegData(compressionQuality: q), j.count <= 2200 { return j } }
-            }
-            return nil
-        }.value
+        let data: Data? = await Task.detached(priority: .utility) { shrink(image) }.value
         guard let data else { return nil }
         if thumbs.count > 12 { thumbs.removeAll() }
         thumbs[url] = data
@@ -107,7 +158,8 @@ enum TVIsland {
 
     // Starts only for something actually playing, and goes away once the TV has moved on.
     // The build's sample TV answers on this phone itself: nothing there is really playing, so nothing goes in the island.
-    static var sample: Bool { ["127.0.0.1", "localhost"].contains { TVBridge.address.contains($0) } }
+    // Except in the build's "island" pose, which is there to film the real card: the island, opened, and the Lock Screen.
+    static var sample: Bool { ["127.0.0.1", "localhost"].contains { TVBridge.address.contains($0) } && UserDefaults.standard.string(forKey: "pose") != "island" }
     // The same, give or take the bar's own drift: the start moves by milliseconds every reading, and updating the island
     // for that would spend its budget on nothing.
     static func same(_ a: TVIslandAttributes.ContentState, _ b: TVIslandAttributes.ContentState) -> Bool {
@@ -122,8 +174,15 @@ enum TVIsland {
         let a = s.session.flatMap { $0.pkg == mint ? nil : $0.art } ?? s.music?.art
         return a?.isEmpty == false && a?.contains("/api/tv/icon") != true ? a : nil
     }
+    // A play or pause pressed on the card, held for four seconds against readings that still say otherwise: the Mac's
+    // answer just after a press is often from before it, and taking it flipped the glyph back under his thumb.
+    static var pressed: (playing: Bool, until: Date)?
     // `art` is the cover's address when the app knows it; nil keeps the cover already shown for the same title.
     static func sync(_ status: TVStatus, art: String? = nil) async {
+        if let p = pressed {
+            if p.until < Date() { pressed = nil }
+            else if let said = state(status), said.playing != p.playing { return }
+        }
         // The build's sample TV: nothing there is really playing, so nothing stays up.
         for old in shown where sample { await old.end(nil, dismissalPolicy: .immediate) }
         if sample { return }
@@ -143,13 +202,15 @@ enum TVIsland {
         if let t = await thumbnail(art) { next.art = t.0; next.artKey = t.1 }
         else if let old = current?.content.state, old.title == next.title { next.art = old.art; next.artKey = old.artKey }
         if let current {
-            if !same(current.content.state, next) || (current.content.staleDate ?? .distantPast) < Date().addingTimeInterval(staleAfter / 2) { await current.update(ActivityContent(state: next, staleDate: staleDate(next))) }
+            let changed = !same(current.content.state, next)
+            if changed || (current.content.staleDate ?? .distantPast) < Date().addingTimeInterval(staleAfter / 2) { await current.update(ActivityContent(state: next, staleDate: staleDate(next))) }
+            if changed || !asked { tell(current.id, next) }
         } else if next.playing, ActivityAuthorizationInfo().areActivitiesEnabled {
             let content = ActivityContent(state: next, staleDate: staleDate(next))
             // With a push token the Mac can end it at five minutes paused even with the app closed; a build signed without
             // push (no aps-environment) can't ask for one, and gets the card all the same.
             if let made = (try? Activity.request(attributes: TVIslandAttributes(), content: content, pushType: .token))
-                ?? (try? Activity.request(attributes: TVIslandAttributes(), content: content, pushType: nil)) { listen(made) }
+                ?? (try? Activity.request(attributes: TVIslandAttributes(), content: content, pushType: nil)) { listen(made); tell(made.id, next) }
         }
     }
 
@@ -183,15 +244,59 @@ struct TVIslandPlayPause: LiveActivityIntent {
                 flipped.start = flipped.playing ? Date().addingTimeInterval(-at) : nil
                 flipped.end = flipped.start?.addingTimeInterval(len)
             }
+            TVIsland.pressed = (flipped.playing, Date().addingTimeInterval(4))
             await current.update(ActivityContent(state: flipped, staleDate: TVIsland.staleDate(flipped)))
         }
-        do { try await TVBridge.post("key", ["key": "play"]) }
+        // The key that does what the glyph said, as the app's own ⏯ sends it, never the toggle: pressed on a card a few
+        // seconds behind the TV, a toggle did the opposite. The toggle only when nothing says what's on.
+        do { try await TVBridge.post("key", ["key": before.map { $0.playing ? "pause" : "resume" } ?? "play"]) }
         catch {
+            TVIsland.pressed = nil
             if let current, let before { await current.update(ActivityContent(state: before, staleDate: TVIsland.staleDate(before))) }
             throw error
         }
+        // The TV's word once it agrees (asked at 1.5 s), and whatever it says once the press's four seconds are up.
         try? await Task.sleep(nanoseconds: 1_500_000_000)
-        if let s = await TVBridge.status() { await TVIsland.sync(s) }
+        if let s = await TVBridge.status() { await TVIsland.sync(s, art: TVIsland.art(s)) }
+        if let p = TVIsland.pressed, TVIsland.live?.content.state.playing == p.playing {
+            try? await Task.sleep(nanoseconds: 2_700_000_000)
+            TVIsland.pressed = nil
+            if let s = await TVBridge.status() { await TVIsland.sync(s, art: TVIsland.art(s)) }
+        }
+        return .result()
+    }
+}
+// The two keys either side of the bar: ten seconds back or on in a film, show or video, the song before or after in
+// Mint. The same sends as the app's own transport makes for each (Stremio's player takes its jumps through the Mac).
+struct TVIslandSkip: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Skip on the TV"
+    static var isDiscoverable = false
+    @Parameter(title: "Forward") var forward: Bool
+    init() {}
+    init(forward: Bool) { self.forward = forward }
+    func perform() async throws -> some IntentResult {
+        let current = TVIsland.live, before = current?.content.state
+        switch before?.app {
+        case "Mint": try await TVBridge.post("key", ["key": forward ? "next" : "previous"])
+        case "YouTube": try await TVBridge.post("key", ["key": forward ? "forward" : "rewind"])
+        default:
+            // The bar moves at once, by the ten seconds asked for, and the TV's own word follows.
+            if let current, var moved = before, let len = moved.length, len > 0 {
+                let at = moved.start.map { Date().timeIntervalSince($0) } ?? (moved.progress ?? 0) * len
+                let to = min(max(at + (forward ? 10 : -10), 0), len)
+                moved.progress = to / len
+                if moved.playing { moved.start = Date().addingTimeInterval(-to); moved.end = moved.start?.addingTimeInterval(len) }
+                await current.update(ActivityContent(state: moved, staleDate: TVIsland.staleDate(moved)))
+            }
+            do { try await TVBridge.post("player-seek", ["steps": forward ? 1 : -1], timeout: 30) }
+            catch {
+                if let current, let before { await current.update(ActivityContent(state: before, staleDate: TVIsland.staleDate(before))) }
+                throw error
+            }
+        }
+        // With the cover of whatever is on now: a song skipped to has its own, and without it the card fell to a glyph.
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        if let s = await TVBridge.status() { await TVIsland.sync(s, art: TVIsland.art(s)) }
         return .result()
     }
 }
