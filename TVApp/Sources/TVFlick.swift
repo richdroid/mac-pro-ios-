@@ -281,6 +281,8 @@ struct FlickScreen: View {
     // away and the gesture's own end never comes: a row left floating in the hand, the list unable to scroll and every
     // tap refused, was the flick "not working" until the page was closed.
     @GestureState private var touching: String?
+    // The row or card just thrown: hidden where it was, as its picture is what flies.
+    @State private var thrownID: String?
     // Another stream of what's already on, picked on purpose: sent, at the spot he's at.
     @State private var switching = false
     // A link's page name and picture, as fetched.
@@ -851,8 +853,9 @@ struct FlickScreen: View {
                 Image(systemName: "tv").font(.system(size: 17, weight: .semibold)).foregroundStyle(TVLook.accent).frame(width: 28)
                 Text("Choose on the TV").font(.subheadline.weight(.semibold))
             }
+            .modifier(LiftedLook(lift: lift, up: liftedID == "tv", scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16), solid: true))
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map["tv"] = $0 }
-            .modifier(LiftedLook(lift: lift, up: liftedID == "tv", scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16)))
+            .opacity(thrownID == "tv" ? 0 : 1)
             .zIndex(liftedID == "tv" ? 1 : 0)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: liftedID == "tv")
             .simultaneousGesture(holdAndThrow("tv") { chooseOnTV() })
@@ -976,10 +979,14 @@ struct FlickScreen: View {
         }
         .disabled(failed)
         .opacity(failed ? 0.45 : 1)
-        // Where it rests, measured outside everything that moves it.
+        // Lifted: up off the list on a bigger, lower shadow, on its own solid ground (nothing under it reads through),
+        // lit round its edge more and more as it rises.
+        .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16), solid: true))
+        // Where it rests, measured outside everything that moves it (inside the drag's offset, the throw's picture
+        // started twice the drag away, near the top of the page).
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map[s.id] = $0 }
-        // Lifted: up off the list on a bigger, lower shadow, lit round its edge more and more as it rises.
-        .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16)))
+        // Thrown: it's the picture on its way to the Remote now, never also a row springing back into the list.
+        .opacity(thrownID == s.id ? 0 : 1)
         .zIndex(up ? 1 : 0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: up)
         // Held a moment, it's in the hand: from then the finger moves it, and the list under it holds still. The row's
@@ -1062,6 +1069,8 @@ struct FlickScreen: View {
             rects.map[id] = (rects.map[id] ?? .zero).offsetBy(dx: translation.width, dy: translation.height)
             let v = hands.hand.velocity
             throwV = CGSize(width: v.dx, height: v.dy)
+            var quiet = Transaction(); quiet.disablesAnimations = true
+            withTransaction(quiet) { thrownID = id }
             if id == "card" { FlickHaptic.caught() }
             send()
         case .longTap:
@@ -1153,6 +1162,7 @@ struct FlickScreen: View {
                 .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.12, corner: 6, rest: (0.45, 18, 10), raised: (0.55, 30, 22)))
                 .animation(.spring(response: 0.3, dampingFraction: 0.7), value: up)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map["card"] = $0 }
+                .opacity(thrownID == "card" && flies ? 0 : 1)
                 // In the hand from the first touch: nothing under it scrolls, so no hold is needed.
                 .gesture(cardGesture { send(from: rects.map["card"]) })
                 .accessibilityElement(children: .combine)
@@ -1211,6 +1221,7 @@ struct FlickScreen: View {
                 try? await Task.sleep(nanoseconds: 16_000_000)
             }
             rects.map["card"] = (rects.map["card"] ?? .zero).offsetBy(dx: lift.drag.width, dy: lift.drag.height)
+            thrownID = "card"
             FlickHaptic.caught(); send(from: rects.map["card"])
             return
         }
@@ -1232,6 +1243,7 @@ struct FlickScreen: View {
             try? await Task.sleep(nanoseconds: 16_000_000)
         }
         rects.map[first.id] = (rects.map[first.id] ?? .zero).offsetBy(dx: lift.drag.width, dy: lift.drag.height)
+        thrownID = first.id
         pick(first)
     }
     // The Remote's tab was brought up under this screen for a pick that didn't go on to it: the page he picked from comes
@@ -1699,11 +1711,14 @@ struct LiftedLook: ViewModifier {
     let swell: CGFloat, corner: CGFloat
     // The shadow at rest and lifted: opacity, radius, drop.
     let rest: (Double, CGFloat, CGFloat), raised: (Double, CGFloat, CGFloat)
+    // A row's own ground is see-through; in the hand it's on a solid one, so the page under it never reads through.
+    var solid = false
     func body(content: Content) -> some View {
         let drag = up ? lift.drag : .zero
         let rise = max(0, -drag.height)
         let shade = up ? raised : rest
         content
+            .background { if solid && up { RoundedRectangle(cornerRadius: corner, style: .continuous).fill(Color(white: 0.14)) } }
             .shadow(color: .black.opacity(shade.0), radius: shade.1, y: shade.2)
             // Lit as it rises, and all the way round once letting go would send it, so the line is seen as well as felt.
             .overlay { RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(TVLook.accent.opacity(up ? (lift.armed ? 1 : 0.45 * min(1, rise / 80)) : 0), lineWidth: up && lift.armed ? 2 : 1.5) }

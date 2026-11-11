@@ -15,7 +15,7 @@ concurrency:
 jobs:
   flick:
     runs-on: xcode-27
-    timeout-minutes: 50
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,7 +36,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
       - name: Films
         continue-on-error: true
-        timeout-minutes: 38
+        timeout-minutes: 60
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -49,7 +49,10 @@ jobs:
           node ci/mock-chumby.js &
           sleep 2
           M=http://127.0.0.1:9002
-          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 \
+            && F=$(grep -rl 'args\[1\] == "touch" || args\[1\] == "drag"' Sources) \
+            && python3 -c 'import sys; f,p=sys.argv[1:]; m="if args[1] == \"touch\" || args[1] == \"drag\" {"; s=open(f).read(); assert m in s; open(f,"w").write(s.replace(m, open(p).read()+m, 1))' "$F" $GITHUB_WORKSPACE/ci/flick-hands/devicehub-path.swift \
+            && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
           # A pose filmed from launch: the app's own scripted hand on the streams page or the card.
@@ -82,6 +85,14 @@ jobs:
                 tap) $D "$DEVICE" touch $x $y 0.08 || echo "touch failed" ;;
                 long) $D "$DEVICE" touch $x $y 0.7 || echo "long touch failed" ;;
                 swipe) $D "$DEVICE" drag $x $y $x 0.2 0.15 || echo "drag failed" ;;
+                # Held, then: a short sharp flick (about 45 pt in 80 ms); a flick easing to a stop before it lifts; a
+                # slow carry well past the line and a rest; carried up then brought back down (must go back); a resting
+                # thumb that swipes as the row lifts (must not send).
+                shortflick) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.04" | bc -l) 0.08 0 || echo "path failed" ;;
+                easeflick) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.055" | bc -l) 0.13 1 $x $(echo "$y - 0.055" | bc -l) 0.03 0 || echo "path failed" ;;
+                carry) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.12" | bc -l) 0.5 0 $x $(echo "$y - 0.12" | bc -l) 0.3 0 || echo "path failed" ;;
+                backdown) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.12" | bc -l) 0.25 0 $x $y 0.3 0 || echo "path failed" ;;
+                latescroll) $D "$DEVICE" path $x $y 0.31 $x $(echo "$y - 0.15" | bc -l) 0.12 0 || echo "path failed" ;;
               esac
             else echo "no row position for $name"; fi
             sleep 14
@@ -104,6 +115,7 @@ jobs:
             fingerfilm finger-tap$x $d tap
             fingerfilm finger-long$x $d long
             fingerfilm finger-swipe$x $d swipe
+            for H in shortflick easeflick carry backdown latescroll; do fingerfilm finger-$H$x $d $H; done
           }
           # Open upright first, the way he holds it; then open flat; then folded.
           $D "$DEVICE" pose open; sleep 5
