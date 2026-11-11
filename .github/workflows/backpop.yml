@@ -1,0 +1,126 @@
+name: Back pops
+# The Mac Pro app alone, shot in every posture with open portrait (the posture Richard holds) first. The full build's
+# screenshot step ran out of time in the TV app's poses before it reached open portrait (2026-11-07, 4555275), so the
+# Mac Pro app's own changes get this short run of their own. Published to the macpro-latest release; the full build and
+# its latest release are untouched.
+on:
+  push:
+    branches: [backpop-ci]
+permissions:
+  contents: write
+concurrency:
+  group: backpop-ci
+  # The running job always finishes; a newer push only replaces one still waiting (several sessions push the Mac Pro app).
+  cancel-in-progress: false
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Mac Pro launch glow
+        run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 82
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          node ci/mock-chumby.js &
+          sleep 2
+          # One shot: name, display, wait, then the app's own arguments.
+          shot() {
+            local name=$1 display=$2 wait=$3; shift 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # One film: name, display, length, then the app's own arguments. FILM_PORT picks the stand-in Mac (9011 is the
+          # one behind his link's speed).
+          film() {
+            local name=$1 display=$2 length=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9001} "$@"
+            sleep $length
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # The swipe log from the last run with -swipeLog YES (Caches/swipe-log.txt), copied out as a .log.
+          swipelog() {
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0
+            [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/macpro-$1-swipe.log || true
+          }
+          # A page taken back with the Back button, the way he does it (Richard, 2026-11-10: "weird resizing issues at times
+          # when going back on a screen from another"): against the Mac whose readings change every second, CPU's history
+          # open at launch, Back tapped, the CPU tile tapped and Back again, then Memory and Back. Each move's start and
+          # end, every reading a page takes and every late frame go to the log beside the film.
+          # name, display, Back's x and y, the CPU tile's x and y, the Memory tile's x (fractions), then the app's own arguments.
+          popfilm() {
+            local name=$1 display=$2 bx=$3 by=$4 tx=$5 ty=$6 mx=$7; shift 7
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9021 -fullEvery 1 -swipeLog YES -tab 0 -openHistory cpu "$@"
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-page.png
+            echo "$name back at $(date +%s.%N | cut -c1-14)"
+            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-back.png
+            $D "$DEVICE" touch $tx $ty 0.08 || echo "tap failed"; sleep 3
+            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 3
+            $D "$DEVICE" touch $mx $ty 0.08 || echo "tap failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-memory.png
+            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            swipelog $name
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          open -a DeviceHub; sleep 10
+          D=/tmp/dh/.build/release/devicehubctl
+          $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          popfilm pop-portrait-before 3 0.065 0.049 0.25 0.66 0.75 -holdLate YES
+          popfilm pop-portrait 3 0.065 0.049 0.25 0.66 0.75
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          popfilm pop-open-raw 3 0.948 0.222 0.62 0.23 0.82 -noHold YES
+          popfilm pop-open-before 3 0.948 0.222 0.62 0.23 0.82 -holdLate YES
+          popfilm pop-open 3 0.948 0.222 0.62 0.23 0.82
+          $D "$DEVICE" pose closed || true; sleep 5
+          popfilm pop-before 1 0.895 0.292 0.23 0.81 0.62 -holdLate YES
+          popfilm pop 1 0.895 0.292 0.23 0.81 0.62
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view backpop-ci >/dev/null 2>&1 || gh release create backpop-ci --prerelease --title "Back pops (a working branch's films)" --notes "Films of pages taken back with the Back button, from a working branch."
+          for f in shots.zip films.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload backpop-ci "$f" --clobber && break; sleep 15; done
+          done
