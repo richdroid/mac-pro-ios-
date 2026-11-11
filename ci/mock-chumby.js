@@ -771,7 +771,10 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
       else { frame(b.subarray(0, budget)); outbox[0] = b.subarray(budget); budget = 0; }
     }
   }, 20) : null;
-  const later = data => setTimeout(() => (slow ? outbox.push(data) : frame(data)), LAG);
+  // Sleepy: in pieces of 32 KB, as the real bridge passes on what Screen Sharing writes. One 4 MB message took the
+  // app's WebSocket seconds to hand over (15 s and more in the build's simulator), and held up everything behind it.
+  const pieces = data => { for (let at = 0; at < data.length; at += 32768) frame(data.subarray(at, at + 32768)); };
+  const later = data => setTimeout(() => (slow ? outbox.push(data) : sleepy ? pieces(data) : frame(data)), LAG);
   // Colours as 0xRRGGBB, put in the app's pixel format when sent.
   let bpp = 32;
   const bg = 0x1c162c, bright = 0xebebf5, dim = 0x786e96, side = 0x121216;
@@ -785,8 +788,22 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
     const r = 205 + (t * 30 | 0) + (n & 15), g = 120 + (t * 40 | 0) + ((n >> 4) & 31), b = 175 + ((n >> 9) & 31);
     return (Math.min(r, 255) << 16) | (Math.min(g, 255) << 8) | Math.min(b, 255);
   };
+  // Sleepy: the wallpaper is worked out once, when the first such session opens (it takes this script seconds), so the
+  // whole picture is ready as fast as the real Mac's when it's asked for.
+  if (sleepy && !mockScreen.wallpaper) {
+    const all = new Uint32Array(W * H);
+    for (let Y = 0; Y < H; Y++) for (let X = 0; X < W; X++) all[Y * W + X] = wall(X, Y);
+    mockScreen.wallpaper = all;
+  }
   const paint = (x0, y0, w, h, scroll) => {
     const out = new Uint32Array(w * h);
+    if (sleepy && w === W && h === H) {
+      // The saved wallpaper with the band's page on top.
+      out.set(mockScreen.wallpaper);
+      const inner = paint(band.x, band.y, band.w, band.h, scroll);
+      for (let y = 0; y < band.h; y++) out.set(inner.subarray(y * band.w, (y + 1) * band.w), (band.y + y) * W + band.x);
+      return out;
+    }
     for (let y = 0; y < h; y++) {
       const Y = y0 + y, row = y * w;
       if (Y < band.y || Y >= band.y + band.h) {
