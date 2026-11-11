@@ -53,6 +53,7 @@ jobs:
             local name=$1 display=$2 length=$3; shift 3
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
+            echo "film $name launch at $(node -e 'console.log(Date.now())')"
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9001} "$@"
             sleep $length
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
