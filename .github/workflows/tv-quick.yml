@@ -104,11 +104,7 @@ jobs:
             tourfilm tour 1
             $D "$DEVICE" pose open; sleep 5
             $D "$DEVICE" rotate 1; sleep 5
-            # Each twice, with the warm-up and without, turn about: the first visits' slow frames side by side.
             tourfilm tour-portrait 3
-            tourfilm tour-portrait-nowarm 3 -noWarm YES
-            tourfilm tour-portrait2 3
-            tourfilm tour-portrait2-nowarm 3 -noWarm YES
             # A film playing, its clock running: how many of the TV's readings are put on screen, as before and now.
             SCENE=$M/rfilm tourfilm tour-film-every 3 -everyReading YES
             SCENE=$M/rfilm tourfilm tour-film 3
