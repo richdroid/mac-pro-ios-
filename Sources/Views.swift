@@ -457,6 +457,14 @@ struct PaneHeading: View {
     }
 }
 
+// A device's name as a word: its first letter capitalised, except names Apple spells its own way ("iphone" → "iPhone",
+// "ipad-2" → "iPad-2"), which keep that spelling (designer, 2026-11-11, amending the capitals ruling).
+func appleCased(_ name: String) -> String {
+    for word in ["iPhone", "iPad", "iPod", "iMac", "macOS", "iOS"] where name.lowercased().hasPrefix(word.lowercased()) {
+        return word + name.dropFirst(word.count)
+    }
+    return name.prefix(1).uppercased() + name.dropFirst()
+}
 // The Mac reports some states in capitals or lower case; the app says them one way.
 func sentenceCase(_ t: String) -> String { t.prefix(1).uppercased() + t.dropFirst().lowercased() }
 
@@ -725,12 +733,14 @@ struct LiveTiles: View {
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net, h = store.live?.hist ?? s.hist, load = store.live?.load ?? s.load
         VStack(spacing: 12) {
             HStack(spacing: 12) {
-                WebTile(title: "CPU", value: "\(cpu.total)%", detail: String(format: "Load %.2f", load.first ?? 0), spark: h.cpu, top: 100, read: { "\(Int($0))%" }, open: { model.history = .cpu })
+                // The CPU's heat on its tile, the one temperature he glances at now the dials are off Status by default
+                // (designer, 2026-11-11).
+                WebTile(title: "CPU", value: "\(cpu.total)%", detail: String(format: "Load %.2f", load.first ?? 0) + (s.temps?.first(where: { $0.name == "CPU" }).map { " · \(Heat.shown($0.c))°\(MacPrefs.celsius ? "C" : "F")" } ?? ""), spark: h.cpu, top: 100, read: { "\(Int($0))%" }, open: { model.history = .cpu })
                 WebTile(title: "Memory", value: Format.bytes(mem.used), detail: "of \(Format.bytes(mem.total))", spark: h.mem, top: 100, read: { "\(Int($0))%" }, open: { model.history = .memory })
             }
             HStack(spacing: 12) {
                 WebTile(title: "Download", value: Format.rate(net.rxRate), detail: net.kind, spark: h.rx, read: Format.rate, open: { model.history = .download })
-                WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.ip, spark: h.tx, read: Format.rate, open: { model.history = .upload })
+                WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.kind, spark: h.tx, read: Format.rate, open: { model.history = .upload })
             }
         }
     }
@@ -813,6 +823,10 @@ struct HeroChips: View {
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).background(Color(white: 0.16), in: Capsule())
     }
     var parts: Int? { healthBad ?? summary.bad }
+    var bannerUp: Bool {
+        let put = AlertDismissals.set(dismissedRaw)
+        return (alerts ?? []).contains { $0.id != OTAInstaller.alertID && !put.contains($0.dismissKey) }
+    }
     var health: (Color, String) {
         func look(_ n: Int) -> String { "\(n) need\(n == 1 ? "s" : "") a look" }
         if let n = parts, n > 0 { return (.orange, look(n)) }
@@ -837,7 +851,8 @@ struct HeroChips: View {
             }
         } else {
             HStack(spacing: 8) {
-                if (parts ?? 0) > 0 {
+                // Not while the alerts banner is up just above: "3 need a look" said it again (designer, 2026-11-11).
+                if bannerUp {} else if (parts ?? 0) > 0 {
                     Button(action: openHealth) { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1, opens: true) }
                         .buttonStyle(FlatStyle()).accessibilityHint("Opens Everything on the Mac")
                 } else { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1) }
@@ -878,10 +893,12 @@ struct QuickActions: View {
     func face(_ id: String, _ icon: String, _ title: String, waits: Bool) -> some View {
         let dim = waits ? offlineDim : 1
         return VStack(spacing: 6) {
-            Image(systemName: done.contains(id) ? "checkmark" : icon).font(.system(size: 20)).foregroundStyle(.white.opacity(dim))
+            // In the accent at full strength, labels in the text's colour: grey on grey read as disabled (11-07 ruling;
+            // designer, 2026-11-11).
+            Image(systemName: done.contains(id) ? "checkmark" : icon).font(.system(size: 20)).foregroundStyle(macBlue.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 52, height: 52).background(Color(white: 0.16).opacity(dim), in: Circle())
-            Text(title).font(.caption2).foregroundStyle(.secondary.opacity(dim)).lineLimit(1).minimumScaleFactor(0.8)
+            Text(title).font(.footnote).foregroundStyle(.primary.opacity(dim)).lineLimit(1).minimumScaleFactor(0.8)
             if let f = fails[id] {
                 Text(f).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                     .transition(.opacity)
@@ -1586,6 +1603,7 @@ struct UpdateLog: View {
     let log: String
     // How tall the lines are, so a short log gets a card its own size rather than an empty slab with one line at its foot.
     @State private var contentHeight: CGFloat?
+    @State private var scrolledDown = false
     static let bad = try? NSRegularExpression(pattern: #"\b(error|errors|failed|failure|fatal|cannot|couldn[’']t|panic)\b|✗"#, options: .caseInsensitive)
     static let good = try? NSRegularExpression(pattern: #"\b(finished|complete|completed|succeeded|success|healthy|installed|nothing to do|up to date)\b|✓"#, options: .caseInsensitive)
     static func matches(_ r: NSRegularExpression?, _ s: String) -> Bool { r?.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil }
@@ -1613,12 +1631,14 @@ struct UpdateLog: View {
             }
             // A line scrolled up under the card's top fades out rather than being cut flat by the edge. The fade is
             // within the top inset, so a short log's first line at rest is untouched.
+            // A full line deep, and only once the log is scrolled off its top, so a short log's first line is untouched.
             .mask {
                 VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: scrolledDown ? 30 : 0)
                     Color.black
                 }
             }
+            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y > 2 } action: { _, v in scrolledDown = v }
             .defaultScrollAnchor(.bottom)
             .scrollEdgeEffectHidden(true, for: .top)
             .scrollBounceBehavior(.basedOnSize)
@@ -1831,7 +1851,7 @@ struct ControlTab: View {
             Section {
                 if s.tailscale.peers.isEmpty { Text("No other devices yet").foregroundStyle(.secondary) }
                 // The device's name as a word and whether it's there; its OS was chatter (designer, 2026-11-11).
-                ForEach(s.tailscale.peers) { p in StateRow(label: p.name.prefix(1).uppercased() + p.name.dropFirst(), good: p.online, value: p.online ? "Connected" : "Offline") }
+                ForEach(s.tailscale.peers) { p in StateRow(label: appleCased(p.name), good: p.online, value: p.online ? "Connected" : "Offline") }
                 if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
             } header: { Text("Remote access") } footer: {
                 if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }

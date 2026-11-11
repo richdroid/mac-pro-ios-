@@ -328,7 +328,7 @@ struct DisplayHoldButton: View {
         VStack(spacing: 6) {
             Image(systemName: isOn ? "sun.max.fill" : "moon")
                 .font(.system(size: 20))
-                .foregroundStyle(lit ? Color.black : Color.white.opacity(dim))
+                .foregroundStyle(lit ? Color.black : macBlue.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 52, height: 52)
                 .background(lit ? Color.white : Color(white: 0.16).opacity(dim), in: Circle())
@@ -349,7 +349,7 @@ struct DisplayHoldButton: View {
                         LinearKeyframe(0, duration: 0.06)
                     }
                 }
-            Text(hint ? "Hold" : "Display").font(.caption2).foregroundStyle(hint ? AnyShapeStyle(macBlue) : AnyShapeStyle(.secondary.opacity(dim))).lineLimit(1).minimumScaleFactor(0.8)
+            Text(hint ? "Hold" : "Display").font(.footnote).foregroundStyle(hint ? AnyShapeStyle(macBlue) : AnyShapeStyle(.primary.opacity(dim))).lineLimit(1).minimumScaleFactor(0.8)
                 .contentTransition(.opacity)
             if let failure {
                 Text(failure).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal: false, vertical: true)
