@@ -101,7 +101,8 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR "$@"
             sleep 9
           }
-          endfilm() { sleep 4; kill -INT $REC; wait $REC; echo "film $1 exit $?"; xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true; }
+          endfilm() { sleep 4; kill -INT $REC; wait $REC; echo "film $1 exit $?"; xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && mv "$C/Library/Caches/swipe-log.txt" dist/chumby-$1-swipe.log || true; }
           films() { # display, suffix, Back's place (x y, fractions of the screenshot; the inner display's tree is empty to
             # devicehubctl, so a tap by label never lands there)
             local d=$1 x=$2 bx=$3 by=$4
@@ -130,16 +131,16 @@ jobs:
           # rest pixel from the first frame after release).
           film 3 pinned-editor-fling-open - -tab 2 -pose editor; $D "$DEVICE" drag 0.75 0.9 0.75 0.25 0.15 || true; sleep 3; $D "$DEVICE" drag 0.75 0.25 0.75 0.9 0.15 || true; endfilm pinned-editor-fling-open
           film 3 pinned-calsettings-fling-open - -tab 2 -pose calsettings; $D "$DEVICE" drag 0.75 0.9 0.75 0.25 0.15 || true; sleep 3; $D "$DEVICE" drag 0.75 0.25 0.75 0.9 0.15 || true; endfilm pinned-calsettings-fling-open
-          # Turned mid-scroll: Calendar settings open flat, scrolled so its title is pinned, turned to open portrait and back.
-          film 3 pinned-turn-open - -tab 2 -pose calsettings; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.0 || true; sleep 2
+          # Turned mid-scroll, both ways, with the swipe log (page and title frames, safe areas, place written and restored):
+          # Calendar settings, a calendar day, and an alarm's editor with an unsaved label (editordraft types it 3 s in).
+          film 3 pinned-turn-open - -tab 2 -pose calsettings -swipeLog YES; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.0 || true; sleep 2
           $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5
-          # Back open flat: it must be where it was; then down to the top and up again past the title, to see the rest.
           $D "$DEVICE" drag 0.75 0.3 0.75 0.95 1.0 || true; sleep 2; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.5 || true; sleep 2; endfilm pinned-turn-open
-          # Turned at rest, then scrolled past the title.
-          film 3 pinned-turnrest-open - -tab 2 -pose calsettings; $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5
+          film 3 pinned-turnrest-open - -tab 2 -pose calsettings -swipeLog YES; $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5
           $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.5 || true; sleep 2; endfilm pinned-turnrest-open
-          # An alarm's editor open flat, scrolled, turned to portrait and back.
-          film 3 editor-turn-open - -tab 2 -pose editor; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.0 || true; sleep 2
+          film 3 day-turn-open - -tab 2 -pose caldayown -swipeLog YES; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.0 || true; sleep 2
+          $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5; endfilm day-turn-open
+          film 3 editor-turn-open - -tab 2 -pose editordraft -swipeLog YES; sleep 3; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.0 || true; sleep 2
           $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5; endfilm editor-turn-open
           # Last of all: Alarms' calendar switch tapped on, open in portrait then folded. It raises the system's calendar
           # permission alert, which stays up over everything after it, so nothing is shot after these.

@@ -409,6 +409,7 @@ struct TwoPane<L: View, R: View>: View {
                         let pinned = rightTitle.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
                         List { if let rightTitle { PageTitle(rightTitle, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
                             .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
+                            .keepsPlace(pinned.map { "page:" + $0 })
                     }
                 }
                 .opacity(rightShown ? 1 : 0)
@@ -506,6 +507,97 @@ extension View {
     func pinsTitle<B: View>(_ on: Bool = true, @ViewBuilder _ bar: () -> B) -> some View { modifier(PinnedTitle(on: on, bar: bar())) }
 }
 
+// The Duo's panes, decided from the size coming in, in the same pass (never a pass later, from a reading of the last
+// layout): turned back open flat, the first frame is the split, never the upright page laid across the fold for half a
+// second first (designer, gate 9). The change itself carries no animation, so a page pushed upright is put back in its
+// pane at once rather than sliding off over the split. Measured clear of the keyboard, or typing upright would look like
+// turning sideways.
+struct ChumbyPaneReader<C: View>: View {
+    @Environment(\.horizontalSizeClass) private var size
+    @ViewBuilder let content: () -> C
+    var body: some View {
+        GeometryReader { g in
+            let panes = size == .regular && g.size.width > g.size.height
+            content()
+                .frame(width: g.size.width, height: g.size.height)
+                .environment(\.paneLayout, panes)
+                .transaction(value: panes) { $0.disablesAnimations = true; $0.animation = nil }
+        }
+        .ignoresSafeArea(.keyboard)
+    }
+}
+
+// A page keeps its place through a fold or a turn (designer, gate 8: "why did it go back to the top"). Open flat a page
+// sits in the right pane; upright the same page is pushed or a cover: two lists of two widths, so the place is kept as a
+// row, not a distance (gate 9). Rows that mark a place (`placeMark`) report where they are; the one the top of the list
+// is in is the place, taken only from a steady layout (never while the list is being resized by the turn), and the new
+// list is scrolled to it once its content has a size. Only across that hand-over: a page closed and opened again later
+// starts at the top.
+@Observable final class PlaceTracker {
+    var marks: [String: CGFloat] = [:]
+    var box: CGRect = .zero
+    var steadySize: CGSize = .zero
+    var restored = false
+    // The mark the list's top is in: the lowest one at or above the top (with a little give), or none at the top.
+    func anchor(offset: CGFloat) -> String? {
+        guard offset > 1 else { return nil }
+        return marks.filter { $0.value <= box.minY + 24 }.max { $0.value < $1.value }?.key
+    }
+}
+@MainActor enum PagePlace {
+    static var anchor: [String: String] = [:]
+    static var left: [String: Date] = [:]
+    static func take(_ key: String) -> String? {
+        defer { left[key] = nil }
+        guard let at = left[key], Date().timeIntervalSince(at) < 1.5 else { anchor[key] = nil; return nil }
+        return anchor[key]
+    }
+}
+struct KeepsPlace: ViewModifier {
+    let key: String?
+    @State private var tracker = PlaceTracker()
+    func body(content: Content) -> some View {
+        if let key {
+            ScrollViewReader { proxy in
+                content
+                    .environment(tracker)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { tracker.box = $0 }
+                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, h in
+                        guard !tracker.restored, h > 0 else { return }
+                        tracker.restored = true
+                        if let a = PagePlace.take(key) {
+                            SwipeLog.note("place restore \(key) \(a)")
+                            DispatchQueue.main.async {
+                                var t = Transaction(); t.disablesAnimations = true
+                                withTransaction(t) { proxy.scrollTo(a, anchor: .top) }
+                            }
+                        }
+                    }
+                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, o in
+                        // Only from a steady layout: a reading while the turn resizes the list is the turn's, not his.
+                        guard tracker.restored, tracker.box.size == tracker.steadySize else { tracker.steadySize = tracker.box.size; return }
+                        let a = tracker.anchor(offset: o)
+                        if PagePlace.anchor[key] != a { PagePlace.anchor[key] = a; SwipeLog.note("place write \(key) \(a ?? "top")") }
+                    }
+                    .onDisappear { PagePlace.left[key] = Date() }
+            }
+        } else {
+            content
+        }
+    }
+}
+struct PlaceMark: ViewModifier {
+    let id: String
+    @Environment(PlaceTracker.self) private var tracker: PlaceTracker?
+    func body(content: Content) -> some View {
+        content.id(id).onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { tracker?.marks[id] = $0 }
+    }
+}
+extension View {
+    func keepsPlace(_ key: String?) -> some View { modifier(KeepsPlace(key: key)) }
+    func placeMark(_ id: String) -> some View { modifier(PlaceMark(id: id)) }
+}
+
 // The page fades out just above the tab bar, so nothing reads through its glass ("Chumby Classic" did, on Home, under the
 // tabs: Richard's phone, 2026-11-05). A mask on the page, not a band of colour over it: the sea behind stays whole, and
 // only the page's own cards and words dissolve as they reach the bar. The bar's own space is the page's bottom safe area,
@@ -578,7 +670,7 @@ struct RootView: View {
     @Environment(\.horizontalSizeClass) private var size
     @State private var resets: [Int: Int] = [:]
     var body: some View {
-        PaneReader {
+        ChumbyPaneReader {
             ZStack {
                 // The sea's own base colour under everything, so the first frame matches the launch screen.
                 ChumbyPalette.sea(scheme == .dark)[0].ignoresSafeArea()

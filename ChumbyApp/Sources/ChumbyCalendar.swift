@@ -297,9 +297,10 @@ struct CalendarSettingsSections: View {
             Section {
                 Toggle(isOn: $wake.rules.enabled) { TwoLine("Wake me from my calendar", CalendarWake.what) }
                     .soloCard()
+                    .placeMark("cs-wake")
             }
             Section {
-                leadRow("Work", $wake.rules.workLead)
+                leadRow("Work", $wake.rules.workLead).placeMark("cs-lead")
                 leadRow("Anything else", $wake.rules.otherLead)
                 leadRow("Extra for a location", $wake.rules.travelExtra)
                 Stepper(value: $wake.rules.daysAhead, in: 1...7) {
@@ -310,7 +311,7 @@ struct CalendarSettingsSections: View {
                 }
             } header: { SectionHead(icon: "clock", text: "Awake before it starts") }
             Section {
-                CalendarSoundRow(autoOpen: ChumbyModel.pose == "template")
+                CalendarSoundRow(autoOpen: ChumbyModel.pose == "template").placeMark("cs-ring")
             } header: { SectionHead(icon: "music.note", text: "How they ring") }
             // Only on a Chumby that knows how.
             if let on = model.state.calOverride {
@@ -320,11 +321,12 @@ struct CalendarSettingsSections: View {
                                 : "Your repeating alarms ring as usual, even on days your calendar wakes you.")
                     }
                     .soloCard(on: model.failed("calover") == nil)
+                    .placeMark("cs-skip")
                     if let f = model.failed("calover") { FailNote(text: f) }
                 } header: { SectionHead(icon: "bell.slash.fill", text: "Skipping other alarms") }
             }
             Section {
-                WordsGroup(title: "Counts as work", words: $wake.rules.workWords)
+                WordsGroup(title: "Counts as work", words: $wake.rules.workWords).placeMark("cs-words")
                 WordsGroup(title: "Never wake for", words: $wake.rules.ignoreWords)
                 WordsGroup(title: "Days off", words: $wake.rules.offWords)
             } header: { SectionHead(icon: "text.quote", text: "Words in titles") }
@@ -404,6 +406,7 @@ struct CalendarWakeSettings: View {
     @EnvironmentObject var model: ChumbyModel
     var body: some View {
         List { PageTitle("Calendar settings"); CalendarSettingsSections().listRowBackground(GlassRow()) }
+            .keepsPlace("page:Calendar settings")
             .pushedPage("settings")
     }
 }
@@ -645,6 +648,7 @@ struct CalendarDaySheet: View {
             }
             // Pinned only with its Done: a pushed page's way out is the system's Back.
             .pinsTitle(done) { PageTitle(title) { doneButton } }
+            .keepsPlace("page:day:" + key)
             .onAppear { labelText = edit.label ?? ""; loadOwn() }
             .onDisappear { commitLabel() }
         } else {

@@ -542,7 +542,7 @@ struct AlarmsTab: View {
     @State private var removing: String?
     @State private var posed = false
     @AppStorage("missedDismissed") private var dismissedRaw = ""
-    struct EditTarget: Identifiable { let alarm: Alarm?; var nap = false; var id: String { (nap ? "nap-" : "") + (alarm?.key ?? "new") } }
+    struct EditTarget: Identifiable { let alarm: Alarm?; var nap = false; var fromPane = false; var id: String { (nap ? "nap-" : "") + (alarm?.key ?? "new") } }
     // Each editor grows out of the row that opened it and shrinks back into it, the iOS zoom, rather than a sheet rising
     // from the foot with no tie to what was tapped (Richard, 2026-11-07: "the animation to edit like the calendar alarm
     // sucks").
@@ -676,14 +676,20 @@ struct AlarmsTab: View {
         .onChange(of: wide) { _, w in
             paneSwap?.cancel(); paneSwap = nil; paneFaded = false
             if w {
-                if model.alarmsPage { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false }
+                // An editor that was in the pane before the turn goes back into it (its draft and place carried), never
+                // left as a cover across the fold (the lead's ruling, 11-11). One opened folded stays a cover.
+                if let e = editing, e.fromPane {
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { editing = nil; pane = e.nap ? .napEditor(e.alarm) : .editor(e.alarm) }
+                }
+                else if model.alarmsPage { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false }
                 else { pane = .schedule }
             } else {
                 switch pane {
                 case .settings: dayPage = nil; model.alarmsPage = true
                 case .day(let k): dayPage = k; model.alarmsPage = true
-                case .editor(let a): editing = EditTarget(alarm: a)
-                case .napEditor(let a): editing = EditTarget(alarm: a, nap: true)
+                case .editor(let a): editing = EditTarget(alarm: a, fromPane: true)
+                case .napEditor(let a): editing = EditTarget(alarm: a, nap: true, fromPane: true)
                 case .template, .schedule: break
                 }
                 pane = .schedule
@@ -717,7 +723,7 @@ struct AlarmsTab: View {
                 }
             // A calendar day moved for that day alone by "just this once": its own time, 25 minutes later than usual.
             case "calonce": if let w = wake.plan.first { wake.rules.dayEdits[w.key] = DayEdit(wakeAt: w.wake.addingTimeInterval(25 * 60).timeIntervalSince1970) }
-            case "editor": edit(mine.first ?? Alarm())
+            case "editor", "editordraft": edit(mine.first ?? Alarm())
             case "editornew": edit(nil)
             // His own alarms and the nap brought on screen, folded, for their shot.
             case "alarmsmine", "napset": Task { try? await Task.sleep(nanoseconds: 1_500_000_000); scrollTo = "nap" }
@@ -1299,6 +1305,17 @@ struct SoundRows: View {
 }
 
 // MARK: - The alarm editor
+// An editor's unsaved draft, kept for the moment a turn moves the editor between the right pane and its cover (Richard's
+// 11-08 rule, as the lead ruled 11-11: he never loses what he typed). Taken only within a few seconds of being left.
+struct EditorDraft { var alarm: Alarm; var time: Date; var date: Date; var repeatMode: String; var day: Int; var sound: SoundChoice; var after: String }
+@MainActor enum EditorDrafts {
+    static var byKey: [String: (EditorDraft, Date)] = [:]
+    static func take(_ key: String) -> EditorDraft? {
+        defer { byKey[key] = nil }
+        guard let (d, at) = byKey[key], Date().timeIntervalSince(at) < 3 else { return nil }
+        return d
+    }
+}
 struct AlarmEditor: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
@@ -1330,6 +1347,7 @@ struct AlarmEditor: View {
     @State private var problem: String?
     @State private var loaded = false
     @State private var justOnce = false
+    @State private var ended = false
 
     var stations: [NamedID] { model.pandoraStations }
     var afterOptions: [(String, String)] {
@@ -1386,7 +1404,7 @@ struct AlarmEditor: View {
             // In the right pane: its own list, its title row with Cancel and Save, then the same sections, clear of the
             // fold. The title row stays pinned once the page is scrolled, so Save is always in reach.
             let buttons = HStack(spacing: 16) {
-                Button("Cancel") { stopTest(); close() }.disabled(saving)
+                Button("Cancel") { ended = true; stopTest(); close() }.disabled(saving)
                 if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
             }
             .foregroundStyle(.tint)
@@ -1395,10 +1413,11 @@ struct AlarmEditor: View {
                 sections.listRowBackground(GlassRow())
             }
             .pinsTitle { PageTitle(title) { buttons } }
+            .keepsPlace(placeKey)
             // On the list, never on a row: a lazy row scrolled off would end the edit (held readings landing) or present
             // nothing. (Build 204's "presents from none" was a sheet bound from many rows of the pane's shared list.)
-            .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
-            .onDisappear { model.editingAlarm = false }
+            .onAppear { if !loaded { begin(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
+            .onDisappear { model.editingAlarm = false; keepDraft() }
             .fillCover(isPresented: $justOnce) { justOnceSheet }
         } else {
             // Presented edge to edge (fillCover, from Alarms and the calendar's sound row), with Cancel and Save as the
@@ -1407,20 +1426,21 @@ struct AlarmEditor: View {
             // sidebar"). As words alone iOS kept them in a row across the top: it sets no title-only item vertically.
             NavigationStack {
                 Form { sections.listRowBackground(GlassRow()) }
+                .keepsPlace(placeKey)
                 .seaList().background { SeaBackground().ignoresSafeArea() }
                 // The system's own title (its face set once in ChumbyApp.dressBars), never a text item in the bar (ruling 11-09).
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button { stopTest(); dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving)
+                        Button { ended = true; stopTest(); dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold) }
                     }
                 }
                 .interactiveDismissDisabled(saving)
-                .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
-                .onDisappear { model.editingAlarm = false }
+                .onAppear { if !loaded { begin(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
+                .onDisappear { model.editingAlarm = false; keepDraft() }
                 .fillCover(isPresented: $justOnce) { justOnceSheet }
             }
         }
@@ -1431,11 +1451,30 @@ struct AlarmEditor: View {
         if let original, case .ok(_, let due, _) = model.justOnceOffer(for: original) { JustOnceSheet(original: original, due: due).environmentObject(model) }
     }
     // For the shot: the sheet, and in it Set with the Chumby's one skip already on another alarm.
+    // For the build's turn film (-pose editordraft): an unsaved label typed once, 3 s in, which must survive the turn.
+    static var drafted = false
     func posedJustOnce() {
+        if ChumbyModel.pose == "editordraft", !Self.drafted, original != nil {
+            Self.drafted = true
+            Task { try? await Task.sleep(nanoseconds: 3_000_000_000); alarm.name = "Kept through the turn" }
+        }
         guard ChumbyModel.pose == "reskip", original != nil else { return }
         Task { try? await Task.sleep(nanoseconds: 1_200_000_000); justOnce = true }
     }
-    func finish() { stopTest(); if let close { close() } else { dismiss() } }
+    func finish() { ended = true; EditorDrafts.byKey[placeKey] = nil; stopTest(); if let close { close() } else { dismiss() } }
+    // The same editor in the pane and in its cover: what's typed, and where it's scrolled, carry across a turn.
+    var placeKey: String { "page:editor:" + (calendarTemplate ? "template" : original?.key ?? (nap ? "nap" : "new")) }
+    // Opened: a draft left by its twin a moment ago (the turn that moved it between pane and cover), or the alarm as it is.
+    func begin() {
+        if let d = EditorDrafts.take(placeKey) {
+            alarm = d.alarm; time = d.time; date = d.date; repeatMode = d.repeatMode; day = d.day; sound = d.sound; after = d.after
+        } else { load() }
+    }
+    // Leaving without Save or Cancel (the turn): what's typed is kept for its twin.
+    func keepDraft() {
+        guard !ended else { return }
+        EditorDrafts.byKey[placeKey] = (EditorDraft(alarm: alarm, time: time, date: date, repeatMode: repeatMode, day: day, sound: sound, after: after), Date())
+    }
 
     var sections: some View {
             Group {
@@ -1467,11 +1506,12 @@ struct AlarmEditor: View {
                     } header: { SectionHead(icon: "timer", text: "Wake me in") } footer: { if nap && original == nil { SectionFoot("Rings once, as your other alarms do, and never turns them off.") } }
                 }
                 if !calendarTemplate && !nap {
-                Section { DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute).datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity) }
+                Section { DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute).datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity).placeMark("ed-time") }
                 Section {
                     Picker("Repeat", selection: $repeatMode.afterMenu($repeatClosing)) {
                         Text("Once").tag("once"); Text("Daily").tag("daily"); Text("Weekdays").tag("weekday"); Text("Weekends").tag("weekend"); Text("One day").tag("day")
                     }
+                    .placeMark("ed-repeat")
                     // The Day and Date rows come and go once Repeat's menu has closed, not under it.
                     let repeatShown = repeatClosing ?? repeatMode
                     if repeatShown == "day" {
@@ -1496,6 +1536,7 @@ struct AlarmEditor: View {
                     MenuRow(title: "Then", note: "What the screen does once it stops ringing.", selection: $after) {
                         ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) }
                     }
+                    .placeMark("ed-after")
                 } header: { SectionHead(icon: "arrow.turn.down.right", text: "Afterwards") }
                 // One of his repeating alarms: later or another sound for its next ring only (the Chumby's skip is pinned by name,
                 // so it needn't be the next alarm to ring).
