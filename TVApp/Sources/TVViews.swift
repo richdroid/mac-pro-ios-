@@ -49,6 +49,8 @@ struct TVApp: App {
                             // Worked out afresh from what the TV is playing now, as the Remote's own ⏭ does it: what was
                             // known before the app was put away may be the episode before's. One wait and one answer:
                             // the Remote's key shows its light for this one (`resolvingNext`) rather than starting its own.
+                            // (A second tap on the card while this one is still looking is the same ask.)
+                            guard !model.resolvingNext else { return }
                             model.resolvingNext = true
                             defer { model.resolvingNext = false }
                             await model.load()
