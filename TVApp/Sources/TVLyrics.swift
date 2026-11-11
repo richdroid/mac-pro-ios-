@@ -227,7 +227,8 @@ struct MusicExtras: View {
     var tall = false
     @State private var appearedAt = Date()
     @Environment(\.scenePhase) private var phase
-    var shown: Int { tall ? 3 : 5 }
+    // Open flat the words' window holds the sung line and a wrapped next one whole, so Up next shows two there.
+    var shown: Int { tall ? 2 : 5 }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             if let d = store.detail, !d.lines.isEmpty {
@@ -236,7 +237,7 @@ struct MusicExtras: View {
                     Group {
                         // A fixed window, 12 pt clear of the heading so no line is ever cut under it. Open flat it stays
                         // short enough that Recently played and Play on TV are still in the pane (gate dd1a, 276).
-                        if d.synced { SyncedLyrics(lines: d.lines, line: store.line, height: tall ? 176 : 250, quiet: Date().timeIntervalSince(appearedAt) < 0.4).padding(.top, 12) }
+                        if d.synced { SyncedLyrics(lines: d.lines, line: store.line, height: tall ? 236 : 250, quiet: Date().timeIntervalSince(appearedAt) < 0.4).padding(.top, 12) }
                         else { PlainLyrics(lines: d.lines, showsAll: $store.showsAll) }
                     }
                     .opacity(store.waiting ? 0 : 1)
@@ -313,7 +314,10 @@ private struct SyncedLyrics: View {
                         .font(.system(size: 24, weight: .bold)).multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .opacity(l.id == line ? 1 : 0.32)
+                        // The sung line, and the one either side of it stepped back; the rest are out of the window's
+                        // story, so no line further off can ever show as a sliver at either edge, whatever its height
+                        // (gate 276: the foot of a line two back under "Lyrics", the top of a wrapped next line at the foot).
+                        .opacity(l.id == line ? 1 : abs(l.id - line) == 1 ? 0.32 : 0)
                         .scaleEffect(l.id == line ? 1 : 0.96, anchor: .leading)
                         .id(l.id)
                 }
@@ -335,7 +339,7 @@ private struct SyncedLyrics: View {
                 Color.clear.frame(height: Self.clearTop)
                 LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.fadeEnd - Self.clearTop)
                 Color.black
-                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 56)
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 20)
             }
         }
         .onChange(of: line, initial: true) { _, now in

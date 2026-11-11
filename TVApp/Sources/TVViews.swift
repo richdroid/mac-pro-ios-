@@ -92,7 +92,7 @@ struct RootView: View {
             return
         }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
-        if ["tour", "type", "episodes", "scrub", "island"].contains(pose) { return }
+        if ["tour", "type", "episodes", "scrub", "island", "connection", "tvsettings"].contains(pose) { return }
         // The Remote's picture hidden, then shown again, as its held menu does it: filmed, so each change is seen to fade.
         if pose == "mirror" {
             Task {
@@ -649,7 +649,7 @@ struct TVSettingsTab: View {
                 Group {
                     // Unfolded, one list each side of the fold rather than one list across it.
                     if panes {
-                        FoldSplit { page(manage).modifier(FollowsScroll(scrolled: scrolled)) } right: {
+                        FoldSplit { page(TVManageSections(level: true)).modifier(FollowsScroll(scrolled: scrolled)) } right: {
                             page(actions).poseScroll().modifier(FollowsScroll(scrolled: scrolled))
                         }
                     } else {
@@ -1184,7 +1184,7 @@ struct GlassKey: View {
             Image(systemName: icon).font(.system(size: size * 0.36, weight: .medium)).frame(width: size, height: size).contentShape(Circle())
                 .scaleEffect(down ? 0.92 : 1).animation(TVLook.press, value: down)
         }
-        .glassEffect(.key, in: Circle())
+        .keyGlass()
     }
 }
 struct PlayKey: View {
@@ -1368,7 +1368,7 @@ struct RemoteTab: View {
                     Image(systemName: "keyboard").font(.system(size: 19, weight: .medium)).foregroundStyle(typing ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.primary))
                         .frame(width: 54, height: 54).contentShape(Circle())
                 }
-                .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(typing ? "Stop typing" : "Type on TV")
+                .buttonStyle(.plain).keyGlass().accessibilityLabel(typing ? "Stop typing" : "Type on TV")
                 .slot()
                 GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu").slot()
             }
@@ -2113,19 +2113,32 @@ struct BannerFallback: View {
         .accessibilityHidden(true)
     }
 }
-// A section of the Apps tab: every app in it on the page, in rows that wrap, never a sideways row with its fifth tile cut
-// at the edge beside sections of two and an empty foot (gate 276). At least two across, the launcher's size where more fit.
+// A section of the Apps tab: every app in it on the page, in rows that wrap at the width the tab gives it, never a
+// sideways row with its fifth tile cut at the edge (gate 276).
 struct BannerRow: View {
     let title: String, apps: [TVStatus.App]
+    var across: Int
+    var width: CGFloat
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            RowTitle(title).padding(.leading, 20)
-            TileRows(tile: TVLook.bannerSize, gap: TVLook.gap, rows: (apps.count + 1) / 2, least: 2) { w in
-                ForEach(apps) { Banner(app: $0, browses: true, width: w) }
+            RowTitle(title)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(width), spacing: TVLook.gap, alignment: .leading), count: max(across, 1)), alignment: .leading, spacing: TVLook.gap) {
+                ForEach(apps) { Banner(app: $0, browses: true, width: width) }
             }
-            .padding(.horizontal, 20)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
+    // How many across for this many tiles in this width: as many as fit at the launcher's size (at least two), then
+    // fewer if that leaves fewer holes in the last row (six in a row of four would be four and two; it's three and three).
+    static func across(_ n: Int, in w: CGFloat) -> Int {
+        let fit = max(2, Int((w + TVLook.gap) / (TVLook.bannerSize.width + TVLook.gap)))
+        guard n > 0 else { return fit }
+        return (2...fit).reversed().min { a, b in
+            let ha = (a - n % a) % a + (a > n ? a - n : 0), hb = (b - n % b) % b + (b > n ? b - n : 0)
+            return ha != hb ? ha < hb : a > b
+        } ?? fit
+    }
+    static func width(_ across: Int, in w: CGFloat) -> CGFloat { max(40, (w - CGFloat(across - 1) * TVLook.gap) / CGFloat(across)) }
 }
 struct AppsTab: View {
     @Environment(TVModel.self) var model
@@ -2149,9 +2162,39 @@ struct AppsTab: View {
     var watch: [TVStatus.App] { Self.watching(all) }
     var listen: [TVStatus.App] { Self.listen.compactMap { p in all.first { $0.pkg == p } } }
     var tools: [TVStatus.App] { all.filter { Self.tools.contains($0.pkg) } }
-    @ViewBuilder func row(_ title: String, _ apps: [TVStatus.App]) -> some View {
-        if !apps.isEmpty { BannerRow(title: title, apps: apps) }
+    @ViewBuilder func row(_ title: String, _ apps: [TVStatus.App], across: Int, width: CGFloat) -> some View {
+        if !apps.isEmpty { BannerRow(title: title, apps: apps, across: across, width: width) }
     }
+    // The room the rows have, inside the page's 20 pt sides: the whole column folded and open upright, each pane open flat
+    // (both panes' tiles take the narrower pane's size, so the same kind of tile is one size on both sides; gate 276).
+    @State private var pageWidth: CGFloat = 0
+    @State private var leftWidth: CGFloat = 0
+    @State private var rightWidth: CGFloat = 0
+    // Open flat, the right pane starts its first heading level with "Watch", under the search on the left.
+    @State private var barRoom: CGFloat = 0
+    func measured(_ w: Binding<CGFloat>) -> some View {
+        Color.clear.frame(height: 0).onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if abs($0 - w.wrappedValue) > 0.5 { w.wrappedValue = $0 } }
+    }
+    // Folded and open upright: Watch as many across as leave no holes; open upright Listen and Tools share one band, two
+    // each, rather than two rows of two with half the screen empty beside them.
+    @ViewBuilder var rows: some View {
+        let w = max(pageWidth - 40, 1)
+        let a = BannerRow.across(watch.count, in: w)
+        row("Watch", watch, across: a, width: BannerRow.width(a, in: w))
+        if w >= 520, !listen.isEmpty, !tools.isEmpty {
+            let half = (w - TVLook.gap * 2) / 2
+            HStack(alignment: .top, spacing: TVLook.gap * 2) {
+                row("Listen", listen, across: 2, width: BannerRow.width(2, in: half)).frame(width: half, alignment: .leading)
+                row("Tools", tools, across: 2, width: BannerRow.width(2, in: half)).frame(width: half, alignment: .leading)
+            }
+        } else {
+            let b = BannerRow.across(max(listen.count, tools.count), in: w)
+            row("Listen", listen, across: b, width: BannerRow.width(b, in: w))
+            row("Tools", tools, across: b, width: BannerRow.width(b, in: w))
+        }
+    }
+    // Open flat: two across each side, at one width.
+    var paneTile: CGFloat { BannerRow.width(2, in: max(min(leftWidth, rightWidth) - 40, 1)) }
     // Before the first answer, the shape of the page instead of a blank one.
     var waiting: some View {
         HStack(spacing: TVLook.gap) {
@@ -2176,9 +2219,11 @@ struct AppsTab: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
                         SendBar().padding(.horizontal, 20)
-                        if let query { EverywhereSearch(text: query) } else { row("Watch", watch) }
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if abs($0 - barRoom) > 0.5 { barRoom = $0 } }
+                        if let query { EverywhereSearch(text: query) } else { row("Watch", watch, across: 2, width: paneTile).padding(.horizontal, 20) }
                     }
                     .padding(.vertical, 12)
+                    .background(alignment: .top) { measured($leftWidth) }
                     // The rows give way to the results with the same fade as folded: open, they vanished and the results'
                     // box popped in (tv21 realsearch-open 16.65 → 17.71 s, no frame between).
                     .animation(.snappy, value: query == nil)
@@ -2191,10 +2236,13 @@ struct AppsTab: View {
                 // watching is Watch's and Recently played is Playing's.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
-                        row("Listen", listen)
-                        row("Tools", tools)
+                        Color.clear.frame(height: barRoom)
+                        row("Listen", listen, across: 2, width: paneTile)
+                        row("Tools", tools, across: 2, width: paneTile)
                     }
+                    .padding(.horizontal, 20)
                     .padding(.vertical, 12)
+                    .background(alignment: .top) { measured($rightWidth) }
                 }
                 .backToTop()
             }
@@ -2202,13 +2250,10 @@ struct AppsTab: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     SendBar().padding(.horizontal, 20)
-                    if let query { EverywhereSearch(text: query) } else {
-                        row("Watch", watch)
-                        row("Listen", listen)
-                        row("Tools", tools)
-                    }
+                    if let query { EverywhereSearch(text: query) } else { rows.padding(.horizontal, 20) }
                 }
                 .padding(.vertical, 12)
+                .background(alignment: .top) { measured($pageWidth) }
                 .animation(.snappy, value: query == nil)
             }
             .scrollDismissesKeyboard(.immediately)
@@ -2242,7 +2287,7 @@ struct SeekButton: View {
         // Still on its way after a moment: a ring turning round the key that shows how far, easier to see than anything
         // on a long film's bar.
         .overlay { if mine && seeker.spinning { SpinRing().transition(.opacity) } }
-        .buttonStyle(.plain).glassEffect(.key, in: Circle()).accessibilityLabel(label)
+        .buttonStyle(.plain).keyGlass().accessibilityLabel(label)
         .accessibilityValue(mine ? "\(abs(net)) seconds" : "")
         .animation(.easeOut(duration: 0.2), value: mine && seeker.spinning)
         .animation(.snappy(duration: 0.2), value: net)
@@ -2754,18 +2799,22 @@ struct PlayingTab: View {
     // search either, which is only for when Mint is what's on or nothing is.
     @ObservedObject private var stremio = BrowseStore.shared(.stremio)
     var watching: Bool { otherAppIsActive && model.status?.session != nil }
+    // A show on, with its episodes in the right pane.
+    var showsEpisodes: Bool { model.status?.session?.pkg == "com.stremio.one" && nextUp.series != nil }
     // Open flat, Recently played goes under the transport on the left, so the picture's pane isn't two-thirds empty
     // beside a packed episode list (gate 276).
     var upNext: some View {
         VStack(alignment: .leading, spacing: 24) {
             // A show: its episodes, the one on marked Playing and the next Up next, in view, rather than a lone card
             // of the same poster again (Richard, 2026-11-05: "again looks bad").
-            if model.status?.session?.pkg == "com.stremio.one", nextUp.series != nil {
+            if showsEpisodes {
                 ShowEpisodes(bringsIntoView: panes).padding(.horizontal, 20)
             }
             RecentRow()
-            // Music is still a tap away with a film on: the search isn't offered here, his last albums are.
-            if showsRecent && !panes { Shelf(source: .mint, title: Self.recentTitle) }
+            // Music is still a tap away with a film on: the search isn't offered here, his last albums are. Open flat
+            // beside a show's episodes it goes under the transport on the left; under a film or video it stays here, so
+            // neither pane is left empty (gate 276, second pass).
+            if showsRecent && !(panes && showsEpisodes) { Shelf(source: .mint, title: Self.recentTitle) }
             // Only ever shows when the phone itself is playing a song, and keeps AirPlay in reach for Siri. Last, so its
             // empty place never pushes the episodes down below the picture's top line (r21).
             FlickCard().padding(.horizontal, 20)
@@ -2777,7 +2826,7 @@ struct PlayingTab: View {
     var nowPane: some View {
         VStack(alignment: .leading, spacing: 32) {
             now.padding(.horizontal, 20)
-            if watching && showsRecent { Shelf(source: .mint, title: Self.recentTitle).transition(.opacity) }
+            if watching && showsEpisodes && showsRecent { Shelf(source: .mint, title: Self.recentTitle).transition(.opacity) }
         }
         .padding(.vertical, 20)
         .settledAnimation(.easeOut(duration: 0.3), value: watching)

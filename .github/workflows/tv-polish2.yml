@@ -57,6 +57,8 @@ jobs:
           }
           pages() {
             local display=$1 tag=$2
+            # Mint twice: the first open after a boot, kept as -first, and the shot itself on a second visit.
+            shot mint$tag-first $display 10 $M/rmint -tab 2
             shot mint$tag $display 10 $M/rmint -tab 2
             shot youtube$tag $display 9 $M/ryoutube -tab 2
             shot episode$tag $display 10 $M/repisode -tab 2

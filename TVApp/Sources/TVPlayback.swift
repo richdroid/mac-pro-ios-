@@ -479,10 +479,19 @@ struct ProgressPlaceholder: View {
 }
 
 // A round glass button that does something here, rather than press a key on the TV.
-// The transport's and the pad's keys: glass with a neutral tint, so a row of them reads as one set over any background.
-// Clear glass took the wall's colours, so over a film's art ⏮ looked red and ⏭ purple, five keys in a row mismatched
-// (gate 276, Playing folded; decided with the designer).
-extension Glass { static var key: Glass { .regular.tint(Color(white: 0.16, opacity: 0.55)).interactive() } }
+// The transport's and the pad's keys: glass tinted with the page's own wall colour, one value for every key on the page,
+// so a row reads as one set over any art and belongs to the page (purple glass on Mint, the poster's tone on a film).
+// Clear glass took whatever lay under each key, so over a film ⏮ looked red and ⏭ purple; a neutral charcoal made them
+// dead holes on Mint's purple (gate 276, item 10, the designer's ruling).
+struct KeyGlass: ViewModifier {
+    @Environment(TVModel.self) var model
+    @ObservedObject private var store = AmbienceStore.shared
+    func body(content: Content) -> some View {
+        let wall = model.mood ?? store.band ?? Color(hex: 0x4A1A5C)
+        content.glassEffect(.regular.tint(wall.mix(with: .black, by: 0.45).opacity(0.5)).interactive(), in: Circle())
+    }
+}
+extension View { func keyGlass() -> some View { modifier(KeyGlass()) } }
 struct GlassButton: View {
     @Environment(TVModel.self) var model
     let icon: String, label: String
@@ -492,7 +501,7 @@ struct GlassButton: View {
         Button { model.tick(); action() } label: {
             Image(systemName: icon).font(.system(size: size * 0.36, weight: .medium)).frame(width: size, height: size).contentShape(Circle())
         }
-        .buttonStyle(.plain).glassEffect(.key, in: Circle()).accessibilityLabel(label)
+        .buttonStyle(.plain).keyGlass().accessibilityLabel(label)
     }
 }
 
@@ -631,10 +640,8 @@ enum SeriesInfo {
 }
 
 extension StremioEpisode {
-    // Its name as the list says it: "2 · The One Where…", the number once; "Episode 2" only when it has no name of its own
-    // (gate 276: rows mixed "Episode 1" with "Episode 2: The One…", which says the number twice).
+    // Its own name, without the "Episode 2" a catalogue puts in front of it or in place of one (gate 276).
     var ownName: String? { Wording.episodeName(name, number: episode) }
-    var rowTitle: String { ownName.map { "\(episode) · \($0)" } ?? "Episode \(episode)" }
 }
 
 // One episode list for everywhere a show is picked from: the series page, and over the Remote and Playing while it's on.
@@ -689,9 +696,13 @@ struct EpisodePicker: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
-                    // Whole names: up to three lines, never cut to "Fi…" (r26).
-                    Text(e.rowTitle).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // Which one, always in the same place over its name, as the Apple TV app sets them; the name whole,
+                    // up to three lines, never cut to "Fi…" (r26), or nothing when it has none of its own (gate 276).
+                    Text(e.season == 0 ? "Special \(e.episode)" : "Episode \(e.episode)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    if let own = e.ownName {
+                        Text(own).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     // What it's about, in one line, so the row says more than its number.
                     if let about, !about.isEmpty { Text(about).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                     HStack(spacing: 6) {
@@ -1000,13 +1011,22 @@ struct PlayingVideo: View {
     var series: NextUp.Series? { session.pkg == "com.stremio.one" ? nextUp.series : nil }
     var body: some View {
         let name = session.showName
-        // The hero names the episode as its row does (gate 276: "S1 E2 · Episode 2" over a row "Episode 2: The One…").
-        let episode: String? = {
-            guard let line = session.episodeLine else { return nil }
+        // An episode: which one in the small line over the title ("Sample Series · S1 E2"), and the episode's own name as
+        // the title, whole (up to three lines, never cut: r26), as its row names it. With no name of its own, the show's
+        // name is the title and "S1 E2" the line over it (gate 276: the hero said "Episode 2", its row "Episode 2: The
+        // One…"; then, joined into one title, the name was cut to "…Long We…").
+        let se = session.seasonEpisode
+        let own: String? = {
+            guard session.episodeLine != nil, let se else { return nil }
             // Only the name of this very episode: a moment after a change, the list may still be the last one's.
-            guard let own = ownName, let se = session.seasonEpisode, own.season == se.season, own.episode == se.episode else { return line }
-            return "S\(se.season) E\(se.episode) · \(own.name)"
+            if let o = ownName, o.season == se.season, o.episode == se.episode { return o.name }
+            // Else whatever the TV's own line names it, after its "S1 E2 · ".
+            guard let line = session.episodeLine, let r = line.range(of: " · ") else { return nil }
+            return Wording.episodeName(String(line[r.upperBound...]), number: se.episode)
         }()
+        let which = se.map { "S\($0.season) E\($0.episode)" }
+        let over: String? = session.episodeLine == nil ? nil : own != nil ? [name, which ?? ""].filter { !$0.isEmpty }.joined(separator: " · ") : name.isEmpty ? nil : which
+        let title = session.episodeLine == nil ? name : own ?? (name.isEmpty ? which ?? "" : name)
         VStack(alignment: .leading, spacing: 14) {
             // One 16:9 picture, never taller than about 38 % of the page, so the title, the bar and the keys are all on the
             // first screen (r19: a portrait poster filled the page and pushed everything under the fold). The episode's
@@ -1044,8 +1064,8 @@ struct PlayingVideo: View {
             VStack(alignment: .leading, spacing: 3) {
                 // The show above, the episode as the title; a film is its own title. A video is its own title too, its
                 // channel under it (r35: the channel was the title and the video's name the small line over it).
-                if let episode, !name.isEmpty { Text(name).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1) }
-                Text(episode ?? name).font(.title2.weight(.bold)).lineLimit(2)
+                if let over { Text(over).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1) }
+                Text(title).font(.title2.weight(.bold)).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 if let channel = session.channel { Text(channel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
                 if let about { Text(about).font(.footnote).foregroundStyle(.secondary).lineLimit(panes ? 4 : 3).padding(.top, 4) }
             }

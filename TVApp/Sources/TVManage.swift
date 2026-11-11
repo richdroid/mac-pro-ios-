@@ -56,9 +56,12 @@ enum GlassCard { static let radius: CGFloat = 25, inset: CGFloat = 20 }
 struct GlassSection<Content: View>: View {
     var header: String? = nil
     var footer: String? = nil
+    // The room of a heading with none shown, so a card beside a headed one starts level with it (open flat).
+    var headerRoom = false
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
+            if header == nil && headerRoom { Text(" ").font(.footnote.weight(.semibold)).accessibilityHidden(true) }
             if let header {
                 Text(header).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, GlassCard.inset)
                     .accessibilityAddTraits(.isHeader)
@@ -111,8 +114,9 @@ struct GlassRowPress: ButtonStyle {
 // reads as a second door to a page above it (gate 276: "Screensaver" and "Home screen settings" were cyan action rows
 // among page links, and "TV settings ›" beside "Home screen settings" read as two ways to one place).
 struct TVManageSections: View {
+    var level = false
     var body: some View {
-        GlassSection {
+        GlassSection(headerRoom: level) {
             NavigationLink(value: ManagePage.apps) { GlassRow(title: "Apps on the TV", icon: "square.grid.2x2", opens: true) }.id(ManagePage.apps)
             NavigationLink(value: ManagePage.settings) { GlassRow(title: "TV settings", icon: "slider.horizontal.3", opens: true) }
             NavigationLink(value: ManagePage.connection) { GlassRow(title: "Connection", icon: "network", opens: true) }
@@ -126,9 +130,10 @@ struct TVActionSections: View {
         GlassSection(header: "On the TV") {
             // The one TV setting he goes looking for, a tap away rather than two pages down.
             SettingsAction(title: "Start the screensaver", icon: "photo") { model.post("settings-page", ["page": "screensaver"]) }
-            SettingsAction(title: "Refresh the TV’s recommendations", icon: "arrow.clockwise") { model.post("refresh") }
-            // What it opens, and where: the launcher's own settings, on the TV's screen (review of dfd490e; gate 276).
-            SettingsAction(title: "Open home screen settings on the TV", icon: "rectangle.grid.1x2") { model.post("launcher-settings") }
+            SettingsAction(title: "Refresh recommendations", icon: "arrow.clockwise") { model.post("refresh") }
+            // The launcher's own settings, on the TV's screen; the card's heading says where, so the words needn't
+            // (review of dfd490e; gate 276, second pass: "TV" twice and a wrapped line).
+            SettingsAction(title: "Home screen settings", icon: "rectangle.grid.1x2") { model.post("launcher-settings") }
         }
     }
 }

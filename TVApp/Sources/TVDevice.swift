@@ -149,8 +149,8 @@ struct DeviceTab: View {
                 Tile(title: "Memory", value: bytes(i.memUsed), detail: "of \(bytes(i.memTotal))", spark: i.hist.mem, top: 100)
             }
             GridRow {
-                Tile(title: "Download", value: rate(i.rxRate), detail: i.wifi.isEmpty ? "Wi-Fi" : i.wifi, spark: i.hist.rx)
-                // No subtitle: the box's IP address was plumbing (gate 276), and the network is said once, under Download.
+                Tile(title: "Download", value: rate(i.rxRate), detail: "", spark: i.hist.rx)
+                // No subtitle on either: the box's IP address was plumbing, and the home network isn't news (gate 276).
                 Tile(title: "Upload", value: rate(i.txRate), detail: "", spark: i.hist.tx)
             }
         }
