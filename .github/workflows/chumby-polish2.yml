@@ -90,11 +90,33 @@ jobs:
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
+          # Films, for what stills can't show: Back from Calendar settings and a scrolled day (both pages whole, nothing
+          # re-laid out, the top fade not flashing), Calendar settings flung and held in portrait under its top fade, and
+          # Alarms' calendar switch tapped on (it must hold on through the permission alert, never spring back).
+          film() { # display, file name, launch suffix, launch args...
+            local d=$1 name=$2 sfx=$3; shift 3
+            local ADDR=http://127.0.0.1:9000; [ "$sfx" != "-" ] && ADDR=$ADDR/$sfx
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR "$@"
+            sleep 9
+          }
+          endfilm() { sleep 4; kill -INT $REC; wait $REC; echo "film $1 exit $?"; xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true; }
+          films() { # display, suffix
+            local d=$1 x=$2
+            film $d back-calsettings$x live -tab 2 -pose calsettings -swipeLog YES; $D "$DEVICE" tap "Back" || echo "no Back"; endfilm back-calsettings$x
+            film $d back-calday$x live -tab 2 -pose calday -swipeLog YES; $D "$DEVICE" drag 0.5 0.7 0.5 0.4 0.3 || true; sleep 2.5; $D "$DEVICE" tap "Back" || echo "no Back"; endfilm back-calday$x
+            film $d scroll-calsettings$x - -tab 2 -pose calsettings; $D "$DEVICE" drag 0.5 0.85 0.5 0.25 0.4 || true; sleep 2; $D "$DEVICE" drag 0.5 0.3 0.5 0.8 0.4 || true; endfilm scroll-calsettings$x
+            film $d calswitch$x slow -tab 2 -pose firstrun; sleep 4; $D "$DEVICE" tap "Wake me from my calendar" || $D "$DEVICE" tap "Wake me from my calendar, ${CAL_NOTE}" || echo "no switch"; sleep 4; endfilm calswitch$x
+          }
+          CAL_NOTE="An alarm before the first thing each day."
           # Folded first (the narrowest, where rows wrap; it ran out of time last), then open in portrait, then open flat.
           set_ 1 ""
+          films 1 ""
           $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
           set_ 3 -portrait
+          films 3 -portrait
           $D "$DEVICE" rotate 3; sleep 5
           set_ 3 -open
       - name: Collect crash reports
@@ -107,7 +129,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.ips' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.ips' '*.mp4' || zip -q ../shots.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view chumby-polish2-shots >/dev/null 2>&1 || gh release create chumby-polish2-shots --target chumby-polish2 --prerelease --title "Chumby polish (branch)" --notes "Branch-only shots."
           for f in shots.zip status.txt; do

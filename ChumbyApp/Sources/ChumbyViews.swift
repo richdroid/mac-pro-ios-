@@ -387,17 +387,28 @@ struct TwoPane<L: View, R: View>: View {
     var rightTrailing: AnyView?
     // False for the moment the right pane changes pages (Alarms' show), so one page fades out before the next fades in.
     var rightShown = true
-    init(rightTitle: String? = " ", rightTrailing: AnyView? = nil, rightShown: Bool = true, @ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) {
-        self.rightTitle = rightTitle; self.rightTrailing = rightTrailing; self.rightShown = rightShown; self.left = left(); self.right = right()
+    // A page that brings its own list and title (the alarm editor, a calendar day), shown in place of `right`'s list, so
+    // it can pin its own title row with its buttons.
+    var rightPage: AnyView?
+    init(rightTitle: String? = " ", rightTrailing: AnyView? = nil, rightShown: Bool = true, rightPage: AnyView? = nil, @ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) {
+        self.rightTitle = rightTitle; self.rightTrailing = rightTrailing; self.rightShown = rightShown; self.rightPage = rightPage; self.left = left(); self.right = right()
     }
     var body: some View {
         if panes {
             FoldSplit {
                 List { Group { left }.listRowBackground(GlassRow()) }
             } right: {
-                // A title row, blank unless the pane holds a page, so both panes start level.
-                List { if let rightTitle { PageTitle(rightTitle) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
-                    .opacity(rightShown ? 1 : 0)
+                Group {
+                    if let rightPage { rightPage }
+                    else {
+                        // A title row, blank unless the pane holds a page, so both panes start level. A real title (Calendar
+                        // settings, with Done) stays pinned once the pane is scrolled.
+                        let pinned = rightTitle.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
+                        List { if let rightTitle { PageTitle(rightTitle) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
+                            .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
+                    }
+                }
+                .opacity(rightShown ? 1 : 0)
             }
             .seaList()
             .animation(.snappy, value: model.unreachable)
@@ -410,6 +421,40 @@ struct TwoPane<L: View, R: View>: View {
                 .animation(.snappy, value: model.unreachable)
         }
     }
+}
+
+// A pane's title row with its buttons (Cancel and Save, Done), pinned once the pane is scrolled: open flat, a page's title
+// row was a list row and scrolled away, so a change at the foot meant scrolling back up to save (designer, 11-11). At rest
+// nothing changes; scrolled, the title row stays at the top and the rows fade out under it over 18 pt, as under a tab bar.
+struct PinnedTitle<Bar: View>: ViewModifier {
+    let on: Bool
+    let bar: Bar
+    @State private var scrolled = false
+    @State private var barHeight: CGFloat = 52
+    func body(content: Content) -> some View {
+        let shown = on && scrolled
+        content
+            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 48 } action: { _, now in
+                withAnimation(.easeOut(duration: 0.18)) { scrolled = now }
+            }
+            .mask {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: shown ? barHeight : 0)
+                    LinearGradient(colors: [.black.opacity(shown ? 0 : 1), .black], startPoint: .top, endPoint: .bottom).frame(height: TabBarFade.fade)
+                    Color.black
+                }
+            }
+            .overlay(alignment: .top) {
+                if shown {
+                    bar.padding(.horizontal, 26).padding(.top, 4)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { barHeight = $0 + 4 }
+                        .transition(.opacity)
+                }
+            }
+    }
+}
+extension View {
+    func pinsTitle<B: View>(_ on: Bool = true, @ViewBuilder _ bar: () -> B) -> some View { modifier(PinnedTitle(on: on, bar: bar())) }
 }
 
 // The page fades out just above the tab bar, so nothing reads through its glass ("Chumby Classic" did, on Home, under the
@@ -1615,7 +1660,7 @@ struct ChannelsTab: View {
             ForEach(offered, id: \.id) { pickRow($0) }
         } header: { SectionHead(icon: "square.grid.2x2.fill", text: "On your Chumby") }
         Section {
-            MenuRow(title: "Category", note: "Widgets made for the Chumby", selection: $category) {
+            MenuRow(title: "Category", note: "Pick one to see its widgets.", selection: $category) {
                 Text("Choose one").tag("")
                 ForEach(categories, id: \.0) { Text($0.1).tag($0.0) }
             }
@@ -2276,14 +2321,21 @@ struct RowRemove: View {
     @Environment(\.colorScheme) private var scheme
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 21)).symbolRenderingMode(.palette)
-                .foregroundStyle(.white, icon.hasPrefix("minus") ? ChumbyPalette.remove(scheme == .dark) : ChumbyPalette.acc(scheme == .dark))
-                .frame(width: 44, height: 44, alignment: .trailing).contentShape(Rectangle())
+            // A drawn disc, so its edge is exactly the frame's (a symbol's side bearing left it 2 pt short of the margin).
+            Circle().fill(icon.hasPrefix("minus") ? ChumbyPalette.remove(scheme == .dark) : ChumbyPalette.acc(scheme == .dark))
+                .frame(width: 21, height: 21)
+                .overlay {
+                    if icon.hasPrefix("minus") { Capsule().fill(.white).frame(width: 10, height: 2.5) }
+                    else { Image(systemName: "xmark").font(.system(size: 9, weight: .heavy)).foregroundStyle(.white) }
+                }
+                // The target: 6 pt in toward the control beside it (never reaching it: rows space them 8 pt or more), 7 pt
+                // out into the card's own margin, 44 pt tall.
+                .padding(.leading, 6).padding(.trailing, 7).frame(height: 44).contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
-        // Laid out 23 pt wide and 36 tall: the disc's right edge on the row's content margin, where switches and steppers
-        // end, and no row taller than before; the 44 pt target reaches past it inward and 4 pt above and below.
-        .padding(.leading, -21).padding(.vertical, -4)
+        // Laid out as the 21 pt disc alone, 36 pt tall: its right edge on the row's content margin, where switches and
+        // steppers end, and no row taller than before.
+        .padding(.leading, -6).padding(.trailing, -7).padding(.vertical, -4)
         .accessibilityLabel(label)
     }
 }

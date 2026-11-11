@@ -11,6 +11,8 @@ import UIKit
 // Turns what's on this iPhone's calendar into real alarms on the Chumby, which then ring with or without the phone.
 @MainActor
 final class CalendarWake: ObservableObject {
+    // What the calendar switch does, in one sentence wherever the switch is (Alarms and Calendar settings: designer, 11-11).
+    static let what = "An alarm before the first thing each day."
     static let shared = CalendarWake()
     static let refreshID = "local.macpro.Chumby.calendar"
     nonisolated static let prefix = Alarm.calendarPrefix
@@ -293,7 +295,7 @@ struct CalendarSettingsSections: View {
     var body: some View {
         Group {
             Section {
-                Toggle(isOn: $wake.rules.enabled) { TwoLine("Wake me from my calendar", "An alarm before the first thing each day.") }
+                Toggle(isOn: $wake.rules.enabled) { TwoLine("Wake me from my calendar", CalendarWake.what) }
                     .soloCard()
             }
             Section {
@@ -632,10 +634,13 @@ struct CalendarDaySheet: View {
     }
     var body: some View {
         if let close {
-            Group {
-                PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
-                sections
+            // Its own list in the pane, so the title row with Done stays pinned once scrolled (as the editor's does).
+            let titleRow = PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
+            List {
+                titleRow
+                sections.listRowBackground(GlassRow())
             }
+            .pinsTitle { titleRow }
             .onAppear { labelText = edit.label ?? ""; loadOwn() }
             .onDisappear { commitLabel() }
         } else {

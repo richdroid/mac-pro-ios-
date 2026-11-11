@@ -531,6 +531,7 @@ struct WokeUpTo: View {
 struct AlarmsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
+    @State private var turningOn = false
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
     @State private var editing: EditTarget?
@@ -555,6 +556,16 @@ struct AlarmsTab: View {
     // as an alarm that's "off" (11-10: yesterday's one-off and its "just this once" sat in his list as two dead rows).
     var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" && $0.key != folded && !ChumbyState.isExpired($0, chumby: model.state.chumbyNow) }.sorted { $0.localMinutes < $1.localMinutes } }
     var paneShown: Pane { wide ? pane : .schedule }
+    // Pages that bring their own list and title row (editor, day), shown in the right pane in place of its list.
+    var rightPage: AnyView? {
+        switch paneShown {
+        case .editor(let a): return AnyView(AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new"))
+        case .napEditor(let a): return AnyView(AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new")))
+        case .day(let k): return AnyView(CalendarDaySheet(key: k, close: { show(.schedule) }).id(k))
+        case .template: return AnyView(AlarmEditor(calendarTemplate: true, close: { show(paneBack) }))
+        default: return nil
+        }
+    }
     // Pages that bring their own title row (editor, day) have none from here.
     var rightTitle: String? {
         switch paneShown {
@@ -610,7 +621,7 @@ struct AlarmsTab: View {
     // and say when they repeat (Richard, 2026-11-05: "theres little to no distinction between daily alarms and calendar
     // alarms its just super unintuitive"). Night times moved to Tinker, and "Woke up to" to Sounds.
     var page: some View {
-        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !(wide && paneFaded)) {
+        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !(wide && paneFaded), rightPage: rightPage) {
             // Add alarm is never a loose circle: it's the last row of My alarms (below).
             PageTitle("Alarms")
             ReachRow()
@@ -640,10 +651,7 @@ struct AlarmsTab: View {
                 calendar
                 nap
             case .settings: CalendarSettingsSections()
-            case .editor(let a): AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new")
-            case .napEditor(let a): AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new"))
-            case .day(let k): CalendarDaySheet(key: k, close: { show(.schedule) }).id(k)
-            case .template: AlarmEditor(calendarTemplate: true, close: { show(paneBack) })
+            default: EmptyView()
             }
         }
         .seaList()
@@ -1039,8 +1047,14 @@ struct AlarmsTab: View {
             } else {
                 // Off: the same switch as Calendar settings' (one setting, one look), with what it does on its second line
                 // (designer, 11-11). Turning it on asks for the calendar and starts the plan, as the "Turn on" row did.
-                Toggle(isOn: Binding(get: { wake.rules.enabled }, set: { on in if on { Task { await wake.enable() } } })) {
-                    TwoLine("Wake me from my calendar", "Wakes you before the first thing each day.")
+                // The switch holds what he asked for while the calendar's permission is asked and the plan starts, rather
+                // than springing back off under the alert; a refusal lets it go, and the note under the card says why.
+                Toggle(isOn: Binding(get: { wake.rules.enabled || turningOn }, set: { on in
+                    guard on, !turningOn else { return }
+                    turningOn = true
+                    Task { await wake.enable(); withAnimation(.snappy) { turningOn = false } }
+                })) {
+                    TwoLine("Wake me from my calendar", CalendarWake.what)
                 }
             }
             // Left on the Chumby when the plan stopped wanting them (Calendars turned off, an event gone): they still ring.
@@ -1366,22 +1380,25 @@ struct AlarmEditor: View {
 
     var body: some View {
         if let close {
-            // In the right pane: its own title row with Cancel and Save, then the same sections, clear of the fold.
-            Group {
-                PageTitle(title) {
-                    HStack(spacing: 16) {
-                        Button("Cancel") { stopTest(); close() }.disabled(saving)
-                        if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
-                    }
-                    .foregroundStyle(.tint)
+            // In the right pane: its own list, its title row with Cancel and Save, then the same sections, clear of the
+            // fold. The title row stays pinned once the page is scrolled, so Save is always in reach.
+            let titleRow = PageTitle(title) {
+                HStack(spacing: 16) {
+                    Button("Cancel") { stopTest(); close() }.disabled(saving)
+                    if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
                 }
-                .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
-                .onDisappear { model.editingAlarm = false }
-                // On this one row, never on the group: inside the pane's list a modifier on the group lands on every
-                // row, and a sheet bound to the same state from many rows presents from none (build 204, open flat).
-                .fillCover(isPresented: $justOnce) { justOnceSheet }
-                sections
+                .foregroundStyle(.tint)
             }
+            List {
+                titleRow
+                    .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
+                    .onDisappear { model.editingAlarm = false }
+                    // On this one row, never on the list: a sheet bound to the same state from many rows presents from none
+                    // (build 204, open flat).
+                    .fillCover(isPresented: $justOnce) { justOnceSheet }
+                sections.listRowBackground(GlassRow())
+            }
+            .pinsTitle { titleRow }
         } else {
             // Presented edge to edge (fillCover, from Alarms and the calendar's sound row), with Cancel and Save as the
             // system's items, each with a glyph, so on the Duo they take the side bar, Cancel at the top where Back goes
