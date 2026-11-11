@@ -52,7 +52,7 @@ enum ManagePage: Hashable { case apps, settings, connection }
 // Every glass section here has one corner, whatever it holds: 25 pt continuous with rows 20 pt in, as the Chumby app's
 // SoloCard. A lone one-line row would still read as a capsule at that corner, so none is left alone: it joins the card it
 // belongs with, or carries its note as a second line (the designer's cures, 2026-11-11).
-enum GlassCard { static let radius: CGFloat = 25, inset: CGFloat = 20 }
+enum GlassCard { static let radius: CGFloat = TVLook.glass, inset: CGFloat = 20 }
 struct GlassSection<Content: View>: View {
     var header: String? = nil
     var footer: String? = nil
@@ -243,7 +243,8 @@ struct ManageAppsView: View {
             } else if store.failed {
                 ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again."))
             } else {
-                HStack { Spacer(); ProgressView(); Spacer() }
+                // The app's one waiting shape, not a spinner.
+                ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12).listRowBackground(Color.clear).listRowSeparator(.hidden) }
             }
         }
         // The rows fade in over the spinner, and the one that's deleted goes with the list's own motion, rather than the
@@ -323,7 +324,8 @@ struct ManageSettingsView: View {
                 } else if store.failed {
                     ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again."))
                 } else {
-                    HStack { Spacer(); ProgressView(); Spacer() }.padding(.top, 40)
+                    // The app's one waiting shape, its rows breathing, not a spinner of this page's own.
+                    VStack(spacing: 10) { ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) } }
                 }
             }
             .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
