@@ -1427,9 +1427,10 @@ struct RemoteTab: View {
             // Mint's player is what's on when it shows: no bar's place above it, online or out of reach (upright offline the
             // kept place shrank the picture and left 83 pt empty, Remote gate 3).
             if !musicShown { progress.columnRole(.under) }
-            // Typing open flat, the keyboard covers the pane from about here: the episode line and Mint's player step aside
-            // rather than sit half under it. Upright the keyboard is over the keys' pane, so they stay.
-            if !(typing && !stackedUpright) { episodes.columnRole(.under); music.columnRole(.under) }
+            // Typing, the episode line and Mint's player step aside, in every posture: open flat they sat half under the
+            // keyboard, and upright the picture's pane gives its height to the bar and the keys (an episode line at the
+            // shrunken picture's width read "Episo…", CI 69af3dc). Folded does the same.
+            if !typing { episodes.columnRole(.under); music.columnRole(.under) }
             // Typing, the keyboard comes up over this pane's foot: the tiles and the send box step aside rather than show
             // through it.
             if !typing {
