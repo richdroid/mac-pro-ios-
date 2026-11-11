@@ -404,7 +404,6 @@ struct CalendarWakeSettings: View {
     @EnvironmentObject var model: ChumbyModel
     var body: some View {
         List { PageTitle("Calendar settings"); CalendarSettingsSections().listRowBackground(GlassRow()) }
-            .keepsPlace("page:Calendar settings")
             .pushedPage("settings")
     }
 }
@@ -646,7 +645,6 @@ struct CalendarDaySheet: View {
             }
             // Pinned only with its Done: a pushed page's way out is the system's Back.
             .pinsTitle(done) { PageTitle(title) { doneButton } }
-            .keepsPlace("page:day:" + key)
             .onAppear { labelText = edit.label ?? ""; loadOwn() }
             .onDisappear { commitLabel() }
         } else {

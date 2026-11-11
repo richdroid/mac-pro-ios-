@@ -409,7 +409,6 @@ struct TwoPane<L: View, R: View>: View {
                         let pinned = rightTitle.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
                         List { if let rightTitle { PageTitle(rightTitle, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
                             .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
-                            .keepsPlace(pinned.map { "page:" + $0 })
                     }
                 }
                 .opacity(rightShown ? 1 : 0)
@@ -505,40 +504,6 @@ struct PinnedRow: ViewModifier {
 }
 extension View {
     func pinsTitle<B: View>(_ on: Bool = true, @ViewBuilder _ bar: () -> B) -> some View { modifier(PinnedTitle(on: on, bar: bar())) }
-}
-
-// A page keeps its place through a fold or a turn (designer, gate 8: "why did it go back to the top"). Open flat a page
-// sits in the right pane; open in portrait the same page is pushed: two lists, so the second is put where the first was.
-// Only across that hand-over: a page closed and opened again later starts at the top, as a page does.
-@MainActor enum PagePlace {
-    static var y: [String: CGFloat] = [:]
-    static var left: [String: Date] = [:]
-}
-struct KeepsPlace: ViewModifier {
-    let key: String?
-    @State private var pos = ScrollPosition(edge: .top)
-    @State private var live = false
-    func body(content: Content) -> some View {
-        if let key {
-            content
-                .scrollPosition($pos)
-                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in if live { PagePlace.y[key] = y } }
-                .onAppear {
-                    if let y = PagePlace.y[key], let at = PagePlace.left[key], Date().timeIntervalSince(at) < 1.5 {
-                        // Once now and once after the first layout, which may come after this appear.
-                        pos.scrollTo(y: y)
-                        DispatchQueue.main.async { pos.scrollTo(y: y) }
-                    } else { PagePlace.y[key] = nil }
-                    Task { @MainActor in live = true }
-                }
-                .onDisappear { live = false; PagePlace.left[key] = Date() }
-        } else {
-            content
-        }
-    }
-}
-extension View {
-    func keepsPlace(_ key: String?) -> some View { modifier(KeepsPlace(key: key)) }
 }
 
 // The page fades out just above the tab bar, so nothing reads through its glass ("Chumby Classic" did, on Home, under the
