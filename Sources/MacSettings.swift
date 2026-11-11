@@ -11,12 +11,7 @@ struct MacSettings: View {
     @AppStorage("fullEvery") private var fullEvery = 10.0
     @AppStorage("apiBudget") private var apiBudget = 200.0
     @AppStorage("startTab") private var startTab = -1
-    @AppStorage("showQuick") private var showQuick = true
-    @AppStorage("showTemps") private var showTemps = true
-    @AppStorage("showDisk") private var showDisk = true
-    @AppStorage("showAccess") private var showAccess = true
-    @AppStorage("showThisMac") private var showThisMac = true
-    @AppStorage("showProcesses") private var showProcesses = true
+    @AppStorage("statusTemps") private var statusTemps = false
     @State private var connecting = false
     @State private var customBudget = false
     @State private var budgetDraft = 200.0
@@ -52,19 +47,13 @@ struct MacSettings: View {
             }
             .padding(.vertical, 4)
         }
-        Section {
-            Toggle("Quick actions", isOn: $showQuick)
-            Toggle("Temperatures", isOn: $showTemps)
-            Toggle("Disk", isOn: $showDisk)
-            Toggle("Remote access", isOn: $showAccess)
-            Toggle("This Mac", isOn: $showThisMac)
-            Toggle("Top processes", isOn: $showProcesses)
-        } header: { Text("Status page") } footer: { Text("The Mac Pro, its live figures and any alerts always show.") }
         // Units, how often figures refresh, and the API budget the Claude tab's dial fills against: everything about how the
         // figures read, in one card. The budget was a section of one row, drawn by the system as a capsule beside the
         // rounded cards (designer, 2026-11-11: merge lone rows into the section they belong with).
         Section("Figures") {
-            // Not "Temperatures": the Status page switch above has that name (designer, 2026-11-11).
+            // Status shows the Mac and its live figures; its temperatures only when asked for here (Richard, 2026-11-11:
+            // "simplify"). The page's other switches went with the cards they hid.
+            Toggle("Temperatures on Status", isOn: $statusTemps)
             Picker("Temperature unit", selection: $celsius) { Text("Fahrenheit").tag(false); Text("Celsius").tag(true) }
             Picker("Live figures", selection: $liveEvery) { Text("Every second").tag(1.0); Text("Every 2 seconds").tag(2.0); Text("Every 5 seconds").tag(5.0) }
             Picker("Everything else", selection: $fullEvery) { Text("Every 10 seconds").tag(10.0); Text("Every 30 seconds").tag(30.0); Text("Every minute").tag(60.0) }
@@ -93,7 +82,8 @@ struct MacSettings: View {
             }
             Toggle("Haptics", isOn: $haptics)
             Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
-        } header: { Text("Behaviour") }
+            AlertSettings()
+        } header: { Text("Behaviour") } footer: { Text(AlertSettings.note) }
         Section {
             LabeledContent("Address", value: URL(string: model.address)?.host ?? "Not set")
             Button("Change connection") { connecting = true }
