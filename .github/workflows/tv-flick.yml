@@ -146,6 +146,7 @@ jobs:
             posefilm flickputback$x $d flick-putback 1
             posefilm flicktap$x $d flick-tap 1
             posefilm flicklink$x $d flick-link 0
+            posefilm flicklinkart$x $d flick-link-art 0
             fingerfilm finger-tap$x $d tap
             fingerfilm finger-long$x $d long
             fingerfilm finger-swipe$x $d swipe

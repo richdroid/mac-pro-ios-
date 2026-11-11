@@ -115,6 +115,8 @@ enum LinkPeek {
     }
     static func peek(_ text: String) async -> (title: String?, art: String?) {
         guard let u = url(text) else { return (nil, nil) }
+        // The build's link-with-art pose: what YouTube's oEmbed answers, from the stand-in Mac (CI has no network).
+        if UserDefaults.standard.string(forKey: "pose") == "flick-link-art" { return ("A sample video that goes on a bit", TVBridge.url("/api/tv/shot")?.absoluteString) }
         if isYouTube(text) {
             let q = u.absoluteString.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
             guard let o = URL(string: "https://www.youtube.com/oembed?url=\(q)&format=json"),
@@ -361,6 +363,11 @@ struct FlickScreen: View {
         else { _step = State(initialValue: .episodes) }
         _failedTokens = State(initialValue: target.avoid)
         if let r = target.receiptID { _receiptID = State(initialValue: r) }
+        // A list already in hand is laid out with the page before it shows: the page arrives whole, never filling in.
+        if let ref = target.source == .stremio && target.send == nil ? target.item.stremioRef : nil, ref.type == "movie" || ref.video != nil {
+            let cached = MainActor.assumeIsolated { StreamCache.shared.inHand(type: ref.type, imdb: ref.imdb, video: ref.video ?? ref.imdb) }
+            if let cached { _streams = State(initialValue: cached); _streamsQuick = State(initialValue: true) }
+        }
         if let v = target.thrown { _throwV = State(initialValue: v) }
     }
     var item: MediaItem { target.item }
@@ -524,6 +531,17 @@ struct FlickScreen: View {
             .containerBackground(.clear, for: .navigation)
         }
         .scrollEdgeEffectStyle(.soft, for: .top)
+        // Close: the app's own glass circle with a white ✕, top-leading inside the screen's safe area, where the bar's
+        // items sit (open upright the bar drew its own ✕ grey whatever it was given). Back, while there's a step to go
+        // back to, stays the system's. Outside the stack, so the bar's height doesn't push it down onto the page.
+        .overlay(alignment: .topLeading) {
+            if previous == nil, !flown {
+                GlassButton(icon: "xmark", label: "Close", size: 44) { if !flown { leave() } }
+                    .foregroundStyle(Color.white)
+                    .padding(.leading, 16).padding(.top, 4)
+                    .opacity(barShown ? 1 : 0)
+            }
+        }
         .preferredColorScheme(.dark)
         // The build's recording only: what the flick is doing, so a frame can be read against the code. Top left, clear of
         // the page's heading.
@@ -657,18 +675,8 @@ struct FlickScreen: View {
     @ToolbarContentBuilder var bar: some ToolbarContent {
         if let previous, !flown {
             ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
-        } else {
-            ToolbarItem(placement: .cancellationAction) {
-                // Full strength, as every close in the app: in the accent on the bar's glass it read as greyed out.
-                // Its own white glyph, not styled by the bar: the bar along the top (open upright) drew a styled one grey.
-                Button { if !flown { leave() } } label: {
-                    Image(systemName: "xmark").font(.body.weight(.semibold)).foregroundStyle(Color.white)
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-            }
         }
+        // Close is the page's own glass circle (the overlay in `screen`), not a bar item.
     }
 
     // The card's own picture, from memory in the first frame when the card that was tapped has it (it always has):
@@ -1238,8 +1246,9 @@ struct FlickScreen: View {
         guard let found, !found.isEmpty else { noStreams = true; return }
         // From the cache: there with the page, no arrival of its own. Fetched now: the rows come in a beat apart.
         let quick = Date().timeIntervalSince(asked) < 0.15
-        // Laid out only once the page is fully up: rows arriving mid-fade took the main thread and froze it (CI 2b00c30).
-        await untilUp()
+        // A list that wasn't in hand is laid out only once the page is fully up: rows arriving mid-fade took the main thread
+        // and froze it (CI 2b00c30). One in hand was laid out with the page.
+        if !quick { await untilUp() }
         streamsQuick = quick
         if quick { streams = found } else { withAnimation { streams = found } }
         streamsAt = Date()
@@ -2246,5 +2255,22 @@ struct ShelfFlick: ViewModifier {
         model.flick(t)
         // The flick screen's own picture takes over from here, from where it was let go.
         Task { @MainActor in try? await Task.sleep(nanoseconds: 60_000_000); ShelfHand.shared.item = nil; up = false }
+    }
+}
+
+// The Remote, drawn once off screen soon after launch, so the first pick doesn't pay for its first drawing as the
+// picture moves (CI: a 600-900 ms turn at the move's start when the Remote had never been shown). Invisible, untouchable,
+// and gone after a second; never when the Remote is already the tab in front.
+struct RemoteWarmup: View {
+    @Environment(TVModel.self) var model
+    @State private var done = false
+    var body: some View {
+        if !done && model.tab != 0 {
+            Page(title: "Remote", alwaysInline: true) { RemoteTab() }
+                .opacity(0.001)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .task { try? await Task.sleep(nanoseconds: 1_200_000_000); done = true }
+        }
     }
 }

@@ -14,6 +14,12 @@ final class StreamCache {
     static let shared = StreamCache()
     private struct Entry { let at: Date; let task: Task<[StremioStream]?, Never> }
     private var entries: [String: Entry] = [:]
+    // Lists that have answered, for a page to be laid out with them before it shows.
+    private var answered: [String: (at: Date, streams: [StremioStream])] = [:]
+    func inHand(type: String, imdb: String, video: String) -> [StremioStream]? {
+        guard let a = answered[Self.key(type, imdb, video)], Date().timeIntervalSince(a.at) < Self.fresh else { return nil }
+        return a.streams
+    }
     private static let fresh: TimeInterval = 600
     static func key(_ type: String, _ imdb: String, _ video: String) -> String { "\(type)/\(imdb)/\(video)" }
     func streams(type: String, imdb: String, video: String, again: Bool = false) async -> [StremioStream]? {
@@ -30,6 +36,7 @@ final class StreamCache {
         }
         entries[k] = Entry(at: Date(), task: task)
         let s = await task.value
+        if let s, !s.isEmpty { answered[k] = (Date(), s) }
         // Nothing found is worth asking again for next time.
         if s?.isEmpty != false, entries[k]?.task == task { entries[k] = nil }
         return s

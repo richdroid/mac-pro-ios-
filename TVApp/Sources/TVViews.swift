@@ -106,7 +106,7 @@ struct RootView: View {
         // A title's details page, pushed over Stremio's page (AppBrowse opens it once the rows are in).
         if pose == "details" { model.tab = 1; model.browsing = .stremio; return }
         // A link pasted into the Remote's field: its card comes up, and the flick's own demo throws it.
-        if pose == "flick-link" {
+        if pose == "flick-link" || pose == "flick-link-art" {
             Task { try? await Task.sleep(nanoseconds: 3_000_000_000); model.send("https://www.youtube.com/watch?v=dQw4w9WgXcQ") }
             return
         }
@@ -237,6 +237,8 @@ struct RootView: View {
             }
             // A card held on a shelf, over everything, where the finger has it (ShelfFlick).
             .overlay { ShelfLiftOverlay() }
+            // The Remote drawn once, unseen, after launch (RemoteWarmup).
+            .background { RemoteWarmup() }
             // Over everything, side bar included, and edge to edge. Not a presented screen: the system slides those up
             // from the bottom, a blurred panel with a hard top edge. The flick fades its own way in and out.
             .overlay {
