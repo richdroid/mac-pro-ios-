@@ -13,7 +13,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 75
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,7 +32,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 55
+        timeout-minutes: 90
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -90,14 +90,13 @@ jobs:
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
-          # Open in portrait first, the posture he holds; then open flat; then folded.
+          # Folded first (the narrowest, where rows wrap; it ran out of time last), then open in portrait, then open flat.
+          set_ 1 ""
           $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
           set_ 3 -portrait
           $D "$DEVICE" rotate 3; sleep 5
           set_ 3 -open
-          $D "$DEVICE" pose closed; sleep 5
-          set_ 1 ""
       - name: Collect crash reports
         if: always()
         run: |
