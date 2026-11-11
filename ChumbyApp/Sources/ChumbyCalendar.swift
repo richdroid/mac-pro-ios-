@@ -294,6 +294,7 @@ struct CalendarSettingsSections: View {
         Group {
             Section {
                 Toggle("Wake me from my calendar", isOn: $wake.rules.enabled)
+                    .soloCard(note: "An alarm before the first thing each day.")
             }
             Section {
                 leadRow("Work", $wake.rules.workLead)
@@ -305,25 +306,24 @@ struct CalendarSettingsSections: View {
                         Text("\(wake.rules.daysAhead) wake-up\(wake.rules.daysAhead == 1 ? "" : "s")").font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
-            } header: { Text("Awake before it starts") }
+            } header: { SectionHead(icon: "clock", text: "Awake before it starts") }
             Section {
                 CalendarSoundRow(autoOpen: ChumbyModel.pose == "template")
-            } header: { Text("How they ring") }
+            } header: { SectionHead(icon: "music.note", text: "How they ring") }
             // Only on a Chumby that knows how.
             if let on = model.state.calOverride {
                 Section {
                     Toggle("Calendar days skip my other alarms", isOn: Binding(get: { on == 1 }, set: { v in Task { await model.setCalendarOverride(v) } }))
+                        .soloCard(note: on == 1 ? "On a day your calendar wakes you, your repeating alarms stay quiet. They ring as usual the day after."
+                                  : "Your repeating alarms ring as usual, even on days your calendar wakes you.", on: model.failed("calover") == nil)
                     if let f = model.failed("calover") { FailNote(text: f) }
-                } header: { Text("Skipping other alarms") } footer: {
-                    Text(on == 1 ? "On a day your calendar wakes you, your repeating alarms stay quiet. They ring as usual the day after."
-                         : "Your repeating alarms ring as usual, even on days your calendar wakes you.")
-                }
+                } header: { SectionHead(icon: "bell.slash.fill", text: "Skipping other alarms") }
             }
             Section {
                 WordsGroup(title: "Counts as work", words: $wake.rules.workWords)
                 WordsGroup(title: "Never wake for", words: $wake.rules.ignoreWords)
                 WordsGroup(title: "Days off", words: $wake.rules.offWords)
-            } header: { Text("Words in titles") }
+            } header: { SectionHead(icon: "text.quote", text: "Words in titles") }
             if !wake.calendars.isEmpty {
                 Section {
                     // Closed to begin with: it's set once and rarely looked at again.
@@ -342,7 +342,7 @@ struct CalendarSettingsSections: View {
                             }
                         }
                     }
-                } footer: { if showCalendars { Text("Tap Work on a calendar to count everything in it as work.") } }
+                } footer: { if showCalendars { SectionFoot("Tap Work on a calendar to count everything in it as work.") } }
             }
         }
     }
@@ -541,12 +541,13 @@ struct CalendarDaySheet: View {
                         .submitLabel(.done).onSubmit(commitLabel)
                 }
                 Toggle("Ring that day", isOn: Binding(get: { !item.skipped }, set: { _ in wake.toggleSkip(item) }))
-            } header: { Text("Just this day") }
+            } header: { SectionHead(icon: "calendar", text: "Just this day") }
             soundSection(item)
             if item.custom || model.state.justOnce(for: item) != nil {
                 Section {
-                    Button("Use the usual settings") { useUsual(item) }.foregroundStyle(.tint).disabled(undoing).background { foot }
-                } footer: { Text("This day wakes and rings like every other again.") }
+                    Button("Use the usual settings") { useUsual(item) }.foregroundStyle(.tint).disabled(undoing)
+                        .soloCard(note: "This day wakes and rings like every other again.").background { foot }
+                }
             }
             // No "How they all ring" here: a day's page changes that day alone, and the shared sound is set in Calendar
             // settings (and shown under Sounds). A control for every day on one day's page read as one more place the same
@@ -601,7 +602,7 @@ struct CalendarDaySheet: View {
                 }
                 .background { foot }
             }
-        } header: { Text("Sound for this day") }
+        } header: { SectionHead(icon: "music.note", text: "Sound for this day") }
         .onChange(of: ownSound) { _, _ in commitOwn() }
         .onChange(of: ownAlarm) { _, _ in commitOwn() }
     }

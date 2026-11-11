@@ -131,20 +131,28 @@ struct NotifySettings: View {
     @Environment(\.colorScheme) private var scheme
     @AppStorage(ChumbyNotify.enabledKey) private var enabled = true
     @State private var denied = false
+    var askSettings: Bool {
+        #if canImport(UIKit)
+        denied && enabled
+        #else
+        false
+        #endif
+    }
     var body: some View {
         Section {
+            // What it sends, said in the row (it was the footer, under a one-row capsule: designer, 11-11).
             Toggle("Notify this iPhone", isOn: $enabled)
                 .onChange(of: enabled) { _, on in
                     if on { Task { denied = !(await ChumbyNotify.shared.ask()) } }
                     ChumbyNotify.shared.share()
                 }
+                .soloCard(note: "Only when an alarm was missed or may not ring.", on: !askSettings)
             #if canImport(UIKit)
-            if denied && enabled, let u = URL(string: UIApplication.openSettingsURLString) {
+            if askSettings, let u = URL(string: UIApplication.openSettingsURLString) {
                 Link("Allow notifications in Settings", destination: u)
             }
             #endif
-        } header: { SectionHead(icon: "bell.fill", text: "Notifications", color: ChumbyPalette.sub(scheme == .dark)) }
-        footer: { Text("Only when an alarm was missed or may not ring.") }
+        } header: { SectionHead(icon: "bell.fill", text: "Notifications") }
         .task { denied = await ChumbyNotify.shared.isDenied() }
     }
 }

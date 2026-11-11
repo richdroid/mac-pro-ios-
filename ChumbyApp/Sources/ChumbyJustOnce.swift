@@ -366,17 +366,11 @@ struct JustOnceSheet: View {
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text(name).font(.custom("Trebuchet MS", size: 24).weight(.bold)).lineLimit(2)
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if minutes > 0 {
-                        Text(due.formatted(date: .omitted, time: .shortened)).strikethrough().foregroundStyle(.secondary)
-                        Image(systemName: "arrow.right").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                    }
-                    Text(at.formatted(date: .omitted, time: .shortened)).font(.body.weight(.semibold)).monospacedDigit().contentTransition(.numericText())
-                    Text(dayWord(due)).foregroundStyle(.secondary)
-                }
+                // The alarm and its day, and the usual time once. The new time lives only in "Rings at", the picker
+                // under When: the hero said it too, so the sheet showed it twice (designer, 11-11).
+                Text("\(dayWord(due)) · usually \(due.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
-            .animation(.snappy, value: minutes)
         }
         Section {
             HStack(spacing: 8) {
@@ -398,10 +392,10 @@ struct JustOnceSheet: View {
                 while t.timeIntervalSince(due) >= 86400 { t = t.addingTimeInterval(-86400) }
                 minutes = min(max(Int((t.timeIntervalSince(due) / 60).rounded()), 0), JustOnce.longest)
             }), displayedComponents: .hourAndMinute)
-        } header: { Text("When") }
-        Section("Sound") { SoundRows(choice: $sound, alarm: $alarm) }
+        } header: { SectionHead(icon: "clock", text: "When") }
+        Section { SoundRows(choice: $sound, alarm: $alarm) } header: { SectionHead(icon: "music.note", text: "Sound") }
         Section {} footer: {
-            Text(original.isCalendar ? "That day’s alarm moves to \(at.formatted(date: .omitted, time: .shortened)). The other days are as they were."
+            SectionFoot(original.isCalendar ? "That day’s alarm moves to \(at.formatted(date: .omitted, time: .shortened)). The other days are as they were."
                  : "The usual \(due.formatted(date: .omitted, time: .shortened)) is skipped and this rings in its place. It repeats as usual after.")
         }
     }
