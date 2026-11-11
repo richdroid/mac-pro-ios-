@@ -60,10 +60,10 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
           # Closed (the cover), first.
-          FILM_PORT=9012 film screen-wake-before 1 8 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoReask YES
-          FILM_PORT=9012 film screen-wake-after 1 8 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
-          FILM_PORT=9012 shot screen-wake-before-2s 1 5 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoReask YES
-          FILM_PORT=9012 shot screen-wake-after-2s 1 5 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
+          FILM_PORT=9012 film screen-wake-before 1 16 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoReask YES
+          FILM_PORT=9012 film screen-wake-after 1 16 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
+          FILM_PORT=9012 shot screen-wake-before-2s 1 12 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoReask YES
+          FILM_PORT=9012 shot screen-wake-after-2s 1 12 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
           FILM_PORT=9011 film screen-slow-after 1 14 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 16
           film screen-fps 1 8 -tab 0 -pose screenfps -openScreen YES
           film screen-kbkey-after 1 17 -tab 0 -pose screenkbfilm -openScreen YES
@@ -82,7 +82,7 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
           sleep 5
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
-          FILM_PORT=9012 film screen-wake-after-portrait 3 8 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
+          FILM_PORT=9012 film screen-wake-after-portrait 3 16 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
           film screen-fps-portrait 3 8 -tab 0 -pose screenfps -openScreen YES
           shot screen-laptop-portrait 3 8 -tab 0 -pose screen -openScreen YES -screenPosture laptop
           ls dist
