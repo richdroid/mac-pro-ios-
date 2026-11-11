@@ -1395,6 +1395,7 @@ struct AlarmEditor: View {
                 sections.listRowBackground(GlassRow())
             }
             .pinsTitle { PageTitle(title) { buttons } }
+            .keepsPlace(placeKey)
             // On the list, never on a row: a lazy row scrolled off would end the edit (held readings landing) or present
             // nothing. (Build 204's "presents from none" was a sheet bound from many rows of the pane's shared list.)
             .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
@@ -1407,6 +1408,7 @@ struct AlarmEditor: View {
             // sidebar"). As words alone iOS kept them in a row across the top: it sets no title-only item vertically.
             NavigationStack {
                 Form { sections.listRowBackground(GlassRow()) }
+                .keepsPlace(placeKey)
                 .seaList().background { SeaBackground().ignoresSafeArea() }
                 // The system's own title (its face set once in ChumbyApp.dressBars), never a text item in the bar (ruling 11-09).
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
@@ -1436,6 +1438,8 @@ struct AlarmEditor: View {
         Task { try? await Task.sleep(nanoseconds: 1_200_000_000); justOnce = true }
     }
     func finish() { stopTest(); if let close { close() } else { dismiss() } }
+    // The same page in the pane and in its cover, so a turn keeps its place (KeepsPlace).
+    var placeKey: String { "page:editor:" + (calendarTemplate ? "template" : original?.key ?? (nap ? "nap" : "new")) }
 
     var sections: some View {
             Group {

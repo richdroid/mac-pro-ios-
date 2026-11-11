@@ -132,7 +132,15 @@ jobs:
           film 3 pinned-calsettings-fling-open - -tab 2 -pose calsettings; $D "$DEVICE" drag 0.75 0.9 0.75 0.25 0.15 || true; sleep 3; $D "$DEVICE" drag 0.75 0.25 0.75 0.9 0.15 || true; endfilm pinned-calsettings-fling-open
           # Turned mid-scroll: Calendar settings open flat, scrolled so its title is pinned, turned to open portrait and back.
           film 3 pinned-turn-open - -tab 2 -pose calsettings; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.0 || true; sleep 2
-          $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5; endfilm pinned-turn-open
+          $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5
+          # Back open flat: it must be where it was; then down to the top and up again past the title, to see the rest.
+          $D "$DEVICE" drag 0.75 0.3 0.75 0.95 1.0 || true; sleep 2; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.5 || true; sleep 2; endfilm pinned-turn-open
+          # Turned at rest, then scrolled past the title.
+          film 3 pinned-turnrest-open - -tab 2 -pose calsettings; $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5
+          $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.5 || true; sleep 2; endfilm pinned-turnrest-open
+          # An alarm's editor open flat, scrolled, turned to portrait and back.
+          film 3 editor-turn-open - -tab 2 -pose editor; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.0 || true; sleep 2
+          $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5; endfilm editor-turn-open
           # Last of all: Alarms' calendar switch tapped on, open in portrait then folded. It raises the system's calendar
           # permission alert, which stays up over everything after it, so nothing is shot after these.
           $D "$DEVICE" rotate 1; sleep 5
