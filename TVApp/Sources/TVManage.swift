@@ -203,7 +203,56 @@ struct ManageAppsView: View {
             if app.removable { Button("Delete", role: .destructive) { removing = app } }
         }
     }
+    @Environment(\.paneLayout) private var panes
+    // Open flat: the list on the left, never one card across the fold; the way back to the automatic order and the
+    // note on the right, level with the list's top (gate 276, fifth pass).
+    func note(_ s: ManageState) -> String {
+        (s.canArrange ? "Tap Edit to drag apps into your order on the TV’s home screen, or to delete one. " : "Swipe an app to delete it from the TV. ") + "Locked apps are what this setup depends on."
+    }
     var body: some View {
+        Group {
+            if panes {
+                FoldSplit { list } right: {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            PageHeading(" ").padding(.horizontal, 4).hidden()
+                            if let s = store.state {
+                                if s.canArrange {
+                                    Button("Back to automatic order") { store.send("app-layout", ["order": [String]()]) { await store.load() } }
+                                        .foregroundStyle(TVLook.accent).frame(minHeight: 44)
+                                }
+                                Text(note(s)).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(.horizontal, 24).padding(.top, 4)
+                    }
+                }
+            } else { list }
+        }
+        .summonsBar()
+        .topShade().topFade()
+        // The same wall as the rest of Settings, outside the fade's mask so its top isn't a black band.
+        .background { Ambience() }
+        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        // Edit is the system's own item in the page's bar: on the Duo, in the side bar under Back (folded, and open in
+        // landscape), in the top bar open in portrait. It sat in a glass capsule of this page's own at the foot (ruling
+        // 2026-11-10: a page's actions go through the system's bar, never a hand-built pill).
+        .barPage()
+        .toolbar { if store.state?.canArrange == true { ToolbarItem(placement: .primaryAction) { editToggle } } }
+        .refreshable { await store.load() }
+        .task { await store.load() }
+        // Asked from a swipe, which leaves nothing to point at, so it's a plain question in the middle.
+        .alert(removing.map { "Delete \($0.name) from the TV?" } ?? "", isPresented: .init(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
+            if let app = removing {
+                Button("Delete", role: .destructive) {
+                    store.state?.apps.removeAll { $0.pkg == app.pkg }
+                    store.send("uninstall", ["pkg": app.pkg]) { await store.load() }
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: { Text("Its data on the TV goes too. You’d have to install it again to get it back.") }
+    }
+    var list: some View {
         List {
             Section { PageHeading("Apps on the TV") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
             if let s = store.state {
@@ -229,7 +278,7 @@ struct ManageAppsView: View {
                     }
                 }
                 // Plain words under the groups, not a one-row glass section (iOS draws one as a capsule; gate 276).
-                Section {
+                if !panes { Section {
                     if s.canArrange {
                         Button("Back to automatic order") {
                             store.send("app-layout", ["order": [String]()]) { await store.load() }
@@ -238,8 +287,8 @@ struct ManageAppsView: View {
                         .listRowBackground(Color.clear)
                     }
                 } footer: {
-                    Text((s.canArrange ? "Tap Edit to drag apps into your order on the TV’s home screen, or to delete one. " : "Swipe an app to delete it from the TV. ") + "Locked apps are what this setup depends on.")
-                }
+                    Text(note(s))
+                } }
             } else if store.failed {
                 ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again."))
             } else {
@@ -257,30 +306,9 @@ struct ManageAppsView: View {
         // about 23 pt lower (fourth pass).
         .contentMargins(.top, 0, for: .scrollContent)
         .listSectionSpacing(.compact)
-        .summonsBar()
-        .topShade().topFade()
-        // The same wall as the rest of Settings, outside the fade's mask so its top isn't a black band.
-        .background { Ambience() }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-        // Edit is the system's own item in the page's bar: on the Duo, in the side bar under Back (folded, and open in
-        // landscape), in the top bar open in portrait. It sat in a glass capsule of this page's own at the foot (ruling
-        // 2026-11-10: a page's actions go through the system's bar, never a hand-built pill).
-        .barPage()
-        .toolbar { if store.state?.canArrange == true { ToolbarItem(placement: .primaryAction) { editToggle } } }
-        .refreshable { await store.load() }
-        .task { await store.load() }
-        // Asked from a swipe, which leaves nothing to point at, so it's a plain question in the middle.
-        .alert(removing.map { "Delete \($0.name) from the TV?" } ?? "", isPresented: .init(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
-            if let app = removing {
-                Button("Delete", role: .destructive) {
-                    store.state?.apps.removeAll { $0.pkg == app.pkg }
-                    store.send("uninstall", ["pkg": app.pkg]) { await store.load() }
-                }
-                Button("Cancel", role: .cancel) {}
-            }
-        } message: { Text("Its data on the TV goes too. You’d have to install it again to get it back.") }
     }
 }
+
 
 struct ManageSettingsView: View {
     @ObservedObject var store: ManageStore
@@ -299,36 +327,62 @@ struct ManageSettingsView: View {
         }
         .padding(.leading, GlassCard.inset).padding(.trailing, 8).frame(minHeight: 52)
     }
+    @Environment(\.paneLayout) private var panes
+    func controls(_ s: ManageState) -> some View {
+        // Open flat it starts level with the card beside it, which has a heading.
+        GlassSection(headerRoom: panes) {
+            pick("TV sleeps after", "sleep_after", Self.sleep)
+            pick("Screensaver starts after", "screensaver_after", Self.saver)
+            pick("Animations", "animations", Self.speed)
+            Toggle("Turn off with the TV", isOn: Binding(get: { (s.settings["cec_auto_off"] ?? 0) == 1 }, set: { store.set("cec_auto_off", $0 ? 1 : 0) }))
+                .padding(.horizontal, GlassCard.inset).frame(minHeight: 52)
+        }
+    }
+    var openOnTV: some View {
+        GlassSection(header: "Open on the TV", footer: "These open the TV’s own settings screens, to use with the remote.") {
+            ForEach(Self.pages, id: \.1) { page in
+                Button { store.send("settings-page", ["page": page.1]) } label: { GlassRow(title: page.0, icon: page.2, acts: true) }
+                    .buttonStyle(GlassRowPress())
+            }
+            // The launcher's own settings: one more of the TV's settings screens, so here with the rest rather
+            // than a second door on Settings (gate 276, third pass).
+            Button { store.send("launcher-settings", [:]) } label: { GlassRow(title: "Home screen settings", icon: "rectangle.grid.1x2", acts: true) }
+                .buttonStyle(GlassRowPress())
+        }
+    }
+    @ViewBuilder var waitingOrFailed: some View {
+        if store.failed {
+            ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again."))
+        } else {
+            // The app's one waiting shape, its rows breathing, not a spinner of this page's own.
+            VStack(spacing: 10) { ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) } }
+        }
+    }
+    func column(@ViewBuilder _ c: () -> some View) -> some View {
+        ScrollView { VStack(alignment: .leading, spacing: 26) { c() }.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24) }
+    }
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                PageHeading("TV settings").padding(.horizontal, 4)
-                if let s = store.state {
-                    GlassSection {
-                        pick("TV sleeps after", "sleep_after", Self.sleep)
-                        pick("Screensaver starts after", "screensaver_after", Self.saver)
-                        pick("Animations", "animations", Self.speed)
-                        Toggle("Turn off with the TV", isOn: Binding(get: { (s.settings["cec_auto_off"] ?? 0) == 1 }, set: { store.set("cec_auto_off", $0 ? 1 : 0) }))
-                            .padding(.horizontal, GlassCard.inset).frame(minHeight: 52)
+        Group {
+            // Open flat, one card each side of the fold, never one card across it (gate 276, fifth pass): the settings
+            // on the left under the page's name, the TV's own screens on the right, the two cards level.
+            if panes {
+                FoldSplit {
+                    column {
+                        PageHeading("TV settings").padding(.horizontal, 4)
+                        if let s = store.state { controls(s) } else { waitingOrFailed }
                     }
-                    GlassSection(header: "Open on the TV", footer: "These open the TV’s own settings screens, to use with the remote.") {
-                        ForEach(Self.pages, id: \.1) { page in
-                            Button { store.send("settings-page", ["page": page.1]) } label: { GlassRow(title: page.0, icon: page.2, acts: true) }
-                                .buttonStyle(GlassRowPress())
-                        }
-                        // The launcher's own settings: one more of the TV's settings screens, so here with the rest rather
-                        // than a second door on Settings (gate 276, third pass).
-                        Button { store.send("launcher-settings", [:]) } label: { GlassRow(title: "Home screen settings", icon: "rectangle.grid.1x2", acts: true) }
-                            .buttonStyle(GlassRowPress())
+                } right: {
+                    column {
+                        PageHeading(" ").padding(.horizontal, 4).hidden()
+                        if store.state != nil { openOnTV }
                     }
-                } else if store.failed {
-                    ContentUnavailableView("Can’t reach the TV", systemImage: "wifi.exclamationmark", description: Text("Pull down to try again."))
-                } else {
-                    // The app's one waiting shape, its rows breathing, not a spinner of this page's own.
-                    VStack(spacing: 10) { ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) } }
+                }
+            } else {
+                column {
+                    PageHeading("TV settings").padding(.horizontal, 4)
+                    if let s = store.state { controls(s); openOnTV } else { waitingOrFailed }
                 }
             }
-            .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
         }
         // As the apps page: the settings fade in over the spinner.
         .settledAnimation(.easeOut(duration: 0.25), value: store.state == nil)

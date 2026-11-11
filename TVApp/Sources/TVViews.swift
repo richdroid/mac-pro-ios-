@@ -696,8 +696,13 @@ struct TVSettingsTab: View {
 // Where the Mac is, and what it takes to reach it from away.
 struct ConnectionView: View {
     @Environment(TVModel.self) var model
+    @Environment(\.paneLayout) private var panes
     @State private var address = ""
     var body: some View {
+        // Open flat, the page keeps to the left pane, never one card across the fold (gate 276, fifth pass).
+        if panes { FoldSplit { page } right: { Color.clear } } else { page }
+    }
+    var page: some View {
         // A glass section of the app's own, not a Form's one-row capsule (gate 276).
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
@@ -2143,6 +2148,13 @@ struct BannerRow: View {
     }
     static func width(_ across: Int, in w: CGFloat) -> CGFloat { max(40, (w - CGFloat(across - 1) * TVLook.gap) / CGFloat(across)) }
 }
+// A scroll view's width less its safe area's sides: the room its content is actually laid in.
+private struct PaneRoom: ViewModifier {
+    @Binding var width: CGFloat
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGFloat.self) { $0.size.width - $0.safeAreaInsets.leading - $0.safeAreaInsets.trailing } action: { if abs($0 - width) > 0.5 { width = $0 } }
+    }
+}
 struct AppsTab: View {
     @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
@@ -2178,6 +2190,7 @@ struct AppsTab: View {
     func measured(_ w: Binding<CGFloat>) -> some View {
         Color.clear.frame(height: 0).onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if abs($0 - w.wrappedValue) > 0.5 { w.wrappedValue = $0 } }
     }
+
     // Folded and open upright: Watch as many across as leave no holes; open upright Listen and Tools share one band, two
     // each, rather than two rows of two with half the screen empty beside them.
     @ViewBuilder var rows: some View {
@@ -2197,9 +2210,9 @@ struct AppsTab: View {
         }
     }
     // Open flat: two across each side, at one width.
-    // The right pane's room measured runs under the side bar's edge: a further 24 pt keeps its tiles ending where
-    // Settings' cards do open flat (fourth pass: 13 pt from the rail).
-    var paneTile: CGFloat { BannerRow.width(2, in: max(min(leftWidth - 40, rightWidth - 84), 1)) }
+    // Two across in each pane at one width: the narrower pane's room inside its 20 pt sides, so the right pane's two
+    // end where Settings' cards do, and the left's are the same size (fifth pass).
+    var paneTile: CGFloat { BannerRow.width(2, in: max(min(leftWidth, rightWidth) - 40, 1)) }
     // Before the first answer, the shape of the page instead of a blank one.
     var waiting: some View {
         HStack(spacing: TVLook.gap) {
@@ -2223,17 +2236,18 @@ struct AppsTab: View {
             FoldSplit {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
-                        SendBar().padding(.horizontal, 20)
+                        // The field as wide as the grid under it, so the column has one right edge (fifth pass).
+                        SendBar().frame(width: query == nil ? paneTile * 2 + TVLook.gap : nil).padding(.horizontal, 20)
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if abs($0 - barRoom) > 0.5 { barRoom = $0 } }
                         if let query { EverywhereSearch(text: query) } else { row("Watch", watch, across: 2, width: paneTile).padding(.horizontal, 20) }
                     }
                     .padding(.vertical, 12)
-                    .background(alignment: .top) { measured($leftWidth) }
                     // The rows give way to the results with the same fade as folded: open, they vanished and the results'
                     // box popped in (tv21 realsearch-open 16.65 → 17.71 s, no frame between).
                     .animation(.snappy, value: query == nil)
                 }
                 .scrollDismissesKeyboard(.immediately)
+                .modifier(PaneRoom(width: $leftWidth))
                 .backToTop(posed: false)
             } right: {
                 // Unfolded, the apps go on across the fold: what he watches with the search on the left, what he listens
@@ -2245,11 +2259,10 @@ struct AppsTab: View {
                         row("Listen", listen, across: 2, width: paneTile)
                         row("Tools", tools, across: 2, width: paneTile)
                     }
-                    // Clear of the side bar by the same room as Settings' cards open flat (gate 276, third pass: 4 pt).
-                    .padding(.leading, 20).padding(.trailing, 40)
+                    .padding(.horizontal, 20)
                     .padding(.vertical, 12)
-                    .background(alignment: .top) { measured($rightWidth) }
                 }
+                .modifier(PaneRoom(width: $rightWidth))
                 .backToTop()
             }
         } else {
