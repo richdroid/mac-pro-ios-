@@ -91,6 +91,7 @@ final class MusicDetailStore: ObservableObject {
     func follow(_ name: String) {
         guard name != song else { left = false; return }
         song = name; misses = 0; lookups = 0
+        unanswered = true; taken = 0
         if showsAll { showsAll = false }
         if left {
             if detail != nil { detail = nil }
@@ -104,6 +105,11 @@ final class MusicDetailStore: ObservableObject {
     func leave() { left = true }
     private var left = false
     private var lookups = 0
+    // The song on the page hasn't had its own answer yet (a fitting one, past Mint's looking up), whether or not a
+    // block is on the page waiting for it: asked for until it has, even paused. And when the last answer taken was
+    // asked for, so one asked for earlier that lands later (a slow bridge) never replaces it.
+    private(set) var unanswered = false
+    private var taken = 0.0
     func read(playing: Bool) async {
         let asked = song, sent = Date().timeIntervalSince1970 * 1000
         let data = await TVBridge.data(TVBridge.url("/api/tv/music-detail"), timeout: 6)
@@ -116,14 +122,19 @@ final class MusicDetailStore: ObservableObject {
         Task { try? await Task.sleep(nanoseconds: 700_000_000); await read(playing: false) }
     }
     private func take(_ parsed: MusicDetail?, sent: Double) {
+        guard sent >= taken else { return }
+        taken = sent
         // Only what belongs to the song on the page: an answer about another (the reading and the page a moment apart
         // at a song's change; over AirPlay the phone knows of a skip before Mint does) is not this song's.
         let fits = parsed.map { $0.title.isEmpty || song.isEmpty || TVStatus.Session.sameName($0.title, song) } ?? false
         guard var d = parsed, fits else {
             // No answer, or not this song's. What's shown for this song stays; a block still waiting for its song gives
-            // up after four misses (about eight seconds).
+            // up after four misses (about eight seconds), and the asking for this song stops with it.
             misses += 1
-            if waiting, misses >= 4 { waiting = false; if detail != nil { detail = nil }; if line != -1 { line = -1 } }
+            if misses >= 4 {
+                unanswered = false
+                if waiting { waiting = false; if detail != nil { detail = nil }; if line != -1 { line = -1 } }
+            }
             present()
             return
         }
@@ -134,7 +145,7 @@ final class MusicDetailStore: ObservableObject {
             lookups += 1
             if waiting { return }
             if let old = detail { d.lines = old.lines; d.synced = old.synced }
-        } else { lookups = 0 }
+        } else { lookups = 0; unanswered = false }
         // The phone's clock and the Mac's really apart (the Mac's reading stamped well before the ask went out, or
         // after now): counted from when the answer came instead. A slow answer alone is not that, and keeps its stamp.
         let now = Date().timeIntervalSince1970 * 1000
@@ -188,7 +199,7 @@ struct MusicDetailWatch: View {
                 store.follow(song)
                 await store.read(playing: playing)
                 // Paused, it still asks until the song on the page has had its own answer (or is given up on).
-                while playing || store.waiting, !Task.isCancelled {
+                while playing || store.unanswered, !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     if Task.isCancelled { return }
                     await store.read(playing: playing)
