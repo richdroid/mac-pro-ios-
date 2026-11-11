@@ -346,7 +346,10 @@ final class AppModel: ObservableObject {
     // States the build's screenshots need that the sample Mac doesn't have. Only with a pose; never on the phone.
     static func applyPose(_ pose: String, to s: inout Status) {
         switch pose {
-        case "alerts", "alertsdismiss": s.alerts = Status.Alert.samples
+        case "alerts", "alertsdismiss":
+            s.alerts = Status.Alert.samples
+            // The CPU as hot as its alert says, so the tile under the banner agrees with it (designer, 2026-11-11).
+            s.temps = (s.temps ?? []).map { $0.name == "CPU" ? Status.Temp(name: "CPU", c: 96) : $0 }
         // Two parts of the Mac needing a look, as its bridge will count them: Status's chip says so and opens Health.
         case "needslook": s.healthBad = 2
         // Before the Mac has said anything about itself: the chip is grey "Checking".
