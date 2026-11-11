@@ -356,6 +356,8 @@ final class AppModel: ObservableObject {
         case "api-live", "api-sheet": s.apiUsage = .sample
         case "api-estimate": s.apiUsage = .estimateSample
         case "longlog": s.upgrade = Status.Upgrade.longSample
+        // The macOS tab's log while a check runs, and when the last step failed: the log shows in both (designer, 2026-11-11).
+        case "upgradefail": s.upgrade = Status.Upgrade.longSample(ending: "[03:41:12] Root patch step failed: the KDK didn’t match this build.", status: "FAILED: root patch")
         // Away from home with two of his apps rebuilt and signed for this iPhone: both install over the air, with the card
         // to install them together ("otaoffer" also has the offer sheet up, as the app opens).
         // Every one of his apps already at the Mac's build: the Updates section says so.

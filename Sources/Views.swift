@@ -1150,7 +1150,7 @@ struct ClaudeTab: View {
     var body: some View {
         if side != .right {
             LimitsSection(s: s)
-            Section("Sessions on this Mac (\(s.claude.sessions.count))") {
+            Section("Sessions (\(s.claude.sessions.count))") {
                 if s.claude.sessions.isEmpty { Text("None running").foregroundStyle(.secondary) }
                 ForEach(s.claude.sessions) { x in
                     let row = SessionRow(session: x, working: restarting != nil && restarting == x.key, restart: { Task { await doRestart(x) } })
@@ -1179,7 +1179,7 @@ struct ClaudeTab: View {
                 LabeledContent("Version", value: s.claude.version.replacingOccurrences(of: " (Claude Code)", with: ""))
                 LabeledContent("Its service on the Mac", value: sentenceCase(s.claude.service ?? "Unknown"))
                 Link(destination: URL(string: "https://claude.ai/code")!) {
-                    HStack { Text("Open in the Claude app"); Spacer(); Image(systemName: "arrow.up.forward").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                    HStack { Text("Open in the Claude app"); Spacer(); Image(systemName: "arrow.up.forward").font(.footnote.weight(.semibold)) }
                 }
                 // Each question hangs off the button that asked it, so it points at what was tapped.
                 Button("Restart Claude remote sessions") { confirm = true }
@@ -1352,7 +1352,7 @@ struct UsageDetail: View {
         Section("Tokens per hour, last 24 hours") {
             VStack(alignment: .leading) {
                 Text(Format.count(u.day.tokens)).font(.title2.weight(.semibold)).monospacedDigit()
-                Text("\(u.day.messages.formatted()) replies on this Mac").font(.footnote).foregroundStyle(.secondary)
+                Text("\(u.day.messages.formatted()) replies").font(.footnote).foregroundStyle(.secondary)
                 Chart(u.hours) { h in
                     BarMark(x: .value("Hour", Date(timeIntervalSince1970: h.t / 1000), unit: .hour), y: .value("Tokens", h.tokens), width: .ratio(0.7))
                         .foregroundStyle(macBlue).clipShape(RoundedRectangle(cornerRadius: 2))
@@ -1377,8 +1377,14 @@ struct UsageDetail: View {
         }
         if !models.isEmpty {
             Section("By model, last 7 days") {
+                // Two lines a model, its figures under its name: one model alone was a one-line row, which the system
+                // draws as a capsule beside the rounded cards (designer, 2026-11-11).
                 ForEach(models, id: \.key) { name, v in
-                    LabeledContent(modelName(name), value: "\(Format.count(v.tokens)) tokens · \(v.messages.formatted()) replies")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(modelName(name))
+                        Text("\(Format.count(v.tokens)) tokens · \(v.messages.formatted()) replies").font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    .padding(.vertical, 2)
                 }
             }
         }
@@ -1555,6 +1561,8 @@ struct UpgradeTab: View {
                 .confirmationDialog("Check for updates now?", isPresented: $confirmRun, titleVisibility: .visible) {
                     Button("Check Now") { fail = nil; Task { fail = await model.run("upgrade-run") } }
                 } message: { Text("This may restart the Mac.") }
+                // The build's shot of the question.
+                .task { if model.pose == "upgradeask" { try? await Task.sleep(nanoseconds: 1_500_000_000); confirmRun = true } }
                 if let fail { FailText(fail).padding(.horizontal, 20).padding(.bottom, 12) }
             }
         }
@@ -1581,7 +1589,8 @@ struct UpgradeTab: View {
         case .all:
             // Only the log's lines scroll; the summary and the rows stay put above them.
             VStack(alignment: .leading, spacing: 12) {
-                summary
+                // "This Mac" over the status card in every posture, as open flat (designer, 2026-11-11).
+                VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
                 agent
                 VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
                 if logShown { log }
@@ -1651,7 +1660,7 @@ struct UpdateLog: View {
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .task {
                 // The build's shot of the log read part way up.
-                guard model.pose == "longlog" else { return }
+                guard model.pose == "longlog" || model.pose == "upgradefail" else { return }
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 proxy.scrollTo(lines.count / 2, anchor: .center)
             }
@@ -1659,7 +1668,7 @@ struct UpdateLog: View {
     }
 }
 extension Status.Upgrade {
-    // A night's worth of log, for the build's shot of it scrolled.
+    // A night's worth of log, a check still running at its end, for the build's shot of it scrolled.
     static var longSample: Status.Upgrade {
         var lines: [String] = []
         for i in 0..<160 {
@@ -1670,8 +1679,12 @@ extension Status.Upgrade {
             default: lines.append("[\(t)] Checking softwareupdate catalogue, pass \(i + 1) of 160")
             }
         }
-        lines.append("[03:41:12] Update check finished. Nothing to do.")
-        return Status.Upgrade(installed: true, status: "HEALTHY", state: ["oclp_tag": "3.0.0"], log: lines.joined(separator: "\n"))
+        return Status.Upgrade(installed: true, status: "RUNNING: checking", state: ["oclp_tag": "3.0.0"], log: lines.joined(separator: "\n"))
+    }
+    // The same night ending another way: a failed step, for the shot of the log that must stay up.
+    static func longSample(ending: String, status: String) -> Status.Upgrade {
+        let l = longSample
+        return Status.Upgrade(installed: true, status: status, state: l.state, log: l.log + "\n" + ending)
     }
 }
 
@@ -1845,7 +1858,8 @@ struct ControlTab: View {
             // draws as a capsule beside the rounded cards (designer, 2026-11-11: merge lone rows where they belong).
             Section {
                 if s.tailscale.peers.isEmpty { Text("No other devices yet").foregroundStyle(.secondary) }
-                ForEach(s.tailscale.peers) { p in StateRow(label: p.name, good: p.online, value: p.os) }
+                // The device's name as a word and whether it's there; its OS was chatter (designer, 2026-11-11).
+                ForEach(s.tailscale.peers) { p in StateRow(label: p.name.prefix(1).uppercased() + p.name.dropFirst(), good: p.online, value: p.online ? "Connected" : "Offline") }
                 if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
             } header: { Text("Remote access") } footer: {
                 if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }
