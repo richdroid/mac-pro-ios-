@@ -397,7 +397,7 @@ final class RemoteScreen: ObservableObject {
         send([3, incremental ? 1 : 0, 0, 0, 0, 0, UInt8(width >> 8), UInt8(width & 255), UInt8(height >> 8), UInt8(height & 255)])
     }
     // The clock behind the whole picture, for as long as this connection lasts: four times a second at first, then once
-    // a second. It asks the Mac again when that's due (an idle Mac sends nothing to prompt it), and 3 s in, if parts
+    // a second. It asks the Mac again when that's due (an idle Mac sends nothing to prompt it), and 8 s in, if parts
     // have come but no whole picture, it shows what there is.
     private var wholeClock: Task<Void, Never>?
     private func watchWhole() {
@@ -411,7 +411,7 @@ final class RemoteScreen: ObservableObject {
                 guard let self, !Task.isCancelled, self.running, self.decoder === watched else { return }
                 if watched.wholeSettled { continue }
                 watched.tickWhole()
-                if waited >= 3, !self.hasPicture, watched.presentHeld() { self.hasPicture = true }
+                if waited >= RemoteDecoderHold.limit, !self.hasPicture, watched.presentHeld() { self.hasPicture = true }
             }
         }
     }
@@ -723,25 +723,29 @@ final class ScreenDecoder: @unchecked Sendable {
     // of the Mac happened to redraw. Seen on every open from a dark display in three tries (2026-11-10), and asking
     // again got the whole picture 120 ms later each time. So: until a whole-screen rectangle has arrived on this
     // connection (and again after the Mac changes resolution), the whole screen is asked for again: at once when the
-    // Mac's first answer wasn't it (when it's coming, it comes first), then 3 s, 6 s, 12 s apart, and not at all once one
+    // Mac's first answer wasn't it (when it's coming, it comes first), then 1 s, 2 s, 4 s apart, and not at all once one
     // has begun to arrive, so a slow link is never made to carry the whole picture twice.
     private var haveWhole = false
     private var askedWhole = CFAbsoluteTimeGetCurrent()
     private var wholeAskGap = 0.3
     private var wholeBegun = false
     // With no earlier picture underneath, patches over black aren't shown: the first thing seen is the whole picture
-    // filling in. Not for more than 3 s from the Mac's first words, in case it never sends one (not from when the
+    // filling in. Not for more than 8 s from the Mac's first words, in case it never sends one (not from when the
     // connection was opened: waking the display and signing in can take longer than that on their own).
     // Once the whole picture has begun to arrive it's waited for to its end, however long the link takes, and shown
     // in one piece: filling in top-down over black was still "stuff draws in so slowly" (Richard, 2026-11-10), and the
     // wait has a measure to show instead (`wholeProgress`).
     private var holdBack: Bool {
-        !Self.noReask && !seeded && !haveWhole && (wholeBegun || CFAbsoluteTimeGetCurrent() - askedFirst < 3)
+        !Self.noReask && !seeded && !haveWhole && (wholeBegun || CFAbsoluteTimeGetCurrent() - askedFirst < Self.holdLimit)
     }
     // How much of the first whole picture has arrived, 0 to 1, while it's on its way; nil before and after.
     var wholeProgress: Double? { wholeLock.lock(); defer { wholeLock.unlock() }; return haveWhole ? nil : wholeFraction }
     private var wholeFraction: Double?
     private var askedFirst = CFAbsoluteTimeGetCurrent()
+    // How long a first open waits for the whole picture before showing what there is (patches over black, the fault in
+    // Richard's shot of 2026-11-10). It was 3 s, and the second asking was at 3.3 s, so a Mac that answered the first
+    // two askings with a scrap had its patches shown first. Now it's asked at 0.3, 1.3, 3.3 and 7.3 s, all inside it.
+    static let holdLimit = RemoteDecoderHold.limit
     // The build's way to film the old behaviour beside the new: "screenNoReask" never asks again and shows patches.
     static let noReask = UserDefaults.standard.bool(forKey: "screenNoReask")
     private var seeded = false
@@ -760,7 +764,7 @@ final class ScreenDecoder: @unchecked Sendable {
         let now = CFAbsoluteTimeGetCurrent()
         guard !haveWhole, !wholeBegun, !Self.noReask, !wholeRequest.isEmpty, now - askedWhole >= wholeAskGap,
               updatesSinceAsk > 0 || now - askedWhole >= 4 else { return nil }
-        askedWhole = now; wholeAsks += 1; wholeAskGap = max(3, wholeAskGap * 2); updatesSinceAsk = 0
+        askedWhole = now; wholeAsks += 1; wholeAskGap = max(1, wholeAskGap * 2); updatesSinceAsk = 0
         return wholeRequest
     }
     private func whole(_ change: () -> Void) { wholeLock.lock(); change(); wholeLock.unlock() }
@@ -1215,3 +1219,6 @@ final class ScreenDecoder: @unchecked Sendable {
         }
     }
 }
+
+// How long a first open holds back patches while it waits for the Mac's whole picture.
+enum RemoteDecoderHold { static let limit = 8.0 }
