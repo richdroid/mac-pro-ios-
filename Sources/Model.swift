@@ -291,7 +291,7 @@ final class AppModel: ObservableObject {
             Reach.shared.hit()
             if problem != nil, pose != "unreachable" { problem = nil }
             if needsSignIn { needsSignIn = false }
-            func markFresh() { unread = 0; pulse.lastFresh = Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable != (pose == "unreadable") { unreadable = pose == "unreadable" } }
+            func markFresh() { unread = 0; pulse.lastFresh = pose == "unreachable" ? Date().addingTimeInterval(-25) : Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable != (pose == "unreadable") { unreadable = pose == "unreadable" } }
             // The build's shot of the Admin key row, in place well before the picture is taken.
             if pose == "api-sheet", !posedSheet {
                 posedSheet = true

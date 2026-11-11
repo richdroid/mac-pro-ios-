@@ -409,12 +409,19 @@ struct AppIcon: View {
     let app: Status.SeedApp
     var size: CGFloat = 58
     @State private var image: Image?
+    // No icon to fetch (an app he added that carries none), or the fetch failed: the app's initial on a quiet tile,
+    // never a blank square (gate 3, Delta).
+    @State private var none = false
     private var key: String { IconCache.key(app) }
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
         ZStack {
             // Until its icon is here, a plain square in the icon's place, never a stand-in picture; then it fades in.
             Color(white: 0.2)
+            if none, image == nil {
+                LinearGradient(colors: [Color(white: 0.36), Color(white: 0.2)], startPoint: .top, endPoint: .bottom)
+                Text(app.name.prefix(1).uppercased()).font(.system(size: size * 0.46, weight: .semibold, design: .rounded)).foregroundStyle(.white.opacity(0.92))
+            }
             if let image { image.resizable().interpolation(.high).scaledToFill().transition(.opacity) }
         }
         .frame(width: size, height: size)
@@ -423,7 +430,7 @@ struct AppIcon: View {
         .accessibilityHidden(true)
         .task(id: key) {
             if let known = IconCache.images[key] { image = known; return }
-            guard let api = IconCache.api, let i = await IconCache.fetch(app, api: api) else { return }
+            guard let api = IconCache.api, let i = await IconCache.fetch(app, api: api) else { none = true; return }
             withAnimation(.easeOut(duration: 0.25)) { image = i }
         }
     }
