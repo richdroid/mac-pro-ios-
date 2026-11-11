@@ -275,10 +275,12 @@ struct FlickScreen: View {
     @State private var liftScale: CGFloat = 1
     // When a lifted row was last put down short of a throw, so the tap that iOS reports with the same release does nothing.
     @State private var settledAt = Date.distantPast
-    // When the row in the hand was lifted: let go where it is within a moment of that, it was a tap that ran long.
-    @State private var liftedAt = Date.distantPast
-    // When the lifted row first left its place under the finger (10 pt), if it has.
-    @State private var movedAt: Date?
+    // The finger on the row or the card, read by FlickHand; kept in a box so its every sample redraws nothing.
+    @State private var hands = HandBox()
+    // Whose gesture is under a finger now. iOS resets it however the touch ends, also when the system takes the touch
+    // away and the gesture's own end never comes: a row left floating in the hand, the list unable to scroll and every
+    // tap refused, was the flick "not working" until the page was closed.
+    @GestureState private var touching: String?
     // Another stream of what's already on, picked on purpose: sent, at the spot he's at.
     @State private var switching = false
     // A link's page name and picture, as fetched.
@@ -401,6 +403,15 @@ struct FlickScreen: View {
                 if up { FlickHaptic.lift(); FlickClock.touched(); liftedUp() }
                 // Down again without a throw: the TV lets its hint go. A throw clears the hand too, but it's `flown` by then.
                 else if !flown { FlickReceipt.cancel(receiptID) }
+            }
+            // The touch is over, however it ended: anything still in the hand that its own end didn't settle goes back.
+            .onChange(of: touching) { was, now in
+                guard now == nil, let id = was else { return }
+                Task { @MainActor in
+                    guard liftedID == id, !flown else { return }
+                    _ = hands.hand.cancel(); hands.id = nil
+                    settle(quiet: true)
+                }
             }
             .task { await opened() }
             // The picture the Remote shows while the TV starts (an episode's still, which the rows never showed), fetched
@@ -835,11 +846,16 @@ struct FlickScreen: View {
             .frame(height: 36, alignment: .leading)
             .padding(.bottom, 2)
             hint("Tap a stream to play it on the TV, or hold it and flick it up.")
-            row(selected: false) { stream = nil; choseOnTV = true; FlickHaptic.caught(); send(from: rects.map["tv"]) } label: {
+            // A row like the streams under it: a tap, or held and flicked up.
+            row(selected: false) { if handFree { chooseOnTV() } } label: {
                 Image(systemName: "tv").font(.system(size: 17, weight: .semibold)).foregroundStyle(TVLook.accent).frame(width: 28)
                 Text("Choose on the TV").font(.subheadline.weight(.semibold))
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map["tv"] = $0 }
+            .modifier(LiftedLook(lift: lift, up: liftedID == "tv", scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16)))
+            .zIndex(liftedID == "tv" ? 1 : 0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: liftedID == "tv")
+            .simultaneousGesture(holdAndThrow("tv") { chooseOnTV() })
             // Where it'll start, and the other way, whenever he's been in it before: from the card, else from Stremio's own
             // Continue watching (Richard, 2026-11-07: "obv when i flick it should start from where i was"). It applies to
             // whichever stream he picks.
@@ -923,8 +939,7 @@ struct FlickScreen: View {
     func streamRow(_ s: StremioStream, best: Bool, failed: Bool, twin: Bool, playing: Bool = false) -> some View {
         let up = liftedID == s.id
         return row(selected: false) {
-            // The tap iOS reports with the release of a lifted row that was put back is that put-back, not a pick.
-            guard liftedID == nil, Date().timeIntervalSince(settledAt) > 0.3 else { return }
+            guard handFree else { return }
             pick(s)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
@@ -972,55 +987,107 @@ struct FlickScreen: View {
         .simultaneousGesture(holdAndThrow(s.id, failed: failed) { pick(s) })
         .accessibilityAction(named: "Flick to the TV") { pick(s) }
     }
-    // The hold and the flick, on a row or the card: lifted after a fifth of a second under the finger, moved with it, and
-    // let go upward (fast, or far enough) as the pick. Let go any other way it settles back where it was.
+    // The hold and the flick, on every row of the list: FlickHand reads the finger (lifted after the hold, moved with it,
+    // let go upward as the pick, let go where it was as a tap, anywhere else back). The same hand reads the card.
     func holdAndThrow(_ id: String, failed: Bool = false, send: @escaping () -> Void) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.3, maximumDistance: 10)
+        let rules = FlickHand.Rules.list
+        return LongPressGesture(minimumDuration: rules.hold, maximumDistance: rules.slop)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("flick")))
+            .updating($touching) { _, s, _ in s = id }
             .onChanged { v in
                 guard !failed, !flown, case .second(true, let d) = v else { return }
-                if liftedID != id { lift.drag = .zero; lift.lean = 0; liftedID = id; liftedAt = Date(); movedAt = nil; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.04 } }
-                if let d, movedAt == nil, abs(d.translation.width) > 10 || abs(d.translation.height) > 10 { movedAt = Date() }
-                if let d {
-                    lift.drag = d.translation
-                    lift.lean = max(-6, min(6, Double(d.velocity.width) / 200 + Double(d.translation.width) / 60))
+                if hands.id != id {
+                    // Lifted now: the hold's clock ran out with the finger still within the slop.
+                    hands.id = id; hands.base = Date().addingTimeInterval(-rules.hold); hands.hand = FlickHand(rules)
+                    _ = hands.hand.down(.zero, at: 0)
+                    handle(hands.hand.held(at: rules.hold), id: id, scale: 1.04)
                 }
+                if let d { follow(d, id: id) }
             }
             .onEnded { v in
-                guard liftedID == id else { return }
-                if case .second(true, let d?) = v, -d.translation.height >= 90 || d.velocity.height <= -500, Self.meantThrow(liftedAt: liftedAt, movedAt: movedAt) {
-                    // The pick, from where the row is now.
-                    rects.map[id] = (rects.map[id] ?? .zero).offsetBy(dx: d.translation.width, dy: d.translation.height)
-                    throwV = d.velocity
-                    send()
-                } else if Self.longTap(v) {
-                    // A press that ran long and was let go where it landed is a tap, and a tap is the pick, however long
-                    // it was held: lifted and put straight back, it did nothing, and a deliberate press read as a dead
-                    // row. Carried off and let go is the way to change his mind, as on any button.
-                    settledAt = Date()
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { liftedID = nil; lift.drag = .zero; lift.lean = 0; liftScale = 1 }
-                    send()
-                } else { settle() }
+                guard hands.id == id else { return }
+                var d: DragGesture.Value?
+                if case .second(true, let dv) = v { d = dv }
+                let t = d.map { $0.time.timeIntervalSince(hands.base) } ?? Date().timeIntervalSince(hands.base)
+                let at = d.map { CGPoint(x: $0.translation.width, y: $0.translation.height) } ?? .zero
+                finish(hands.hand.up(at, at: t), id: id, translation: d?.translation ?? .zero, send: send)
             }
     }
-    // Let go without having moved it (10 pt, the system's own slop for a tap): a tap, not a row picked up and put back.
-    static func longTap(_ v: SequenceGesture<LongPressGesture, DragGesture>.Value) -> Bool {
-        guard case .second(true, let d) = v else { return false }
-        guard let d else { return true }
-        return abs(d.translation.width) < 10 && abs(d.translation.height) < 10
+    // The card: nothing under it scrolls, so it's in the hand from the first touch; the throw, the put-back and the tap
+    // are the list's own.
+    func cardGesture(send: @escaping () -> Void) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named("flick"))
+            .updating($touching) { _, s, _ in s = "card" }
+            .onChanged { d in
+                guard !flown else { return }
+                if hands.id != "card" {
+                    hands.id = "card"; hands.base = d.time; hands.hand = FlickHand(.card)
+                    handle(hands.hand.down(.zero, at: 0), id: "card", scale: 1.05)
+                }
+                follow(d, id: "card")
+            }
+            .onEnded { d in
+                guard !flown, hands.id == "card" else { return }
+                let at = CGPoint(x: d.translation.width, y: d.translation.height)
+                finish(hands.hand.up(at, at: d.time.timeIntervalSince(hands.base)), id: "card", translation: d.translation, send: send)
+            }
     }
-    // A throw is meant only when the row was in the hand first: still for a beat (80 ms) after it lifted, or carried for
-    // a quarter of a second. A thumb resting on a row and then swiping the list up lifts the row just as the swipe
-    // begins; that's a scroll that came late, and it must never send a stream to the TV.
-    static func meantThrow(liftedAt: Date, movedAt: Date?) -> Bool {
-        guard let movedAt else { return false }
-        return movedAt.timeIntervalSince(liftedAt) >= 0.08 || Date().timeIntervalSince(liftedAt) >= 0.25
+    // The finger moved: the thing follows it exactly, leaning the way it goes, and says when letting go would send it.
+    func follow(_ d: DragGesture.Value, id: String) {
+        guard liftedID == id else { return }
+        handle(hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: d.time.timeIntervalSince(hands.base)), id: id)
+        lift.drag = d.translation
+        let card = id == "card"
+        lift.lean = max(card ? -8 : -6, min(card ? 8 : 6, Double(d.velocity.width) / (card ? 180 : 200) + Double(d.translation.width) / (card ? 50 : 60)))
     }
-    // Let go short of a throw: back to rest, with one soft touch.
-    func settle() {
+    func handle(_ events: [FlickHand.Event], id: String, scale: CGFloat = 1.04) {
+        for e in events {
+            switch e {
+            case .lifted:
+                lift.drag = .zero; lift.lean = 0; lift.armed = false; liftedID = id
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = scale }
+            case .armed(let on):
+                // Past the line: let go now and it goes. Felt once, as a detent, and seen as its edge lit all round.
+                lift.armed = on
+                if on { FlickHaptic.detent() }
+            case .yielded: break
+            }
+        }
+    }
+    func finish(_ outcome: FlickHand.Outcome, id: String, translation: CGSize, send: () -> Void) {
+        hands.id = nil
+        switch outcome {
+        case .thrown:
+            // The pick, from where the thing is now, leaving the way the finger did.
+            rects.map[id] = (rects.map[id] ?? .zero).offsetBy(dx: translation.width, dy: translation.height)
+            let v = hands.hand.velocity
+            throwV = CGSize(width: v.dx, height: v.dy)
+            if id == "card" { FlickHaptic.caught() }
+            send()
+        case .longTap:
+            // A press that ran long and was let go where it landed is a tap, and a tap is the pick, however long it was
+            // held: lifted and put straight back, it did nothing, and a deliberate press read as a dead row.
+            settledAt = Date()
+            throwV = .zero
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { liftedID = nil; lift.drag = .zero; lift.lean = 0; lift.armed = false; liftScale = 1 }
+            if id == "card" { FlickHaptic.caught() }
+            send()
+        case .putBack: settle()
+        case .cancelled, .none, .quickTap: if liftedID == id { settle(quiet: true) }
+        }
+    }
+    // Let go short of a throw: back to rest, with one soft touch (none when the system took the touch away).
+    func settle(quiet: Bool = false) {
         settledAt = Date()
-        FlickHaptic.settle()
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.6)) { liftedID = nil; lift.drag = .zero; lift.lean = 0; liftScale = 1 }
+        if !quiet { FlickHaptic.settle() }
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.6)) { liftedID = nil; lift.drag = .zero; lift.lean = 0; lift.armed = false; liftScale = 1 }
+    }
+    // The tap iOS reports with the release of a lifted row (put back, or already sent by the hand) is that release, not
+    // a second pick.
+    var handFree: Bool { liftedID == nil && Date().timeIntervalSince(settledAt) > 0.3 }
+    func chooseOnTV() {
+        guard !flown else { return }
+        stream = nil; choseOnTV = true; FlickHaptic.caught(); send(from: rects.map["tv"])
     }
     // A stream picked: felt at once, and sent. What's already on the TV is never sent again; the pick goes straight to
     // the Remote (Richard, 2026-11-05: "the episode restarted i think because of the app").
@@ -1061,8 +1128,12 @@ struct FlickScreen: View {
         // the phone's own share of "the stremio streams take much too long" is measured on his phone (2026-11-07).
         if !again, openedAt != .distantPast, !leaving {
             let now = Date()
-            var e: [String: Any] = ["name": "streams-shown", "at": now.timeIntervalSince1970 * 1000, "sinceOpen": Int(now.timeIntervalSince(openedAt) * 1000), "count": found.count]
-            if let p = StreamCache.pressedAt, now.timeIntervalSince(p) < 30 { e["sincePress"] = Int(now.timeIntervalSince(p) * 1000) }
+            // `sinceAsk` is his wait: from the moment this list was wanted (the page opening on it, or an episode picked).
+            // `sinceOpen` counts from the page opening, so on a show it includes however long he read the episodes: the
+            // "28.7 s" and "33.2 s" of 07:24Z on 11-11 were 0.53 s and 0.92 s lookups after 28 s of choosing an episode.
+            var e: [String: Any] = ["name": "streams-shown", "at": now.timeIntervalSince1970 * 1000, "sinceOpen": Int(now.timeIntervalSince(openedAt) * 1000),
+                                    "sinceAsk": Int(now.timeIntervalSince(asked) * 1000), "video": video, "count": found.count, "cached": quick]
+            if let p = StreamCache.pressedAt, now.timeIntervalSince(p) < 30, now.timeIntervalSince(asked) >= now.timeIntervalSince(p) - 0.5 { e["sincePress"] = Int(now.timeIntervalSince(p) * 1000) }
             Task { _ = try? await TVBridge.post("timing", ["events": [e]], timeout: 10) }
         }
     }
@@ -1083,23 +1154,7 @@ struct FlickScreen: View {
                 .animation(.spring(response: 0.3, dampingFraction: 0.7), value: up)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map["card"] = $0 }
                 // In the hand from the first touch: nothing under it scrolls, so no hold is needed.
-                .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("flick"))
-                    .onChanged { d in
-                        guard !flown else { return }
-                        if liftedID != "card" { liftedID = "card"; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.05 } }
-                        lift.drag = d.translation
-                        lift.lean = max(-8, min(8, Double(d.velocity.width) / 180 + Double(d.translation.width) / 50))
-                    }
-                    .onEnded { d in
-                        guard !flown else { return }
-                        let still = abs(d.translation.width) < 6 && abs(d.translation.height) < 6
-                        if still || -d.translation.height >= 90 || d.velocity.height <= -500 {
-                            rects.map["card"] = (rects.map["card"] ?? .zero).offsetBy(dx: d.translation.width, dy: d.translation.height)
-                            throwV = still ? .zero : d.velocity
-                            FlickHaptic.caught()
-                            send(from: rects.map["card"])
-                        } else { settle() }
-                    })
+                .gesture(cardGesture { send(from: rects.map["card"]) })
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityHint("Sends this to the TV")
@@ -1150,7 +1205,11 @@ struct FlickScreen: View {
             try? await Task.sleep(nanoseconds: 800_000_000)
             liftedID = "card"; withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = 1.05 }
             try? await Task.sleep(nanoseconds: 350_000_000)
-            for i in 1...24 { lift.drag = CGSize(width: 10 * sin(CGFloat(i) / 24 * .pi), height: -9 * CGFloat(i)); try? await Task.sleep(nanoseconds: 16_000_000) }
+            for i in 1...24 {
+                lift.drag = CGSize(width: 10 * sin(CGFloat(i) / 24 * .pi), height: -9 * CGFloat(i))
+                if !lift.armed, lift.drag.height <= -FlickHand.Rules.card.carry { lift.armed = true; FlickHaptic.detent() }
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
             rects.map["card"] = (rects.map["card"] ?? .zero).offsetBy(dx: lift.drag.width, dy: lift.drag.height)
             FlickHaptic.caught(); send(from: rects.map["card"])
             return
@@ -1169,6 +1228,7 @@ struct FlickScreen: View {
         for i in 1...24 {
             lift.drag = CGSize(width: 12 * sin(CGFloat(i) / 24 * .pi), height: -8 * CGFloat(i))
             lift.lean = Double(cos(CGFloat(i) / 24 * .pi)) * 3
+            if !lift.armed, lift.drag.height <= -FlickHand.Rules.list.carry { lift.armed = true; FlickHaptic.detent() }
             try? await Task.sleep(nanoseconds: 16_000_000)
         }
         rects.map[first.id] = (rects.map[first.id] ?? .zero).offsetBy(dx: lift.drag.width, dy: lift.drag.height)
@@ -1620,6 +1680,14 @@ final class RectBox { var map: [String: CGRect] = [:] }
 @Observable final class LiftBox {
     var drag = CGSize.zero
     var lean = 0.0
+    // Past the line: let go now and it goes to the TV.
+    var armed = false
+}
+// The hand on the row or the card, and when its clock started.
+final class HandBox {
+    var hand = FlickHand(.list)
+    var id: String?
+    var base = Date()
 }
 // A row or the card in the hand: its shadow, the light round its edge as it rises, its swell, its lean and its place
 // under the finger. At rest it reads nothing from the box.
@@ -1637,7 +1705,8 @@ struct LiftedLook: ViewModifier {
         let shade = up ? raised : rest
         content
             .shadow(color: .black.opacity(shade.0), radius: shade.1, y: shade.2)
-            .overlay { RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(TVLook.accent.opacity(up ? 0.8 * min(1, rise / 200) : 0), lineWidth: 1.5) }
+            // Lit as it rises, and all the way round once letting go would send it, so the line is seen as well as felt.
+            .overlay { RoundedRectangle(cornerRadius: corner, style: .continuous).strokeBorder(TVLook.accent.opacity(up ? (lift.armed ? 1 : 0.45 * min(1, rise / 80)) : 0), lineWidth: up && lift.armed ? 2 : 1.5) }
             .scaleEffect(up ? scale + swell * min(1, rise / 260) : 1)
             .rotationEffect(.degrees(up ? lift.lean : 0))
             .offset(drag)

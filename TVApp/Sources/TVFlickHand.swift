@@ -1,0 +1,274 @@
+import Foundation
+import CoreGraphics
+
+// The flick, as one hand on one thing that can go to the TV: every row and card that sends reads the finger through this,
+// so the lift, the throw, the put-back and the tap are the same everywhere (Richard, 2026-11-11: "flicking isnt working
+// consistently it should be the basis of everything"). Plain values in, plain answers out, no views: the scripted hands
+// at the foot drive it exactly as a finger does, and the build and this Mac run them.
+//
+// In a list the thing is lifted after a hold (a plain swipe scrolls, never a throw: the 2026-11-10 ruling); a card with
+// nothing under it to scroll is in the hand from the first touch. From the lift on it follows the finger; let go upward,
+// carried far enough or thrown fast enough, it goes to the TV; let go where it was lifted, it was a press that ran long,
+// and a press is the pick; let go anywhere else, it goes back.
+struct FlickHand {
+    struct Rules: Equatable {
+        // How long the finger rests before the thing is in the hand. 0: at once.
+        var hold: Double
+        // Moved this far before the hold is done: a scroll, and the hand lets go of it.
+        var slop: CGFloat = 10
+        // Let go within this of where it was lifted: a press that ran long, so a tap.
+        var still: CGFloat = 10
+        // Carried up this far and let go, at any speed: thrown.
+        var carry: CGFloat = 80
+        // Or flung up this fast (points a second, the fastest stretch of the last tenth of a second, so a finger that
+        // slows as it leaves still counts) having risen at least `flingRise`.
+        var fling: CGFloat = 350
+        var flingRise: CGFloat = 20
+        // Up, not sideways: the rise is at least this share of the sideways travel (about 60° either side of straight up).
+        var steep: CGFloat = 0.6
+        // In a list, a throw is only meant when the thing was in the hand first: still for this long after the lift, or
+        // carried at least `carried` in all. A thumb resting on a row and then swiping the list up lifts the row just as
+        // the swipe begins; that's a scroll that came late, and it never sends anything.
+        var beat: Double = 0.08
+        var carried: Double = 0.25
+        static let list = Rules(hold: 0.3)
+        static let card = Rules(hold: 0, beat: 0, carried: 0)
+    }
+    enum Phase: Equatable { case idle, pressing, lifted, yielded, done }
+    // What the thing does while the finger is on it.
+    enum Event: Equatable {
+        case lifted
+        // Let go now and it goes (true), or it no longer would (false): felt as a detent, seen as its edge lit.
+        case armed(Bool)
+        // The finger moved before the hold: the list's.
+        case yielded
+    }
+    // How it ended.
+    enum Outcome: Equatable {
+        // Let go before the hold: an ordinary tap, the button's own.
+        case quickTap
+        // Lifted and let go where it was: a tap that ran long, the pick.
+        case longTap
+        case thrown
+        case putBack
+        // Taken away by the system (a call, the scroll view, the view gone): back to rest, silently.
+        case cancelled
+        // Nothing of this hand's: it was a scroll, or it had already ended.
+        case none
+    }
+    let rules: Rules
+    private(set) var phase = Phase.idle
+    private var downAt = 0.0, downPoint = CGPoint.zero
+    private(set) var liftedAt = 0.0
+    private var liftPoint = CGPoint.zero
+    private var movedAt: Double?
+    private var samples: [(t: Double, p: CGPoint)] = []
+    private(set) var armed = false
+    init(_ rules: Rules) { self.rules = rules }
+
+    // Where the finger has it, from where it was lifted.
+    var offset: CGSize {
+        guard let last = samples.last, phase == .lifted || phase == .done else { return .zero }
+        return CGSize(width: last.p.x - liftPoint.x, height: last.p.y - liftPoint.y)
+    }
+    // How the finger was moving as it left: the fastest upward stretch over the last tenth of a second, in points a
+    // second (negative is up), with its sideways part.
+    var velocity: CGVector {
+        guard let last = samples.last else { return .zero }
+        var best = CGVector.zero
+        // Every stretch of at least 30 ms that ends in the last 150 ms, the fastest upward one.
+        for i in samples.indices.reversed() {
+            let end = samples[i]
+            if last.t - end.t > 0.15 { break }
+            guard let j = samples[..<i].lastIndex(where: { end.t - $0.t >= 0.03 }) else { continue }
+            let dt = end.t - samples[j].t
+            let v = CGVector(dx: (end.p.x - samples[j].p.x) / dt, dy: (end.p.y - samples[j].p.y) / dt)
+            if v.dy < best.dy { best = v }
+        }
+        // Over the last two samples too, and the whole tenth, so a slow steady carry still has its speed.
+        if best == .zero, let first = samples.last(where: { last.t - $0.t > 0.012 }) {
+            let dt = last.t - first.t
+            best = CGVector(dx: (last.p.x - first.p.x) / dt, dy: (last.p.y - first.p.y) / dt)
+        }
+        return best
+    }
+
+    mutating func down(_ p: CGPoint, at t: Double) -> [Event] {
+        self = FlickHand(rules)
+        phase = .pressing; downAt = t; downPoint = p
+        samples = [(t, p)]
+        return rules.hold <= 0 ? lift(at: t) : []
+    }
+    // The hold's own clock: the finger has rested long enough without moving away.
+    mutating func held(at t: Double) -> [Event] {
+        guard phase == .pressing, t - downAt >= rules.hold - 0.001 else { return [] }
+        return lift(at: t)
+    }
+    mutating func move(_ p: CGPoint, at t: Double) -> [Event] {
+        switch phase {
+        case .pressing:
+            if hypot(p.x - downPoint.x, p.y - downPoint.y) > rules.slop { phase = .yielded; return [.yielded] }
+            samples.append((t, p))
+            // The hold's clock may have been missed (a busy frame): the finger's own time says it's done.
+            return t - downAt >= rules.hold ? lift(at: t) : []
+        case .lifted:
+            samples.append((t, p))
+            if samples.count > 40 { samples.removeFirst(samples.count - 40) }
+            if movedAt == nil, hypot(p.x - liftPoint.x, p.y - liftPoint.y) > rules.still { movedAt = t }
+            let now = wouldThrow(at: t)
+            if now != armed { armed = now; return [.armed(now)] }
+            return []
+        default: return []
+        }
+    }
+    mutating func up(_ p: CGPoint, at t: Double) -> Outcome {
+        switch phase {
+        case .pressing:
+            phase = .done
+            return .quickTap
+        case .lifted:
+            _ = move(p, at: t)
+            phase = .done
+            if wouldThrow(at: t) { return .thrown }
+            let o = offset
+            if abs(o.width) < rules.still && abs(o.height) < rules.still && movedAt == nil { return .longTap }
+            return .putBack
+        default:
+            return .none
+        }
+    }
+    mutating func cancel() -> Outcome {
+        let was = phase
+        phase = .done
+        return was == .lifted ? .cancelled : .none
+    }
+
+    private mutating func lift(at t: Double) -> [Event] {
+        phase = .lifted; liftedAt = t
+        liftPoint = samples.last?.p ?? downPoint
+        samples = [(t, liftPoint)]
+        movedAt = nil; armed = false
+        return [.lifted]
+    }
+    // Let go now: would it go?
+    func wouldThrow(at t: Double) -> Bool {
+        guard phase == .lifted || phase == .done else { return false }
+        let o = offset
+        let rise = -o.height
+        guard rise > 0, rise >= rules.steep * abs(o.width) else { return false }
+        let v = velocity
+        let flung = -v.dy >= rules.fling && rise >= rules.flingRise && -v.dy >= rules.steep * abs(v.dx)
+        guard rise >= rules.carry || flung else { return false }
+        return meant(at: t)
+    }
+    private func meant(at t: Double) -> Bool {
+        if rules.hold <= 0 { return true }
+        guard let movedAt else { return false }
+        return movedAt - liftedAt >= rules.beat || t - liftedAt >= rules.carried
+    }
+}
+
+// MARK: - Scripted hands
+// Each is a finger's whole touch, sample by sample, and what the flick must make of it. A line with "pass":false is a
+// failure the build reports; ci/flick-hands/main.swift runs the same scripts on the Mac.
+extension FlickHand {
+    enum Step { case down(CGFloat, CGFloat), move(CGFloat, CGFloat), held, up(CGFloat, CGFloat), cancel }
+    struct Script { let name: String; let rules: Rules; let steps: [(Double, Step)]; let want: Outcome; let what: String; var events: [Event]? = nil }
+    // A straight stroke from (x0, y0) by (dx, dy) over `ms`, at 120 samples a second.
+    static func stroke(from t0: Double, _ x0: CGFloat, _ y0: CGFloat, by dx: CGFloat, _ dy: CGFloat, ms: Double, ease: Bool = false) -> [(Double, Step)] {
+        let n = max(1, Int(ms / 8.33))
+        return (1...n).map { i in
+            var f = CGFloat(i) / CGFloat(n)
+            // Easing out: fast at first, slowing to a stop as it leaves.
+            if ease { f = 1 - (1 - f) * (1 - f) }
+            return (t0 + Double(i) * ms / 1000 / Double(n), .move(x0 + dx * f, y0 + dy * f))
+        }
+    }
+    static let scripts: [Script] = {
+        let L = Rules.list, C = Rules.card
+        var s: [Script] = []
+        // Lists: the hold, then the throw.
+        s.append(Script(name: "hold-then-carry-up", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 6, -140, ms: 300) + [(0.76, .up(206, 260))],
+                        want: .thrown, what: "held, then carried 140 pt up: sent", events: [.lifted, .armed(true)]))
+        s.append(Script(name: "hold-then-short-fast-flick", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.42, 200, 400, by: 4, -45, ms: 80) + [(0.51, .up(204, 355))],
+                        want: .thrown, what: "held, then a short sharp flick of 45 pt in 80 ms: sent (was put back: under 90 pt)"))
+        s.append(Script(name: "flick-that-slows-as-it-leaves", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.42, 200, 400, by: 0, -60, ms: 130, ease: true) + [(0.58, .up(200, 340))],
+                        want: .thrown, what: "a flick that eases to a stop before the finger lifts: its fastest stretch counts, sent"))
+        s.append(Script(name: "carry-up-then-pause", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.4, 200, 400, by: 0, -120, ms: 300) + [(1.2, .up(200, 280))],
+                        want: .thrown, what: "carried well up, held there, then let go: sent"))
+        s.append(Script(name: "diagonal-throw", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 90, -120, ms: 200) + [(0.66, .up(290, 280))],
+                        want: .thrown, what: "thrown up and to the side (37° off upright): sent"))
+        // Lists: never steal a scroll.
+        s.append(Script(name: "plain-swipe-up", rules: L,
+                        steps: [(0, .down(200, 400))] + stroke(from: 0.02, 200, 400, by: 0, -200, ms: 150) + [(0.18, .up(200, 200))],
+                        want: .none, what: "a plain swipe up the list: a scroll, nothing lifted, nothing sent", events: [.yielded]))
+        s.append(Script(name: "slow-drag-starting-early", rules: L,
+                        steps: [(0, .down(200, 400))] + stroke(from: 0.05, 200, 400, by: 0, -60, ms: 400) + [(0.46, .up(200, 340))],
+                        want: .none, what: "a slow scroll that starts before the hold: the list's"))
+        s.append(Script(name: "late-scroll-after-resting-thumb", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.31, 200, 400, by: 0, -160, ms: 120) + [(0.44, .up(200, 240))],
+                        want: .putBack, what: "a resting thumb that swipes the moment the row lifts: a scroll come late, never sent"))
+        s.append(Script(name: "jitter-under-slop", rules: L,
+                        steps: [(0, .down(200, 400)), (0.1, .move(203, 404)), (0.2, .move(198, 397)), (0.3, .held), (0.5, .up(201, 402))],
+                        want: .longTap, what: "a press that wobbles a little and runs long: a tap, the pick"))
+        // Put back.
+        s.append(Script(name: "hold-then-drag-down", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 0, 90, ms: 250) + [(0.72, .up(200, 490))],
+                        want: .putBack, what: "lifted and pulled down: back where it was, nothing sent"))
+        s.append(Script(name: "hold-then-sideways", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 140, -30, ms: 250) + [(0.72, .up(340, 370))],
+                        want: .putBack, what: "lifted and carried sideways: back, nothing sent"))
+        s.append(Script(name: "up-then-back-down", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 0, -120, ms: 200)
+                            + stroke(from: 0.65, 200, 280, by: 0, 115, ms: 250) + [(0.95, .up(200, 395))],
+                        want: .putBack, what: "carried up past the line, then brought back down: changed his mind, not sent",
+                        events: [.lifted, .armed(true), .armed(false)]))
+        s.append(Script(name: "cancelled-while-lifted", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.4, 200, 400, by: 0, -50, ms: 100) + [(0.55, .cancel)],
+                        want: .cancelled, what: "the system takes the touch while it's in the hand: put back, never left floating"))
+        s.append(Script(name: "quick-tap", rules: L,
+                        steps: [(0, .down(200, 400)), (0.09, .up(200, 400))],
+                        want: .quickTap, what: "a quick tap: the row's own button, the pick"))
+        // The card: in the hand from the first touch, the same throw.
+        s.append(Script(name: "card-tap", rules: C,
+                        steps: [(0, .down(200, 500)), (0.1, .up(201, 500))],
+                        want: .longTap, what: "a tap on the card: sent"))
+        s.append(Script(name: "card-flick", rules: C,
+                        steps: [(0, .down(200, 500))] + stroke(from: 0.02, 200, 500, by: 0, -50, ms: 90) + [(0.12, .up(200, 450))],
+                        want: .thrown, what: "the card flicked up at once, no hold: sent"))
+        s.append(Script(name: "card-pull-down", rules: C,
+                        steps: [(0, .down(200, 500))] + stroke(from: 0.02, 200, 500, by: 0, 80, ms: 200) + [(0.25, .up(200, 580))],
+                        want: .putBack, what: "the card pulled down: back"))
+        s.append(Script(name: "card-slow-small-lift", rules: C,
+                        steps: [(0, .down(200, 500))] + stroke(from: 0.02, 200, 500, by: 0, -40, ms: 600) + [(0.64, .up(200, 460))],
+                        want: .putBack, what: "the card nudged up 40 pt, slowly: back, not sent"))
+        return s
+    }()
+    // Each script through a fresh hand: one line of what it did, one of whether that was right.
+    static func runScripts() -> [String] {
+        var lines: [String] = []
+        for script in scripts {
+            var h = FlickHand(script.rules)
+            var events: [Event] = []
+            var outcome = Outcome.none
+            for (t, step) in script.steps {
+                switch step {
+                case .down(let x, let y): events += h.down(CGPoint(x: x, y: y), at: t)
+                case .move(let x, let y): events += h.move(CGPoint(x: x, y: y), at: t)
+                case .held: events += h.held(at: t)
+                case .up(let x, let y): outcome = h.up(CGPoint(x: x, y: y), at: t)
+                case .cancel: outcome = h.cancel()
+                }
+            }
+            let v = h.velocity
+            let pass = outcome == script.want && (script.events == nil || script.events == events)
+            lines.append(#"{"case":"\#(script.name)","out":"\#(outcome)","events":"\#(events.map { "\($0)" }.joined(separator: " "))","vy":\#(Int(v.dy)),"assert":"\#(script.what)","pass":\#(pass)}"#)
+        }
+        return lines
+    }
+}

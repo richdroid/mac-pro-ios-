@@ -34,6 +34,14 @@ final class StreamCache {
         if s?.isEmpty != false, entries[k]?.task == task { entries[k] = nil }
         return s
     }
+    // An episode row under a finger ("tt…:s:e"): its list asked for now, so the tap that follows finds it on its way
+    // (an episode's list not asked for ahead took 0.5–1.3 s after the tap, 07:17–07:24Z on 11-11).
+    func prefetch(episode video: String) {
+        guard let imdb = video.split(separator: ":").first.map(String.init), imdb.hasPrefix("tt"), video.contains(":") else { return }
+        let k = Self.key("series", imdb, video)
+        if let e = entries[k], Date().timeIntervalSince(e.at) < Self.fresh { return }
+        Task { _ = await streams(type: "series", imdb: imdb, video: video) }
+    }
     // A list that turned out stale: the next look asks afresh.
     func forget(type: String, imdb: String, video: String) { entries[Self.key(type, imdb, video)] = nil }
     // Pressed on a card: a film, or an episode already named, has a list worth fetching now. A series still to have

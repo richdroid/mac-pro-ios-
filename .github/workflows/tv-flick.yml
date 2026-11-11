@@ -1,0 +1,129 @@
+name: TV flick checks
+# The flick's own run, for the tv-flick-everywhere branch (never main): the scripted hands through FlickHand on the Mac,
+# then the streams page and the card filmed in each posture he uses, open upright first, then open flat, then folded.
+# Real touches through Device Hub where it can make them (a tap, a long press, a swipe up the list); the hold-and-throw
+# itself is the app's scripted pose (Device Hub can't rest a finger before it drags). Published to the tv-flick release.
+on:
+  push:
+    branches: [tv-flick-everywhere]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tv-flick
+  cancel-in-progress: true
+jobs:
+  flick:
+    runs-on: xcode-27
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Scripted hands
+        run: |
+          mkdir -p dist
+          swiftc TVApp/Sources/TVFlickHand.swift ci/flick-hands/main.swift -o /tmp/flick-hands
+          /tmp/flick-hands | tee dist/flick-hands.log
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+      - name: Films
+        continue-on-error: true
+        timeout-minutes: 38
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          rm -f /tmp/tv-hitches.log
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          # A pose filmed from launch: the app's own scripted hand on the streams page or the card.
+          posefilm() {
+            local name=$1 display=$2 pose=$3 tab=$4
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab $tab -pose $pose
+            sleep 16
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # A real finger on the first stream row (where the app says it is), filmed: "tap" a quick tap, "long" a press
+          # held 0.7 s and let go where it was (the pick), "swipe" a fast swipe up from the row (a scroll: nothing sent).
+          fingerfilm() {
+            local name=$1 display=$2 how=$3
+            rm -f /tmp/tv-home-applied.log
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose flick-stage
+            sleep 12
+            local at x y
+            at=$(grep -o 'what=row&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            x=${at#*x=}; x=${x%%&*}; y=${at##*y=}
+            if [ -n "$x" ] && [ -n "$y" ]; then
+              case $how in
+                tap) $D "$DEVICE" touch $x $y 0.08 || echo "touch failed" ;;
+                long) $D "$DEVICE" touch $x $y 0.7 || echo "long touch failed" ;;
+                swipe) $D "$DEVICE" drag $x $y $x 0.2 0.15 || echo "drag failed" ;;
+              esac
+            else echo "no row position for $name"; fi
+            sleep 14
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # What the mock was sent: a swipe must have sent nothing.
+            cp /tmp/tv-flick-sends.log dist/tv-$name-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$name-sends.log
+          }
+          posture() {
+            local x=$1 d=$2
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose flick-stage; sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-flick-stage$x.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            posefilm flick$x $d flick-starting 1
+            posefilm flickputback$x $d flick-putback 1
+            posefilm flicktap$x $d flick-tap 1
+            posefilm flicklink$x $d flick-link 0
+            fingerfilm finger-tap$x $d tap
+            fingerfilm finger-long$x $d long
+            fingerfilm finger-swipe$x $d swipe
+          }
+          # Open upright first, the way he holds it; then open flat; then folded.
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          posture -portrait 3
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          posture -open 3
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          $D "$DEVICE" pose closed || true; sleep 5
+          posture "" 1
+          cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../flick.zip . -i '*.png' '*.log' '*.mp4' '*.txt' || zip -q ../flick.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-flick >/dev/null 2>&1 || gh release create tv-flick --prerelease --title "TV flick checks" --notes "Work in progress on the flick: hands, shots and films from the tv-flick-everywhere branch."
+          for f in flick.zip status.txt; do
+            for i in 1 2 3; do gh release upload tv-flick "$f" --clobber && break; sleep 15; done
+          done
