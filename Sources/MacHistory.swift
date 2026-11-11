@@ -195,17 +195,18 @@ struct HistoryView: View {
             }
         }
         .chartYAxis {
+            // 10 pt between the plot and its figures, so the "now" dot never touches one (designer, 2026-11-11).
             // Round steps for sizes and speeds ("0, 100, 200, 300 GB"), not the chart's own (279, 186, 93) (designer,
             // 2026-11-11).
             if let ticks {
                 AxisMarks(position: .trailing, values: ticks) { v in
                     AxisGridLine().foregroundStyle(.white.opacity(0.1))
-                    AxisValueLabel { if let d = v.as(Double.self) { Text(metric.axisText(d)).font(.caption2).monospacedDigit() } }
+                    AxisValueLabel(horizontalSpacing: 10) { if let d = v.as(Double.self) { Text(metric.axisText(d)).font(.caption2).monospacedDigit() } }
                 }
             } else {
                 AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { v in
                     AxisGridLine().foregroundStyle(.white.opacity(0.1))
-                    AxisValueLabel { if let d = v.as(Double.self) { Text(metric.text(d)).font(.caption2).monospacedDigit() } }
+                    AxisValueLabel(horizontalSpacing: 10) { if let d = v.as(Double.self) { Text(metric.text(d)).font(.caption2).monospacedDigit() } }
                 }
             }
         }
