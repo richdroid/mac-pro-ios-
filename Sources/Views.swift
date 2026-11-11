@@ -138,7 +138,11 @@ struct StatusBarTopReader: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(\.statusBarTop, top)
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { if $0 != top { top = $0 } }
+            // The system gives the new inset as a turn ends; the title's 14 pt step then eases rather than jumps.
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { v in
+                guard v != top else { return }
+                if (v < 20) != (top < 20) { withAnimation(Motion.quick) { top = v } } else { top = v }
+            }
     }
 }
 private struct TopEdgeUnderKey: EnvironmentKey { static let defaultValue: (Int, Bool) -> Void = { _, _ in } }

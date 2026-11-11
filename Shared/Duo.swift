@@ -372,7 +372,11 @@ struct FoldSplit<L: View, R: View>: View {
                     // Turned into a posture this page has a split for already: that split stands until a different reading
                     // has held for 0.4 s. Mid-turn the crease reads half-way (0.50) for a frame or two, and the panes moved
                     // to it and back (designer, resize regate: 0.548, 0.500, 0.548 in one turn).
-                    if open, let saved = FoldSeen.bySize[key], saved != read {
+                    // A size of page not seen before counts too (mid-turn the page passes through sizes of its own, and one
+                    // read half-way there was taken as that size's split, bd75948): whatever the panes are using stays
+                    // until the new reading has lasted.
+                    let current = (held?.key == key ? held?.split : nil) ?? FoldSeen.bySize[key] ?? FoldSeen.last
+                    if open, let saved = current, saved != read {
                         pending.read = read
                         pending.task?.cancel()
                         pending.task = Task { @MainActor in
