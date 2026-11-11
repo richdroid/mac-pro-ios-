@@ -469,6 +469,8 @@ struct FlickCardButton: View {
     var hasInfo: Bool { source == .stremio && !item.isYouTube && item.stremioRef != nil }
     // What a tap on a card does; the build's real-data flows tap through here too.
     @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil) {
+        // The tap iOS reports with the release of a card that was held (thrown, put back, or let go as a tap) is that.
+        if Date().timeIntervalSince(ShelfHand.shared.handledAt) < 0.35 { return }
         if model.isOnTV(item, source) { model.showOnRemote(); return }
         if item.isYouTube {
             // A YouTube video from Continue watching: thrown like anything else, and on the TV it opens in YouTube where
@@ -488,6 +490,8 @@ struct FlickCardButton: View {
             .buttonStyle(PressCard(onPress: source == .stremio && !item.isYouTube ? { [model] in if !model.isOnTV(item, source) { StreamCache.shared.prefetch(item); Prepare.arm() } } : nil))
             // Outside the press's own squeeze, so the measure never moves with what it measures.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
+            // Held, it lifts off the shelf; thrown up, it goes to the TV (ShelfFlick, the streams page's own hand).
+            .modifier(ShelfFlick(item: item, source: source, width: width, rect: { [place] in place.rect ?? .zero }))
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
             // The details are a pushed page with the system's Back, never a sheet (2026-11-08: the sheet sat inset with a
             // rounded corner and no Back, folded). On a page pushed by an item (an app's page) it opens through that

@@ -232,6 +232,8 @@ struct RootView: View {
                 // Opening Playing shows what's on now, not what was on at the last look.
                 if t == 2 { Task { await model.load() } }
             }
+            // A card held on a shelf, over everything, where the finger has it (ShelfFlick).
+            .overlay { ShelfLiftOverlay() }
             // Over everything, side bar included, and edge to edge. Not a presented screen: the system slides those up
             // from the bottom, a blurred panel with a hard top edge. The flick fades its own way in and out.
             .overlay {
@@ -2765,6 +2767,7 @@ struct PlayingTab: View {
 struct FilmCard: View {
     @Environment(TVModel.self) var model
     let film: Film
+    @State private var place = FrameBox()
     var body: some View {
         Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio) } label: {
             VStack(alignment: .leading, spacing: 6) {
@@ -2777,6 +2780,8 @@ struct FilmCard: View {
                 .frame(width: 118, alignment: .leading)
             }
         }.buttonStyle(PressCard()).accessibilityLabel(film.title)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
+        .modifier(ShelfFlick(item: film.media, source: .stremio, width: 118, rect: { [place] in place.rect ?? .zero }))
     }
 }
 struct FilmRow: View {

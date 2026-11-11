@@ -102,6 +102,26 @@ jobs:
             # What the mock was sent: a swipe must have sent nothing.
             cp /tmp/tv-flick-sends.log dist/tv-$name-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$name-sends.log
           }
+          # A card on a shelf, held and thrown with a real finger (Watch, tab 3, at a fixed place: the first card of the
+          # first shelf), and the same card held and put back. What the stand-in Mac was sent says whether it went.
+          shelffilm() {
+            local name=$1 display=$2 x=$3 y=$4 how=$5
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 3
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-start.png
+            case $how in
+              throw) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.12" | bc -l) 0.18 0 || echo "path failed" ;;
+              back) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.1" | bc -l) 0.25 0 $x $y 0.3 0 || echo "path failed" ;;
+            esac
+            sleep 14
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            cp /tmp/tv-flick-sends.log dist/tv-$name-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$name-sends.log
+          }
           posture() {
             local x=$1 d=$2
             curl -s $M/fnormal/reset > /dev/null
@@ -116,6 +136,8 @@ jobs:
             fingerfilm finger-long$x $d long
             fingerfilm finger-swipe$x $d swipe
             for H in shortflick easeflick carry backdown latescroll; do fingerfilm finger-$H$x $d $H; done
+            shelffilm shelf-throw$x $d 0.15 0.33 throw
+            shelffilm shelf-back$x $d 0.15 0.33 back
           }
           # Open upright first, the way he holds it; then open flat; then folded.
           $D "$DEVICE" pose open; sleep 5

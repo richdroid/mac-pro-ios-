@@ -31,6 +31,10 @@ struct FlickTarget: Identifiable {
     // "Choose another" after a start that failed: straight to the streams, with the ones that didn't start set apart.
     var streamsFirst = false
     var avoid: Set<String> = []
+    // Thrown from a card where it lives (a shelf, a search result, Continue watching), with the throw's speed: the flick
+    // screen sends it at once rather than waiting for a pick, under the lift's own receipt id.
+    var thrown: CGSize? = nil
+    var receiptID: String? = nil
     // A link pasted or typed: a plain card naming the site and, once fetched, the page (the 2026-11-10 ruling: a link
     // flicks like anything else, never straight to the TV).
     static func link(_ text: String) -> FlickTarget {
@@ -344,6 +348,8 @@ struct FlickScreen: View {
         else if ref?.type == "movie" || ref?.video != nil || target.streamsFirst { _step = State(initialValue: .streams) }
         else { _step = State(initialValue: .episodes) }
         _failedTokens = State(initialValue: target.avoid)
+        if let r = target.receiptID { _receiptID = State(initialValue: r) }
+        if let v = target.thrown { _throwV = State(initialValue: v) }
     }
     var item: MediaItem { target.item }
     var source: MediaSource { target.source }
@@ -518,6 +524,12 @@ struct FlickScreen: View {
         }
         if step == .streams && video && !onTV { Prepare.arm(prepareBody) }
         if Self.posed && Self.pose != "streams" { Task { await demo() } }
+        // Thrown from its shelf: nothing to choose (a video, a song, a link) goes now; a show with no episode named opens
+        // its page as a tap would, and the TV lets the lift's screen go.
+        if target.thrown != nil {
+            if step == .card { Task { try? await Task.sleep(nanoseconds: 34_000_000); FlickHaptic.caught(); send(from: shelfFrom) } }
+            else if step == .episodes { FlickReceipt.cancel(receiptID) }
+        }
         if isLink && !linkLooked {
             linkLooked = true
             Task {
@@ -1111,8 +1123,10 @@ struct FlickScreen: View {
             guard let on = fileOnTV, on != s.description else { toRemoteNow(); return }
             switching = true
         }
-        send(from: rects.map[s.id] ?? rects.map["poster"])
+        send(from: target.thrown != nil ? shelfFrom : rects.map[s.id] ?? rects.map["poster"])
     }
+    // Where a card thrown from its shelf was let go, in this screen's space.
+    var shelfFrom: CGRect? { target.origin.map { $0.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y) } }
     func findStreams(again: Bool = false) async {
         guard let ref = item.stremioRef else { return }
         findingStreams = true; noStreams = false
@@ -1133,6 +1147,13 @@ struct FlickScreen: View {
         streamsQuick = quick
         if quick { streams = found } else { withAnimation { streams = found } }
         streamsAt = Date()
+        // Thrown from its shelf: the stream he'd most likely pick (Best: the top one that hasn't failed and isn't a dub),
+        // sent as if he'd thrown its row. The tap still shows the list (Richard, 2026-11-10); the throw is the flick.
+        if target.thrown != nil, !flown, !leaving, !again {
+            if let best = found.first(where: { !failedTokens.contains($0.token) && $0.stalled != true && $0.dubbed != true }) ?? found.first(where: { !failedTokens.contains($0.token) }) {
+                pick(best)
+            }
+        }
         // How long he waited for the list, from the card's press and from this page opening, into the Mac's timing log, so
         // the phone's own share of "the stremio streams take much too long" is measured on his phone (2026-11-07).
         if !again, openedAt != .distantPast, !leaving {
@@ -1909,5 +1930,188 @@ struct AppBrowse: View {
                 PageBarAction(title: "Open on TV", icon: "tv") { model.post("open", ["pkg": source.pkg]) }
             }
         }
+    }
+}
+
+// MARK: - The flick from where a thing lives
+// Every card that can go to the TV (a shelf's, a search result, Continue watching, Watch's films, Mint's albums) is
+// flicked the way a stream row is: held, it lifts off its shelf; thrown up, it goes; let go where it was, it's a tap
+// (its page); anywhere else, it goes back. The same FlickHand reads it. A tap still opens its page. The card in the hand
+// is drawn over everything (ShelfLiftOverlay), as a shelf clips whatever leaves it.
+@MainActor @Observable final class ShelfHand {
+    static let shared = ShelfHand()
+    var item: MediaItem?
+    var source = MediaSource.stremio
+    var width: CGFloat = 0
+    var rect = CGRect.zero
+    var drag = CGSize.zero
+    var lean = 0.0
+    var armed = false
+    // A tap iOS reports with the release of a held card is that release, not a second action.
+    @ObservationIgnored var handledAt = Date.distantPast
+}
+// The card in the hand, over the whole window, where the finger has it.
+struct ShelfLiftOverlay: View {
+    @State private var hand = ShelfHand.shared
+    var body: some View {
+        GeometryReader { g in
+            if let item = hand.item {
+                let o = g.frame(in: .global).origin
+                let rise = max(0, -hand.drag.height)
+                MediaCard(item: item, source: hand.source, width: hand.width)
+                    .shadow(color: .black.opacity(0.55), radius: 26, y: 18)
+                    .overlay(alignment: .top) {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(TVLook.accent.opacity(hand.armed ? 1 : 0.45 * min(1, rise / 80)), lineWidth: hand.armed ? 2 : 1.5)
+                            .frame(width: hand.width, height: hand.rect.height > 0 ? min(hand.rect.height, hand.width * 1.5) : hand.width * 1.5)
+                    }
+                    .scaleEffect(1.06 + 0.06 * min(1, rise / 240), anchor: .center)
+                    .rotationEffect(.degrees(hand.lean))
+                    .position(x: hand.rect.midX - o.x + hand.drag.width, y: hand.rect.midY - o.y + hand.drag.height)
+                    .transition(.opacity)
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+// The scroll views a held card sits in hold still while it's in the hand, as the streams page's list does.
+#if canImport(UIKit)
+final class ScrollLockBox { weak var view: UIView?; var locked: [UIScrollView] = [] }
+struct ScrollLock: UIViewRepresentable {
+    let box: ScrollLockBox
+    func makeUIView(context: Context) -> UIView { let v = UIView(); v.isUserInteractionEnabled = false; box.view = v; return v }
+    func updateUIView(_ uiView: UIView, context: Context) { box.view = uiView }
+    @MainActor static func set(_ box: ScrollLockBox, _ on: Bool) {
+        if on {
+            var v = box.view?.superview
+            while let s = v { if let sv = s as? UIScrollView, sv.panGestureRecognizer.isEnabled { sv.panGestureRecognizer.isEnabled = false; box.locked.append(sv) }; v = s.superview }
+        } else { box.locked.forEach { $0.panGestureRecognizer.isEnabled = true }; box.locked = [] }
+    }
+}
+#else
+final class ScrollLockBox {}
+struct ScrollLock: View {
+    let box: ScrollLockBox
+    var body: some View { Color.clear }
+    @MainActor static func set(_ box: ScrollLockBox, _ on: Bool) {}
+}
+#endif
+struct ShelfFlick: ViewModifier {
+    @Environment(TVModel.self) var model
+    let item: MediaItem
+    let source: MediaSource
+    let width: CGFloat
+    // Where the card is, as its button measures it.
+    let rect: () -> CGRect
+    @State private var hands = HandBox()
+    @State private var lock = ScrollLockBox()
+    @State private var up = false
+    @State private var receipt = ""
+    @GestureState private var touching = false
+    func body(content: Content) -> some View {
+        content
+            .opacity(up ? 0 : 1)
+            .background(ScrollLock(box: lock).allowsHitTesting(false))
+            .simultaneousGesture(gesture)
+            .onChange(of: touching) { _, t in
+                guard !t else { return }
+                Task { @MainActor in if up { _ = hands.hand.cancel(); end(.cancelled, translation: .zero) } }
+            }
+            .accessibilityAction(named: "Flick to the TV") { hands.hand = FlickHand(.list); throwIt(velocity: CGSize(width: 0, height: -800), translation: .zero) }
+    }
+    var gesture: some Gesture {
+        let rules = FlickHand.Rules.list
+        return LongPressGesture(minimumDuration: rules.hold, maximumDistance: rules.slop)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
+            .updating($touching) { _, s, _ in s = true }
+            .onChanged { v in
+                guard case .second(true, let d) = v, model.flicking == nil || model.flickRetired else { return }
+                if !up {
+                    hands.base = Date().addingTimeInterval(-rules.hold); hands.hand = FlickHand(rules)
+                    _ = hands.hand.down(.zero, at: 0)
+                    _ = hands.hand.held(at: rules.hold)
+                    lifted()
+                }
+                guard let d else { return }
+                for e in hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: d.time.timeIntervalSince(hands.base)) {
+                    if case .armed(let on) = e { ShelfHand.shared.armed = on; if on { FlickHaptic.detent() } }
+                }
+                ShelfHand.shared.drag = d.translation
+                ShelfHand.shared.lean = max(-6, min(6, Double(d.velocity.width) / 200 + Double(d.translation.width) / 60))
+            }
+            .onEnded { v in
+                guard up else { return }
+                var d: DragGesture.Value?
+                if case .second(true, let dv) = v { d = dv }
+                let t = d.map { $0.time.timeIntervalSince(hands.base) } ?? Date().timeIntervalSince(hands.base)
+                let at = d.map { CGPoint(x: $0.translation.width, y: $0.translation.height) } ?? .zero
+                end(hands.hand.up(at, at: t), translation: d?.translation ?? .zero)
+            }
+    }
+    // In the hand: felt, drawn over everything, the shelf held still, and the TV told what's coming.
+    func lifted() {
+        up = true
+        FlickHaptic.lift(); FlickClock.touched()
+        ScrollLock.set(lock, true)
+        let h = ShelfHand.shared
+        h.item = item; h.source = source; h.width = width; h.rect = rect(); h.drag = .zero; h.lean = 0; h.armed = false
+        if source == .stremio, !item.isYouTube { StreamCache.shared.prefetch(item) }
+        guard !model.isOnTV(item, source) else { receipt = ""; return }
+        receipt = UUID().uuidString
+        FlickReceipt.lift(Self.receipt(item, source, id: receipt), lands: source == .mint ? "mint" : nil)
+    }
+    // What the TV's receiving screen shows for this card.
+    static func receipt(_ item: MediaItem, _ source: MediaSource, id: String) -> [String: Any] {
+        let kind: String
+        if item.isYouTube { kind = "video" }
+        else if source == .mint { kind = "song" }
+        else if item.stremioRef?.type == "series" { kind = "episode" }
+        else { kind = "film" }
+        return FlickReceipt.body(id: id, title: item.title, line: item.shownSubtitle, art: item.art, kind: kind,
+                                 shape: kind == "song" ? "square" : kind == "video" ? "wide" : "poster")
+    }
+    func end(_ outcome: FlickHand.Outcome, translation: CGSize) {
+        ShelfHand.shared.handledAt = Date()
+        ScrollLock.set(lock, false)
+        switch outcome {
+        case .thrown:
+            let v = hands.hand.velocity
+            throwIt(velocity: CGSize(width: v.dx, height: v.dy), translation: translation)
+        case .longTap:
+            // Held and let go where it was: a tap, its page, as on any button.
+            put(back: false)
+            if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
+            FlickCardButton.tap(model, item, source, origin: rect())
+        default:
+            FlickHaptic.settle()
+            if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
+            put(back: true)
+        }
+    }
+    func put(back: Bool) {
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.75)) { ShelfHand.shared.drag = .zero; ShelfHand.shared.lean = 0; ShelfHand.shared.armed = false }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: back ? 300_000_000 : 0)
+            ShelfHand.shared.item = nil; up = false
+        }
+    }
+    func throwIt(velocity: CGSize, translation: CGSize) {
+        FlickHaptic.caught()
+        let from = rect().offsetBy(dx: translation.width, dy: translation.height)
+        // What's on already: the Remote, nothing sent (as a tap on it does).
+        if model.isOnTV(item, source) { ShelfHand.shared.item = nil; up = false; model.showOnRemote(); return }
+        var t: FlickTarget
+        if item.isYouTube {
+            let at = item.resume ?? 0
+            let link = "https://www.youtube.com/watch?v=\(item.id)" + (at >= 30 ? "&t=\(at)" : "")
+            t = FlickTarget(item: item, source: source, send: ("send", ["text": link]), lands: "com.google.android.youtube.tv", origin: from)
+        } else { t = FlickTarget(item: item, source: source, origin: from) }
+        t.thrown = velocity
+        t.receiptID = receipt.isEmpty ? nil : receipt
+        model.flick(t)
+        // The flick screen's own picture takes over from here, from where it was let go.
+        Task { @MainActor in try? await Task.sleep(nanoseconds: 60_000_000); ShelfHand.shared.item = nil; up = false }
     }
 }
