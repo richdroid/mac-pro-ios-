@@ -590,6 +590,9 @@ struct FlickScreen: View {
                 .opacity(0.4)
             Color.black.opacity(0.6)
         }
+        // Open upright the page stops short of the tab bar along the foot; its ground carries on down behind the bar,
+        // so no band of black sits between them.
+        .padding(.bottom, footUnder)
         // Edge to edge, except past the page's trailing edge beside the side bar, where it would cover the rail.
         .ignoresSafeArea(edges: model.flickChoosing ? [.top, .bottom, .leading] : .all)
         .opacity(arrived ? 1 : 0)
@@ -597,13 +600,18 @@ struct FlickScreen: View {
         .animation(.easeOut(duration: 0.3), value: step)
     }
 
+    // How far the ground reaches under the foot's tab bar (open upright, while choosing), as a negative padding.
+    var footUnder: CGFloat { sizeClass == .regular && !panes && model.flickChoosing ? -(max(model.footBarRoom, TVLook.footRoom) + 20) : 0 }
+
     // One control at the top of the bar, as the Duo reserves it: Back while there's a step to go back to, else Close.
     @ToolbarContentBuilder var bar: some ToolbarContent {
         if let previous, !flown {
             ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
         } else {
             ToolbarItem(placement: .cancellationAction) {
-                Button { if !flown { leave() } } label: { Label("Close", systemImage: "xmark") }
+                // Full strength, as every close in the app: in the accent on the bar's glass it read as greyed out.
+                Button { if !flown { leave() } } label: { Label("Close", systemImage: "xmark").font(.body.weight(.semibold)) }
+                    .tint(.white)
             }
         }
     }
