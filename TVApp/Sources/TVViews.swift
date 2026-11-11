@@ -1472,7 +1472,7 @@ struct RemoteTab: View {
                     keysBlock(grid).frame(height: typing ? nil : grid.key + 12 + grid.play, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.bottom, typing ? max(0, geo.frame(in: .global).maxY - keyboardTop) + 12 : 0)
+                .padding(.bottom, typing ? max(0, geo.frame(in: .global).maxY - keyboardTop) + 50 : 0)
             } else {
                 VStack(spacing: 14) { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity); keysBlock(grid) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1506,7 +1506,8 @@ struct RemoteTab: View {
         #endif
     }
     // Where the keyboard's top is on screen (infinity while it's down): upright the page ignores the keyboard, so the
-    // keys' pane lifts its bar and keys clear of it by what it covers (CI f4d20ff: an inset reading left the keys under it).
+    // keys' pane lifts its bar and keys clear of it by what it covers, and of the soft edge it draws above itself (50 pt;
+    // CI e751115: lifted to its frame alone, the keys' row sat in that fade, as it had folded).
     @State private var keyboardTop: CGFloat = .infinity
     // How wide the picture is drawn, for the keys in the pane under it to take the same width.
     @State private var pictureWidth: CGFloat = 0
