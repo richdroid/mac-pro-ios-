@@ -277,9 +277,21 @@ final class ScrollWatch {
 // and that was what it held as it came back: a tab returned to with Back was split down its middle, off the crease,
 // for the length of the pop, then snapped across to the crease as the pop ended (Richard's recording, 2026-11-10,
 // and CI 8b7b68e frame by frame). A page that can't see the crease lays out by what was last seen instead.
+// Kept across launches too: on a cold launch open flat nothing had been seen yet, so both panes were laid out split down
+// the middle and moved across to the crease when it was first read, a second or two in, every row reflowing as they went
+// (Mac Pro CI a6bba65, open flat: the dials' row 234 to 213 pt, the right pane's content 828 to 807, at 2.7 s).
 @MainActor private enum FoldSeen {
-    static var bySize: [String: FoldSeenSplit] = [:]
-    static var last: FoldSeenSplit?
+    private static let key = "foldSeenSplits"
+    static var bySize: [String: FoldSeenSplit] = load() { didSet { save() } }
+    static var last: FoldSeenSplit? = bySize["last"]
+    private static func load() -> [String: FoldSeenSplit] {
+        guard let raw = UserDefaults.standard.dictionary(forKey: key) as? [String: [Double]] else { return [:] }
+        return raw.compactMapValues { v in v.count == 3 ? FoldSeenSplit(ratio: v[0] < 0 ? nil : CGFloat(v[0]), gutter: CGFloat(v[1]), outer: CGFloat(v[2])) : nil }
+    }
+    private static func save() {
+        var all = bySize; if let last { all["last"] = last }
+        UserDefaults.standard.set(all.mapValues { [Double($0.ratio ?? -1), Double($0.gutter), Double($0.outer)] }, forKey: key)
+    }
 }
 struct FoldSeenSplit: Equatable { var ratio: CGFloat?; var gutter: CGFloat; var outer: CGFloat }
 // Two panes, in Apple's container: side by side when wide, stacked when tall, and clear of the fold when partly closed.
@@ -324,7 +336,7 @@ struct FoldSplit<L: View, R: View>: View {
                 // lay out by and to remember.
                 let take: () -> Void = {
                     guard !blind, !NavTransit.shared.moving() else { return }
-                    if open { FoldSeen.bySize[key] = read; FoldSeen.last = read }
+                    if open, FoldSeen.bySize[key] != read || FoldSeen.last != read { FoldSeen.last = read; FoldSeen.bySize[key] = read }
                     if held?.key != key || held?.split != read { held = (key, read) }
                 }
                 ArrangementView {
