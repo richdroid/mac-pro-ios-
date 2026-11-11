@@ -232,6 +232,14 @@ http.createServer((q, s) => {
     return s.end(JSON.stringify({ rows: hits.length ? [{ title: 'Results', items: hits }] : [] }));
   }
   if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' }))) })); }
+  // Mint's own screen for the song on: its words, timed, and what plays after it (the Playing tab mirrors both).
+  if (q.url.startsWith('/api/tv/music-detail')) {
+    s.setHeader('content-type', 'application/json');
+    const words = ['The first line of a sample song', 'A second line that runs a little longer than the first', '', 'Here the chorus comes around', 'And says the same thing twice', 'And says the same thing twice', 'A quiet line', 'The last line of a sample song'];
+    return s.end(JSON.stringify({ ok: true, title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', playing: true, position_ms: 40000, duration_ms: 180000, airplay: false, asked_at: Date.now(),
+      lyrics: { status: '', synced: true, line: 3, lines: words.map((w, i) => [25000 + i * 5000, 30000 + i * 5000, w]) },
+      queue: { remaining: 7, items: ['Next Song', 'Another Song', 'Third Song'].map(title => ({ title, artist: 'Sample Artist', album: 'Sample Album', duration_ms: 200000, art: tvBase + '/art.png' })) } }));
+  }
   if (q.url.startsWith('/api/tv/recs')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ films: ['Rope', 'Match Point', 'Blue Velvet', 'Klute'].map(title => ({ title, year: '1990', slug: title.toLowerCase(), imdb: 'tt1234567', art: tvBase + '/poster.png', why: 'Because you liked Heat' })) })); }
   // A search for the show on the TV finds it, as the real catalogue would (the app looks a series up by name when its
   // rows don't carry it).

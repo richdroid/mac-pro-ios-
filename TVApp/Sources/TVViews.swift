@@ -2416,7 +2416,7 @@ struct PhoneControls: View {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 let now = min(max(scrub ?? phone.position, 0), song.duration)
                 VStack(spacing: 0) {
-                    ScrubBar(value: now, total: song.duration, scrub: $scrub, tickEvery: 10, label: { NowControls.clock($0 * 1000) }) { phone.seek(to: $0) }
+                    ScrubBar(value: now, total: song.duration, scrub: $scrub, tickEvery: 10, label: { NowControls.clock($0 * 1000) }) { phone.seek(to: $0); MusicDetailStore.shared.moved() }
                     HStack {
                         Text(NowControls.clock(now * 1000))
                         Spacer()
@@ -2428,7 +2428,7 @@ struct PhoneControls: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Position")
                 .accessibilityValue("\(NowControls.clock(now * 1000)) of \(NowControls.clock(song.duration * 1000))")
-                .accessibilityAdjustableAction { dir in phone.seek(to: max(0, min(song.duration, now + (dir == .increment ? 15 : -15)))) }
+                .accessibilityAdjustableAction { dir in phone.seek(to: max(0, min(song.duration, now + (dir == .increment ? 15 : -15)))); MusicDetailStore.shared.moved() }
             }
             HStack(spacing: 26) {
                 GlassButton(icon: "backward.fill", label: "Previous", size: 54) { phone.previous() }
@@ -2505,6 +2505,7 @@ struct PlayingTab: View {
     // What Mint finds as he types, the same search as the Apps page's.
     @StateObject private var found = BrowseStore(.mint)
     @ObservedObject private var mintHome = BrowseStore.shared(.mint)
+    @ObservedObject private var lyrics = MusicDetailStore.shared.presence
     // A play asked for and not yet showing on the TV.
     @State private var pending = false
     @State private var pendingWait: Task<Void, Never>?
@@ -2619,9 +2620,20 @@ struct PlayingTab: View {
             withAnimation(.easeOut(duration: 0.2)) { pending = false }
         }
     }
+    // The song the words and the queue under it are for, and whether it's playing: the phone's own when it drives the
+    // TV over AirPlay, else Mint's.
+    var extras: (song: String, playing: Bool, pausedAt: Int)? {
+        if phone.drives, let s = phone.song { return (s.title, phone.playing, Int(phone.position)) }
+        if let m = music { return (m.title, model.songPlaying(m) == true, Int(m.position / 1000)) }
+        return nil
+    }
     var send: some View {
         VStack(alignment: .leading, spacing: 18) {
             FlickCard()
+            // Mint's own screen, here: the song's words, the sung line leading, and what plays after it. First under
+            // what's on (open flat, level with the cover), ahead of what he played before.
+            // On the page only when Mint has words or a queue for this song, so a song with neither leaves it as it was.
+            if extras != nil, lyrics.shows { MusicExtras(tall: panes) }
             // What he last played, first under what's on: a cover tapped has it playing again, before any typing. The row
             // runs to the page's edges, as rows do, out of this stack's 20 pt.
             if showsRecent { Shelf(source: .mint, title: Self.recentTitle).padding(.horizontal, -20) }
@@ -2669,6 +2681,9 @@ struct PlayingTab: View {
             }
         }
         .task { if mintHome.rows.isEmpty { await mintHome.load() } }
+        // The asking for the words and the queue, which draws nothing and takes no room.
+        .background { if let e = extras { MusicDetailWatch(song: e.song, playing: e.playing, pausedAt: e.pausedAt) } }
+        .settledAnimation(.easeOut(duration: 0.25), value: lyrics.shows)
         .settledAnimation(.spring(response: 0.4, dampingFraction: 0.85), value: results.map(\.id))
         // Mint's rows arriving, and Recently played's place closing if Mint has none, fade rather than cut.
         .settledAnimation(.easeOut(duration: 0.25), value: mintHome.rows.map(\.title))
