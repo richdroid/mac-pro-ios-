@@ -313,6 +313,8 @@ struct FoldSplit<L: View, R: View>: View {
     // worked out again as every push and pop began and again as it ended, both panes of it, on the main thread at the
     // moment the move should start (CI f7a119a: Status's two panes three times over in one pop).
     @State private var held: (key: String, split: Split)?
+    @MainActor final class Pending { var read: FoldSeenSplit?; var task: Task<Void, Never>? }
+    @State private var pending = Pending()
     var body: some View {
         #if os(iOS)
         if #available(iOS 27.1, *) {
@@ -321,7 +323,8 @@ struct FoldSplit<L: View, R: View>: View {
                 let folded = !g.reservedRegions(kind: .division).isEmpty
                 let crease = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame
                 let hinge = crease?.midX
-                let ratio: CGFloat? = wide && !folded ? hinge.map { min(max($0 / g.size.width, 0.3), 0.7) } : nil
+                // To the hundredth: a crease read a few thousandths apart (0.548, then 0.551) was a second reflow of every row.
+                let ratio: CGFloat? = wide && !folded ? hinge.map { (min(max($0 / g.size.width, 0.3), 0.7) * 100).rounded() / 100 } : nil
                 // Each pane stops short of the crease, which is about 40 pt wide: half of it plus a little air, and never
                 // less than 24, so no card sits on the fold.
                 let gutter: CGFloat = wide && !folded ? min(max(24, (crease?.width ?? 0) / 2 + 4), 40) : 0
@@ -349,6 +352,22 @@ struct FoldSplit<L: View, R: View>: View {
                 // lay out by and to remember.
                 let take: () -> Void = {
                     guard !blind, !NavTransit.shared.moving() else { return }
+                    // Turned into a posture this page has a split for already: that split stands until a different reading
+                    // has held for 0.4 s. Mid-turn the crease reads half-way (0.50) for a frame or two, and the panes moved
+                    // to it and back (designer, resize regate: 0.548, 0.500, 0.548 in one turn).
+                    if open, let saved = FoldSeen.bySize[key], saved != read {
+                        pending.read = read
+                        pending.task?.cancel()
+                        pending.task = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 400_000_000)
+                            guard !Task.isCancelled, pending.read == read else { return }
+                            FoldSeen.last = read; FoldSeen.bySize[key] = read
+                            held = (key, read)
+                        }
+                        if held?.key != key { held = (key, saved) }
+                        return
+                    }
+                    pending.task?.cancel(); pending.read = nil
                     if open, FoldSeen.bySize[key] != read || FoldSeen.last != read { FoldSeen.last = read; FoldSeen.bySize[key] = read }
                     if held?.key != key || held?.split != read { held = (key, read) }
                 }

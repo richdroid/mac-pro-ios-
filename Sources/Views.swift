@@ -15,7 +15,7 @@ struct MacProApp: App {
     init() { AlertWatch.shared.install() }
     var body: some Scene {
         WindowGroup {
-            RootView(seeds: model.seedStore).environmentObject(model).environmentObject(model.liveStore).environmentObject(model.liveStore.display)
+            RootView(seeds: model.seedStore).modifier(StatusBarTopReader()).environmentObject(model).environmentObject(model.liveStore).environmentObject(model.liveStore.display)
                 .otaOffer(model)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in
@@ -126,6 +126,19 @@ struct TopEdge: ViewModifier {
         #else
         v
         #endif
+    }
+}
+// The window's own top inset (the status bar), read at layout and handed down, so a page's first line moves with a fold or
+// a turn as it happens. Read statically in each body (TopEdge.statusBar), it kept the old posture's value until the next
+// reading redrew the page, and the whole page dropped 14 pt seconds after the turn, untouched (designer, resize regate).
+private struct StatusBarTopKey: EnvironmentKey { static let defaultValue: CGFloat = 59 }
+extension EnvironmentValues { var statusBarTop: CGFloat { get { self[StatusBarTopKey.self] } set { self[StatusBarTopKey.self] = newValue } } }
+struct StatusBarTopReader: ViewModifier {
+    @State private var top = TopEdge.statusBar
+    func body(content: Content) -> some View {
+        content
+            .environment(\.statusBarTop, top)
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { if $0 != top { top = $0 } }
     }
 }
 private struct TopEdgeUnderKey: EnvironmentKey { static let defaultValue: (Int, Bool) -> Void = { _, _ in } }
@@ -467,12 +480,13 @@ extension View {
 // A page's name as its first line, at the tabs' size and height (paneTitle). The right pane carries it unseen, so both
 // panes' first cards start level.
 struct PaneHeading: View {
+    @Environment(\.statusBarTop) private var statusBarTop
     let title: String
     var shown = true
     var body: some View {
         Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, TopEdge.statusBar < 20 ? 14 : 0)
+            .padding(.top, statusBarTop < 20 ? 14 : 0)
             .opacity(shown ? 1 : 0)
             .accessibilityHidden(!shown)
             .accessibilityAddTraits(.isHeader)
@@ -531,6 +545,7 @@ struct Notice: View {
 // header can stay put while the log scrolls.
 struct Screen<Content: View>: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.statusBarTop) private var statusBarTop
     @Environment(\.paneLayout) private var panes
     let tab: Int
     let title: String
@@ -557,7 +572,7 @@ struct Screen<Content: View>: View {
                 // title collapsed into the bar, and the rows ran on under it ("Open on the Mac (13)" printed behind
                 // "Apps", 2026-11-07). The TV app does the same.
                 // At the cards' edge and as far down as the system's large title sat, so nothing moved but its behaviour.
-                Section { paneTitle(side).padding(.top, TopEdge.statusBar < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+                Section { paneTitle(side).padding(.top, statusBarTop < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right, Notice.shows(model) { Section { Notice() } }
                 if let s = shown ?? model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
@@ -635,7 +650,7 @@ struct Screen<Content: View>: View {
         VStack(spacing: 12) {
             // As high as the listed tabs' titles (the list's 4 pt margin, and 14 pt more where the clock is on the side):
             // macOS's sat 18 pt above Apps' folded, so the title jumped going from one tab to the next.
-            paneTitle(side).padding(.leading, side == .right ? 0 : 20).padding(.top, (TopEdge.statusBar < 20 ? 14 : 0) + 4)
+            paneTitle(side).padding(.leading, side == .right ? 0 : 20).padding(.top, (statusBarTop < 20 ? 14 : 0) + 4)
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
                     .padding(.leading, 20)

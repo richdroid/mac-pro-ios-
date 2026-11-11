@@ -2,6 +2,7 @@ import SwiftUI
 
 // Everything about how the app looks and behaves, in one place at the foot of the side bar.
 struct MacSettings: View {
+    @Environment(\.statusBarTop) private var statusBarTop
     @EnvironmentObject var model: AppModel
     @AppStorage("accent") private var accent = "blue"
     @AppStorage("celsius") private var celsius = false
@@ -33,7 +34,7 @@ struct MacSettings: View {
                 // The page's name as its first line, going up with the page, as on every other tab.
                 Section {
                     Text("Settings").font(.largeTitle.weight(.bold)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, TopEdge.statusBar < 20 ? 14 : 0)
+                        .padding(.top, statusBarTop < 20 ? 14 : 0)
                         .accessibilityAddTraits(.isHeader)
                 }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
