@@ -1469,9 +1469,15 @@ struct AlarmEditor: View {
                     // No Backup beep switch: the Chumby saves every alarm with backup 0 whatever it's sent (do_save, since
                     // 11-05: the stock beeper killed the alarm panel), so turning it on here came back off after Save.
                     // What it's for, said in the row: alone, "Then" was a one-row capsule (designer, 11-11).
-                    Picker("Then", selection: $after) { ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) } }
-                        .soloCard(note: calendarTemplate ? "What the screen does once it stops ringing, for every alarm your calendar sets."
-                                  : "What the screen does once it stops ringing.")
+                    // The note is the picker's own label's second line, so the row stays the system's picker row.
+                    Picker(selection: $after) { ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) } } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Then")
+                            Text(calendarTemplate ? "What the screen does once it stops ringing, for every alarm your calendar sets."
+                                 : "What the screen does once it stops ringing.").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 2)
                 } header: { SectionHead(icon: "arrow.turn.down.right", text: "Afterwards") }
                 // One of his repeating alarms: later or another sound for its next ring only (the Chumby's skip is pinned by name,
                 // so it needn't be the next alarm to ring).
@@ -1507,6 +1513,7 @@ struct AlarmEditor: View {
                         saving = true; problem = nil
                         Task { let why = await model.undoJustOnce(); saving = false; if let why { problem = why } else { finish() } }
                     }.foregroundStyle(.tint).disabled(saving)
+                    // The section's only row (the pinned case with its note is the section above), so a solo card.
                     .soloCard(note: "The usual alarm rings again and this one goes.")
                 } }
                 else if nap, original != nil { Section {
