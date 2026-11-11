@@ -281,6 +281,11 @@ struct RemoteScreenView: View {
                     if (UserDefaults.standard.array(forKey: key) as? [Double]) != v { UserDefaults.standard.set(v, forKey: key) }
                 } else if let v = UserDefaults.standard.array(forKey: key) as? [Double], v.count == 4 {
                     crease = CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
+                } else if w > h {
+                    // Never told yet (the first open flat sideways after an install): the Duo's hinge runs down the
+                    // display's middle, so that's where it's taken to be until the system says. A timed fallback showed
+                    // one capsule across the fold for half a second and then split it (the designer's sixth review).
+                    crease = CGRect(x: (w / 2 - 20).rounded(), y: 0, width: 40, height: h)
                 }
             }
             return Fold(crease: crease,
