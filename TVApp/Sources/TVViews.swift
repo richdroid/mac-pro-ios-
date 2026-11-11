@@ -1426,7 +1426,7 @@ struct RemoteTab: View {
             if !musicShown { progress.columnRole(.under) }
             // Typing open flat, the keyboard covers the pane from about here: the episode line and Mint's player step aside
             // rather than sit half under it. Upright the keyboard is over the keys' pane, so they stay.
-            if !(typing && panes) { episodes.columnRole(.under); music.columnRole(.under) }
+            if !(typing && !stackedUpright) { episodes.columnRole(.under); music.columnRole(.under) }
             // Typing, the keyboard comes up over this pane's foot: the tiles and the send box step aside rather than show
             // through it.
             if !typing {
@@ -1457,7 +1457,7 @@ struct RemoteTab: View {
     // pad is never wider than the keys under it.
     private var keysColumn: some View {
         GeometryReader { geo in
-            let stacked = size == .regular && !panes
+            let stacked = stackedUpright
             let grid = RemoteGrid.keys(min(geo.size.width, vSize == .compact ? 260 : 380, stacked && pictureWidth > 120 ? pictureWidth : .infinity))
             if stacked {
                 // Open upright, under the picture's pane: one pad diameter in every state, hung from the top with the keys
@@ -1484,7 +1484,11 @@ struct RemoteTab: View {
     // The folded column as it was before typing began, kept while typing so the keys don't move or shrink.
     @State private var foldedGrid: RemoteGrid?
     // Open upright: one column, picture above the fold and the keys under it, in every state, typing included.
-    var stackedUpright: Bool { size == .regular && !panes }
+    // Read as typing begins and kept while it lasts: the app's pane reading flipped to two panes as the keyboard took the
+    // height, and the page went side by side (CI 1180364 and 5767dcc, type-portrait).
+    var stackedUpright: Bool { size == .regular && !(typing ? calmPanes : panes) }
+    // The pane reading as last seen with no keyboard up.
+    @State private var calmPanes = false
     // Where the fold runs across this view open upright, in its own space: the hinge's own region when the system reports
     // it, otherwise the middle of the screen, 40 pt wide (about the crease's width).
     static func crease(in g: GeometryProxy) -> CGRect {
@@ -1601,6 +1605,7 @@ struct RemoteTab: View {
                 }
             }
         }
+        .onChange(of: panes, initial: true) { _, p in if keyboardInset - restInset < 50 { calmPanes = p } }
         // The build's typing film ("-typeCycle YES"): the keyboard comes and goes every 5 s, as the keyboard key would
         // have it, so typing in and out is filmed in every posture without a tap (Remote gate 3).
         .task {
