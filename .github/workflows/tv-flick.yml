@@ -133,6 +133,11 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose flick-stage; sleep 10
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-flick-stage$x.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # A series page at rest: the capsule, the episode list, the strip beside the side bar.
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose series; sleep 12
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-series$x.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             posefilm flick$x $d flick-starting 1
             posefilm flickputback$x $d flick-putback 1
             posefilm flicktap$x $d flick-tap 1

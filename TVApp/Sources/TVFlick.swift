@@ -433,7 +433,13 @@ struct FlickScreen: View {
             .task(id: screenURL) { if let u = screenURL { _ = await ImageStore.shared.load(u); if let h = ImageStore.shared.cached(u) { softImage = await ImageStore.shrunk(h, 16) } } }
             // Quick, and in the very frame the screen goes up (a task starts a frame or two later, and the page under it
             // had already begun to go: 2-3 frames of black): the page is what he tapped for, there as the tap lands.
-            .onAppear { FlickHaptic.warm(); withAnimation(.easeOut(duration: 0.18)) { arrived = true } }
+            .onAppear {
+                FlickHaptic.warm()
+                // The ground's soft picture and colour from memory, so the page arrives in its colour, not on black.
+                if softImage == nil, let u = screenURL ?? URL(string: item.art) { softImage = ImageStore.shared.small(u, 16) }
+                if tint == nil { tint = ImageStore.shared.cachedBand(URL(string: item.art)) }
+                withAnimation(.easeOut(duration: 0.18)) { arrived = true }
+            }
     }
     var screen: some View {
         // The system's own bar, so on the Duo back and close sit on the side like everywhere else.
@@ -587,12 +593,15 @@ struct FlickScreen: View {
                     LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.72), .init(color: .clear, location: 1)],
                                    startPoint: .leading, endPoint: .trailing)
                 }
+                // Open upright the page stops above the tab bar along the foot, over the black behind the bar: its tint
+                // dies away down its last stretch, so the ground runs on into the black with no edge between them.
+                .mask {
+                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: footFade ? 0.78 : 1), .init(color: footFade ? .clear : .black, location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
                 .opacity(0.4)
             Color.black.opacity(0.6)
         }
-        // Open upright the page stops short of the tab bar along the foot; its ground carries on down behind the bar,
-        // so no band of black sits between them.
-        .padding(.bottom, footUnder)
         // Edge to edge, except past the page's trailing edge beside the side bar, where it would cover the rail.
         .ignoresSafeArea(edges: model.flickChoosing ? [.top, .bottom, .leading] : .all)
         .opacity(arrived ? 1 : 0)
@@ -600,11 +609,10 @@ struct FlickScreen: View {
         .animation(.easeOut(duration: 0.3), value: step)
     }
 
-    // How far the ground reaches under the foot's tab bar (open upright, while choosing), as a negative padding.
-    var footUnder: CGFloat { sizeClass == .regular && !panes && model.flickChoosing ? -(max(model.footBarRoom, TVLook.footRoom) + 20) : 0 }
-
     // "S1 E3 · The One Where…", or "S1 E3" alone for an episode with no name of its own.
     static func line(_ e: StremioEpisode) -> String { "S\(e.season) E\(e.episode)" + (e.ownName.map { " · " + $0 } ?? "") }
+
+    var footFade: Bool { sizeClass == .regular && !panes }
 
     // One control at the top of the bar, as the Duo reserves it: Back while there's a step to go back to, else Close.
     @ToolbarContentBuilder var bar: some ToolbarContent {
@@ -613,15 +621,22 @@ struct FlickScreen: View {
         } else {
             ToolbarItem(placement: .cancellationAction) {
                 // Full strength, as every close in the app: in the accent on the bar's glass it read as greyed out.
-                Button { if !flown { leave() } } label: { Label("Close", systemImage: "xmark").font(.body.weight(.semibold)) }
-                    .tint(.white)
+                Button { if !flown { leave() } } label: {
+                    Label { Text("Close") } icon: { Image(systemName: "xmark").font(.body.weight(.semibold)).foregroundStyle(.white) }
+                }
+                .tint(.white)
             }
         }
     }
 
-    var poster: some View {
-        Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
-            .shadow(color: .black.opacity(0.4), radius: 10, y: 5)
+    // The card's own picture, from memory in the first frame when the card that was tapped has it (it always has):
+    // never an empty box while the page arrives.
+    @ViewBuilder var poster: some View {
+        Group {
+            if let held = ImageStore.shared.cached(URL(string: item.art)) { Image(tv: held).resizable().scaledToFill() }
+            else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) } }
+        }
+        .shadow(color: .black.opacity(0.4), radius: 10, y: 5)
     }
     // The show's name leads; under it, once an episode's chosen, that episode, else how many seasons there are.
     func titles(big: Bool) -> some View {
@@ -639,7 +654,9 @@ struct FlickScreen: View {
     // the description an episode description unless not available").
     var blurbText: String? {
         if step == .streams, let e = episode, let o = info?.about[e.id], !o.isEmpty { return o }
-        let a = meta?.about ?? item.about
+        // The card's own words, when it came with them, stay: swapped for the catalogue's as the page arrived, the text
+        // changed in front of him (the settled rule).
+        let a = item.about?.isEmpty == false ? item.about : meta?.about
         return a?.isEmpty == false ? a : nil
     }
     // Stremio's own words for it are on their way (the card's are in hand at once, the catalogue's a moment later).
