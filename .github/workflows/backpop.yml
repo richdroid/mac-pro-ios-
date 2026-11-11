@@ -183,7 +183,7 @@ jobs:
             # the second question for an app that didn't quit; a restart whose answer never came; Claude's service rows.
             shot checking$x $d 8 -tab 0 -pose checking
             shot control-busy$x $d 9 -tab 5 -pose controlbusy
-            shot forcequit$x $d 9 -tab 1 -pose forcequit
+            shot forcequit$x $d 15 -tab 1 -pose forcequit
             shot didntconfirm$x $d 9 -tab 5 -pose didntconfirm
             shot claude-scrolled$x $d 9 -tab 2 -pose scrolled
             # The unreachable card as it's said now, with its ✕; Claude's service card wherever it sits; Apps with his three
