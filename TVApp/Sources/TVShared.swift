@@ -31,8 +31,8 @@ struct TVStatus: Decodable, Equatable {
         // "S3 E4 · Notapusy", from the Mac's fields, else read off the player's second line. Nil for a film.
         var episodeLine: String? {
             if let s = season, let e = episode {
-                let t = episodeTitle ?? ""
-                return "S\(s) E\(e)" + (t.isEmpty ? "" : " · " + t)
+                let t = Wording.episodeName(episodeTitle ?? "", number: e)
+                return "S\(s) E\(e)" + (t.map { " · " + $0 } ?? "")
             }
             // A YouTube video's second line is its channel, not an episode (r35: "Lil B" set as the title, the video's own
             // name as the small line over it).
@@ -161,7 +161,19 @@ enum Wording {
         let head = s[r], digits = head.split(whereSeparator: { !$0.isNumber })
         guard digits.count == 2 else { return s }
         let rest = s[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " ·:-–—"))
-        return "S\(digits[0]) E\(digits[1])" + (rest.isEmpty ? "" : " · " + rest)
+        let name = episodeName(rest, number: Int(digits[1]))
+        return "S\(digits[0]) E\(digits[1])" + (name.map { " · " + $0 } ?? "")
+    }
+    // An episode's own name, without the "Episode 2" a catalogue puts in front of it or in place of one: "Episode 2: The
+    // One Where…" is "The One Where…", and "Episode 2" alone is no name at all (gate 276: the hero said "Episode 2", its
+    // row "Episode 2: The One Where…"). The number is said by whatever shows the name.
+    static func episodeName(_ s: String, number: Int?) -> String? {
+        var t = s.trimmingCharacters(in: .whitespaces)
+        if let r = t.range(of: #"^(?i:episode|ep\.?)\s*(\d+)"#, options: .regularExpression) {
+            let n = Int(t[r].filter(\.isNumber))
+            if number == nil || n == number { t = t[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " ·:-–—.")) }
+        }
+        return t.isEmpty ? nil : t
     }
 }
 

@@ -62,7 +62,7 @@ jobs:
             local d=$1 x=$2
             for T in 0 1 2 3 5 9; do shot tab$T$x $d 7 $M -tab $T; done
             for T in 1 2 3 5; do shot scroll-$T$x $d 9 $M -tab $T -scroll 30; done
-            for S in rmint ryoutube ryoutubebare repisode; do shot playing-$S$x $d 8 $M/$S -tab 2; done
+            for S in rmint rmintplain ryoutube ryoutubebare repisode; do shot playing-$S$x $d 8 $M/$S -tab 2; done
             for S in ridle repisode rfilm ryoutube roffline; do shot remote-$S$x $d 8 $M/$S -tab 0; done
             # Pages opened over a tab: Back is the side bar's (the bottom bar's first item, open in portrait).
             for P in browse streams; do shot $P$x $d 9 $M -tab 1 -pose $P; done

@@ -222,17 +222,22 @@ struct MusicDetailWatch: View {
 // Under a song on Playing: its words and what's next. Only on the page at all when Mint has one or the other.
 struct MusicExtras: View {
     @ObservedObject private var store = MusicDetailStore.shared
-    // Open flat, the words have the right pane to themselves and stand taller.
+    // Open flat, in the right pane: the words keep a short window and the queue its first three, so what he played
+    // before and the field to play something stay in sight under them.
     var tall = false
     @State private var appearedAt = Date()
     @Environment(\.scenePhase) private var phase
+    // Open flat the words' window holds the sung line and a wrapped next one whole, so Up next shows two there.
+    var shown: Int { tall ? 2 : 5 }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             if let d = store.detail, !d.lines.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     RowTitle("Lyrics")
                     Group {
-                        if d.synced { SyncedLyrics(lines: d.lines, line: store.line, height: tall ? 380 : 250, quiet: Date().timeIntervalSince(appearedAt) < 0.4) }
+                        // A fixed window, 12 pt clear of the heading so no line is ever cut under it. Open flat it stays
+                        // short enough that Recently played and Play on TV are still in the pane (gate dd1a, 276).
+                        if d.synced { SyncedLyrics(lines: d.lines, line: store.line, height: tall ? 236 : 250, quiet: Date().timeIntervalSince(appearedAt) < 0.4).padding(.top, 12) }
                         else { PlainLyrics(lines: d.lines, showsAll: $store.showsAll) }
                     }
                     .opacity(store.waiting ? 0 : 1)
@@ -244,7 +249,7 @@ struct MusicExtras: View {
                     RowTitle("Up next")
                     VStack(alignment: .leading, spacing: 0) {
                         VStack(spacing: 10) {
-                            ForEach(d.queue.prefix(5)) { item in
+                            ForEach(d.queue.prefix(shown)) { item in
                                 HStack(spacing: 12) {
                                     Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: {
                                         // No cover yet, or none: a note on the tile, never an empty box.
@@ -260,8 +265,8 @@ struct MusicExtras: View {
                                 .accessibilityElement(children: .combine)
                             }
                         }
-                        if d.remaining > min(d.queue.count, 5) {
-                            Text("and \(d.remaining - min(d.queue.count, 5)) more").font(.footnote.weight(.medium)).foregroundStyle(.secondary).padding(.top, 10)
+                        if d.remaining > min(d.queue.count, shown) {
+                            Text("and \(d.remaining - min(d.queue.count, shown)) more").font(.footnote.weight(.medium)).foregroundStyle(.secondary).padding(.top, 10)
                         }
                     }
                     .opacity(store.waiting ? 0 : 1)
@@ -293,7 +298,13 @@ private struct SyncedLyrics: View {
     @State private var position = ScrollPosition(idType: Int.self)
     @State private var placed = false
     static let glide = Animation.spring(response: 0.55, dampingFraction: 0.86)
-    static let anchor = UnitPoint(x: 0.5, y: 0.3)
+    // The sung line's place, in points from the window's top, the same in every window height: deep enough that the line
+    // before it has the whole top fade to go through, and the one before that is gone before the edge (gate 276: at 30 %
+    // of the window the line above sat half in the fade and showed as the foot of its letters under "Lyrics").
+    static let lead: CGFloat = 82
+    // Clear, then the fade: everything above `fadeEnd` is on its way out, nothing at the very edge shows at all.
+    static let clearTop: CGFloat = 10, fadeEnd: CGFloat = 60
+    var anchor: UnitPoint { UnitPoint(x: 0.5, y: min(Self.lead / max(height, 1), 0.6)) }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -303,7 +314,10 @@ private struct SyncedLyrics: View {
                         .font(.system(size: 24, weight: .bold)).multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .opacity(l.id == line ? 1 : 0.32)
+                        // The sung line, and the one either side of it stepped back; the rest are out of the window's
+                        // story, so no line further off can ever show as a sliver at either edge, whatever its height
+                        // (gate 276: the foot of a line two back under "Lyrics", the top of a wrapped next line at the foot).
+                        .opacity(l.id == line ? 1 : abs(l.id - line) == 1 ? 0.32 : 0)
                         .scaleEffect(l.id == line ? 1 : 0.96, anchor: .leading)
                         .id(l.id)
                 }
@@ -311,24 +325,27 @@ private struct SyncedLyrics: View {
             .scrollTargetLayout()
             // The first line starts clear of the top fade, close under the heading; room under the last for it to sit
             // where the sung line sits.
-            .padding(.top, 36).padding(.bottom, height * 0.6)
+            .padding(.top, Self.fadeEnd + 2).padding(.bottom, height * 0.6)
             .animation(placed && !quiet ? Self.glide : nil, value: line)
         }
-        .scrollPosition($position, anchor: Self.anchor)
+        .scrollPosition($position, anchor: anchor)
         .scrollIndicators(.hidden)
         .scrollDisabled(true).allowsHitTesting(false)
         .frame(height: height)
         .mask {
             VStack(spacing: 0) {
-                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 36)
+                // The top few points fully clear, then a deep fade: the line before the sung one is passing through it,
+                // the one before that is gone before the edge, so nothing is ever cut flat under the heading.
+                Color.clear.frame(height: Self.clearTop)
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.fadeEnd - Self.clearTop)
                 Color.black
-                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 56)
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 20)
             }
         }
         .onChange(of: line, initial: true) { _, now in
             let to = max(now, 0)
-            if placed && !quiet { withAnimation(Self.glide) { position.scrollTo(id: to, anchor: Self.anchor) } }
-            else { position.scrollTo(id: to, anchor: Self.anchor); Task { placed = true } }
+            if placed && !quiet { withAnimation(Self.glide) { position.scrollTo(id: to, anchor: anchor) } }
+            else { position.scrollTo(id: to, anchor: anchor); Task { placed = true } }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Lyrics")

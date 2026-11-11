@@ -766,8 +766,7 @@ struct AlarmsTab: View {
                     let c = clockParts(n.at)
                     Text(c.0).font(.custom("Trebuchet MS", size: 52).weight(.bold)).monospacedDigit().contentTransition(.numericText())
                     Text(c.1).font(.custom("Trebuchet MS", size: 22).weight(.bold)).contentTransition(.numericText())
-                    Spacer(minLength: 8)
-                    Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
+                    Spacer(minLength: 0)
                 }
                 // Moved for one ring, the day line says so in few words and "Back to 6:45 AM" has a row of its own:
                 // beside the line, folded, both were cut short (build 218: "Back to 6:45…", "just this once (usual…").
@@ -776,9 +775,14 @@ struct AlarmsTab: View {
                         .foregroundStyle(.secondary).lineLimit(2).contentTransition(.numericText())
                 }
                 HStack(alignment: .center, spacing: 10) {
-                    if moved == nil {
-                        Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst)")
-                            .foregroundStyle(.secondary).lineLimit(1).contentTransition(.numericText())
+                    // How long until it rings sits under the time, with the day: at the time's right, the card's top
+                    // corner, the status bar's clock and Wi-Fi covered it once the page scrolled (gate dd1a, 276).
+                    VStack(alignment: .leading, spacing: 2) {
+                        if moved == nil {
+                            Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst)")
+                                .foregroundStyle(.secondary).lineLimit(1).contentTransition(.numericText())
+                        }
+                        Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
                     }
                     Spacer(minLength: 8)
                     if let moved, let u = moved.usual {
