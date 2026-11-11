@@ -3331,9 +3331,9 @@ struct UnderFlick: ViewModifier {
             // Black under the side bar too while covered: the strip beside a show's or stream's page showed whatever lay
             // under the faded page, a brown (28,16,10) against the page's near-black (8,5,4) edge, a band (r30).
             .overlay { Color.black.ignoresSafeArea().opacity(covered ? 1 : 0).allowsHitTesting(false) }
-            // Covered only once the flick's page has faded up over it (0.18 s), so the two cross with no black between
-            // them; shown again at once.
-            .animation(covered ? .easeOut(duration: 0.1).delay(0.22) : .easeOut(duration: 0.15), value: covered)
+            // Covered slowly at first while the flick's page comes up fast over it, both from the same frame, so the two
+            // cross with no black between them and the strip beside the side bar goes dark with them.
+            .animation(covered ? .easeIn(duration: 0.2) : .easeOut(duration: 0.15), value: covered)
             .modifier(Untitled(on: barHidden))
             #if os(iOS)
             .toolbarVisibility(barHidden ? .visible : .automatic, for: .navigationBar)

@@ -310,7 +310,7 @@ struct FlickScreen: View {
         else if target.image != nil || source == .mint || target.send?.0 == "flick" { kind = "song" }
         else { kind = "film" }
         let line: String
-        if let e = episode { line = "S\(e.season) E\(e.episode) · \(e.name)" }
+        if let e = episode { line = Self.line(e) }
         else if isLink { line = linkTitle == nil ? "" : item.title }
         else if kind == "film" { line = "" }
         else { line = shown.subtitle }
@@ -386,7 +386,7 @@ struct FlickScreen: View {
             return MediaItem(title: linkTitle ?? item.title, subtitle: linkTitle == nil ? "" : item.title, art: linkArt ?? item.art, id: item.id, kind: item.kind)
         }
         guard let e = episode else { return item }
-        return MediaItem(title: item.title, subtitle: "S\(e.season) E\(e.episode) · \(e.name)", art: item.art, id: item.id, kind: item.kind)
+        return MediaItem(title: item.title, subtitle: Self.line(e), art: item.art, id: item.id, kind: item.kind)
     }
     var seasons: [Int] { Array(Set((meta?.episodes ?? []).map(\.season))).sorted() }
     var previous: Step? {
@@ -431,7 +431,9 @@ struct FlickScreen: View {
             // The picture the Remote shows while the TV starts (an episode's still, which the rows never showed), fetched
             // and shrunk while he's choosing, so at the pick it's in memory with its soft version.
             .task(id: screenURL) { if let u = screenURL { _ = await ImageStore.shared.load(u); if let h = ImageStore.shared.cached(u) { softImage = await ImageStore.shrunk(h, 16) } } }
-            .onAppear { FlickHaptic.warm() }
+            // Quick, and in the very frame the screen goes up (a task starts a frame or two later, and the page under it
+            // had already begun to go: 2-3 frames of black): the page is what he tapped for, there as the tap lands.
+            .onAppear { FlickHaptic.warm(); withAnimation(.easeOut(duration: 0.18)) { arrived = true } }
     }
     var screen: some View {
         // The system's own bar, so on the Duo back and close sit on the side like everywhere else.
@@ -520,8 +522,6 @@ struct FlickScreen: View {
     // As the screen opens: in it comes, the colours change, and whatever the page needs is asked for.
     func opened() async {
         openedAt = Date()
-        // Quick: the page is what he tapped for, so it's there as the tap lands, not on a half-second spring.
-        withAnimation(.easeOut(duration: 0.18)) { arrived = true }
         Task { try? await Task.sleep(nanoseconds: 120_000_000); withAnimation(.easeOut(duration: 0.2)) { barShown = true } }
         // The app behind takes on the picked thing's colour too, and gets its own back after: never once this has
         // started to close, or the colour would stay behind it.
@@ -603,6 +603,9 @@ struct FlickScreen: View {
     // How far the ground reaches under the foot's tab bar (open upright, while choosing), as a negative padding.
     var footUnder: CGFloat { sizeClass == .regular && !panes && model.flickChoosing ? -(max(model.footBarRoom, TVLook.footRoom) + 20) : 0 }
 
+    // "S1 E3 · The One Where…", or "S1 E3" alone for an episode with no name of its own.
+    static func line(_ e: StremioEpisode) -> String { "S\(e.season) E\(e.episode)" + (e.ownName.map { " · " + $0 } ?? "") }
+
     // One control at the top of the bar, as the Duo reserves it: Back while there's a step to go back to, else Close.
     @ToolbarContentBuilder var bar: some ToolbarContent {
         if let previous, !flown {
@@ -625,7 +628,7 @@ struct FlickScreen: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(item.title).font(big ? .title.weight(.bold) : .title2.weight(.bold)).lineLimit(3)
             if step == .streams, let e = episode {
-                Text("S\(e.season) E\(e.episode) · \(e.name)").font(.headline).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
+                Text(Self.line(e)).font(.headline).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
             } else if isSeries, case let n = seasons.filter({ $0 > 0 }).count, n > 0 {
                 Text(n == 1 ? "1 season" : "\(n) seasons").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
             }
@@ -739,7 +742,7 @@ struct FlickScreen: View {
                     Circle().fill(TVLook.accent).frame(width: 9, height: 9)
                     VStack(alignment: .leading, spacing: 1) {
                         Text("On the TV").font(.headline)
-                        Text("S\(t.episode.season) E\(t.episode.episode) · \(t.episode.name)").font(.caption.weight(.medium)).opacity(0.7).lineLimit(1)
+                        Text(Self.line(t.episode)).font(.caption.weight(.medium)).opacity(0.7).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "av.remote").font(.system(size: 17, weight: .semibold))
@@ -760,7 +763,9 @@ struct FlickScreen: View {
                     Image(systemName: "play.fill").font(.system(size: 17, weight: .bold))
                     VStack(alignment: .leading, spacing: 1) {
                         Text("\(t.verb) S\(t.episode.season) E\(t.episode.episode)").font(.headline)
-                        Text(([t.episode.name] + (left.map { [$0] } ?? [])).joined(separator: " · ")).font(.caption.weight(.medium)).opacity(0.7).lineLimit(1)
+                        // Its own name and the time, never "Episode 1" under "S1 E1" (tv-polish2's naming, gate 276).
+                        let sub = ([t.episode.ownName].compactMap { $0 } + (left.map { [$0] } ?? [])).joined(separator: " · ")
+                        if !sub.isEmpty { Text(sub).font(.caption.weight(.medium)).opacity(0.7).lineLimit(1) }
                     }
                     Spacer(minLength: 0)
                 }
@@ -1360,7 +1365,7 @@ struct FlickScreen: View {
         return ""
     }
     func beginStarting() {
-        model.beginStart(.init(title: shown.title, art: startingArt, line: episode.map { "S\($0.season) E\($0.episode) · \($0.name)" }, token: stream?.token), target: again)
+        model.beginStart(.init(title: shown.title, art: startingArt, line: episode.map { Self.line($0) }, token: stream?.token), target: again)
     }
     // Into the Remote, in one move: the picked thing's picture goes from where it was picked onto the Remote's own picture
     // of the TV, which shows the same poster, as this page fades under it. The film's colour stays, as it's the same film.

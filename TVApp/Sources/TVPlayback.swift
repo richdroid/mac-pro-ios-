@@ -626,6 +626,11 @@ enum SeriesInfo {
     }
 }
 
+extension StremioEpisode {
+    // Its own name, without the "Episode 2" a catalogue puts in front of it or in place of one (gate 276).
+    var ownName: String? { Wording.episodeName(name, number: episode) }
+}
+
 // One episode list for everywhere a show is picked from: the series page, and over the Remote and Playing while it's on.
 // Seasons as numbers after the word, then the episodes: a still, its number and name, how long it runs, a tick once
 // watched, and the bar of how far in on the one he's on. The list scrolls itself to that one.
