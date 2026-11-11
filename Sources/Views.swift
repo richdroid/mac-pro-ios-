@@ -598,14 +598,14 @@ struct Screen<Content: View>: View {
         VStack(spacing: 12) {
             // As high as the listed tabs' titles (the list's 4 pt margin, and 14 pt more where the clock is on the side):
             // macOS's sat 18 pt above Apps' folded, so the title jumped going from one tab to the next.
-            paneTitle(side).padding(.leading, side == .right ? 0 : 20).padding(.top, (TopEdge.statusBar < 20 ? 14 : 0) + 4)
+            paneTitle(side).padding(.top, (TopEdge.statusBar < 20 ? 14 : 0) + 4)
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
-                    .padding(.leading, 20)
             }
             if let s = model.status { content(s, side) }
             else if side != .right { connecting.frame(maxHeight: .infinity) }
         }
+        .modifier(PageLead(on: side != .right))
     }
     var body: some View {
         let _ = SwipeLog.mark("screen \(tab) body")
@@ -633,6 +633,14 @@ struct Screen<Content: View>: View {
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
         }
     }
+}
+// A hand-drawn page's left edge, where the lists' cards are: 20 pt from the display's edge in every posture. Open flat
+// the split has already moved the left pane 14 pt in, and the macOS tab added its 20 on top, so its title and cards
+// started 14 pt right of every other tab's (designer, 2026-11-11: one page inset for every tab's left pane).
+struct PageLead: ViewModifier {
+    @Environment(\.paneOuter) private var outer
+    let on: Bool
+    func body(content: Content) -> some View { content.padding(.leading, on ? max(0, 20 - outer) : 0) }
 }
 // The pages a tab's stack can show. Alone here, watching the open pages (NavStore), so a page opening or closing works
 // out this and nothing else: the tab under it is handed through untouched.
@@ -1202,12 +1210,13 @@ func resetsIn(_ ms: Double) -> String {
 
 // A label, a figure and a line under it: the API card's right-hand column, and the plan card's.
 struct UsageFigure: View {
-    let title: String, value: String, detail: String
+    let title: String, value: String, detail: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
             Text(value).font(.title2.weight(.semibold)).monospacedDigit()
-            Text(detail).font(.caption).foregroundStyle(.tertiary).monospacedDigit()
+            // Secondary, not tertiary: tertiary grey on the black card was hard to read (designer, 2026-11-11).
+            if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1293,9 +1302,11 @@ struct LimitsSection: View {
                 planDial("This week", u.plan?.sevenDay, u.plan?.sevenDayResets)
                 if showsAPI { apiDial }
                 if Self.lone(s, model) {
+                    // "On this Mac" once, over both: it was under each figure, twice in tertiary grey (designer, 2026-11-11).
                     VStack(alignment: .leading, spacing: 14) {
-                        UsageFigure(title: "Last 5 hours", value: Format.count(u.fiveHours.tokens), detail: "tokens on this Mac")
-                        UsageFigure(title: "Last 7 days", value: Format.count(u.week.tokens), detail: "tokens on this Mac")
+                        Text("Tokens on this Mac").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                        UsageFigure(title: "Last 5 hours", value: Format.count(u.fiveHours.tokens), detail: nil)
+                        UsageFigure(title: "Last 7 days", value: Format.count(u.week.tokens), detail: nil)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -1480,34 +1491,18 @@ struct UpgradeTab: View {
         if s.oclp.patchedFor.isEmpty { return "No root patches yet" }
         return patchedThis ? "Root patched for this macOS" : "Root patched for build \(patchedBuild ?? s.oclp.patchedFor)"
     }
+    // Only its word and when it was checked: the versions and the patch were under it and again in the rows card beside
+    // it, four lines said twice (designer, 2026-11-11). The rows card carries them in every posture.
     var summary: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: seal.0).font(.system(size: 30)).foregroundStyle(seal.1).symbolRenderingMode(.hierarchical).frame(width: 36)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(headline).font(.headline).lineLimit(2)
-                    if s.upgrade.installed, let at = statusParts.at {
-                        Text("Checked \(at.formatted(.relative(presentation: .named)))").font(.footnote).foregroundStyle(.secondary)
-                    }
-                    Text("macOS \(s.macos) · OCLP \(oclp)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                    Text(patched).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
-                    // The date on a line of its own, so it never breaks across two.
-                    // Said what it is: a bare "October 30" under the patches read as nothing in particular.
-                    if !s.oclp.patchedAt.isEmpty { Text("Patched \(s.oclp.patchedAt)").font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
-                }
-                Spacer(minLength: 8)
-                if s.upgrade.installed {
-                    Button { confirmRun = true } label: {
-                        Image(systemName: "arrow.clockwise").font(.body.weight(.semibold)).frame(width: 30, height: 30)
-                    }
-                    .buttonStyle(.bordered).buttonBorderShape(.circle)
-                    .accessibilityLabel("Run update check now")
-                    .confirmationDialog("Run the update check now?", isPresented: $confirmRun, titleVisibility: .visible) {
-                        Button("Run Now") { fail = nil; Task { fail = await model.run("upgrade-run") } }
-                    } message: { Text("It may restart the Mac.") }
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: seal.0).font(.system(size: 30)).foregroundStyle(seal.1).symbolRenderingMode(.hierarchical).frame(width: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(headline).font(.headline).lineLimit(2)
+                if s.upgrade.installed, let at = statusParts.at {
+                    Text("Checked \(at.formatted(.relative(presentation: .named)))").font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            if let fail { FailText(fail) }
+            Spacer(minLength: 0)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1535,16 +1530,40 @@ struct UpgradeTab: View {
             .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         }
     }
-    // The facts behind the summary, as rows, where the open Duo has the room for them.
+    // The facts behind the summary, as rows, and at their foot the one thing to do here: run the update check. It was a
+    // round arrow on the summary, which read as a refresh against staleness (designer, 2026-11-11).
     var facts: some View {
-        VStack(spacing: 0) {
-            ForEach(Array([("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", patchedFor),("Patched", s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)].enumerated()), id: \.offset) { i, row in
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array([("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", patchedFor), ("Patched", s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)].enumerated()), id: \.offset) { i, row in
                 if i > 0 { Divider().padding(.leading, 16) }
                 LabeledContent(row.0, value: row.1).padding(.horizontal, 16).padding(.vertical, 12)
+            }
+            if s.upgrade.installed {
+                Divider().padding(.leading, 16)
+                Button { confirmRun = true } label: {
+                    Text("Check for updates").foregroundStyle(macBlue).frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16).padding(.vertical, 12).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .confirmationDialog("Check for updates now?", isPresented: $confirmRun, titleVisibility: .visible) {
+                    Button("Check Now") { fail = nil; Task { fail = await model.run("upgrade-run") } }
+                } message: { Text("This may restart the Mac.") }
+                if let fail { FailText(fail).padding(.horizontal, 16).padding(.bottom, 12) }
             }
         }
         .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
     }
+    // The log only when it has something to read. "Update check finished. Nothing to do." on its own was success chatter
+    // (designer, 2026-11-11). It's back while a check runs, and always when its last line is a failure.
+    var logShown: Bool {
+        let last = s.upgrade.log.split(separator: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }).map(String.init) ?? ""
+        if last.isEmpty { return false }
+        if UpdateLog.matches(UpdateLog.bad, last) { return true }
+        if seal.0 == "arrow.triangle.2.circlepath" { return true }
+        return !UpdateLog.matches(Self.noop, last)
+    }
+    static let noop = try? NSRegularExpression(pattern: #"nothing to do|up to date|no updates?\b"#, options: .caseInsensitive)
+    var log: some View { VStack(alignment: .leading, spacing: 8) { header("Log"); UpdateLog(log: s.upgrade.log) } }
     // The Apps tab's section headings ("Updates", "On this iPhone"): bold, secondary, under the title rather than as loud
     // as it, in line with the text in the cards below. "Log" was white and semibold at the cards' very edge.
     func header(_ t: String) -> some View { Text(t).font(.title3.weight(.bold)).foregroundStyle(.secondary).padding(.leading, 16) }
@@ -1553,31 +1572,32 @@ struct UpgradeTab: View {
     var body: some View {
         switch side {
         case .all:
-            // Only the log's lines scroll; the summary and the log's header stay put above them.
+            // Only the log's lines scroll; the summary and the rows stay put above them.
             VStack(alignment: .leading, spacing: 12) {
                 summary
                 agent
-                VStack(alignment: .leading, spacing: 8) { header("Log"); UpdateLog(log: s.upgrade.log) }
+                VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
+                if logShown { log }
             }
             // With the side bar beside the page, the cards end at its edge, as the list cards do. Open in portrait the tabs
             // are along the foot and nothing is there: the cards ran into the display's edge and lost their right corners.
-            .padding(.leading, 20).padding(.trailing, trailingInset > 20 ? 0 : 20).padding(.bottom, 12)
+            .padding(.trailing, trailingInset > 20 ? 0 : 20).padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { trailingInset = $0 }
         case .left:
-            // A header of its own, like the log's beside it, so both panes' first cards start on one line. It stays put
-            // while the cards under it scroll.
+            // A header of its own, like the details' beside it, so both panes' first cards start on one line.
             VStack(alignment: .leading, spacing: 8) {
                 header("This Mac")
-                ScrollView { VStack(spacing: 12) { summary; facts; agent } }
+                ScrollView { VStack(spacing: 12) { summary; agent } }
                     .scrollBounceBehavior(.basedOnSize)
                     .scrollEdgeEffectHidden(true, for: .top)
             }
-            .padding(.leading, 20)
         case .right:
-            VStack(alignment: .leading, spacing: 8) {
-                header("Log")
-                UpdateLog(log: s.upgrade.log)
+            // The rows beside the summary, and the log under them when it has something to say: with the log hidden the
+            // right pane was empty (designer, 2026-11-11: option 2, nothing across the fold).
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
+                if logShown { log }
             }
             .padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
@@ -1746,11 +1766,11 @@ struct ControlTab: View {
                     failLine("login")
                 }
             } header: { Text(s.macLogin ? "Mac login" : "Log in to this Mac") } footer: {
-                Text(s.macLogin ? "It stays logged in after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
+                // Logged in, nothing: "It stays logged in after restarts." was reassurance (Never #32, designer 2026-11-11).
+                if !s.macLogin { Text("Used once to log in, then saved in the Mac’s keychain. Forget password removes it.") }
             }
-            Section {
-                Button("Open Screen") { model.screenOpen = true }
-            } header: { Text("Screen") } footer: { Text("Tap to click · drag to move things · two fingers to scroll · pinch to zoom") }
+            // No Screen section: Status's Screen quick action is the one door, and the Screen teaches its own gestures
+            // (designer, 2026-11-11: keep one door).
             SendSection(route: model.route)
             Section {
                 Button { model.signingIn = true } label: { Label("Fill a saved login", systemImage: "key.fill") }
@@ -1792,11 +1812,6 @@ struct ControlTab: View {
             }
         }
         if side != .left {
-            if !s.publicUrl.isEmpty {
-                Section {
-                    if let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
-                } header: { Text("Public link") } footer: { Text("This address changes whenever the Mac restarts.") }
-            }
             if let list = s.services {
                 Section("Services") {
                     ForEach(list) { v in
@@ -1819,9 +1834,14 @@ struct ControlTab: View {
                     }
                 }
             }
-            Section("Connected devices") {
+            // The devices on his Tailscale and the public link, one card: each was a section of one row, which the system
+            // draws as a capsule beside the rounded cards (designer, 2026-11-11: merge lone rows where they belong).
+            Section {
                 if s.tailscale.peers.isEmpty { Text("No other devices yet").foregroundStyle(.secondary) }
                 ForEach(s.tailscale.peers) { p in StateRow(label: p.name, good: p.online, value: p.os) }
+                if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
+            } header: { Text("Remote access") } footer: {
+                if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }
             }
             // Health and Restart the Mac, last and apart from the everyday buttons, each its own page.
             MacPowerSections()

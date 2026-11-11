@@ -62,13 +62,15 @@ struct MacSettings: View {
                     Toggle("This Mac", isOn: $showThisMac)
                     Toggle("Top processes", isOn: $showProcesses)
                 } header: { Text("Status page") } footer: { Text("The Mac Pro, its live figures and any alerts always show.") }
-                Section("Units and updates") {
-                    Picker("Temperatures", selection: $celsius) { Text("Fahrenheit").tag(false); Text("Celsius").tag(true) }
+                // Units, how often figures refresh, and the API budget the Claude tab's dial fills against: everything about how the
+                // figures read, in one card. The budget was a section of one row, drawn by the system as a capsule beside the
+                // rounded cards (designer, 2026-11-11: merge lone rows into the section they belong with).
+                Section("Figures") {
+                    // Not "Temperatures": the Status page switch above has that name (designer, 2026-11-11).
+                    Picker("Temperature unit", selection: $celsius) { Text("Fahrenheit").tag(false); Text("Celsius").tag(true) }
                     Picker("Live figures", selection: $liveEvery) { Text("Every second").tag(1.0); Text("Every 2 seconds").tag(2.0); Text("Every 5 seconds").tag(5.0) }
                     Picker("Everything else", selection: $fullEvery) { Text("Every 10 seconds").tag(10.0); Text("Every 30 seconds").tag(30.0); Text("Every minute").tag(60.0) }
-                }
-                // The API dial on the Claude tab fills against this. Picked, not typed, so there's no keyboard to get stuck with.
-                Section("Claude") {
+                    // The API dial on the Claude tab fills against this. Picked, not typed, so there's no keyboard to get stuck with.
                     Picker("Monthly API budget", selection: Binding(get: { apiBudget }, set: { v in
                         if v < 0 { budgetDraft = apiBudget; customBudget = true } else { apiBudget = v }
                     })) {
@@ -83,7 +85,6 @@ struct MacSettings: View {
                     } message: { Text("In dollars, for the API dial on the Claude tab.") }
                     .id("claude")
                 }
-                OTASettings()
                 Section {
                     Picker("Open on", selection: $startTab) {
                         Text("The last tab used").tag(-1)
@@ -91,12 +92,16 @@ struct MacSettings: View {
                     }
                     Toggle("Haptics", isOn: $haptics)
                     Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
-                } header: { Text("Behaviour") }
+                    // Was its own section of one row (designer, 2026-11-11: no lone rows).
+                    OTASettings()
+                } header: { Text("Behaviour") } footer: { Text(OTASettings.note) }
                 Section {
                     LabeledContent("Address", value: URL(string: model.address)?.host ?? "Not set")
                     Button("Change connection") { connecting = true }
-                } header: { Text("Connection") }
-                Section { LabeledContent("Version", value: version) }
+                } header: { Text("Connection") } footer: {
+                    // A note under the last card, not a card of one row of its own.
+                    Text("Mac Pro \(version)").monospacedDigit()
+                }
             }
             .scrollsUnder()
             .task {

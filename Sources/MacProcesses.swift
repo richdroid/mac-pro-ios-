@@ -181,6 +181,11 @@ struct ProcessesLink: View {
 }
 
 // One Claude Code session on the Mac: what it's doing, and, for the ones this Mac keeps, its screen a tap away.
+extension Status.Session {
+    // The name as a word: its first letter capitalised and the rest as the Mac has it, so "build" reads "Build" and
+    // "mac-dash" reads "Mac-dash", never "Mac-Dash" (designer, 2026-11-11).
+    var shownName: String { name.prefix(1).uppercased() + name.dropFirst() }
+}
 struct SessionRow: View {
     let session: Status.Session
     let working: Bool
@@ -189,7 +194,8 @@ struct SessionRow: View {
     var tint: Color {
         if session.stuck == true || session.waiting == true { return .orange }
         switch session.status {
-        case "stopped": return .red
+        // Grey, not red: a session that simply isn't running is normal, and red read as an error (designer, 2026-11-11).
+        case "stopped": return Color(white: 0.55)
         case "idle": return .green
         case "starting": return .secondary
         default: return macBlue
@@ -214,7 +220,7 @@ struct SessionRow: View {
         HStack(spacing: 10) {
             Circle().fill(tint).frame(width: 9, height: 9)
             VStack(alignment: .leading, spacing: 1) {
-                Text(session.name).lineLimit(1)
+                Text(session.shownName).lineLimit(1)
                 Text(line).font(.footnote.weight(session.waiting == true ? .semibold : .regular)).foregroundStyle(session.stuck == true || session.waiting == true ? .orange : .secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -225,7 +231,7 @@ struct SessionRow: View {
                 // Only a session that seems stuck has a reason to be restarted.
                 Button("Restart") { confirm = true }
                     .buttonStyle(.bordered).controlSize(.small)
-                    .confirmationDialog("Restart \(session.name)?", isPresented: $confirm, titleVisibility: .visible) {
+                    .confirmationDialog("Restart \(session.shownName)?", isPresented: $confirm, titleVisibility: .visible) {
                         Button("Restart", role: .destructive, action: restart)
                     } message: { Text(session.waiting == true ? "It will come back to the same question. To answer it, tap the session instead." : "It stops what it’s doing, then picks up the same conversation.") }
             }

@@ -67,7 +67,9 @@ http.createServer((q, s) => {
 const macMock = JSON.parse(require('fs').readFileSync(__dirname + '/mock-status.json'));
 { // Times relative to now, so the screenshots show what a real day looks like.
   const now = Date.now(), plan = macMock.usage.plan;
-  plan.at = now - 120000; plan.fiveHourResets = now + 3 * 3600e3; plan.sevenDayResets = now + 4 * 86400e3;
+  // Read 2 minutes before each answer, not before the stand-in started: an hour into the build the shots said "Plan last
+  // read 1h 2m ago" on a plan the real Mac reads every few minutes (designer, 2026-11-11). Stamped as each answer goes.
+  plan.at = -4242; plan.fiveHourResets = now + 3 * 3600e3; plan.sevenDayResets = now + 4 * 86400e3;
   // As the real Mac reports it since November: Claude no longer sends a 5-hour limit for this plan.
   plan.fiveHour = null; plan.fiveHourResets = null;
   macMock.iosApps.apps.forEach(a => { if (a.expires) { a.expires = now + 6 * 86400e3; a.installedAt = now - 86400e3; } });
@@ -90,7 +92,9 @@ macMock.apps = [
 ];
 macMock.installed = ['Calendar', 'Claude', 'Code', 'Finder', 'Google Chrome', 'Music', 'Safari', 'System Settings', 'Tailscale', 'Terminal', 'TextEdit', 'VLC'];
 macMock.displayOn = false;
-const macStatus = JSON.stringify(macMock);
+const macStatusAt = JSON.stringify(macMock);
+let macStatus = macStatusAt.replace('"at":-4242', `"at":${Date.now() - 120000}`);
+setInterval(() => { macStatus = macStatusAt.replace('"at":-4242', `"at":${Date.now() - 120000}`); }, 30000);
 const macProc = (pid, name, cpu, mem, locked) => ({ pid, start: 'Fri Oct 30 23:11:35 2026', name, cpu, mem: mem * 1048576, locked });
 const macProcs = JSON.stringify({
   cpu: [macProc(40, 'Google Chrome Helper', 84, 610, null), macProc(41, 'WindowServer', 22, 240, 'System process'), macProc(42, 'Claude Code', 12, 690, 'Claude session'), macProc(43, 'Music', 6, 380, null), macProc(44, 'node', 3, 310, 'The dashboard'), macProc(45, 'Tailscale', 2, 118, 'Keeps remote access')],

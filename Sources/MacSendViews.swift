@@ -118,8 +118,6 @@ struct SendSection: View {
     @State private var picked: [PhotosPickerItem] = []
     @State private var importing = false
     @State private var showAll = false
-    @State private var shown: String?
-    @State private var revealFail: [String: String] = [:]
     let route: String
 
     var body: some View {
@@ -167,37 +165,18 @@ struct SendSection: View {
         }
     }
 
+    // A plain record of what got there: no Show in Finder, which opened a window on a Mac whose display is kept off, so
+    // a tap showed nothing happen (designer, 2026-11-11).
     func recentRow(_ f: SentFile) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 12) {
-                Image(systemName: f.dir == true ? "folder" : MacFiles.symbol(f.name)).foregroundStyle(.secondary).frame(width: 26)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(f.name).lineLimit(1).truncationMode(.middle)
-                    Text("\(MacFiles.bytes(f.size)) · \(Format.ago(ms: f.at))").font(.footnote).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-                Button { reveal(f) } label: {
-                    if shown == f.name { Label("Shown", systemImage: "checkmark").labelStyle(.titleAndIcon) } else { Text("Show in Finder") }
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .accessibilityHint("Opens a Finder window on the Mac with this file selected")
+        HStack(spacing: 12) {
+            Image(systemName: f.dir == true ? "folder" : MacFiles.symbol(f.name)).foregroundStyle(.secondary).frame(width: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(f.name).lineLimit(1).truncationMode(.middle)
+                Text("\(MacFiles.bytes(f.size)) · \(Format.ago(ms: f.at))").font(.footnote).foregroundStyle(.secondary)
             }
-            if let e = revealFail[f.name] { FailText(e) }
+            Spacer(minLength: 0)
         }
-    }
-    func reveal(_ f: SentFile) {
-        guard let base = sends.queue.base() else { return }
-        revealFail[f.name] = nil
-        Task {
-            do {
-                try await MacFiles.reveal(f.name, on: base)
-                withAnimation(Motion.quick) { shown = f.name }
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
-                if shown == f.name { withAnimation(Motion.quick) { shown = nil } }
-            } catch {
-                withAnimation(Motion.quick) { revealFail[f.name] = MacFiles.unreachable(error) ? Phrase.macAway : error.localizedDescription }
-            }
-        }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -236,8 +215,12 @@ struct MacPowerSections: View {
             .buttonStyle(.plain)
             .contentShape(Rectangle())
             .id("power")
+            // In Health's card, not a card of one row of its own (designer, 2026-11-11: no lone rows).
+            Button(role: .destructive) { model.macPage = .restart } label: {
+                HStack { Text("Restart the Mac…"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+            }
         } header: { Text("Health") } footer: {
-            Text("Tailscale, the bridge, sessions, the TV link, the Letterboxd relay, the Chumby and OCLP, each with its state.")
+            Text("Tailscale, the bridge, sessions, the TV link, the Letterboxd relay, the Chumby and OCLP, each with its state. A restart checks first that the Mac will come back by itself.")
         }
         .task {
             if let p = MacHealthView.posed(model.pose == "send" ? "healthbad" : "health") , !model.pose.isEmpty { summary = p.report; return }
@@ -249,10 +232,5 @@ struct MacPowerSections: View {
         }
         // Back from its page: the summary says what that page last saw.
         .onReceive(model.nav.$macPage.dropFirst()) { p in if p == nil { Task { await read() } } }
-        Section {
-            Button(role: .destructive) { model.macPage = .restart } label: {
-                HStack { Text("Restart the Mac…"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
-            }
-        } header: { Text("Power") } footer: { Text("Checks first that it will come back by itself.") }
     }
 }

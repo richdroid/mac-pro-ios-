@@ -7,6 +7,10 @@ import UIKit
 // so lists read better as one column, the same as on the outer display.
 private struct PaneLayoutKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues { var paneLayout: Bool { get { self[PaneLayoutKey.self] } set { self[PaneLayoutKey.self] = newValue } } }
+// How far FoldSplit has already moved its left pane in from the display's outer edge, so a page drawn by hand (not a
+// List, whose cards land at the same place either way) can take it off its own inset and line up with the lists.
+private struct PaneOuterKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues { var paneOuter: CGFloat { get { self[PaneOuterKey.self] } set { self[PaneOuterKey.self] = newValue } } }
 struct PaneReader<C: View>: View {
     @Environment(\.horizontalSizeClass) private var size
     @State private var landscape = true
@@ -328,7 +332,7 @@ struct FoldSplit<L: View, R: View>: View {
                     if held?.key != key || held?.split != read { held = (key, read) }
                 }
                 ArrangementView {
-                    left.padding(.leading, use.outer).padding(.trailing, use.gutter).splitArrangementLayoutRatio(use.ratio)
+                    left.environment(\.paneOuter, use.outer).padding(.leading, use.outer).padding(.trailing, use.gutter).splitArrangementLayoutRatio(use.ratio)
                 } secondary: {
                     right.padding(.leading, use.gutter)
                 }

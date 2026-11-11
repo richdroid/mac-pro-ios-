@@ -463,12 +463,10 @@ enum IconCache {
 // In Settings: whether the app offers waiting updates as it opens.
 struct OTASettings: View {
     @AppStorage(OTAInstaller.offerKey) private var offer = false
+    // A row in Settings' Behaviour card; its note is that card's footer.
+    static let note = "New builds of your apps show as a number on the Apps tab and on the app’s icon. Ask about updates on opening offers them as the app opens too."
     var body: some View {
-        Section {
-            Toggle("Also ask when I open the app", isOn: $offer)
-        } header: { Text("App updates") } footer: {
-            Text("New builds of your apps show as a number on the Apps tab and on the app’s icon, and install over the air from anywhere on Tailscale.")
-        }
+        Toggle("Ask about updates on opening", isOn: $offer)
     }
 }
 
