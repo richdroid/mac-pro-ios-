@@ -938,15 +938,14 @@ struct QuickActions: View {
     }
 }
 
+// What Richard glances at, and nothing else (Richard, 2026-11-11: "status screen has too much on mac pro app now and
+// the notify setting should be in settings simplify"): anything wrong, the Mac and how it's doing, and its live figures.
+// The quick actions are Control's, the alerts switch is in Settings, and the disk, remote access, this Mac and top
+// processes cards are gone: what's wrong with any of them comes as an alert, and the rest has its own tab or page.
+// Temperatures show only when he turns them on in Settings.
 struct StatusTab: View {
     @EnvironmentObject var model: AppModel
-    // What the page shows, chosen in Settings.
-    @AppStorage("showQuick") private var showQuick = true
-    @AppStorage("showTemps") private var showTemps = true
-    @AppStorage("showDisk") private var showDisk = true
-    @AppStorage("showAccess") private var showAccess = true
-    @AppStorage("showThisMac") private var showThisMac = true
-    @AppStorage("showProcesses") private var showProcesses = true
+    @AppStorage("statusTemps") private var showTemps = false
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -960,76 +959,16 @@ struct StatusTab: View {
         if showTemps, let temps = s.temps, !temps.isEmpty {
             Section("Temperatures") { TempDials(s: s).opacity(dim).place("temps") }
         }
-        if showDisk {
-            Section("Disk") {
-                Button { model.history = .disk } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text("\(Format.bytes(s.disk.free)) free").font(.system(size: 26, weight: .semibold)).monospacedDigit()
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
-                        }
-                        Text("\(Format.bytes(s.disk.used)) used of \(Format.bytes(s.disk.total))").font(.footnote).foregroundStyle(.secondary)
-                        ProgressView(value: s.disk.used, total: s.disk.total).tint(s.disk.used / max(s.disk.total, 1) > 0.9 ? .red : macBlue).padding(.top, 8)
-                    }
-                    .padding(.vertical, 2)
-                    .contentShape(Rectangle())
-                    .opacity(dim)
-                }
-                .buttonStyle(PressStyle())
-                .place("disk")
-            }
-        }
     }
-    @ViewBuilder var text: some View {
-        AlertSettings()
-        if showAccess {
-            Section("Remote access") {
-                StateRow(label: "Claude remote sessions", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped").place("access-Remote control")
-                StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped").place("access-Desktop app")
-                StateRow(label: "Tailscale", good: s.tailscale.state == "Running", value: s.tailscale.state == "Running" ? "Connected" : "Off").place("access-Tailscale")
-                StateRow(label: "Public link", good: s.publicLinkActive, value: s.publicLinkActive ? "Active" : s.publicUrl.isEmpty ? "Off" : "Down").place("access-Public link")
-                StateRow(label: "Screen Sharing", good: s.sharing.vnc, value: s.sharing.vnc ? "On" : "Off").place("access-Screen Sharing")
-                StateRow(label: "SSH", good: s.sharing.ssh, value: s.sharing.ssh ? "On" : "Off").place("access-SSH")
-            }
-        }
-        if showThisMac {
-            Section("This Mac") {
-                LabeledContent("Model", value: s.model).place("mac-model")
-                LabeledContent("Processor", value: s.cpuModel.replacingOccurrences(of: "(R)", with: "").replacingOccurrences(of: "CPU ", with: "")).place("mac-cpu")
-                LabeledContent("Tailnet", value: s.tailscale.name ?? "Not signed in").place("mac-tailnet")
-                Button("Change connection") { model.signInSheet = true }.place("mac-change")
-            }
-        }
-        if showProcesses {
-            Section("Top processes") {
-                // Eight rows by place, not by process: the Mac's top eight change order and members with every reading, and
-                // rows keyed by process were taken out, put in and moved each time, a relayout of the list's very end
-                // (where a pull past the end rests) once a second. By place, a reading changes a row's words and nothing
-                // else; one line each, so no name can change a row's height either.
-                ForEach(Array(s.procs.prefix(8).enumerated()), id: \.offset) { i, p in
-                    LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)).lineLimit(1).place("proc-\(i)")
-                }
-                Button { model.processes = .cpu } label: {
-                    HStack { Text("All processes").foregroundStyle(.primary); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
-                        .contentShape(Rectangle())
-                }
-                .place("procs-all")
-            }
-        }
-    }
-    // Folded, one column in the approved order. Open, the machine and its actions on the left with the settings under
-    // them, and the figures on the right, where they're all in view at once.
+    // Folded, one column. Open, the Mac on the left and its figures on the right, all in view at once.
     var body: some View {
         let _ = SwipeLog.mark("status tab body")
         if side != .right {
             // Updates waiting are the number on the Apps tab, not a problem with the Mac.
             if let alerts = s.alerts?.filter({ $0.id != OTAInstaller.alertID }), !alerts.isEmpty { AlertBanner(alerts: alerts) }
             Section { Hero(s: s).place("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
-            if showQuick { Section { QuickActions().place("quick") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
         }
         if side != .left { graphics }
-        if side != .right { text }
     }
 }
 
@@ -1786,6 +1725,10 @@ struct ControlTab: View {
 
     var body: some View {
         if side != .right {
+            // The quick actions, moved here from Status (Richard, 2026-11-11: "simplify"): the Screen's one door, the
+            // display, and the clipboard both ways.
+            Section { QuickActions().place("quick") }
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden)
             Section {
                 if s.macLogin {
                     HStack(spacing: 8) {
