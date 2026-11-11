@@ -14,7 +14,12 @@ final class FrameBuffer {
     let bytes: UnsafeMutableRawPointer
     let width: Int, height: Int
     var size: Int { width * height * 4 }
-    init(width: Int, height: Int) { self.width = max(width, 0); self.height = max(height, 0); bytes = calloc(max(self.width * self.height * 4, 1), 1) }
+    // `cleared: false` for memory about to be written over in full, which needn't be cleared first.
+    init(width: Int, height: Int, cleared: Bool = true) {
+        self.width = max(width, 0); self.height = max(height, 0)
+        let n = max(self.width * self.height * 4, 1)
+        bytes = cleared ? calloc(n, 1) : malloc(n)
+    }
     deinit { free(bytes) }
     func provider() -> CGDataProvider? {
         CGDataProvider(dataInfo: Unmanaged.passRetained(self).toOpaque(), data: bytes, size: size) { info, _, _ in
@@ -295,7 +300,11 @@ final class RemoteScreen: ObservableObject {
                 if whole { toldWhole = true }
                 guard let owner, await owner.handle(task, events: state, drew: told) else { return }
             }
-            if decoder.stopped { return }
+            if decoder.stopped {
+                // A stream that stopped making sense is closed and opened afresh, over the picture already there.
+                if decoder.lostTrack { task.cancel(with: .abnormalClosure, reason: nil); await owner?.dropped(task, code: 0) }
+                return
+            }
         }
     }
     // False once this socket is no longer the one wanted.
@@ -676,7 +685,8 @@ final class ScreenDecoder: @unchecked Sendable {
     // refresh, and showing only the newest lost one in five; a short queue shows them all, one per refresh.
     private var ready: [(FrameBuffer, Int)] = []
     private var latest: (FrameBuffer, Int)?
-    static let queued = 3
+    // Two, not three: each one waiting is a display refresh (16 ms) between the Mac's change and the phone's pixels.
+    static let queued = 2
     func snapshot() -> (FrameBuffer, Int) { lock.lock(); defer { lock.unlock() }; return (shared, generation) }
     // The oldest picture not yet shown, or, for a layer that has shown nothing of this connection yet, the newest.
     func next(after shown: Int, fresh: Bool) -> (FrameBuffer, Int)? {
@@ -685,15 +695,55 @@ final class ScreenDecoder: @unchecked Sendable {
         if let latest, fresh || latest.1 != shown { return latest }
         return nil
     }
-    private func finished() {
+    // Screen Sharing doesn't always answer the first request with the whole screen. Opened while the Mac's display is
+    // asleep or still waking, it answers with a 2 × 2 rectangle and from then on sends only what changes, so the phone
+    // showed black with a few live patches, or (on a reconnect) the old picture with a few new patches, until each part
+    // of the Mac happened to redraw. Seen on every open from a dark display in three tries (2026-11-10), and asking
+    // again got the whole picture 120 ms later each time. So: until a whole-screen rectangle has arrived on this
+    // connection (and again after the Mac changes resolution), the whole screen is asked for again: at once when the
+    // Mac's first answer wasn't it (when it's coming, it comes first), then 1.5 s, 3 s, 6 s apart, and not at all once one
+    // has begun to arrive, so a slow link is never made to carry the whole picture twice.
+    private var haveWhole = false
+    private var askedWhole = CFAbsoluteTimeGetCurrent()
+    private var wholeAskGap = 0.3
+    private var wholeBegun = false
+    // With no earlier picture underneath, patches over black aren't shown: the first thing seen is the whole picture
+    // filling in. Not for more than 3 s, in case the Mac never sends one.
+    private var holdBack: Bool {
+        !Self.noReask && !seeded && !haveWhole && !wholeBegun && CFAbsoluteTimeGetCurrent() - opened < 3
+    }
+    // The build's way to film the old behaviour beside the new: "screenNoReask" never asks again and shows patches.
+    static let noReask = UserDefaults.standard.bool(forKey: "screenNoReask")
+    private var seeded = false
+    private func askNext() {
+        let now = CFAbsoluteTimeGetCurrent()
+        if !haveWhole, !wholeBegun, !Self.noReask, now - askedWhole >= wholeAskGap {
+            askedWhole = now; wholeAsks += 1; wholeAskGap = max(1.5, wholeAskGap * 2)
+            request(incremental: false)
+        }
+        else { request(incremental: true) }
+    }
+    // How many times the whole picture had to be asked for again, for the measuring badge.
+    private(set) var wholeAsks = 0
+    // The stream stopped making sense (a message or encoding this doesn't know, or data that doesn't fit). What follows
+    // can't be read, so nothing more is drawn from it and the owner opens a fresh connection over the last picture.
+    // Before, an unknown message emptied the buffer and carried on, reading the middle of the next one as pixels.
+    private(set) var lostTrack = false
+    private func lose(_ why: String) { print("screen: lost track of the stream (\(why))"); lostTrack = true; stage = .stopped }
+
+    // False when the picture was held back, and so nothing new is there to show.
+    @discardableResult private func finished() -> Bool {
         // Copied here, off the main thread, so the layer gets a picture nothing writes into while it's on screen.
-        let copy = FrameBuffer(width: frame.width, height: frame.height)
+        // Nothing is shown of a first connection until its whole picture has begun: see `holdBack`.
+        if holdBack { return false }
+        let copy = FrameBuffer(width: frame.width, height: frame.height, cleared: false)
         memcpy(copy.bytes, frame.bytes, frame.size)
         lock.lock()
         generation += 1
         ready.append((copy, generation)); latest = (copy, generation)
         if ready.count > Self.queued { ready.removeFirst(ready.count - Self.queued) }
         lock.unlock()
+        return true
     }
     // MARK: Timings
     private let opened = CFAbsoluteTimeGetCurrent()
@@ -762,7 +812,7 @@ final class ScreenDecoder: @unchecked Sendable {
                 guard let head = take(24 + nameLength) else { return }
                 width = be16(head, 0); height = be16(head, 2)
                 let fresh = FrameBuffer(width: width, height: height)
-                if let seed, seed.width == width, seed.height == height { memcpy(fresh.bytes, seed.bytes, fresh.size) }
+                if let seed, seed.width == width, seed.height == height { memcpy(fresh.bytes, seed.bytes, fresh.size); seeded = true }
                 frame = fresh
                 mark { $0.signedIn = $1 }
                 // 32-bit little-endian BGRX, or 16-bit little-endian 5-6-5. ZRLE first, moved areas next, raw as the
@@ -773,6 +823,7 @@ final class ScreenDecoder: @unchecked Sendable {
                 send([2, 0, 0, 5,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33,  255, 255, 255, 17])
                 // The whole picture first, then a few requests already waiting, so each change on the Mac is sent as
                 // it happens instead of a round trip after the last one arrived.
+                askedWhole = CFAbsoluteTimeGetCurrent()
                 request(incremental: false)
                 for _ in 1..<pipeline { request(incremental: true) }
                 stage = .messages
@@ -797,7 +848,7 @@ final class ScreenDecoder: @unchecked Sendable {
                 case 3:
                     guard buffer.count >= 8 else { return }
                     guard take(8 + be32(buffer, 4)) != nil else { return }
-                default: buffer = Data(); return
+                default: lose("message type \(type)"); return
                 }
             }
         }
@@ -830,9 +881,10 @@ final class ScreenDecoder: @unchecked Sendable {
             case 16:
                 guard buffer.count >= 16 else { return false }
                 let length = be32(buffer, 12)
-                guard x + w <= width, y + h <= height else { fail("Unexpected screen data."); return false }
+                guard x + w <= width, y + h <= height else { lose("a rectangle outside the screen"); return false }
                 drop(16)
                 painted = true; paintedArea += w * h
+                if w * h >= width * height * 3 / 4 { wholeBegun = true }
                 streaming = Streaming(x: x, y: y, w: w, h: h, left: length)
                 // The link's speed, from the first big rectangle streaming in: its bytes over the time they took.
                 if countingFirst, w * h >= width * height / 4 { bigStart = (CFAbsoluteTimeGetCurrent(), length) }
@@ -841,7 +893,7 @@ final class ScreenDecoder: @unchecked Sendable {
                 let length = w * h * bytesPerPixel
                 guard buffer.count >= 12 + length else { return false }
                 painted = true; paintedArea += w * h
-                if w * h >= width * height * 3 / 4 { wholeSeen = true }
+                if w * h >= width * height * 3 / 4 { wholeSeen = true; haveWhole = true; wholeBegun = true }
                 buffer.withUnsafeBytes { src in
                     let from = src.baseAddress! + 12
                     for row in 0..<h where y + row < height && x + w <= width {
@@ -869,16 +921,17 @@ final class ScreenDecoder: @unchecked Sendable {
                 frame = FrameBuffer(width: width, height: height)
                 events.append(.resized(w, h))
                 resized = true
+                // The new size starts black: its whole picture is asked for until it comes, as on opening.
+                haveWhole = false; wholeBegun = false; seeded = true; wholeAskGap = 0.3
                 drop(12); rectsLeft -= 1
             default:
-                fail("Unexpected screen data."); return false
+                lose("encoding \(encoding)"); return false
             }
         }
         // The whole update is in.
         inUpdate = false
         // An update that only changed the pointer's picture leaves the screen's picture as it was.
-        if painted || resized || empty {
-            finished()
+        if painted || resized || empty, finished() {
             events.append(.drew)
             if countingFirst, painted { mark { t, now in if t.firstPixels == nil { t.firstPixels = now } } }
             // Whole once the full-screen answer is in: with requests already waiting, the Mac answers small changes (the
@@ -892,8 +945,9 @@ final class ScreenDecoder: @unchecked Sendable {
                 }
             }
         }
-        // One answered, one more asked for, so the same number always wait. After a resize the whole new picture.
-        request(incremental: !resized)
+        // One answered, one more asked for, so the same number always wait: the whole picture after a resize, and for as
+        // long as this connection hasn't had one.
+        if resized { askedWhole = CFAbsoluteTimeGetCurrent(); request(incremental: false) } else { askNext() }
         return true
     }
 
@@ -907,18 +961,18 @@ final class ScreenDecoder: @unchecked Sendable {
                 inflated.append(contentsOf: out)
                 return true
             }
-            guard ok else { fail("Unexpected screen data."); return false }
+            guard ok else { lose("data that wouldn't inflate"); return false }
             drop(n); s.left -= n
         }
         let result = inflated.withUnsafeBufferPointer { drawTiles($0, &s) }
-        if result == .bad { fail("Unexpected screen data."); return false }
+        if result == .bad { lose("a tile that doesn't fit"); return false }
         // Drawn data is let go now and then, not on every tile.
         if inflatedAt > 1 << 18 { inflated.removeFirst(inflatedAt); inflatedAt = 0 }
         let done = s.tileY >= s.h
         if done {
-            guard s.left == 0 else { fail("Unexpected screen data."); return false }
+            guard s.left == 0 else { lose("a rectangle longer than its picture"); return false }
             streaming = nil; rectsLeft -= 1
-            if s.w * s.h >= width * height * 3 / 4 { wholeSeen = true }
+            if s.w * s.h >= width * height * 3 / 4 { wholeSeen = true; haveWhole = true }
             if let big = bigStart {
                 bigStart = nil
                 let span = CFAbsoluteTimeGetCurrent() - big.0
@@ -926,7 +980,7 @@ final class ScreenDecoder: @unchecked Sendable {
             }
             return true
         }
-        if s.left == 0 { fail("Unexpected screen data."); return false }
+        if s.left == 0 { lose("a rectangle shorter than its picture"); return false }
         streaming = s
         // A big rectangle (the first picture, a page scrolled on a slow link) is shown as it fills in, about 15 times a
         // second, rather than all at once after its last byte.
@@ -934,7 +988,7 @@ final class ScreenDecoder: @unchecked Sendable {
             let now = CFAbsoluteTimeGetCurrent()
             if now - lastShown >= 0.066 {
                 lastShown = now; shownRows = s.tileY
-                finished()
+                guard finished() else { return false }
                 events.append(.drew)
                 if countingFirst { mark { t, at in if t.firstPixels == nil { t.firstPixels = at } } }
             }
