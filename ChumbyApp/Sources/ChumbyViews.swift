@@ -431,18 +431,23 @@ struct PinnedTitle<Bar: View>: ViewModifier {
     let bar: Bar
     @State private var scrolled = false
     @State private var barHeight: CGFloat = 52
+    @State private var topInset: CGFloat = 0
     func body(content: Content) -> some View {
         let shown = on && scrolled
         content
             .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 48 } action: { _, now in
                 withAnimation(.easeOut(duration: 0.18)) { scrolled = now }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
+            // Over the whole display, safe areas included: laid out inside them it clipped the rows flat above the
+            // bottom edge, even at rest (designer, 11-11: "A mask on a scroll view covers the safe area, or it clips").
             .mask {
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: shown ? barHeight : 0)
+                    Color.clear.frame(height: shown ? topInset + barHeight : 0)
                     LinearGradient(colors: [.black.opacity(shown ? 0 : 1), .black], startPoint: .top, endPoint: .bottom).frame(height: TabBarFade.fade)
                     Color.black
                 }
+                .ignoresSafeArea()
             }
             .overlay(alignment: .top) {
                 if shown {
@@ -1635,9 +1640,10 @@ struct ChannelsTab: View {
             HStack(spacing: 14) {
                 Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 12)
-                Image(systemName: isIn ? "checkmark.circle.fill" : "plus.circle.fill").font(.system(size: 24))
-                    .foregroundStyle(isIn ? ChumbyPalette.on : ChumbyPalette.acc(scheme == .dark))
-                    .contentTransition(.symbolEffect(.replace))
+                // Drawn as the remove mark is (RowRemove): a 21 pt disc, its right edge on the content margin.
+                Circle().fill(isIn ? ChumbyPalette.on : ChumbyPalette.acc(scheme == .dark)).frame(width: 21, height: 21)
+                    .overlay { Image(systemName: isIn ? "checkmark" : "plus").font(.system(size: 10, weight: .heavy)).foregroundStyle(.white).contentTransition(.symbolEffect(.replace)) }
+                    .animation(.snappy, value: isIn)
             }
             .frame(minHeight: 34)
             .contentShape(Rectangle())

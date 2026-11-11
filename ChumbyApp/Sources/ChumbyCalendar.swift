@@ -12,7 +12,7 @@ import UIKit
 @MainActor
 final class CalendarWake: ObservableObject {
     // What the calendar switch does, in one sentence wherever the switch is (Alarms and Calendar settings: designer, 11-11).
-    static let what = "An alarm before the first thing each day."
+    static let what = "Rings before your first event."
     static let shared = CalendarWake()
     static let refreshID = "local.macpro.Chumby.calendar"
     nonisolated static let prefix = Alarm.calendarPrefix
@@ -412,7 +412,7 @@ struct CalendarDayPage: View {
     @EnvironmentObject var model: ChumbyModel
     let key: String
     var body: some View {
-        List { CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false).listRowBackground(GlassRow()) }
+        List { CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false, ownList: false) }
             .pushedPage("day")
     }
 }
@@ -471,6 +471,9 @@ struct CalendarDaySheet: View {
     var close: (() -> Void)?
     // Pushed, the system's Back closes it, so it has no Done of its own.
     var done = true
+    // False when a page around it brings the list (the pushed page): its rows alone, never a list inside a list's row,
+    // which collapsed to one empty bar (designer, 11-11).
+    var ownList = true
     var item: PlannedWake? { wake.plan.first { $0.key == key } }
     var title: String { item.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
     var edit: DayEdit { wake.rules.dayEdits[key] ?? DayEdit() }
@@ -636,11 +639,19 @@ struct CalendarDaySheet: View {
         if let close {
             // Its own list in the pane, so the title row with Done stays pinned once scrolled (as the editor's does).
             let titleRow = PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
-            List {
-                titleRow
-                sections.listRowBackground(GlassRow())
+            Group {
+                if ownList {
+                    List {
+                        titleRow
+                        sections.listRowBackground(GlassRow())
+                    }
+                    // Pinned only with its Done: a pushed page's way out is the system's Back.
+                    .pinsTitle(done) { titleRow }
+                } else {
+                    titleRow
+                    sections.listRowBackground(GlassRow())
+                }
             }
-            .pinsTitle { titleRow }
             .onAppear { labelText = edit.label ?? ""; loadOwn() }
             .onDisappear { commitLabel() }
         } else {

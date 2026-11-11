@@ -758,7 +758,10 @@ struct AlarmsTab: View {
     // What rings next, first, so it never has to be worked out from the list: what kind it is, the time, when, and Skip.
     @State private var skipping = false
     @ViewBuilder var glance: some View {
-        if !model.stateKnown {
+        if !model.stateKnown && model.unreachable {
+            // Out of reach, no spinner promising an answer that can't come: the Offline row above says why.
+            Text("What rings next shows once the Chumby answers.").font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 6)
+        } else if !model.stateKnown {
             HStack(spacing: 10) {
                 ProgressView()
                 VStack(alignment: .leading, spacing: 3) {
