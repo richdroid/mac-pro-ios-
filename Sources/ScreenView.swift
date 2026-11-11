@@ -466,11 +466,12 @@ struct RemoteScreenView: View {
                 p.crease = kind == .flatLandscape ? fold.crease : nil
                 return p
             }
-            p.picture = fitted(in: clear(CGRect(x: 0, y: 0, width: w, height: kind == .closedLandscape ? h - dock - 4 : h)))
+            // Open flat too, the picture is fitted in the space above the dock, never under it (it took the display's whole
+            // height there, and where that left under 56 pt the dock lay over the Mac's own bottom edge). Whole, against
+            // the top, centred across; the dock centred in what's left under it.
+            p.picture = fitted(in: clear(CGRect(x: 0, y: 0, width: w, height: max(h - dock - 8, 1))))
             let room = h - p.picture.maxY
-            p.dock = room >= dock + 4
-                ? CGRect(x: 0, y: p.picture.maxY + (room - dock) / 2, width: w, height: dock)
-                : CGRect(x: 0, y: h - dock - 6 - bottom, width: w, height: dock)
+            p.dock = CGRect(x: 0, y: p.picture.maxY + max((room - dock) / 2, 4), width: w, height: dock)
             p.crease = kind == .flatLandscape ? fold.crease : nil
         }
         return p
@@ -604,8 +605,9 @@ struct RemoteScreenView: View {
         }
     }
     // A round tool on a dark glass, the size of the row it sits in.
-    func toolButton(_ icon: String, _ a11y: String, on: Bool = false, tint: Color = .white, compact: Bool = false, action: @escaping () -> Void) -> some View {
-        let side: CGFloat = compact ? 32 : 44
+    // `side`: the dock's own size for a tool, so everything in it is one height (its tools were 44 pt beside 40 pt keys).
+    func toolButton(_ icon: String, _ a11y: String, on: Bool = false, tint: Color = .white, compact: Bool = false, side given: CGFloat? = nil, action: @escaping () -> Void) -> some View {
+        let side: CGFloat = given ?? (compact ? 32 : 44)
         return Button { tick(.light); action() } label: {
             Image(systemName: icon).font(.system(size: compact ? 14 : 17, weight: .semibold))
                 .frame(width: side, height: side)
@@ -640,7 +642,7 @@ struct RemoteScreenView: View {
     // MARK: Clipboard
     // Copy and Paste carry text between the two clipboards. Done is a tick on the button itself, for a moment; a failure
     // says why, right at the button.
-    func clipButton(paste: Bool, compact: Bool = false) -> some View {
+    func clipButton(paste: Bool, compact: Bool = false, side: CGFloat? = nil) -> some View {
         let state = paste ? pasteState : copyState
         let icon: String
         switch state {
@@ -651,7 +653,7 @@ struct RemoteScreenView: View {
         // Nothing on this iPhone's clipboard isn't a failure: Paste just sits dimmed until there is.
         let empty = paste && !phoneHasText
         return toolButton(icon, paste ? "Paste the iPhone’s clipboard on the Mac" : "Copy from the Mac to the iPhone",
-                          tint: state == .done ? macBlue : state.failed ? .red : .white, compact: compact) {
+                          tint: state == .done ? macBlue : state.failed ? .red : .white, compact: compact, side: side) {
             if paste { pasteFromPhone() } else { copyToPhone() }
         }
         .disabled(empty)
@@ -1116,18 +1118,31 @@ struct RemoteScreenView: View {
         }
         .buttonStyle(MacKeyStyle()).accessibilityLabel(a11y)
     }
-    // Landscape, the picture has the room, so the keys sit in one dock under it: 40 pt keys, 4 pt apart. Where the
-    // hinge crosses it, it splits in two, one capsule each side of the fold, so no key sits on the crease.
+    // Landscape, the picture has the room, so the keys sit in one dock under it. One design throughout (Richard,
+    // 2026-11-10, of the two capsules open flat: "this is fucked look at the bar"): every key and tool is 40 × 40, 4 pt
+    // apart, so both capsules are one height; keys that type on the Mac have a key's face, the app's own tools are bare
+    // glyphs, and Done is a filled circle of the same size at the far end. Where the hinge crosses the dock it splits in
+    // two capsules of the same width, one each side of the fold and the same distance from it, so no key sits on the
+    // crease and the two halves mirror each other.
+    static let dockKey: CGFloat = 40, dockGap: CGFloat = 4
+    // Nine places: the left half's nine keys, and the right half's eight things plus Fit when it shows.
+    static let dockHalf: CGFloat = dockKey * 9 + dockGap * 8
     @ViewBuilder func dock(_ width: CGFloat, crease: CGRect?) -> some View {
         if let crease, crease.minX > 0, crease.maxX < width {
             // Half the fold, never under 20 pt, plus a little air.
             let half = max(20, crease.width / 2) + 6
+            // Both halves the same width, as wide as nine keys where the page allows.
+            let page = min(crease.midX - half, width - crease.midX - half) - 12 - 16
+            let each = max(min(Self.dockHalf, page), 0)
             HStack(spacing: 0) {
-                Group { if dockOpen { capsule { dockKeys() } } }
+                Group { if dockOpen { capsule { HStack(spacing: Self.dockGap) { dockKeys(compact: each < Self.dockHalf) }.frame(width: each, alignment: .leading) } } }
                     .frame(width: max(0, crease.midX - half), alignment: .trailing)
                 Color.clear.frame(width: half * 2, height: 1)
-                capsule { dockTools() }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Group {
+                    if dockOpen { capsule { HStack(spacing: Self.dockGap) { dockTools(compact: each < Self.dockHalf, spread: true) }.frame(width: each) } }
+                    else { capsule { dockTools() } }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(width: width)
         } else {
@@ -1144,28 +1159,31 @@ struct RemoteScreenView: View {
         }
     }
     func capsule<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        HStack(spacing: 4) { content() }
+        HStack(spacing: Self.dockGap) { content() }
             .padding(6)
             .glassEffect(.regular, in: Capsule())
     }
     // Left of the fold: ⌘ through →.
     @ViewBuilder func dockKeys(compact: Bool = false) -> some View {
-        MacKeyCap(label: "⌘", sym: MacKey.command, keys: keys, a11y: "Command", size: 16).frame(width: 44, height: 40)
-        keyButton("esc", "Escape") { keys.tap(MacKey.esc) }
-        if !compact { keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() } }
-        keyButton("", icon: "magnifyingglass", "Spotlight") { keys.tap(MacKey.space, with: [MacKey.command]) }
-        keyButton("", icon: "rectangle.3.group", "Mission Control") { keys.tap(MacKey.up, with: [MacKey.control]) }
-        ForEach([(MacKey.left, "arrow.left", "Left arrow"), (MacKey.up, "arrow.up", "Up arrow"), (MacKey.down, "arrow.down", "Down arrow"), (MacKey.right, "arrow.right", "Right arrow")], id: \.0) { k in
-            MacKeyCap(label: "", icon: k.1, sym: k.0, keys: keys, a11y: k.2).frame(width: 40, height: 40)
+        let k = Self.dockKey
+        MacKeyCap(label: "⌘", sym: MacKey.command, keys: keys, a11y: "Command", size: 16).frame(width: k, height: k)
+        keyButton("esc", "Escape") { keys.tap(MacKey.esc) }.frame(width: k, height: k)
+        if !compact { keyButton("", icon: "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() }.frame(width: k, height: k) }
+        keyButton("", icon: "magnifyingglass", "Spotlight") { keys.tap(MacKey.space, with: [MacKey.command]) }.frame(width: k, height: k)
+        keyButton("", icon: "rectangle.3.group", "Mission Control") { keys.tap(MacKey.up, with: [MacKey.control]) }.frame(width: k, height: k)
+        ForEach([(MacKey.left, "arrow.left", "Left arrow"), (MacKey.up, "arrow.up", "Up arrow"), (MacKey.down, "arrow.down", "Down arrow"), (MacKey.right, "arrow.right", "Right arrow")], id: \.0) { key in
+            MacKeyCap(label: "", icon: key.1, sym: key.0, keys: keys, a11y: key.2).frame(width: k, height: k)
         }
     }
-    // Right of the fold: ⌫ ⏎, the tools and Done.
-    @ViewBuilder func dockTools(compact: Bool = false) -> some View {
+    // Right of the fold: ⌫ ⏎, the tools and Done. `spread`: the hide key and Done keep to the far end of their capsule,
+    // which is as wide as the keys' one, whatever is between.
+    @ViewBuilder func dockTools(compact: Bool = false, spread: Bool = false) -> some View {
+        let k = Self.dockKey
         if dockOpen {
-            MacKeyCap(label: "", icon: "delete.left", sym: MacKey.delete, keys: keys, a11y: "Delete").frame(width: 40, height: 40)
-            MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return").frame(width: 40, height: 40)
-            toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Show keyboard", on: typing) { typing.toggle() }
-            if !compact, zoomed || fillZoom > 1.01 { toolButton(fitIcon, fitLabel) { fitScreen() } }
+            MacKeyCap(label: "", icon: "delete.left", sym: MacKey.delete, keys: keys, a11y: "Delete").frame(width: k, height: k)
+            MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return").frame(width: k, height: k)
+            toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Show keyboard", on: typing, side: k) { typing.toggle() }
+            if !compact, zoomed || fillZoom > 1.01 { toolButton(fitIcon, fitLabel, side: k) { fitScreen() } }
             if compact {
                 Menu {
                     if zoomed || fillZoom > 1.01 { Button { fitScreen() } label: { Label(fitLabel, systemImage: fitIcon) } }
@@ -1174,25 +1192,26 @@ struct RemoteScreenView: View {
                     Button { pasteFromPhone() } label: { Label("Paste on the Mac", systemImage: "doc.on.clipboard") }.disabled(!phoneHasText)
                     Button { signingIn = true } label: { Label("Sign in to the Mac", systemImage: "key.fill") }
                 } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(Circle())
+                    Image(systemName: "ellipsis").font(.system(size: 17, weight: .semibold)).frame(width: k, height: k).contentShape(Circle())
                 }
                 .foregroundStyle(.white).accessibilityLabel("Clipboard and sign-in")
             } else {
-                toolButton("key.fill", "Sign in to the Mac") { signingIn = true }
-                clipButton(paste: false)
-                clipButton(paste: true)
+                toolButton("key.fill", "Sign in to the Mac", side: k) { signingIn = true }
+                clipButton(paste: false, side: k)
+                clipButton(paste: true, side: k)
             }
         }
+        if spread { Spacer(minLength: 0) }
         Button {
             tick(.light)
             withAnimation(Motion.quick) { dockOpen.toggle() }
         } label: {
             Image(systemName: dockOpen ? "chevron.down" : "chevron.up").font(.system(size: 13, weight: .bold))
-                .frame(width: 30, height: 40).contentShape(Rectangle())
+                .frame(width: k, height: k).contentShape(Rectangle())
         }
         .buttonStyle(.plain).foregroundStyle(.white.opacity(0.7)).accessibilityLabel(dockOpen ? "Hide the keys" : "Show the keys")
         // Done stays, at the right-hand end, even with the keys tucked away.
-        toolButton("xmark", "Done", on: true) { model.screenOpen = false }
+        toolButton("xmark", "Done", on: true, side: k) { model.screenOpen = false }
     }
 
     // Watching doesn't count as touching, so keep the iPhone's display on while the Mac's screen is open.
