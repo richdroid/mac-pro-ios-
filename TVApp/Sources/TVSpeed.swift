@@ -197,6 +197,7 @@ final class HitchLog: NSObject {
     private var hitches: [[String: Any]] = []
     private var flushing: Task<Void, Never>?
     func start() {
+        MainTurns.start()
         guard link == nil, UserDefaults.standard.string(forKey: "pose") != nil else { return }
         let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
         l.add(to: .main, forMode: .common)
@@ -233,6 +234,26 @@ final class HitchLog: NSObject {
         hitches.append(["ms": Int(gap), "at": Date().timeIntervalSince1970 * 1000])
         print("HITCH \(Int(gap)) ms")
         flushSoon()
+    }
+}
+#endif
+
+// The build's films only (-swipeLog YES): every main-thread turn over 24 ms, into the swipe log beside the flick's own
+// steps (open, fade, covers, move, landed), so a held frame in a film is told apart as a stall or an animation that
+// didn't run.
+#if os(iOS)
+enum MainTurns {
+    nonisolated(unsafe) private static var woke: CFAbsoluteTime = 0
+    nonisolated(unsafe) private static var started = false
+    @MainActor static func start() {
+        guard SwipeLog.on, !started else { return }
+        started = true
+        let o = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { _, a in
+            let now = CFAbsoluteTimeGetCurrent()
+            if a == .afterWaiting { woke = now }
+            else if woke > 0 { if now - woke > 0.024 { SwipeLog.note(String(format: "main turn %.0f ms", (now - woke) * 1000)) }; woke = 0 }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), o, .commonModes)
     }
 }
 #endif

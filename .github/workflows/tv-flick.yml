@@ -61,11 +61,13 @@ jobs:
             curl -s $M/fnormal/reset > /dev/null
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 4
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab $tab -pose $pose
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab $tab -pose $pose -swipeLog YES
             sleep 16
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # The main thread's long turns beside the flick's own steps, for the film's held frames.
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/tv-$name-main.log || true
           }
           # A real finger on the first stream row (where the app says it is), filmed: "tap" a quick tap, "long" a press
           # held 0.7 s and let go where it was (the pick), "swipe" a fast swipe up from the row (a scroll: nothing sent).
@@ -138,6 +140,8 @@ jobs:
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose series; sleep 12
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-series$x.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # The arrival with the tile's picture already in memory (as on his phone), and two stills in the middle of it.
+            posefilm flicktapart$x $d flick-tap-art 1
             posefilm flick$x $d flick-starting 1
             posefilm flickputback$x $d flick-putback 1
             posefilm flicktap$x $d flick-tap 1

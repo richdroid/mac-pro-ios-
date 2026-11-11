@@ -194,6 +194,9 @@ struct RootView: View {
                 if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream"].contains(pose) || pose.hasPrefix("flick-") ? "movie" : "series") }) {
                     // The stream flick goes as he does it most: the best stream found for him, in the hand, thrown.
                     // Through the card's own tap, as a finger would: what's already on goes to the Remote with nothing sent.
+                    // "-art" poses: the tile's picture is in memory first, as on his phone, so the page's arrival is judged
+                    // with its poster and ground.
+                    if pose.hasSuffix("-art"), let u = URL(string: item.art) { _ = await ImageStore.shared.load(u); _ = await ImageStore.shared.band(u); if let h = ImageStore.shared.cached(u) { _ = await ImageStore.shrunk(h, 16) } }
                     FlickCardButton.tap(model, item, .stremio, ready: pose == "flickdemo-stream" || pose.hasPrefix("flick-")); return
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)

@@ -442,9 +442,12 @@ struct FlickScreen: View {
                 if tint == nil { tint = ImageStore.shared.cachedBand(URL(string: item.art)) }
                 // Out of the quiet transaction that put the screen up (under it the fade didn't run: a cut), then the
                 // pages under it go once it's fully up.
+                SwipeLog.note("flick open")
                 DispatchQueue.main.async {
-                    withAnimation(.easeOut(duration: 0.18)) { arrived = true }
-                    Task { try? await Task.sleep(nanoseconds: 200_000_000); if !leaving { model.flickArrived = true } }
+                    SwipeLog.note("flick fade")
+                    // The ✕ with the page, not a beat after it.
+                    withAnimation(.easeOut(duration: 0.18)) { arrived = true; barShown = true }
+                    Task { try? await Task.sleep(nanoseconds: 200_000_000); if !leaving { SwipeLog.note("flick covers"); model.flickArrived = true } }
                 }
             }
     }
@@ -535,7 +538,6 @@ struct FlickScreen: View {
     // As the screen opens: in it comes, the colours change, and whatever the page needs is asked for.
     func opened() async {
         openedAt = Date()
-        Task { try? await Task.sleep(nanoseconds: 120_000_000); withAnimation(.easeOut(duration: 0.2)) { barShown = true } }
         // The app behind takes on the picked thing's colour too, and gets its own back after: never once this has
         // started to close, or the colour would stay behind it.
         if priorMood == nil { priorMood = .some(model.mood) }
@@ -1250,10 +1252,7 @@ struct FlickScreen: View {
                 .accessibilityAddTraits(.isButton)
                 .accessibilityHint("Sends this to the TV")
                 .accessibilityAction { FlickHaptic.caught(); send(from: rects.map["card"]) }
-            Text(shown.title).font(.headline).multilineTextAlignment(.center).lineLimit(2).padding(.horizontal, 40)
-                .contentTransition(.opacity)
-                .opacity(up ? 0 : 1)
-                .animation(.easeOut(duration: 0.15), value: up)
+            // The card names itself under its picture; a second title under the card said it twice.
             Spacer(minLength: 0)
             Spacer(minLength: 0)
         }
@@ -1439,6 +1438,7 @@ struct FlickScreen: View {
                 FlickClock.current.mark("aim-remembered")
             }
             FlickClock.current.mark("move")
+            SwipeLog.note("flick move")
             model.remoteMoveAt = Date()
             // The page dissolves over the move's first half, the Remote's keys coming up through it; the picture travels on
             // its own spring. Two animations side by side, never one inside the other (the review of e59620e).
@@ -1469,6 +1469,7 @@ struct FlickScreen: View {
             // over 0.15 s while this one, opaque, still sits exactly on it; then this one goes in one frame, the Remote's
             // fully under it, so nothing is drawn twice and nothing fades in sight.
             FlickClock.current.remoteLanded()
+            SwipeLog.note("flick landed")
             if let live = model.mirrorSlot, live.width > 20 { model.rememberSlot(live, slotKey) }
             // The pages he picked from may show again (this screen is about to go), and the Remote stays drawn.
             var landed = Transaction(); landed.disablesAnimations = true
