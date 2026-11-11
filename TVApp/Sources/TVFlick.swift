@@ -455,6 +455,7 @@ struct FlickScreen: View {
                     // The page under it goes in the same step, slowly at first (UnderFlick), so the strip round the bars
                     // darkens with the fade rather than after it.
                     withAnimation(.easeOut(duration: 0.18)) { onScreen = true }
+                    upAt = Date().addingTimeInterval(0.2)
                     if !leaving { model.flickArrived = true }
                 }
             }
@@ -626,6 +627,15 @@ struct FlickScreen: View {
         .animation(.easeOut(duration: 0.3), value: step)
     }
 
+    // Until the page's arrival has finished (its fade ended), so nothing new is laid out while it fades up.
+    @State private var upAt: Date?
+    func untilUp() async {
+        for _ in 0..<150 {
+            if let u = upAt, Date() >= u { return }
+            try? await Task.sleep(nanoseconds: 16_000_000)
+        }
+    }
+
     // Waits until the main thread is drawing freely again: two 16 ms waits in a row that come back on time (a long turn
     // in between makes one come back late). At most 1.2 s.
     static func settleFrames() async {
@@ -650,11 +660,13 @@ struct FlickScreen: View {
         } else {
             ToolbarItem(placement: .cancellationAction) {
                 // Full strength, as every close in the app: in the accent on the bar's glass it read as greyed out.
+                // Its own white glyph, not styled by the bar: the bar along the top (open upright) drew a styled one grey.
                 Button { if !flown { leave() } } label: {
-                    Label { Text("Close") } icon: { Image(systemName: "xmark").font(.body.weight(.semibold)).symbolRenderingMode(.monochrome).foregroundStyle(Color.white) }
+                    Image(systemName: "xmark").font(.body.weight(.semibold)).foregroundStyle(Color.white)
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
                 }
-                // The bar along the top (open upright) drew it grey through the tint alone.
-                .tint(.white).foregroundStyle(Color.white)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
             }
         }
     }
@@ -1181,7 +1193,7 @@ struct FlickScreen: View {
         settledAt = Date()
         let id = liftedID
         settling = id
-        Task { try? await Task.sleep(nanoseconds: 450_000_000); if settling == id { settling = nil } }
+        Task { try? await Task.sleep(nanoseconds: 420_000_000); if settling == id { withAnimation(.easeOut(duration: 0.2)) { settling = nil } } }
         if !quiet { FlickHaptic.settle() }
         withAnimation(.spring(response: 0.38, dampingFraction: 0.6)) { liftedID = nil; lift.drag = .zero; lift.lean = 0; lift.armed = false; liftScale = 1 }
     }
@@ -1226,6 +1238,8 @@ struct FlickScreen: View {
         guard let found, !found.isEmpty else { noStreams = true; return }
         // From the cache: there with the page, no arrival of its own. Fetched now: the rows come in a beat apart.
         let quick = Date().timeIntervalSince(asked) < 0.15
+        // Laid out only once the page is fully up: rows arriving mid-fade took the main thread and froze it (CI 2b00c30).
+        await untilUp()
         streamsQuick = quick
         if quick { streams = found } else { withAnimation { streams = found } }
         streamsAt = Date()
@@ -1450,9 +1464,9 @@ struct FlickScreen: View {
                 leave(restoreMood: false); Task { await model.load() }; return
             }
             remoteSlot = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
-            // The Remote drawn under this screen before anything moves: built at the pick, its first drawing took the
-            // main thread for up to 0.9 s just as the move began, and the picture jumped (CI f980195).
-            await Self.settleFrames()
+            // A frame, so the Remote's first layout is under way before anything moves. (Waiting for it to be fully drawn
+            // held the picked row still for a quarter of a second: a freeze.)
+            try? await Task.sleep(nanoseconds: 17_000_000)
             if remembered {
                 // The Remote, built in that frame, may already say where its picture really is.
                 if let live = model.mirrorSlot, live.width > 20 { remoteSlot = live.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y) }
@@ -1524,6 +1538,7 @@ struct FlickScreen: View {
             found = await Task.detached(priority: .userInitiated) { d.flatMap { try? JSONDecoder().decode(StremioMeta.self, from: $0) } }.value
         }
         guard let m = found else { metaFailed = true; return }
+        await untilUp()
         defer {
             // The episode the big key would play, its streams fetched now, so tapping it never waits on them (§2.5a C7).
             if ref.type == "series", let e = resumeTarget?.episode, !isOn(e) { Task { _ = await StreamCache.shared.streams(type: "series", imdb: ref.imdb, video: e.id) } }
