@@ -2020,16 +2020,24 @@ struct Transport: View {
     var failed: Bool { starting?.failed == true }
     // An episode on whose next can't be worked out yet: ⏭ stays lit and works it out on the press (r18: dimmed on S2 E3 of 4).
     var episodeOn: Bool { model.status?.session?.seasonEpisode != nil || (starting?.line?.hasPrefix("S") ?? false) }
+    // Nothing after this (a film, or the last episode): four keys, never a dead ⏭ (TV polish designer, 2026-11-11). The
+    // four keep the five places' outer edges, so they still line up with the keys above them.
+    @State private var rowWidth: CGFloat = 0
     var body: some View {
         let stremio = playing == nil && (model.status?.session?.pkg == "com.stremio.one" || starting != nil)
+        let four = stremio && nextUp.next == nil && !(episodeOn && nextUp.series == nil)
+        let slot: CGFloat? = four ? nil : .infinity
+        let inset = four ? max(0, (rowWidth / 5 - size) / 2) : 0
         HStack(spacing: 0) {
             Group {
                 if stremio { GlassButton(icon: "backward.end.fill", label: nextUp.previous.map { "Start over, or \($0.subtitle)" } ?? "Start over", size: size) { StremioBack.press(model) } }
                 else { GlassKey(icon: "backward.end.fill", label: "Previous", key: "previous", size: size) }
-            }.frame(maxWidth: .infinity)
+            }.frame(maxWidth: slot)
+            if four { Spacer(minLength: 0) }
             Group {
                 if stremio { SeekButton(icon: "gobackward.10", label: "Back 10 seconds", step: -1, size: size) } else { GlassKey(icon: "gobackward.10", label: "Rewind", key: "rewind", size: size) }
-            }.frame(maxWidth: .infinity)
+            }.frame(maxWidth: slot)
+            if four { Spacer(minLength: 0) }
             // Says which it'll do, as on the Playing tab, once the TV's word is fresh.
             // Held, it stops: the flick's own control screen is gone, and Stop went with it to here.
             // A start shows pause from the throw on (r19: the key changed glyph mid-start for no reason). Failed, nothing is
@@ -2044,10 +2052,12 @@ struct Transport: View {
                         Task { try? await Task.sleep(nanoseconds: 1_200_000_000); await model.load() }
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: slot)
+            if four { Spacer(minLength: 0) }
             Group {
                 if stremio { SeekButton(icon: "goforward.10", label: "Forward 10 seconds", step: 1, size: size) } else { GlassKey(icon: "goforward.10", label: "Fast forward", key: "forward", size: size) }
-            }.frame(maxWidth: .infinity)
+            }.frame(maxWidth: slot)
+            if !four {
             Group {
                 if !stremio { GlassKey(icon: "forward.end.fill", label: "Next", key: "next", size: size) }
                 else if let next = nextUp.next {
@@ -2058,12 +2068,12 @@ struct Transport: View {
                     // Not worked out yet: asked for on the press, and the TV's own next if it still can't be. A series never
                     // dims ⏭ for not knowing (r19), and the key shows it's working on it until it throws.
                     ResolvingNextKey(size: size)
-                } else {
-                    // A film, or the last episode: the key stays, dimmed, rather than leave a gap.
-                    GlassButton(icon: "forward.end.fill", label: "Nothing after this", size: size) {}.disabled(true).opacity(0.35)
                 }
             }.frame(maxWidth: .infinity)
+            }
         }
+        .padding(.horizontal, inset)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in if abs(w - rowWidth) > 0.5 { rowWidth = w } }
         // Failed: nothing to control but stopping, which is the held ⏯.
         // Connecting (nothing heard from the TV yet this launch, and no start under way): the row waits at 40 %, like the
         // bar's place in a start, rather than a bright ▶ saying it's paused when it may be playing (r33: ▶, then ⏸ a
