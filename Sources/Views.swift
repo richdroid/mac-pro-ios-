@@ -776,7 +776,7 @@ struct Hero: View {
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
             // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
-            HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale, route: model.route, pulse: model.pulse) {
+            HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale || !model.gotFresh, route: model.route, pulse: model.pulse) {
                 model.tab = 5; model.macPage = .health
             }
             .padding(.top, 9)
@@ -946,7 +946,8 @@ struct StatusTab: View {
     let bare = EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)
     // The figures, dimmed while they're only the last ones the Mac sent.
     @ViewBuilder var graphics: some View {
-        let dim = model.stale ? 0.5 : 1
+        // Also until the Mac has answered since launch: the cached figures are last time's, never shown as live (gate 3).
+        let dim = model.stale || !model.gotFresh ? 0.5 : 1
         Section { LiveTiles(s: s).opacity(dim).place("tiles") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         if showTemps, let temps = s.temps, !temps.isEmpty {
             Section("Temperatures") { TempDials(s: s).opacity(dim).place("temps") }
@@ -1110,7 +1111,7 @@ struct AppsTab: View {
             } message: { Text("Unsaved work is lost.") }
             .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
             // The build's shot of the second question, for an app that was asked to quit and stayed.
-            .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 3_500_000_000); forcing = open.first } }
+            .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } } }
         }
     }
 }
@@ -2079,7 +2080,7 @@ struct SeedSection: View {
                             .font(.subheadline).fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 4)
                         Button { withAnimation(Motion.quick) { autoTipDone = true } } label: {
-                            Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).frame(width: 30, height: 30).contentShape(Rectangle())
+                            Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.primary).frame(width: 44, height: 30).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Dismiss")
