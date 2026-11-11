@@ -23,20 +23,47 @@ struct PaneReader<C: View>: View {
 // A page sliding on or off is moved by UIKit, and what it reads of itself while it moves (its safe area, where the fold is
 // in its own space) is the slide's, not the scene's: read as layout, it squeezed and re-flowed the page as it went
 // (Richard, 2026-11-09: "when u swipe a page off screen the elements compact as u do so"). Pages hold what they read at
-// rest until the move is over. Only stacks that register (the Mac Pro app's) count; elsewhere it's never in flight.
+// rest until the move is over.
+//
+// The move is noted before its first frame is laid out, however it began. The edge swipe told the app when it began; the
+// Back button told no one, so a pop from Back was only noticed once a page had already read the slide's numbers: the
+// page going off was laid out squeezed for a frame and the page coming back split wrongly for two, then both snapped to
+// what they hold (Richard, 2026-11-10, a recording open flat: "weird resizing issues at times when going back on a
+// screen from another"). Now every page a stack is about to show reports in (viewWillAppear, which UIKit calls at the
+// start of any push or pop, before it moves anything), in all three apps, with nothing for an app to register.
 @MainActor @Observable final class NavTransit {
     static let shared = NavTransit()
     private(set) var active = false
     #if canImport(UIKit)
     @ObservationIgnored private let stacks = NSHashTable<UINavigationController>.weakObjects()
     @ObservationIgnored private weak var current: AnyObject?
-    // The build's "before" films turn the hold off (-noHold YES), to film a page swiped off as it was.
+    // The build's "before" films: -noHold YES turns the hold off, to film a page as the system alone moves it, and
+    // -holdLate YES leaves a move to be noticed the way it was (the edge swipe's start, or a page's first changed reading).
     @ObservationIgnored private let off = UserDefaults.standard.bool(forKey: "noHold")
+    @ObservationIgnored private let late = UserDefaults.standard.bool(forKey: "holdLate")
+    private init() {
+        if !off, !late { _ = Self.hook }
+        SwipeLog.frames()
+    }
+    // UIViewController.viewWillAppear, with the move noted after it. Exchanged once; every page of every stack passes here.
+    private static let hook: Void = {
+        let c: AnyClass = UIViewController.self
+        guard let a = class_getInstanceMethod(c, #selector(UIViewController.viewWillAppear(_:))),
+              let b = class_getInstanceMethod(c, #selector(UIViewController.duoWillAppear(_:))) else { return }
+        method_exchangeImplementations(a, b)
+    }()
     func register(_ n: UINavigationController) { if !off { stacks.add(n) } }
+    // A page is about to show in this stack: if the stack is moving it there, the move begins now.
+    func appearing(in n: UINavigationController) {
+        guard !off else { return }
+        stacks.add(n)
+        if let c = n.transitionCoordinator { begin(c) }
+    }
     // Marks the move in flight until its coordinator says it's over (finished, or the swipe let go and sprang back).
     func begin(_ c: UIViewControllerTransitionCoordinator) {
         guard !off, current !== (c as AnyObject) else { return }
         current = c as AnyObject
+        if SwipeLog.on { SwipeLog.note(String(format: "move began (%.2f s%@)", c.transitionDuration, c.isInteractive ? ", under the finger" : "")) }
         if !active { active = true }
         let queued = c.animate(alongsideTransition: nil) { [weak self] _ in
             Task { @MainActor in
@@ -54,16 +81,28 @@ struct PaneReader<C: View>: View {
             }
         }
     }
-    private func end() { current = nil; if active { active = false } }
-    // Asked as a reading lands: true while any registered stack is mid-move, and the move is noted if it wasn't yet.
+    private func end() { current = nil; SwipeLog.note("move ended"); if active { active = false } }
+    // Asked as a reading lands: true while any known stack is mid-move, and the move is noted if it wasn't yet.
     func moving() -> Bool {
         if let c = stacks.allObjects.lazy.compactMap(\.transitionCoordinator).first { begin(c); return true }
         return active
     }
+    // The same, asked while a view is being laid out: nothing is noted, so nothing changes under the layout.
+    var inFlight: Bool { active || (!late && stacks.allObjects.contains { $0.transitionCoordinator != nil }) }
     #else
     func moving() -> Bool { false }
+    var inFlight: Bool { false }
     #endif
 }
+#if canImport(UIKit)
+extension UIViewController {
+    // Stands in for viewWillAppear (NavTransit.hook), so this calls the original.
+    @objc dynamic func duoWillAppear(_ animated: Bool) {
+        duoWillAppear(animated)
+        if let n = navigationController { NavTransit.shared.appearing(in: n) }
+    }
+}
+#endif
 
 // A pushed page laid out from what it reads at rest while a push or pop moves it: the same size and safe area from the
 // first frame of the slide to the last, so it goes off whole, rows and cards as they were. At rest it reads the system as
@@ -122,6 +161,26 @@ enum SwipeLog {
         if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
         else { try? Data(line.utf8).write(to: url) }
     }
+    // Every frame the main thread was late for (over 1.5 display periods), noted beside the readings, so a page that
+    // stalls as a move begins is caught in the same log as the move.
+    #if canImport(UIKit)
+    @MainActor private static var meter: FrameGaps?
+    @MainActor static func frames() { if on, meter == nil { meter = FrameGaps() } }
+    @MainActor private final class FrameGaps: NSObject {
+        private var last: CFTimeInterval = 0
+        override init() {
+            super.init()
+            CADisplayLink(target: self, selector: #selector(tick(_:))).add(to: .main, forMode: .common)
+        }
+        @objc private func tick(_ l: CADisplayLink) {
+            let period = max(l.targetTimestamp - l.timestamp, 1.0 / 120)
+            if last > 0, l.timestamp - last > 1.5 * period { SwipeLog.note(String(format: "late frame %.0f ms", (l.timestamp - last) * 1000)) }
+            last = l.timestamp
+        }
+    }
+    #else
+    @MainActor static func frames() {}
+    #endif
 }
 
 // What one scrolling page is doing, for each app's hold on polled readings (its ScrollHold): read from the page's
@@ -203,7 +262,8 @@ struct FoldSplit<L: View, R: View>: View {
                 // the same air from that edge as the right pane has from the side column.
                 let outer: CGFloat = wide && !folded ? 14 : 0
                 let live = Split(ratio: ratio, gutter: gutter, outer: outer)
-                let use = transit.active ? (held ?? live) : live
+                // Asked here, as the split is laid out, so a move's first frame is already the held one.
+                let use = transit.inFlight ? (held ?? live) : live
                 ArrangementView {
                     left.padding(.leading, use.outer).padding(.trailing, use.gutter).splitArrangementLayoutRatio(use.ratio)
                 } secondary: {
@@ -212,7 +272,7 @@ struct FoldSplit<L: View, R: View>: View {
                 .arrangementViewStyle(.split)
                 .onChange(of: live, initial: true) { _, v in
                     if !NavTransit.shared.moving() { held = v }
-                    SwipeLog.note("split ratio \(v.ratio.map { String(format: "%.3f", $0) } ?? "nil") gutter \(Int(v.gutter))\(transit.active ? " (held)" : "")")
+                    SwipeLog.note("split ratio \(v.ratio.map { String(format: "%.3f", $0) } ?? "nil") gutter \(Int(v.gutter))\(transit.inFlight ? " (held)" : "")")
                 }
                 .onChange(of: transit.active) { _, now in if !now { held = live } }
             }

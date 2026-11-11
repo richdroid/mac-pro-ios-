@@ -615,7 +615,9 @@ struct WebTile: View {
                 }
                 // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
                 Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
-                    .animation(.easeOut(duration: 0.2), value: value)
+                    // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
+                    // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
+                    .animation(NavTransit.shared.active ? nil : .easeOut(duration: 0.2), value: value)
                 Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                 if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
