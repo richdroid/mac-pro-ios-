@@ -557,7 +557,10 @@ struct Screen<Content: View>: View {
                 if let (t, to) = ["forcequit": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart")][model.pose], t == tab {
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    proxy.scrollTo(to, anchor: .top)
+                    // An open app's row is known in the List by its ForEach identity (its pid), not by the .id put on it,
+                    // so "open" never scrolled and the folded Force Quit pose fired on a row off screen (gate 4).
+                    if model.pose == "forcequit", let first = model.status?.apps.first(where: { $0.mem != nil }) { proxy.scrollTo(first.id, anchor: .top) }
+                    else { proxy.scrollTo(to, anchor: .top) }
                     return
                 }
                 guard model.pose != "scrolled" || tab == 0 else {
