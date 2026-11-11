@@ -701,24 +701,26 @@ final class ScreenDecoder: @unchecked Sendable {
     // of the Mac happened to redraw. Seen on every open from a dark display in three tries (2026-11-10), and asking
     // again got the whole picture 120 ms later each time. So: until a whole-screen rectangle has arrived on this
     // connection (and again after the Mac changes resolution), the whole screen is asked for again: at once when the
-    // Mac's first answer wasn't it (when it's coming, it comes first), then 1.5 s, 3 s, 6 s apart, and not at all once one
+    // Mac's first answer wasn't it (when it's coming, it comes first), then 3 s, 6 s, 12 s apart, and not at all once one
     // has begun to arrive, so a slow link is never made to carry the whole picture twice.
     private var haveWhole = false
     private var askedWhole = CFAbsoluteTimeGetCurrent()
     private var wholeAskGap = 0.3
     private var wholeBegun = false
     // With no earlier picture underneath, patches over black aren't shown: the first thing seen is the whole picture
-    // filling in. Not for more than 3 s, in case the Mac never sends one.
+    // filling in. Not for more than 3 s from the Mac's first words, in case it never sends one (not from when the
+    // connection was opened: waking the display and signing in can take longer than that on their own).
     private var holdBack: Bool {
-        !Self.noReask && !seeded && !haveWhole && !wholeBegun && CFAbsoluteTimeGetCurrent() - opened < 3
+        !Self.noReask && !seeded && !haveWhole && !wholeBegun && CFAbsoluteTimeGetCurrent() - askedFirst < 3
     }
+    private var askedFirst = CFAbsoluteTimeGetCurrent()
     // The build's way to film the old behaviour beside the new: "screenNoReask" never asks again and shows patches.
     static let noReask = UserDefaults.standard.bool(forKey: "screenNoReask")
     private var seeded = false
     private func askNext() {
         let now = CFAbsoluteTimeGetCurrent()
         if !haveWhole, !wholeBegun, !Self.noReask, now - askedWhole >= wholeAskGap {
-            askedWhole = now; wholeAsks += 1; wholeAskGap = max(1.5, wholeAskGap * 2)
+            askedWhole = now; wholeAsks += 1; wholeAskGap = max(3, wholeAskGap * 2)
             request(incremental: false)
         }
         else { request(incremental: true) }
@@ -823,7 +825,7 @@ final class ScreenDecoder: @unchecked Sendable {
                 send([2, 0, 0, 5,  0, 0, 0, 16,  0, 0, 0, 1,  0, 0, 0, 0,  255, 255, 255, 33,  255, 255, 255, 17])
                 // The whole picture first, then a few requests already waiting, so each change on the Mac is sent as
                 // it happens instead of a round trip after the last one arrived.
-                askedWhole = CFAbsoluteTimeGetCurrent()
+                askedWhole = CFAbsoluteTimeGetCurrent(); askedFirst = askedWhole
                 request(incremental: false)
                 for _ in 1..<pipeline { request(incremental: true) }
                 stage = .messages

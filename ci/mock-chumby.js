@@ -775,7 +775,8 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
   // Colours as 0xRRGGBB, put in the app's pixel format when sent.
   let bpp = 32;
   const bg = 0x1c162c, bright = 0xebebf5, dim = 0x786e96, side = 0x121216;
-  const band = { x: 240, y: 120, w: 800, h: 560 };
+  // Sleepy: a small part of the screen changes a few times a second, as a quiet desktop does.
+  const band = sleepy ? { x: 440, y: 260, w: 400, h: 280 } : { x: 240, y: 120, w: 800, h: 560 };
   // The wallpaper of the slow stand-in: noise in 2 × 2 blocks over a gradient, which deflates about as well as a
   // real desktop does.
   const wall = (X, Y) => {
@@ -854,7 +855,8 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
   // Like a real server: an answer goes out when there's a request waiting and the page has moved since the last one.
   // Slow, the page holds still: a moving page there would only queue behind the first picture, as on the real link.
   const answer = () => { if (pending > 0 && sent !== scroll) { pending--; sent = scroll; count++; update(band.x, band.y, band.w, band.h, scroll); } };
-  const tick = setInterval(() => { if (!slow) scroll += 3; answer(); }, 16);
+  let ticks = 0;
+  const tick = setInterval(() => { if (!slow && (!sleepy || ++ticks % 12 === 0)) scroll += 3; answer(); }, 16);
   const report = setInterval(() => { if (count) console.log(`mock screen: ${Math.round(count / 2)} pictures a second`); count = 0; }, 2000);
   const stop = () => { clearInterval(tick); clearInterval(report); if (pump) clearInterval(pump); sock.destroy(); };
   sock.on('close', stop); sock.on('error', stop);
