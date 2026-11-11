@@ -1504,17 +1504,19 @@ struct RemoteTab: View {
                         }
                         Group {
                             Spacer(minLength: 0)
-                            // Clear of the title above it, which the keyboard pushes the page up under; while typing it gives
-                            // way first, so the bar and both rows of keys sit wholly above the keyboard.
-                            pad.frame(width: grid.width).frame(minHeight: typing ? 56 : grid.pad, maxHeight: grid.pad).padding(.top, typing ? 12 : 0)
-                            Spacer(minLength: 0)
+                            // Typing, the pad steps aside: it never shrank below its drawn size, and pushed the keys under
+                            // the keyboard (CI ee66d34). The bar and the keys' row sit wholly above the keyboard.
+                            if !typing {
+                                pad.frame(width: grid.width, height: grid.pad).transition(.opacity)
+                                Spacer(minLength: 0)
+                            }
                             keysBlock(grid)
                         }
                         .modifier(KeysArrive(gate: keysGate))
                     }
-                    // On the title's own inset, not floating between it and the rail.
-                    .padding(.leading, 6)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    // Centred in the room left of the rail: on the title's inset it left a wide empty band before the
+                    // rail (CI ee66d34).
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .onChange(of: fresh, initial: true) { _, g in if !typing { foldedGrid = g } }
                 }
                 .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
