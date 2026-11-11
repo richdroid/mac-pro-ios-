@@ -137,7 +137,7 @@ enum LinkPeek {
 // The flick's receipt on the TV (Richard, 2026-11-10: "a receipt of flick interface on tv", and "when i start to flick the
 // tv starts the expected work in background and theres a receipt interface that makes sense with the flick"). The TV is
 // told each step of the gesture, by the flick's own id: the lift (it begins what's likely coming where it can't be seen,
-// and shows a short line at its bottom edge), the throw (the card comes up from that edge there, leaning the way it was
+// and shows nothing), the throw (the card comes up from that edge there, leaning the way it was
 // thrown and as fast, and says how the start goes), or the put-back (gone). The phone's picture leaves by its top edge
 // and arrives at the TV's bottom edge: one motion. The Mac and the launcher do the rest (tv.js receiptSay, FlickReceipt.kt).
 enum FlickReceipt {
@@ -305,8 +305,9 @@ struct FlickScreen: View {
         let shape = kind == "song" ? "square" : kind == "film" || (kind == "episode" && episode?.thumb.isEmpty != false) ? "poster" : "wide"
         return FlickReceipt.body(id: receiptID, title: shown.title, line: line, art: startingArt, kind: kind, shape: shape)
     }
-    // The card or a row is in his hand: the TV begins what it can where it can't be seen (the Mac's flick-lift), and for
-    // a stream row that exact stream's link is resolved there now, ahead of the throw. Nothing for what's already on.
+    // The card or a row is in his hand: the TV begins what it can where it can't be seen (the Mac's flick-lift: the
+    // card's picture fetched, Mint's process up for a song), and for a stream row that exact stream's link is resolved
+    // there now, ahead of the throw. Nothing shows on the TV until the release. Nothing for what's already on.
     func liftedUp() {
         guard !flown, !onTV else { return }
         let id = UUID().uuidString
@@ -316,6 +317,9 @@ struct FlickScreen: View {
         if video, let row = liftedID, let s = streams.first(where: { $0.id == row }) {
             var b = prepareBody
             b["token"] = s.token
+            // The link and nothing else: nothing is woken, opened or shown on the TV before he lets go (lifted and put
+            // back, the TV must be exactly as it was).
+            b["resolve"] = true
             Prepare.arm(b)
         }
         FlickReceipt.lift(r, lands: kindLands)
