@@ -186,7 +186,9 @@ struct ManageAppsView: View {
         HStack(spacing: 12) {
             ZStack {
                 TVLook.bannerTile
-                if app.hasIcon, let u = TVBridge.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
+                // Mint's tile as the Apps tab draws it, not the APK's home-made banner.
+                if app.pkg == MintBanner.pkg { MintBanner() }
+                else if app.hasIcon, let u = TVBridge.url("/api/tv/icon?pkg=\(app.pkg)&v=2") {
                     Art(url: u) { i in
                         if app.wide == true { i.resizable().scaledToFill() } else { i.resizable().scaledToFit().padding(5) }
                     } placeholder: { Color.clear }
@@ -241,11 +243,12 @@ struct ManageAppsView: View {
         // list redrawing in a frame (the 2026-11-10 motion pass).
         .settledAnimation(.easeOut(duration: 0.25), value: store.state == nil)
         .settledAnimation(.easeOut(duration: 0.25), value: store.state?.apps.map(\.pkg))
-        // The same wall as the rest of Settings, its rows in the cards' glass.
+        // Its rows in the cards' glass, over the wall (set after the top fade, so the fade never blacks the wall out).
         .scrollContentBackground(.hidden)
-        .background { Ambience() }
         .summonsBar()
         .topShade().topFade()
+        // The same wall as the rest of Settings, outside the fade's mask so its top isn't a black band.
+        .background { Ambience() }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
         // Edit is the system's own item in the page's bar: on the Duo, in the side bar under Back (folded, and open in
         // landscape), in the top bar open in portrait. It sat in a glass capsule of this page's own at the foot (ruling
@@ -314,12 +317,12 @@ struct ManageSettingsView: View {
             }
             .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24)
         }
-        // The same wall as Settings and Connection behind it, never black.
-        .background { Ambience() }
         // As the apps page: the settings fade in over the spinner.
         .settledAnimation(.easeOut(duration: 0.25), value: store.state == nil)
         .summonsBar()
         .topShade().topFade()
+        // The same wall as Settings and Connection, outside the fade's mask so its top isn't a black band.
+        .background { Ambience() }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
         .barPage()
         .refreshable { await store.load() }
