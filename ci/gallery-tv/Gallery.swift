@@ -45,10 +45,12 @@ func card<C: View, B: View>(_ w: CGFloat, _ h: CGFloat, _ bg: B, @ViewBuilder _ 
         let video = made("Every Frame a Painting: The Art of Editing", "Tony Zhou", "YouTube", playing: true, at: 95, of: 540, art: real["video"] ?? poster(640, 360, .systemPurple, .systemBlue, "EDITING"))
         let bare = made("Sample Film", "", "Stremio", playing: true, at: nil, of: nil, art: nil)
         let nolen = made("Twin Peaks", "S1 E3 · Zen, or the Skill to Catch a Killer", "Stremio", playing: true, at: nil, of: nil, art: real["show"] ?? poster(400, 600, .systemOrange, .systemRed, "PEAKS"))
+        var showNext = show.0; showNext.next = true
+        var nolenNext = nolen.0; nolenNext.next = true
         let all: [(name: String, state: TVIslandAttributes.ContentState, stale: Bool)] = [
-            ("A show, playing" + show.1, show.0, false), ("A song, paused" + song.1, song.0, false), ("Out of date" + show.1, show.0, true),
+            ("A show, playing, next known" + show.1, showNext, false), ("A song, paused" + song.1, song.0, false), ("Out of date" + show.1, show.0, true),
             ("A film, long name" + film.1, film.0, false), ("A video, wide still" + video.1, video.0, false), ("No cover, no length", bare.0, false),
-            ("A show with no running time" + nolen.1, nolen.0, false),
+            ("A show with no running time, next known" + nolen.1, nolenNext, false),
         ]
         let lock = page.contains("lock")
         let part = Int(String(page.last ?? "0")) ?? 0

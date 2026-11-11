@@ -59,7 +59,9 @@ struct IslandTitles: View {
     var under: Bool { !state.subtitle.isEmpty && state.subtitle != state.title && state.subtitle != state.app }
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
+            // A long name steps down a size before it's cut, and a film's (no second line) wraps to two first.
             Text(state.title).font(.system(size: under ? 16 : 15, weight: .semibold)).foregroundStyle(.white).lineLimit(under ? 1 : 2)
+                .minimumScaleFactor(0.82)
                 .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
             if under { Text(state.subtitle).font(.system(size: 13)).foregroundStyle(.white.opacity(0.62)).lineLimit(1) }
         }
@@ -83,7 +85,8 @@ struct IslandBar: View {
                 ProgressView(value: min(max(state.progress ?? 0, 0), 1))
             }
         }
-        .progressViewStyle(.linear).tint(TVLook.accent).labelsHidden()
+        // White, as the system's own Now Playing bar is (Richard's choice via the coordinator, 2026-11-11).
+        .progressViewStyle(.linear).tint(.white).labelsHidden()
         .background { Capsule().fill(.white.opacity(0.2)).frame(height: 4) }
     }
 }
@@ -148,6 +151,19 @@ struct IslandSkip: View {
         .buttonStyle(.plain).accessibilityLabel(label)
     }
 }
+// The episode after this one, when the TV knows it. It opens the app on that episode's streams (⏭ always shows the
+// streams, never plays by itself), so it's a link, not a key that acts from here.
+struct IslandNext: View {
+    var size: CGFloat = 20
+    var wide = false
+    var body: some View {
+        Link(destination: URL(string: "tvremoteapp://next")!) {
+            Image(systemName: "forward.end.fill").font(.system(size: size - 4, weight: .medium)).foregroundStyle(.white)
+                .frame(width: wide ? 44 : 32, height: 40).contentShape(Rectangle())
+        }
+        .accessibilityLabel("Next episode")
+    }
+}
 // The three keys in a row, where there's no bar for two of them to stand at the ends of, and on the Lock Screen.
 struct IslandKeys: View {
     let state: TVIslandAttributes.ContentState
@@ -159,6 +175,9 @@ struct IslandKeys: View {
             IslandSkip(app: state.app, forward: true, size: 22, wide: true)
         }
         .frame(height: 40)
+        // The three stay centred; next episode stands at the row's end.
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .trailing) { if state.next == true { IslandNext(size: 22, wide: true) } }
     }
 }
 
@@ -200,6 +219,7 @@ struct IslandOpenBottom: View {
                         IslandSkip(app: state.app, forward: false)
                         IslandBar(state: state)
                         IslandSkip(app: state.app, forward: true)
+                        if state.next == true { IslandNext() }
                     }
                     .frame(height: 32)
                     // The keys' glyphs, not their touch areas, line up with the cover and ⏯ above.

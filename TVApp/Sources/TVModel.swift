@@ -516,7 +516,7 @@ final class TVModel {
     // The last answer's bytes, so an unchanged answer is neither decoded nor compared field by field.
     @ObservationIgnored private var lastStatusBytes: Data?
     @ObservationIgnored private var islandSync: Task<Void, Never>?
-    @ObservationIgnored private var islandNext: (status: TVStatus, art: String?)?
+    @ObservationIgnored private var islandNext: (status: TVStatus, art: String?, hasNext: Bool)?
     func load(polled: Bool = false) async {
         if let l = loading { await l.value; return }
         let t = Task { await reload(polled: polled) }
@@ -546,12 +546,12 @@ final class TVModel {
         // new cover's fetch and shrinking (and every update iOS takes its time over) held this reading back from the
         // screen, so what's on changed on the Lock Screen's card before it did on the Remote he was looking at.
         // Only the newest reading waits its turn: one still on its way when the next lands is passed over.
-        islandNext = (s, islandArt(s))
+        islandNext = (s, islandArt(s), NextUp.shared.next != nil)
         if islandSync == nil {
             islandSync = Task { [weak self] in
                 while let self, let next = self.islandNext {
                     self.islandNext = nil
-                    await TVIsland.sync(next.status, art: next.art)
+                    await TVIsland.sync(next.status, art: next.art, hasNext: next.hasNext)
                 }
                 self?.islandSync = nil
             }

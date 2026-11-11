@@ -39,7 +39,19 @@ struct TVApp: App {
                     default: break
                     }
                 }
-                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t == 4 ? 1 : t } }
+                .onOpenURL { u in
+                    if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 4 ? 1 : t }
+                    // The Now Playing card's next-episode key: the Remote, and that episode's streams as soon as it's
+                    // known (a launch from cold has to hear from the TV first; five seconds at most, then said).
+                    if u.host == "next" {
+                        model.tab = 0
+                        Task {
+                            for _ in 0..<50 where NextUp.shared.next == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+                            if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) }
+                            else { model.say("Couldn’t find the next episode") }
+                        }
+                    }
+                }
         }
     }
 }
@@ -779,6 +791,17 @@ struct SendBar: View {
     func submit() { if link { model.send(draft.text); draft.text = "" } }
 }
 
+// Under a heading whose rows are the ones kept from last time because the Mac can't be asked for fresh ones: when
+// they were last seen, so old rows never pass for now (the rows themselves are dimmed).
+struct KeptNote: View {
+    let since: Date
+    static let ago: RelativeDateTimeFormatter = { let f = RelativeDateTimeFormatter(); f.unitsStyle = .full; return f }()
+    var body: some View {
+        Text("Last seen " + Self.ago.localizedString(for: since, relativeTo: Date()))
+            .font(.footnote.weight(.medium)).foregroundStyle(.secondary).padding(.horizontal, 20)
+            .transition(.opacity)
+    }
+}
 struct RowTitle: View {
     let title: String
     init(_ t: String) { title = t }
@@ -1962,10 +1985,21 @@ private struct FrontRing: View {
     var body: some View {
         let on = model.frontApp == pkg
         RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2.5)
+            // Pressed and not yet confirmed: the ring breathes, quietly, until the TV says the app is in front.
+            .modifier(RingWaits(on: model.openingApp?.pkg == pkg))
             .opacity(on ? 1 : 0)
             // Settled: coming back to the page, the ring is simply where it is; it only moves in front of him.
             .settledAnimation(.easeOut(duration: 0.15), value: on)
             .accessibilityHidden(true)
+    }
+}
+private struct RingWaits: ViewModifier {
+    let on: Bool
+    @Environment(\.accessibilityReduceMotion) private var still
+    func body(content: Content) -> some View {
+        if on && !still {
+            content.phaseAnimator([1.0, 0.45]) { ring, strength in ring.opacity(strength) } animation: { _ in .easeInOut(duration: 0.7) }
+        } else { content }
     }
 }
 // A banner drawn here, for an app whose own is missing or came out blank: its brand's colour, its mark where it has a
@@ -2084,7 +2118,7 @@ struct AppsTab: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
                         row("Listen", listen)
-                        row("Tools and settings", tools)
+                        row("Tools", tools)
                     }
                     .padding(.vertical, 12)
                 }
@@ -2097,7 +2131,7 @@ struct AppsTab: View {
                     if let query { EverywhereSearch(text: query) } else {
                         row("Watch", watch)
                         row("Listen", listen)
-                        row("Tools and settings", tools)
+                        row("Tools", tools)
                     }
                 }
                 .padding(.vertical, 12)
@@ -2166,6 +2200,7 @@ struct Shelf: View {
             if let row, !row.items.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     RowHeader(title: title, route: .media(row, store.source)).padding(.leading, 20)
+                    if let since = store.keptSince { KeptNote(since: since).padding(.top, -6).padding(.bottom, 6) }
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 10) {
                             ForEach(row.items) { item in FlickCardButton(item: item, source: store.source, width: store.source == .mint ? 128 : 112) }
@@ -2173,6 +2208,7 @@ struct Shelf: View {
                         .padding(.horizontal, 20)
                     }
                     .rowEdge()
+                    .opacity(store.keptSince != nil ? 0.55 : 1)
                 }
             } else if store.rows.isEmpty && !store.failed && store.query.isEmpty {
                 // Its place is kept while it comes, so the rows under it don't get pushed down when it does.
@@ -2775,6 +2811,8 @@ struct DiscoverColumn: View {
     @ObservedObject private var shows = BrowseStore.discover("series")
     @ObservedObject private var home = BrowseStore.shared(.stremio)
     @FocusState private var searchFocused: Bool
+    // How wide the column is, for whether a found list is all on screen (then its heading is no door).
+    @State private var paneWidth: CGFloat = 0
     static let continueTitle = "Continue watching"
     // Films and shows together, so it sits above the switch and belongs to neither: the page's first row, and its home
     // since it left the Apps tab (Richard's choice, 2026-11-10). Only ever Stremio's own row, the one under a film on
@@ -2820,7 +2858,7 @@ struct DiscoverColumn: View {
         let searched = !store.query.trimmingCharacters(in: .whitespaces).isEmpty && row.title == "Results"
         let title = searched ? (kind == "movie" ? "Films" : "Shows") : row.title
         return VStack(alignment: .leading, spacing: 0) {
-            if searched && row.items.count < 4 { RowTitle(title).padding(.leading, 20) }
+            if searched && 20 + CGFloat(row.items.count) * 124 + CGFloat(max(row.items.count - 1, 0)) * 10 <= max(paneWidth, 1) { RowTitle(title).padding(.leading, 20) }
             else { RowHeader(title: title, route: .media(MediaRow(title: title, items: row.items), .stremio)).padding(.leading, 20) }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 10) {
@@ -2843,6 +2881,7 @@ struct DiscoverColumn: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let continuing {
                     shelf(continuing)
+                        .opacity(home.keptSince != nil ? 0.55 : 1)
                         // Said only from the real row on screen, so CI fails a pane still showing grey boxes, whatever the
                         // store holds (r28: the store had the rows, the screen didn't, and the check passed).
                         .task { _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=home&pane=\(part)"), timeout: 3) }
@@ -2893,9 +2932,12 @@ struct DiscoverColumn: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 if part != .right { controls }
+                // The Mac can't be asked: the rows are the ones kept from last time, said so and dimmed.
+                if part != .right, store.query.isEmpty, let since = store.keptSince ?? home.keptSince { KeptNote(since: since) }
                 // Each kind's rows are their own, so switching crossfades the rows alone.
                 ForEach(shown, id: \.title) { row in
                     shelf(row)
+                    .opacity(store.keptSince != nil ? 0.55 : 1)
                     .id(kind + "/" + row.title)
                     .transition(.opacity)
                 }
@@ -2914,6 +2956,8 @@ struct DiscoverColumn: View {
         // layout: with one, the page rested with its first row at the top, past the stack's 12 pt top padding, so "Watch"
         // sat 12 pt above every other tab's title, faded, and folded cut off at the screen's top (d7c64e6 tv-3, TV-3).
         .scrollDismissesKeyboard(.immediately)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if abs($0 - paneWidth) > 0.5 { paneWidth = $0 } }
+        .settledAnimation(.easeOut(duration: 0.25), value: (store.keptSince ?? home.keptSince) != nil)
         .backToTop(posed: part != .left)
         // Stremio's home, asked for here as well as at launch, and asked again until it's in: open, the launch's own ask
         // could be lost in the relayout of unfolding, and Continue watching sat as grey boxes for good (r26). A failure

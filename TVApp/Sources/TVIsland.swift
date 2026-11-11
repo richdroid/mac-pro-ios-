@@ -23,6 +23,8 @@ struct TVIslandAttributes: ActivityAttributes {
         var length: Double?
         // When it was paused, kept across readings while it stays paused: five minutes on, the card goes.
         var pausedSince: Date?
+        // The TV knows the episode after this one: the card offers it (the key opens the app on that episode's streams).
+        var next: Bool?
     }
 }
 
@@ -178,7 +180,9 @@ enum TVIsland {
     // answer just after a press is often from before it, and taking it flipped the glyph back under his thumb.
     static var pressed: (playing: Bool, until: Date)?
     // `art` is the cover's address when the app knows it; nil keeps the cover already shown for the same title.
-    static func sync(_ status: TVStatus, art: String? = nil) async {
+    // `hasNext` is whether the app knows the next episode; nil (a reading made without the app's lookup) keeps what the
+    // card already says for the same episode.
+    static func sync(_ status: TVStatus, art: String? = nil, hasNext: Bool? = nil) async {
         if let p = pressed {
             if p.until < Date() { pressed = nil }
             else if let said = state(status), said.playing != p.playing { return }
@@ -199,6 +203,11 @@ enum TVIsland {
         // A pause keeps the moment it began; playing clears it.
         if !next.playing { next.pausedSince = (current?.content.state.playing == false ? current?.content.state.pausedSince : nil) ?? Date() }
         if pausedOut(next) { await current?.end(nil, dismissalPolicy: .immediate); return }
+        if next.app == "Stremio" {
+            let old = current?.content.state
+            next.next = hasNext ?? (old?.title == next.title && old?.subtitle == next.subtitle ? old?.next : nil)
+            if next.next == false { next.next = nil }
+        }
         if let t = await thumbnail(art) { next.art = t.0; next.artKey = t.1 }
         else if let old = current?.content.state, old.title == next.title { next.art = old.art; next.artKey = old.artKey }
         if let current {
