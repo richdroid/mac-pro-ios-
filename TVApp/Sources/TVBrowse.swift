@@ -442,6 +442,7 @@ struct BrowseColumn: View {
             // The rows arrive, and give way to what a search finds, with a fade: the lists are set outside any animation,
             // so they cut in and out (the 2026-11-10 motion pass).
             .settledAnimation(.easeOut(duration: 0.25), value: shown.map(\.title))
+            .settledAnimation(.easeOut(duration: 0.25), value: store.keptSince != nil)
             .animation(.easeOut(duration: 0.25), value: store.query.isEmpty)
         }
         .restsOnRows()

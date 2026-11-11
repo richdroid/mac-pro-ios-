@@ -42,13 +42,21 @@ struct TVApp: App {
                 .onOpenURL { u in
                     if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 4 ? 1 : t }
                     // The Now Playing card's next-episode key: the Remote, and that episode's streams as soon as it's
-                    // known (a launch from cold has to hear from the TV first; five seconds at most, then said).
+                    // known (a launch from cold has to hear from the TV first; about three seconds at most, then said).
                     if u.host == "next" {
                         model.tab = 0
                         Task {
-                            for _ in 0..<50 where NextUp.shared.next == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+                            // Worked out afresh from what the TV is playing now, as the Remote's own ⏭ does it: what was
+                            // known before the app was put away may be the episode before's. The Remote's key shows its
+                            // light while that's done, and whichever has the answer first sends (a send repeated within
+                            // three seconds is one send).
+                            await model.load()
+                            NextUp.shared.forgetAll(); NextUp.shared.follow(model.status)
+                            try? await Task.sleep(nanoseconds: 400_000_000)
+                            NotificationCenter.default.post(name: ResolvingNextKey.press, object: nil)
+                            for _ in 0..<30 where NextUp.shared.next == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
                             if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) }
-                            else { model.say("Couldn’t find the next episode") }
+                            else if model.flicking == nil { model.say("Couldn’t find the next episode") }
                         }
                     }
                 }
@@ -797,9 +805,12 @@ struct KeptNote: View {
     let since: Date
     static let ago: RelativeDateTimeFormatter = { let f = RelativeDateTimeFormatter(); f.unitsStyle = .full; return f }()
     var body: some View {
-        Text("Last seen " + Self.ago.localizedString(for: since, relativeTo: Date()))
-            .font(.footnote.weight(.medium)).foregroundStyle(.secondary).padding(.horizontal, 20)
-            .transition(.opacity)
+        // Said afresh each minute, so it's never left saying less than is true; under a minute it's "just now".
+        TimelineView(.periodic(from: .now, by: 60)) { ctx in
+            Text(ctx.date.timeIntervalSince(since) < 60 ? "Last seen just now" : "Last seen " + Self.ago.localizedString(for: since, relativeTo: ctx.date))
+                .font(.footnote.weight(.medium)).foregroundStyle(.secondary).padding(.horizontal, 20)
+        }
+        .transition(.opacity)
     }
 }
 struct RowTitle: View {
@@ -1996,10 +2007,14 @@ private struct FrontRing: View {
 private struct RingWaits: ViewModifier {
     let on: Bool
     @Environment(\.accessibilityReduceMotion) private var still
+    // One view throughout, its strength eased both ways: swapped for another when the TV confirmed, the ring jumped from
+    // wherever its breath was (as low as 45 %) to full in one frame.
+    @State private var dim = false
     func body(content: Content) -> some View {
-        if on && !still {
-            content.phaseAnimator([1.0, 0.45]) { ring, strength in ring.opacity(strength) } animation: { _ in .easeInOut(duration: 0.7) }
-        } else { content }
+        content
+            .opacity(dim ? 0.45 : 1)
+            .animation(on && !still ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true) : .easeOut(duration: 0.2), value: dim)
+            .onChange(of: on, initial: true) { _, now in dim = now && !still }
     }
 }
 // A banner drawn here, for an app whose own is missing or came out blank: its brand's colour, its mark where it has a
@@ -2218,6 +2233,7 @@ struct Shelf: View {
         }
         // The row fades in over its waiting shapes, which it replaces in place, rather than cutting in.
         .settledAnimation(.easeOut(duration: 0.25), value: row == nil)
+        .settledAnimation(.easeOut(duration: 0.25), value: store.keptSince != nil)
         .task { await store.load() }
     }
 }
