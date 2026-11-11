@@ -18,7 +18,7 @@ struct ChumbyApp: App {
                 .font(.custom("Trebuchet MS", size: 16))
                 .toggleStyle(SwitchToggleStyle(tint: ChumbyPalette.on))
                 .onChange(of: phase) { _, p in
-                    if p == .active { model.start(); CalendarWake.shared.syncIfDue(); ChumbyNotify.shared.share(); if model.tab == 2 { ChumbyNotify.shared.clearDelivered() }; Task { await model.loadSongs(force: true) } } else { model.stop() }
+                    if p == .active { model.start(); CalendarWake.shared.syncIfDue(); ChumbyNotify.shared.share(); if model.tab == 2 { ChumbyNotify.shared.clearDelivered() }; Task { await model.loadSongs(force: true); await model.loadMacPlaying() } } else { model.stop() }
                     #if os(iOS)
                     if p == .background { CalendarWake.shared.scheduleRefresh() }
                     #endif
@@ -949,7 +949,7 @@ struct HomeTab: View {
     @ViewBuilder var playing: some View {
         // Only from a recent reading: the kept copy can say music was playing when the app was last open, and a Playing
         // card that shows for a beat and then goes reads as the app settling in front of him (build 185's film).
-        if model.state.musicPlaying && !model.unreachable && model.stateConfirmed {
+        if (model.state.musicPlaying || model.macPlaying != nil || model.macStarting != nil) && !model.unreachable && model.stateConfirmed {
             NowPlaying(tab: 0, failID: "homeVolume")
                 .padding(.horizontal, 18).padding(.vertical, 10)
                 .card()
@@ -1037,7 +1037,7 @@ struct HomeTab: View {
         }
         .animation(ChumbyModel.ringChange(to: model.sys.ringing), value: model.sys.ringing)
         // Music starting or stopping brings the Playing card in or out, and what's under it moves with it.
-        .animation(.spring(duration: 0.4, bounce: 0.15), value: model.state.musicPlaying)
+        .animation(.spring(duration: 0.4, bounce: 0.15), value: model.state.musicPlaying || model.macPlaying != nil || model.macStarting != nil)
     }
 }
 
@@ -1750,15 +1750,20 @@ struct NowPlaying: View {
         return s
     }
     var body: some View {
-        let song = nowSong
+        // A song the Mac is playing here (chosen from "Play a song from the Mac") leads: the Chumby's own player isn't
+        // what's playing then, and its Stop is the Mac's.
+        let starting = model.macStarting
+        let mac = starting ?? model.macPlaying
+        let song = mac.map { Song(t: 0, title: $0.name, artist: $0.artist, album: $0.album) } ?? nowSong
+        let playing = model.state.musicPlaying || mac != nil
         let f = song.flatMap { art.found[SongArt.key($0)] }
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
                 // The stand-in stays underneath and the cover fades in over it when it arrives, never a swap in one frame.
                 ZStack {
                     ZStack {
-                        ChumbyPalette.hex(0x2c5bae).opacity(model.state.musicPlaying ? 1 : 0.45)
-                        if model.state.musicPlaying { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
+                        ChumbyPalette.hex(0x2c5bae).opacity(playing ? 1 : 0.45)
+                        if playing { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
                         else { OctopusMark(color: .white.opacity(0.85), eyes: ChumbyPalette.hex(0x2c5bae), blink: 0.08).padding(14) }
                     }
                     if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
@@ -1768,15 +1773,20 @@ struct NowPlaying: View {
                 VStack(alignment: .leading, spacing: 3) {
                     if let song {
                         Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
-                        Text(song.artist).foregroundStyle(.secondary).lineLimit(1)
+                        // Chosen a moment ago and not yet sounding: said so, where its artist will be.
+                        Text(starting != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(1)
+                            .contentTransition(.opacity)
                     } else {
-                        Text(model.state.musicPlaying ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
+                        Text(playing ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
                     }
                 }
                 Spacer(minLength: 8)
                 // Stop only while something plays: with nothing to stop, it's a dead button.
-                if model.state.musicPlaying {
-                    Button { model.cmd("stopmusic", id: failID) } label: { Image(systemName: "stop.fill").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44) }
+                if starting != nil {
+                    // No Stop until there's something to stop: the Mac is still getting it to the Chumby.
+                    ProgressView().frame(width: 44, height: 44)
+                } else if playing {
+                    Button { if mac != nil { model.stopMacMusic() } else { model.cmd("stopmusic", id: failID) } } label: { Image(systemName: "stop.fill").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44) }
                         .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Stop")
                 }
             }
@@ -1794,9 +1804,19 @@ struct NowPlaying: View {
                 Text("\(Int(volume))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
             }
             if let f = model.failed(failID) { FailNote(text: f) }
+            // About the Mac's song (it couldn't start, or didn't stop): kept until put away.
+            if let f = model.failed("macmusic") { FailNote(text: f, dismiss: model.dismissal("macmusic")) }
         }
         .padding(.vertical, 6)
-        .animation(.snappy, value: model.state.musicPlaying)
+        .animation(.snappy, value: playing)
+        // While this tab is up, the Mac is asked what it's playing here: often while it is, so the card lets go soon after
+        // the song ends, and now and then otherwise, so a song started earlier (the phone has been away) shows.
+        .task(id: model.tab == tab) {
+            while model.tab == tab && !Task.isCancelled && MacMusic.reachable {
+                await model.loadMacPlaying()
+                try? await Task.sleep(nanoseconds: model.macPlaying != nil ? 8_000_000_000 : 30_000_000_000)
+            }
+        }
         .task(id: model.sys.vol) { if !dragging && model.sys.vol >= 0 { volume = Double(model.sys.vol) } }
         .task(id: model.tab == tab && model.state.musicPlaying) {
             while model.tab == tab && !Task.isCancelled {
@@ -1814,6 +1834,7 @@ struct SoundsTab: View {
     @State private var alarmVolume = 100.0
     @State private var addStream = false
     @State private var addStation = false
+    @State private var pickSong = false
     @State private var stationLink = ""
     @State private var streamURL = ""
     @State private var streamName = ""
@@ -1888,6 +1909,15 @@ struct SoundsTab: View {
                     Label("Accept AirPlay", systemImage: "airplayaudio")
                 }
                 if let f = model.failed("airplay") { FailNote(text: f) }
+                // Any song in his Mac's Music library, played here by the Mac: only where the app knows the Mac, and
+                // while the Chumby accepts AirPlay, which is how the Mac reaches it.
+                if MacMusic.reachable && model.sys.airplayOn {
+                    Button { pickSong = true } label: {
+                        Label("Play a song from the Mac", systemImage: "music.note.list")
+                            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
+                    }
+                    .foregroundStyle(.tint).disabled(model.unreachable)
+                }
             }
             WokeUpTo()
         } right: {
@@ -1988,6 +2018,7 @@ struct SoundsTab: View {
         .seaList()
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
+        .fillCover(isPresented: $pickSong) { MacSongPicker().environmentObject(model) }
         .alert("Add a Pandora station", isPresented: $addStation) {
             TextField("Pandora link", text: $stationLink).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
             Button("Add") { let l = stationLink; stationLink = ""; Task { await model.addPandora(l) } }
