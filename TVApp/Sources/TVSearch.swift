@@ -505,18 +505,24 @@ struct SearchPage: View {
     @ObservedObject private var store = SearchStore.shared
     @FocusState private var focused: Bool
     var body: some View {
+        // The field stays put above what scrolls, as the system's own search does. Inside the scroll view, open upright
+        // the keyboard's own lift scrolled the page, and a scroll that puts the keyboard away put it away at once
+        // (tv-search-ci 829e7c4 and e40ae26: focus on, then off, in every open-upright pose; the probe's field above the
+        // list kept it).
         Group {
             if panes {
                 FoldSplit {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 22) {
-                            field
-                            if draft.text.isEmpty { RecentSearches(store: store) } else { ResultList(results: store.results, part: .left) }
+                    VStack(alignment: .leading, spacing: 14) {
+                        field.padding(.top, 12)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 22) {
+                                if draft.text.isEmpty { RecentSearches(store: store) } else { ResultList(results: store.results, part: .left) }
+                            }
+                            .padding(.bottom, 12)
                         }
-                        .padding(.vertical, 12)
+                        .scrollDismissesKeyboard(.interactively)
+                        .backToTop(posed: false)
                     }
-                    .scrollDismissesKeyboard(.immediately)
-                    .backToTop(posed: false)
                 } right: {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 22) {
@@ -524,24 +530,26 @@ struct SearchPage: View {
                         }
                         .padding(.vertical, 12)
                     }
-                    .scrollDismissesKeyboard(.immediately)
+                    .scrollDismissesKeyboard(.interactively)
                     .backToTop()
                 }
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        field
-                        if draft.text.isEmpty {
-                            RecentSearches(store: store)
-                            SearchSuggestions()
-                        } else {
-                            ResultList(results: store.results, part: .all)
+                VStack(alignment: .leading, spacing: 14) {
+                    field.padding(.top, 12)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 22) {
+                            if draft.text.isEmpty {
+                                RecentSearches(store: store)
+                                SearchSuggestions()
+                            } else {
+                                ResultList(results: store.results, part: .all)
+                            }
                         }
+                        .padding(.bottom, 12)
                     }
-                    .padding(.vertical, 12)
+                    .scrollDismissesKeyboard(.interactively)
+                    .backToTop()
                 }
-                .scrollDismissesKeyboard(.immediately)
-                .backToTop()
             }
         }
         .onChange(of: draft.text, initial: true) { _, t in store.typed(t, model: model) }
