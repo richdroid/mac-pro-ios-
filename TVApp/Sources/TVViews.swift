@@ -1337,7 +1337,10 @@ struct RemoteTab: View {
             // Laid out first, at the full width, so the bar or a player coming in under it never shrinks it, and a flick's
             // screen moving onto it lands where it stays.
             .layoutPriority(1)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in if abs(w - pictureWidth) > 0.5 { pictureWidth = w } }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in
+                if abs(w - pictureWidth) > 0.5 { pictureWidth = w }
+                if !typing, abs(w - calmPictureWidth) > 0.5 { calmPictureWidth = w }
+            }
     }
     // Asleep, one big way to wake it over the pad, which wakes it too.
     @ViewBuilder var wake: some View {
@@ -1508,6 +1511,7 @@ struct RemoteTab: View {
     @State private var keyboardTop: CGFloat = .infinity
     // How wide the picture is drawn, for the keys in the pane under it to take the same width.
     @State private var pictureWidth: CGFloat = 0
+    @State private var calmPictureWidth: CGFloat = 0
     var body: some View {
         Group {
             if stackedUpright {
@@ -1519,7 +1523,8 @@ struct RemoteTab: View {
                     if typing {
                         // Typing, the keyboard covers nearly all of the pane under the fold, so the bar and the keys' row
                         // come up above it, under the picture's pane (CI 219df47: under the fold they sat beneath the keyboard).
-                        let tg = RemoteGrid.keys(min(g.size.width - 40, 380, pictureWidth > 120 ? pictureWidth : .infinity))
+                        // At the column's width from before typing: the picture shrinks to give up the height, the keys don't.
+                        let tg = RemoteGrid.keys(min(g.size.width - 40, 380, calmPictureWidth > 120 ? calmPictureWidth : .infinity))
                         let rows = 50 + 12 + tg.key
                         VStack(spacing: 14) {
                             side(apps: false).frame(height: max(0, crease.minY - 14 - rows - 8))
