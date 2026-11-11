@@ -205,9 +205,15 @@ struct FlickScreen: View {
     @State private var streamsQuick = false
     @State private var streamFilter = "All"
     @State private var noStreams = false
-    @State private var arrived = false
+    // The page's own layers: on from the start, so everything is drawn while the screen is still unseen; the move into
+    // the Remote dissolves them.
+    @State private var arrived = true
+    // The screen's arrival: drawn from the first frame at a thousandth (never 0, which skips the drawing), faded up only
+    // once the main thread has finished drawing it. Faded up at once, its first frame was followed by a 450-650 ms turn
+    // on the main thread (CI f980195's main log): a held half-blend, then a cut.
+    @State private var onScreen = false
     // The bar's buttons come a beat after the backdrop starts in, as the bar itself can't fade.
-    @State private var barShown = false
+    @State private var barShown = true
     // Sent: the pick is on its way to the TV and its picture on its way to the Remote.
     @State private var flown = false
     @State private var releasedAt = Date.distantPast
@@ -406,7 +412,7 @@ struct FlickScreen: View {
 
     var body: some View {
         screen
-            .opacity(fadingOut ? 0 : 1)
+            .opacity(fadingOut ? 0 : onScreen ? 1 : 0.001)
             // The TV made ready, with what's coming, at each point he shows he means it: the show's page with its Resume,
             // and the streams opening. Nothing is prepared for what's already on the TV (r18).
             .onChange(of: step) { _, now in if now == .streams && video && !onTV { Prepare.arm(prepareBody) } }
@@ -443,11 +449,13 @@ struct FlickScreen: View {
                 // Out of the quiet transaction that put the screen up (under it the fade didn't run: a cut), then the
                 // pages under it go once it's fully up.
                 SwipeLog.note("flick open")
-                DispatchQueue.main.async {
+                Task {
+                    await Self.settleFrames()
                     SwipeLog.note("flick fade")
-                    // The ✕ with the page, not a beat after it.
-                    withAnimation(.easeOut(duration: 0.18)) { arrived = true; barShown = true }
-                    Task { try? await Task.sleep(nanoseconds: 200_000_000); if !leaving { SwipeLog.note("flick covers"); model.flickArrived = true } }
+                    // The page under it goes in the same step, slowly at first (UnderFlick), so the strip round the bars
+                    // darkens with the fade rather than after it.
+                    withAnimation(.easeOut(duration: 0.18)) { onScreen = true }
+                    if !leaving { model.flickArrived = true }
                 }
             }
     }
@@ -616,6 +624,18 @@ struct FlickScreen: View {
         .opacity(arrived ? 1 : 0)
         .animation(.easeOut(duration: 0.35), value: episode)
         .animation(.easeOut(duration: 0.3), value: step)
+    }
+
+    // Waits until the main thread is drawing freely again: two 16 ms waits in a row that come back on time (a long turn
+    // in between makes one come back late). At most 1.2 s.
+    static func settleFrames() async {
+        let limit = Date().addingTimeInterval(1.2)
+        var onTime = 0
+        while onTime < 2 && Date() < limit {
+            let t = Date()
+            try? await Task.sleep(nanoseconds: 16_000_000)
+            onTime = Date().timeIntervalSince(t) < 0.03 ? onTime + 1 : 0
+        }
     }
 
     // "S1 E3 · The One Where…", or "S1 E3" alone for an episode with no name of its own.
@@ -1430,8 +1450,9 @@ struct FlickScreen: View {
                 leave(restoreMood: false); Task { await model.load() }; return
             }
             remoteSlot = s.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y)
-            // A frame, so the Remote's first layout is done before anything moves.
-            try? await Task.sleep(nanoseconds: 17_000_000)
+            // The Remote drawn under this screen before anything moves: built at the pick, its first drawing took the
+            // main thread for up to 0.9 s just as the move began, and the picture jumped (CI f980195).
+            await Self.settleFrames()
             if remembered {
                 // The Remote, built in that frame, may already say where its picture really is.
                 if let live = model.mirrorSlot, live.width > 20 { remoteSlot = live.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y) }
