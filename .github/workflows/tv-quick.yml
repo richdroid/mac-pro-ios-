@@ -92,7 +92,7 @@ jobs:
             local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES "${@:3}"
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address ${SCENE:-$M/live} -tab 0 -pose tour -swipeLog YES "${@:3}"
             sleep 25
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
@@ -109,6 +109,9 @@ jobs:
             tourfilm tour-portrait-nowarm 3 -noWarm YES
             tourfilm tour-portrait2 3
             tourfilm tour-portrait2-nowarm 3 -noWarm YES
+            # A film playing, its clock running: how many of the TV's readings are put on screen, as before and now.
+            SCENE=$M/rfilm tourfilm tour-film-every 3 -everyReading YES
+            SCENE=$M/rfilm tourfilm tour-film 3
           fi
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist

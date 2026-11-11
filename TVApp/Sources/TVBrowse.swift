@@ -57,13 +57,13 @@ final class BrowseStore: ObservableObject {
     // One for each app, so going back in shows what was there straight away.
     static func shared(_ source: MediaSource) -> BrowseStore {
         if let s = stores[source] { return s }
-        let s = BrowseStore(source); stores[source] = s; return s
+        let s = BrowseStore(source, kept: "home-" + source.rawValue); stores[source] = s; return s
     }
     // The Watch tab's films and shows, kept for the app's life, so its search and genre are still there when he's back.
     private static var discovering: [String: BrowseStore] = [:]
     static func discover(_ type: String) -> BrowseStore {
         if let s = discovering[type] { return s }
-        let s = BrowseStore(.stremio, base: "/api/tv/discover?type=\(type)"); discovering[type] = s; return s
+        let s = BrowseStore(.stremio, base: "/api/tv/discover?type=\(type)", kept: "discover-" + type); discovering[type] = s; return s
     }
     private var searching: Task<Void, Never>?
     // The rows only if they're the answer to what's asked now: a search never shows the last search's rows, or the
@@ -80,7 +80,34 @@ final class BrowseStore: ObservableObject {
     // What a search's one list is called here ("Films", "Shows"), where the Mac's own name for it ("Results") says
     // nothing beside another kind's.
     let found: String?
-    init(_ source: MediaSource, base: String? = nil, found: String? = nil) { self.source = source; self.base = base; self.found = found }
+    // The list as it last came (no search, no genre), kept on the phone under this name: a launch shows it at once and
+    // the Mac's fresh answer replaces it when it comes, so Watch, Continue watching and Mint's rows never open empty or
+    // wait on the Mac (its first answer of a session took 6.3 s on 2026-11-10; the rows sat as grey shapes for all of it).
+    let kept: String?
+    private var fromDisk = false
+    private static func keptFile(_ name: String) -> URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-rows-\(name).json")
+    }
+    init(_ source: MediaSource, base: String? = nil, found: String? = nil, kept: String? = nil) {
+        self.source = source; self.base = base; self.found = found; self.kept = kept
+        // Not for the build's sample Mac, whose scenes each expect to start from nothing.
+        guard let kept, let file = Self.keptFile(kept), !["127.0.0.1", "localhost"].contains(where: { TVBridge.address.contains($0) }) else { return }
+        let folds = base != nil
+        Task { [weak self] in
+            let rows: [MediaRow]? = await Task.detached(priority: .userInitiated) {
+                guard let d = try? Data(contentsOf: file), let a = try? JSONDecoder().decode(BrowseAnswer.self, from: d) else { return nil }
+                return folds ? Self.fold(Self.once(a.rows)) : a.rows
+            }.value
+            // Only if nothing has come meanwhile, and nothing is being searched.
+            guard let self, let rows, !rows.isEmpty, self.rows.isEmpty, self.loadedFor == nil, self.query.isEmpty, self.genre.isEmpty else { return }
+            self.fromDisk = true
+            self.rows = rows
+        }
+    }
+    private func keep(_ data: Data?) {
+        guard let kept, let data, let file = Self.keptFile(kept), !["127.0.0.1", "localhost"].contains(where: { TVBridge.address.contains($0) }) else { return }
+        Task.detached(priority: .utility) { try? data.write(to: file, options: .atomic) }
+    }
     func endpoint(_ q: String) -> String {
         guard let base else { return source.endpoint(q) }
         let enc = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "" }
@@ -116,13 +143,15 @@ final class BrowseStore: ObservableObject {
         guard q == query.trimmingCharacters(in: .whitespaces) + (genre.isEmpty ? "" : "\u{1}" + genre) else { return }
         guard let decoded else {
             // Results for some other search aren't an answer to this one.
-            if loadedFor != q { if !rows.isEmpty { rows = [] }; loadedFor = nil }
+            // (The list kept from last time stays while the Mac can't be asked for a fresh one.)
+            if loadedFor != q, !(fromDisk && q.isEmpty) { if !rows.isEmpty { rows = [] }; loadedFor = nil }
             if failed != rows.isEmpty { failed = rows.isEmpty }
             return
         }
         // The same list again (a revisit after a minute) changes nothing on screen, so it isn't set again.
         if decoded != rows { rows = decoded }
-        loadedFor = q; loadedAt = Date()
+        loadedFor = q; loadedAt = Date(); fromDisk = false
+        if q.isEmpty, !decoded.isEmpty { keep(data) }
     }
     // Stremio's home for Continue watching: one request that every asker waits on, rather than two panes' loads cancelling
     // each other's bookkeeping through the search guards (r27, open: the row stayed four grey boxes). Applied whenever no
@@ -132,10 +161,12 @@ final class BrowseStore: ObservableObject {
         if !rows.isEmpty && loadedFor == "" && Date().timeIntervalSince(loadedAt) < 60 { return }
         let task = homeTask ?? Task {
             let data = await TVBridge.data(TVBridge.url(source.endpoint("")), timeout: 20)
-            return await Task.detached(priority: .userInitiated) { () -> [MediaRow]? in
+            let rows = await Task.detached(priority: .userInitiated) { () -> [MediaRow]? in
                 guard let data, let a = try? JSONDecoder().decode(BrowseAnswer.self, from: data) else { return nil }
                 return a.rows
             }.value
+            if rows?.isEmpty == false { self.keep(data) }
+            return rows
         }
         homeTask = task
         let decoded = await task.value
@@ -144,7 +175,7 @@ final class BrowseStore: ObservableObject {
         guard let decoded else { if failed != rows.isEmpty { failed = rows.isEmpty }; return }
         if failed { failed = false }
         if decoded != rows { rows = decoded }
-        loadedFor = ""; loadedAt = Date()
+        loadedFor = ""; loadedAt = Date(); fromDisk = false
     }
     // Each title once on the page, in the first row it comes in. Continue watching is his own and is kept whole, but what
     // it holds isn't repeated further down.
