@@ -133,9 +133,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          (cd dist && zip -qr ../flick.zip . -i '*.png' '*.log' '*.mp4' '*.txt' || zip -q ../flick.zip /dev/null)
+          # In three parts: one zip of every film was over 500 MB and its upload failed.
+          (cd dist && zip -q ../flick.zip *.png *.log *.txt 2>/dev/null; zip -q ../flick-pose.mp4.zip tv-flick*.mp4 2>/dev/null; zip -q ../flick-finger.mp4.zip tv-finger*.mp4 2>/dev/null; true)
+          ls -la *.zip
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view tv-flick >/dev/null 2>&1 || gh release create tv-flick --prerelease --title "TV flick checks" --notes "Work in progress on the flick: hands, shots and films from the tv-flick-everywhere branch."
-          for f in flick.zip status.txt; do
+          for f in flick.zip flick-pose.mp4.zip flick-finger.mp4.zip status.txt; do
             for i in 1 2 3; do gh release upload tv-flick "$f" --clobber && break; sleep 15; done
           done
