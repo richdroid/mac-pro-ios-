@@ -585,16 +585,24 @@ final class TVModel {
         }
         return a == b
     }
+    private static var read = 0, shown = 0
+    // "-everyReading YES": every reading published, as before, for the build's before-and-after count.
+    private static let everyReading = UserDefaults.standard.bool(forKey: "everyReading")
     private func publish(_ s: TVStatus, data d: Data) {
         let unchanged = d == lastStatusBytes && status != nil
         lastStatusBytes = d
-        if !unchanged, s != status, !staleStatus, starting == nil, playHeld == nil, let old = status, Self.onlyTheClock(old, s) {
+        #if os(iOS)
+        // For the build's films only: how many readings came and how many were put on screen, between the slow frames.
+        if !unchanged, s != status { Self.read += 1; if Self.read % 5 == 0 { HitchLog.shared.note("status: \(Self.read) readings with something new, \(Self.shown) shown") } }
+        #endif
+        if !unchanged, s != status, !staleStatus, starting == nil, playHeld == nil, !Self.everyReading, let old = status, Self.onlyTheClock(old, s) {
             // Nothing to show; the checks below still read this reading's own times.
             settlePlayHold(s)
             if openingApp != nil, s.app == openingApp?.pkg { openingApp = nil }
             return
         }
         if !unchanged && s != status {
+            Self.shown += 1
             status = s
             if openingApp != nil, s.app == openingApp?.pkg { openingApp = nil }
             // Every app's banner fetched once, as soon as the list first comes, so the Apps tab and the Remote's tiles
