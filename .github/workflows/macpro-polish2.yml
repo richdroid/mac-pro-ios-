@@ -52,6 +52,9 @@ jobs:
             local d=$1 x=$2
             for T in 0 1 2 4 5 9; do shot tab$T$x $d 7 -tab $T; done
             shot longlog$x $d 9 -tab 4 -pose longlog
+            shot upgradefail$x $d 9 -tab 4 -pose upgradefail
+            shot upgradeask$x $d 9 -tab 4 -pose upgradeask
+            shot claude-bottom$x $d 9 -tab 2 -pose claudecard
             shot claude-usage$x $d 9 -tab 2 -pose scrolled
             shot control-scrolled$x $d 9 -tab 5 -pose scrolled
             shot settings-lower$x $d 9 -tab 9 -pose settings-lower
