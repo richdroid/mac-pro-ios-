@@ -1474,8 +1474,18 @@ struct UpgradeTab: View {
         return (sentenceCase(t), at, step)
     }
     static let stamp: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; return f }()
+    // A check in progress says so: "Running" over Details' "Running 26.7.2" said two things with one word (designer, 2026-11-11).
+    var checking: Bool { statusParts.word.lowercased() == "running" }
     var headline: String {
-        s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : statusParts.word) : onTahoe ? "On Tahoe" : "Waiting for your password to start"
+        if s.upgrade.installed, checking { return "Checking for updates" }
+        return s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : statusParts.word) : onTahoe ? "On Tahoe" : "Waiting for your password to start"
+    }
+    // The log's newest line without its time, for the step a running check is on.
+    var lastStep: String? {
+        guard let l = s.upgrade.log.split(separator: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return nil }
+        var t = String(l)
+        if t.hasPrefix("["), let close = t.firstIndex(of: "]") { t = String(t[t.index(after: close)...]).trimmingCharacters(in: .whitespaces) }
+        return t.isEmpty ? nil : t
     }
     var oclp: String { s.upgrade.state["oclp_tag"] ?? s.oclp.version }
     // A seal for how it stands: done, working, or something to look at.
@@ -1509,8 +1519,9 @@ struct UpgradeTab: View {
         guard s.upgrade.installed else { return nil }
         let checked = statusParts.at.map { "checked \($0.formatted(.relative(presentation: .named)))" }
         if !logShown, !s.upgrade.log.isEmpty { return ["Up to date", checked].compactMap { $0 }.joined(separator: " · ") }
-        // Running or failed: which step, as the Mac names it after its word ("FAILED: root patch" → "Root patch").
-        let step = statusParts.step.map(sentenceCase)
+        // Running: the step it's on, from the log's newest line. Failed: which step, as the Mac names it after its word
+        // ("FAILED: root patch" → "Root patch").
+        let step = checking ? lastStep : statusParts.step.map(sentenceCase)
         let line = [step, checked].compactMap { $0 }.joined(separator: " · ")
         return line.isEmpty ? nil : line.prefix(1).uppercased() + line.dropFirst()
     }
@@ -1521,7 +1532,7 @@ struct UpgradeTab: View {
             Image(systemName: seal.0).font(.system(size: 30)).foregroundStyle(seal.1).symbolRenderingMode(.hierarchical).frame(width: 36)
             VStack(alignment: .leading, spacing: 2) {
                 Text(headline).font(.headline).lineLimit(2)
-                if let line = summaryLine { Text(line).font(.footnote).foregroundStyle(.secondary) }
+                if let line = summaryLine { Text(line).font(.footnote).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
             }
             Spacer(minLength: 0)
         }
@@ -1568,7 +1579,7 @@ struct UpgradeTab: View {
                 }
                 .buttonStyle(.plain)
                 .confirmationDialog("Check for updates now?", isPresented: $confirmRun, titleVisibility: .visible) {
-                    Button("Check Now") { fail = nil; Task { fail = await model.run("upgrade-run") } }
+                    Button("Check now") { fail = nil; Task { fail = await model.run("upgrade-run") } }
                 } message: { Text("This may restart the Mac.") }
                 // The build's shot of the question.
                 .task { if model.pose == "upgradeask" { try? await Task.sleep(nanoseconds: 1_500_000_000); confirmRun = true } }
@@ -1657,8 +1668,17 @@ struct UpdateLog: View {
                             .id(i)
                     }
                 }
-                .padding(14)
+                // The list rows' insets, so its lines start where every card's text does (designer, 2026-11-11).
+                .padding(.horizontal, 20).padding(.vertical, 14)
                 .textSelection(.enabled)
+            }
+            // A line scrolled up under the card's top fades out rather than being cut flat by the edge. The fade is
+            // within the top inset, so a short log's first line at rest is untouched.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
+                    Color.black
+                }
             }
             .defaultScrollAnchor(.bottom)
             .scrollEdgeEffectHidden(true, for: .top)
