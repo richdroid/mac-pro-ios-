@@ -1472,7 +1472,6 @@ struct RemoteTab: View {
                     keysBlock(grid).frame(height: typing ? nil : grid.key + 12 + grid.play, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.bottom, typing ? max(0, geo.frame(in: .global).maxY - keyboardTop) + 50 : 0)
             } else {
                 VStack(spacing: 14) { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity); keysBlock(grid) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1505,9 +1504,7 @@ struct RemoteTab: View {
         return CGRect(x: 0, y: g.size.height / 2 - 20, width: g.size.width, height: 40)
         #endif
     }
-    // Where the keyboard's top is on screen (infinity while it's down): upright the page ignores the keyboard, so the
-    // keys' pane lifts its bar and keys clear of it by what it covers, and of the soft edge it draws above itself (50 pt;
-    // CI e751115: lifted to its frame alone, the keys' row sat in that fade, as it had folded).
+    // Where the keyboard's top is on screen (infinity while it's down).
     @State private var keyboardTop: CGFloat = .infinity
     // How wide the picture is drawn, for the keys in the pane under it to take the same width.
     @State private var pictureWidth: CGFloat = 0
@@ -1519,10 +1516,22 @@ struct RemoteTab: View {
                 // gate 3). The page ignores the keyboard, so it stays one column; the keys' pane lifts its bar and keys.
                 GeometryReader { g in
                     let crease = Self.crease(in: g)
-                    VStack(spacing: 0) {
-                        side(apps: false).frame(height: max(0, crease.minY))
-                        Color.clear.frame(height: crease.height)
-                        keysColumn.frame(maxHeight: .infinity)
+                    if typing {
+                        // Typing, the keyboard covers nearly all of the pane under the fold, so the bar and the keys' row
+                        // come up above it, under the picture's pane (CI 219df47: under the fold they sat beneath the keyboard).
+                        let tg = RemoteGrid.keys(min(g.size.width - 40, 380, pictureWidth > 120 ? pictureWidth : .infinity))
+                        let rows = 50 + 12 + tg.key
+                        VStack(spacing: 14) {
+                            side(apps: false).frame(height: max(0, crease.minY - 14 - rows - 8))
+                            keysBlock(tg).frame(maxWidth: .infinity)
+                            Spacer(minLength: 0)
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            side(apps: false).frame(height: max(0, crease.minY))
+                            Color.clear.frame(height: crease.height)
+                            keysColumn.frame(maxHeight: .infinity)
+                        }
                     }
                 }
                 .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
