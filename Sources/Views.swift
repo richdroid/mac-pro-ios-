@@ -1491,6 +1491,14 @@ struct UpgradeTab: View {
         if s.oclp.patchedFor.isEmpty { return "No root patches yet" }
         return patchedThis ? "Root patched for this macOS" : "Root patched for build \(patchedBuild ?? s.oclp.patchedFor)"
     }
+    // Under the word: what the hidden log's last line said ("Up to date"), and when it was checked. The card is never a
+    // lone line, which at the cards' 26 pt corner read as a capsule (designer, 2026-11-11).
+    var summaryLine: String? {
+        guard s.upgrade.installed else { return nil }
+        let checked = statusParts.at.map { "checked \($0.formatted(.relative(presentation: .named)))" }
+        if !logShown, !s.upgrade.log.isEmpty { return ["Up to date", checked].compactMap { $0 }.joined(separator: " · ") }
+        return checked.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+    }
     // Only its word and when it was checked: the versions and the patch were under it and again in the rows card beside
     // it, four lines said twice (designer, 2026-11-11). The rows card carries them in every posture.
     var summary: some View {
@@ -1498,13 +1506,11 @@ struct UpgradeTab: View {
             Image(systemName: seal.0).font(.system(size: 30)).foregroundStyle(seal.1).symbolRenderingMode(.hierarchical).frame(width: 36)
             VStack(alignment: .leading, spacing: 2) {
                 Text(headline).font(.headline).lineLimit(2)
-                if s.upgrade.installed, let at = statusParts.at {
-                    Text("Checked \(at.formatted(.relative(presentation: .named)))").font(.footnote).foregroundStyle(.secondary)
-                }
+                if let line = summaryLine { Text(line).font(.footnote).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(.horizontal, 20).padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
     }
@@ -1535,20 +1541,21 @@ struct UpgradeTab: View {
     var facts: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array([("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", patchedFor), ("Patched", s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)].enumerated()), id: \.offset) { i, row in
-                if i > 0 { Divider().padding(.leading, 16) }
-                LabeledContent(row.0, value: row.1).padding(.horizontal, 16).padding(.vertical, 12)
+                // The list cards' insets: text 20 pt in, separators stopping 20 pt short of the right edge.
+                if i > 0 { Divider().padding(.horizontal, 20) }
+                LabeledContent(row.0, value: row.1).padding(.horizontal, 20).padding(.vertical, 12)
             }
             if s.upgrade.installed {
-                Divider().padding(.leading, 16)
+                Divider().padding(.horizontal, 20)
                 Button { confirmRun = true } label: {
                     Text("Check for updates").foregroundStyle(macBlue).frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16).padding(.vertical, 12).contentShape(Rectangle())
+                        .padding(.horizontal, 20).padding(.vertical, 12).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .confirmationDialog("Check for updates now?", isPresented: $confirmRun, titleVisibility: .visible) {
                     Button("Check Now") { fail = nil; Task { fail = await model.run("upgrade-run") } }
                 } message: { Text("This may restart the Mac.") }
-                if let fail { FailText(fail).padding(.horizontal, 16).padding(.bottom, 12) }
+                if let fail { FailText(fail).padding(.horizontal, 20).padding(.bottom, 12) }
             }
         }
         .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
@@ -1566,7 +1573,7 @@ struct UpgradeTab: View {
     var log: some View { VStack(alignment: .leading, spacing: 8) { header("Log"); UpdateLog(log: s.upgrade.log) } }
     // The Apps tab's section headings ("Updates", "On this iPhone"): bold, secondary, under the title rather than as loud
     // as it, in line with the text in the cards below. "Log" was white and semibold at the cards' very edge.
-    func header(_ t: String) -> some View { Text(t).font(.title3.weight(.bold)).foregroundStyle(.secondary).padding(.leading, 16) }
+    func header(_ t: String) -> some View { Text(t).font(.title3.weight(.bold)).foregroundStyle(.secondary).padding(.leading, 20) }
     // The same edges as the system's list cards on every other tab: 20 pt in from the leading side, out to the trailing
     // edge of the space, and in the right pane open, from its leading edge.
     var body: some View {
