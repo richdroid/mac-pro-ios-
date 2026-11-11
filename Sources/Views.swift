@@ -228,11 +228,17 @@ final class PlaceKeeper {
     }
     var top: AnyHashable?
     var layout: Bool?
-    // Where the top of the page is on screen (its scroll view's top plus the bars over it), in the window's points.
-    var line: CGFloat = 120
     var restoring = Date.distantPast
     // While the rebuilt page lays out and scrolls back, its rows pass the line and must not count as his place.
     var settling: Bool { Date().timeIntervalSince(restoring) < 1.2 }
+}
+// Where the top of each page is on screen (its scroll view's top plus the bars over it), in the window's points. Read in
+// geometry transforms, which SwiftUI runs off the main actor, so it is behind a lock rather than on PlaceKeeper.
+final class PlaceLines: @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var lines: [String: CGFloat] = [:]
+    nonisolated static func line(_ page: String) -> CGFloat { lock.lock(); defer { lock.unlock() }; return lines[page] ?? 120 }
+    nonisolated static func set(_ page: String, _ y: CGFloat) { lock.lock(); lines[page] = y; lock.unlock() }
 }
 private struct PlacePageKey: EnvironmentKey { static let defaultValue: String? = nil }
 extension EnvironmentValues { var placePage: String? { get { self[PlacePageKey.self] } set { self[PlacePageKey.self] = newValue } } }
@@ -245,7 +251,9 @@ struct MarksPlace: ViewModifier {
     func body(content: Content) -> some View {
         content.onGeometryChange(for: Bool.self) { g in
             guard let page else { return false }
-            let f = g.frame(in: .global), line = MainActor.assumeIsolated { PlaceKeeper.page(page).line }
+            // SwiftUI runs this off the main actor: MainActor.assumeIsolated here trapped (SIGTRAP, build dd1a9ce,
+            // 2026-11-11), so the line is read from its own locked store, never from the main-actor PlaceKeeper.
+            let f = g.frame(in: .global), line = PlaceLines.line(page)
             return f.minY <= line && f.maxY > line
         } action: { on in
             guard on, let page else { return }
@@ -263,7 +271,7 @@ struct KeepsPlace: ViewModifier {
         content
             .environment(\.placePage, page)
             // The line is just under the bars over the page: the scroll view's top in the window plus its top inset.
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top + 8 } action: { PlaceKeeper.page(page).line = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top + 8 } action: { PlaceLines.set(page, $0) }
             .task(id: panes) {
                 let k = PlaceKeeper.page(page)
                 // Of two panes the first to appear starts the restore; the other, a moment later, scrolls too if it holds it.
@@ -307,6 +315,27 @@ struct FailText: View {
     }
 }
 
+// A pushed page reads from the Mac on its own. When the Mac stops answering (8 s of misses, MissClock), the page says so
+// in one line with how old what it shows is, dims it, and takes nothing that would act on it: a session could be answered
+// or a process quit against a screen that was minutes old and looked live (audit, 2026-11-10).
+struct StaleLine: View {
+    let lastRead: Date?
+    static func ago(_ d: Date, now: Date) -> String {
+        let s = max(0, Int(now.timeIntervalSince(d)))
+        return s < 60 ? "\(max(s, 1)) s ago" : s < 3600 ? "\(s / 60) min ago" : Format.span(Double(s)) + " ago"
+    }
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 5)) { c in
+            Label(lastRead.map { "Last read \(Self.ago($0, now: c.date)) · \(Phrase.macAwayShort)" } ?? Phrase.macAway, systemImage: "wifi.exclamationmark")
+                .font(.footnote.weight(.medium)).foregroundStyle(.orange).monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .transition(.opacity)
+    }
+}
+// What a stale page's own content is dimmed to.
+let staleDim = 0.5
+
 // System tabs and navigation get Liquid Glass and move to the Duo's right edge by themselves.
 struct RootView: View {
     @EnvironmentObject var model: AppModel
@@ -318,6 +347,7 @@ struct RootView: View {
     // A new colour redraws the other tabs; Settings, where it was picked, stays put so the swatch can animate.
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
     var body: some View {
+        let _ = SwipeLog.mark("root body")
         PaneReader {
             TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
                 // Back to the tab's own start. With a page open on it, the page goes back the way Back takes it, the
@@ -360,8 +390,9 @@ struct RootView: View {
         .onChange(of: updateCount) { _, n in AppBadge.set(n) }
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }
         .onChange(of: celsius) { _, _ in MacPrefs.shareWithWidgets() }
+        .onChange(of: model.address) { _, _ in MacPrefs.shareWithWidgets() }
         .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
-        .sheet(isPresented: $model.signInSheet) { SignInView().environmentObject(model) }
+        .screenCover(isPresented: $model.signInSheet) { SignInView().environmentObject(model) }
         // Up here, so unfolding doesn't close it and lose what's typed.
         .sheet(isPresented: $model.signingIn) {
             LoginSheet { u, p in
@@ -426,6 +457,14 @@ struct PaneHeading: View {
     }
 }
 
+// A device's name as a word: its first letter capitalised, except names Apple spells its own way ("iphone" → "iPhone",
+// "ipad-2" → "iPad-2"), which keep that spelling (designer, 2026-11-11, amending the capitals ruling).
+func appleCased(_ name: String) -> String {
+    for word in ["iPhone", "iPad", "iPod", "iMac", "macOS", "iOS"] where name.lowercased().hasPrefix(word.lowercased()) {
+        return word + name.dropFirst(word.count)
+    }
+    return name.prefix(1).uppercased() + name.dropFirst()
+}
 // The Mac reports some states in capitals or lower case; the app says them one way.
 func sentenceCase(_ t: String) -> String { t.prefix(1).uppercased() + t.dropFirst().lowercased() }
 
@@ -442,9 +481,22 @@ struct Notice: View {
                 Button("Sign in") { model.signInSheet = true }.buttonStyle(.borderedProminent)
             }
             .padding(.vertical, 4)
-        } else if let p = model.problem {
+        } else if model.unreadable {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("The Mac answered, but this version can’t read it.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("What’s here is the last it could read. Update the app in TestFlight.").font(.footnote).foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+        } else if let p = model.problem, !model.problemPutAway {
             VStack(alignment: .leading, spacing: 10) {
-                Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.red)
+                HStack(alignment: .top, spacing: 8) {
+                    Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading)
+                    // One ✕, full strength, a 44 pt target: put away, the card comes back with the next run of misses.
+                    Button { withAnimation(Motion.quick) { model.problemPutAway = true } } label: {
+                        Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.primary).frame(width: 44, height: 30).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Dismiss")
+                }
                 HStack(spacing: 10) {
                     Button("Open Tailscale") { if let u = URL(string: "tailscale://") { openURL(u) } }.buttonStyle(.bordered)
                     Button {
@@ -458,7 +510,7 @@ struct Notice: View {
             .padding(.vertical, 4)
         }
     }
-    static func shows(_ model: AppModel) -> Bool { model.needsSignIn || model.problem != nil }
+    static func shows(_ model: AppModel) -> Bool { model.needsSignIn || (model.problem != nil && !model.problemPutAway) || model.unreadable }
 }
 
 // Shared frame for each tab: a large title, the notice above, and pull to refresh. Updates draws its own page, so its
@@ -508,6 +560,14 @@ struct Screen<Content: View>: View {
             .task {
                 // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
+                // And of a state that sits down the page: Force Quit's question hangs off Apps' open apps, the secret being
+                // typed is in Control's Passwords, Claude's service card is at the foot of its pane.
+                if let (t, to) = ["forcequit": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart")][model.pose], t == tab {
+                    for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    proxy.scrollTo(to, anchor: .top)
+                    return
+                }
                 guard model.pose != "scrolled" || tab == 0 else {
                     guard side != .left, let to = [1: "open", 2: "detail", 5: "power"][tab] else { return }
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
@@ -546,16 +606,17 @@ struct Screen<Content: View>: View {
         VStack(spacing: 12) {
             // As high as the listed tabs' titles (the list's 4 pt margin, and 14 pt more where the clock is on the side):
             // macOS's sat 18 pt above Apps' folded, so the title jumped going from one tab to the next.
-            paneTitle(side).padding(.leading, side == .right ? 0 : 20).padding(.top, (TopEdge.statusBar < 20 ? 14 : 0) + 4)
+            paneTitle(side).padding(.top, (TopEdge.statusBar < 20 ? 14 : 0) + 4)
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
-                    .padding(.leading, 20)
             }
             if let s = model.status { content(s, side) }
             else if side != .right { connecting.frame(maxHeight: .infinity) }
         }
+        .modifier(PageLead(on: side != .right))
     }
     var body: some View {
+        let _ = SwipeLog.mark("screen \(tab) body")
         NavigationStack {
             Group {
                 if listed {
@@ -577,16 +638,43 @@ struct Screen<Content: View>: View {
             // No bar title at all, in one pane or two: the page's first line carries the name (paneTitle).
             .navigationBarTitleDisplayMode(.large)
             .toolbarVisibility(.hidden, for: .navigationBar)
-            .navigationDestination(item: tab == 0 ? $model.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
+            .modifier(StackPages(tab: tab, model: model, nav: model.nav))
+        }
+    }
+}
+// A hand-drawn page's left edge, where the lists' cards are: 20 pt from the display's edge in every posture. Open flat
+// the split has already moved the left pane 14 pt in, and the macOS tab added its 20 on top, so its title and cards
+// started 14 pt right of every other tab's (designer, 2026-11-11: one page inset for every tab's left pane).
+struct PageLead: ViewModifier {
+    @Environment(\.paneOuter) private var outer
+    let on: Bool
+    func body(content: Content) -> some View { content.padding(.leading, on ? max(0, 20 - outer) : 0) }
+}
+// The pages a tab's stack can show. Alone here, watching the open pages (NavStore), so a page opening or closing works
+// out this and nothing else: the tab under it is handed through untouched.
+struct StackPages: ViewModifier {
+    let tab: Int
+    let model: AppModel
+    @ObservedObject var nav: NavStore
+    func body(content: Content) -> some View {
+        content
+            .navigationDestination(item: tab == 0 ? $nav.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
             // All processes, from Status itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && model.history == nil ? $model.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
-            .navigationDestination(item: tab == 2 ? $model.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
-            .navigationDestination(item: tab == 1 ? $model.appHistory : Binding<String?>.constant(nil)) { VersionHistoryView(file: $0, model: model) }
+            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
+            .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
+            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { VersionHistoryView(file: $0, model: model) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
-            .navigationDestination(item: tab == 5 ? $model.macPage : Binding<MacPage?>.constant(nil)) { p in
+            .navigationDestination(item: tab == 5 ? $nav.macPage : Binding<MacPage?>.constant(nil)) { p in
                 if p == .health { MacHealthView(model: model) } else { MacRestartView(model: model) }
             }
-        }
+    }
+}
+// Processes over a history, the same way.
+struct ProcessesOverHistory: ViewModifier {
+    let model: AppModel
+    @ObservedObject var nav: NavStore
+    func body(content: Content) -> some View {
+        content.navigationDestination(item: $nav.processes) { ProcessesView(first: $0, model: model) }
     }
 }
 
@@ -616,7 +704,9 @@ struct WebTile: View {
                 }
                 // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
                 Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
-                    .animation(.easeOut(duration: 0.2), value: value)
+                    // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
+                    // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
+                    .animation(NavTransit.shared.active ? nil : .easeOut(duration: 0.2), value: value)
                 Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                 if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
@@ -643,12 +733,14 @@ struct LiveTiles: View {
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net, h = store.live?.hist ?? s.hist, load = store.live?.load ?? s.load
         VStack(spacing: 12) {
             HStack(spacing: 12) {
-                WebTile(title: "CPU", value: "\(cpu.total)%", detail: String(format: "Load %.2f", load.first ?? 0), spark: h.cpu, top: 100, read: { "\(Int($0))%" }, open: { model.history = .cpu })
+                // The CPU's heat on its tile, the one temperature he glances at now the dials are off Status by default
+                // (designer, 2026-11-11).
+                WebTile(title: "CPU", value: "\(cpu.total)%", detail: String(format: "Load %.2f", load.first ?? 0) + (s.temps?.first(where: { $0.name == "CPU" }).map { " · \(Heat.shown($0.c))°\(MacPrefs.celsius ? "C" : "F")" } ?? ""), spark: h.cpu, top: 100, read: { "\(Int($0))%" }, open: { model.history = .cpu })
                 WebTile(title: "Memory", value: Format.bytes(mem.used), detail: "of \(Format.bytes(mem.total))", spark: h.mem, top: 100, read: { "\(Int($0))%" }, open: { model.history = .memory })
             }
             HStack(spacing: 12) {
                 WebTile(title: "Download", value: Format.rate(net.rxRate), detail: net.kind, spark: h.rx, read: Format.rate, open: { model.history = .download })
-                WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.ip, spark: h.tx, read: Format.rate, open: { model.history = .upload })
+                WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.kind, spark: h.tx, read: Format.rate, open: { model.history = .upload })
             }
         }
     }
@@ -702,40 +794,68 @@ struct Hero: View {
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
             // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
-            HeroChips(alerts: (s.alerts ?? []).filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, offline: model.stale, route: model.route, pulse: model.pulse).padding(.top, 9)
+            HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale || !model.gotFresh, route: model.route, pulse: model.pulse) {
+                model.tab = 5; model.macPage = .health
+            }
+            .padding(.top, 9)
         }
         .frame(maxWidth: .infinity)
     }
 }
 
-// The machine's health, from its alerts alone, and how the phone is reaching it. Offline, only how long ago it last answered.
+// The machine's health and how the phone is reaching it. Offline, only how long ago it last answered.
+// Health is said in the words Control's row and the Health page use, from the same count: "All running", or "2 need a
+// look", which opens that page. It read "All systems go" from the alerts alone while Control said "2 need a look", and
+// green before the Mac had said anything at all (audit, 2026-11-10); now that's a grey "Checking".
 struct HeroChips: View {
-    let alerts: [Status.Alert]
+    let alerts: [Status.Alert]?
+    // The parts that need a look: from the status when the Mac's bridge says, else what the app last read itself.
+    var healthBad: Int?
     let offline: Bool
     let route: String
     @ObservedObject var pulse: Pulse
     @AppStorage(AlertDismissals.key) private var dismissedRaw = ""
-    func chip<D: View>(@ViewBuilder _ dot: () -> D, _ text: String) -> some View {
-        HStack(spacing: 6) { dot(); Text(text).lineLimit(1) }
+    @ObservedObject private var summary = HealthSummary.shared
+    var openHealth: () -> Void = {}
+    // `opens`: the chip is a way in (Health, when parts need a look), and shows it the way a row does.
+    func chip<D: View>(@ViewBuilder _ dot: () -> D, _ text: String, opens: Bool = false) -> some View {
+        HStack(spacing: 6) { dot(); Text(text).lineLimit(1); if opens { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.secondary) } }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).background(Color(white: 0.16), in: Capsule())
     }
-    var health: (Color, String) {
-        if alerts.isEmpty { return (.green, "All systems go") }
-        let tint: Color = alerts.contains { $0.level == "critical" } ? .red : .orange
-        // Every alert put away with its ✕: the problem is still there, so this names the worst of them rather than
-        // saying "Needs attention" over a page that no longer shows why. Never green while one is live.
+    var parts: Int? { healthBad ?? summary.bad }
+    var bannerUp: Bool {
         let put = AlertDismissals.set(dismissedRaw)
-        if alerts.allSatisfy({ put.contains($0.dismissKey) }), let worst = alerts.first(where: { $0.level == "critical" }) ?? alerts.first { return (tint, worst.title) }
-        return (tint, "Needs attention")
+        return (alerts ?? []).contains { $0.id != OTAInstaller.alertID && !put.contains($0.dismissKey) }
+    }
+    var health: (Color, String) {
+        func look(_ n: Int) -> String { "\(n) need\(n == 1 ? "s" : "") a look" }
+        if let n = parts, n > 0 { return (.orange, look(n)) }
+        let said = alerts ?? []
+        if !said.isEmpty {
+            let tint: Color = said.contains { $0.level == "critical" } ? .red : .orange
+            // Every alert put away with its ✕: the problem is still there, so this names the worst of them rather than
+            // counting what the page no longer shows. Never green while one is live.
+            let put = AlertDismissals.set(dismissedRaw)
+            if said.allSatisfy({ put.contains($0.dismissKey) }), let worst = said.first(where: { $0.level == "critical" }) ?? said.first { return (tint, worst.title) }
+            return (tint, look(said.count))
+        }
+        // Nothing said yet, by the status or by the Mac's Health (a Mac that can't say how its parts are, an older
+        // bridge, is judged by its alerts alone).
+        if alerts == nil, parts == nil, !summary.cantSay { return (.gray, "Checking") }
+        return (.green, "All running")
     }
     var body: some View {
         if offline {
             TimelineView(.periodic(from: .now, by: 30)) { _ in
-                chip({ Circle().fill(Color.gray).frame(width: 9, height: 9) }, pulse.lastFresh.map { "Last seen \(Format.ago(ms: $0.timeIntervalSince1970 * 1000))" } ?? "Not reached yet")
+                chip({ Circle().fill(Color.gray).frame(width: 9, height: 9) }, pulse.lastFresh.map { "Last read \(StaleLine.ago($0, now: Date()))" } ?? "Not reached yet")
             }
         } else {
             HStack(spacing: 8) {
-                chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1)
+                // Not while the alerts banner is up just above: "3 need a look" said it again (designer, 2026-11-11).
+                if bannerUp {} else if (parts ?? 0) > 0 {
+                    Button(action: openHealth) { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1, opens: true) }
+                        .buttonStyle(FlatStyle()).accessibilityHint("Opens Everything on the Mac")
+                } else { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1) }
                 // The dot beats each time the Mac answers.
                 chip({
                     Circle().fill(Color.green).frame(width: 9, height: 9)
@@ -765,18 +885,21 @@ struct QuickActions: View {
         fails[id] = text
         Task { try? await Task.sleep(nanoseconds: 4_000_000_000); if fails[id] == text { fails[id] = nil } }
     }
-    func button(_ id: String, _ icon: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+    func button(_ id: String, _ icon: String, _ title: String, waits: Bool? = nil, _ action: @escaping () -> Void) -> some View {
         // They all need the Mac, so they wait, dimmed, while it can't be reached. The dim is in the face's own colours,
         // the same values Display uses, so the system's disabled dimming isn't stacked on top.
-        Button(action: action) { face(id, icon, title) }.buttonStyle(FlatStyle()).disabled(model.stale)
+        Button(action: action) { face(id, icon, title, waits: waits ?? model.stale) }.buttonStyle(FlatStyle()).disabled(waits ?? model.stale)
     }
-    func face(_ id: String, _ icon: String, _ title: String) -> some View {
-        let dim = model.stale ? offlineDim : 1
+    func face(_ id: String, _ icon: String, _ title: String, waits: Bool) -> some View {
+        let dim = waits ? offlineDim : 1
         return VStack(spacing: 6) {
-            Image(systemName: done.contains(id) ? "checkmark" : icon).font(.system(size: 20)).foregroundStyle(.white.opacity(dim))
+            // In the accent at full strength, labels in the text's colour: grey on grey read as disabled (11-07 ruling;
+            // designer, 2026-11-11).
+            Image(systemName: done.contains(id) ? "checkmark" : icon).font(.system(size: 20)).foregroundStyle(macBlue.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 52, height: 52).background(Color(white: 0.16).opacity(dim), in: Circle())
-            Text(title).font(.caption2).foregroundStyle(.secondary.opacity(dim)).lineLimit(1).minimumScaleFactor(0.8)
+            // Two lines rather than shrunk: folded, "Copy from Mac" squeezed small against its neighbour.
+            Text(title).font(.footnote).foregroundStyle(.primary.opacity(dim)).multilineTextAlignment(.center).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             if let f = fails[id] {
                 Text(f).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                     .transition(.opacity)
@@ -786,13 +909,15 @@ struct QuickActions: View {
     }
     var body: some View {
         HStack(alignment: .top, spacing: 4) {
-            button("screen", "macwindow", "Screen") { model.openScreen() }
+            // The Mac's screen has its own connection: it stays live while the status can't be read (Richard's ruling,
+            // 2026-11-11), and waits only when the Mac can't be reached or wants its code.
+            button("screen", "macwindow", "Screen", waits: model.problem != nil || model.needsSignIn) { model.openScreen() }
             // Dims itself, in its own colours, to match the other three.
             DisplayHoldButton().disabled(model.stale)
             button("copy", "doc.on.doc", "Copy from Mac") {
                 fails["copy"] = nil
                 Task {
-                    guard let t = try? await model.api.clipboard() else { fail("copy", "Can’t reach the Mac"); return }
+                    guard let t = try? await model.api.clipboard() else { fail("copy", Phrase.macAway); return }
                     // The Mac only hands over text: a copied picture or file reads as nothing, so "empty" would be wrong.
                     if t.isEmpty { fail("copy", "No text on the Mac’s clipboard"); return }
                     #if canImport(UIKit)
@@ -801,7 +926,9 @@ struct QuickActions: View {
                     succeed("copy")
                 }
             }
-            button("send", "doc.on.clipboard", "Send to Mac") {
+            // "Paste to Mac", not "Send to Mac": that name is the files' (Control, the share sheet). This one puts the
+            // iPhone's clipboard on the Mac's, the other way from Copy from Mac beside it (audit, 2026-11-10).
+            button("send", "doc.on.clipboard", "Paste to Mac") {
                 fails["send"] = nil
                 #if canImport(UIKit)
                 let t = UIPasteboard.general.string ?? ""
@@ -810,7 +937,7 @@ struct QuickActions: View {
                 #endif
                 Task {
                     if t.isEmpty { fail("send", "Nothing copied on this iPhone"); return }
-                    do { try await model.api.setClipboard(t); succeed("send") } catch { fail("send", "Can’t reach the Mac") }
+                    do { try await model.api.setClipboard(t); succeed("send") } catch { fail("send", Phrase.macAway) }
                 }
             }
         }
@@ -829,15 +956,14 @@ struct QuickActions: View {
     }
 }
 
+// What Richard glances at, and nothing else (Richard, 2026-11-11: "status screen has too much on mac pro app now and
+// the notify setting should be in settings simplify"): anything wrong, the Mac and how it's doing, and its live figures.
+// The quick actions are Control's, the alerts switch is in Settings, and the disk, remote access, this Mac and top
+// processes cards are gone: what's wrong with any of them comes as an alert, and the rest has its own tab or page.
+// Temperatures show only when he turns them on in Settings.
 struct StatusTab: View {
     @EnvironmentObject var model: AppModel
-    // What the page shows, chosen in Settings.
-    @AppStorage("showQuick") private var showQuick = true
-    @AppStorage("showTemps") private var showTemps = true
-    @AppStorage("showDisk") private var showDisk = true
-    @AppStorage("showAccess") private var showAccess = true
-    @AppStorage("showThisMac") private var showThisMac = true
-    @AppStorage("showProcesses") private var showProcesses = true
+    @AppStorage("statusTemps") private var showTemps = false
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -845,80 +971,22 @@ struct StatusTab: View {
     let bare = EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)
     // The figures, dimmed while they're only the last ones the Mac sent.
     @ViewBuilder var graphics: some View {
-        let dim = model.stale ? 0.5 : 1
+        // Also until the Mac has answered since launch: the cached figures are last time's, never shown as live (gate 3).
+        let dim = model.stale || !model.gotFresh ? 0.5 : 1
         Section { LiveTiles(s: s).opacity(dim).place("tiles") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         if showTemps, let temps = s.temps, !temps.isEmpty {
             Section("Temperatures") { TempDials(s: s).opacity(dim).place("temps") }
         }
-        if showDisk {
-            Section("Disk") {
-                Button { model.history = .disk } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text("\(Format.bytes(s.disk.free)) free").font(.system(size: 26, weight: .semibold)).monospacedDigit()
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
-                        }
-                        Text("\(Format.bytes(s.disk.used)) used of \(Format.bytes(s.disk.total))").font(.footnote).foregroundStyle(.secondary)
-                        ProgressView(value: s.disk.used, total: s.disk.total).tint(s.disk.used / max(s.disk.total, 1) > 0.9 ? .red : macBlue).padding(.top, 8)
-                    }
-                    .padding(.vertical, 2)
-                    .contentShape(Rectangle())
-                    .opacity(dim)
-                }
-                .buttonStyle(PressStyle())
-                .place("disk")
-            }
-        }
     }
-    @ViewBuilder var text: some View {
-        AlertSettings()
-        if showAccess {
-            Section("Remote access") {
-                StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped").place("access-Remote control")
-                StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped").place("access-Desktop app")
-                StateRow(label: "Tailscale", good: s.tailscale.state == "Running", value: s.tailscale.state == "Running" ? "Connected" : "Off").place("access-Tailscale")
-                StateRow(label: "Public link", good: s.publicLinkActive, value: s.publicLinkActive ? "Active" : s.publicUrl.isEmpty ? "Off" : "Down").place("access-Public link")
-                StateRow(label: "Screen Sharing", good: s.sharing.vnc, value: s.sharing.vnc ? "On" : "Off").place("access-Screen Sharing")
-                StateRow(label: "SSH", good: s.sharing.ssh, value: s.sharing.ssh ? "On" : "Off").place("access-SSH")
-            }
-        }
-        if showThisMac {
-            Section("This Mac") {
-                LabeledContent("Model", value: s.model).place("mac-model")
-                LabeledContent("Processor", value: s.cpuModel.replacingOccurrences(of: "(R)", with: "").replacingOccurrences(of: "CPU ", with: "")).place("mac-cpu")
-                LabeledContent("Tailnet", value: s.tailscale.name ?? "Not signed in").place("mac-tailnet")
-                Button("Change connection") { model.signInSheet = true }.place("mac-change")
-            }
-        }
-        if showProcesses {
-            Section("Top processes") {
-                // Eight rows by place, not by process: the Mac's top eight change order and members with every reading, and
-                // rows keyed by process were taken out, put in and moved each time, a relayout of the list's very end
-                // (where a pull past the end rests) once a second. By place, a reading changes a row's words and nothing
-                // else; one line each, so no name can change a row's height either.
-                ForEach(Array(s.procs.prefix(8).enumerated()), id: \.offset) { i, p in
-                    LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)).lineLimit(1).place("proc-\(i)")
-                }
-                Button { model.processes = .cpu } label: {
-                    HStack { Text("All processes").foregroundStyle(.primary); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
-                        .contentShape(Rectangle())
-                }
-                .place("procs-all")
-            }
-        }
-    }
-    // Folded, one column in the approved order. Open, the machine and its actions on the left with the settings under
-    // them, and the figures on the right, where they're all in view at once.
+    // Folded, one column. Open, the Mac on the left and its figures on the right, all in view at once.
     var body: some View {
+        let _ = SwipeLog.mark("status tab body")
         if side != .right {
             // Updates waiting are the number on the Apps tab, not a problem with the Mac.
             if let alerts = s.alerts?.filter({ $0.id != OTAInstaller.alertID }), !alerts.isEmpty { AlertBanner(alerts: alerts) }
             Section { Hero(s: s).place("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
-            if showQuick { Section { QuickActions().place("quick") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
         }
         if side != .left { graphics }
-        if side != .right { text }
     }
 }
 
@@ -926,6 +994,21 @@ struct AppsTab: View {
     @EnvironmentObject var model: AppModel
     @State private var pending: Status.App?
     @State private var alert: String?
+    // Quitting, the way the Processes page does it: asked to close first, and Force Quit offered only for an app that
+    // was asked and stayed. The two were offered side by side in one alert here (audit, 2026-11-10).
+    @State private var forcing: Status.App?
+    @State private var working: Int?
+    func quit(_ a: Status.App, force: Bool) async {
+        working = a.pid; defer { working = nil }
+        if let e = await model.run(force ? "app-kill" : "app-quit", ["pid": a.pid]) { alert = e; return }
+        // The Mac gives it a few seconds, and so does this: gone from the list says it quit.
+        for _ in 0..<5 {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            await model.refresh()
+            if !(model.status?.apps.contains { $0.pid == a.pid && $0.mem != nil } ?? false) { return }
+        }
+        if force { alert = "\(a.name) is still running." } else { forcing = a }
+    }
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -959,9 +1042,13 @@ struct AppsTab: View {
                             Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
                         }
                         Spacer(minLength: 8)
-                        Button("Quit") { pending = a }
-                            .rowCapsule(prominent: false)
-                            .accessibilityLabel("Quit \(a.name)")
+                        if working == a.pid { ProgressView().frame(width: 60) }
+                        else {
+                            Button("Quit") { pending = a }
+                                .rowCapsule(prominent: false)
+                                .disabled(working != nil)
+                                .accessibilityLabel("Quit \(a.name)")
+                        }
                     }
                     // The first app is where the build's scrolled shot stops, its heading gone up under the top.
                     .place(open.first?.id == a.id ? AnyHashable("open") : AnyHashable(a.id))
@@ -974,15 +1061,22 @@ struct AppsTab: View {
                 } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
                 .place("launch")
             }
-            // One question from the row's Quit, with Force Quit beside it for an app that won't go.
+            // One question from the row's Quit; Force Quit is a second question, only for an app that didn't go.
             .alert(pending.map { "Quit \($0.name)?" } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
                 if let p = pending {
-                    Button("Quit") { Task { alert = await model.run("app-quit", ["pid": p.pid]) } }
-                    Button("Force Quit", role: .destructive) { Task { alert = await model.run("app-kill", ["pid": p.pid]) } }
+                    Button("Quit", role: .destructive) { Task { await quit(p, force: false) } }
                     Button("Cancel", role: .cancel) {}
                 }
-            } message: { Text("Force Quit loses unsaved work.") }
+            } message: { Text("It’s asked to close. Unsaved work may be lost.") }
+            .alert(forcing.map { "\($0.name) didn’t quit. Force it?" } ?? "", isPresented: .init(get: { forcing != nil }, set: { if !$0 { forcing = nil } })) {
+                if let p = forcing {
+                    Button("Force Quit", role: .destructive) { Task { await quit(p, force: true) } }
+                    Button("Cancel", role: .cancel) {}
+                }
+            } message: { Text("Unsaved work is lost.") }
             .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
+            // The build's shot of the second question, for an app that was asked to quit and stayed.
+            .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } } }
         }
     }
 }
@@ -1013,7 +1107,7 @@ struct ClaudeTab: View {
     var body: some View {
         if side != .right {
             LimitsSection(s: s)
-            Section("Sessions on this Mac (\(s.claude.sessions.count))") {
+            Section("Sessions (\(s.claude.sessions.count))") {
                 if s.claude.sessions.isEmpty { Text("None running").foregroundStyle(.secondary) }
                 ForEach(s.claude.sessions) { x in
                     let row = SessionRow(session: x, working: restarting != nil && restarting == x.key, restart: { Task { await doRestart(x) } })
@@ -1036,17 +1130,17 @@ struct ClaudeTab: View {
         if side != .left { UsageDetail(s: s) }
         if side != .right {
             Section("Claude Code") {
-                StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
-                StateRow(label: "Auto-restart", good: s.claude.keepAlive, value: s.claude.keepAlive ? "Armed" : "Off").place("cc-restart")
+                StateRow(label: "Claude remote sessions", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
+                StateRow(label: "Restarts by itself", good: s.claude.keepAlive, value: s.claude.keepAlive ? "On" : "Off").place("cc-restart")
                 StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
                 LabeledContent("Version", value: s.claude.version.replacingOccurrences(of: " (Claude Code)", with: ""))
-                LabeledContent("Service", value: sentenceCase(s.claude.service ?? "Unknown"))
+                LabeledContent("Its service on the Mac", value: sentenceCase(s.claude.service ?? "Unknown"))
                 Link(destination: URL(string: "https://claude.ai/code")!) {
-                    HStack { Text("Open in the Claude app"); Spacer(); Image(systemName: "arrow.up.forward").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                    HStack { Text("Open in the Claude app"); Spacer(); Image(systemName: "arrow.up.forward").font(.footnote.weight(.semibold)) }
                 }
                 // Each question hangs off the button that asked it, so it points at what was tapped.
-                Button("Restart remote control") { confirm = true }
-                    .confirmationDialog("Restart remote control?", isPresented: $confirm, titleVisibility: .visible) {
+                Button("Restart Claude remote sessions") { confirm = true }
+                    .confirmationDialog("Restart Claude remote sessions?", isPresented: $confirm, titleVisibility: .visible) {
                         Button("Restart", role: .destructive) {
                             rcFail = nil
                             Task { rcFail = await model.run("rc-restart") }
@@ -1073,12 +1167,13 @@ func resetsIn(_ ms: Double) -> String {
 
 // A label, a figure and a line under it: the API card's right-hand column, and the plan card's.
 struct UsageFigure: View {
-    let title: String, value: String, detail: String
+    let title: String, value: String, detail: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary)
             Text(value).font(.title2.weight(.semibold)).monospacedDigit()
-            Text(detail).font(.caption).foregroundStyle(.tertiary).monospacedDigit()
+            // Secondary, not tertiary: tertiary grey on the black card was hard to read (designer, 2026-11-11).
+            if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1164,9 +1259,11 @@ struct LimitsSection: View {
                 planDial("This week", u.plan?.sevenDay, u.plan?.sevenDayResets)
                 if showsAPI { apiDial }
                 if Self.lone(s, model) {
+                    // "On this Mac" once, over both: it was under each figure, twice in tertiary grey (designer, 2026-11-11).
                     VStack(alignment: .leading, spacing: 14) {
-                        UsageFigure(title: "Last 5 hours", value: Format.count(u.fiveHours.tokens), detail: "tokens on this Mac")
-                        UsageFigure(title: "Last 7 days", value: Format.count(u.week.tokens), detail: "tokens on this Mac")
+                        Text("Tokens on this Mac").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                        UsageFigure(title: "Last 5 hours", value: Format.count(u.fiveHours.tokens), detail: nil)
+                        UsageFigure(title: "Last 7 days", value: Format.count(u.week.tokens), detail: nil)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -1212,7 +1309,7 @@ struct UsageDetail: View {
         Section("Tokens per hour, last 24 hours") {
             VStack(alignment: .leading) {
                 Text(Format.count(u.day.tokens)).font(.title2.weight(.semibold)).monospacedDigit()
-                Text("\(u.day.messages.formatted()) replies on this Mac").font(.footnote).foregroundStyle(.secondary)
+                Text("\(u.day.messages.formatted()) replies").font(.footnote).foregroundStyle(.secondary)
                 Chart(u.hours) { h in
                     BarMark(x: .value("Hour", Date(timeIntervalSince1970: h.t / 1000), unit: .hour), y: .value("Tokens", h.tokens), width: .ratio(0.7))
                         .foregroundStyle(macBlue).clipShape(RoundedRectangle(cornerRadius: 2))
@@ -1237,8 +1334,14 @@ struct UsageDetail: View {
         }
         if !models.isEmpty {
             Section("By model, last 7 days") {
+                // Two lines a model, its figures under its name: one model alone was a one-line row, which the system
+                // draws as a capsule beside the rounded cards (designer, 2026-11-11).
                 ForEach(models, id: \.key) { name, v in
-                    LabeledContent(modelName(name), value: "\(Format.count(v.tokens)) tokens · \(v.messages.formatted()) replies")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(modelName(name))
+                        Text("\(Format.count(v.tokens)) tokens · \(v.messages.formatted()) replies").font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    .padding(.vertical, 2)
                 }
             }
         }
@@ -1314,16 +1417,32 @@ struct UpgradeTab: View {
     var onTahoe: Bool { (Int(s.macos.split(separator: ".").first ?? "") ?? 0) >= 26 }
     // The update service's status line comes as a log line: "2026-11-04 03:30:15 healthy: macos 26.7.2 (25g332), oclp …".
     // The card says only its word ("Healthy"), with when it was checked under it; the versions are already on the line below.
-    var statusParts: (word: String, at: Date?) {
+    var statusParts: (word: String, at: Date?, step: String?) {
         var t = s.upgrade.status.trimmingCharacters(in: .whitespaces)
         var at: Date?
+        var step: String?
         if t.count >= 19, let d = Self.stamp.date(from: String(t.prefix(19))) { at = d; t = String(t.dropFirst(19)).trimmingCharacters(in: .whitespaces) }
-        if let colon = t.firstIndex(of: ":") { t = String(t[..<colon]) }
-        return (sentenceCase(t), at)
+        if let colon = t.firstIndex(of: ":") {
+            let rest = t[t.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            // Only a short step name: a healthy line goes on with the versions, already in Details.
+            if !rest.isEmpty, rest.count <= 32, !rest.lowercased().hasPrefix("macos") { step = rest }
+            t = String(t[..<colon])
+        }
+        return (sentenceCase(t), at, step)
     }
     static let stamp: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; return f }()
+    // A check in progress says so: "Running" over Details' "Running 26.7.2" said two things with one word (designer, 2026-11-11).
+    var checking: Bool { statusParts.word.lowercased() == "running" }
     var headline: String {
-        s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : statusParts.word) : onTahoe ? "On Tahoe" : "Waiting for your password to start"
+        if s.upgrade.installed, checking { return "Checking for updates" }
+        return s.upgrade.installed ? (s.upgrade.status.isEmpty ? "Starting…" : statusParts.word) : onTahoe ? "On Tahoe" : "Waiting for your password to start"
+    }
+    // The log's newest line without its time, for the step a running check is on.
+    var lastStep: String? {
+        guard let l = s.upgrade.log.split(separator: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return nil }
+        var t = String(l)
+        if t.hasPrefix("["), let close = t.firstIndex(of: "]") { t = String(t[t.index(after: close)...]).trimmingCharacters(in: .whitespaces) }
+        return t.isEmpty ? nil : t
     }
     var oclp: String { s.upgrade.state["oclp_tag"] ?? s.oclp.version }
     // A seal for how it stands: done, working, or something to look at.
@@ -1351,36 +1470,30 @@ struct UpgradeTab: View {
         if s.oclp.patchedFor.isEmpty { return "No root patches yet" }
         return patchedThis ? "Root patched for this macOS" : "Root patched for build \(patchedBuild ?? s.oclp.patchedFor)"
     }
+    // Under the word: what the hidden log's last line said ("Up to date"), and when it was checked. The card is never a
+    // lone line, which at the cards' 26 pt corner read as a capsule (designer, 2026-11-11).
+    var summaryLine: String? {
+        guard s.upgrade.installed else { return nil }
+        let checked = statusParts.at.map { "checked \($0.formatted(.relative(presentation: .named)))" }
+        if !logShown, !s.upgrade.log.isEmpty { return ["Up to date", checked].compactMap { $0 }.joined(separator: " · ") }
+        // Running: the step it's on, from the log's newest line. Failed: which step, as the Mac names it after its word
+        // ("FAILED: root patch" → "Root patch").
+        let step = checking ? lastStep : statusParts.step.map(sentenceCase)
+        let line = [step, checked].compactMap { $0 }.joined(separator: " · ")
+        return line.isEmpty ? nil : line.prefix(1).uppercased() + line.dropFirst()
+    }
+    // Only its word and when it was checked: the versions and the patch were under it and again in the rows card beside
+    // it, four lines said twice (designer, 2026-11-11). The rows card carries them in every posture.
     var summary: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: seal.0).font(.system(size: 30)).foregroundStyle(seal.1).symbolRenderingMode(.hierarchical).frame(width: 36)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(headline).font(.headline).lineLimit(2)
-                    if s.upgrade.installed, let at = statusParts.at {
-                        Text("Checked \(at.formatted(.relative(presentation: .named)))").font(.footnote).foregroundStyle(.secondary)
-                    }
-                    Text("macOS \(s.macos) · OCLP \(oclp)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                    Text(patched).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
-                    // The date on a line of its own, so it never breaks across two.
-                    // Said what it is: a bare "October 30" under the patches read as nothing in particular.
-                    if !s.oclp.patchedAt.isEmpty { Text("Patched \(s.oclp.patchedAt)").font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
-                }
-                Spacer(minLength: 8)
-                if s.upgrade.installed {
-                    Button { confirmRun = true } label: {
-                        Image(systemName: "arrow.clockwise").font(.body.weight(.semibold)).frame(width: 30, height: 30)
-                    }
-                    .buttonStyle(.bordered).buttonBorderShape(.circle)
-                    .accessibilityLabel("Run update check now")
-                    .confirmationDialog("Run the update check now?", isPresented: $confirmRun, titleVisibility: .visible) {
-                        Button("Run Now") { fail = nil; Task { fail = await model.run("upgrade-run") } }
-                    } message: { Text("It may restart the Mac.") }
-                }
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: seal.0).font(.system(size: 30)).foregroundStyle(seal.1).symbolRenderingMode(.hierarchical).frame(width: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(headline).font(.headline).lineLimit(2)
+                if let line = summaryLine { Text(line).font(.footnote).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
             }
-            if let fail { FailText(fail) }
+            Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(.horizontal, 20).padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
     }
@@ -1406,49 +1519,78 @@ struct UpgradeTab: View {
             .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         }
     }
-    // The facts behind the summary, as rows, where the open Duo has the room for them.
+    // The facts behind the summary, as rows, and at their foot the one thing to do here: run the update check. It was a
+    // round arrow on the summary, which read as a refresh against staleness (designer, 2026-11-11).
     var facts: some View {
-        VStack(spacing: 0) {
-            ForEach(Array([("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", patchedFor),("Patched", s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)].enumerated()), id: \.offset) { i, row in
-                if i > 0 { Divider().padding(.leading, 16) }
-                LabeledContent(row.0, value: row.1).padding(.horizontal, 16).padding(.vertical, 12)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array([("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", patchedFor), ("Patched", s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)].enumerated()), id: \.offset) { i, row in
+                // The list cards' insets: text 20 pt in, separators stopping 20 pt short of the right edge.
+                if i > 0 { Divider().padding(.horizontal, 20) }
+                LabeledContent(row.0, value: row.1).padding(.horizontal, 20).padding(.vertical, 12)
+            }
+            if s.upgrade.installed {
+                Divider().padding(.horizontal, 20)
+                Button { confirmRun = true } label: {
+                    Text("Check for updates").foregroundStyle(macBlue).frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20).padding(.vertical, 12).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .confirmationDialog("Check for updates now?", isPresented: $confirmRun, titleVisibility: .visible) {
+                    Button("Check now") { fail = nil; Task { fail = await model.run("upgrade-run") } }
+                } message: { Text("This may restart the Mac.") }
+                // The build's shot of the question.
+                .task { if model.pose == "upgradeask" { try? await Task.sleep(nanoseconds: 1_500_000_000); confirmRun = true } }
+                if let fail { FailText(fail).padding(.horizontal, 20).padding(.bottom, 12) }
             }
         }
         .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
     }
+    // The log only when it has something to read. "Update check finished. Nothing to do." on its own was success chatter
+    // (designer, 2026-11-11). It's back while a check runs, and always when its last line is a failure.
+    var logShown: Bool {
+        let last = s.upgrade.log.split(separator: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }).map(String.init) ?? ""
+        if last.isEmpty { return false }
+        if UpdateLog.matches(UpdateLog.bad, last) { return true }
+        if seal.0 == "arrow.triangle.2.circlepath" { return true }
+        return !UpdateLog.matches(Self.noop, last)
+    }
+    static let noop = try? NSRegularExpression(pattern: #"nothing to do|up to date|no updates?\b"#, options: .caseInsensitive)
+    var log: some View { VStack(alignment: .leading, spacing: 8) { header("Log"); UpdateLog(log: s.upgrade.log) } }
     // The Apps tab's section headings ("Updates", "On this iPhone"): bold, secondary, under the title rather than as loud
     // as it, in line with the text in the cards below. "Log" was white and semibold at the cards' very edge.
-    func header(_ t: String) -> some View { Text(t).font(.title3.weight(.bold)).foregroundStyle(.secondary).padding(.leading, 16) }
+    func header(_ t: String) -> some View { Text(t).font(.title3.weight(.bold)).foregroundStyle(.secondary).padding(.leading, 20) }
     // The same edges as the system's list cards on every other tab: 20 pt in from the leading side, out to the trailing
     // edge of the space, and in the right pane open, from its leading edge.
     var body: some View {
         switch side {
         case .all:
-            // Only the log's lines scroll; the summary and the log's header stay put above them.
+            // Only the log's lines scroll; the summary and the rows stay put above them.
             VStack(alignment: .leading, spacing: 12) {
-                summary
+                // "This Mac" over the status card in every posture, as open flat (designer, 2026-11-11).
+                VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
                 agent
-                VStack(alignment: .leading, spacing: 8) { header("Log"); UpdateLog(log: s.upgrade.log) }
+                VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
+                if logShown { log }
             }
             // With the side bar beside the page, the cards end at its edge, as the list cards do. Open in portrait the tabs
             // are along the foot and nothing is there: the cards ran into the display's edge and lost their right corners.
-            .padding(.leading, 20).padding(.trailing, trailingInset > 20 ? 0 : 20).padding(.bottom, 12)
+            .padding(.trailing, trailingInset > 20 ? 0 : 20).padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { trailingInset = $0 }
         case .left:
-            // A header of its own, like the log's beside it, so both panes' first cards start on one line. It stays put
-            // while the cards under it scroll.
+            // A header of its own, like the details' beside it, so both panes' first cards start on one line.
             VStack(alignment: .leading, spacing: 8) {
                 header("This Mac")
-                ScrollView { VStack(spacing: 12) { summary; facts; agent } }
+                ScrollView { VStack(spacing: 12) { summary; agent } }
                     .scrollBounceBehavior(.basedOnSize)
                     .scrollEdgeEffectHidden(true, for: .top)
             }
-            .padding(.leading, 20)
         case .right:
-            VStack(alignment: .leading, spacing: 8) {
-                header("Log")
-                UpdateLog(log: s.upgrade.log)
+            // The rows beside the summary, and the log under them when it has something to say: with the log hidden the
+            // right pane was empty (designer, 2026-11-11: option 2, nothing across the fold).
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
+                if logShown { log }
             }
             .padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
@@ -1462,6 +1604,7 @@ struct UpdateLog: View {
     let log: String
     // How tall the lines are, so a short log gets a card its own size rather than an empty slab with one line at its foot.
     @State private var contentHeight: CGFloat?
+    @State private var scrolledDown = false
     static let bad = try? NSRegularExpression(pattern: #"\b(error|errors|failed|failure|fatal|cannot|couldn[’']t|panic)\b|✗"#, options: .caseInsensitive)
     static let good = try? NSRegularExpression(pattern: #"\b(finished|complete|completed|succeeded|success|healthy|installed|nothing to do|up to date)\b|✓"#, options: .caseInsensitive)
     static func matches(_ r: NSRegularExpression?, _ s: String) -> Bool { r?.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil }
@@ -1483,14 +1626,26 @@ struct UpdateLog: View {
                             .id(i)
                     }
                 }
-                .padding(14)
+                // The list rows' insets, so its lines start where every card's text does (designer, 2026-11-11).
+                .padding(.horizontal, 20)
                 .textSelection(.enabled)
             }
+            // A line scrolled up fades out a full line deep, and only once the log is scrolled off its top, so a short
+            // log's first line is untouched. The scroll view stops 14 pt inside the card's top and foot, so the fade has
+            // reached nothing before any glyph meets the edge it's cut at.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: scrolledDown ? 30 : 0)
+                    Color.black
+                }
+            }
+            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y > 2 } action: { _, v in scrolledDown = v }
             .defaultScrollAnchor(.bottom)
             .scrollEdgeEffectHidden(true, for: .top)
             .scrollBounceBehavior(.basedOnSize)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, h in contentHeight = h }
-            .frame(maxHeight: contentHeight ?? CGFloat(lines.count) * 21 + 28)
+            .frame(maxHeight: contentHeight ?? CGFloat(lines.count) * 21)
+            .padding(.vertical, 14)
             .background(Color(white: 0.06), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .task {
@@ -1503,7 +1658,7 @@ struct UpdateLog: View {
     }
 }
 extension Status.Upgrade {
-    // A night's worth of log, for the build's shot of it scrolled.
+    // A night's worth of log, a check still running at its end, for the build's shot of it scrolled.
     static var longSample: Status.Upgrade {
         var lines: [String] = []
         for i in 0..<160 {
@@ -1514,17 +1669,18 @@ extension Status.Upgrade {
             default: lines.append("[\(t)] Checking softwareupdate catalogue, pass \(i + 1) of 160")
             }
         }
-        lines.append("[03:41:12] Update check finished. Nothing to do.")
-        return Status.Upgrade(installed: true, status: "HEALTHY", state: ["oclp_tag": "3.0.0"], log: lines.joined(separator: "\n"))
+        return Status.Upgrade(installed: true, status: "RUNNING: checking", state: ["oclp_tag": "3.0.0"], log: lines.joined(separator: "\n"))
+    }
+    // The same night ending another way: a failed step, for the shot of the log that must stay up.
+    static func longSample(ending: String, status: String) -> Status.Upgrade {
+        let l = longSample
+        return Status.Upgrade(installed: true, status: status, state: l.state, log: l.log + "\n" + ending)
     }
 }
 
 struct ControlTab: View {
     @EnvironmentObject var model: AppModel
     @State private var pressReturn = false
-    @State private var appleEmail = ""
-    @State private var applePassword = ""
-    @State private var appleCode = ""
     @State private var confirmForget = false
     @State private var reveal = false
     @State private var restartService: Status.Service?
@@ -1535,21 +1691,55 @@ struct ControlTab: View {
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
 
+    // What's on its way to the Mac, and what has just got there. An action in flight can't be pressed again: Type a
+    // secret took two round trips of up to 25 s each with nothing on screen, and a second tap typed the password into
+    // the Mac again, Return and all, wherever its focus then was (audit, 2026-11-10). Its button shows the wait, then a
+    // tick; a failure stays under it until the next thing done here, not 4 s.
+    @State private var busy: Set<String> = []
+    @State private var ticked: Set<String> = []
     func act(_ key: String, _ work: @escaping () async -> String?) {
-        fails = [:]
+        guard !busy.contains(key) else { return }
+        withAnimation(Motion.quick) { fails = [:] }
+        busy.insert(key)
         Task {
-            guard let e = await work() else { return }
-            withAnimation(Motion.quick) { fails[key] = e }
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            if fails[key] == e { withAnimation(Motion.quick) { fails[key] = nil } }
+            let e = await work()
+            busy.remove(key)
+            // Said with what it was that didn't happen: a bare "Can’t reach the Mac" under a red row read as another row.
+            if let e { withAnimation(Motion.quick) { fails[key] = Self.undone(key) + e }; return }
+            withAnimation(Motion.quick) { _ = ticked.insert(key) }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            withAnimation(Motion.quick) { _ = ticked.remove(key) }
         }
     }
     @ViewBuilder func failLine(_ key: String) -> some View { if let f = fails[key] { FailText(f) } }
+    static func undone(_ key: String) -> String {
+        switch key {
+        case "unlock": return "Not unlocked: "
+        case "login": return "Not logged in: "
+        case "forget": return "Not forgotten: "
+        case "type": return "Not typed: "
+        default: return key.hasPrefix("svc:") ? "Not restarted: " : ""
+        }
+    }
+    // A row's button with its action's state at the row's end: waiting, then done.
+    func actButton(_ title: String, _ key: String, role: ButtonRole? = nil, _ action: @escaping () -> Void) -> some View {
+        Button(role: role, action: action) {
+            HStack {
+                Text(title)
+                Spacer(minLength: 8)
+                if busy.contains(key) { ProgressView() }
+                else if ticked.contains(key) { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(.green).transition(.opacity).accessibilityLabel("Done") }
+            }
+        }
+        .disabled(busy.contains(key))
+    }
     // The build's shots of a failure under its button, and of the Forget password question.
     func pose() async {
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         if model.pose == "controlfail" { withAnimation(Motion.quick) { fails["forget"] = "The Mac didn’t answer. Check Tailscale and try again." } }
         if model.pose == "forget" { confirmForget = true }
+        // A secret on its way to the Mac (the arrow a spinner, no second tap), beside a failure that has stayed.
+        if model.pose == "controlbusy" { drafts.typed = "correct horse"; busy = ["type"]; fails["forget"] = Self.undone("forget") + Phrase.macAway }
     }
     var locked: Bool { s.screen == "locked" }
     var displayOn: Bool { s.displayOn ?? (s.screen != "display off") }
@@ -1557,6 +1747,10 @@ struct ControlTab: View {
 
     var body: some View {
         if side != .right {
+            // The quick actions, moved here from Status (Richard, 2026-11-11: "simplify"): the Screen's one door, the
+            // display, and the clipboard both ways.
+            Section { QuickActions().place("quick") }
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden)
             Section {
                 if s.macLogin {
                     HStack(spacing: 8) {
@@ -1568,10 +1762,10 @@ struct ControlTab: View {
                     }
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                     if locked {
-                        Button("Unlock") { act("unlock") { await model.run("mac-unlock") } }
+                        actButton("Unlock", "unlock") { act("unlock") { await model.run("mac-unlock") } }
                         failLine("unlock")
                     }
-                    Button("Forget password", role: .destructive) { confirmForget = true }
+                    actButton("Forget password", "forget", role: .destructive) { confirmForget = true }
                         .task { await pose() }
                         .confirmationDialog("Forget the Mac’s password?", isPresented: $confirmForget, titleVisibility: .visible) {
                             Button("Forget password", role: .destructive) { act("forget") { await model.run("mac-logout") } }
@@ -1579,22 +1773,23 @@ struct ControlTab: View {
                     failLine("forget")
                 } else {
                     SecureField("Mac password", text: $drafts.macPassword).textContentType(.password)
-                    Button("Log in") {
+                    actButton("Log in", "login") {
                         let p = drafts.macPassword; drafts.macPassword = ""
                         act("login") { await model.runSealed("mac-login", secret: p) }
-                    }.disabled(drafts.macPassword.isEmpty)
+                    }.disabled(drafts.macPassword.isEmpty && !busy.contains("login"))
                     failLine("login")
                 }
             } header: { Text(s.macLogin ? "Mac login" : "Log in to this Mac") } footer: {
-                Text(s.macLogin ? "It stays logged in after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
+                // Logged in, nothing: "It stays logged in after restarts." was reassurance (Never #32, designer 2026-11-11).
+                if !s.macLogin { Text("Used once to log in, then saved in the Mac’s keychain. Forget password removes it.") }
             }
-            Section {
-                Button("Open screen") { model.openScreen() }
-            } header: { Text("Remote desktop") } footer: { Text("Tap to click · drag to move things · two fingers to scroll · pinch to zoom") }
+            // No Screen section: Status's Screen quick action is the one door, and the Screen teaches its own gestures
+            // (designer, 2026-11-11: keep one door).
             SendSection(route: model.route)
             Section {
                 Button { model.signingIn = true } label: { Label("Fill a saved login", systemImage: "key.fill") }
                     .disabled(!typingReady)
+                    .id("typebox")
                     .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
                 if typingReady {
                     HStack(spacing: 10) {
@@ -1613,8 +1808,13 @@ struct ControlTab: View {
                                 if e == nil { drafts.typed = "" }
                                 return e
                             }
-                        } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
-                        .buttonStyle(.plain).foregroundStyle(drafts.typed.isEmpty ? Color.secondary : macBlue).disabled(drafts.typed.isEmpty).accessibilityLabel("Type on Mac")
+                        } label: {
+                            // While it's being typed on the Mac the arrow is a spinner and takes no second tap; then a tick.
+                            if busy.contains("type") { ProgressView().frame(width: 28, height: 28) }
+                            else { Image(systemName: ticked.contains("type") ? "checkmark.circle.fill" : "arrow.up.circle.fill").font(.title2).contentTransition(.symbolEffect(.replace)) }
+                        }
+                        .buttonStyle(.plain).foregroundStyle(ticked.contains("type") ? Color.green : drafts.typed.isEmpty ? Color.secondary : macBlue)
+                        .disabled(drafts.typed.isEmpty || busy.contains("type")).accessibilityLabel(busy.contains("type") ? "Typing on the Mac" : "Type on Mac")
                     }
                     Toggle("Press Return afterward", isOn: $pressReturn)
                     failLine("type")
@@ -1626,31 +1826,6 @@ struct ControlTab: View {
             }
         }
         if side != .left {
-            // Installs and renewals live on the Apps tab; this only appears if Apple needs you again.
-            if !s.ios.signedIn || s.ios.job.state == "code" {
-                Section {
-                    if s.ios.job.state == "code" {
-                        TextField("6-digit code", text: $appleCode).textContentType(.oneTimeCode)
-                        Button("Send code") {
-                            let c = appleCode; appleCode = ""
-                            act("apple") { await model.runSealed("ios-code", secret: c) }
-                        }.disabled(appleCode.isEmpty)
-                    } else {
-                        TextField("Apple account email", text: $appleEmail).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        SecureField("Apple account password", text: $applePassword).textContentType(.password)
-                        Button("Sign in to Apple") {
-                            let secret = appleEmail + "\n" + applePassword; applePassword = ""
-                            act("apple") { await model.runSealed("ios-login", secret: secret) }
-                        }.disabled(appleEmail.isEmpty || applePassword.isEmpty)
-                    }
-                    failLine("apple")
-                } header: { Text("Apple account") } footer: { Text("The Mac needs this to renew your apps.") }
-            }
-            if !s.publicUrl.isEmpty {
-                Section {
-                    if let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
-                } header: { Text("Public link") } footer: { Text("This address changes whenever the Mac restarts.") }
-            }
             if let list = s.services {
                 Section("Services") {
                     ForEach(list) { v in
@@ -1661,7 +1836,8 @@ struct ControlTab: View {
                                 Spacer()
                                 // Only a service that's down has anything to restart.
                                 if !v.running {
-                                    Button("Restart") { restartService = v }.buttonStyle(.bordered).controlSize(.small)
+                                    if busy.contains("svc:" + v.label) { ProgressView().controlSize(.small) }
+                                    Button("Restart") { restartService = v }.buttonStyle(.bordered).controlSize(.small).disabled(busy.contains("svc:" + v.label))
                                         .confirmationDialog("Restart \(v.name)?", isPresented: .init(get: { restartService?.label == v.label }, set: { if !$0 { restartService = nil } }), titleVisibility: .visible) {
                                             Button("Restart") { act("svc:" + v.label) { await model.run("service-restart", ["label": v.label]) } }
                                         }
@@ -1672,9 +1848,15 @@ struct ControlTab: View {
                     }
                 }
             }
-            Section("Connected devices") {
+            // The devices on his Tailscale and the public link, one card: each was a section of one row, which the system
+            // draws as a capsule beside the rounded cards (designer, 2026-11-11: merge lone rows where they belong).
+            Section {
                 if s.tailscale.peers.isEmpty { Text("No other devices yet").foregroundStyle(.secondary) }
-                ForEach(s.tailscale.peers) { p in StateRow(label: p.name, good: p.online, value: p.os) }
+                // The device's name as a word and whether it's there; its OS was chatter (designer, 2026-11-11).
+                ForEach(s.tailscale.peers) { p in StateRow(label: appleCased(p.name), good: p.online, value: p.online ? "Connected" : "Offline") }
+                if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
+            } header: { Text("Remote access") } footer: {
+                if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }
             }
             // Health and Restart the Mac, last and apart from the everyday buttons, each its own page.
             MacPowerSections()
@@ -1688,37 +1870,121 @@ struct SignInView: View {
     @State private var address = ""
     @State private var code = ""
     @State private var note: String?
+    @State private var probing = false
+    // Not a sheet: on the Duo a sheet is an inset card folded and sits across the crease open flat, its fields on the fold
+    // (Richard, 2026-11-10: sheets fill the screen up to the side column; designer, 2026-11-11). A cover the size of the
+    // screen, the page's name its first line as on every pushed page, Cancel and Connect the system's own bar items (the
+    // side strip folded and open flat, the bar along the top upright), and open flat a pane each side of the hinge: the
+    // address on the left, the code and what went wrong on the right.
+    @ViewBuilder var addressSection: some View {
+        Section {
+            TextField("https://your-mac.your-tailnet.ts.net", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+        } header: { Text("Mac Pro address") } footer: { Text("Tailscale works from anywhere with the Tailscale app on and needs no code. The public link changes when the Mac restarts.") }
+    }
+    @ViewBuilder var codeSection: some View {
+        Section {
+            SecureField("Access code", text: $code).textContentType(.oneTimeCode).textInputAutocapitalization(.characters)
+        } header: { Text("Public link only") }
+        if let note { Section { FailText(note) } }
+    }
+    func heading(shown: Bool) -> some View {
+        Section { PaneHeading(title: "Connection", shown: shown) }
+            .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+    }
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("https://your-mac.your-tailnet.ts.net", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                } header: { Text("Mac Pro address") } footer: { Text("Tailscale works from anywhere with the Tailscale app on and needs no code. The public link changes when the Mac restarts.") }
-                Section {
-                    SecureField("Access code", text: $code).textContentType(.oneTimeCode).textInputAutocapitalization(.characters)
-                } header: { Text("Public link only") }
-                if let note { Section { FailText(note) } }
+            PaneReader {
+                SignInPanes(left: { Form { heading(shown: true); addressSection } }, right: { Form { heading(shown: false); codeSection } },
+                            all: { Form { heading(shown: true); addressSection; codeSection } })
             }
-            .navigationTitle("Connection")
+            .background(groupedBackground.ignoresSafeArea())
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Connect") { Task { await connect() } } }
+                ToolbarItem(placement: .confirmationAction) {
+                    // The address is tried before it's kept, and the wait shows where Connect was.
+                    if probing { ProgressView() } else { Button("Connect") { Task { await connect() } }.disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                }
             }
-            .onAppear { address = model.address }
+            .onAppear {
+                address = model.address
+                // The build's shots of the sheet trying an address, and of one that didn't answer.
+                if model.pose == "signinprobe" { address = "mac-pro.example.ts.net"; probing = true }
+                if model.pose == "signinbad" { address = "https://mac-pro.exmaple.ts.net"; note = "Can’t reach a Mac at this address. Is Tailscale on?" }
+                if model.pose == "signincode" { note = "This address needs its access code." }
+            }
         }
+        .preferredColorScheme(.dark)
     }
+    // What was typed, as an address the app can use: the scheme put on when it's left off (https, or http for a bare
+    // local address), no trailing slash. Nil when it still isn't one.
+    static func normalised(_ typed: String) -> String? {
+        var t = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        while t.hasSuffix("/") { t.removeLast() }
+        guard !t.isEmpty, !t.contains(" ") else { return nil }
+        if !t.contains("://") {
+            let host = t.split(separator: ":").first.map(String.init) ?? t
+            let local = host.hasSuffix(".local") || host == "localhost" || (host.split(separator: ".").count == 4 && host.allSatisfy { $0.isNumber || $0 == "." })
+            t = (local ? "http://" : "https://") + t
+        }
+        guard let u = URL(string: t), let h = u.host, !h.isEmpty, ["http", "https"].contains(u.scheme ?? "") else { return nil }
+        return t
+    }
+    // Asks the address itself before keeping it. It was saved first and judged by the app's state, which starts out
+    // "needs sign in" and takes 8 s of misses to say unreachable: a typo read as "needs an access code", and a wrong
+    // address closed the sheet as if connected (audit, 2026-11-10).
     func connect() async {
         note = nil
-        model.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let fixed = Self.normalised(address), let base = URL(string: fixed) else { note = "That isn’t an address. It looks like https://your-mac.your-tailnet.ts.net"; return }
+        address = fixed
+        probing = true; defer { probing = false }
+        let api = API(base: base)
         if !code.isEmpty {
-            do { try await model.api.login(code: code) } catch { note = error.localizedDescription; return }
+            do { try await api.login(code: code) }
+            catch { note = MacFiles.unreachable(error) || error is URLError ? "Can’t reach a Mac at this address. Is Tailscale on?" : error.localizedDescription; return }
         }
-        code = ""
-        await model.refresh()
-        if model.needsSignIn { note = "This address needs an access code." }
-        else if model.problem != nil { note = "Can’t reach the Mac at this address." }
-        else { dismiss() }
+        do {
+            _ = try await api.statusData()
+            code = ""
+            model.address = fixed
+            await model.refresh()
+            dismiss()
+        } catch APIError.signInNeeded {
+            note = code.isEmpty ? "This address needs its access code." : "The Mac didn’t take that access code."
+        } catch {
+            note = "Can’t reach a Mac at this address. Is Tailscale on?"
+        }
+    }
+}
+
+// One column, or a pane each side of the hinge open flat (FoldSplit), for a page that isn't one of the tabs.
+struct SignInPanes<L: View, R: View, A: View>: View {
+    @Environment(\.paneLayout) private var panes
+    @ViewBuilder let left: () -> L
+    @ViewBuilder let right: () -> R
+    @ViewBuilder let all: () -> A
+    var body: some View {
+        if panes { FoldSplit { left().scrollContentBackground(.hidden) } right: { right().scrollContentBackground(.hidden) } }
+        else { all().scrollContentBackground(.hidden) }
+    }
+}
+
+// How many parts of the Mac need a look, as the app last read it from the Mac's Health (Control's row and the Health
+// page read it; Status's chip shows it when the status itself doesn't say). Nil until read, and again once it can't be.
+@MainActor
+final class HealthSummary: ObservableObject {
+    static let shared = HealthSummary()
+    @Published private(set) var bad: Int?
+    // Asked, and the Mac had no answer to give.
+    @Published private(set) var cantSay = false
+    private var asked = Date.distantPast
+    func set(_ r: MacReport?) { let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n }; if r != nil, cantSay { cantSay = false } }
+    // For Status, from a Mac whose status doesn't carry the count: asked once a minute at most.
+    func refresh(_ api: API) {
+        guard Date().timeIntervalSince(asked) > 60 else { return }
+        asked = Date()
+        Task { if let r = try? await api.macHealth() { set(r) } else if bad == nil, !cantSay { cantSay = true } }
     }
 }
 
@@ -1849,7 +2115,7 @@ struct SeedSection: View {
                             .font(.subheadline).fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 4)
                         Button { withAnimation(Motion.quick) { autoTipDone = true } } label: {
-                            Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).frame(width: 30, height: 30).contentShape(Rectangle())
+                            Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.primary).frame(width: 44, height: 30).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Dismiss")

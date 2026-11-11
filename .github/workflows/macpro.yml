@@ -243,12 +243,85 @@ jobs:
             local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) || return 0
             [ -f "$c/Library/Caches/regions.txt" ] && cp "$c/Library/Caches/regions.txt" dist/macpro-screen-kb-posture-regions.log || true
           }
+          # A page taken back with the Back button, the way Richard does it (2026-11-10: "weird resizing issues at times
+          # when going back on a screen from another"): against the Mac whose readings change every second, CPU's history
+          # open at launch, Back tapped, the CPU tile tapped and Back again, then Memory and Back. Each move's start and
+          # end, every reading a page takes and every late frame go to the log beside the film.
+          # name, display, Back's x and y, the CPU tile's x and y, the Memory tile's x (fractions), then the app's own arguments.
+          popfilm() {
+            local name=$1 display=$2 bx=$3 by=$4 tx=$5 ty=$6 mx=$7; shift 7
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9021 -fullEvery 1 -swipeLog YES -tab 0 -openHistory cpu "$@"
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-page.png
+            echo "$name back at $(date +%s.%N | cut -c1-14)"
+            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-back.png
+            $D "$DEVICE" touch $tx $ty 0.08 || echo "tap failed"; sleep 3
+            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 3
+            $D "$DEVICE" touch $mx $ty 0.08 || echo "tap failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-memory.png
+            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            swipelog $name
+          }
+          # A launch straight onto a page (a session's, as a notification tapped opens it), then Back with a real tap: the
+          # tab underneath must be there whole from the pop's first frame (designer, 2026-11-10: it had never been drawn,
+          # and arrived in pieces). name, display, Back's x and y.
+          launchpop() {
+            local name=$1 display=$2 bx=$3 by=$4; shift 4
+            local D=/tmp/dh/.build/release/devicehubctl
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9021 -fullEvery 1 -swipeLog YES -tab 0 -pose session
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-page.png
+            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 4
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            swipelog $name
+          }
           reopenshots() {
             local d=$1 x=$2
             reopenshot reopen-history$x $d -tab 0 -openHistory cpu
             reopenshot reopen-processes$x $d -tab 0 -openProcesses cpu
             reopenshot reopen-versions$x $d -tab 1 -pose versions
             reopenshot reopen-session$x $d -tab 2 -pose session
+          }
+          # What the 2026-11-10 audit changed, in one posture (display, suffix): a session whose screen has stopped coming
+          # and one whose message didn't get through, Processes and a history gone stale, a status the app can't read,
+          # Status's chip with two parts needing a look, a restart that never came back, Control, and the Connection sheet.
+          auditshots() {
+            local d=$1 x=$2
+            shot session-stale$x $d 9 -tab 2 -pose sessionstale
+            shot session-fail$x $d 9 -tab 2 -pose sessionfail
+            shot processes-stale$x $d 8 -tab 0 -openProcesses cpu -pose stale
+            shot history-stale$x $d 8 -tab 0 -openHistory cpu -pose stale
+            shot unreadable$x $d 8 -tab 0 -pose unreadable
+            shot needslook$x $d 8 -tab 0 -pose needslook
+            shot health-stuck$x $d 9 -tab 5 -pose healthstuck
+            shot signin$x $d 8 -tab 0 -pose signin
+            # The sheet trying an address, one that didn't answer, and one that wants its code.
+            shot signin-probe$x $d 8 -tab 0 -pose signinprobe
+            shot signin-bad$x $d 8 -tab 0 -pose signinbad
+            shot signin-code$x $d 8 -tab 0 -pose signincode
+            # Before the Mac has said anything of itself (grey "Checking"); a secret on its way with a failure that stayed;
+            # the second question for an app that didn't quit; a restart whose answer never came; Claude's service rows.
+            shot checking$x $d 8 -tab 0 -pose checking
+            shot control-busy$x $d 9 -tab 5 -pose controlbusy
+            shot forcequit$x $d 9 -tab 1 -pose forcequit
+            shot didntconfirm$x $d 9 -tab 5 -pose didntconfirm
+            shot claude-scrolled$x $d 9 -tab 2 -pose scrolled
+            # The unreachable card as it's said now, with its ✕; Claude's service card wherever it sits; Apps with his three
+            # apps from TestFlight, as the stand-in Mac now reports them.
+            shot unreachable$x $d 8 -tab 0 -pose unreachable
+            shot claudecard$x $d 9 -tab 2 -pose claudecard
+            shot tab1$x $d 7 -tab 1
           }
           # Everything that changed, in one posture (display, suffix).
           poses() {
@@ -301,6 +374,7 @@ jobs:
             shot restart$x $d 9 -tab 5 -pose restart
             shot restart-red$x $d 9 -tab 5 -pose restartred
             shot processes$x $d 8 -tab 0 -openProcesses cpu
+            auditshots $d $x
           }
           # The keyboard key on the cover (folded upright), first, while the Duo is still closed: the keyboard up and away twice, judged in
           # frames (Richard, 2026-11-10: "when i select keyboard in folded portrait from the toolbar theres a weird animation").
@@ -347,8 +421,14 @@ jobs:
           # Status, the page he named, pulled his way (pullfilm) against that Mac: the log beside it must show every reading
           # held while the page is past its end, and the spring in steps that shrink, never one move.
           FILM_PORT=9021 pullfilm statuspull-portrait 3 0.5 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
+          # And against the Mac under load (9031: every reading 2 to 5 s late, one in seven lost): it is there the whole
+          # time, so no "can't reach" card may come and go at the top of Status, at rest or mid-pull (Richard, 2026-11-11:
+          # "the top scroll shit happening"; the main build's own film showed the card twice in 16 s).
+          FILM_PORT=9031 pullfilm statuspull-slow-portrait 3 0.5 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
           FILM_PORT=9021 swipefilm appsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -fullEvery 1 -frameLog YES
           FILM_PORT=9021 swipefilm versionsbounce-portrait 3 0.5 0.8 0.28 -tab 1 -pose versionsfilm -fullEvery 1 -frameLog YES
+          popfilm pop-portrait 3 0.065 0.049 0.25 0.66 0.75
+          launchpop launchpop-portrait 3 0.065 0.049
           backfilms 3 -portrait
           reopenshots 3 -portrait
           retapfilm
@@ -362,6 +442,8 @@ jobs:
           shot session-open 3 9 -tab 2 -pose session
           shot history-open 3 8 -tab 0 -openHistory cpu
           shot processes-open 3 8 -tab 0 -openProcesses cpu
+          popfilm pop-open 3 0.948 0.222 0.62 0.23 0.82
+          launchpop launchpop-open 3 0.948 0.222
           backfilm back-history-open 3 -tab 0 -openHistory cpu
           backfilm back-versions-open 3 -tab 1 -pose versions
           backfilm back-session-open 3 -tab 2 -pose session
@@ -381,6 +463,9 @@ jobs:
           slowfilms 1 ""
           film scrollfilm 1 30 -tab 0 -pose scrollfilm
           swipefilm versionsfling 1 0.45 0.8 0.28 -tab 1 -pose versionsfilm
+          FILM_PORT=9031 pullfilm statuspull-slow 1 0.45 0.8 0.28 -tab 0 -fullEvery 1 -frameLog YES
+          popfilm pop 1 0.895 0.292 0.23 0.81 0.62
+          launchpop launchpop 1 0.895 0.292
           backfilms 1 ""
           # The hinge moved with a page up (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios across
           # everything"): both displays filmed while a pushed page and then Status are flung, the phone opened, turned,

@@ -67,7 +67,9 @@ http.createServer((q, s) => {
 const macMock = JSON.parse(require('fs').readFileSync(__dirname + '/mock-status.json'));
 { // Times relative to now, so the screenshots show what a real day looks like.
   const now = Date.now(), plan = macMock.usage.plan;
-  plan.at = now - 120000; plan.fiveHourResets = now + 3 * 3600e3; plan.sevenDayResets = now + 4 * 86400e3;
+  // Read 2 minutes before each answer, not before the stand-in started: an hour into the build the shots said "Plan last
+  // read 1h 2m ago" on a plan the real Mac reads every few minutes (designer, 2026-11-11). Stamped as each answer goes.
+  plan.at = -4242; plan.fiveHourResets = now + 3 * 3600e3; plan.sevenDayResets = now + 4 * 86400e3;
   // As the real Mac reports it since November: Claude no longer sends a 5-hour limit for this plan.
   plan.fiveHour = null; plan.fiveHourResets = null;
   macMock.iosApps.apps.forEach(a => { if (a.expires) { a.expires = now + 6 * 86400e3; a.installedAt = now - 86400e3; } });
@@ -90,7 +92,9 @@ macMock.apps = [
 ];
 macMock.installed = ['Calendar', 'Claude', 'Code', 'Finder', 'Google Chrome', 'Music', 'Safari', 'System Settings', 'Tailscale', 'Terminal', 'TextEdit', 'VLC'];
 macMock.displayOn = false;
-const macStatus = JSON.stringify(macMock);
+const macStatusAt = JSON.stringify(macMock);
+let macStatus = macStatusAt.replace('"at":-4242', `"at":${Date.now() - 120000}`);
+setInterval(() => { macStatus = macStatusAt.replace('"at":-4242', `"at":${Date.now() - 120000}`); }, 30000);
 const macProc = (pid, name, cpu, mem, locked) => ({ pid, start: 'Fri Oct 30 23:11:35 2026', name, cpu, mem: mem * 1048576, locked });
 const macProcs = JSON.stringify({
   cpu: [macProc(40, 'Google Chrome Helper', 84, 610, null), macProc(41, 'WindowServer', 22, 240, 'System process'), macProc(42, 'Claude Code', 12, 690, 'Claude session'), macProc(43, 'Music', 6, 380, null), macProc(44, 'node', 3, 310, 'The dashboard'), macProc(45, 'Tailscale', 2, 118, 'Keeps remote access')],
@@ -120,6 +124,14 @@ const liveMac = () => {
 const liveMacStatus = () => JSON.stringify(liveMac());
 const liveMacLive = () => { const m = liveMac(); return JSON.stringify({ uptime: m.uptime, load: m.load, cpu: m.cpu, mem: m.mem, net: m.net, hist: m.hist, temps: m.temps, displayOn: m.displayOn }); };
 http.createServer((q, s) => macRoutes(q, s, liveMacStatus, liveMacLive)).listen(9021, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// The same Mac under load (9031), as his was on 2026-11-11: every reading takes 2 to 5 s to come and every seventh
+// never comes at all. The Mac is there the whole time, so the app must never say it can't reach it.
+let slowReads = 0;
+http.createServer((q, s) => {
+  if (!/^\/api\/(live|status)/.test(q.url)) return macRoutes(q, s, liveMacStatus, liveMacLive);
+  if (++slowReads % 7 === 0) return q.socket.destroy();
+  setTimeout(() => macRoutes(q, s, liveMacStatus, liveMacLive), 2000 + (slowReads * 733) % 3000);
+}).listen(9031, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
 // The same Mac opened while its display is asleep or waking, as Screen Sharing really answers then (2026-11-10): a 2 x 2

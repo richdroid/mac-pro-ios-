@@ -18,9 +18,6 @@ targets:
       - target: MacProWidget
       # Send to Mac Pro in the share sheet, embedded as TV embeds Send to TV.
       - target: MacProShare
-      - target: HotProbe
-        embed: true
-        link: false
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -241,11 +238,3 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryTV
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-  HotProbe:
-    type: framework
-    platform: iOS
-    sources: [Hot]
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.HotProbe
-        DEFINES_MODULE: NO

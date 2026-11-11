@@ -114,6 +114,39 @@ struct Status: Decodable {
     // existing is all there is to go on.
     var publicUp: Bool?
     var publicLinkActive: Bool { !publicUrl.isEmpty && (publicUp ?? true) }
+    // How many parts of the Mac need a look, as its Health page counts them, and when that was read (ms). From a bridge
+    // that says; nil from an older one.
+    var healthBad: Int?
+    var healthAt: Double?
+
+    // Read leniently: the parts no tab can do without are required, and everything else falls back to an empty value
+    // when the Mac leaves it out or changes its shape. The bridge changes daily, and one field renamed there froze
+    // sessions, apps and alerts here, since a status that doesn't decode is dropped whole (audit, 2026-11-10).
+    enum CodingKeys: String, CodingKey {
+        case model, macos, build, uptime, load, cpuModel, cpu, mem, disk, net, hist, apps, installed, procs, tailscale, claude, usage, upgrade, oclp, sharing
+        case publicUrl, typing, iphone, iloader, macLogin, screen, agentStale, ios, displayOn, temps, services, iosApps, alerts, apiUsage, publicUp, healthBad, healthAt
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        func opt<T: Decodable>(_ k: CodingKeys) -> T? { (try? c.decodeIfPresent(T.self, forKey: k)) ?? nil }
+        model = try c.decode(String.self, forKey: .model); macos = try c.decode(String.self, forKey: .macos)
+        build = opt(.build) ?? ""; uptime = try c.decode(Double.self, forKey: .uptime); load = opt(.load) ?? []; cpuModel = opt(.cpuModel) ?? ""
+        cpu = try c.decode(CPU.self, forKey: .cpu); mem = try c.decode(Memory.self, forKey: .mem); disk = try c.decode(Disk.self, forKey: .disk)
+        net = try c.decode(Network.self, forKey: .net); hist = try c.decode(History.self, forKey: .hist)
+        apps = try c.decode([App].self, forKey: .apps); tailscale = try c.decode(Tailscale.self, forKey: .tailscale)
+        claude = try c.decode(Claude.self, forKey: .claude)
+        installed = opt(.installed) ?? []; procs = opt(.procs) ?? []
+        let none = Tally(input: 0, output: 0, cache: 0, messages: 0, models: [:])
+        usage = opt(.usage) ?? Usage(plan: nil, fiveHours: none, day: none, week: none, hours: [], scanning: false)
+        upgrade = opt(.upgrade) ?? Upgrade(installed: false, status: "", state: [:], log: "")
+        oclp = opt(.oclp) ?? OCLP(version: "", patchedFor: "", patchedAt: "", kdk: "")
+        sharing = opt(.sharing) ?? Sharing(ssh: false, vnc: false)
+        publicUrl = opt(.publicUrl) ?? ""; typing = opt(.typing) ?? ""; iphone = opt(.iphone) ?? false; iloader = opt(.iloader) ?? false
+        macLogin = opt(.macLogin) ?? false; screen = opt(.screen) ?? ""; agentStale = opt(.agentStale) ?? false
+        ios = opt(.ios) ?? IOSStatus(hasPhone: false, signedIn: true, ready: false, installedAt: 0, nextDue: 0, lastResult: "", resigning: false, job: IOSJob(state: "", message: ""))
+        displayOn = opt(.displayOn); temps = opt(.temps); services = opt(.services); iosApps = opt(.iosApps); alerts = opt(.alerts)
+        apiUsage = opt(.apiUsage); publicUp = opt(.publicUp); healthBad = opt(.healthBad); healthAt = opt(.healthAt)
+    }
 }
 
 // The numbers that change every second.
@@ -184,8 +217,6 @@ struct API {
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
     }
 
-    func hotProbe(_ part: String = "HotProbe") async throws -> (Data, URLResponse) { try await session.data(for: request("/ios/hot/\(part)")) }
-
     func live() async throws -> LiveStatus {
         var r = request("/api/live"); r.timeoutInterval = 6
         let (data, response) = try await session.data(for: r)
@@ -216,14 +247,6 @@ struct API {
         if code == 401 || code == 403 { throw APIError.signInNeeded }
         guard code == 200 else { throw APIError.badResponse }
         return data
-    }
-
-    func status() async throws -> Status {
-        let (data, response) = try await session.data(for: request("/api/status"))
-        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if code == 401 || code == 403 { throw APIError.signInNeeded }
-        guard code == 200 else { throw APIError.badResponse }
-        return try JSONDecoder().decode(Status.self, from: data)
     }
 
     @discardableResult
@@ -260,18 +283,6 @@ struct API {
         let (d, resp) = try await session.data(for: r)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
         return d
-    }
-
-    // Fetches an app from the Mac, so this iPhone can hand it to SideStore when it's away from home.
-    func download(_ file: String) async throws -> URL {
-        let name = file.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file
-        var r = request("/ios/app/\(name)"); r.timeoutInterval = 600
-        let (temp, response) = try await session.download(for: r)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.message("The Mac couldn’t send that app.") }
-        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(file)
-        try? FileManager.default.removeItem(at: dest)
-        try FileManager.default.moveItem(at: temp, to: dest)
-        return dest
     }
 
     func processes() async throws -> ProcessReport {

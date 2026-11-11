@@ -145,27 +145,26 @@ struct AlertBanner: View {
     }
 }
 
+// The alerts switch, a row in Settings' Behaviour card (it sat on Status, Richard 2026-11-11: "the notify setting should
+// be in settings"). What it sends is that card's footnote.
 struct AlertSettings: View {
     @EnvironmentObject var model: AppModel
     @AppStorage(AlertWatch.enabledKey) private var enabled = true
     @State private var denied = false
+    static let note = "Alerts when the Mac is too hot, its disk is nearly full, something is down, or Claude usage is nearly out."
     var body: some View {
-        Section {
-            Toggle("Notify this iPhone", isOn: $enabled)
-                .onChange(of: enabled) { _, on in
-                    if on { Task { denied = !(await AlertWatch.shared.ask()) } }
-                    // Off: the Mac forgets this iPhone. On: it's told where to send again.
-                    PushToken.share(model.api)
-                }
-            #if canImport(UIKit)
-            if denied && enabled, let u = URL(string: UIApplication.openSettingsURLString) {
-                Link("Allow notifications in Settings", destination: u)
+        Toggle("Notify this iPhone", isOn: $enabled)
+            .onChange(of: enabled) { _, on in
+                if on { Task { denied = !(await AlertWatch.shared.ask()) } }
+                // Off: the Mac forgets this iPhone. On: it's told where to send again.
+                PushToken.share(model.api)
             }
-            #endif
-        } header: { Text("Alerts") } footer: {
-            Text("Too hot, disk nearly full, something down, or Claude usage nearly out.")
+            .task { denied = await AlertWatch.shared.isDenied() }
+        #if canImport(UIKit)
+        if denied && enabled, let u = URL(string: UIApplication.openSettingsURLString) {
+            Link("Allow notifications in Settings", destination: u)
         }
-        .task { denied = await AlertWatch.shared.isDenied() }
+        #endif
     }
 }
 
