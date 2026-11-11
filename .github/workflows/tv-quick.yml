@@ -112,6 +112,17 @@ jobs:
             # open flat, then folded and turned. One column: the keys' edges are the picture's, nothing under the rail.
             remotes() { for S in repisode rfilm ridle rmint ryoutube roffline; do shot remote-$S$2 $1 8 $M/$S -tab 0; done; shot remote-type$2 $1 9 $M/repisode -tab 0 -pose type; }
             remotes 1 ""
+            # In motion: the Remote left on a TV whose state changes every 8 s (a show, a film, nothing, Mint, an episode
+            # with no length), so nothing may move or resize as a state comes and goes. Folded, then open upright.
+            remotefilm() {
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$2 --force dist/tv-$1.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/rcycle -tab 0
+              sleep 48
+              kill -INT $REC; wait $REC
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            }
+            remotefilm remote-cycle 1
             $D "$DEVICE" rotate 3 || true; sleep 4
             shot remote-repisode-fland 1 8 $M/repisode -tab 0
             $D "$DEVICE" rotate 1 || true; sleep 4
@@ -119,6 +130,7 @@ jobs:
             $D "$DEVICE" rotate 1; sleep 5
             OPENED=1
             remotes 3 -portrait
+            remotefilm remote-cycle-portrait 3
             $D "$DEVICE" rotate 3 || true; sleep 5
             remotes 3 -open
             $D "$DEVICE" rotate 1 || true; sleep 5

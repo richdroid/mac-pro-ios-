@@ -1447,9 +1447,22 @@ struct RemoteTab: View {
     private var keysColumn: some View {
         GeometryReader { geo in
             let stacked = size == .regular && !panes
-            let grid = RemoteGrid.keys(min(geo.size.width, vSize == .compact ? 300 : 380, stacked && pictureWidth > 120 ? pictureWidth : .infinity))
-            VStack(spacing: 14) { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity); keysBlock(grid) }
+            let grid = RemoteGrid.keys(min(geo.size.width, vSize == .compact ? 260 : 380, stacked && pictureWidth > 120 ? pictureWidth : .infinity))
+            if stacked {
+                // Open upright, under the picture's pane: one pad diameter in every state, hung from the top with the keys
+                // under it and the spare room at the foot (gate 2: 160 pt with a show, 216 with Mint, and moving 28 pt).
+                // Typing, it gives way so the bar and the keys stay above the keyboard.
+                let d = min((grid.width * 0.6).rounded(), 210)
+                VStack(spacing: 14) {
+                    pad.frame(width: grid.width).frame(minHeight: typing ? 60 : d, maxHeight: d)
+                    keysBlock(grid)
+                    Spacer(minLength: 0)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VStack(spacing: 14) { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity); keysBlock(grid) }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .padding(.horizontal, 20).padding(.bottom, 16)
         .modifier(KeysArrive(gate: keysGate))
@@ -1492,31 +1505,39 @@ struct RemoteTab: View {
                 GeometryReader { geo in
                     let fresh = RemoteGrid.folded(width: geo.size.width, height: geo.size.height, under: Self.underRoom + 30)
                     let grid = typing ? (foldedGrid ?? fresh) : fresh
+                    // Typing, the picture stays when it fits above the bar and the keys' row (gate 2: 170 pt of empty art
+                    // where it had been).
+                    let typingRoom = geo.size.height - 44 - (grid.width * 9 / 16 + 14 + 50 + 12 + grid.key)
                     VStack(spacing: 14) {
-                        // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
-                        // Always there, as open: hidden, it shows what's on blurred behind its own "Show the TV's screen".
-                        if !typing {
+                        if !typing || typingRoom >= 0 {
                             picture(closable: true).frame(width: grid.width, height: grid.width * 9 / 16).transition(.opacity)
-                            // Mint's player is what's on when it shows: no empty bar's place above it (offline it left 70 pt).
-                            if !musicShown { progress.frame(width: grid.width) }
-                            // Mint playing has no transport here, so its own player is the way to pause it.
-                            episodes.frame(width: grid.width); music.frame(width: grid.width)
+                        }
+                        if !typing {
+                            // Everything hangs from the top (gate 2: the pad's centre moved 29 to 42 pt as a show or Mint
+                            // started): one slot under the picture as tall as the most that goes there, then the pad, then
+                            // the keys; spare height is at the foot. Mint's player is what's on when it shows: no empty
+                            // bar's place above it.
+                            VStack(spacing: 14) {
+                                if !musicShown { progress.frame(width: grid.width) }
+                                episodes.frame(width: grid.width); music.frame(width: grid.width)
+                            }
+                            .frame(width: grid.width, height: Self.underRoom + 30 - 14, alignment: .top)
                         }
                         Group {
-                            Spacer(minLength: 0)
                             // Typing, the pad steps aside: it never shrank below its drawn size, and pushed the keys under
-                            // the keyboard (CI ee66d34). The bar and the keys' row sit wholly above the keyboard.
-                            if !typing {
-                                pad.frame(width: grid.width, height: grid.pad).transition(.opacity)
-                                Spacer(minLength: 0)
-                            }
+                            // the keyboard (CI ee66d34). The bar and the keys' row sit at the foot, above the keyboard.
+                            if typing { Spacer(minLength: 0) }
+                            else { pad.frame(width: grid.width, height: grid.pad).transition(.opacity) }
                             keysBlock(grid)
                         }
                         .modifier(KeysArrive(gate: keysGate))
+                        if !typing { Spacer(minLength: 0) }
                     }
                     // Centred in the room left of the rail: on the title's inset it left a wide empty band before the
                     // rail (CI ee66d34).
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Typing, clear of the keyboard's own soft edge, which faded the keys' row away above it (CI d2fba13).
+                    .padding(.bottom, typing ? 44 : 0)
                     .onChange(of: fresh, initial: true) { _, g in if !typing { foldedGrid = g } }
                 }
                 .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
