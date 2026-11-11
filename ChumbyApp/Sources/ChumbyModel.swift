@@ -133,7 +133,7 @@ final class ChumbyModel: ObservableObject {
     // The "just this once" sheet, open or not: on the model, not in the menu's own state, because Home lays its
     // controls out in another place of the tree when the phone opens flat, and a sheet held by the view went with it.
     @Published var justOnceSheetOpen = false
-    @Published var alarmsPage = false { didSet { if alarmsPage { releaseHeld() } } }
+    @Published var alarmsPage = false { didSet { if alarmsPage { releaseHeld() }; if alarmsPage != oldValue { SwipeLog.note("alarmsPage \(alarmsPage)") } } }
     // The page shown in place of Alarms ("Calendar settings", or the day's name), for its bar's title.
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []

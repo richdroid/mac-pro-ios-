@@ -477,40 +477,52 @@ struct WordsGroup: View {
     }
 }
 // Folded, and open in portrait, its own page pushed over Alarms, with the system's Back (laid out by iOS the Duo's
-// way) and the system's title; open in landscape its sections fill the right pane (AlarmsTab).
+// way); open in landscape its sections fill the right pane (AlarmsTab).
 struct CalendarWakeSettings: View {
     @EnvironmentObject var model: ChumbyModel
     var body: some View {
-        List { CalendarSettingsSections().listRowBackground(GlassRow()) }
-        .seaList()
-        // Open in portrait the tab bar runs along the foot under this page too: its rows fade out above the bar, as a
-        // tab's do, never reading through it (build 204: "Never wake for…" beside the bar).
-        .modifier(TabBarFade())
-        .overSea()
-        .toolbar(.visible, for: .navigationBar)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        // The system's large title, never a hand-set one in the bar: a text item there forces a horizontal bar across the
-        // top even where the Duo puts controls on the side, leaving Back alone on the strip far from a small centred title
-        // (Richard, 2026-11-09: "the back button looks off … not iphone duo"). Large, the title leads the page like every
-        // tab's, and Back sits where iOS puts it. The face is set once in ChumbyApp.dressBars.
-        .navigationTitle("Calendar settings").navigationBarTitleDisplayMode(.large)
+        List { PageTitle("Calendar settings"); CalendarSettingsSections().listRowBackground(GlassRow()) }
+            .pushedPage("settings")
     }
 }
 // A calendar day pushed over Alarms (folded, and open in portrait): the day's own settings, with the system's Back.
 struct CalendarDayPage: View {
     @EnvironmentObject var model: ChumbyModel
-    @ObservedObject private var wake = CalendarWake.shared
     let key: String
-    var title: String { wake.plan.first { $0.key == key }.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
     var body: some View {
-        List { CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false, titled: false).listRowBackground(GlassRow()) }
-        .seaList()
-        .modifier(TabBarFade())
-        .overSea()
-        .toolbar(.visible, for: .navigationBar)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        // The system's large title, as Calendar settings (above).
-        .navigationTitle(title).navigationBarTitleDisplayMode(.large)
+        List { CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false).listRowBackground(GlassRow()) }
+            .pushedPage("day")
+    }
+}
+extension View {
+    // A page pushed over a tab. Its name is its own first row (PageTitle), in the tabs' face and at their height, and
+    // the system's bar holds only Back, which iOS lays out the Duo's way (the top of the side strip folded, the bar
+    // along the top open in portrait). The system's large title is not used: a tab's own bar is hidden, so on Back the
+    // bar went with it, and the title was cut out of the page before the slide began and its band closed up under the
+    // rows as they went (CI bx, alarmsdemo 11.80 s and 15.58 s; Richard, 2026-11-10: "weird resizing issues at times
+    // when going back on a screen from another"). The Mac Pro app's pushed pages are named the same way (pushedTitle).
+    func pushedPage(_ name: String) -> some View { modifier(PushedPage(name: name)) }
+}
+private struct PushedPage: ViewModifier {
+    let name: String
+    @Environment(\.horizontalSizeClass) private var size
+    func body(content: Content) -> some View {
+        content
+            .seaList()
+            // Open in portrait the status bar and Back have the top to themselves, so the list's own top margin is left
+            // off there, as on the tabs (TwoPane).
+            .contentMargins(.top, size == .regular ? 0 : nil, for: .scrollContent)
+            // Open in portrait the tab bar runs along the foot under this page too: its rows fade out above the bar, as a
+            // tab's do, never reading through it (build 204: "Never wake for…" beside the bar).
+            .modifier(TabBarFade())
+            .overSea()
+            .pageLog(name)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            // No title in the bar: a text item there forces a horizontal bar across the top even where the Duo puts
+            // controls on the side, leaving Back alone on the strip (Richard, 2026-11-09: "the back button looks off …
+            // not iphone duo").
+            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -535,9 +547,8 @@ struct CalendarDaySheet: View {
     let key: String
     // Set when it fills the open Duo's right pane, or the folded content column, instead of being a sheet.
     var close: (() -> Void)?
-    // Pushed, the system's Back closes it, so it has no Done of its own, and the page's title is the system's (titled false).
+    // Pushed, the system's Back closes it, so it has no Done of its own.
     var done = true
-    var titled = true
     var item: PlannedWake? { wake.plan.first { $0.key == key } }
     var title: String { item.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
     var edit: DayEdit { wake.rules.dayEdits[key] ?? DayEdit() }
@@ -701,7 +712,7 @@ struct CalendarDaySheet: View {
     var body: some View {
         if let close {
             Group {
-                if titled { PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } } }
+                PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
                 sections
             }
             .onAppear { labelText = edit.label ?? ""; loadOwn() }

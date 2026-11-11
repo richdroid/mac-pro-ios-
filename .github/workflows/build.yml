@@ -808,6 +808,36 @@ jobs:
           tv_flick 3 "-partial" || echo "TV flick partial incomplete"
           # Last, since each moves the hinge: the Chumby app filmed through folds and turns with pages and sheets up.
           chumby_posturefilms || echo "Chumby posture films incomplete"
+          # Back tapped on a page pushed over Alarms (Richard, 2026-11-10: "weird resizing issues at times when going back
+          # on a screen from another", with the Back button, not the edge swipe), folded and then open in portrait, the
+          # posture he holds, on the live scene whose readings change every poll. Calendar settings at rest, then a
+          # calendar day scrolled first. Back is tapped by its accessibility label. Judged in frames from the tap to a
+          # second after: both pages whole and the same size throughout, the title row moving only with its page, nothing
+          # re-laid out before, during or after the slide. The swipe log beside each film has every page's and title row's
+          # place, size and safe area as they change (pageLog), from "alarmsPage false" on.
+          chumby_backfilms() {
+            local D=/tmp/dh/.build/release/devicehubctl
+            one() { # display, file suffix, pose, scroll first (yes|no)
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$1 --force dist/chumby-back-$3$2.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/live -tab 2 -pose $3 -swipeLog YES
+              sleep 9
+              if [ "$4" = yes ]; then $D "$DEVICE" drag 0.5 0.7 0.5 0.4 0.3 || echo "drag failed"; sleep 2.5; fi
+              $D "$DEVICE" tap "Back" || echo "Back not found ($3$2)"
+              sleep 4
+              kill -INT $REC; wait $REC; echo "chumby back $3$2 film exit $?"
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+              C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && mv "$C/Library/Caches/swipe-log.txt" dist/chumby-back-$3$2-swipe.log || true
+            }
+            $D "$DEVICE" pose closed || true; sleep 4
+            one 1 "" calsettings no
+            one 1 "" calday yes
+            $D "$DEVICE" pose open || true; sleep 4; $D "$DEVICE" rotate 1 || true; sleep 4
+            one 3 "-portrait" calsettings no
+            one 3 "-portrait" calday yes
+            $D "$DEVICE" pose closed || true; sleep 4
+          }
+          chumby_backfilms || echo "Chumby back films incomplete"
           # Menus closing, folded, for the designer to judge in frames (Richard, 2026-11-10: changing an alarm's sound, "the
           # window for selecting just dissapears"): the editor's Plays menu picked to Radio and back to Tone, then Repeat to
           # Once (menufilm-editor); Channels' header menu picked to News (menufilm-channels). Taps are by accessibility label.

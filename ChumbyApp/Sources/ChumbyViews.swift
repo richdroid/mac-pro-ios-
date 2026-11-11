@@ -296,6 +296,7 @@ struct PageTitle<Trailing: View>: View {
             trailing
         }
         .frame(minHeight: 44)
+        .pageLog("title \(title)")
         .listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 4, leading: 6, bottom: 0, trailing: 6))
     }
 }
@@ -375,9 +376,22 @@ extension View {
     }
     // A tab's own page: its title is the first row, so no empty bar sits above it and every tab starts at the same height.
     func tabPage(_ tab: Int, _ model: ChumbyModel) -> some View {
-        self.modifier(TabBarFade()).overSea(active: model.tab == tab).toolbar(.hidden, for: .navigationBar)
+        self.modifier(TabBarFade()).overSea(active: model.tab == tab).pageLog("tab \(tab)").toolbar(.hidden, for: .navigationBar)
+    }
+    // For the build's films of Back (-swipeLog YES, never on the phone): where this view is, its size and its safe area,
+    // each time any of them changes, to the swipe log. A page or a title row that is moved or resized as a page goes back
+    // shows there in numbers, between "alarmsPage false" and the next reading at rest.
+    @ViewBuilder func pageLog(_ name: String) -> some View {
+        if SwipeLog.on {
+            background {
+                Color.clear.onGeometryChange(for: PageReading.self) { PageReading(frame: $0.frame(in: .global), insets: $0.safeAreaInsets) } action: { r in
+                    SwipeLog.note(String(format: "%@ x %.1f y %.1f size %.1fx%.1f insets t%.1f l%.1f b%.1f r%.1f", name, r.frame.minX, r.frame.minY, r.frame.width, r.frame.height, r.insets.top, r.insets.leading, r.insets.bottom, r.insets.trailing))
+                }
+            }
+        } else { self }
     }
 }
+struct PageReading: Equatable { var frame: CGRect; var insets: EdgeInsets }
 
 // MARK: - The shell
 // System tabs get Liquid Glass and move to the Duo's right edge by themselves.
