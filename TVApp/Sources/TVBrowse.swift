@@ -101,6 +101,7 @@ final class BrowseStore: ObservableObject {
             // Only if nothing has come meanwhile, and nothing is being searched.
             guard let self, let rows, !rows.isEmpty, self.rows.isEmpty, self.loadedFor == nil, self.query.isEmpty, self.genre.isEmpty else { return }
             self.fromDisk = true
+            if self.failed { self.failed = false }
             self.rows = rows
         }
     }
