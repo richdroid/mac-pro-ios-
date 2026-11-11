@@ -1087,6 +1087,20 @@ struct AppsTab: View {
                     }
                     // The first app is where the build's scrolled shot stops, its heading gone up under the top.
                     .place(open.first?.id == a.id ? AnyHashable("open") : AnyHashable(a.id))
+                    // Each question comes from the row it's about, the row just tapped and so on screen. Hung off the
+                    // Section, the build's Force Quit pose never came up in any posture (CI a4a3b2e, 334a0d6): a List's
+                    // rows are drawn lazily, and a Section is no view of its own to present from.
+                    // One question from the row's Quit; Force Quit is a second question, only for an app that didn't go.
+                    .alert("Quit \(a.name)?", isPresented: .init(get: { pending?.pid == a.pid }, set: { if !$0 { pending = nil } })) {
+                        Button("Quit", role: .destructive) { Task { await quit(a, force: false) } }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { Text("It’s asked to close. Unsaved work may be lost.") }
+                    .alert("\(a.name) didn’t quit. Force it?", isPresented: .init(get: { forcing?.pid == a.pid }, set: { if !$0 { forcing = nil } })) {
+                        Button("Force Quit", role: .destructive) { Task { await quit(a, force: true) } }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { Text("Unsaved work is lost.") }
+                    // The build's shot of the second question, for an app that was asked to quit and stayed.
+                    .task { if model.pose == "forcequit", open.first?.id == a.id { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = a } }
                 }
             }
             Section {
@@ -1096,22 +1110,7 @@ struct AppsTab: View {
                 } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
                 .place("launch")
             }
-            // One question from the row's Quit; Force Quit is a second question, only for an app that didn't go.
-            .alert(pending.map { "Quit \($0.name)?" } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
-                if let p = pending {
-                    Button("Quit", role: .destructive) { Task { await quit(p, force: false) } }
-                    Button("Cancel", role: .cancel) {}
-                }
-            } message: { Text("It’s asked to close. Unsaved work may be lost.") }
-            .alert(forcing.map { "\($0.name) didn’t quit. Force it?" } ?? "", isPresented: .init(get: { forcing != nil }, set: { if !$0 { forcing = nil } })) {
-                if let p = forcing {
-                    Button("Force Quit", role: .destructive) { Task { await quit(p, force: true) } }
-                    Button("Cancel", role: .cancel) {}
-                }
-            } message: { Text("Unsaved work is lost.") }
             .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
-            // The build's shot of the second question, for an app that was asked to quit and stayed.
-            .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } } }
         }
     }
 }
