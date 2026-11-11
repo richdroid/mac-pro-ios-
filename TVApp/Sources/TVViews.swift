@@ -2148,15 +2148,6 @@ struct BannerRow: View {
     }
     static func width(_ across: Int, in w: CGFloat) -> CGFloat { max(40, (w - CGFloat(across - 1) * TVLook.gap) / CGFloat(across)) }
 }
-// A scroll view's width less its safe area's sides: the room its content is actually laid in.
-private struct PaneRoom: ViewModifier {
-    @Binding var width: CGFloat
-    func body(content: Content) -> some View {
-        // The trailing inset capped at the side bar's own room, as Page caps it: the inset reported beside the bar is far
-        // wider than the bar (about 173 pt against 76), and taken whole it shrank the tiles (fifth pass).
-        content.onGeometryChange(for: CGFloat.self) { $0.size.width - $0.safeAreaInsets.leading - min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { if abs($0 - width) > 0.5 { width = $0 } }
-    }
-}
 struct AppsTab: View {
     @Environment(TVModel.self) var model
     @Environment(\.paneLayout) private var panes
@@ -2214,7 +2205,8 @@ struct AppsTab: View {
     // Open flat: two across each side, at one width.
     // Two across in each pane at one width: the narrower pane's room inside its 20 pt sides, so the right pane's two
     // end where Settings' cards do, and the left's are the same size (fifth pass).
-    var paneTile: CGFloat { BannerRow.width(2, in: max(min(leftWidth, rightWidth) - 40, 1)) }
+    static let railClear: CGFloat = 66
+    var paneTile: CGFloat { BannerRow.width(2, in: max(min(leftWidth - 40, rightWidth - 20 - Self.railClear), 1)) }
     // Before the first answer, the shape of the page instead of a blank one.
     var waiting: some View {
         HStack(spacing: TVLook.gap) {
@@ -2244,12 +2236,12 @@ struct AppsTab: View {
                         if let query { EverywhereSearch(text: query) } else { row("Watch", watch, across: 2, width: paneTile).padding(.horizontal, 20) }
                     }
                     .padding(.vertical, 12)
+                    .background(alignment: .top) { measured($leftWidth) }
                     // The rows give way to the results with the same fade as folded: open, they vanished and the results'
                     // box popped in (tv21 realsearch-open 16.65 → 17.71 s, no frame between).
                     .animation(.snappy, value: query == nil)
                 }
                 .scrollDismissesKeyboard(.immediately)
-                .modifier(PaneRoom(width: $leftWidth))
                 .backToTop(posed: false)
             } right: {
                 // Unfolded, the apps go on across the fold: what he watches with the search on the left, what he listens
@@ -2261,10 +2253,12 @@ struct AppsTab: View {
                         row("Listen", listen, across: 2, width: paneTile)
                         row("Tools", tools, across: 2, width: paneTile)
                     }
-                    .padding(.horizontal, 20)
+                    // Inside a tab's page the right pane's room runs about 16 pt under the side bar, where Settings'
+                    // does: kept 66 pt clear, so the tiles end 50 pt short of the bar where Settings' cards do (fifth pass, measured).
+                    .padding(.leading, 20).padding(.trailing, Self.railClear)
                     .padding(.vertical, 12)
+                    .background(alignment: .top) { measured($rightWidth) }
                 }
-                .modifier(PaneRoom(width: $rightWidth))
                 .backToTop()
             }
         } else {
