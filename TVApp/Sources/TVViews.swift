@@ -73,9 +73,8 @@ struct RootView: View {
         HitchLog.shared.start()
         #endif
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
+        if pose == "shelf" { return } // the shelf films land a finger on Watch themselves (tv-flick workflow)
         // Words typed into the Apps page's search: the keyboard up, as it is when he types them.
-        // The shelf films land a finger on Watch themselves (tv-flick workflow).
-        if pose == "shelf" { return }
         if pose == "search" { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; SendDraft.shared.text = "Heat"; return }
         // The Remote's search field tapped, then words typed: the Apps page's search, keyboard up, results in.
         if pose == "remotesearch" {
