@@ -876,7 +876,7 @@ struct RemoteScreenView: View {
             }
             .overlay {
                 // The Mac's own pointer, drawn here at once rather than waiting for it to come back in the picture.
-                if screen.hasPicture {
+                if screen.hasPicture, observed.pictureShown {
                     CursorOverlay(screen: screen, pad: pad,
                                   map: CursorMap(scale: fit * zoom, pan: pan, canvas: canvasSize, mac: screen.size, always: always),
                                   image: observed.cursorImage, hotspot: observed.cursorHotspot)
@@ -1321,11 +1321,16 @@ struct RemoteScreenView: View {
         // picture arrives. A spinner that turned into a bar halfway through was two waits in a row (the designer's third
         // review). Signed in, the picture not here yet, the same sign stays until the picture is: it used to vanish at
         // sign-in and leave plain black for the half second to three that the first picture takes.
-        case let ph where ph == .connecting || ((ph == .idle || ph == .connected) && !observed.hasPicture):
-            TimelineView(.periodic(from: .now, by: 0.12)) { _ in
+        // Until the picture is actually drawn, not only arrived: between the two the space was black with only the
+        // pointer on it (the designer's fifth review). Signed in and still waiting after 4 s, it says what for: the Mac
+        // is asked for its whole screen until it sends it, and nothing patchy is shown meanwhile.
+        case let ph where ph == .connecting || ((ph == .idle || ph == .connected) && !observed.pictureShown):
+            TimelineView(.periodic(from: .now, by: 0.12)) { ctx in
                 let part = screen.phase != .connected ? 0 : min(max(screen.firstPictureProgress ?? 0, 0), 1)
+                let long = screen.phase == .connected && ctx.date.timeIntervalSince(shownAt) > 4
                 VStack(spacing: 10) {
-                    Text("Connecting…").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85))
+                    Text(long ? "Waiting for the Mac’s screen…" : "Connecting…").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85))
+                        .contentTransition(.opacity).animation(Motion.fade, value: long)
                     ProgressView(value: part).tint(.white).frame(width: 150)
                         .animation(Motion.quick, value: part)
                 }
@@ -2208,6 +2213,7 @@ struct ScreenLayer: UIViewRepresentable {
                 layer.contents = image
                 CATransaction.commit()
                 frames += 1
+                screen.layerShowedPicture()
             }
             guard let onRate else { return }
             let now = CACurrentMediaTime()
