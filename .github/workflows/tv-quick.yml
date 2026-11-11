@@ -107,14 +107,29 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
           }
+          if has remote; then
+            # The Remote in every posture and state: folded (the cover display, the rail on the right), open upright,
+            # open flat, then folded and turned. One column: the keys' edges are the picture's, nothing under the rail.
+            remotes() { for S in repisode rfilm ridle rmint ryoutube roffline; do shot remote-$S$2 $1 8 $M/$S -tab 0; done; shot remote-type$2 $1 9 $M/repisode -tab 0 -pose type; }
+            remotes 1 ""
+            $D "$DEVICE" rotate 3 || true; sleep 4
+            shot remote-repisode-fland 1 8 $M/repisode -tab 0
+            $D "$DEVICE" rotate 1 || true; sleep 4
+            $D "$DEVICE" pose open; sleep 5
+            $D "$DEVICE" rotate 1; sleep 5
+            OPENED=1
+            remotes 3 -portrait
+            $D "$DEVICE" rotate 3 || true; sleep 5
+            remotes 3 -open
+            $D "$DEVICE" rotate 1 || true; sleep 5
+          fi
           if has pages; then
             # The searches, folded and then open upright: the Apps page's (films, shows and music found together) and
             # Watch's own with one film found. A simulator's first keyboard is slow, so the first search shot is retaken.
             shot search 1 12 $M -tab 1 -pose search
             shot search 1 12 $M -tab 1 -pose search
             shot watchsearch 1 10 $M -tab 3 -pose watchsearch
-            $D "$DEVICE" pose open; sleep 5
-            $D "$DEVICE" rotate 1; sleep 5
+            [ -z "$OPENED" ] && { $D "$DEVICE" pose open; sleep 5; $D "$DEVICE" rotate 1; sleep 5; }
             OPENED=1
             shot search-portrait 3 12 $M -tab 1 -pose search
             shot search-portrait 3 12 $M -tab 1 -pose search
