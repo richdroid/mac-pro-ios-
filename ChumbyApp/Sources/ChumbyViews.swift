@@ -39,7 +39,7 @@ struct ChumbyApp: App {
                 .onReceive(NotificationCenter.default.publisher(for: ChumbyNotify.opened)) { n in
                     model.tab = 2
                     ChumbyNotify.shared.clearDelivered()
-                    if n.object as? String == ChumbyNotify.unsetID { Task { await CalendarWake.shared.sync() } }
+                    if let id = n.object as? String, id == ChumbyNotify.unsetID || id == ChumbyNotify.noAlarmID { Task { await CalendarWake.shared.sync() } }
                 }
                 // While music plays on the Chumby, "Woke up to" and its widget follow it song by song, on any tab.
                 .task(id: model.state.musicPlaying) {

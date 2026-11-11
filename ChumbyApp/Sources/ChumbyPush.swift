@@ -14,7 +14,8 @@ import UIKit
 final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
     static let shared = ChumbyNotify()
     static let enabledKey = "chumbyNotifications"
-    static let unsetID = "chumby-unset", offlineID = "chumby-offline"
+    // noAlarmID is the Mac's: a work event coming with no alarm before it, which the calendar update here then sets.
+    static let unsetID = "chumby-unset", offlineID = "chumby-offline", noAlarmID = "chumby-noalarm"
     private static let tokenKey = "pushToken", askedKey = "notifyAsked", toldKey = "unsetTold", knownKey = "wakesOnChumby"
     private let center = UNUserNotificationCenter.current()
     private var sent: String?
