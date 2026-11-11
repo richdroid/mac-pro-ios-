@@ -1080,7 +1080,16 @@ struct StatusTab: View {
                 // (where a pull past the end rests) once a second. By place, a reading changes a row's words and nothing
                 // else; one line each, so no name can change a row's height either.
                 ForEach(Array(s.procs.prefix(8).enumerated()), id: \.offset) { i, p in
-                    LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)).lineLimit(1).monospacedDigit().place("proc-\(i)")
+                    // One line always: a name too long to sit beside its figures (Google Chrome Helper (Renderer), folded) made
+                    // LabeledContent put the figures under it, and the row doubled in height, then halved when the order
+                    // changed at the next reading (CI 74b459c, folded: proc-3 20.5 to 44.5 pt and back every 10 s). The
+                    // name gives way, cut short; the figures keep their place.
+                    HStack(spacing: 12) {
+                        Text(p.name).lineLimit(1).truncationMode(.middle).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)).lineLimit(1).monospacedDigit().foregroundStyle(.secondary).fixedSize()
+                    }
+                    .accessibilityElement(children: .combine)
+                    .place("proc-\(i)")
                 }
                 Button { model.processes = .cpu } label: {
                     HStack { Text("All processes").foregroundStyle(.primary); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
@@ -1153,8 +1162,9 @@ struct AppsTab: View {
                     // seemingly actionable r confusing and fucked"). Never a swipe (no swipe-to-delete on glass cards).
                     HStack(spacing: 12) {
                         VStack(alignment: .leading) {
-                            Text(a.name)
-                            Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                            // One line each, so the CPU figure coming and going with each reading never changes the row's height.
+                            Text(a.name).lineLimit(1)
+                            Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
                         }
                         Spacer(minLength: 8)
                         if working == a.pid { ProgressView().frame(width: 60) }
