@@ -98,10 +98,10 @@ struct IslandTime: View {
         Group {
             if state.playing, let a = state.start, let b = state.end, b > a {
                 // Past its end (the TV has moved on and the card hasn't heard), it holds at the end.
-                HStack(spacing: 0) {
-                    if left { Text("-") }
-                    Text(timerInterval: a...b, countsDown: left).multilineTextAlignment(left ? .trailing : .leading)
-                }
+                // One text, its minus joined to it: side by side, the running time took the width and stood apart from
+                // its minus ("-  24:02" on the simulator's own Lock Screen).
+                (left ? Text("-") + Text(timerInterval: a...b, countsDown: true) : Text(timerInterval: a...b, countsDown: false))
+                    .multilineTextAlignment(left ? .trailing : .leading)
             } else if let p = state.progress, let len = state.length, len > 0 {
                 Text((left ? "-" : "") + Self.clock(left ? len * (1 - p) : len * p))
             }
