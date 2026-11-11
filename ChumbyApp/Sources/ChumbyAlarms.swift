@@ -1393,7 +1393,7 @@ struct AlarmEditor: View {
                 .foregroundStyle(.tint)
             }
             List {
-                titleRow
+                titleRow.pinnedRow()
                     .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
                     .onDisappear { model.editingAlarm = false }
                     // On this one row, never on the list: a sheet bound to the same state from many rows presents from none

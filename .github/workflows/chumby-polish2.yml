@@ -123,12 +123,13 @@ jobs:
           # pose), and the editor dragged slowly past its pinned title's 48 pt.
           film 3 panes-open live -tab 2 -pose alarmsdemo; sleep 20; endfilm panes-open
           film 3 pinned-editor-open - -tab 2 -pose editor; $D "$DEVICE" drag 0.75 0.8 0.75 0.45 2.5 || true; sleep 2; $D "$DEVICE" drag 0.75 0.45 0.75 0.8 2.5 || true; endfilm pinned-editor-open
+          film 3 pinned-day-open - -tab 2 -pose caldayown; $D "$DEVICE" drag 0.75 0.8 0.75 0.45 2.5 || true; sleep 2; $D "$DEVICE" drag 0.75 0.45 0.75 0.8 2.5 || true; endfilm pinned-day-open
           # Last of all: Alarms' calendar switch tapped on, open in portrait then folded. It raises the system's calendar
           # permission alert, which stays up over everything after it, so nothing is shot after these.
           $D "$DEVICE" rotate 1; sleep 5
           film 3 calswitch-portrait slow -tab 2 -pose firstrun; sleep 3; $D "$DEVICE" touch 0.896 0.456 || echo "no switch"; sleep 4; $D "$DEVICE" touch 0.5 0.68 || echo "no refusal"; sleep 4; endfilm calswitch-portrait
           $D "$DEVICE" pose closed; sleep 5
-          film 1 calswitch slow -tab 2 -pose firstrun; sleep 3; $D "$DEVICE" tap "Wake me from my calendar, An alarm before the first thing each day." || $D "$DEVICE" touch 0.713 0.534 || echo "no switch"; sleep 4; $D "$DEVICE" tree > dist/chumby-calswitch-tree.log 2>&1; $D "$DEVICE" tap "Don’t Allow" || $D "$DEVICE" tap "Don't Allow" || echo "no refusal"; sleep 4; endfilm calswitch
+          film 1 calswitch slow -tab 2 -pose firstrun; sleep 3; $D "$DEVICE" tap "Wake me from my calendar" || echo "no switch"; sleep 6; endfilm calswitch
       - name: Collect crash reports
         if: always()
         run: |
