@@ -1599,7 +1599,9 @@ struct RemoteTab: View {
         .navigationSubtitle(state.isEmpty ? "\u{00A0}" : state)
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
-            if let r = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect { keyboardTop = r.minY < UIScreen.main.bounds.height - 1 ? r.minY : .infinity }
+            // Its top as it ends up, whatever screen it's on (the Duo's main screen isn't UIScreen.main's; checked against that, a
+            // keyboard up read as down, CI f735bda). Put away, it's said by its own notice below.
+            if let r = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect, r.height > 0 { keyboardTop = r.minY }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardTop = .infinity }
         #endif
