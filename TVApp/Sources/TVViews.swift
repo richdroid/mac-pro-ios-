@@ -223,6 +223,7 @@ struct RootView: View {
                 Tab(value: 5) { Page(title: "Status", retaps: resets[5, default: 0]) { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
                 // Last, so it sits at the foot of the side bar, as in the other apps.
                 Tab(value: 9) { TVSettingsTab(retaps: resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
+                Tab(value: 6, role: .search) { if SearchProbe.system { SearchProbe() } else { Page(title: "Search", retaps: resets[6, default: 0]) { SearchProbe() } } }
             }
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
