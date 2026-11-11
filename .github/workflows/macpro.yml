@@ -307,8 +307,8 @@ jobs:
           # Opening the Screen on a Mac whose display was asleep, as it was (patches of the Mac over black, for good) and as
           # it is (the whole picture, asked for again), against a stand-in that answers as the real Mac did (Richard,
           # 2026-11-10: "sometimes theres issues drawing in the display").
-          FILM_PORT=9012 film screen-wake-before 1 8 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoReask YES
-          FILM_PORT=9012 film screen-wake-after 1 8 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
+          FILM_PORT=9012 film screen-wake-before 1 16 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoReask YES
+          FILM_PORT=9012 film screen-wake-after 1 16 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
           # Unfold the Duo through Device Hub (a known version of someone else's tool), then turn it to portrait.
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
