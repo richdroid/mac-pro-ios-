@@ -598,6 +598,13 @@ struct Screen<Content: View>: View {
                     return
                 }
                 // The build's shot of Status scrolled down to the dials and the disk.
+                // The build's film of Status left at its end, where the top processes are (the resize check).
+                if model.pose == "scrolledend", tab == 0, side != .right {
+                    for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    proxy.scrollTo("procs-all", anchor: .bottom)
+                    return
+                }
                 guard tab == 0, side != .left, model.pose == "scrolled" || model.pose == "scrollfilm" else { return }
                 // A cold launch in the build's simulator takes ~10 s to show Status: wait for it, so the film shows scrolling.
                 for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }

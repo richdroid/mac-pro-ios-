@@ -95,6 +95,7 @@ jobs:
             # The first launch fills the cache; the films after it are cold launches over it, as on his phone.
             restfilm rest-top$x $d
             restfilm rest-scrolled$x $d -pose scrolled
+            restfilm rest-end$x $d -pose scrolledend
             pullfilm pull$x $d $px 0.8 0.28
             # The gate's own reproduction: the Mac under load (2 to 5 s late, one in seven lost), asked every second.
             FILM_PORT=9031 pullfilm pull-slow$x $d $px 0.8 0.28 -fullEvery 1
