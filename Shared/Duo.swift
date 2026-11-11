@@ -174,7 +174,10 @@ extension View {
 // For the build's films of a page swiped off (-swipeLog YES, never on the phone): every reading a page takes and when the
 // move began and ended, to Caches/swipe-log.txt, so a page that changes as it slides is caught in numbers, not only seen.
 enum SwipeLog {
-    static let on = UserDefaults.standard.bool(forKey: "swipeLog")
+    // The build's films turn it on with -swipeLog YES; on the phone, Settings' "Record smoothness log" (smoothLog) does, so
+    // the same log can be taken from his own hands and sent to the Mac (resize regate, 2026-11-11).
+    nonisolated(unsafe) static var on = UserDefaults.standard.bool(forKey: "swipeLog") || UserDefaults.standard.bool(forKey: "smoothLog")
+    static var file: URL? { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("swipe-log.txt") }
     static let start = Date()
     nonisolated(unsafe) private static var landedWatch: CFAbsoluteTime = 0
     // A view's body being worked out, for the build's logs: which pages a move or a reading made the app redraw.
@@ -184,8 +187,22 @@ enum SwipeLog {
         if s.hasSuffix("landed") { landedWatch = CFAbsoluteTimeGetCurrent() + 0.5 }
         let line = String(format: "%.3f ", Date().timeIntervalSince(start)) + s + "\n"
         let url = dir.appendingPathComponent("swipe-log.txt")
-        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
-        else { try? Data(line.utf8).write(to: url) }
+        // One handle kept open: opening and closing the file for every line cost the main thread on each frame of a scroll,
+        // which matters now the log runs on the phone.
+        writeLock.lock(); defer { writeLock.unlock() }
+        if handle == nil {
+            if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+            handle = try? FileHandle(forWritingTo: url); handle?.seekToEndOfFile()
+        }
+        handle?.write(Data(line.utf8))
+    }
+    private static let writeLock = NSLock()
+    nonisolated(unsafe) private static var handle: FileHandle?
+    // Starts the log afresh (the file removed): the next line opens a new one.
+    static func restart() {
+        writeLock.lock(); defer { writeLock.unlock() }
+        try? handle?.close(); handle = nil
+        if let file { try? FileManager.default.removeItem(at: file) }
     }
     // Every frame the main thread was late for (over 1.5 display periods), noted beside the readings, so a page that
     // stalls as a move begins is caught in the same log as the move.

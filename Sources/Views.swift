@@ -15,7 +15,7 @@ struct MacProApp: App {
     init() { AlertWatch.shared.install() }
     var body: some Scene {
         WindowGroup {
-            RootView(seeds: model.seedStore).modifier(StatusBarTopReader()).environmentObject(model).environmentObject(model.liveStore).environmentObject(model.liveStore.display)
+            RootView(seeds: model.seedStore).modifier(StatusBarTopReader()).environmentObject(model).environmentObject(model.notice).environmentObject(model.liveStore).environmentObject(model.liveStore.display)
                 .otaOffer(model)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in
@@ -498,6 +498,7 @@ func sentenceCase(_ t: String) -> String { t.prefix(1).uppercased() + t.dropFirs
 
 // Can't reach the Mac, or it wants its code: said once at the top of every tab, each with what to do about it.
 struct Notice: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     @Environment(\.openURL) private var openURL
     @State private var retrying = false
@@ -544,6 +545,7 @@ struct Notice: View {
 // Shared frame for each tab: a large title, the notice above, and pull to refresh. Updates draws its own page, so its
 // header can stay put while the log scrolls.
 struct Screen<Content: View>: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     @Environment(\.statusBarTop) private var statusBarTop
     @Environment(\.paneLayout) private var panes
@@ -832,6 +834,10 @@ struct TempDials: View {
 struct EvenGrid: Layout {
     var spacing: CGFloat = 12
     var rowSpacing: CGFloat = 16
+    // A dial is never wider than this, centred in its column: sized by the column, it grew and shrank with every change of
+    // the page's width (a turn into open portrait laid the dials out at 311 pt, then 343 as the side bar's inset went to the
+    // foot; designer, resize regate). Wide pages had over-large dials anyway; folded and in a pane they're narrower than this.
+    var largest: CGFloat = 96
     static func columns(_ n: Int, width: CGFloat) -> Int {
         let fit = max(Int((width + 12) / 76), 1)
         guard n > fit else { return max(n, 1) }
@@ -843,7 +849,7 @@ struct EvenGrid: Layout {
         let cell = max((width - spacing * CGFloat(across - 1)) / CGFloat(across), 0)
         var rows: [CGFloat] = []
         for (i, v) in subviews.enumerated() {
-            let h = v.sizeThatFits(ProposedViewSize(width: cell, height: nil)).height
+            let h = v.sizeThatFits(ProposedViewSize(width: min(cell, largest), height: nil)).height
             if i % across == 0 { rows.append(h) } else { rows[rows.count - 1] = max(rows[rows.count - 1], h) }
         }
         return (across, cell, rows)
@@ -868,7 +874,8 @@ struct EvenGrid: Layout {
             for c in 0..<g.across {
                 let i = r * g.across + c
                 guard i < subviews.count else { break }
-                subviews[i].place(at: CGPoint(x: bounds.minX + CGFloat(c) * (g.cell + spacing), y: y), proposal: ProposedViewSize(width: g.cell, height: h))
+                let w = min(g.cell, largest)
+                subviews[i].place(at: CGPoint(x: bounds.minX + CGFloat(c) * (g.cell + spacing) + (g.cell - w) / 2, y: y), proposal: ProposedViewSize(width: w, height: h))
             }
             y += h + rowSpacing
         }
@@ -876,6 +883,7 @@ struct EvenGrid: Layout {
 }
 
 struct Hero: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     let s: Status
     var body: some View {
@@ -964,6 +972,7 @@ struct HeroChips: View {
 
 // The things reached for most, one tap from the top of the app. Done shows as a tick on the button; a problem, under it.
 struct QuickActions: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     // The display's state as the last full status said, for the Display key between live readings.
     var displayOn: Bool?
@@ -1048,6 +1057,7 @@ struct QuickActions: View {
 }
 
 struct StatusTab: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     // What the page shows, chosen in Settings.
     @AppStorage("showQuick") private var showQuick = true

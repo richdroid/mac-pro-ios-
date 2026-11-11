@@ -74,6 +74,7 @@ enum TrendCache {
 }
 
 struct HistoryView: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     @Environment(\.paneLayout) private var panes
     let metric: HistoryMetric
@@ -299,6 +300,7 @@ struct NowDot: View {
 // Held down like the lock screen's flashlight: a ring fills around it under the finger, it clicks and switches. The
 // glyph and its fill say which way it is; a tap on its own only wiggles it and says "Hold" in place.
 struct DisplayHoldButton: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var display: DisplayState
     @State private var pressing = false

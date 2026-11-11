@@ -53,6 +53,7 @@ enum AlertDismissals {
 }
 
 struct AlertBanner: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     let alerts: [Status.Alert]
     @AppStorage(AlertDismissals.key) private var dismissedRaw = ""

@@ -39,6 +39,17 @@ final class StatusStore: ObservableObject {
     var moves = false
 }
 
+// Whether what's on screen is only the last the Mac sent, and why: kept apart from the model the way the status is (resize
+// regate, 2026-11-11). On the model, the "Can't reach the Mac" card arriving redrew the root and every view in the app,
+// and froze the phone 1.4 s just as it came. Only the views that say or dim for it watch this.
+@MainActor
+final class NoticeStore: ObservableObject {
+    @Published var problem: String?
+    @Published var unreadable = false
+    @Published var problemPutAway = false
+    @Published var needsSignIn = false
+}
+
 // When the Mac last answered. Kept apart from the model so the beat on each refresh redraws only the chip that shows it.
 @MainActor
 final class Pulse: ObservableObject {
@@ -67,6 +78,7 @@ final class AppModel: ObservableObject {
     let sessionStore = SessionStore()
     let pulse = Pulse()
     let statusStore = StatusStore()
+    let notice = NoticeStore()
     let screen = RemoteScreen()
     @Published var screenOpen = false { didSet { screen.paused = !screenOpen } }
     @Published var signingIn = false
@@ -78,18 +90,18 @@ final class AppModel: ObservableObject {
     // front (Tailscale wakes up after the app does), so one missed reading or the bridge restarting never flips the app to
     // unreachable (Richard, 2026-11-10, of the TV app: "cant reach the mac is tailscale on keeps happening"). An answer
     // the app couldn't read isn't the Mac being away and never counts. Every view that says it reads this (or Reach).
-    @Published var problem: String?
+    var problem: String? { get { notice.problem } set { notice.problem = newValue } }
     // The Mac answered, but with a status this build can't read (the bridge changes daily; one renamed field was
     // enough). It's reachable, so not `problem`; but nothing on screen is live, and the app says so instead of freezing
     // every tab under a chip that read "Live" (audit, 2026-11-10).
-    @Published var unreadable = false
+    var unreadable: Bool { get { notice.unreadable } set { notice.unreadable = newValue } }
     // The unreachable card put away with its ✕ (a note that stays can be dismissed). The Mac is still away, and the chips
     // and dimmed keys go on saying so; the card returns with the next run of misses, or the next launch.
-    @Published var problemPutAway = false
+    var problemPutAway: Bool { get { notice.problemPutAway } set { notice.problemPutAway = newValue } }
     private var unread = 0
     // The Mac wants its access code. Shown as a row at the top of each tab; the sheet only opens by itself when there's
     // no address at all, so pressing Cancel is respected.
-    @Published var needsSignIn = false
+    var needsSignIn: Bool { get { notice.needsSignIn } set { notice.needsSignIn = newValue } }
     @Published var signInSheet = false
     @Published var apiSetup = false      // the Admin key row in the Usage card; here, so leaving the tab doesn't lose it
     @Published var gotFresh = false      // the Mac has answered at least once since launch, not just the cache

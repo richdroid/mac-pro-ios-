@@ -19,6 +19,11 @@ struct MacSettings: View {
     @AppStorage("showThisMac") private var showThisMac = true
     @AppStorage("showProcesses") private var showProcesses = true
     @State private var connecting = false
+    // A log of how smoothly the app runs (every reading, row height and late frame), for sending to the Mac, off unless he
+    // turns it on for a check (resize regate, 2026-11-11).
+    @AppStorage("smoothLog") private var smoothLog = false
+    @State private var logSending = false
+    @State private var logSent: String?
     @State private var customBudget = false
     @State private var budgetDraft = 200.0
     static let budgets: [Double] = [50, 100, 200, 500]
@@ -92,6 +97,27 @@ struct MacSettings: View {
                     }
                     Toggle("Haptics", isOn: $haptics)
                     Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
+                    Toggle("Record smoothness log", isOn: $smoothLog)
+                        .onChange(of: smoothLog) { _, on in
+                            if on { SwipeLog.restart() }
+                            SwipeLog.on = on || UserDefaults.standard.bool(forKey: "swipeLog")
+                            if on { SwipeLog.frames() }
+                            logSent = nil
+                        }
+                    if smoothLog {
+                        Button {
+                            Task {
+                                guard let f = SwipeLog.file, FileManager.default.fileExists(atPath: f.path) else { logSent = "Nothing recorded yet"; return }
+                                logSending = true; defer { logSending = false }
+                                let stamp = Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false)).replacingOccurrences(of: ":", with: ".")
+                                do { _ = try await MacFiles.send(f, as: "Mac Pro smoothness \(stamp).txt", size: MacFiles.size(f), to: model.api.base) { _ in }; logSent = "Sent to the Mac" }
+                                catch { logSent = AppModel.say(error) }
+                            }
+                        } label: {
+                            HStack { Text("Send the log to the Mac"); Spacer(); if logSending { ProgressView() } else if let logSent { Text(logSent).foregroundStyle(.secondary) } }
+                        }
+                        .disabled(logSending)
+                    }
                 } header: { Text("Behaviour") }
                 Section {
                     LabeledContent("Address", value: URL(string: model.address)?.host ?? "Not set")

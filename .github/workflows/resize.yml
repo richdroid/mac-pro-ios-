@@ -91,11 +91,41 @@ jobs:
             local name=$1 display=$2 bx=$3 by=$4; shift 4
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro > /dev/null 2>&1; sleep 1
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9041 -swipeLog YES -tab 0 -openHistory cpu
-            sleep 12
+            sleep 14
             echo "$name back at $(date +%s.%N | cut -c1-14)"
             $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 4
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            logs $name
+          }
+          # Status, then Apps for 30 s while an alert arrives (9042: 20 s after the first ask), then Status again: what came
+          # while it was away is in place or moves in, never in one frame. name, display, Apps' and Status's tab x and y.
+          tabfilm() {
+            local name=$1 display=$2 ax=$3 ay=$4 sx=$5 sy=$6
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro > /dev/null 2>&1; sleep 1
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9042 -swipeLog YES -tab 0
+            sleep 10
+            echo "$name to Apps at $(date +%s.%N | cut -c1-14)"; $D "$DEVICE" touch $ax $ay 0.08 || echo "tap failed"; sleep 32
+            echo "$name to Status at $(date +%s.%N | cut -c1-14)"; $D "$DEVICE" touch $sx $sy 0.08 || echo "tap failed"; sleep 8
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            logs $name
+          }
+          # The Duo moved with Status up, at the top and part way down (scrolled to the dials): each posture's layout in place
+          # as the move ends, nothing changing after. name, display to film, the first posture's commands, then the moves.
+          turnfilm() {
+            local name=$1 display=$2 pose=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro > /dev/null 2>&1; sleep 1
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9041 -swipeLog YES -tab 0 $pose; sleep 12
+            for m in "$@"; do echo "$name move $m at $(date +%s.%N | cut -c1-14)"; $D "$DEVICE" $m || true; sleep 10; done
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             logs $name
@@ -147,17 +177,23 @@ jobs:
           $D "$DEVICE" rotate 3 || true; sleep 5
           posture 3 -open 0.75
           popfilm pop-open 3 0.948 0.222
-          # Turned between open flat and open portrait, and back, with Status up: each posture's layout in place as it ends.
-          xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/macpro-turn.mp4 > /dev/null 2>&1 & REC=$!
-          sleep 3
-          xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9041 -swipeLog YES -tab 0; sleep 12
-          echo "turn to portrait at $(date +%s.%N | cut -c1-14)"; $D "$DEVICE" rotate 1 || true; sleep 8
-          echo "turn to open flat at $(date +%s.%N | cut -c1-14)"; $D "$DEVICE" rotate 3 || true; sleep 8
-          kill -INT $REC; wait $REC
-          xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
-          logs turn
+          # Open flat, the left pane (where the top processes are) flung to its end and left there.
+          endfilm rest-end-left-open 3 0.25
+          tabfilm tabback-open 3 0.948 0.62 0.948 0.54
+          # Open flat to open portrait and back, at the top and part way down.
+          turnfilm turn-flat 3 "" "rotate 1" "rotate 3" "rotate 1" "rotate 3"
+          turnfilm turn-flat-scrolled 3 "-pose scrolled" "rotate 1" "rotate 3" "rotate 1" "rotate 3"
+          $D "$DEVICE" rotate 1 || true; sleep 5
+          tabfilm tabback-portrait 3 0.36 0.94 0.268 0.94
           $D "$DEVICE" pose closed || true; sleep 5
           posture 1 "" 0.45
+          tabfilm tabback 1 0.897 0.624 0.897 0.55
+          # Unfolded and folded again with Status up, both displays, at the top and part way down.
+          turnfilm fold-inner 3 "" "pose open" "pose closed" "pose open"
+          $D "$DEVICE" pose closed || true; sleep 5
+          turnfilm fold-inner-scrolled 3 "-pose scrolled" "pose open" "pose closed" "pose open"
+          $D "$DEVICE" pose closed || true; sleep 5
+          turnfilm fold-outer 1 "" "pose open" "pose closed"
           # A first launch with nothing kept from before (a fresh install): its first answer builds Status from nothing.
           C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data); rm -f "$C/Library/Caches/status.json"
           restfilm firstlaunch 1
