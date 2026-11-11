@@ -1517,6 +1517,8 @@ struct RemoteTab: View {
                     // Centred in the room left of the rail: on the title's inset it left a wide empty band before the
                     // rail (CI ee66d34).
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Typing, clear of the keyboard's own soft edge, which faded the keys' row away above it (CI d2fba13).
+                    .padding(.bottom, typing ? 44 : 0)
                     .onChange(of: fresh, initial: true) { _, g in if !typing { foldedGrid = g } }
                 }
                 .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
