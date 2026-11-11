@@ -977,6 +977,10 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
       for (let i = 0; i < n; i++) data[i] ^= mask[i & 3];
       buf = buf.subarray(at + 4 + n);
       if (op === 8) return stop();
+      // A ping is answered, as the real bridge's WebSocket does. Unanswered, the app's check on coming to the front
+      // (2 s, no answer) dropped every film's first connection and opened a second, which looked like a 2 to 3 s
+      // sign-in on the open display (the designer's fourth review).
+      if (op === 9) { if (!sock.destroyed && n < 126) { sock.write(Buffer.from([0x8a, n])); sock.write(data); } stamp('ping answered'); continue; }
       if (op === 2 || op === 0) fromApp(data);
     }
   });
