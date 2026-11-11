@@ -69,6 +69,37 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             logs $name
           }
+          # Status flung to its end with real touches, then left there 60 s (six full readings): the top processes at rest.
+          # The scroll-to pose never moved the list (designer, resize gate). name, display, x, then the app's own arguments.
+          endfilm() {
+            local name=$1 display=$2 x=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            echo "$name launch at $(date +%s.%N | cut -c1-14)"
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:${FILM_PORT:-9041} -swipeLog YES -frameLog YES -tab 0 "$@"
+            sleep 12
+            for i in 1 2 3 4 5 6; do $D "$DEVICE" drag $x 0.8 $x 0.28 0.12 || echo "drag failed"; sleep 1.4; done
+            echo "$name at rest at $(date +%s.%N | cut -c1-14)"
+            sleep 62
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            logs $name
+          }
+          # Back with a real tap from a history opened at launch, as the Back-pop films do (gate 4, Open 1): the pop's start.
+          popfilm() {
+            local name=$1 display=$2 bx=$3 by=$4; shift 4
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9041 -swipeLog YES -tab 0 -openHistory cpu
+            sleep 12
+            echo "$name back at $(date +%s.%N | cut -c1-14)"
+            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 4
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+            logs $name
+          }
           # Status pulled his way: flung to its end, drawn past it slowly and let go, back up and pulled past the top
           # slowly and let go, then a quick pull past the top; the page then left at rest 12 s. name, display, x, low y,
           # high y (fractions), then the app's own arguments.
@@ -97,11 +128,10 @@ jobs:
             # The first launch fills the cache; the films after it are cold launches over it, as on his phone.
             restfilm rest-top$x $d
             restfilm rest-scrolled$x $d -pose scrolled
-            restfilm rest-end$x $d -pose scrolledend
+            endfilm rest-end$x $d $px
             pullfilm pull$x $d $px 0.8 0.28
             # The gate's own reproduction: the Mac under load (2 to 5 s late, one in seven lost), asked every second.
             FILM_PORT=9031 pullfilm pull-slow$x $d $px 0.8 0.28 -fullEvery 1
-            xcrun simctl io "$DEVICE" screenshot --display=$d dist/macpro-status$x.png
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
@@ -111,9 +141,21 @@ jobs:
           # each run had a 4 to 5 s stall that no later one had) and every film launches over a cache, as his phone does.
           xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9041 -tab 0; sleep 25
           xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          # The first launch open flat after an install: nothing about the fold kept yet (the warm-up was open portrait).
           posture 3 -portrait 0.5
+          popfilm pop-portrait 3 0.065 0.049
           $D "$DEVICE" rotate 3 || true; sleep 5
           posture 3 -open 0.75
+          popfilm pop-open 3 0.948 0.222
+          # Turned between open flat and open portrait, and back, with Status up: each posture's layout in place as it ends.
+          xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/macpro-turn.mp4 > /dev/null 2>&1 & REC=$!
+          sleep 3
+          xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9041 -swipeLog YES -tab 0; sleep 12
+          echo "turn to portrait at $(date +%s.%N | cut -c1-14)"; $D "$DEVICE" rotate 1 || true; sleep 8
+          echo "turn to open flat at $(date +%s.%N | cut -c1-14)"; $D "$DEVICE" rotate 3 || true; sleep 8
+          kill -INT $REC; wait $REC
+          xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          logs turn
           $D "$DEVICE" pose closed || true; sleep 5
           posture 1 "" 0.45
           # A first launch with nothing kept from before (a fresh install): its first answer builds Status from nothing.

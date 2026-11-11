@@ -336,7 +336,15 @@ struct FoldSplit<L: View, R: View>: View {
                 let key = "\(Int(g.size.width))x\(Int(g.size.height))\(open ? " open" : "")"
                 // Its own last reading at rest; else what a page this size last read (a tab first shown under a page);
                 // else what any page last read open flat; else, with nothing to go by yet, what it reads now.
-                let use = (held?.key == key ? held?.split : nil) ?? (open ? FoldSeen.bySize[key] ?? FoldSeen.last : nil) ?? read
+                // With nothing seen yet (the first launch open flat after an install), the hinge is taken to be the display's
+                // centre, where the Duo's is, so the panes don't start split down the page's middle and move across when the
+                // crease is first read (designer, resize gate: the first open-flat launch reflowed).
+                let centre: Split? = blind ? {
+                    let f = g.frame(in: .global)
+                    let w = (UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.bounds.width) ?? (f.maxX + f.minX)
+                    return Split(ratio: min(max((w / 2 - f.minX) / max(g.size.width, 1), 0.3), 0.7), gutter: 24, outer: 14)
+                }() : nil
+                let use = (held?.key == key ? held?.split : nil) ?? (open ? FoldSeen.bySize[key] ?? FoldSeen.last ?? centre : nil) ?? read
                 // A reading at rest with the crease in sight (or where there's none to see: folded, upright) is the one to
                 // lay out by and to remember.
                 let take: () -> Void = {

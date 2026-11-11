@@ -236,7 +236,14 @@ final class AppModel: ObservableObject {
         // foot of Apps went 90→76 between two frames as TextEdit came and went, the page at rest at its end).
         // The same for anything that adds or takes away a row or a card: an alert arriving or going at the top of Status (the
         // whole page under it moved down a row in one frame), a session, a sensor, a top process.
-        func rows(_ s: Status?) -> [String] {
+        func rows(_ s: Status?) -> [String] { Self.rows(s) }
+        statusStore.moves = status != nil && rows(status) != rows(fresh)
+        if statusStore.moves { withAnimation(Motion.quick) { status = fresh } } else { status = fresh }
+        statusStore.moves = false
+        afterApply(fresh)
+    }
+    // What adds or takes away a row or a card, for telling a landing that moves the page from one that only changes figures.
+    static func rows(_ s: Status?) -> [String] {
             guard let s else { return [] }
             var r: [String] = s.apps.filter { $0.mem != nil }.map { "\($0.pid)" }
             r += (s.iosApps?.apps ?? []).map { $0.id }
@@ -246,10 +253,8 @@ final class AppModel: ObservableObject {
             r.append("procs:\(s.procs.count)")
             r.append("health:\(s.healthBad ?? -1)")
             return r
-        }
-        statusStore.moves = status != nil && rows(status) != rows(fresh)
-        if statusStore.moves { withAnimation(Motion.quick) { status = fresh } } else { status = fresh }
-        statusStore.moves = false
+    }
+    private func afterApply(_ fresh: Status) {
         IconCache.prefetch(fresh, api: api)
         openPending()
         // Status's histories read ahead, so a tile opens onto a drawn chart.

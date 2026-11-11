@@ -670,7 +670,11 @@ struct Screen<Content: View>: View {
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
         }
         .onReceive(model.statusStore.$status) { take($0) }
-        .onChange(of: model.tab) { _, t in if t == tab, let s = model.status { shown = s } }
+        // Come back to with something added or gone while away (an alert, a sensor, a process): it moves in, not in one frame.
+        .onChange(of: model.tab) { _, t in
+            guard t == tab, let s = model.status else { return }
+            if shown != nil, AppModel.rows(shown) != AppModel.rows(s) { withAnimation(Motion.quick) { shown = s } } else { shown = s }
+        }
     }
 }
 // The pages a tab's stack can show. Alone here, watching the open pages (NavStore), so a page opening or closing works
@@ -719,8 +723,11 @@ struct WebTile: View {
     var open: () -> Void = {}
     var figure: Text {
         let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
+        let small = Font.system(size: 17, weight: .semibold)
+        // "%" is a unit like the others (designer, resize gate): small beside its number.
+        if value.hasSuffix("%") { return Text(value.dropLast()).font(big) + Text("%").font(small) }
         guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
-        return Text(value[..<gap]).font(big) + Text(value[gap...]).font(.system(size: 17, weight: .semibold))
+        return Text(value[..<gap]).font(big) + Text(value[gap...]).font(small)
     }
     var body: some View {
         Button(action: open) {
@@ -826,13 +833,21 @@ struct EvenGrid: Layout {
         }
         return (across, cell, rows)
     }
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    // Each dial is measured once per width, not again to place it: building the row mid-scroll measured all eight twice.
+    struct Cache { var width: CGFloat = -1; var grid: (across: Int, cell: CGFloat, rows: [CGFloat]) = (1, 0, []) }
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache.width = -1 }
+    private func cached(_ width: CGFloat, _ subviews: Subviews, _ cache: inout Cache) -> (across: Int, cell: CGFloat, rows: [CGFloat]) {
+        if cache.width != width { cache.grid = grid(width, subviews); cache.width = width }
+        return cache.grid
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let width = proposal.width ?? 76 * 4
-        let g = grid(width, subviews)
+        let g = cached(width, subviews, &cache)
         return CGSize(width: width, height: g.rows.reduce(0, +) + rowSpacing * CGFloat(max(g.rows.count - 1, 0)))
     }
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let g = grid(bounds.width, subviews)
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let g = cached(bounds.width, subviews, &cache)
         var y = bounds.minY
         for (r, h) in g.rows.enumerated() {
             for c in 0..<g.across {
