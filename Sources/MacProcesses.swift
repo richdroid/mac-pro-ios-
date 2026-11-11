@@ -71,7 +71,13 @@ struct ProcessesView: View {
         ScrollViewReader { proxy in
         List {
             // The page's name first; open flat it heads the left pane and is carried unseen in the right (PaneHeading).
-            Section { PaneHeading(title: "Processes", shown: !panes || by == .cpu) }
+            // Under the name, as on a session and a history, and carried unseen in the right pane so both stay level.
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    PaneHeading(title: "Processes", shown: !panes || by == .cpu)
+                    if stale { StaleLine(lastRead: lastRead).opacity(!panes || by == .cpu ? 1 : 0).accessibilityHidden(panes && by != .cpu) }
+                }
+            }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
             if chooser {
                 Section {
@@ -80,7 +86,6 @@ struct ProcessesView: View {
                 }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
             }
-            if notes, stale { Section { StaleLine(lastRead: lastRead) } }
             if notes, let note { Section { FailText(note) } }
             if chooser { Section { rowsBody(by) } } else { Section(by.title) { rowsBody(by) } }
         }
