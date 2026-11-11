@@ -135,10 +135,10 @@ final class CalendarWake: ObservableObject {
         }
         return names.first
     }
-    nonisolated static func minutes(_ d: Date) -> String { String(Int(d.timeIntervalSince1970 / 60)) }
+    nonisolated static func minutes(_ d: Date) -> String { WakePlanner.minutes(d) }
     // A day's own label, when it has one, names its alarm on the Chumby in place of the event's title.
     nonisolated static func alarmName(_ w: PlannedWake) -> String { alarmName(title: w.shown) }
-    nonisolated static func alarmName(title: String) -> String { prefix + String(title.prefix(30)) }
+    nonisolated static func alarmName(title: String) -> String { WakePlanner.alarmName(title: title) }
     // Whether the Chumby really holds what the plan says, so the list never shows the phone's plan as if it were set.
     enum OnDevice { case set, missing, stillOn }
     func onDevice(_ item: PlannedWake, in s: ChumbyState) -> OnDevice {
@@ -169,24 +169,35 @@ final class CalendarWake: ObservableObject {
         lastTry = Date()
         retry?.cancel()
         allowed = EKEventStore.authorizationStatus(for: .event) == .fullAccess
-        guard allowed else { return "Chumby can't see your calendar." }
+        guard allowed else { return "Chumby can’t see your calendar." }
         // One reading of the calendar for both the plan and the check on what's already set, so they can't disagree.
         let evs = events()
         plan = WakePlanner.plan(evs, rules: rules)
         let wanted = rules.enabled ? plan.filter { !$0.skipped } : []
-        let keep = CalendarKeep(plan: plan, events: evs, labels: rules.dayEdits.compactMapValues { $0.label })
+        // Whether a rule was changed by hand since the last update that went through (see CalendarKeep).
+        let signature = WakePlanner.signature(rules)
+        let synced = UserDefaults.standard.string(forKey: "wakeRulesSynced")
+        let on = rules.enabled
+        let keep = CalendarKeep(plan: plan, events: evs, labels: rules.dayEdits.compactMapValues { $0.label },
+                                off: !on, rulesChanged: synced != nil && synced != signature)
         let stored = storedSettings
         do {
             // The same careful save as everything else: read fresh, change only the calendar's alarms, never under a
             // ringing alarm. The first time, the settings chosen here become the Chumby's set for every calendar alarm after.
             let r = try await chumbyTry { api in
                 try await AlarmWriter.shared.edit(api, quiet: true, template: { s in s.calTpl == nil && stored != nil && s.alarms.contains { $0.isCalendar } }, planned: { s in
-                    s.applyCalendar(wanted, settings: s.calTpl ?? stored, keep: keep)
+                    // A calendar that came back with nothing at all, while the Chumby holds wakes from it: far likelier a
+                    // phone that couldn't read it (locked, access lapsed) than a calendar truly emptied. Nothing is sent.
+                    if on, evs.isEmpty, s.alarms.contains(where: { $0.isCalendar && $0.isOn && $0.nextFire(after: s.chumbyNow ?? Date()) != nil }) {
+                        throw ChumbyError.refused("Couldn’t read the calendar, so its alarms were left as they are. Pull down to try again.")
+                    }
+                    return s.applyCalendar(wanted, settings: s.calTpl ?? stored, keep: keep)
                 })
             }
             if r.saved { saved?(r.state) }
             lastSync = Date()
             UserDefaults.standard.set(lastSync, forKey: "wakeSynced")
+            UserDefaults.standard.set(signature, forKey: "wakeRulesSynced")
             note = nil
             return !r.saved ? "Already up to date." : wanted.isEmpty ? "No calendar alarms needed." : "Updated \(wanted.count) calendar alarm\(wanted.count == 1 ? "" : "s")."
         } catch ChumbyError.waiting(let why) {
@@ -220,99 +231,6 @@ final class CalendarWake: ObservableObject {
     #endif
 }
 
-// What the calendar said when a sync began, so it can tell a calendar alarm whose event is really gone from one the plan has
-// merely stopped choosing. The plan picks the first thing each day and drops a day whose wake-up is already behind it, so
-// an earlier event turning up that day, a longer lead or a different first event all leave the plan without a wake the
-// Chumby still holds, sometimes minutes before it rings (11-04: the 14:40 shift wake, removed at 14:00).
-struct CalendarKeep {
-    var plan: [PlannedWake]            // every planned wake, skipped ones too
-    var events: [CalEvent]             // everything read, declined and canceled ones too
-    var labels: [String: String] = [:] // a day's own label, by event key: its alarm goes by that name on the Chumby
-    enum Verdict { case keep, userChose, gone }
-    // For a calendar alarm that's on, due within 24 h, which the plan no longer wants.
-    func verdict(_ a: Alarm, due: Date) -> Verdict {
-        // Its event: same title, starting after the alarm and no more than 18 hours after it (any lead there is).
-        func near(_ start: Date) -> Bool { start >= due && start.timeIntervalSince(due) <= 18 * 3600 }
-        // Events whose day was given a label this alarm goes by (the event's id, from "id@start", so it's found after the
-        // event moves too).
-        let labelled = Set(labels.filter { CalendarWake.alarmName(title: $0.value) == a.name }.keys.map { k in k.range(of: "@", options: .backwards).map { String(k[..<$0.lowerBound]) } ?? k })
-        func ofLabelled(_ key: String) -> Bool { key.range(of: "@", options: .backwards).map { labelled.contains(String(key[..<$0.lowerBound])) } ?? false }
-        // By the name it has now, by its event's title for an alarm made before that day was given a label of its own,
-        // or by a label that day was given.
-        if let item = plan.first(where: { (CalendarWake.alarmName($0) == a.name || CalendarWake.alarmName(title: $0.title) == a.name || ofLabelled($0.key)) && near($0.start) }) {
-            // Turned off for that day, or given that day's own lead, time or label, by hand: the user's call, and the new
-            // alarm replaces it.
-            if item.skipped || item.custom { return .userChose }
-            // Moved some other way (the event's time, a rule): the old time still rings, beside the new one.
-            return .keep
-        }
-        // Its event by title, or by the label that day was given, so a labelled day's alarm is kept like any other while
-        // its event is still there.
-        let matching = events.filter { e in
-            (CalendarWake.alarmName(title: e.title) == a.name || ofLabelled(WakePlanner.key(e))) && near(e.start)
-        }
-        if matching.contains(where: { !$0.declined && !$0.canceled }) { return .keep }
-        if !matching.isEmpty { return .gone }               // declined or canceled
-        // Nothing by that name: deleted, as long as the calendar was really read. An empty read (locked phone, no access
-        // yet) proves nothing, so the alarm stays.
-        return events.isEmpty ? .keep : .gone
-    }
-}
-
-extension ChumbyState {
-    // Puts the calendar's alarms in the list, sounding like your own, and says what that may cost (see SavePermit).
-    // Only calendar alarms are touched. One that's on and due within 24 hours is never dropped just because the plan stopped
-    // choosing it; it goes only when its event is deleted, declined or canceled, or the user skipped or re-timed that day.
-    // Without `keep`, every such alarm stays.
-    mutating func applyCalendar(_ wakes: [PlannedWake], settings: Alarm? = nil, keep: CalendarKeep? = nil) -> SavePermit {
-        var permit = SavePermit(calendarOnly: true)
-        let mine = alarms.filter { $0.isCalendar }
-        // A day with its own sound counts as different until the Chumby holds exactly that sound, marked as its own.
-        func sound(_ a: Alarm) -> String { [a.type, a.arg, a.param, a.param_description, a.duration, a.snooze, a.auto_dismiss, a.action, a.action_param].joined(separator: "\u{1}") }
-        let have = Set(mine.filter { $0.isOn }.map { $0.time + $0.name + ($0.isOwn ? "\u{2}" + sound($0) : "") })
-        let wanted = wakes.map { w -> String in
-            var own = Alarm(); if let o = w.own { own.takeSettings(from: o) }
-            return CalendarWake.minutes(w.wake) + CalendarWake.alarmName(w) + (w.own != nil ? "\u{2}" + sound(own) : "")
-        }
-        if have == Set(wanted) && mine.filter({ !$0.isOn }).isEmpty { return permit }
-        let want = Set(wakes.map { CalendarWake.minutes($0.wake) + CalendarWake.alarmName($0) })
-        // By the Chumby's clock, since that's the one it rings by.
-        let clock = chumbyNow ?? Date()
-        var held: [Alarm] = []
-        for a in mine where a.isOn && !want.contains(a.time + a.name) {
-            // Past, or more than a day off: the plan decides.
-            guard let due = a.nextFire(after: clock), due.timeIntervalSince(clock) <= 86400 else { continue }
-            switch keep?.verdict(a, due: due) ?? .keep {
-            case .keep: held.append(a)
-            case .userChose: permit.userOff.insert(a.key)
-            case .gone: permit.deliberate.insert(a.key)
-            }
-        }
-        let others = alarms.filter { !$0.isCalendar }
-        // The sound of your repeating alarm, or failing that any alarm with a real sound.
-        let real = others.filter { !$0.isPlaceholder && !$0.isHelper }
-        let sound = real.first { $0.isOn && $0.when != "once" } ?? real.first { $0.type == "audio" } ?? real.first
-        alarms = others
-        // Kept exactly as the Chumby holds it.
-        for a in held {
-            if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
-        }
-        for w in wakes {
-            var a = sound ?? Alarm()
-            if sound == nil, let tone = tones.first { a.type = "beep"; a.arg = tone; a.param_description = tone }
-            if let settings { a.takeSettings(from: settings) }
-            a.name = CalendarWake.alarmName(w); a.enabled = "1"; a.when = "once"; a.time = CalendarWake.minutes(w.wake)
-            // Guessed from your own alarm, it only borrows the sound; chosen settings keep their own after-action and backup.
-            // (Never the stock backup beeper: the Chumby saves backup 0 whatever it's sent.)
-            if settings == nil { a.action = ""; a.action_param = ""; a.backup = "0" }
-            // That day's own sound and snooze, kept by the Chumby because it's marked as its own.
-            if let o = w.own { a.takeSettings(from: o); a.backup = "0"; if a.backupDelay.isEmpty || a.backupDelay == "0" { a.backupDelay = "5" }; a.own = "1" } else { a.own = "" }
-            if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
-        }
-        return permit
-    }
-}
-
 extension CalendarWake {
     // "Just this once" for a calendar day: the day's own time, and its own sound when it differs from what the Chumby
     // holds for it, saved by the calendar's own update, so the day's one alarm moves in one save. CalendarKeep counts an
@@ -334,7 +252,7 @@ extension CalendarWake {
 
 struct ChumbyCalendarIntent: AppIntent {
     static var title: LocalizedStringResource = "Update Chumby Alarms from Calendar"
-    static var description = IntentDescription("Sets the Chumby's alarms from your calendar. Run this from an automation to keep them current.")
+    static var description = IntentDescription("Sets the Chumby’s alarms from your calendar. Run this from an automation to keep them current.")
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         .result(dialog: IntentDialog(stringLiteral: await CalendarWake.shared.sync()))
@@ -477,40 +395,52 @@ struct WordsGroup: View {
     }
 }
 // Folded, and open in portrait, its own page pushed over Alarms, with the system's Back (laid out by iOS the Duo's
-// way) and the system's title; open in landscape its sections fill the right pane (AlarmsTab).
+// way); open in landscape its sections fill the right pane (AlarmsTab).
 struct CalendarWakeSettings: View {
     @EnvironmentObject var model: ChumbyModel
     var body: some View {
-        List { CalendarSettingsSections().listRowBackground(GlassRow()) }
-        .seaList()
-        // Open in portrait the tab bar runs along the foot under this page too: its rows fade out above the bar, as a
-        // tab's do, never reading through it (build 204: "Never wake for…" beside the bar).
-        .modifier(TabBarFade())
-        .overSea()
-        .toolbar(.visible, for: .navigationBar)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        // The system's large title, never a hand-set one in the bar: a text item there forces a horizontal bar across the
-        // top even where the Duo puts controls on the side, leaving Back alone on the strip far from a small centred title
-        // (Richard, 2026-11-09: "the back button looks off … not iphone duo"). Large, the title leads the page like every
-        // tab's, and Back sits where iOS puts it. The face is set once in ChumbyApp.dressBars.
-        .navigationTitle("Calendar settings").navigationBarTitleDisplayMode(.large)
+        List { PageTitle("Calendar settings"); CalendarSettingsSections().listRowBackground(GlassRow()) }
+            .pushedPage("settings")
     }
 }
 // A calendar day pushed over Alarms (folded, and open in portrait): the day's own settings, with the system's Back.
 struct CalendarDayPage: View {
     @EnvironmentObject var model: ChumbyModel
-    @ObservedObject private var wake = CalendarWake.shared
     let key: String
-    var title: String { wake.plan.first { $0.key == key }.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
     var body: some View {
-        List { CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false, titled: false).listRowBackground(GlassRow()) }
-        .seaList()
-        .modifier(TabBarFade())
-        .overSea()
-        .toolbar(.visible, for: .navigationBar)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        // The system's large title, as Calendar settings (above).
-        .navigationTitle(title).navigationBarTitleDisplayMode(.large)
+        List { CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false).listRowBackground(GlassRow()) }
+            .pushedPage("day")
+    }
+}
+extension View {
+    // A page pushed over a tab. Its name is its own first row (PageTitle), in the tabs' face and at their height, and
+    // the system's bar holds only Back, which iOS lays out the Duo's way (the top of the side strip folded, the bar
+    // along the top open in portrait). The system's large title is not used: a tab's own bar is hidden, so on Back the
+    // bar went with it, and the title was cut out of the page before the slide began and its band closed up under the
+    // rows as they went (CI bx, alarmsdemo 11.80 s and 15.58 s; Richard, 2026-11-10: "weird resizing issues at times
+    // when going back on a screen from another"). The Mac Pro app's pushed pages are named the same way (pushedTitle).
+    func pushedPage(_ name: String) -> some View { modifier(PushedPage(name: name)) }
+}
+private struct PushedPage: ViewModifier {
+    let name: String
+    @Environment(\.horizontalSizeClass) private var size
+    func body(content: Content) -> some View {
+        content
+            .seaList()
+            // Open in portrait the status bar and Back have the top to themselves, so the list's own top margin is left
+            // off there, as on the tabs (TwoPane).
+            .contentMargins(.top, size == .regular ? 0 : nil, for: .scrollContent)
+            // Open in portrait the tab bar runs along the foot under this page too: its rows fade out above the bar, as a
+            // tab's do, never reading through it (build 204: "Never wake for…" beside the bar).
+            .modifier(TabBarFade())
+            .overSea()
+            .pageLog(name)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            // No title in the bar: a text item there forces a horizontal bar across the top even where the Duo puts
+            // controls on the side, leaving Back alone on the strip (Richard, 2026-11-09: "the back button looks off …
+            // not iphone duo").
+            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -535,9 +465,8 @@ struct CalendarDaySheet: View {
     let key: String
     // Set when it fills the open Duo's right pane, or the folded content column, instead of being a sheet.
     var close: (() -> Void)?
-    // Pushed, the system's Back closes it, so it has no Done of its own, and the page's title is the system's (titled false).
+    // Pushed, the system's Back closes it, so it has no Done of its own.
     var done = true
-    var titled = true
     var item: PlannedWake? { wake.plan.first { $0.key == key } }
     var title: String { item.map { $0.wake.formatted(.dateTime.weekday(.wide)) } ?? "Calendar" }
     var edit: DayEdit { wake.rules.dayEdits[key] ?? DayEdit() }
@@ -701,7 +630,7 @@ struct CalendarDaySheet: View {
     var body: some View {
         if let close {
             Group {
-                if titled { PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } } }
+                PageTitle(title) { if done { Button("Done") { commitLabel(); close() }.fontWeight(.semibold).foregroundStyle(.tint) } }
                 sections
             }
             .onAppear { labelText = edit.label ?? ""; loadOwn() }

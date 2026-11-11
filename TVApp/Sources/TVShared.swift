@@ -103,6 +103,39 @@ struct TVStatus: Decodable, Equatable {
         var artist: String?
         var handoff: String?
     }
+    // The television behind the box, as the box hears it over HDMI-CEC. Absent from a Mac that doesn't read it; with
+    // CEC off on the box, only `enabled: false`. `tv`: on, off, waking, sleeping, or empty when it isn't known.
+    // `input`: box (showing this box), tv (its own screen), other (another device, named in `source` if it says), or empty.
+    struct CEC: Decodable, Equatable {
+        var enabled: Bool
+        var tv: String?; var input: String?; var source: String?
+        // Who made it, whether its own remote's keys have been heard by the box, and what else is on its HDMI sockets.
+        var brand: String?; var keys: Bool?; var others: [String]?
+    }
+    var cec: CEC?
+    // The box is awake, but the television is known to be off or showing something else. Nil while it shows the box,
+    // while the box itself is asleep (that is said as asleep), and whenever it simply isn't known: nothing is claimed.
+    enum Away: Equatable {
+        case off, elsewhere(String?)
+        // Off reads exactly as the box asleep does ("Asleep", "Wake the TV"): to him it's one black TV, and the box
+        // follows the television to sleep a few seconds later, so the words never change under him (designer, 11-10).
+        // Elsewhere reads as its siblings do: "Asleep", "Screensaver", "On PlayStation 5".
+        var line: String {
+            switch self {
+            case .off: return "Asleep"
+            case .elsewhere(let name?): return "On \(name)"
+            case .elsewhere(nil): return "On another input"
+            }
+        }
+        var glyph: String { self == .off ? "moon.fill" : "rectangle.2.swap" }
+    }
+    var away: Away? {
+        guard online, screen != "asleep", let c = cec, c.enabled else { return nil }
+        if c.tv == "off" || c.tv == "sleeping" { return .off }
+        if c.input == "other" { return .elsewhere(c.source?.isEmpty == false ? c.source : nil) }
+        if c.input == "tv" { return .elsewhere(nil) }
+        return nil
+    }
 }
 
 // The words under a title: only what helps. Never the service a rec came from, what kind of thing it is, or the app

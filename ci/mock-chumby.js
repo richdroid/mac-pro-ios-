@@ -57,7 +57,9 @@ http.createServer((q, s) => {
   if (a === 'state') { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(stateNow(data.state))); return; }
   if (a === 'shot') { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/shot.jpg')); return; }
   if (a === 'cat') { s.end('<a href="/guide/AB-1/category"><img alt="Clocks"></a>'); return; }
-  if (q.method === 'POST') { s.end('{"ok":true}'); return; }
+  // Outside the live scenes nothing changes, so the two actions that are confirmed by reading the state back answer as an
+  // older Chumby does, and the app goes its older way.
+  if (q.method === 'POST') { s.end(a === 'once' || a === 'pstation' ? '{"ok":false,"error":"unknown action"}' : '{"ok":true}'); return; }
   if (data[a]) { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(data[a])); return; }
   s.statusCode = 404; s.end();
 }).listen(9000, '127.0.0.1');
@@ -230,6 +232,14 @@ http.createServer((q, s) => {
     return s.end(JSON.stringify({ rows: hits.length ? [{ title: 'Results', items: hits }] : [] }));
   }
   if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' }))) })); }
+  // Mint's own screen for the song on: its words, timed, and what plays after it (the Playing tab mirrors both).
+  if (q.url.startsWith('/api/tv/music-detail')) {
+    s.setHeader('content-type', 'application/json');
+    const words = ['The first line of a sample song', 'A second line that runs a little longer than the first', '', 'Here the chorus comes around', 'And says the same thing twice', 'And says the same thing twice', 'A quiet line', 'The last line of a sample song'];
+    return s.end(JSON.stringify({ ok: true, title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', playing: true, position_ms: 40000, duration_ms: 180000, airplay: false, asked_at: Date.now(),
+      lyrics: { status: '', synced: true, line: 3, lines: words.map((w, i) => [25000 + i * 5000, 30000 + i * 5000, w]) },
+      queue: { remaining: 7, items: ['Next Song', 'Another Song', 'Third Song'].map(title => ({ title, artist: 'Sample Artist', album: 'Sample Album', duration_ms: 200000, art: tvBase + '/art.png' })) } }));
+  }
   if (q.url.startsWith('/api/tv/recs')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ films: ['Rope', 'Match Point', 'Blue Velvet', 'Klute'].map(title => ({ title, year: '1990', slug: title.toLowerCase(), imdb: 'tt1234567', art: tvBase + '/poster.png', why: 'Because you liked Heat' })) })); }
   // A search for the show on the TV finds it, as the real catalogue would (the app looks a series up by name when its
   // rows don't carry it).
@@ -373,6 +383,27 @@ function chumbyScene(q, s) {
           return json({ ok: true, pending: false, skipped: live.state.skipped });
         }
         if (a === 'unskip') { live.state.skipped = null; return json({ ok: true, pending: false, skipped: null }); }
+        // "Just this once" in one request, as the Chumby answers it (chumby 9d3c1a1): the one-off joins the list switched
+        // on, any earlier one by that name replaced, no other alarm touched, and the skip is pinned to the usual ring.
+        if (a === 'once') {
+          const name = f.get('name') || '', at = +f.get('at'), to = +f.get('to'), oname = f.get('oname') || '';
+          if (!/ \(just this once\)$/.test(oname) || / \(just this once\)$/.test(name)) return json({ ok: false, error: 'bad name' });
+          if (!(at > 0 && to >= at && to <= at + 720)) return json({ ok: false, error: 'bad time' });
+          const orig = live.state.alarms.find(x => x.name === name && x.enabled === '1');
+          if (!orig) return json({ ok: false, error: 'no such alarm' });
+          const one = { ...orig, name: oname, enabled: '1', when: 'once', time: String(to), backup: '0', backupDelay: '5', own: '' };
+          if (f.get('type') !== null) for (const k of ['type', 'arg', 'param', 'param_description', 'duration', 'snooze', 'auto_dismiss']) one[k] = f.get(k) || '';
+          live.state.alarms = [...live.state.alarms.filter(x => x.name !== oname), one];
+          live.state.skipped = pinned(live.state, name, at);
+          return json({ ok: true, confirmed: live.state.skipped !== null, pending: false, skipped: live.state.skipped });
+        }
+        // A Pandora station from its share link: the answer comes at once, the result in the state.
+        if (a === 'pstation') {
+          const id = ((f.get('u') || '').match(/station\/play\/(\d+)/) || [])[1], k = f.get('k') || '';
+          live.state.pandoraAdd = id ? `${k}\tok\t${id}\tDream Pop Radio` : `${k}\terr\tthat link isn't a Pandora station`;
+          if (id) live.state.pandora = [...live.state.pandora.filter(p => p.id !== id), { id, name: 'Dream Pop Radio' }];
+          return json({ ok: true, pending: true });
+        }
         // A channel chosen in the app stays chosen, so the channel shown doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
         if (a === 'save') {
@@ -481,7 +512,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rasleep|roffline|ryoutubebare|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; return tvReal(q, s, path, query, json); }
@@ -536,13 +567,20 @@ function tvPose(q, s) {
     q.on('close', () => { clearTimeout(wait); clearInterval(timer); });
     return true;
   }
-  if (/^r(asleep|offline|youtube|youtubebare|mint|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
+  if (/^r(tvoff|tvawayfilm|tvaway|cecoff|asleep|offline|youtube|youtubebare|mint|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
     const v = JSON.parse(tvStatus), now = Date.now();
     // Which scene's status the app really asked for, so a shot showing the sample's song can be told apart from one that
     // never reached its scene (review of dfd490e: ryoutubebare showed Mint's Sample Song).
     try { fs.appendFileSync('/tmp/tv-scene-status.log', scene + '\n'); } catch {}
     if (scene === 'rasleep') { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'roffline') { v.online = false; delete v.session; }
+    // The television behind the box, over HDMI-CEC: turned off with its own remote while the box is awake; on another
+    // device that names itself; and CEC off on the box (only Status says so).
+    if (scene === 'rtvoff') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'off', input: 'box', brand: 'Sony' }; }
+    if (scene === 'rtvaway') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'on', input: 'other', source: 'PlayStation 5', brand: 'Sony', keys: true, others: ['PlayStation 5'] }; }
+    // His real case: a film left paused for the PlayStation. The bar and keys stay under the dark picture; play brings the TV back.
+    if (scene === 'rtvawayfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: false, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; v.cec = { enabled: true, tv: 'on', input: 'other', source: 'PlayStation 5', brand: 'Sony' }; }
+    if (scene === 'rcecoff') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: false }; }
     // A video the Mac hasn't found yet: no still, no length, only where it's got to (the yt-dlp search can take half a
     // minute or miss; r35: the Playing tab showed an empty box).
     if (scene === 'ryoutubebare') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Lil B - Gotham City [ Music Video ] [ Official ]', 'Lil B'], position: 83000, sampledAt: now, canSeek: false }; }

@@ -11,87 +11,6 @@ typealias PlatformImage = NSImage
 extension Image { init(platform i: NSImage) { self.init(nsImage: i) } }
 #endif
 
-// One change to the alarms, said in a way that can be applied to any copy of the list, fresh from the Chumby or not, and
-// that does nothing the second time. That's what lets a save re-read the list and change only this.
-enum AlarmChange {
-    case toggle(Alarm, Bool)
-    case replace(Alarm, Alarm)
-    case add(Alarm)
-    case delete(Alarm)
-    case volume(Int)
-    case fade(Int)
-    case nap(at: Int)          // minutes since 1970
-    // A nap with its own sound, length, snooze and ring time (the nap editor); still the one Nap alarm, so the Chumby's
-    // helper rule (never counted by newest_wins, never pinned) and one-nap-at-a-time both hold.
-    case setNap(Alarm)
-    case cancelNap
-    static func find(_ a: Alarm, in s: ChumbyState) -> Int? { s.alarms.firstIndex { $0.same(a) } ?? s.alarms.firstIndex { $0.key == a.key } }
-    func apply(_ s: inout ChumbyState) {
-        switch self {
-        case .toggle(let a, let on):
-            if let i = Self.find(a, in: s) { s.alarms[i].enabled = on ? "1" : "0" }
-        case .replace(let old, let new):
-            if s.alarms.contains(where: { $0.same(new) }) { return }
-            if let i = Self.find(old, in: s) { s.alarms[i] = new } else { Self.add(new, to: &s) }
-        case .add(let a):
-            if !s.alarms.contains(where: { $0.same(a) }) { Self.add(a, to: &s) }
-        case .delete(let a):
-            if let i = Self.find(a, in: s) { s.alarms.remove(at: i) }
-        case .volume(let v): s.volume = v
-        case .fade(let f): s.fade = f
-        case .nap(let at):
-            // A new nap replaces one still to come. One that has already gone off is left to finish ringing.
-            let now = Int(Date().timeIntervalSince1970 / 60)
-            s.alarms.removeAll { $0.name == "Nap" && $0.when == "once" && (Int($0.time) ?? 0) > now && $0.time != String(at) }
-            if !s.alarms.contains(where: { $0.name == "Nap" && $0.when == "once" && $0.time == String(at) }) { s.addNap(at: at) }
-        case .setNap(let a):
-            // The one nap: any other still to come goes, and this one takes its place (or the first free one).
-            let now = Int(Date().timeIntervalSince1970 / 60)
-            s.alarms.removeAll { $0.name == "Nap" && $0.when == "once" && (Int($0.time) ?? 0) > now && !$0.same(a) }
-            if !s.alarms.contains(where: { $0.same(a) }) { Self.add(a, to: &s) }
-        case .cancelNap:
-            let now = Int(Date().timeIntervalSince1970 / 60)
-            s.alarms.removeAll { $0.name == "Nap" && $0.when == "once" && (Int($0.time) ?? 0) > now }
-        }
-        s.reindex()
-    }
-    private static func add(_ a: Alarm, to s: inout ChumbyState) {
-        if let free = s.alarms.firstIndex(where: { $0.isPlaceholder }) { s.alarms[free] = a } else { s.alarms.append(a) }
-    }
-    // The alarms this change deletes, turns off or edits by the user's own hand, for AlarmWriter's safety net. Anything
-    // else lost in the same save (the Chumby's newest_wins, say) is only allowed when the editor showed it first (`alsoOff`).
-    func permit(in s: ChumbyState, alsoOff: Set<String> = []) -> SavePermit {
-        var p = SavePermit(userOff: alsoOff)
-        switch self {
-        case .toggle(let a, let on): if !on { p.userOff.insert(a.key) }
-        case .replace(let old, _), .delete(let old): p.userOff.insert(old.key)
-        case .nap, .setNap, .cancelNap: for a in s.alarms where a.name == "Nap" && a.when == "once" { p.userOff.insert(a.key) }
-        case .add, .volume, .fade: break
-        }
-        return p
-    }
-    // What a failure says at the control, in the words of what was tried.
-    var failHead: String {
-        switch self {
-        case .toggle(_, let on): return on ? "Couldn’t turn this on" : "Couldn’t turn this off"
-        case .volume: return "Couldn’t change the volume"
-        case .fade: return "Couldn’t change the fade"
-        default: return "Not on the Chumby yet"
-        }
-    }
-    // Where its mark shows: the alarm's row, or the control it came from.
-    var mark: String {
-        switch self {
-        case .toggle(let a, _): return a.key
-        case .replace(_, let a), .add(let a): return a.key
-        case .delete(let a): return a.key
-        case .volume: return "alarmVolume"
-        case .fade: return "fade"
-        case .nap, .setNap, .cancelNap: return "nap"
-        }
-    }
-}
-
 // A control's own failure, shown at that control and nowhere else.
 struct Failure: Equatable { let id: String; let text: String; let at: Date }
 enum AlarmMark: Equatable { case failed(head: String, why: String), landed(Date) }
@@ -133,7 +52,7 @@ final class ChumbyModel: ObservableObject {
     // The "just this once" sheet, open or not: on the model, not in the menu's own state, because Home lays its
     // controls out in another place of the tree when the phone opens flat, and a sheet held by the view went with it.
     @Published var justOnceSheetOpen = false
-    @Published var alarmsPage = false { didSet { if alarmsPage { releaseHeld() } } }
+    @Published var alarmsPage = false { didSet { if alarmsPage { releaseHeld() }; if alarmsPage != oldValue { SwipeLog.note("alarmsPage \(alarmsPage)") } } }
     // The page shown in place of Alarms ("Calendar settings", or the day's name), for its bar's title.
     private(set) var api: ChumbyAPI?
     private var loops: [Task<Void, Never>] = []
@@ -219,6 +138,9 @@ final class ChumbyModel: ObservableObject {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
+    // A list a flow of its own just read straight from the Chumby (a "just this once"): as recent as a reading gets.
+    func adoptFresh(_ s: ChumbyState) { stateConfirmed = true; adopt(s) }
+
     func start() {
         stop()
         running = true
@@ -226,7 +148,18 @@ final class ChumbyModel: ObservableObject {
         loops = [
             // Through the Mac's cache these are cheap. Straight to the 64 MB Chumby they are not, so go far slower there.
             Task { [weak self] in while !Task.isCancelled { await self?.loadSys(); try? await Task.sleep(nanoseconds: self?.direct == true ? 30_000_000_000 : 4_000_000_000) } },
-            Task { [weak self] in while !Task.isCancelled { await self?.loadState(); try? await Task.sleep(nanoseconds: self?.direct == true ? 60_000_000_000 : 6_000_000_000) } },
+            // On opening, the Mac's copy of the list is as old as the last visit; asking is what makes it read a new one,
+            // which is there about two seconds later (measured 2026-11-10: 2.1 s). So an old answer is asked for again
+            // in 0.7 s, a few times, and not at the next six-second turn: the list is confirmed in about 2.5 s after
+            // opening where it took 6 to 7, and saves that wait for it ("Still reaching the Chumby") wait that much less.
+            Task { [weak self] in
+                var quick = 0
+                while !Task.isCancelled {
+                    let old = await self?.loadState() == false
+                    quick = old && self?.direct != true ? quick + 1 : 0
+                    try? await Task.sleep(nanoseconds: self?.direct == true ? 60_000_000_000 : quick > 0 && quick <= 8 ? 700_000_000 : 6_000_000_000)
+                }
+            },
             Task { [weak self] in await self?.loadChannels() },
         ]
     }
@@ -310,18 +243,21 @@ final class ChumbyModel: ObservableObject {
         guard !fallback.isEmpty, let next = Self.makeAPI(usingFallback ? address : fallback) else { return }
         usingFallback.toggle(); api = next; failures = 0
     }
-    func loadState() async {
-        guard let api, Date() >= stateHold, let r = try? await fetch("state", from: api) else { return }
+    // False when the answer was an old copy (the Mac is reading a new one), so the caller may ask again soon.
+    @discardableResult
+    func loadState() async -> Bool {
+        guard let api, Date() >= stateHold, let r = try? await fetch("state", from: api) else { return true }
         // Only a recent reading counts: the cache can hand back a list from hours ago, and once a recent one has come in,
         // an older copy (the Mac's, just after a save) is never shown over it.
         let recent = r.age < 30
-        if !recent && stateConfirmed { return }
-        if r.data == stateBytes { if recent, !stateConfirmed { stateConfirmed = true }; return }
-        guard Date() >= stateHold, let s = try? JSONDecoder().decode(ChumbyState.self, from: r.data) else { return }
+        if !recent && stateConfirmed { return false }
+        if r.data == stateBytes { if recent, !stateConfirmed { stateConfirmed = true }; return recent }
+        guard Date() >= stateHold, let s = try? JSONDecoder().decode(ChumbyState.self, from: r.data) else { return true }
         // Not while a page is moving (see releaseHeld). The ring is sys's, which never waits.
-        if parks { SwipeLog.note("state held"); heldState = (r.data, s, recent); return }
+        if parks { SwipeLog.note("state held"); heldState = (r.data, s, recent); return recent }
         SwipeLog.note("state landed")
         applyState(s, data: r.data, recent: recent)
+        return recent
     }
     private func applyState(_ s: ChumbyState, data: Data, recent: Bool) {
         if recent, !stateConfirmed { stateConfirmed = true }
@@ -347,6 +283,7 @@ final class ChumbyModel: ObservableObject {
         }
         deviceState = s
         if !stateKnown { stateKnown = true }
+        if let d = doubted, Self.skipAgrees(s.skipped, d) { doubted = nil; letGo("skip") }
         // A change that didn't get through, which the Chumby now matches anyway (put right on the Chumby, say), is done.
         pending.removeAll { p in
             guard p.failed != nil else { return false }
@@ -433,16 +370,28 @@ final class ChumbyModel: ObservableObject {
     }
 
     // A failure, at the control it came from. Nothing is said when things work: the control itself shows that.
+    // Notes about whether tonight's alarm is as he left it (a skip or an undo the Chumby didn't confirm), and one that
+    // arrives up to a minute after the tap (a station looked up), stay until he puts them away or the Chumby agrees:
+    // one that cleared itself after six seconds was gone before a locked phone was looked at again.
+    static let keptNotes: Set<String> = ["skip", "pandora"]
+    @Published private(set) var kept: [String: String] = [:]
+    func letGo(_ id: String) {
+        if kept[id] != nil { withAnimation(.snappy) { kept[id] = nil } }
+        if id == "skip" { ChumbyNotify.shared.skipSettled() }
+    }
+    // The ✕ for a note that stays; nil for one that clears itself.
+    func dismissal(_ id: String) -> (() -> Void)? { kept[id] == nil ? nil : { [weak self] in self?.tick(); self?.letGo(id) } }
     func fail(_ id: String, _ text: String) {
         #if canImport(UIKit)
         Haptics.note.notificationOccurred(.error)
         #endif
+        if Self.keptNotes.contains(id) { withAnimation(.snappy) { kept[id] = text }; return }
         // The note's row comes and goes in one spring, never in one frame.
         withAnimation(.snappy) { failure = Failure(id: id, text: text, at: Date()) }
         failureClear?.cancel()
         failureClear = Task { [weak self] in try? await Task.sleep(nanoseconds: 6_000_000_000); if !Task.isCancelled { withAnimation(.snappy) { self?.failure = nil } } }
     }
-    func failed(_ id: String) -> String? { failure?.id == id ? failure?.text : nil }
+    func failed(_ id: String) -> String? { kept[id] ?? (failure?.id == id ? failure?.text : nil) }
     func hold(_ seconds: Double = 8) { let until = Date().addingTimeInterval(seconds); sysHold = until; stateHold = until; sysBytes = Data(); stateBytes = Data() }
     func tick() {
         #if canImport(UIKit)
@@ -569,7 +518,10 @@ final class ChumbyModel: ObservableObject {
         do {
             guard let api else { throw ChumbyError.message("No Chumby address set.") }
             let change = p.change
-            let r = try await AlarmWriter.shared.edit(api, planned: { s in let permit = change.permit(in: s); change.apply(&s); return permit })
+            let r = try await AlarmWriter.shared.edit(api, planned: { s in
+                if let why = change.refusal(in: s) { throw ChumbyError.refused(why) }
+                let permit = change.permit(in: s); change.apply(&s); return permit
+            })
             pending.removeAll { $0.id == id }
             landed(r, mark: p.change.mark)
         } catch {
@@ -602,7 +554,10 @@ final class ChumbyModel: ObservableObject {
     func save(_ c: AlarmChange, alsoOff: Set<String> = []) async -> String? {
         guard let api else { return "No Chumby address set." }
         do {
-            let r = try await AlarmWriter.shared.edit(api, planned: { s in let permit = c.permit(in: s, alsoOff: alsoOff); c.apply(&s); return permit })
+            let r = try await AlarmWriter.shared.edit(api, planned: { s in
+                if let why = c.refusal(in: s) { throw ChumbyError.refused(why) }
+                let permit = c.permit(in: s, alsoOff: alsoOff); c.apply(&s); return permit
+            })
             pending.removeAll { $0.change.mark == c.mark }
             landed(r, mark: c.mark)
             return nil
@@ -722,33 +677,95 @@ final class ChumbyModel: ObservableObject {
     }
     // The Chumby's skip, pinned to this alarm's ring at `at` (a=skip name=&at=, epoch minutes). There's only ever one pin:
     // this replaces any other. Nil once it's asked for; otherwise why not. The Chumby's own answer replaces the guess.
-    func skip(_ a: Alarm, at: Date) async -> String? {
+    func skip(_ a: Alarm, at: Date, settle: Bool = true) async -> String? {
         let before = state.skipped
+        letGo("skip")
         state.skipped = SkippedAlarm(name: a.name, at: at.timeIntervalSince1970, when: a.when); deviceState.skipped = state.skipped
         skipWanted = (state.skipped, Date().addingTimeInterval(10))
         tick()
         hold(4)
         let minute = Int((at.timeIntervalSince1970 / 60).rounded())
-        guard let why = await sendInOrder("skip", extra: "&name=" + ChumbyAPI.enc(a.name) + "&at=\(minute)") else { await settleSkip(); return nil }
+        guard let why = await sendInOrder("skip", extra: "&name=" + ChumbyAPI.enc(a.name) + "&at=\(minute)") else {
+            // Checked in the background: the card already shows it, and whoever needs the answer first (a "just this
+            // once") reads it for itself.
+            let wanted = state.skipped
+            skipSettle?.cancel()
+            if settle { holdForSkipCheck(); skipSettle = Task { await settleSkip(wanted: wanted, alarmAt: wanted?.date); if !Task.isCancelled { endSkipHold() } } }
+            return nil
+        }
         skipWanted = nil
         state.skipped = before; deviceState.skipped = before
         return "Couldn’t skip it. \(why)"
     }
-    func unskip() async {
+    func unskip(settle: Bool = true) async {
         let before = state.skipped
+        letGo("skip")
         state.skipped = nil; deviceState.skipped = nil
         skipWanted = (nil, Date().addingTimeInterval(10))
         tick()
         hold(4)
-        guard let why = await sendInOrder("unskip", extra: "") else { await settleSkip(); return }
+        guard let why = await sendInOrder("unskip", extra: "") else {
+            skipSettle?.cancel()
+            // The alarm that stays skipped if this undo doesn't land: the one the skip was on.
+            if settle { holdForSkipCheck(); skipSettle = Task { await settleSkip(wanted: nil, alarmAt: before?.date); if !Task.isCancelled { endSkipHold() } } }
+            return
+        }
         skipWanted = nil
         state.skipped = before; deviceState.skipped = before
         fail("skip", "Couldn’t undo the skip. \(why)")
     }
-    // The panel takes a moment to confirm, so read again once it has.
-    private func settleSkip() async {
-        try? await Task.sleep(nanoseconds: 2_500_000_000)
-        await loadState()
+    // The panel takes a moment to confirm, so read again once it has, and check its answer against what was asked: a
+    // skip or an undo the Chumby didn't take used to flip back without a word ten seconds later, after he'd locked the
+    // phone believing it. Read at 2.5, 7.5 and 22.5 s (the last one late enough that the Mac has renewed its copy of the
+    // list whatever happened, so "not confirmed" is never said of a skip that landed a little late); still not as
+    // asked, it's said at the card, with the error tap.
+    private var skipSettle: Task<Void, Never>?
+    // What was asked for when the Chumby didn't confirm it: a later reading that agrees takes the note away by itself.
+    private var doubted: SkippedAlarm??
+    static func skipAgrees(_ now: SkippedAlarm?, _ wanted: SkippedAlarm?) -> Bool {
+        let now = now.flatMap { $0.date > Date() ? $0 : nil }
+        guard let wanted else { return now == nil }
+        return now.map { $0.name == wanted.name && abs($0.at - wanted.at) < 60 } ?? false
+    }
+    // The check outlives the app being left: he skips or undoes and locks the phone, and iOS would otherwise stop the
+    // app before the last reading, 22 s on. Held as the Mac Pro app holds a send (one hold; a newer check takes it over).
+    #if canImport(UIKit)
+    private var skipHold = UIBackgroundTaskIdentifier.invalid
+    #endif
+    private func holdForSkipCheck() {
+        #if canImport(UIKit)
+        endSkipHold()
+        skipHold = UIApplication.shared.beginBackgroundTask(withName: "Chumby skip check") { [weak self] in self?.endSkipHold() }
+        #endif
+    }
+    private func endSkipHold() {
+        #if canImport(UIKit)
+        if skipHold != .invalid { UIApplication.shared.endBackgroundTask(skipHold); skipHold = .invalid }
+        #endif
+    }
+    private func settleSkip(wanted: SkippedAlarm?, alarmAt: Date? = nil) async {
+        func agrees() -> Bool { Self.skipAgrees(deviceState.skipped, wanted) }
+        doubted = nil
+        var ok = false
+        for wait in [2.5, 5.0, 15.0] {
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            if Task.isCancelled { return }       // a newer skip or undo has its own check
+            // Straight from the Chumby's own answer, never laid over with what was asked for.
+            if let api, let d = try? await api.fresh("state"), let s = try? AlarmWriter.strict(d) {
+                stateConfirmed = true
+                took(s)
+                if agrees() { ok = true; break }
+            }
+        }
+        if Task.isCancelled { return }
+        if !ok {
+            skipWanted = nil
+            relay()
+            doubted = .some(wanted)
+            // Left the app by now: said as a notification too, since the note at the card is only seen on coming back.
+            if !running { await ChumbyNotify.shared.skipUnconfirmed(undo: wanted == nil, at: alarmAt) }
+            fail("skip", wanted == nil ? "The Chumby didn’t confirm the undo. Check the alarm before you sleep." : "The Chumby didn’t confirm the skip. Check the alarm before you sleep.")
+        }
         // The widgets show the skip too, so they mustn't wait for their next refresh to catch up.
         WidgetCenter.shared.reloadAllTimelines()
     }
@@ -788,6 +805,50 @@ final class ChumbyModel: ObservableObject {
         state.reindex()
         deviceState.schedule = state.schedule
         await send("sched", o, id: "schedule")
+    }
+    // A Pandora station added from its share link (a=pstation, chumby 9d3c1a1): the Chumby reads the station's number
+    // from the link and its name from Pandora's own page, and adds it to the stations an alarm can play. Nothing of his
+    // account is used. The Chumby answers at once and the result arrives in its state a few seconds later.
+    @Published var addingStation = false
+    @Published var stationAdded: String?
+    func addPandora(_ link: String) async {
+        let l = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let api, !addingStation else { return }
+        guard ["https://www.pandora.com/", "https://pandora.com/", "https://pandora.app.link/"].contains(where: { l.hasPrefix($0) }) else {
+            fail("pandora", "That isn’t a Pandora link. In Pandora, open the station, then Share and Copy Link."); return
+        }
+        tick()
+        letGo("pandora")
+        withAnimation(.snappy) { addingStation = true; stationAdded = nil }
+        defer { withAnimation(.snappy) { addingStation = false } }
+        let key = String(format: "%08x", UInt32.random(in: 0...UInt32.max))
+        do { try await api.post("pstation", body: ChumbyAPI.form([("u", l), ("k", key)])) }
+        catch ChumbyError.message(let m) where m == "unknown action" { fail("pandora", "This Chumby can’t add a station from a link yet."); return }
+        catch ChumbyError.message(let m) where m == "not a Pandora link" || m == "bad link" { fail("pandora", "That isn’t a Pandora link. In Pandora, open the station, then Share and Copy Link."); return }
+        catch { fail("pandora", "Couldn’t add it. \(AlarmWriter.explain(error))"); return }
+        for _ in 0..<25 {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let d = try? await api.fresh("state"), let s = try? AlarmWriter.strict(d) else { continue }
+            let p = s.pandoraAdd.components(separatedBy: "\t")
+            guard p.count >= 2, p[0] == key, p[1] != "wait" else { continue }
+            if p[1] == "ok" {
+                stateConfirmed = true
+                took(s)
+                withAnimation(.snappy) { stationAdded = p.count > 3 ? p[3] : "The station" }
+                return
+            }
+            let why: String
+            switch p.count > 2 ? p[2] : "" {
+            case "that link isn't a Pandora station": why = "That link isn’t to a Pandora station."
+            case "couldn't open that link": why = "The Chumby couldn’t open that link. Try again."
+            case "Pandora doesn't know that station": why = "Pandora doesn’t know that station."
+            case "couldn't reach Pandora": why = "The Chumby couldn’t reach Pandora. Try again."
+            default: why = "The Chumby couldn’t save it. Its storage may be full."
+            }
+            fail("pandora", why)
+            return
+        }
+        fail("pandora", "Pandora didn’t answer in time. Try again.")
     }
     // What will really ring: always from the Chumby's own list, never from a change that hasn't landed.
     func nextRing() -> (alarm: Alarm, at: Date)? { deviceState.nextRing() }

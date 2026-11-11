@@ -85,6 +85,9 @@ final class BrowseStore: ObservableObject {
     // wait on the Mac (its first answer of a session took 6.3 s on 2026-11-10; the rows sat as grey shapes for all of it).
     let kept: String?
     private var fromDisk = false
+    // When the kept list was last fresh, once the Mac has failed to give a newer one: the pages dim it and say so.
+    @Published private(set) var keptSince: Date?
+    private var keptDate: Date?
     private static func keptFile(_ name: String) -> URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-rows-\(name).json")
     }
@@ -94,13 +97,15 @@ final class BrowseStore: ObservableObject {
         guard let kept, let file = Self.keptFile(kept), !["127.0.0.1", "localhost"].contains(where: { TVBridge.address.contains($0) }) else { return }
         let folds = base != nil
         Task { [weak self] in
-            let rows: [MediaRow]? = await Task.detached(priority: .userInitiated) {
+            let disk: (rows: [MediaRow], at: Date?)? = await Task.detached(priority: .userInitiated) {
                 guard let d = try? Data(contentsOf: file), let a = try? JSONDecoder().decode(BrowseAnswer.self, from: d) else { return nil }
-                return folds ? Self.fold(Self.once(a.rows)) : a.rows
+                let at = (try? FileManager.default.attributesOfItem(atPath: file.path))?[.modificationDate] as? Date
+                return (folds ? Self.fold(Self.once(a.rows)) : a.rows, at)
             }.value
             // Only if nothing has come meanwhile, and nothing is being searched.
-            guard let self, let rows, !rows.isEmpty, self.rows.isEmpty, self.loadedFor == nil, self.query.isEmpty, self.genre.isEmpty else { return }
+            guard let self, let rows = disk?.rows, !rows.isEmpty, self.rows.isEmpty, self.loadedFor == nil, self.query.isEmpty, self.genre.isEmpty else { return }
             self.fromDisk = true
+            self.keptDate = disk?.at
             if self.failed { self.failed = false }
             self.rows = rows
         }
@@ -146,12 +151,14 @@ final class BrowseStore: ObservableObject {
             // Results for some other search aren't an answer to this one.
             // (The list kept from last time stays while the Mac can't be asked for a fresh one.)
             if loadedFor != q, !(fromDisk && q.isEmpty) { if !rows.isEmpty { rows = [] }; loadedFor = nil }
+            if fromDisk, q.isEmpty, keptSince != keptDate { keptSince = keptDate }
             if failed != rows.isEmpty { failed = rows.isEmpty }
             return
         }
         // The same list again (a revisit after a minute) changes nothing on screen, so it isn't set again.
         if decoded != rows { rows = decoded }
         loadedFor = q; loadedAt = Date(); fromDisk = false
+        if keptSince != nil { keptSince = nil }
         if q.isEmpty, !decoded.isEmpty { keep(data) }
     }
     // Stremio's home for Continue watching: one request that every asker waits on, rather than two panes' loads cancelling
@@ -173,10 +180,15 @@ final class BrowseStore: ObservableObject {
         let decoded = await task.value
         if homeTask == task { homeTask = nil }
         guard query.trimmingCharacters(in: .whitespaces).isEmpty && genre.isEmpty else { return }
-        guard let decoded else { if failed != rows.isEmpty { failed = rows.isEmpty }; return }
+        guard let decoded else {
+            if failed != rows.isEmpty { failed = rows.isEmpty }
+            if fromDisk, keptSince != keptDate { keptSince = keptDate }
+            return
+        }
         if failed { failed = false }
         if decoded != rows { rows = decoded }
         loadedFor = ""; loadedAt = Date(); fromDisk = false
+        if keptSince != nil { keptSince = nil }
     }
     // Each title once on the page, in the first row it comes in. Continue watching is his own and is kept whole, but what
     // it holds isn't repeated further down.
@@ -409,6 +421,8 @@ struct BrowseColumn: View {
                     }
                     .frame(maxWidth: .infinity).padding(.top, 60)
                 }
+                // The Mac can't be asked: the rows are the ones kept from last time, said so and dimmed.
+                if part != .right, store.query.isEmpty, let since = store.keptSince { KeptNote(since: since) }
                 ForEach(shown) { row in
                     VStack(alignment: .leading, spacing: 0) {
                         RowHeader(title: row.title, route: .media(row, store.source)).padding(.leading, 20)
@@ -420,6 +434,7 @@ struct BrowseColumn: View {
                         }
                         .rowEdge()
                     }
+                    .opacity(store.keptSince != nil ? 0.55 : 1)
                 }
             }
             .scrollTargetLayout()
@@ -427,6 +442,7 @@ struct BrowseColumn: View {
             // The rows arrive, and give way to what a search finds, with a fade: the lists are set outside any animation,
             // so they cut in and out (the 2026-11-10 motion pass).
             .settledAnimation(.easeOut(duration: 0.25), value: shown.map(\.title))
+            .settledAnimation(.easeOut(duration: 0.25), value: store.keptSince != nil)
             .animation(.easeOut(duration: 0.25), value: store.query.isEmpty)
         }
         .restsOnRows()
@@ -533,12 +549,16 @@ struct EverywhereSearch: View {
     @StateObject private var music = BrowseStore(.mint)
     var stores: [BrowseStore] { [films, shows, music] }
     var foundRows: [MediaRow] { films.answerRows + shows.answerRows + music.answerRows }
-    // Shown together once both have answered, so films never arrive later and push in above the music being looked at
-    // (r18), or after 2.5 s at most. "No results" only once every store has answered (r19: it showed "No results for
-    // 'Heat'" while the films were still coming, because music's empty answer came first).
+    // Films and shows are shown together once both have answered, or after 2.5 s at most, and music joins under them
+    // when it comes: films never arrive later and push in above the music being looked at (r18). "No results" only once
+    // every store has answered (r19: it showed "No results for 'Heat'" while the films were still coming, because
+    // music's empty answer came first).
     @State private var settledFor: String?
     var settled: Bool { settledFor == text }
     var allAnswered: Bool { films.answered(text) && shows.answered(text) && music.answered(text) }
+    // Films and shows are shown as soon as both have answered (about a fifth of a second); music, which sits under
+    // them, joins when it comes, so nothing ever arrives above what he's looking at.
+    var watchAnswered: Bool { films.answered(text) && shows.answered(text) }
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             ForEach(Array(stores.enumerated()), id: \.offset) { _, store in
@@ -572,9 +592,9 @@ struct EverywhereSearch: View {
         }
         .task(id: text) {
             settledFor = nil
-            // Both answered for this text, or 2.5 s gone by.
+            // Films and shows answered for this text, or 2.5 s gone by.
             for _ in 0..<25 {
-                if allAnswered { break }
+                if watchAnswered { break }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
             if !Task.isCancelled { settledFor = text }

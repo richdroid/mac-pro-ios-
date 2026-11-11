@@ -156,6 +156,8 @@ struct DeviceTab: View {
             Divider()
             HStack { Text("Resolution"); Spacer(); Text(i.resolution).foregroundStyle(.secondary) }.padding(14)
             Divider()
+            // The television behind the box, as HDMI-CEC tells it: a row and its rule, or nothing while that isn't known.
+            TelevisionRow(status: model.status)
             VStack(alignment: .leading, spacing: 6) {
                 Button(action: tidy) {
                     HStack(spacing: 8) {
@@ -171,6 +173,8 @@ struct DeviceTab: View {
             }
             .padding(14)
         }
+        // The television's row comes and goes with the whole card easing, so the rows under it never move at a stroke.
+        .settledAnimation(.easeOut(duration: 0.25), value: TelevisionRow.value(model.status?.cec))
         .tvCard()
     }
     // Asked for only while this tab is on screen.

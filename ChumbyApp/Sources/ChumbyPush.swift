@@ -10,11 +10,13 @@ import UIKit
 // - the Chumby gone offline with an alarm due later today, and again at the alarm's own minute if it's still gone;
 // - quietly, that it's back with the alarm set.
 // One is made here on the phone: a calendar alarm the background update couldn't put on the Chumby.
+// A second one made here: a skip or an undo of his that the Chumby never confirmed, found out after he'd left the app.
 // Never sent, by ruling: an alarm ringing or ringing late (he's there), skips and naps (his own doing), and no badges.
 final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
     static let shared = ChumbyNotify()
     static let enabledKey = "chumbyNotifications"
-    static let unsetID = "chumby-unset", offlineID = "chumby-offline"
+    // noAlarmID is the Mac's: a work event coming with no alarm before it, which the calendar update here then sets.
+    static let unsetID = "chumby-unset", offlineID = "chumby-offline", noAlarmID = "chumby-noalarm", skipID = "chumby-skip"
     private static let tokenKey = "pushToken", askedKey = "notifyAsked", toldKey = "unsetTold", knownKey = "wakesOnChumby"
     private let center = UNUserNotificationCenter.current()
     private var sent: String?
@@ -95,6 +97,24 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
         content.interruptionLevel = w.wake.timeIntervalSince(now) <= 12 * 3600 ? .timeSensitive : .active
         try? await center.add(UNNotificationRequest(identifier: Self.unsetID, content: content, trigger: nil))
     }
+
+    // A skip or an undo asked for in the app that the Chumby still hadn't confirmed 22 s later (ChumbyModel.settleSkip),
+    // by which time the app had been left: at the card it would be said there. The Mac can't see this (a skip set on
+    // the Chumby looks the same whether he meant it or it's an undo that failed), so the phone says it. An undo that
+    // didn't land is an alarm that may not ring, and breaks through; a skip that didn't land is only an alarm he didn't
+    // want. No prompt of its own: it's sent only if notifications were already allowed (install, or Tinker's switch).
+    func skipUnconfirmed(undo: Bool, at: Date?) async {
+        guard enabled, !staged, await center.notificationSettings().authorizationStatus == .authorized else { return }
+        let which = at.map { "Your \($0.formatted(date: .omitted, time: .shortened)) alarm" } ?? "Your alarm"
+        let content = UNMutableNotificationContent()
+        content.title = undo ? "Skip not undone" : "Skip not confirmed"
+        content.body = undo ? "\(which) may not ring. Open Chumby to check." : "\(which) may still ring. Open Chumby to check."
+        content.sound = .default
+        content.interruptionLevel = undo ? .timeSensitive : .active
+        try? await center.add(UNNotificationRequest(identifier: Self.skipID, content: content, trigger: nil))
+    }
+    // Gone once it's put right: the Chumby agrees, or he skips or undoes again.
+    func skipSettled() { center.removeDeliveredNotifications(withIdentifiers: [Self.skipID]) }
 
     // Every one of them is about an alarm: a tap opens Alarms, and the one about an alarm not set tries again at once.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {

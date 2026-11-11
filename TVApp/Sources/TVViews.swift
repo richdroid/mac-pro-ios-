@@ -39,7 +39,28 @@ struct TVApp: App {
                     default: break
                     }
                 }
-                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t == 4 ? 1 : t } }
+                .onOpenURL { u in
+                    if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 4 ? 1 : t }
+                    // The Now Playing card's next-episode key: the Remote, and that episode's streams as soon as it's
+                    // known (a launch from cold has to hear from the TV first; about three seconds at most, then said).
+                    if u.host == "next" {
+                        model.tab = 0
+                        Task {
+                            // Worked out afresh from what the TV is playing now, as the Remote's own ⏭ does it: what was
+                            // known before the app was put away may be the episode before's. One wait and one answer:
+                            // the Remote's key shows its light for this one (`resolvingNext`) rather than starting its own.
+                            // (A second tap on the card while this one is still looking is the same ask.)
+                            guard !model.resolvingNext else { return }
+                            model.resolvingNext = true
+                            defer { model.resolvingNext = false }
+                            await model.load()
+                            NextUp.shared.forgetAll(); NextUp.shared.follow(model.status)
+                            for _ in 0..<30 where NextUp.shared.next == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+                            if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) }
+                            else { model.say("Couldn’t find the next episode") }
+                        }
+                    }
+                }
         }
     }
 }
@@ -779,6 +800,20 @@ struct SendBar: View {
     func submit() { if link { model.send(draft.text); draft.text = "" } }
 }
 
+// Under a heading whose rows are the ones kept from last time because the Mac can't be asked for fresh ones: when
+// they were last seen, so old rows never pass for now (the rows themselves are dimmed).
+struct KeptNote: View {
+    let since: Date
+    static let ago: RelativeDateTimeFormatter = { let f = RelativeDateTimeFormatter(); f.unitsStyle = .full; return f }()
+    var body: some View {
+        // Said afresh on each minute since then, so it's never left saying less than is true; under one it's "just now".
+        TimelineView(.periodic(from: since, by: 60)) { ctx in
+            Text(ctx.date.timeIntervalSince(since) < 60 ? "Last seen just now" : "Last seen " + Self.ago.localizedString(for: since, relativeTo: ctx.date))
+                .font(.footnote.weight(.medium)).foregroundStyle(.secondary).padding(.horizontal, 20)
+        }
+        .transition(.opacity)
+    }
+}
 struct RowTitle: View {
     let title: String
     init(_ t: String) { title = t }
@@ -1196,6 +1231,8 @@ struct RemoteTab: View {
         guard !model.staleStatus, let s = model.status else { return "Connecting…" }
         // The wake button says the rest.
         if s.screen == "asleep" { return "Asleep" }
+        // The box is up but the television isn't showing it (HDMI-CEC): that is what's true, not what the box has on.
+        if let a = s.away { return a.line }
         if s.screen == "screensaver" { return "Screensaver" }
         // What's playing, by name, rather than the app it's playing in. Only while it's what's on, never one left behind.
         if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty {
@@ -1224,6 +1261,8 @@ struct RemoteTab: View {
     }
     @State private var hadSession = false
     var asleep: Bool { !model.staleStatus && model.status?.screen == "asleep" }
+    // The television off, or on another input, while the box is awake: treated as asleep is, with its own one key.
+    var away: TVStatus.Away? { model.staleStatus ? nil : model.status?.away }
     // The Mac answers but the TV doesn't: the keys can't reach it, so they show it.
     var unreachable: Bool { model.status.map { !$0.online } ?? false }
     // While something plays, where it is and a bar to move it, right under the picture, as on the Playing tab.
@@ -1266,7 +1305,7 @@ struct RemoteTab: View {
         if session && seriesOn { ZStack { EpisodesLine() }.frame(height: 46) } else { EpisodesLine() }
     }
     // Asleep or out of reach, the picture is dark with a moon or a cut wire, not the last frame passed off as now.
-    var dark: Bool { asleep || unreachable }
+    var dark: Bool { asleep || unreachable || away != nil }
     static let dim = 0.35
     func picture(closable: Bool) -> some View {
         MirrorView(store: model.mirrorStore, closable: closable && !dark)
@@ -1279,7 +1318,7 @@ struct RemoteTab: View {
                     ZStack {
                         // Fully black: a faint last frame through it read as the TV still showing something (r26).
                         Color.black
-                        Image(systemName: unreachable ? "wifi.slash" : "moon.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+                        Image(systemName: unreachable ? "wifi.slash" : away?.glyph ?? "moon.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55))
                     }
                     .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
                     .transition(.opacity)
@@ -1292,50 +1331,56 @@ struct RemoteTab: View {
             // Laid out first, at the full width, so the bar or a player coming in under it never shrinks it, and a flick's
             // screen moving onto it lands where it stays.
             .layoutPriority(1)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in if abs(w - pictureWidth) > 0.5 { pictureWidth = w } }
     }
     // Asleep, one big way to wake it over the pad, which wakes it too.
     @ViewBuilder var wake: some View {
-        if asleep {
-            Button { model.tick(); model.key("wake") } label: {
+        // The television off with the box still up is the same key, in the same place: it turns the television on.
+        if asleep || away == .off {
+            Button { model.tick(); if asleep { model.key("wake") } else { model.post("tv-on") } } label: {
                 Label("Wake the TV", systemImage: "power").font(.title3.weight(.semibold)).padding(.horizontal, 26).frame(height: 60)
             }
             .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule()).transition(.opacity.combined(with: .scale(scale: 0.9)))
+        } else if let away, !unreachable {
+            TelevisionKey(away: away).transition(.opacity.combined(with: .scale(scale: 0.9)))
         }
     }
-    var keys: some View {
+    // The two rows of keys, on the Remote's one column: five equal places across exactly the column's width, the keys
+    // sized to it (never five fixed keys spread wider than the picture above them, as on his folded phone, 2026-11-11:
+    // "look at the controls fucked"), each key over the one below it. The outer keys' edges are the column's edges.
+    func keys(_ grid: RemoteGrid) -> some View {
         VStack(spacing: 12) {
-            // Power joins the top row like a real remote's, rather than sitting alone under everything. Both rows sit on the
-            // same five equal slots, so every key lines up with the one above it.
+            // Power joins the top row like a real remote's, rather than sitting alone under everything.
             HStack(spacing: 0) {
-                GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep").slot()
-                GlassKey(icon: "chevron.left", label: "Back", key: "back").slot()
-                GlassKey(icon: "house.fill", label: "Home", key: "home").slot()
+                GlassKey(icon: "power", label: "Sleep or wake", key: model.status?.screen == "asleep" ? "wake" : "sleep", size: grid.key).slot()
+                GlassKey(icon: "chevron.left", label: "Back", key: "back", size: grid.key).slot()
+                GlassKey(icon: "house.fill", label: "Home", key: "home", size: grid.key).slot()
                 // Lit while the typing bar is up, and closes it again.
                 Button { model.tick(); withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { typing.toggle() } } label: {
-                    Image(systemName: "keyboard").font(.system(size: 19, weight: .medium)).foregroundStyle(typing ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.primary))
-                        .frame(width: 54, height: 54).contentShape(Circle())
+                    Image(systemName: "keyboard").font(.system(size: grid.key * 0.35, weight: .medium)).foregroundStyle(typing ? AnyShapeStyle(TVLook.accent) : AnyShapeStyle(.primary))
+                        .frame(width: grid.key, height: grid.key).contentShape(Circle())
                 }
                 .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(typing ? "Stop typing" : "Type on TV")
                 .slot()
-                GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu").slot()
+                GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu", size: grid.key).slot()
             }
             // Folded, typing takes the transport's room: the keyboard sliced it in half, and its glow smeared through.
             // Only with something on to play: idle on the home screen, five transport keys did nothing.
-            if session && !(typing && size != .regular) { transport.transition(.opacity) }
+            // The one transport, the same as Playing's, on the top row's five places.
+            if session && !(typing && size != .regular) { Transport(glow: !typing, size: grid.key, playSize: grid.play).transition(.opacity) }
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
         }
+        // Five places of a key and a gap each: the first and last keys' edges land on the column's.
+        .frame(width: grid.width + grid.gap)
         // The TV's status is never set inside an animation, so the row came and went in one frame as something started
         // or ended on the TV. It fades, like the lines under the picture (the 2026-11-10 motion pass).
         .settledAnimation(.easeOut(duration: 0.25), value: session)
     }
-    // The one transport, the same as Playing's, on the top row's five places.
-    var transport: some View { Transport(glow: !typing) }
-    var keysBlock: some View {
+    func keysBlock(_ grid: RemoteGrid) -> some View {
         VStack(spacing: 12) {
             // Above the keys, and up for as long as it's wanted, so typing and moving between boxes go together.
-            if typing { TypeBar(open: $typing).transition(.move(edge: .bottom).combined(with: .opacity)) }
-            // A remote's width at most, so held in portrait the keys don't spread to the edges.
-            keys.frame(maxWidth: 380)
+            if typing { TypeBar(open: $typing).frame(width: grid.width).transition(.move(edge: .bottom).combined(with: .opacity)) }
+            keys(grid)
         }
         .opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
         // Whether something was on when the TV was last heard: kept through a drop, so its keys stay (dimmed).
@@ -1344,9 +1389,9 @@ struct RemoteTab: View {
     }
     // The pad, dimmed while the TV can't be reached. Asleep, its keys step back and the wake button sits in the empty ring.
     var pad: some View {
-        DPad(bare: asleep).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep)
+        DPad(bare: asleep || away != nil).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
             .overlay { wake }
-            .settledAnimation(.easeInOut(duration: 0.25), value: asleep)
+            .settledAnimation(.easeInOut(duration: 0.25), value: asleep || away != nil)
     }
     // Only when the music is what's on: a song's player beside a film's was two now-playings on one TV.
     // Dimmed and out of reach with every other key while the TV can't be reached (its ▶ stayed bright and live, r32).
@@ -1391,10 +1436,21 @@ struct RemoteTab: View {
         .padding(.horizontal, 20).padding(.bottom, 16)
     }
     // The pad and the keys, the second column wherever the Remote has two.
+    // Its width is the Remote's column: a remote's width at most (380 pt), and open upright, where the picture's pane
+    // is above it, the picture's own width, so the keys' edges are the picture's, the bar's and the episode line's. The
+    // pad is never wider than the keys under it.
     private var keysColumn: some View {
-        VStack(spacing: 14) { pad.frame(maxHeight: .infinity); keysBlock }.padding(.horizontal, 20).padding(.bottom, 16)
-            .modifier(KeysArrive(gate: keysGate))
+        GeometryReader { geo in
+            let stacked = size == .regular && !panes
+            let grid = RemoteGrid.keys(min(geo.size.width, 380, stacked && pictureWidth > 120 ? pictureWidth : .infinity))
+            VStack(spacing: 14) { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity); keysBlock(grid) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(.horizontal, 20).padding(.bottom, 16)
+        .modifier(KeysArrive(gate: keysGate))
     }
+    // How wide the picture is drawn, for the keys in the pane under it to take the same width.
+    @State private var pictureWidth: CGFloat = 0
     var body: some View {
         Group {
             if size == .regular {
@@ -1421,19 +1477,28 @@ struct RemoteTab: View {
                 // once something is (the review of 9c34a08: 343 pt idle, 275 pt with anything on, the picture shrinking the
                 // moment a show started; 01fc626 kept the room on top of the row itself, and the picture was 155 pt with a
                 // film on).
-                PictureColumn(spacing: 14, under: Self.underRoom + (session ? 0 : Self.transportRoom)) {
-                    // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
-                    // Always there, as open: hidden, it shows what's on blurred behind its own "Show the TV's screen", and
-                    // a long press on it has the same, so nothing for it is left in the bar.
-                    if !typing { picture(closable: true).columnRole(.picture).transition(.opacity) }
-                    // Mint playing has no transport here, so its own player is the way to pause it.
-                    if !typing { progress.columnRole(.under); episodes.columnRole(.under); music.columnRole(.under) }
-                    Group {
-                        // Clear of the title above it, which the keyboard pushes the page up under.
-                        pad.frame(minHeight: 110, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
-                        keysBlock
+                // One column, worked out from the room there is (RemoteGrid.folded): the picture, the bar, the episode
+                // line, the pad and both rows of keys share its width and its edges, and the keys are sized to it.
+                GeometryReader { geo in
+                    let grid = typing ? RemoteGrid.keys(min(geo.size.width, 380))
+                        : RemoteGrid.folded(width: geo.size.width, height: geo.size.height, under: musicShown ? Self.underRoom + 30 : Self.underRoom)
+                    VStack(spacing: 14) {
+                        // Steps aside while typing, so the keyboard, the pad and the title each have their own room.
+                        // Always there, as open: hidden, it shows what's on blurred behind its own "Show the TV's screen".
+                        if !typing {
+                            picture(closable: true).frame(width: grid.width, height: grid.width * 9 / 16).transition(.opacity)
+                            // Mint playing has no transport here, so its own player is the way to pause it.
+                            progress.frame(width: grid.width); episodes.frame(width: grid.width); music.frame(width: grid.width)
+                        }
+                        Group {
+                            // Clear of the title above it, which the keyboard pushes the page up under. It takes whatever
+                            // height is spare (all of the lines' and the transport's while nothing is on), up to the column's width.
+                            pad.frame(maxWidth: grid.width).frame(minHeight: 110, maxHeight: .infinity).padding(.top, typing ? 12 : 0)
+                            keysBlock(grid)
+                        }
+                        .modifier(KeysArrive(gate: keysGate))
                     }
-                    .modifier(KeysArrive(gate: keysGate))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
                 // As open: the lines under the picture fade with the TV's status rather than pop.
@@ -1489,6 +1554,31 @@ private extension View {
 // about 266 pt wide with nothing on, 209 with an episode); it's the column's full width whenever that fits. What sits
 // under it, and the tiles beside it open, take the picture's width, so their edges line up with it. Whatever height is
 // left goes to what can grow (the pad, a spacer), never to the picture.
+// The Remote's one column: how wide it is, and the keys sized to it. Five keys and four gaps make exactly the width,
+// 54 pt keys at most (a remote's own size) and 40 at least; ⏯ is a quarter bigger, as it always was.
+struct RemoteGrid: Equatable {
+    var width: CGFloat, key: CGFloat, play: CGFloat
+    var gap: CGFloat { (width - 5 * key) / 4 }
+    static func keys(_ width: CGFloat) -> RemoteGrid {
+        let w = max(width, 212)
+        let k = min(54, max(40, ((w - 48) / 5).rounded(.down)))
+        return RemoteGrid(width: w, key: k, play: (k * 68 / 54).rounded())
+    }
+    // Folded, everything is in one column and its width is the unknown: the widest (to the room's own width, 380 pt at
+    // most) at which the picture, the room for the bar and the episode line, a pad in proportion (44 % of the width,
+    // 110 pt at least) and both rows of keys all fit the height. The transport's row is always counted, so the picture
+    // is one size whether or not something is on, and the pad has the spare height when nothing is.
+    static func folded(width: CGFloat, height: CGFloat, under: CGFloat) -> RemoteGrid {
+        var w = min(width, 380)
+        while w > 220 {
+            let g = keys(w)
+            let need = w * 9 / 16 + under + 14 + max(110, w * 0.44) + 14 + g.key + 12 + g.play
+            if need <= height { break }
+            w -= 2
+        }
+        return keys(w)
+    }
+}
 struct PictureColumn: Layout {
     enum Role { case picture, under, aligned, other }
     struct RoleKey: LayoutValueKey { static let defaultValue = Role.other }
@@ -1893,12 +1983,13 @@ struct ResolvingNextKey: View {
     static let press = Notification.Name("ResolvingNextKey.press")
     var body: some View {
         GlassButton(icon: "forward.end.fill", label: "Next episode", size: size) { go() }
-        .overlay { if busy { LoadingRing(radius: size / 2).frame(width: size, height: size).transition(.opacity) } }
-        .animation(.easeOut(duration: 0.15), value: busy)
+        // Its own press, or the Now Playing card's next-episode link working the same thing out.
+        .overlay { if busy || model.resolvingNext { LoadingRing(radius: size / 2).frame(width: size, height: size).transition(.opacity) } }
+        .animation(.easeOut(duration: 0.15), value: busy || model.resolvingNext)
         .onReceive(NotificationCenter.default.publisher(for: Self.press)) { _ in go() }
     }
     func go() {
-            guard !busy else { return }
+            guard !busy, !model.resolvingNext else { return }
             busy = true
             Task {
                 NextUp.shared.forget(); NextUp.shared.follow(model.status)
@@ -1962,10 +2053,25 @@ private struct FrontRing: View {
     var body: some View {
         let on = model.frontApp == pkg
         RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2.5)
+            // Pressed and not yet confirmed: the ring breathes, quietly, until the TV says the app is in front.
+            .modifier(RingWaits(on: model.openingApp?.pkg == pkg))
             .opacity(on ? 1 : 0)
             // Settled: coming back to the page, the ring is simply where it is; it only moves in front of him.
             .settledAnimation(.easeOut(duration: 0.15), value: on)
             .accessibilityHidden(true)
+    }
+}
+private struct RingWaits: ViewModifier {
+    let on: Bool
+    @Environment(\.accessibilityReduceMotion) private var still
+    // One view throughout, its strength eased both ways: swapped for another when the TV confirmed, the ring jumped from
+    // wherever its breath was (as low as 45 %) to full in one frame.
+    @State private var dim = false
+    func body(content: Content) -> some View {
+        content
+            .opacity(dim ? 0.45 : 1)
+            .animation(on && !still ? .easeInOut(duration: 0.7).repeatForever(autoreverses: true) : .easeOut(duration: 0.2), value: dim)
+            .onChange(of: on, initial: true) { _, now in dim = now && !still }
     }
 }
 // A banner drawn here, for an app whose own is missing or came out blank: its brand's colour, its mark where it has a
@@ -2084,7 +2190,7 @@ struct AppsTab: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
                         row("Listen", listen)
-                        row("Tools and settings", tools)
+                        row("Tools", tools)
                     }
                     .padding(.vertical, 12)
                 }
@@ -2097,7 +2203,7 @@ struct AppsTab: View {
                     if let query { EverywhereSearch(text: query) } else {
                         row("Watch", watch)
                         row("Listen", listen)
-                        row("Tools and settings", tools)
+                        row("Tools", tools)
                     }
                 }
                 .padding(.vertical, 12)
@@ -2166,6 +2272,7 @@ struct Shelf: View {
             if let row, !row.items.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     RowHeader(title: title, route: .media(row, store.source)).padding(.leading, 20)
+                    if let since = store.keptSince { KeptNote(since: since).padding(.top, -6).padding(.bottom, 6) }
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 10) {
                             ForEach(row.items) { item in FlickCardButton(item: item, source: store.source, width: store.source == .mint ? 128 : 112) }
@@ -2173,6 +2280,7 @@ struct Shelf: View {
                         .padding(.horizontal, 20)
                     }
                     .rowEdge()
+                    .opacity(store.keptSince != nil ? 0.55 : 1)
                 }
             } else if store.rows.isEmpty && !store.failed && store.query.isEmpty {
                 // Its place is kept while it comes, so the rows under it don't get pushed down when it does.
@@ -2182,6 +2290,7 @@ struct Shelf: View {
         }
         // The row fades in over its waiting shapes, which it replaces in place, rather than cutting in.
         .settledAnimation(.easeOut(duration: 0.25), value: row == nil)
+        .settledAnimation(.easeOut(duration: 0.25), value: store.keptSince != nil)
         .task { await store.load() }
     }
 }
@@ -2260,7 +2369,8 @@ struct FlickCard: View {
         } else if reach.inReach {
             // Mint comes to the front first, ready to receive.
             model.post("music-now")
-            if RoutePicker.open() { model.say("Choose Mint Music") } else { showPicker = true }
+            // By the name the TV has in the phone's AirPlay list, which is "Google TV" (it said "Mint Music", which isn't there).
+            if RoutePicker.open() { model.say("Choose Google TV") } else { showPicker = true }
         }
         #endif
     }
@@ -2298,7 +2408,7 @@ struct FlickCard: View {
         .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerPlaybackStateDidChange)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerNowPlayingItemDidChange)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refresh() }
-        .alert("AirPlay to the TV", isPresented: $showPicker) { Button("OK", role: .cancel) {} } message: { Text("Tap the AirPlay button on this card and choose Mint Music. AirPlay only reaches the TV on home Wi-Fi.") }
+        .alert("AirPlay to the TV", isPresented: $showPicker) { Button("OK", role: .cancel) {} } message: { Text("Tap the AirPlay button on this card and choose Google TV. AirPlay only reaches the TV on home Wi-Fi.") }
         #endif
         .animation(.snappy, value: alreadyThere)
         .animation(.snappy, value: reach.inReach)
@@ -2354,7 +2464,7 @@ struct PhoneControls: View {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 let now = min(max(scrub ?? phone.position, 0), song.duration)
                 VStack(spacing: 0) {
-                    ScrubBar(value: now, total: song.duration, scrub: $scrub, tickEvery: 10, label: { NowControls.clock($0 * 1000) }) { phone.seek(to: $0) }
+                    ScrubBar(value: now, total: song.duration, scrub: $scrub, tickEvery: 10, label: { NowControls.clock($0 * 1000) }) { phone.seek(to: $0); MusicDetailStore.shared.moved() }
                     HStack {
                         Text(NowControls.clock(now * 1000))
                         Spacer()
@@ -2366,7 +2476,7 @@ struct PhoneControls: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Position")
                 .accessibilityValue("\(NowControls.clock(now * 1000)) of \(NowControls.clock(song.duration * 1000))")
-                .accessibilityAdjustableAction { dir in phone.seek(to: max(0, min(song.duration, now + (dir == .increment ? 15 : -15)))) }
+                .accessibilityAdjustableAction { dir in phone.seek(to: max(0, min(song.duration, now + (dir == .increment ? 15 : -15)))); MusicDetailStore.shared.moved() }
             }
             HStack(spacing: 26) {
                 GlassButton(icon: "backward.fill", label: "Previous", size: 54) { phone.previous() }
@@ -2443,6 +2553,7 @@ struct PlayingTab: View {
     // What Mint finds as he types, the same search as the Apps page's.
     @StateObject private var found = BrowseStore(.mint)
     @ObservedObject private var mintHome = BrowseStore.shared(.mint)
+    @ObservedObject private var lyrics = MusicDetailStore.shared.presence
     // A play asked for and not yet showing on the TV.
     @State private var pending = false
     @State private var pendingWait: Task<Void, Never>?
@@ -2557,9 +2668,20 @@ struct PlayingTab: View {
             withAnimation(.easeOut(duration: 0.2)) { pending = false }
         }
     }
+    // The song the words and the queue under it are for, and whether it's playing: the phone's own when it drives the
+    // TV over AirPlay, else Mint's.
+    var extras: (song: String, playing: Bool, pausedAt: Int)? {
+        if phone.drives, let s = phone.song { return (s.title, phone.playing, Int(phone.position)) }
+        if let m = music { return (m.title, model.songPlaying(m) == true, Int(m.position / 1000)) }
+        return nil
+    }
     var send: some View {
         VStack(alignment: .leading, spacing: 18) {
             FlickCard()
+            // Mint's own screen, here: the song's words, the sung line leading, and what plays after it. First under
+            // what's on (open flat, level with the cover), ahead of what he played before.
+            // On the page only when Mint has words or a queue for this song, so a song with neither leaves it as it was.
+            if extras != nil, lyrics.shows { MusicExtras(tall: panes) }
             // What he last played, first under what's on: a cover tapped has it playing again, before any typing. The row
             // runs to the page's edges, as rows do, out of this stack's 20 pt.
             if showsRecent { Shelf(source: .mint, title: Self.recentTitle).padding(.horizontal, -20) }
@@ -2607,6 +2729,9 @@ struct PlayingTab: View {
             }
         }
         .task { if mintHome.rows.isEmpty { await mintHome.load() } }
+        // The asking for the words and the queue, which draws nothing and takes no room.
+        .background { if let e = extras { MusicDetailWatch(song: e.song, playing: e.playing, pausedAt: e.pausedAt) } }
+        .settledAnimation(.easeOut(duration: 0.25), value: lyrics.shows)
         .settledAnimation(.spring(response: 0.4, dampingFraction: 0.85), value: results.map(\.id))
         // Mint's rows arriving, and Recently played's place closing if Mint has none, fade rather than cut.
         .settledAnimation(.easeOut(duration: 0.25), value: mintHome.rows.map(\.title))
@@ -2775,6 +2900,8 @@ struct DiscoverColumn: View {
     @ObservedObject private var shows = BrowseStore.discover("series")
     @ObservedObject private var home = BrowseStore.shared(.stremio)
     @FocusState private var searchFocused: Bool
+    // How wide the column is, for whether a found list is all on screen (then its heading is no door).
+    @State private var paneWidth: CGFloat = 0
     static let continueTitle = "Continue watching"
     // Films and shows together, so it sits above the switch and belongs to neither: the page's first row, and its home
     // since it left the Apps tab (Richard's choice, 2026-11-10). Only ever Stremio's own row, the one under a film on
@@ -2820,7 +2947,7 @@ struct DiscoverColumn: View {
         let searched = !store.query.trimmingCharacters(in: .whitespaces).isEmpty && row.title == "Results"
         let title = searched ? (kind == "movie" ? "Films" : "Shows") : row.title
         return VStack(alignment: .leading, spacing: 0) {
-            if searched && row.items.count < 4 { RowTitle(title).padding(.leading, 20) }
+            if searched && 20 + CGFloat(row.items.count) * 124 + CGFloat(max(row.items.count - 1, 0)) * 10 <= max(paneWidth, 1) { RowTitle(title).padding(.leading, 20) }
             else { RowHeader(title: title, route: .media(MediaRow(title: title, items: row.items), .stremio)).padding(.leading, 20) }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 10) {
@@ -2843,6 +2970,7 @@ struct DiscoverColumn: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let continuing {
                     shelf(continuing)
+                        .opacity(home.keptSince != nil ? 0.55 : 1)
                         // Said only from the real row on screen, so CI fails a pane still showing grey boxes, whatever the
                         // store holds (r28: the store had the rows, the screen didn't, and the check passed).
                         .task { _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=home&pane=\(part)"), timeout: 3) }
@@ -2893,9 +3021,12 @@ struct DiscoverColumn: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 if part != .right { controls }
+                // The Mac can't be asked: the rows are the ones kept from last time, said so and dimmed.
+                if part != .right, store.query.isEmpty, let since = store.keptSince ?? home.keptSince { KeptNote(since: since) }
                 // Each kind's rows are their own, so switching crossfades the rows alone.
                 ForEach(shown, id: \.title) { row in
                     shelf(row)
+                    .opacity(store.keptSince != nil ? 0.55 : 1)
                     .id(kind + "/" + row.title)
                     .transition(.opacity)
                 }
@@ -2914,6 +3045,8 @@ struct DiscoverColumn: View {
         // layout: with one, the page rested with its first row at the top, past the stack's 12 pt top padding, so "Watch"
         // sat 12 pt above every other tab's title, faded, and folded cut off at the screen's top (d7c64e6 tv-3, TV-3).
         .scrollDismissesKeyboard(.immediately)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if abs($0 - paneWidth) > 0.5 { paneWidth = $0 } }
+        .settledAnimation(.easeOut(duration: 0.25), value: (store.keptSince ?? home.keptSince) != nil)
         .backToTop(posed: part != .left)
         // Stremio's home, asked for here as well as at launch, and asked again until it's in: open, the launch's own ask
         // could be lost in the relayout of unfolding, and Continue watching sat as grey boxes for good (r26). A failure

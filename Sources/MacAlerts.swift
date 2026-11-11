@@ -14,6 +14,7 @@ extension Status.Alert {
         switch kind {
         case "temp": return "thermometer.high"
         case "disk": return "internaldrive.fill"
+        case "usage": return "gauge.with.dots.needle.67percent"
         default: return "exclamationmark.triangle.fill"
         }
     }
@@ -29,7 +30,7 @@ extension Status.Alert {
     // The service behind a "down" alert, when it's one the Mac can restart.
     var serviceLabel: String? { kind == "service" && id.hasPrefix("service:local.") ? String(id.dropFirst(8)) : nil }
     static let samples = [
-        Status.Alert(id: "temp:CPU", level: "critical", kind: "temp", metric: "temp:CPU", title: "CPU is hot", detail: "205°F", since: 0, c: 96),
+        Status.Alert(id: "temp:CPU", level: "critical", kind: "temp", metric: "temp:CPU", title: "CPU is very hot", detail: "205°F", since: 0, c: 96),
         Status.Alert(id: "disk", level: "warning", kind: "disk", metric: "disk", title: "Disk nearly full", detail: "21 GB free", since: 0),
         Status.Alert(id: "service:local.mac-dash-tunnel", level: "warning", kind: "service", metric: nil, title: "Public link is down", detail: "Restart it in Control", since: 0),
     ]
@@ -83,6 +84,8 @@ struct AlertBanner: View {
         if a.id.hasPrefix("session:") { model.openSession(key: String(a.id.dropFirst(8))) }
         // Updates waiting while he's away: Apps, and the install starts there.
         else if a.id == OTAInstaller.alertID { model.tab = 1; OTAInstaller.shared.wanted = true }
+        // Claude usage near its limit: the usage itself, on the Claude tab.
+        else if a.kind == "usage" { model.show(tab: 3) }
         else if let m = a.metric.flatMap(HistoryMetric.named) { model.history = m } else { model.tab = 5 }
     }
     func what(_ a: Status.Alert) -> some View {
@@ -103,7 +106,7 @@ struct AlertBanner: View {
             if let label = a.serviceLabel {
                 what(a)
                 if restarting == a.id { ProgressView().padding(.trailing, 8) }
-                else { Button("Restart") { restart(a, label) }.buttonStyle(.bordered).controlSize(.small).tint(a.tint) }
+                else { Button("Restart") { restart(a, label) }.buttonStyle(.bordered).controlSize(.small).tint(a.tint).disabled(model.stale) }
             } else {
                 Button { open(a) } label: { what(a) }.buttonStyle(.plain)
             }
@@ -112,12 +115,17 @@ struct AlertBanner: View {
                 Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.primary)
                     .frame(width: 44, height: 44).contentShape(Rectangle())
             }
-            .buttonStyle(.borderless)
+            // Plain, so the mark is the row's own ink: a borderless button drew it in the accent blue (CI e883e9d).
+            .buttonStyle(.plain)
             .accessibilityLabel("Dismiss \(a.title)")
             .padding(.trailing, -12)
         }
     }
-    @ViewBuilder var body: some View {
+    // Arriving, or the last one put away: the page makes room in one move, never in one frame.
+    var body: some View {
+        Group { banner }.animation(.snappy, value: shown.map(\.dismissKey))
+    }
+    @ViewBuilder var banner: some View {
         if !shown.isEmpty {
             Section {
                 ForEach(shown) { a in
@@ -155,7 +163,7 @@ struct AlertSettings: View {
             }
             #endif
         } header: { Text("Alerts") } footer: {
-            Text("Too hot, disk nearly full or something down.")
+            Text("Too hot, disk nearly full, something down, or Claude usage nearly out.")
         }
         .task { denied = await AlertWatch.shared.isDenied() }
     }
@@ -273,7 +281,7 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
         // The Mac's notifications carry the alert's id; one made here is named by it.
         let id = response.notification.request.content.userInfo["alert"] as? String ?? response.notification.request.identifier
         AlertDismissals.restore(id: id)
-        UserDefaults.standard.set(id.hasPrefix("session:") ? 2 : id == OTAInstaller.alertID ? 1 : 0, forKey: "tab")
+        UserDefaults.standard.set(id.hasPrefix("session:") || id.hasPrefix("usage:") ? 2 : id == OTAInstaller.alertID ? 1 : 0, forKey: "tab")
         if id == OTAInstaller.alertID { Task { @MainActor in OTAInstaller.shared.wanted = true } }
         // Kept too, in case the tap launched the app and nothing is listening yet.
         Self.pending = id

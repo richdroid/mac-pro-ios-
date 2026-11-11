@@ -85,6 +85,17 @@ extension ChumbyModel {
         one.enabled = "1"; one.when = "once"; one.time = String(Int((at.timeIntervalSince1970 / 60).rounded())); one.backup = "0"
         if one.backupDelay.isEmpty || one.backupDelay == "0" { one.backupDelay = "5" }
         if old?.alarm.key == one.key { return "That’s already set just this once." }
+        // In one request where the Chumby can (a=once): the one-off added and the usual ring skipped in a few seconds,
+        // rather than three saves and a skip over 20 to 70. An older Chumby goes the long way below.
+        switch await onceInOne(original, due: due, one: one) {
+        case .done:
+            if let old, old.alarm.key != one.key, old.alarm.name != one.name {
+                if let why = await save(.delete(old.alarm)) { return "Set. But the earlier one-off at \(old.at.formatted(date: .omitted, time: .shortened)) couldn’t be removed, so it rings too: \(why)" }
+            }
+            return nil
+        case .failed(let why): return why
+        case .older: break
+        }
         // 1. Kept switched off, so it's not a new alarm when it's switched on.
         var off = one; off.enabled = "0"
         if let why = await save(.add(off)) { return why }
@@ -95,6 +106,13 @@ extension ChumbyModel {
         }
         // The two saves just sent the panel back to its list; it answers no skip until that's in. Wait for it.
         await waitForPanel()
+        // The usual ring is only skipped once the Chumby itself shows the one-off there and switched on. Anything else
+        // (on 11-10 a 10:10 one-off was found left switched off on the Chumby, the mark of a save built on an old copy)
+        // stops here, with the usual alarm untouched.
+        guard let now = try? AlarmWriter.strict(await api.fresh("state")), now.alarms.contains(where: { $0.key == one.key && $0.isOn }) else {
+            _ = await save(.delete(one))
+            return "The Chumby didn’t take the one-off, so nothing was changed. Your usual alarm rings."
+        }
         // 3. The usual ring skipped, checked against the Chumby's own answer.
         if let why = await skipFor(original, due: due) {
             // Couldn't: take the one-off away again, so it's as it was rather than ringing twice.
@@ -107,6 +125,56 @@ extension ChumbyModel {
             if let why = await save(.delete(old.alarm)) { return "Set. But the earlier one-off at \(old.at.formatted(date: .omitted, time: .shortened)) couldn’t be removed, so it rings too: \(why)" }
         }
         return nil
+    }
+    enum OnceOutcome { case done, older, failed(String) }
+    // The Chumby's own "just this once" (a=once, chumby 9d3c1a1): it writes the one-off into its list switched on, with
+    // no other alarm touched, and asks its panel to skip the usual ring, in that order, so a failure part-way leaves
+    // both ringing. Whatever it answers (or if the answer is lost on the way), the Chumby's state is then read until it
+    // shows both the one-off switched on and the skip on that ring; only that counts as done. The one-off there
+    // without its skip is taken away again, so it's as it was; the skip never stands without the one-off.
+    private func onceInOne(_ original: Alarm, due: Date, one: Alarm) async -> OnceOutcome {
+        guard let api else { return .failed("No Chumby address set.") }
+        let minute = Int((due.timeIntervalSince1970 / 60).rounded())
+        let body = ChumbyAPI.form([("name", original.name), ("at", "\(minute)"), ("to", one.time), ("oname", one.name),
+                                   ("type", one.type), ("arg", one.arg), ("param", one.param), ("param_description", one.param_description),
+                                   ("duration", one.duration), ("snooze", one.snooze), ("auto_dismiss", one.auto_dismiss)])
+        hold(12)
+        var lost = false
+        do {
+            // A token the Chumby no longer takes is asked for again, once (post forgets it on that answer).
+            do { try await api.post("once", body: body) }
+            catch ChumbyError.message(let m) where m.contains("token") { try await api.post("once", body: body) }
+        }
+        catch ChumbyError.message(let m) where m == "unknown action" { return .older }
+        // Turned down by the Chumby in its own words: nothing was changed.
+        catch ChumbyError.message(let m) where m != "No answer from the Chumby." { return .failed(AlarmWriter.explain(ChumbyError.message(m))) }
+        catch { lost = true }      // no answer: it may still have been done, so the state decides
+        func there(_ s: ChumbyState) -> Bool { s.alarms.contains { $0.key == one.key && $0.isOn } }
+        func skipped(_ s: ChumbyState) -> Bool { s.skipped.map { $0.name == original.name && abs($0.date.timeIntervalSince(due)) < 60 } ?? false }
+        var last: ChumbyState?
+        // Up to 24 s: the Mac renews its copy of the list every 20 s when nothing told it to sooner (an answer lost on the
+        // way told it nothing), and the panel may take that long to pin the skip while it's loading the list.
+        for _ in 0..<16 {
+            if let s = try? AlarmWriter.strict(await api.fresh("state")) {
+                last = s
+                if there(s) && skipped(s) {
+                    adoptFresh(s)
+                    return .done
+                }
+            }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+        guard let s = last else { return .failed(ChumbyWords.notAnswering + ". Check the alarm before you sleep.") }
+        // Not as asked. Whatever is put back, the skip goes first: a skip request still waiting on the panel would
+        // otherwise land after the one-off had been removed, and nothing would ring. (An undo with nothing to undo
+        // is harmless.) Then the one-off, if it's there, so it's as it was.
+        await unskip(settle: false)
+        if !there(s) {
+            if skipped(s) { return .failed("The Chumby didn’t take the one-off, so the skip was taken back. Your usual alarm rings.") }
+            return .failed(lost ? ChumbyWords.notAnswering + ". Check the alarm before you sleep." : "The Chumby didn’t take the one-off. Nothing was changed.")
+        }
+        if let why = await save(.delete(one)) { return .failed("The Chumby didn’t confirm the skip, so both will ring: \(why)") }
+        return .failed("The Chumby didn’t confirm the skip. Nothing was changed.")
     }
     // After a save the panel re-reads its list (a=state says "pending" until the hook has it in, apply.sh), and its
     // hook answers no skip request until then. A skip asked for straight after the one-off's two saves went
@@ -124,18 +192,18 @@ extension ChumbyModel {
         // The Chumby's clock before asking, so a copy from before the request (the relay keeps one for a while) is
         // never read as its answer.
         let asked = (try? JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state")))?.chumbyNow
-        if let why = await skip(original, at: due) { return why }
+        if let why = await skip(original, at: due, settle: false) { return why }
         // Read again until the panel has answered: its poll runs every 2 s once its list is in, and the relay's copy
         // follows a little behind. Up to half a minute, not a few seconds.
         for _ in 0..<15 {
             if let s = try? JSONDecoder().decode(ChumbyState.self, from: await api.fresh("state")), asked.map({ a in s.chumbyNow.map { $0 > a } ?? true }) ?? true, let k = s.skipped {
                 if k.name == original.name && abs(k.date.timeIntervalSince(due)) < 60 { return nil }
-                await unskip()
+                await unskip(settle: false)
                 return "The Chumby skipped another alarm, so that skip was taken back."
             }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
-        await unskip()
+        await unskip(settle: false)
         return "The Chumby didn’t confirm the skip."
     }
     // Back to the usual: the skip taken back first when it's this one's (so the usual alarm rings again), then the one-off
@@ -146,9 +214,13 @@ extension ChumbyModel {
         // Once the usual time has gone by, there's nothing to go back to: removing this one would leave the night silent.
         guard j.canUndo else { return "The usual time has already gone, so this one stays." }
         if j.pinned {
-            if failure?.id == "skip" { failure = nil }
-            await unskip()
+            letGo("skip")
+            let asked = deviceState.chumbyNow
+            await unskip(settle: false)
             if let f = failed("skip") { return f }
+            // Only once the Chumby itself says the skip is off does the one-off go: with the skip still on and the one-off
+            // removed, nothing would ring. Unconfirmed, the one-off stays, so both ring.
+            guard let api, await chumbyUnskipConfirmed(api, since: asked) else { return chumbyUnskipDoubt }
         }
         return await save(.delete(j.alarm))
     }

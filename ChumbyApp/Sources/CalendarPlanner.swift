@@ -84,6 +84,18 @@ struct PlannedWake: Identifiable, Equatable {
 }
 
 enum WakePlanner {
+    // How a calendar alarm is named and timed on the Chumby (here, so the plan and the checks on it share them).
+    static func minutes(_ d: Date) -> String { String(Int(d.timeIntervalSince1970 / 60)) }
+    // A day's own label, when it has one, names its alarm on the Chumby in place of the event's title.
+    static func alarmName(_ w: PlannedWake) -> String { alarmName(title: w.shown) }
+    static func alarmName(title: String) -> String { Alarm.calendarPrefix + String(title.prefix(30)) }
+    // The rules a wake's time comes from, as one string, without the per-day choices (skips, a day's own time): when
+    // this differs from the last update's, the user changed a rule by hand.
+    static func signature(_ r: WakeRules) -> String {
+        [String(r.enabled), String(r.workLead), String(r.otherLead), String(r.travelExtra), String(r.dayStartHour),
+         r.workWords.joined(separator: ","), r.ignoreWords.joined(separator: ","), r.offWords.joined(separator: ","),
+         r.workCalendars.sorted().joined(separator: ","), r.excludedCalendars.sorted().joined(separator: ",")].joined(separator: "|")
+    }
     // Whole words only, so "Workout" isn't work and "Shiftless" isn't a shift.
     static func mentions(_ text: String, _ phrases: [String]) -> Bool {
         let words = text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
@@ -149,5 +161,111 @@ enum WakePlanner {
             if out.count >= r.daysAhead { break }
         }
         return out
+    }
+}
+
+// What the calendar said when a sync began, so it can tell a calendar alarm whose event is really gone from one the plan has
+// merely stopped choosing. The plan picks the first thing each day and drops a day whose wake-up is already behind it, so
+// an earlier event turning up that day, a longer lead or a different first event all leave the plan without a wake the
+// Chumby still holds, sometimes minutes before it rings (11-04: the 14:40 shift wake, removed at 14:00).
+struct CalendarKeep {
+    var plan: [PlannedWake]            // every planned wake, skipped ones too
+    var events: [CalEvent]             // everything read, declined and canceled ones too
+    var labels: [String: String] = [:] // a day's own label, by event key: its alarm goes by that name on the Chumby
+    // "Wake me from my calendar" switched off by hand: every calendar alarm goes, the next day's too. Left on, it rang
+    // the morning after he'd turned the whole thing off.
+    var off = false
+    // The rules themselves were changed by hand since the last update (how long before work, a word, a calendar): a wake
+    // that moved because of that is replaced, not left ringing beside its new time.
+    var rulesChanged = false
+    enum Verdict { case keep, userChose, gone }
+    // For a calendar alarm that's on, due within 24 h, which the plan no longer wants.
+    func verdict(_ a: Alarm, due: Date) -> Verdict {
+        // Its event: same title, starting after the alarm and no more than 18 hours after it (any lead there is).
+        if off { return .userChose }
+        func near(_ start: Date) -> Bool { start >= due && start.timeIntervalSince(due) <= 18 * 3600 }
+        // Events whose day was given a label this alarm goes by (the event's id, from "id@start", so it's found after the
+        // event moves too).
+        let labelled = Set(labels.filter { WakePlanner.alarmName(title: $0.value) == a.name }.keys.map { k in k.range(of: "@", options: .backwards).map { String(k[..<$0.lowerBound]) } ?? k })
+        func ofLabelled(_ key: String) -> Bool { key.range(of: "@", options: .backwards).map { labelled.contains(String(key[..<$0.lowerBound])) } ?? false }
+        // By the name it has now, by its event's title for an alarm made before that day was given a label of its own,
+        // or by a label that day was given.
+        if let item = plan.first(where: { (WakePlanner.alarmName($0) == a.name || WakePlanner.alarmName(title: $0.title) == a.name || ofLabelled($0.key)) && near($0.start) }) {
+            // Turned off for that day, or given that day's own lead, time or label, by hand: the user's call, and the new
+            // alarm replaces it.
+            if item.skipped || item.custom || rulesChanged { return .userChose }
+            // Moved some other way (the event's time, a rule): the old time still rings, beside the new one.
+            return .keep
+        }
+        // Its event by title, or by the label that day was given, so a labelled day's alarm is kept like any other while
+        // its event is still there.
+        let matching = events.filter { e in
+            (WakePlanner.alarmName(title: e.title) == a.name || ofLabelled(WakePlanner.key(e))) && near(e.start)
+        }
+        if matching.contains(where: { !$0.declined && !$0.canceled }) { return .keep }
+        if !matching.isEmpty { return .gone }               // declined or canceled
+        // Nothing by that name: deleted, as long as the calendar was really read. An empty read (locked phone, no access
+        // yet) proves nothing, so the alarm stays.
+        return events.isEmpty ? .keep : .gone
+    }
+}
+
+extension ChumbyState {
+    // Puts the calendar's alarms in the list, sounding like your own, and says what that may cost (see SavePermit).
+    // Only calendar alarms are touched. One that's on and due within 24 hours is never dropped just because the plan stopped
+    // choosing it; it goes only when its event is deleted, declined or canceled, or the user skipped or re-timed that day.
+    // Without `keep`, every such alarm stays.
+    mutating func applyCalendar(_ wakes: [PlannedWake], settings: Alarm? = nil, keep: CalendarKeep? = nil) -> SavePermit {
+        var permit = SavePermit(calendarOnly: true)
+        let mine = alarms.filter { $0.isCalendar }
+        // A day with its own sound counts as different until the Chumby holds exactly that sound, marked as its own.
+        func sound(_ a: Alarm) -> String { [a.type, a.arg, a.param, a.param_description, a.duration, a.snooze, a.auto_dismiss, a.action, a.action_param].joined(separator: "\u{1}") }
+        let have = Set(mine.filter { $0.isOn }.map { $0.time + $0.name + ($0.isOwn ? "\u{2}" + sound($0) : "") })
+        let wanted = wakes.map { w -> String in
+            var own = Alarm(); if let o = w.own { own.takeSettings(from: o) }
+            return WakePlanner.minutes(w.wake) + WakePlanner.alarmName(w) + (w.own != nil ? "\u{2}" + sound(own) : "")
+        }
+        if have == Set(wanted) && mine.filter({ !$0.isOn }).isEmpty { return permit }
+        let want = Set(wakes.map { WakePlanner.minutes($0.wake) + WakePlanner.alarmName($0) })
+        // By the Chumby's clock, since that's the one it rings by.
+        let clock = chumbyNow ?? Date()
+        var held: [Alarm] = []
+        for a in mine where a.isOn && !want.contains(a.time + a.name) {
+            // Past: the plan decides.
+            guard let due = a.nextFire(after: clock) else { continue }
+            // More than a day off, the plan decides too, unless the calendar came back empty while it's switched on: a
+            // phone that couldn't read it (locked, access lapsed) proves nothing, and Thursday's wake stays.
+            guard due.timeIntervalSince(clock) <= 86400 else {
+                if let keep, keep.events.isEmpty, !keep.off { held.append(a) }
+                continue
+            }
+            switch keep?.verdict(a, due: due) ?? .keep {
+            case .keep: held.append(a)
+            case .userChose: permit.userOff.insert(a.key)
+            case .gone: permit.deliberate.insert(a.key)
+            }
+        }
+        let others = alarms.filter { !$0.isCalendar }
+        // The sound of your repeating alarm, or failing that any alarm with a real sound.
+        let real = others.filter { !$0.isPlaceholder && !$0.isHelper }
+        let sound = real.first { $0.isOn && $0.when != "once" } ?? real.first { $0.type == "audio" } ?? real.first
+        alarms = others
+        // Kept exactly as the Chumby holds it.
+        for a in held {
+            if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
+        }
+        for w in wakes {
+            var a = sound ?? Alarm()
+            if sound == nil, let tone = tones.first { a.type = "beep"; a.arg = tone; a.param_description = tone }
+            if let settings { a.takeSettings(from: settings) }
+            a.name = WakePlanner.alarmName(w); a.enabled = "1"; a.when = "once"; a.time = WakePlanner.minutes(w.wake)
+            // Guessed from your own alarm, it only borrows the sound; chosen settings keep their own after-action and backup.
+            // (Never the stock backup beeper: the Chumby saves backup 0 whatever it's sent.)
+            if settings == nil { a.action = ""; a.action_param = ""; a.backup = "0" }
+            // That day's own sound and snooze, kept by the Chumby because it's marked as its own.
+            if let o = w.own { a.takeSettings(from: o); a.backup = "0"; if a.backupDelay.isEmpty || a.backupDelay == "0" { a.backupDelay = "5" }; a.own = "1" } else { a.own = "" }
+            if let free = alarms.firstIndex(where: { $0.isPlaceholder }) { alarms[free] = a } else { alarms.append(a) }
+        }
+        return permit
     }
 }

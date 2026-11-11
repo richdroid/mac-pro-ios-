@@ -130,17 +130,18 @@ struct SendSection: View {
             PhotosPicker(selection: $picked, selectionBehavior: .ordered, matching: nil, preferredItemEncoding: .current, photoLibrary: .shared()) {
                 Label("Send photos and videos", systemImage: "photo.on.rectangle")
             }
+            .disabled(route == "public link")
             .onChange(of: picked) { _, items in
                 guard !items.isEmpty else { return }
                 sends.add(photos: items); picked = []
             }
             Button { importing = true } label: { Label("Send files", systemImage: "folder") }
+                .disabled(route == "public link")
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { r in
                     if case .success(let urls) = r, !urls.isEmpty { sends.add(files: urls) }
                 }
             ForEach(queue.jobs) { job in
-                SendJobRow(job: job, retry: { queue.retry(job) }, tint: macBlue)
-                    .swipeActions { if !job.busy || job.failed { Button("Remove", role: .destructive) { queue.remove(job) } } }
+                SendJobRow(job: job, retry: { queue.retry(job) }, tint: macBlue, remove: { withAnimation(Motion.quick) { queue.remove(job) } })
                     .transition(.opacity)
             }
         } header: { Text("Send to Mac") } footer: {
@@ -209,27 +210,35 @@ struct MacPowerSections: View {
         Section {
             Button { model.macPage = .health } label: {
                 HStack {
-                    Label(watch.active ? "Getting everything up" : "Everything on the Mac", systemImage: "checklist").foregroundStyle(Color.primary)
+                    Label(watch.active ? "Getting everything up" : "Everything on the Mac", systemImage: "checklist").lineLimit(1)
                     Spacer()
                     if let s = summary {
                         let bad = s.parts.filter(\.bad).count
                         HStack(spacing: 6) {
                             Circle().fill(bad == 0 ? Color.green : Color.red).frame(width: 8, height: 8)
-                            Text(bad == 0 ? "All \(s.parts.count) running" : "\(bad) need\(bad == 1 ? "s" : "") a look")
+                            Text(bad == 0 ? "All running" : "\(bad) need\(bad == 1 ? "s" : "") a look").lineLimit(1)
                         }
                         .font(.footnote).foregroundStyle(.secondary)
                     }
                     Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                 }
             }
+            // Plain, so the summary reads grey and the name white, as a Settings row does; the row is still the button.
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
             .id("power")
         } header: { Text("Health") } footer: {
             Text("Tailscale, the bridge, sessions, the TV link, the Letterboxd relay, the Chumby and OCLP, each with its state.")
         }
         .task {
             if let p = MacHealthView.posed(model.pose == "send" ? "healthbad" : "health") , !model.pose.isEmpty { summary = p.report; return }
-            summary = try? await model.api.macHealth()
+            while !Task.isCancelled {
+                if let r = try? await model.api.macHealth() { summary = r }
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
         }
+        // Back from its page: the summary says what that page last saw.
+        .onChange(of: model.macPage) { _, p in if p == nil { Task { if let r = try? await model.api.macHealth() { summary = r } } } }
         Section {
             Button(role: .destructive) { model.macPage = .restart } label: {
                 HStack { Text("Restart the Mac…"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
