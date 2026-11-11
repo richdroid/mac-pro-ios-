@@ -78,6 +78,17 @@ struct RootView: View {
         // The search tab opened with nothing typed (recent searches and what he's in the middle of), then typed into a key at a
         // time, as a finger does: each keystroke's first results timed in the stand-in Mac's log.
         if pose == "searchempty" { SearchStore.shared.forgetAll(); for t in ["Sample Series", "Heat"] { SearchStore.shared.remember(t) }; SearchStore.show(model, text: ""); return }
+        // An app found and opened from the search: the keyboard goes and the Remote comes up, nothing left behind.
+        if pose == "searchapp" {
+            Task {
+                SearchStore.show(model, text: "")
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                SendDraft.shared.text = "netflix"
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if let h = SearchStore.shared.results.top { SearchStore.shared.open(h, model: model, origin: nil) }
+            }
+            return
+        }
         if pose.hasPrefix("searchtype") {
             let words = pose == "searchtype-show" ? "alien s1e2" : pose == "searchtype-slip" ? "haet" : "heat"
             Task {
@@ -759,7 +770,8 @@ struct SendBar: View {
                 .contentTransition(.symbolEffect(.replace))
             if opensSearch {
                 Button { SearchStore.show(model) } label: {
-                    Text(draft.text.isEmpty ? "Search, or send a link" : draft.text).foregroundStyle(draft.text.isEmpty ? .tertiary : .primary)
+                    // Always its own words: the last search's words belong to the Search tab, not to this page.
+                    Text("Search, or send a link").foregroundStyle(.tertiary)
                         .lineLimit(1).frame(maxWidth: .infinity, minHeight: 50, alignment: .leading).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).accessibilityLabel("Search, or send a link")
@@ -794,7 +806,7 @@ struct SendBar: View {
                     draft.wantsFocus = false
                 }
             }
-            if draft.text.isEmpty {
+            if draft.text.isEmpty || opensSearch {
                 Button {
                     #if canImport(UIKit)
                     // A copied link goes to the TV; copied words are searched here, like typed ones.

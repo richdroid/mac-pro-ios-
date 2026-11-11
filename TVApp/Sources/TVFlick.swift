@@ -607,10 +607,12 @@ struct FlickScreen: View {
             // page pushed over the choosing (Richard, 2026-11-11: "the description like expansion shouldnt come via the
             // form of like another screen"). That page was the "Details" key's.
             if let t = blurbText ?? (blurbComing ? "" : nil) {
-                ExpandingText(text: t, lines: lines, reserves: true) {
+                ExpandingText(text: t, lines: lines, reserves: true, more: item.stremioRef != nil) {
                     if let ref = item.stremioRef { TitleFacts(type: ref.type, imdb: ref.imdb) }
                 }
                 .contentTransition(.opacity)
+                // Its facts asked for now, so opening it finds them there.
+                .task(id: item.id) { if let ref = item.stremioRef { _ = await TitleInfoStore.load(ref.type, ref.imdb) } }
             }
             HStack(spacing: 18) {
                 if let slug = item.slug, !slug.isEmpty {

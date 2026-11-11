@@ -89,6 +89,9 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-search-keys$x.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # The top result tapped (the streams come up, the keyboard must not come back), and an app found and opened.
+            film search-tap$x $d 11 16 $M -pose realsearch
+            film search-app$x $d 10 13 $M -pose searchapp
             # A film's words opened in place on its streams page, then closed again.
             film blurb$x $d 10 17 $M -tab 3 -pose blurbopen
             grep -E 'what=(search|focus)' /tmp/tv-home-applied.log > dist/search-timings$x.log 2>/dev/null || echo "no timings" > dist/search-timings$x.log

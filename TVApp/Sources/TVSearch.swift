@@ -356,12 +356,16 @@ final class SearchStore: ObservableObject {
         // Stable, so on a full tie a film (asked first) leads a show of the same name.
         hits = hits.enumerated().sorted { a, b in a.element.rank != b.element.rank ? a.element.rank > b.element.rank : a.offset < b.offset }.map(\.element)
         // The one he most likely means, when it's clear enough: an exact or strong match, or one of his own.
-        if let first = hits.first, first.match >= 72 || (first.mine > 0 && first.match >= 55) {
+        // A slip of a key on one of his own titles still makes it the one.
+        if let first = hits.first, first.match >= 72 || (first.mine > 0 && first.match >= 55) || (first.mine >= 30 && first.match >= 39) {
             r.top = first
             hits.removeFirst()
         }
         let limits: [SearchHit.Kind: Int] = [.show: 12, .film: 12, .music: 12, .video: 8, .app: 4]
-        for k in [SearchHit.Kind.show, .film, .music, .video, .app] {
+        // The groups in the order of their best: the kind he most likely means comes first (the top result's own first).
+        var order: [SearchHit.Kind] = r.top.map { [$0.kind] } ?? []
+        for h in hits where !order.contains(h.kind) { order.append(h.kind) }
+        for k in order {
             let g = hits.filter { $0.kind == k }.prefix(limits[k] ?? 8)
             if !g.isEmpty { r.groups.append(.init(kind: k, hits: Array(g))) }
         }
@@ -414,10 +418,16 @@ final class SearchStore: ObservableObject {
         }
         return MediaItem(title: i.title, subtitle: i.subtitle, art: i.art, id: imdb, kind: "series", about: i.about)
     }
+    // He's done something on the page (tapped, scrolled, sent): the keyboard is never brought back for him after that.
+    var touched = false
     func open(_ h: SearchHit, model: TVModel, origin: CGRect?) {
+        touched = true
         remember()
         if h.kind == .app {
+            // On the TV now: nothing left behind here, and the Remote to drive it, as every other "on the TV" does.
+            Keyboard.dismiss()
             model.tick(); model.opening(h.item.id); model.post("open", ["pkg": h.item.id])
+            model.tab = 0
             return
         }
         FlickCardButton.tap(model, Self.target(h), h.source, origin: origin)
@@ -440,6 +450,7 @@ final class SearchStore: ObservableObject {
     static func show(_ model: TVModel, text: String? = nil) {
         model.tick()
         if let text { SendDraft.shared.text = text }
+        shared.touched = false
         SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1
         model.browsing = nil
         model.tab = 6
@@ -534,16 +545,18 @@ struct SearchPage: View {
             }
         }
         .onChange(of: draft.text, initial: true) { _, t in store.typed(t, model: model) }
+        .onScrollPhaseChange { _, p in if p == .interacting { store.touched = true } }
+        // Continue watching there on the first frame, not cut in under the page later.
+        .task { await BrowseStore.shared(.stremio).loadHome() }
         // The tab opened straight (at launch, or before anything asked for the keyboard): the field takes it.
         .onAppear { if !draft.wantsFocus { draft.wantsFocus = true; draft.focusRequest += 1 } }
-        .animation(.easeOut(duration: 0.2), value: draft.text.isEmpty)
     }
     var link: Bool { SendBar.isLink(draft.text) }
     var field: some View {
         HStack(spacing: 8) {
             Image(systemName: link ? "paperplane" : "magnifyingglass").foregroundStyle(.secondary).padding(.leading, 14)
                 .contentTransition(.symbolEffect(.replace))
-            TextField("Shows, films, music, apps", text: $draft.text)
+            TextField(panes ? "Search" : "Shows, films, music, apps", text: $draft.text)
                 .focused($focused).autocorrectionDisabled().textInputAutocapitalization(.never)
                 .submitLabel(link ? .send : .search)
                 .hidesTabBar(while: focused, "search")
@@ -552,7 +565,8 @@ struct SearchPage: View {
                 }
                 // Return sends a link; for words it does the obvious thing with the top result, as a tap on it would.
                 .onSubmit {
-                    if link { model.send(draft.text); draft.text = "" }
+                    store.touched = true
+                    if link { Keyboard.dismiss(); model.send(draft.text); draft.text = "" }
                     else if let h = store.results.top { store.open(h, model: model, origin: nil) }
                     else { store.remember(); focused = false }
                 }
@@ -563,26 +577,29 @@ struct SearchPage: View {
                 // three seconds, and given back if it goes.
                 .task(id: draft.focusRequest) {
                     guard draft.wantsFocus else { return }
+                    store.touched = false
+                    focused = true
                     var held = 0
-                    for _ in 0..<14 {
-                        try? await Task.sleep(nanoseconds: 220_000_000)
-                        if Task.isCancelled { return }
+                    for _ in 0..<12 {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        // Never once he's tapped, scrolled or sent something, and never while a flick is up.
+                        if Task.isCancelled || store.touched || model.flicking != nil { break }
                         if !focused { focused = true; held = 0 } else { held += 1 }
-                        if held >= 8 { break }
+                        if held >= 6 { break }
                     }
                     draft.wantsFocus = false
                 }
             if draft.text.isEmpty {
-                Button {
-                    #if canImport(UIKit)
-                    if let s = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
-                        if SendBar.isLink(s) { model.send(s) } else { draft.text = s }
-                    } else { focused = true }
-                    #endif
-                } label: { Image(systemName: "doc.on.clipboard").frame(width: 44, height: 44) }
-                .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Use what you copied")
+                // The system's own paste key: no "Allow Paste" question each time. A link goes to the TV, words are searched.
+                PasteButton(payloadType: String.self) { got in
+                    guard let s = got.first?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return }
+                    Task { @MainActor in
+                        if SendBar.isLink(s) { store.touched = true; Keyboard.dismiss(); model.send(s) } else { draft.text = s }
+                    }
+                }
+                .labelStyle(.iconOnly).buttonBorderShape(.circle).tint(TVLook.accent.opacity(0.25)).padding(.trailing, 4)
             } else if link {
-                Button { model.send(draft.text); draft.text = "" } label: { Image(systemName: "arrow.up.circle.fill").font(.title2).frame(width: 44, height: 44) }
+                Button { store.touched = true; Keyboard.dismiss(); model.send(draft.text); draft.text = "" } label: { Image(systemName: "arrow.up.circle.fill").font(.title2).frame(width: 44, height: 44) }
                     .buttonStyle(.plain).foregroundStyle(TVLook.accent).accessibilityLabel("Send to the TV")
             } else {
                 Button { draft.text = ""; focused = true } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44) }
@@ -624,16 +641,16 @@ private struct ResultList: View {
     let part: Part
     @State private var opened: Set<SearchHit.Kind> = []
     // Open flat: the top result under the field on the left, every group on the right, so neither side sits empty.
-    func inPart(_ k: SearchHit.Kind) -> Bool { part != .left }
+    var showsGroups: Bool { part != .left }
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             if SendBar.isLink(results.text) {
                 if part != .right { LinkRow(text: results.text) }
             } else {
                 if part != .right, let top = results.top { TopHit(hit: top).transition(.opacity) }
-                ForEach(results.groups.filter { inPart($0.kind) }) { g in
+                ForEach(showsGroups ? results.groups : []) { g in
                     let open = opened.contains(g.kind)
-                    let few = g.kind == .app ? 4 : 4
+                    let few = 4
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .firstTextBaseline) {
                             RowTitle(SearchResults.title(g.kind))
@@ -667,6 +684,8 @@ private struct ResultList: View {
             }
         }
         .animation(.snappy(duration: 0.28), value: results)
+        // "Show all" is for these words: new words start folded again.
+        .onChange(of: SearchQuery.key(results.text)) { _, _ in if !opened.isEmpty { opened = [] } }
     }
 }
 
@@ -682,7 +701,7 @@ private struct TopHit: View {
                 HitArt(hit: hit, height: 118)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Top result").font(.caption.weight(.bold)).foregroundStyle(TVLook.accent).textCase(.uppercase)
+                    Text("Top result").font(.footnote.weight(.semibold)).foregroundStyle(TVLook.accent)
                     Text(hit.item.title).font(.title3.weight(.bold)).lineLimit(2).multilineTextAlignment(.leading)
                     Text(hit.line).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 4)
@@ -779,7 +798,7 @@ private struct LinkRow: View {
     @Environment(TVModel.self) var model
     let text: String
     var body: some View {
-        Button { model.send(text); SendDraft.shared.text = "" } label: {
+        Button { SearchStore.shared.touched = true; Keyboard.dismiss(); model.send(text); SendDraft.shared.text = "" } label: {
             HStack(spacing: 12) {
                 Image(systemName: "paperplane.fill").font(.title3).foregroundStyle(.black.opacity(0.85))
                     .frame(width: 48, height: 48).background(TVLook.accent, in: Circle())
@@ -849,10 +868,6 @@ private struct SearchSuggestions: View {
         VStack(alignment: .leading, spacing: 22) {
             if !continuing.isEmpty { list("Continue watching", continuing.map { hit($0, mine: 40) }, carryOn: true) }
             if !flicked.isEmpty { list("Recently flicked", flicked.map { hit($0, mine: 30) }, carryOn: false) }
-            if continuing.isEmpty && flicked.isEmpty {
-                Text("Shows, films, music, YouTube and the TV’s apps, all from here.")
-                    .font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 20)
-            }
         }
     }
     func list(_ title: String, _ hits: [SearchHit], carryOn: Bool) -> some View {
@@ -901,11 +916,13 @@ struct ExpandingText<Extra: View>: View {
     var lines = 4
     var font: Font = .subheadline
     var reserves = false
+    // There's more to open than the words (who's in it, who made it): "More" is offered even when the words fit.
+    var more = false
     @ViewBuilder var extra: () -> Extra
     @State private var open = false
     @State private var full: CGFloat = 0
     @State private var short: CGFloat = 0
-    var cut: Bool { full > short + 1 }
+    var cut: Bool { more || full > short + 1 }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(text).font(font).foregroundStyle(.secondary)
@@ -920,8 +937,11 @@ struct ExpandingText<Extra: View>: View {
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
             if open { extra().transition(.opacity.combined(with: .move(edge: .top))) }
-            if cut || open {
+            // Its line held from the start where the page reserves room, so working out whether it's needed never moves
+            // what's under it (the review of 829e7c4: the flick's heading dropped 10 pt after landing).
+            if cut || open || reserves {
                 Text(open ? "Less" : "More").font(.footnote.weight(.semibold)).foregroundStyle(TVLook.accent)
+                    .opacity(cut || open ? 1 : 0)
                     .contentTransition(.opacity)
             }
         }
@@ -954,7 +974,7 @@ private struct Lines: ViewModifier {
 }
 extension ExpandingText where Extra == EmptyView {
     init(text: String, lines: Int = 4, font: Font = .subheadline, reserves: Bool = false) {
-        self.init(text: text, lines: lines, font: font, reserves: reserves) { EmptyView() }
+        self.init(text: text, lines: lines, font: font, reserves: reserves, more: false) { EmptyView() }
     }
 }
 
