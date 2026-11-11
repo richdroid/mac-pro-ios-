@@ -164,7 +164,12 @@ final class AppModel: ObservableObject {
     // Only a settled page with something already on it is worth protecting: never the first reading, nor while a page is
     // open over a tab (a history waits on its chart; designer HOLD, 2026-11-08: the first status parked at launch left
     // the history in portrait on an empty chart).
-    private var parks: Bool { ScrollHold.holding && status != nil && history == nil && processes == nil && sessionScreen == nil && pendingSession == nil }
+    // Nor while a page slides on or off: a reading landing then redrew the tab mid-slide, on the main thread the slide
+    // needs, and changed the figures of a page still arriving. It lands as the move ends (NavTransit.onEnd).
+    private var parks: Bool {
+        if NavTransit.shared.active, status != nil, pendingSession == nil { return true }
+        return ScrollHold.holding && status != nil && history == nil && processes == nil && sessionScreen == nil && pendingSession == nil
+    }
     private func apply(_ fresh: Status) {
         // An app opening or quitting on the Mac, or one of his apps coming or going, slides its row in or out with the list's
         // own animation; put in at once, the rows under it jumped a row's height in one frame (designer, CI 836207d: the
@@ -177,7 +182,7 @@ final class AppModel: ObservableObject {
         // Status's histories read ahead, so a tile opens onto a drawn chart.
         if tab == 0 { let api = api; Task { await TrendCache.prefetch(api, fresh) } }
         // Status's health chip, from a Mac whose status doesn't count its parts yet: read from its Health now and then.
-        if tab == 0, fresh.healthBad == nil, pose.isEmpty { HealthSummary.shared.refresh(api) }
+        if tab == 0, fresh.healthBad == nil { HealthSummary.shared.refresh(api) }
         AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
     }
     private func releaseHeld() {
@@ -188,6 +193,13 @@ final class AppModel: ObservableObject {
     func start() {
         stop()
         ScrollHold.onRelease = { [weak self] in self?.releaseHeld() }
+        // What waited for a slide lands as it ends, simply there: figures rolling into place on a page that has only just
+        // arrived read as the page still settling (Richard's recording, 2026-11-10).
+        NavTransit.shared.onEnd = { [weak self] in
+            guard !ScrollHold.holding else { return }
+            var still = Transaction(); still.disablesAnimations = true
+            withTransaction(still) { self?.releaseHeld() }
+        }
         loops = [
             // Everything, every 10 seconds; the live numbers every second in between. While the Mac can't be reached it's
             // asked every 3 s at most: the live numbers stop then, and only this brings the app back, which took up to a

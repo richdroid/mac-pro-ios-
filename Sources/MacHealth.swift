@@ -321,7 +321,9 @@ struct MacHealthView: View {
                 MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id), starting: startingWindow).place(id)
             }
         } header: {
-            if heading {
+            // While the Mac is away nothing is known of its parts: the heading says so too, not what was last read.
+            if heading, down { Text("Waiting for the Mac") }
+            else if heading {
                 Text(report.map { r in
                     let n = r.parts.filter(\.bad).count
                     return n == 0 ? "All running" : startingWindow ? "\(n) still starting" : "\(n) need\(n == 1 ? "s" : "") a look"

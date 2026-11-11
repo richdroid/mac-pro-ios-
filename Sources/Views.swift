@@ -762,9 +762,12 @@ struct HeroChips: View {
     var health: (Color, String) {
         func look(_ n: Int) -> String { "\(n) need\(n == 1 ? "s" : "") a look" }
         if let n = parts, n > 0 { return (.orange, look(n)) }
-        guard let alerts, parts != nil || !alerts.isEmpty else { return (.gray, "Checking") }
-        if alerts.isEmpty { return (.green, "All running") }
-        return (alerts.contains { $0.level == "critical" } ? .red : .orange, look(alerts.count))
+        let said = alerts ?? []
+        if !said.isEmpty { return (said.contains { $0.level == "critical" } ? .red : .orange, look(said.count)) }
+        // Nothing said yet, by the status or by the Mac's Health (a Mac that can't say how its parts are, an older
+        // bridge, is judged by its alerts alone).
+        if alerts == nil, parts == nil, !summary.cantSay { return (.gray, "Checking") }
+        return (.green, "All running")
     }
     var body: some View {
         if offline {
@@ -1832,13 +1835,15 @@ struct SignInView: View {
 final class HealthSummary: ObservableObject {
     static let shared = HealthSummary()
     @Published private(set) var bad: Int?
+    // Asked, and the Mac had no answer to give.
+    @Published private(set) var cantSay = false
     private var asked = Date.distantPast
-    func set(_ r: MacReport?) { let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n } }
+    func set(_ r: MacReport?) { let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n }; if r != nil, cantSay { cantSay = false } }
     // For Status, from a Mac whose status doesn't carry the count: asked once a minute at most.
     func refresh(_ api: API) {
         guard Date().timeIntervalSince(asked) > 60 else { return }
         asked = Date()
-        Task { if let r = try? await api.macHealth() { set(r) } }
+        Task { if let r = try? await api.macHealth() { set(r) } else if bad == nil, !cantSay { cantSay = true } }
     }
 }
 
