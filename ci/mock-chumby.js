@@ -206,8 +206,13 @@ http.createServer((q, s) => {
     return;
   }
   if (tvPose(q, s)) return;
-  const scene = (q.url.match(/^\/(stremio|youtube|ending)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(stremio|youtube|ending|longabout)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
+  // A film whose description runs well past four lines, for the words opened in place (the TV search branch's films).
+  if (scene === 'longabout' && q.url.startsWith('/api/tv/stremio-meta')) {
+    s.setHeader('content-type', 'application/json');
+    return s.end(JSON.stringify({ about: 'A made-up crew of careful thieves plans one last job in a city that never seems to sleep, while a detective who has given everything to the work closes in on them. Both men are the best at what they do, and both know it. Over one long week the two circle each other through the streets, the docks and the diners at four in the morning, until a single meeting over coffee changes what either of them thought the job was for. Written for the screenshot, and long enough to be cut at four lines.', episodes: [] }));
+  }
   if (scene && q.url === '/api/tv/status') { s.setHeader('content-type', 'application/json'); return s.end(tvScene(scene)); }
   // Skips take the real player a few seconds, so the shot catches them still on their way.
   if (scene && q.method === 'POST' && q.url === '/api/tv/player-seek') { s.setHeader('content-type', 'application/json'); return setTimeout(() => s.end(JSON.stringify({ ok: true, position: 7630000, duration: 8000000 })), 6000); }

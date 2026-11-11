@@ -37,6 +37,8 @@ jobs:
           exec > >(tee dist/sim.log) 2>&1
           DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
           xcrun simctl list devices available | grep -m1 "$DEVICE"
+          # No hardware keyboard: open upright (regular width) the simulator otherwise keeps the software one away.
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
           xcrun simctl boot "$DEVICE"
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
@@ -93,7 +95,7 @@ jobs:
             film search-tap$x $d 11 16 $M -pose realsearch
             film search-app$x $d 10 13 $M -pose searchapp
             # A film's words opened in place on its streams page, then closed again.
-            film blurb$x $d 10 17 $M -tab 3 -pose blurbopen
+            film blurb$x $d 10 17 $M/longabout -tab 3 -pose blurbopen
             grep -E 'what=(search|focus)' /tmp/tv-home-applied.log > dist/search-timings$x.log 2>/dev/null || echo "no timings" > dist/search-timings$x.log
           }
           $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5

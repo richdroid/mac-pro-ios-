@@ -422,6 +422,8 @@ final class SearchStore: ObservableObject {
     var touched = false
     func open(_ h: SearchHit, model: TVModel, origin: CGRect?) {
         touched = true
+        // No keyboard asked for any more, by anything: it rose over the Remote open upright (the review of 2f4e35b).
+        SendDraft.shared.wantsFocus = false
         remember()
         if h.kind == .app {
             // On the TV now: nothing left behind here, and the Remote to drive it, as every other "on the TV" does.
@@ -554,6 +556,8 @@ struct SearchPage: View {
         }
         .onChange(of: draft.text, initial: true) { _, t in store.typed(t, model: model) }
         .onScrollPhaseChange { _, p in if p == .interacting { store.touched = true } }
+        // Another tab: the field lets the keyboard go, so it never rises over the page he went to.
+        .onChange(of: model.tab) { _, t in if t != 6, focused { focused = false } }
         // Continue watching there on the first frame, not cut in under the page later.
         .task { await BrowseStore.shared(.stremio).loadHome() }
         // The tab opened straight (at launch, or before anything asked for the keyboard): the field takes it.
@@ -594,7 +598,7 @@ struct SearchPage: View {
                         // field is rebuilt): the request stays for the field that replaces it, which carries on with it.
                         if Task.isCancelled { return }
                         // Never once he's tapped, scrolled or sent something, and never while a flick is up.
-                        if store.touched || model.flicking != nil { break }
+                        if store.touched || model.flicking != nil || model.tab != 6 { break }
                         if !focused { focused = true; held = 0 } else { held += 1 }
                         if held >= 6 { break }
                     }
@@ -706,25 +710,28 @@ private struct TopHit: View {
     @ObservedObject private var store = SearchStore.shared
     let hit: SearchHit
     @State private var place = FrameBox()
+    // Folded the keyboard leaves little room: the card is compact, so the next group's first row shows under it.
+    @Environment(\.horizontalSizeClass) private var size
+    var compact: Bool { size == .compact }
     var body: some View {
         Button { store.open(hit, model: model, origin: place.rect) } label: {
             HStack(alignment: .top, spacing: 14) {
-                HitArt(hit: hit, height: 118)
+                HitArt(hit: hit, height: compact ? 76 : 118)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: compact ? 3 : 5) {
                     Text("Top result").font(.footnote.weight(.semibold)).foregroundStyle(TVLook.accent)
-                    Text(hit.item.title).font(.title3.weight(.bold)).lineLimit(2).multilineTextAlignment(.leading)
-                    Text(hit.line).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer(minLength: 4)
+                    Text(hit.item.title).font(compact ? .headline : .title3.weight(.bold)).lineLimit(compact ? 1 : 2).multilineTextAlignment(.leading)
+                    if !compact { Text(hit.line).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
+                    Spacer(minLength: compact ? 2 : 4)
                     Label(hit.action, systemImage: hit.kind == .app ? "tv" : "play.fill")
                         .font(.subheadline.weight(.semibold)).foregroundStyle(.black.opacity(0.85))
-                        .padding(.horizontal, 14).frame(height: 36)
+                        .padding(.horizontal, 14).frame(height: compact ? 30 : 36)
                         .background(TVLook.accent, in: Capsule())
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(12)
-            .frame(minHeight: 142)
+            .padding(compact ? 10 : 12)
+            .frame(minHeight: compact ? 96 : 142)
             .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
         }
@@ -878,6 +885,14 @@ private struct SearchSuggestions: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             if !continuing.isEmpty { list("Continue watching", continuing.map { hit($0, mine: 40) }, carryOn: true) }
+            // Its place held from the first frame while Stremio's home comes, so it never cuts in under the page.
+            else if home.rows.isEmpty && !home.failed {
+                VStack(alignment: .leading, spacing: 6) {
+                    RowTitle("Continue watching").padding(.horizontal, 20)
+                    VStack(spacing: 4) { ForEach(0..<3, id: \.self) { _ in HitRowWait() } }.padding(.horizontal, 12)
+                }
+                .transition(.opacity)
+            }
             if !flicked.isEmpty { list("Recently flicked", flicked.map { hit($0, mine: 30) }, carryOn: false) }
         }
     }
@@ -935,9 +950,31 @@ struct ExpandingText<Extra: View>: View {
     @State private var short: CGFloat = 0
     var cut: Bool { more || full > short + 1 }
     var body: some View {
+        // The room a page reserves (the lines and the More line) is held by an unseen copy under the words, so "More"
+        // sits right under the last line and any spare room is below it, never between (the review of 2f4e35b: open
+        // flat, a one-line description, three empty lines, then "More" at the foot).
+        ZStack(alignment: .topLeading) {
+            if reserves && !open {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(" ").font(font).lineLimit(lines, reservesSpace: true)
+                    Text("More").font(.footnote.weight(.semibold))
+                }
+                .hidden().accessibilityHidden(true)
+            }
+            words
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard cut || open else { return }
+            model.tick()
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) { open.toggle() }
+        }
+        .modifier(ExpandingTail(cut: cut, open: $open, text: text))
+    }
+    var words: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(text).font(font).foregroundStyle(.secondary)
-                .modifier(Lines(limit: open ? nil : lines, reserves: reserves))
+                .modifier(Lines(limit: open ? nil : lines, reserves: false))
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if !open { short = $0 } }
@@ -948,20 +985,19 @@ struct ExpandingText<Extra: View>: View {
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
             if open { extra().transition(.opacity.combined(with: .move(edge: .top))) }
-            // Its line held from the start where the page reserves room, so working out whether it's needed never moves
-            // what's under it (the review of 829e7c4: the flick's heading dropped 10 pt after landing).
-            if cut || open || reserves {
+            if cut || open {
                 Text(open ? "Less" : "More").font(.footnote.weight(.semibold)).foregroundStyle(TVLook.accent)
-                    .opacity(cut || open ? 1 : 0)
                     .contentTransition(.opacity)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard cut || open else { return }
-            model.tick()
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) { open.toggle() }
-        }
+    }
+}
+private struct ExpandingTail: ViewModifier {
+    let cut: Bool
+    @Binding var open: Bool
+    let text: String
+    func body(content: Content) -> some View {
+        content
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(cut || open ? .isButton : [])
         .accessibilityHint(cut ? (open ? "Shows less" : "Shows the whole description") : "")
