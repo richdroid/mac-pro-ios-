@@ -88,6 +88,8 @@ struct RemoteScreenView: View {
     // 2026-11-07: "use the iphone duo api").
     @State private var hingeFolded: Bool?
     @State private var shownAt = Date()
+    // The display has been its real size long enough for changes of plan to be moves rather than the opening layout.
+    @State private var settled = false
 
     enum ClipState: Equatable {
         case idle, working, done, failed(String)
@@ -375,6 +377,27 @@ struct RemoteScreenView: View {
                         p.trackpad = CGRect(x: side, y: p.modRow.maxY + 10, width: w - side * 2, height: max(h - bottom - 8 - p.modRow.maxY - 10, 60))
                     }
                 }
+                // The column can't hold the tools (the cover's is 84 pt wide, for eleven of them), so the picture ran the
+                // full width with the camera's hole sitting on the Mac's top right corner, over whatever was there.
+                // Instead the tools' row goes up beside the camera, in line with it, as a MacBook has its camera in the
+                // bezel above the screen, and the picture starts under it at its full width: nothing of the Mac is under
+                // the hole, no black band is left, and the trackpad gives up 34 pt, not the picture.
+                if p.tools.isEmpty, let i = fold.covered.firstIndex(where: { $0.intersects(lid) }) {
+                    let cam = i < fold.cores.count ? fold.cores[i] : o
+                    let rowRight = right ? cam.minX - 6 : w - side, rowLeft = right ? side : cam.maxX + 6
+                    if cam.minY >= top, cam.maxY < h * 0.2, rowRight - rowLeft >= 340 {
+                        p.fnRow = CGRect(x: rowLeft, y: max(cam.midY - 16, top + 4), width: rowRight - rowLeft, height: 32)
+                        let under = max(cam.maxY, p.fnRow.maxY) + 8
+                        if keyboard > 0 {
+                            let room = fitWidth(w, maxHeight: max(p.modRow.minY - 8 - under, 60))
+                            p.picture = CGRect(x: (w - room.width) / 2, y: under, width: room.width, height: room.height)
+                        } else {
+                            p.picture = CGRect(x: (w - pic.width) / 2, y: under, width: pic.width, height: pic.height)
+                            p.modRow.origin.y = p.picture.maxY + 6
+                            p.trackpad = CGRect(x: side, y: p.modRow.maxY + 10, width: w - side * 2, height: max(h - bottom - 8 - p.modRow.maxY - 10, 60))
+                        }
+                    }
+                }
             }
         case .book:
             // A MacBook opened across the fold: the left page is the screen alone, as large as the page allows; the right
@@ -491,7 +514,7 @@ struct RemoteScreenView: View {
             // The first-use card sits over the picture's touch surface, so its Got it can be pressed: under it, the picture
             // took the tap as a click on the Mac and the card could never be put away.
             if showHint, screen.hasPicture { place(gestureHint, p.picture) }
-            place(functionRow, p.fnRow)
+            place(functionRow(tight: p.fnRow.width > 0 && p.fnRow.width < 400), p.fnRow)
             // Folded beside the camera, the same tools down the side, each in its own place.
             ForEach(Array(zip(ScreenTool.allCases, p.tools)), id: \.0) { t, r in
                 tool(t).frame(width: r.width, height: r.height).position(x: r.midX, y: r.midY)
@@ -505,7 +528,15 @@ struct RemoteScreenView: View {
                 .frame(width: 1, height: 1).opacity(0.01)
         }
         .frame(width: area.width, height: area.height, alignment: .topLeading)
-        .animation(planMotion, value: p)
+        // Not while the Screen is opening: its first layout is of an empty display (0 × 0, then the real size a moment
+        // later, then the camera's and hinge's regions), and moving from that one to the real one grew every part out of
+        // the top-left corner. The parts are simply put in place until the display has been its real size for a moment.
+        .animation(settled ? planMotion : nil, value: p)
+        .task(id: area.width > 1 && area.height > 1) {
+            guard area.width > 1, area.height > 1, !settled else { return }
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            if !Task.isCancelled { settled = true }
+        }
     }
     func place<V: View>(_ v: V, _ r: CGRect) -> some View {
         Placed(content: v, rect: r)
@@ -513,24 +544,25 @@ struct RemoteScreenView: View {
 
     // MARK: The function row
     // Where a MacBook's function keys are: the Mac's own shortcuts on the left, this screen's tools and Done on the right.
-    var functionRow: some View {
-        HStack(spacing: 5) {
-            ForEach([ScreenTool.esc, .missionControl, .terminal, .spotlight, .switchApps], id: \.self) { tool($0) }
-            Spacer(minLength: 6)
+    // `tight`: beside the cover's camera the row is 370 pt, not 446, so its gaps and its keys' least width come in a little.
+    func functionRow(tight: Bool) -> some View {
+        HStack(spacing: tight ? 3 : 5) {
+            ForEach([ScreenTool.esc, .missionControl, .terminal, .spotlight, .switchApps], id: \.self) { tool($0, tight: tight) }
+            Spacer(minLength: tight ? 2 : 6)
             ForEach([ScreenTool.keyboard, .copy, .paste, .signIn, .fit, .done], id: \.self) { tool($0) }
         }
     }
     var showsFit: Bool { zoomed || fillZoom > 1.01 }
-    @ViewBuilder func tool(_ t: ScreenTool) -> some View {
+    @ViewBuilder func tool(_ t: ScreenTool, tight: Bool = false) -> some View {
         switch t {
-        case .esc: fnKey("esc", nil, "Escape") { keys.tap(MacKey.esc) }
-        case .missionControl: fnKey("", "rectangle.3.group", "Mission Control") { keys.tap(MacKey.up, with: [MacKey.control]) }
+        case .esc: fnKey("esc", nil, "Escape", tight: tight) { keys.tap(MacKey.esc) }
+        case .missionControl: fnKey("", "rectangle.3.group", "Mission Control", tight: tight) { keys.tap(MacKey.up, with: [MacKey.control]) }
         // Terminal, opened on the Mac. A window glyph here sent App Exposé, which he read as Terminal and got every window
         // instead (Richard, 2026-11-07: "terminal button works like show all windows button"). App Exposé is still
         // three fingers down.
-        case .terminal: fnKey("", "apple.terminal", "Open Terminal") { openTerminal() }
-        case .spotlight: fnKey("", "magnifyingglass", "Spotlight") { keys.tap(MacKey.space, with: [MacKey.command]) }
-        case .switchApps: fnKey("", "square.grid.3x1.below.line.grid.1x2", "Switch apps") { keys.switchApps() }
+        case .terminal: fnKey("", "apple.terminal", "Open Terminal", tight: tight) { openTerminal() }
+        case .spotlight: fnKey("", "magnifyingglass", "Spotlight", tight: tight) { keys.tap(MacKey.space, with: [MacKey.command]) }
+        case .switchApps: fnKey("", "square.grid.3x1.below.line.grid.1x2", "Switch apps", tight: tight) { keys.switchApps() }
         case .keyboard: toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Dictate or type", on: typing, compact: true) { typing.toggle() }
         case .copy: clipButton(paste: false, compact: true)
         case .paste: clipButton(paste: true, compact: true)
@@ -539,13 +571,13 @@ struct RemoteScreenView: View {
         case .done: toolButton("xmark", "Done", on: true, compact: true) { model.screenOpen = false }
         }
     }
-    func fnKey(_ label: String, _ icon: String?, _ a11y: String, action: @escaping () -> Void) -> some View {
+    func fnKey(_ label: String, _ icon: String?, _ a11y: String, tight: Bool = false, action: @escaping () -> Void) -> some View {
         Button { tick(.light); action() } label: {
             Group {
                 if let icon { Image(systemName: icon).font(.system(size: 13, weight: .semibold)) }
                 else { Text(label).font(.system(size: 12, weight: .semibold)) }
             }
-            .frame(minWidth: 30, maxWidth: 44, minHeight: 32).contentShape(Rectangle())
+            .frame(minWidth: tight ? 27 : 30, maxWidth: 44, minHeight: 32).contentShape(Rectangle())
         }
         .buttonStyle(MacKeyStyle()).accessibilityLabel(a11y)
     }
