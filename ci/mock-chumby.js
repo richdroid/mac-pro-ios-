@@ -122,6 +122,9 @@ const liveMacLive = () => { const m = liveMac(); return JSON.stringify({ uptime:
 http.createServer((q, s) => macRoutes(q, s, liveMacStatus, liveMacLive)).listen(9021, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
+// The same Mac opened while its display is asleep or waking, as Screen Sharing really answers then (2026-11-10): a 2 x 2
+// rectangle for the first whole-screen request, then only what changes, and the whole screen only when asked again.
+http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9012, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, true));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
 http.createServer((q, s) => { s.statusCode = 401; s.setHeader('content-type', 'application/json'); s.end('{"error":"Sign in to the Mac Pro."}'); }).listen(9003, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
@@ -791,7 +794,10 @@ function tvReal(q, s, path, query, json) {
 // A stand-in for the Mac's Screen Sharing. The app's pixel format is honoured (32-bit BGRX or 16-bit 5-6-5). With
 // `slow`, it behaves as the real Mac does over his link (2026-11-07): the whole screen as one ZRLE rectangle, a busy
 // wallpaper so it's about as big as the Mac's, and everything sent at 358 KB/s, the speed his sessions showed.
-function mockScreen(req, sock, slow = false) {
+// With `sleepy`, the first whole-screen request gets a 2 x 2 rectangle, as from a Mac whose display was asleep.
+function mockScreen(req, sock, slow = false, sleepy = false) {
+  const busy = slow || sleepy;
+  let dozing = sleepy;
   const key = req.headers['sec-websocket-key'];
   if (!key || !req.url.startsWith('/novnc/ws/vnc')) return sock.destroy();
   const accept = require('crypto').createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
@@ -832,11 +838,11 @@ function mockScreen(req, sock, slow = false) {
     for (let y = 0; y < h; y++) {
       const Y = y0 + y, row = y * w;
       if (Y < band.y || Y >= band.y + band.h) {
-        if (slow) for (let x = 0; x < w; x++) out[row + x] = wall(x0 + x, Y); else out.fill(side, row, row + w);
+        if (busy) for (let x = 0; x < w; x++) out[row + x] = wall(x0 + x, Y); else out.fill(side, row, row + w);
         continue;
       }
       out.fill(bg, row, row + w);
-      if (slow) for (let x = 0; x < w; x++) { const X = x0 + x; if (X < band.x || X >= band.x + band.w) out[row + x] = wall(X, Y); }
+      if (busy) for (let x = 0; x < w; x++) { const X = x0 + x; if (X < band.x || X >= band.x + band.w) out[row + x] = wall(X, Y); }
       // A line every 56 px, 22 px tall and of varying length; the one in the middle bright, the rest dim.
       const v = Y - band.y + scroll, k = Math.floor(v / 56);
       if (v % 56 >= 22) continue;
@@ -925,7 +931,8 @@ function mockScreen(req, sock, slow = false) {
       const m = msgs.subarray(0, need); msgs = msgs.subarray(need);
       if (t === 0) bpp = m[4] === 16 ? 16 : 32;
       if (t === 3) {
-        if (m[1] === 0) { count++; sent = scroll; update(0, 0, W, H, scroll); }
+        if (m[1] === 0 && dozing) { dozing = false; update(0, 0, 2, 2, scroll); }
+        else if (m[1] === 0) { count++; sent = scroll; update(0, 0, W, H, scroll); }
         else { pending++; answer(); }
       }
     }

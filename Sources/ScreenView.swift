@@ -61,8 +61,6 @@ struct RemoteScreenView: View {
     // own duration and curve, so the row riding on it moves with it (Richard, 2026-11-10: "when i select keyboard in
     // folded portrait from the toolbar theres a weird animation").
     @State private var planMotion = RemoteScreenView.posture
-    // The build's film of the keyboard as it was, for comparison (-kbOld YES).
-    static let kbOld = UserDefaults.standard.bool(forKey: "kbOld")
     @State private var dockOpen = true
     @State private var loginPassword = ""
     @State private var loggingIn = false
@@ -104,7 +102,7 @@ struct RemoteScreenView: View {
             let (f, force) = effectiveFold(fold(full), full.size)
             let insets = ScreenInsets.current
             let p = Self.plan(area: full.size, fold: f, aspect: aspect, top: insets.top, bottom: insets.bottom,
-                              keyboard: Self.kbOld ? (typing ? keyboardHeight : 0) : keyboardHeight, force: force)
+                              keyboard: keyboardHeight, force: force)
             let _ = RegionLog.note("plan \(p.kind) top \(Int(insets.top)) picture \(p.picture.debugDescription) fnRow \(p.fnRow.debugDescription) tools \(p.tools.count) \(p.tools.first?.debugDescription ?? "") dock \(p.dock.debugDescription) keyboard \(Int(typing ? keyboardHeight : 0))")
             stage(p, area: full.size)
                 // A change of posture puts the system keyboard away: it was left up over the open display, covering the
@@ -165,7 +163,7 @@ struct RemoteScreenView: View {
             guard let end = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
             let screenHeight = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.bounds.height }.first ?? end.maxY
             let height = max(0, screenHeight - end.minY)
-            guard typing || height == 0 || Self.kbOld else { return }
+            guard typing || height == 0 else { return }
             followKeyboard(n, to: height)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { n in
@@ -195,7 +193,6 @@ struct RemoteScreenView: View {
     // the plan change it causes; the posture's spring again once it's done.
     func followKeyboard(_ n: Notification, to height: CGFloat) {
         guard abs(height - keyboardHeight) > 0.5 else { return }
-        if Self.kbOld { withAnimation(Self.posture) { keyboardHeight = height }; return }
         let d = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double).flatMap { $0 > 0 ? $0 : nil } ?? 0.25
         let motion = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: d)
         planMotion = motion
@@ -505,10 +502,10 @@ struct RemoteScreenView: View {
                 .frame(width: 1, height: 1).opacity(0.01)
         }
         .frame(width: area.width, height: area.height, alignment: .topLeading)
-        .animation(Self.kbOld ? Self.posture : planMotion, value: p)
+        .animation(planMotion, value: p)
     }
     func place<V: View>(_ v: V, _ r: CGRect) -> some View {
-        Placed(content: v, rect: r, old: Self.kbOld)
+        Placed(content: v, rect: r)
     }
 
     // MARK: The function row
@@ -660,13 +657,14 @@ struct RemoteScreenView: View {
             let before: String
             do { before = try await api.clipboard() } catch { setClip(false, .failed("Couldn’t reach the Mac")); return }
             screen.key(0x63, with: [MacKey.command])
-            // The Mac takes a moment to copy; the first change is the copy, or, if nothing changes, the same text again.
-            var text = before
-            for _ in 0..<6 {
+            // The Mac takes a moment to copy. Only a clipboard that changed is a copy: with nothing selected the Mac's
+            // clipboard stays as it was, and handing that over said "done" for a copy that never happened.
+            var text: String?
+            for _ in 0..<8 {
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 if let t = try? await api.clipboard(), t != before { text = t; break }
             }
-            guard !text.isEmpty else { setClip(false, .failed("Nothing was copied on the Mac")); return }
+            guard let text, !text.isEmpty else { setClip(false, .failed("Nothing new was copied on the Mac")); return }
             #if canImport(UIKit)
             UIPasteboard.general.string = text
             #endif
@@ -2572,11 +2570,10 @@ struct HingeReader: ViewModifier {
 struct Placed<V: View>: View {
     let content: V
     let rect: CGRect
-    var old = false
     @State private var last: CGRect?
     var body: some View {
         let shown = !rect.isEmpty
-        let r = shown || old ? rect : (last ?? rect)
+        let r = shown ? rect : (last ?? rect)
         content.frame(width: max(r.width, 0), height: max(r.height, 0))
             .opacity(shown ? 1 : 0)
             .allowsHitTesting(shown)
