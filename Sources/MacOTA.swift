@@ -460,16 +460,6 @@ enum IconCache {
     }
 }
 
-// In Settings: whether the app offers waiting updates as it opens.
-struct OTASettings: View {
-    @AppStorage(OTAInstaller.offerKey) private var offer = false
-    // A row in Settings' Behaviour card; its note is that card's footer.
-    static let note = "New builds of your apps show as a number on the Apps tab and on the app’s icon. Ask about updates on opening offers them as the app opens too."
-    var body: some View {
-        Toggle("Ask about updates on opening", isOn: $offer)
-    }
-}
-
 // The count on the app's home-screen icon: the updates waiting, nothing else.
 enum AppBadge {
     static func set(_ n: Int) {

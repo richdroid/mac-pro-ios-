@@ -220,7 +220,7 @@ struct MacPowerSections: View {
                 HStack { Text("Restart the Mac…"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
             }
         } header: { Text("Health") } footer: {
-            Text("Tailscale, the bridge, sessions, the TV link, the Letterboxd relay, the Chumby and OCLP, each with its state. A restart checks first that the Mac will come back by itself.")
+            Text("A restart checks first that the Mac will come back by itself.")
         }
         .task {
             if let p = MacHealthView.posed(model.pose == "send" ? "healthbad" : "health") , !model.pose.isEmpty { summary = p.report; return }
