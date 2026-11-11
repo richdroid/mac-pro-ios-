@@ -2767,7 +2767,6 @@ struct PlayingTab: View {
 struct FilmCard: View {
     @Environment(TVModel.self) var model
     let film: Film
-    @State private var place = FrameBox()
     var body: some View {
         Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio) } label: {
             VStack(alignment: .leading, spacing: 6) {
@@ -2780,8 +2779,6 @@ struct FilmCard: View {
                 .frame(width: 118, alignment: .leading)
             }
         }.buttonStyle(PressCard()).accessibilityLabel(film.title)
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
-        .modifier(ShelfFlick(item: film.media, source: .stremio, width: 118, rect: { [place] in place.rect ?? .zero }))
     }
 }
 struct FilmRow: View {

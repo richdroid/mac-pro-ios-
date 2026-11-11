@@ -430,7 +430,7 @@ struct FlickScreen: View {
             .task { await opened() }
             // The picture the Remote shows while the TV starts (an episode's still, which the rows never showed), fetched
             // and shrunk while he's choosing, so at the pick it's in memory with its soft version.
-            .task(id: screenURL) { if let u = screenURL { _ = await ImageStore.shared.load(u); if softImage == nil, let h = ImageStore.shared.cached(u) { softImage = await ImageStore.shrunk(h, 16) } } }
+            .task(id: screenURL) { if let u = screenURL { _ = await ImageStore.shared.load(u); if let h = ImageStore.shared.cached(u) { softImage = await ImageStore.shrunk(h, 16) } } }
             .onAppear { FlickHaptic.warm() }
     }
     var screen: some View {
@@ -467,6 +467,10 @@ struct FlickScreen: View {
             // and fades with the rest of this screen: taken off as the move began, iOS kept its glass disc and dropped the
             // glyph, an empty circle until the Remote came.
             .toolbar { if barShown { bar } }
+            // The whole bar, its glass with it, goes as the move begins: left to fade with the screen, the ✕ sat over the
+            // Remote's title for 0.4 s after the landing.
+            .toolbarVisibility(toRemote ? .hidden : .automatic, for: .navigationBar)
+            .animation(.easeOut(duration: 0.15), value: toRemote)
             .environment(\.pageBar, pageBar)
             // Open, the show's one big key sits at the left pane's foot, level with Back at the right's: the same height,
             // the same baseline.
@@ -567,17 +571,14 @@ struct FlickScreen: View {
             Color.black
             Color.clear
                 .overlay {
+                    // The picture at 16 px (the Remote's own soft ground, fetched as the page opens), scaled up: a deep
+                    // blur at no cost. A live 32-point blur over the whole screen cost the page its frames.
                     Group {
-                        if let image = target.image { image.resizable().scaledToFill() }
-                        else {
-                            Art(url: URL(string: episode?.thumb.isEmpty == false ? episode!.thumb : shown.art)) { $0.resizable().scaledToFill() } placeholder: { Color.clear }
-                                .id(episode?.id ?? shown.art)
-                                .transition(.opacity)
-                        }
+                        if let soft = softImage { Image(tv: soft).resizable().interpolation(.high).scaledToFill().transition(.opacity) }
+                        else if let image = target.image { image.resizable().scaledToFill().blur(radius: 32) }
                     }
-                    // A fixed blur: animating its radius redraws the whole screen's blur every frame.
-                    .blur(radius: 32)
                     .scaleEffect(1.1)
+                    .animation(.easeOut(duration: 0.3), value: softImage != nil)
                 }
                 .clipped()
                 // Beside the side bar the strip under it is plain black, so the art's tint dies away before the page's
@@ -939,9 +940,14 @@ struct FlickScreen: View {
     // The running time, for the Resume chip's time: from Stremio's own catalogue, the episode's if it has one.
     func loadRuntime() async {
         guard runtime == nil, hasResume, let ref = item.stremioRef,
-              let d = await TVBridge.data(URL(string: "https://v3-cinemeta.strem.io/meta/\(ref.type)/\(ref.imdb).json"), timeout: 10, cached: true),
-              let meta = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["meta"] as? [String: Any] else { return }
+              let d = await TVBridge.data(URL(string: "https://v3-cinemeta.strem.io/meta/\(ref.type)/\(ref.imdb).json"), timeout: 10, cached: true) else { return }
         let video = episode?.id ?? ref.video
+        // A series' whole catalogue entry is large: read off the main thread, so the page never stalls on it.
+        guard let ms = await Task.detached(priority: .userInitiated, operation: { Self.runtime(in: d, video: video) }).value else { return }
+        withAnimation(.easeOut(duration: 0.2)) { runtime = ms }
+    }
+    nonisolated static func runtime(in d: Data, video: String?) -> Double? {
+        guard let meta = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["meta"] as? [String: Any] else { return nil }
         let ep = (meta["videos"] as? [[String: Any]])?.first { ($0["id"] as? String) == video }
         func minutes(_ t: Any?) -> Double? {
             guard let t = t as? String else { return nil }
@@ -953,7 +959,7 @@ struct FlickScreen: View {
             let h = number(before: "h"), m = number(before: "min")
             return h + m > 0 ? (h * 60 + m) * 60000 : nil
         }
-        if let ms = minutes(ep?["runtime"]) ?? minutes(meta["runtime"]) { withAnimation(.easeOut(duration: 0.2)) { runtime = ms } }
+        return minutes(ep?["runtime"]) ?? minutes(meta["runtime"])
     }
     // A stream's row: the pick, by a tap, or lifted (held a moment) and flicked up. Lifted, it rises off the list, follows
     // the finger exactly and swells as it goes up; let go upward it's sent, let go short of that it settles back.
@@ -1449,7 +1455,7 @@ struct FlickScreen: View {
         let found: StremioMeta?
         if ref.type == "series" { found = await NextUp.meta(ref.imdb) } else {
             let d = await TVBridge.data(TVBridge.url("/api/tv/stremio-meta?type=\(ref.type)&id=\(ref.imdb)"), timeout: 15)
-            found = d.flatMap { try? JSONDecoder().decode(StremioMeta.self, from: $0) }
+            found = await Task.detached(priority: .userInitiated) { d.flatMap { try? JSONDecoder().decode(StremioMeta.self, from: $0) } }.value
         }
         guard let m = found else { metaFailed = true; return }
         defer {
