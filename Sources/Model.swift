@@ -2,7 +2,17 @@ import Foundation
 import SwiftUI
 
 @MainActor
-final class LiveStore: ObservableObject { @Published var live: LiveStatus? }
+final class LiveStore: ObservableObject {
+    @Published var live: LiveStatus? { didSet { display.set(live?.displayOn) } }
+    // The display's state alone, published only when it changes: the Display key watches this, so its row isn't worked
+    // out again with every reading.
+    let display = DisplayState()
+}
+@MainActor
+final class DisplayState: ObservableObject {
+    @Published private(set) var on: Bool?
+    func set(_ v: Bool?) { if v != on { on = v } }
+}
 
 // What the pushed pages show from the status, kept apart from it: Version History its app's entry, a session's page its
 // session. Each is set only when it changed, so a page watching these never redraws for a reading (the status itself is

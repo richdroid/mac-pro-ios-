@@ -15,7 +15,7 @@ struct MacProApp: App {
     init() { AlertWatch.shared.install() }
     var body: some Scene {
         WindowGroup {
-            RootView(seeds: model.seedStore).environmentObject(model).environmentObject(model.liveStore)
+            RootView(seeds: model.seedStore).environmentObject(model).environmentObject(model.liveStore).environmentObject(model.liveStore.display)
                 .otaOffer(model)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in

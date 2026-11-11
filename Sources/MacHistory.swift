@@ -300,7 +300,7 @@ struct NowDot: View {
 // glyph and its fill say which way it is; a tap on its own only wiggles it and says "Hold" in place.
 struct DisplayHoldButton: View {
     @EnvironmentObject var model: AppModel
-    @EnvironmentObject var store: LiveStore
+    @EnvironmentObject var display: DisplayState
     @State private var pressing = false
     @State private var fill: CGFloat = 0
     @State private var wanted: Bool?    // what was asked for, until the Mac agrees
@@ -312,7 +312,7 @@ struct DisplayHoldButton: View {
     // From the page that holds it: the status isn't watched through the model (StatusStore).
     var statusOn: Bool?
     var statusOff = false
-    var reported: Bool? { store.live?.displayOn ?? statusOn }
+    var reported: Bool? { display.on ?? statusOn }
     var isOn: Bool { wanted ?? reported ?? !statusOff }
     static let hold = 0.4, settle = 0.12
     var body: some View {
