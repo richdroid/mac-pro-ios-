@@ -147,15 +147,18 @@ jobs:
             typefilm remote-typing-open 3
             $D "$DEVICE" rotate 1 || true; sleep 5
             # The fold closing and opening while typing: both displays filmed, the keyboard up from launch.
+            # (A display can only be filmed while it's lit: the main one throughout, the cover one while folded.)
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/tv-remote-typing-fold-open.mp4 > /dev/null 2>&1 & REC3=$!
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/tv-remote-typing-fold-cover.mp4 > /dev/null 2>&1 & REC1=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/repisode -tab 0 -pose type
             sleep 10
-            $D "$DEVICE" pose closed || true; sleep 10
+            $D "$DEVICE" pose closed || true; sleep 2
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/tv-remote-typing-fold-cover.mp4 > /dev/null 2>&1 & REC1=$!
+            sleep 10
+            kill -INT $REC1; wait $REC1
             $D "$DEVICE" pose open || true; sleep 5
             $D "$DEVICE" rotate 1 || true; sleep 8
-            kill -INT $REC3 $REC1; wait $REC3 $REC1
+            kill -INT $REC3; wait $REC3
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
           fi
           if has pages; then
