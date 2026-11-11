@@ -136,7 +136,10 @@ final class TVModel {
             lastFlick = (target.item.id, Date())
         }
         var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { flicking = target; flickRetired = false }
+        // Choosing from the first frame, in the same quiet transaction: set by the screen once it was up, the change
+        // animated the host's inset and the new page's first layout with it, so the page grew in from a narrow column
+        // ("Choos / e on / the TV", CI tv-flicktap at 13 s).
+        withTransaction(t) { flicking = target; flickRetired = false; flickChoosing = true }
     }
     // The thing on a card is what the TV is playing now (the same film, or the episode named on the card): tapping it goes
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
