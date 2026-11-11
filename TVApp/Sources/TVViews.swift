@@ -2314,7 +2314,8 @@ struct FlickCard: View {
         } else if reach.inReach {
             // Mint comes to the front first, ready to receive.
             model.post("music-now")
-            if RoutePicker.open() { model.say("Choose Mint Music") } else { showPicker = true }
+            // By the name the TV has in the phone's AirPlay list, which is "Google TV" (it said "Mint Music", which isn't there).
+            if RoutePicker.open() { model.say("Choose Google TV") } else { showPicker = true }
         }
         #endif
     }
@@ -2352,7 +2353,7 @@ struct FlickCard: View {
         .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerPlaybackStateDidChange)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .MPMusicPlayerControllerNowPlayingItemDidChange)) { _ in refresh() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refresh() }
-        .alert("AirPlay to the TV", isPresented: $showPicker) { Button("OK", role: .cancel) {} } message: { Text("Tap the AirPlay button on this card and choose Mint Music. AirPlay only reaches the TV on home Wi-Fi.") }
+        .alert("AirPlay to the TV", isPresented: $showPicker) { Button("OK", role: .cancel) {} } message: { Text("Tap the AirPlay button on this card and choose Google TV. AirPlay only reaches the TV on home Wi-Fi.") }
         #endif
         .animation(.snappy, value: alreadyThere)
         .animation(.snappy, value: reach.inReach)
