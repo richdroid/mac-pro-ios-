@@ -82,7 +82,9 @@ jobs:
           # Open, in portrait (the posture he holds), for the same.
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
-          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
+          # DeviceHub's controls aren't always ready at the first try ("No "Open" control" while listing Open, 1e89dcb):
+          # tried until it takes, and a run that never unfolds says so, rather than filming the black of a closed display.
+          for i in 1 2 3 4 5 6; do /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open && { echo "unfold ok (try $i)"; break; }; echo "unfold try $i failed"; sleep 5; [ $i = 6 ] && echo "NEVER UNFOLDED" > dist/FAILED-unfold.log; done
           sleep 5
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
           FILM_PORT=9013 film screen-wake-idle-portrait 3 10 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
