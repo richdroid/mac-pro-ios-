@@ -306,6 +306,27 @@ struct FailText: View {
     }
 }
 
+// A pushed page reads from the Mac on its own. When the Mac stops answering (8 s of misses, MissClock), the page says so
+// in one line with how old what it shows is, dims it, and takes nothing that would act on it: a session could be answered
+// or a process quit against a screen that was minutes old and looked live (audit, 2026-11-10).
+struct StaleLine: View {
+    let lastRead: Date?
+    static func ago(_ d: Date, now: Date) -> String {
+        let s = max(0, Int(now.timeIntervalSince(d)))
+        return s < 60 ? "\(max(s, 1)) s ago" : s < 3600 ? "\(s / 60) min ago" : Format.span(Double(s)) + " ago"
+    }
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 5)) { c in
+            Label(lastRead.map { "Last read \(Self.ago($0, now: c.date)) · \(Phrase.macAwayShort)" } ?? Phrase.macAway, systemImage: "wifi.exclamationmark")
+                .font(.footnote.weight(.medium)).foregroundStyle(.orange).monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .transition(.opacity)
+    }
+}
+// What a stale page's own content is dimmed to.
+let staleDim = 0.5
+
 // System tabs and navigation get Liquid Glass and move to the Duo's right edge by themselves.
 struct RootView: View {
     @EnvironmentObject var model: AppModel
@@ -317,6 +338,7 @@ struct RootView: View {
     // A new colour redraws the other tabs; Settings, where it was picked, stays put so the swatch can animate.
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
     var body: some View {
+        let _ = SwipeLog.mark("root body")
         PaneReader {
             TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
                 // Back to the tab's own start. With a page open on it, the page goes back the way Back takes it, the
@@ -359,6 +381,7 @@ struct RootView: View {
         .onChange(of: updateCount) { _, n in AppBadge.set(n) }
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }
         .onChange(of: celsius) { _, _ in MacPrefs.shareWithWidgets() }
+        .onChange(of: model.address) { _, _ in MacPrefs.shareWithWidgets() }
         .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
         .sheet(isPresented: $model.signInSheet) { SignInView().environmentObject(model) }
         // Up here, so unfolding doesn't close it and lose what's typed.
@@ -441,6 +464,12 @@ struct Notice: View {
                 Button("Sign in") { model.signInSheet = true }.buttonStyle(.borderedProminent)
             }
             .padding(.vertical, 4)
+        } else if model.unreadable {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("The Mac answered, but this version can’t read it.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("What’s here is the last it could read. Update the app in TestFlight.").font(.footnote).foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
         } else if let p = model.problem {
             VStack(alignment: .leading, spacing: 10) {
                 Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.red)
@@ -457,7 +486,7 @@ struct Notice: View {
             .padding(.vertical, 4)
         }
     }
-    static func shows(_ model: AppModel) -> Bool { model.needsSignIn || model.problem != nil }
+    static func shows(_ model: AppModel) -> Bool { model.needsSignIn || model.problem != nil || model.unreadable }
 }
 
 // Shared frame for each tab: a large title, the notice above, and pull to refresh. Updates draws its own page, so its
@@ -555,6 +584,7 @@ struct Screen<Content: View>: View {
         }
     }
     var body: some View {
+        let _ = SwipeLog.mark("screen \(tab) body")
         NavigationStack {
             Group {
                 if listed {
@@ -702,34 +732,51 @@ struct Hero: View {
                 .accessibilityLabel("Mac Pro, Late 2013")
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
-            HeroChips(alerts: (s.alerts ?? []).filter { $0.id != OTAInstaller.alertID }, offline: model.stale, route: model.route, pulse: model.pulse).padding(.top, 9)
+            HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID }, healthBad: s.healthBad, offline: model.stale, route: model.route, pulse: model.pulse) {
+                model.tab = 5; model.macPage = .health
+            }
+            .padding(.top, 9)
         }
         .frame(maxWidth: .infinity)
     }
 }
 
-// The machine's health, from its alerts alone, and how the phone is reaching it. Offline, only how long ago it last answered.
+// The machine's health and how the phone is reaching it. Offline, only how long ago it last answered.
+// Health is said in the words Control's row and the Health page use, from the same count: "All running", or "2 need a
+// look", which opens that page. It read "All systems go" from the alerts alone while Control said "2 need a look", and
+// green before the Mac had said anything at all (audit, 2026-11-10); now that's a grey "Checking".
 struct HeroChips: View {
-    let alerts: [Status.Alert]
+    let alerts: [Status.Alert]?
+    // The parts that need a look: from the status when the Mac's bridge says, else what the app last read itself.
+    var healthBad: Int?
     let offline: Bool
     let route: String
     @ObservedObject var pulse: Pulse
+    @ObservedObject private var summary = HealthSummary.shared
+    var openHealth: () -> Void = {}
     func chip<D: View>(@ViewBuilder _ dot: () -> D, _ text: String) -> some View {
         HStack(spacing: 6) { dot(); Text(text).lineLimit(1) }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).background(Color(white: 0.16), in: Capsule())
     }
+    var parts: Int? { healthBad ?? summary.bad }
     var health: (Color, String) {
-        if alerts.isEmpty { return (.green, "All systems go") }
-        return (alerts.contains { $0.level == "critical" } ? .red : .orange, "Needs attention")
+        func look(_ n: Int) -> String { "\(n) need\(n == 1 ? "s" : "") a look" }
+        if let n = parts, n > 0 { return (.orange, look(n)) }
+        guard let alerts, parts != nil || !alerts.isEmpty else { return (.gray, "Checking") }
+        if alerts.isEmpty { return (.green, "All running") }
+        return (alerts.contains { $0.level == "critical" } ? .red : .orange, look(alerts.count))
     }
     var body: some View {
         if offline {
             TimelineView(.periodic(from: .now, by: 30)) { _ in
-                chip({ Circle().fill(Color.gray).frame(width: 9, height: 9) }, pulse.lastFresh.map { "Last seen \(Format.ago(ms: $0.timeIntervalSince1970 * 1000))" } ?? "Not reached yet")
+                chip({ Circle().fill(Color.gray).frame(width: 9, height: 9) }, pulse.lastFresh.map { "Last read \(Format.ago(ms: $0.timeIntervalSince1970 * 1000))" } ?? "Not reached yet")
             }
         } else {
             HStack(spacing: 8) {
-                chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1)
+                if (parts ?? 0) > 0 {
+                    Button(action: openHealth) { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1) }
+                        .buttonStyle(FlatStyle()).accessibilityHint("Opens Everything on the Mac")
+                } else { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1) }
                 // The dot beats each time the Mac answers.
                 chip({
                     Circle().fill(Color.green).frame(width: 9, height: 9)
@@ -786,7 +833,7 @@ struct QuickActions: View {
             button("copy", "doc.on.doc", "Copy from Mac") {
                 fails["copy"] = nil
                 Task {
-                    guard let t = try? await model.api.clipboard() else { fail("copy", "Can’t reach the Mac"); return }
+                    guard let t = try? await model.api.clipboard() else { fail("copy", Phrase.macAway); return }
                     // The Mac only hands over text: a copied picture or file reads as nothing, so "empty" would be wrong.
                     if t.isEmpty { fail("copy", "No text on the Mac’s clipboard"); return }
                     #if canImport(UIKit)
@@ -795,7 +842,9 @@ struct QuickActions: View {
                     succeed("copy")
                 }
             }
-            button("send", "doc.on.clipboard", "Send to Mac") {
+            // "Paste to Mac", not "Send to Mac": that name is the files' (Control, the share sheet). This one puts the
+            // iPhone's clipboard on the Mac's, the other way from Copy from Mac beside it (audit, 2026-11-10).
+            button("send", "doc.on.clipboard", "Paste to Mac") {
                 fails["send"] = nil
                 #if canImport(UIKit)
                 let t = UIPasteboard.general.string ?? ""
@@ -804,7 +853,7 @@ struct QuickActions: View {
                 #endif
                 Task {
                     if t.isEmpty { fail("send", "Nothing copied on this iPhone"); return }
-                    do { try await model.api.setClipboard(t); succeed("send") } catch { fail("send", "Can’t reach the Mac") }
+                    do { try await model.api.setClipboard(t); succeed("send") } catch { fail("send", Phrase.macAway) }
                 }
             }
         }
@@ -869,7 +918,7 @@ struct StatusTab: View {
         AlertSettings()
         if showAccess {
             Section("Remote access") {
-                StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped").place("access-Remote control")
+                StateRow(label: "Claude remote sessions", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped").place("access-Remote control")
                 StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped").place("access-Desktop app")
                 StateRow(label: "Tailscale", good: s.tailscale.state == "Running", value: s.tailscale.state == "Running" ? "Connected" : "Off").place("access-Tailscale")
                 StateRow(label: "Public link", good: s.publicLinkActive, value: s.publicLinkActive ? "Active" : s.publicUrl.isEmpty ? "Off" : "Down").place("access-Public link")
@@ -905,6 +954,7 @@ struct StatusTab: View {
     // Folded, one column in the approved order. Open, the machine and its actions on the left with the settings under
     // them, and the figures on the right, where they're all in view at once.
     var body: some View {
+        let _ = SwipeLog.mark("status tab body")
         if side != .right {
             // Updates waiting are the number on the Apps tab, not a problem with the Mac.
             if let alerts = s.alerts?.filter({ $0.id != OTAInstaller.alertID }), !alerts.isEmpty { AlertBanner(alerts: alerts) }
@@ -920,6 +970,21 @@ struct AppsTab: View {
     @EnvironmentObject var model: AppModel
     @State private var pending: Status.App?
     @State private var alert: String?
+    // Quitting, the way the Processes page does it: asked to close first, and Force Quit offered only for an app that
+    // was asked and stayed. The two were offered side by side in one alert here (audit, 2026-11-10).
+    @State private var forcing: Status.App?
+    @State private var working: Int?
+    func quit(_ a: Status.App, force: Bool) async {
+        working = a.pid; defer { working = nil }
+        if let e = await model.run(force ? "app-kill" : "app-quit", ["pid": a.pid]) { alert = e; return }
+        // The Mac gives it a few seconds, and so does this: gone from the list says it quit.
+        for _ in 0..<5 {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            await model.refresh()
+            if !(model.status?.apps.contains { $0.pid == a.pid && $0.mem != nil } ?? false) { return }
+        }
+        if force { alert = "\(a.name) is still running." } else { forcing = a }
+    }
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -953,9 +1018,13 @@ struct AppsTab: View {
                             Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
                         }
                         Spacer(minLength: 8)
-                        Button("Quit") { pending = a }
-                            .rowCapsule(prominent: false)
-                            .accessibilityLabel("Quit \(a.name)")
+                        if working == a.pid { ProgressView().frame(width: 60) }
+                        else {
+                            Button("Quit") { pending = a }
+                                .rowCapsule(prominent: false)
+                                .disabled(working != nil)
+                                .accessibilityLabel("Quit \(a.name)")
+                        }
                     }
                     // The first app is where the build's scrolled shot stops, its heading gone up under the top.
                     .place(open.first?.id == a.id ? AnyHashable("open") : AnyHashable(a.id))
@@ -968,14 +1037,19 @@ struct AppsTab: View {
                 } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
                 .place("launch")
             }
-            // One question from the row's Quit, with Force Quit beside it for an app that won't go.
+            // One question from the row's Quit; Force Quit is a second question, only for an app that didn't go.
             .alert(pending.map { "Quit \($0.name)?" } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
                 if let p = pending {
-                    Button("Quit") { Task { alert = await model.run("app-quit", ["pid": p.pid]) } }
-                    Button("Force Quit", role: .destructive) { Task { alert = await model.run("app-kill", ["pid": p.pid]) } }
+                    Button("Quit", role: .destructive) { Task { await quit(p, force: false) } }
                     Button("Cancel", role: .cancel) {}
                 }
-            } message: { Text("Force Quit loses unsaved work.") }
+            } message: { Text("It’s asked to close. Unsaved work may be lost.") }
+            .alert(forcing.map { "\($0.name) didn’t quit. Force it?" } ?? "", isPresented: .init(get: { forcing != nil }, set: { if !$0 { forcing = nil } })) {
+                if let p = forcing {
+                    Button("Force Quit", role: .destructive) { Task { await quit(p, force: true) } }
+                    Button("Cancel", role: .cancel) {}
+                }
+            } message: { Text("Unsaved work is lost.") }
             .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
         }
     }
@@ -1030,8 +1104,8 @@ struct ClaudeTab: View {
         if side != .left { UsageDetail(s: s) }
         if side != .right {
             Section("Claude Code") {
-                StateRow(label: "Remote control", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
-                StateRow(label: "Auto-restart", good: s.claude.keepAlive, value: s.claude.keepAlive ? "Armed" : "Off").place("cc-restart")
+                StateRow(label: "Claude remote sessions", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped")
+                StateRow(label: "Restarts by itself", good: s.claude.keepAlive, value: s.claude.keepAlive ? "On" : "Off").place("cc-restart")
                 StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped")
                 LabeledContent("Version", value: s.claude.version.replacingOccurrences(of: " (Claude Code)", with: ""))
                 LabeledContent("Service", value: sentenceCase(s.claude.service ?? "Unknown"))
@@ -1516,9 +1590,6 @@ extension Status.Upgrade {
 struct ControlTab: View {
     @EnvironmentObject var model: AppModel
     @State private var pressReturn = false
-    @State private var appleEmail = ""
-    @State private var applePassword = ""
-    @State private var appleCode = ""
     @State private var confirmForget = false
     @State private var reveal = false
     @State private var restartService: Status.Service?
@@ -1529,16 +1600,38 @@ struct ControlTab: View {
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
 
+    // What's on its way to the Mac, and what has just got there. An action in flight can't be pressed again: Type a
+    // secret took two round trips of up to 25 s each with nothing on screen, and a second tap typed the password into
+    // the Mac again, Return and all, wherever its focus then was (audit, 2026-11-10). Its button shows the wait, then a
+    // tick; a failure stays under it until the next thing done here, not 4 s.
+    @State private var busy: Set<String> = []
+    @State private var ticked: Set<String> = []
     func act(_ key: String, _ work: @escaping () async -> String?) {
-        fails = [:]
+        guard !busy.contains(key) else { return }
+        withAnimation(Motion.quick) { fails = [:] }
+        busy.insert(key)
         Task {
-            guard let e = await work() else { return }
-            withAnimation(Motion.quick) { fails[key] = e }
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            if fails[key] == e { withAnimation(Motion.quick) { fails[key] = nil } }
+            let e = await work()
+            busy.remove(key)
+            if let e { withAnimation(Motion.quick) { fails[key] = e }; return }
+            withAnimation(Motion.quick) { _ = ticked.insert(key) }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            withAnimation(Motion.quick) { _ = ticked.remove(key) }
         }
     }
     @ViewBuilder func failLine(_ key: String) -> some View { if let f = fails[key] { FailText(f) } }
+    // A row's button with its action's state at the row's end: waiting, then done.
+    func actButton(_ title: String, _ key: String, role: ButtonRole? = nil, _ action: @escaping () -> Void) -> some View {
+        Button(role: role, action: action) {
+            HStack {
+                Text(title)
+                Spacer(minLength: 8)
+                if busy.contains(key) { ProgressView() }
+                else if ticked.contains(key) { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(.green).transition(.opacity).accessibilityLabel("Done") }
+            }
+        }
+        .disabled(busy.contains(key))
+    }
     // The build's shots of a failure under its button, and of the Forget password question.
     func pose() async {
         try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -1562,10 +1655,10 @@ struct ControlTab: View {
                     }
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                     if locked {
-                        Button("Unlock") { act("unlock") { await model.run("mac-unlock") } }
+                        actButton("Unlock", "unlock") { act("unlock") { await model.run("mac-unlock") } }
                         failLine("unlock")
                     }
-                    Button("Forget password", role: .destructive) { confirmForget = true }
+                    actButton("Forget password", "forget", role: .destructive) { confirmForget = true }
                         .task { await pose() }
                         .confirmationDialog("Forget the Mac’s password?", isPresented: $confirmForget, titleVisibility: .visible) {
                             Button("Forget password", role: .destructive) { act("forget") { await model.run("mac-logout") } }
@@ -1573,18 +1666,18 @@ struct ControlTab: View {
                     failLine("forget")
                 } else {
                     SecureField("Mac password", text: $drafts.macPassword).textContentType(.password)
-                    Button("Log in") {
+                    actButton("Log in", "login") {
                         let p = drafts.macPassword; drafts.macPassword = ""
                         act("login") { await model.runSealed("mac-login", secret: p) }
-                    }.disabled(drafts.macPassword.isEmpty)
+                    }.disabled(drafts.macPassword.isEmpty && !busy.contains("login"))
                     failLine("login")
                 }
             } header: { Text(s.macLogin ? "Mac login" : "Log in to this Mac") } footer: {
                 Text(s.macLogin ? "It stays logged in after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
             }
             Section {
-                Button("Open screen") { model.screenOpen = true }
-            } header: { Text("Remote desktop") } footer: { Text("Tap to click · drag to move things · two fingers to scroll · pinch to zoom") }
+                Button("Open Screen") { model.screenOpen = true }
+            } header: { Text("Screen") } footer: { Text("Tap to click · drag to move things · two fingers to scroll · pinch to zoom") }
             SendSection(route: model.route)
             Section {
                 Button { model.signingIn = true } label: { Label("Fill a saved login", systemImage: "key.fill") }
@@ -1607,8 +1700,13 @@ struct ControlTab: View {
                                 if e == nil { drafts.typed = "" }
                                 return e
                             }
-                        } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
-                        .buttonStyle(.plain).foregroundStyle(drafts.typed.isEmpty ? Color.secondary : macBlue).disabled(drafts.typed.isEmpty).accessibilityLabel("Type on Mac")
+                        } label: {
+                            // While it's being typed on the Mac the arrow is a spinner and takes no second tap; then a tick.
+                            if busy.contains("type") { ProgressView().frame(width: 28, height: 28) }
+                            else { Image(systemName: ticked.contains("type") ? "checkmark.circle.fill" : "arrow.up.circle.fill").font(.title2).contentTransition(.symbolEffect(.replace)) }
+                        }
+                        .buttonStyle(.plain).foregroundStyle(ticked.contains("type") ? Color.green : drafts.typed.isEmpty ? Color.secondary : macBlue)
+                        .disabled(drafts.typed.isEmpty || busy.contains("type")).accessibilityLabel(busy.contains("type") ? "Typing on the Mac" : "Type on Mac")
                     }
                     Toggle("Press Return afterward", isOn: $pressReturn)
                     failLine("type")
@@ -1620,26 +1718,6 @@ struct ControlTab: View {
             }
         }
         if side != .left {
-            // Installs and renewals live on the Apps tab; this only appears if Apple needs you again.
-            if !s.ios.signedIn || s.ios.job.state == "code" {
-                Section {
-                    if s.ios.job.state == "code" {
-                        TextField("6-digit code", text: $appleCode).textContentType(.oneTimeCode)
-                        Button("Send code") {
-                            let c = appleCode; appleCode = ""
-                            act("apple") { await model.runSealed("ios-code", secret: c) }
-                        }.disabled(appleCode.isEmpty)
-                    } else {
-                        TextField("Apple account email", text: $appleEmail).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        SecureField("Apple account password", text: $applePassword).textContentType(.password)
-                        Button("Sign in to Apple") {
-                            let secret = appleEmail + "\n" + applePassword; applePassword = ""
-                            act("apple") { await model.runSealed("ios-login", secret: secret) }
-                        }.disabled(appleEmail.isEmpty || applePassword.isEmpty)
-                    }
-                    failLine("apple")
-                } header: { Text("Apple account") } footer: { Text("The Mac needs this to renew your apps.") }
-            }
             if !s.publicUrl.isEmpty {
                 Section {
                     if let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
@@ -1655,7 +1733,8 @@ struct ControlTab: View {
                                 Spacer()
                                 // Only a service that's down has anything to restart.
                                 if !v.running {
-                                    Button("Restart") { restartService = v }.buttonStyle(.bordered).controlSize(.small)
+                                    if busy.contains("svc:" + v.label) { ProgressView().controlSize(.small) }
+                                    Button("Restart") { restartService = v }.buttonStyle(.bordered).controlSize(.small).disabled(busy.contains("svc:" + v.label))
                                         .confirmationDialog("Restart \(v.name)?", isPresented: .init(get: { restartService?.label == v.label }, set: { if !$0 { restartService = nil } }), titleVisibility: .visible) {
                                             Button("Restart") { act("svc:" + v.label) { await model.run("service-restart", ["label": v.label]) } }
                                         }
@@ -1682,6 +1761,7 @@ struct SignInView: View {
     @State private var address = ""
     @State private var code = ""
     @State private var note: String?
+    @State private var probing = false
     var body: some View {
         NavigationStack {
             Form {
@@ -1697,22 +1777,68 @@ struct SignInView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Connect") { Task { await connect() } } }
+                ToolbarItem(placement: .confirmationAction) {
+                    // The address is tried before it's kept, and the wait shows where Connect was.
+                    if probing { ProgressView() } else { Button("Connect") { Task { await connect() } }.disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                }
             }
             .onAppear { address = model.address }
         }
     }
+    // What was typed, as an address the app can use: the scheme put on when it's left off (https, or http for a bare
+    // local address), no trailing slash. Nil when it still isn't one.
+    static func normalised(_ typed: String) -> String? {
+        var t = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        while t.hasSuffix("/") { t.removeLast() }
+        guard !t.isEmpty, !t.contains(" ") else { return nil }
+        if !t.contains("://") {
+            let host = t.split(separator: ":").first.map(String.init) ?? t
+            let local = host.hasSuffix(".local") || host == "localhost" || (host.split(separator: ".").count == 4 && host.allSatisfy { $0.isNumber || $0 == "." })
+            t = (local ? "http://" : "https://") + t
+        }
+        guard let u = URL(string: t), let h = u.host, !h.isEmpty, ["http", "https"].contains(u.scheme ?? "") else { return nil }
+        return t
+    }
+    // Asks the address itself before keeping it. It was saved first and judged by the app's state, which starts out
+    // "needs sign in" and takes 8 s of misses to say unreachable: a typo read as "needs an access code", and a wrong
+    // address closed the sheet as if connected (audit, 2026-11-10).
     func connect() async {
         note = nil
-        model.address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let fixed = Self.normalised(address), let base = URL(string: fixed) else { note = "That isn’t an address. It looks like https://your-mac.your-tailnet.ts.net"; return }
+        address = fixed
+        probing = true; defer { probing = false }
+        let api = API(base: base)
         if !code.isEmpty {
-            do { try await model.api.login(code: code) } catch { note = error.localizedDescription; return }
+            do { try await api.login(code: code) }
+            catch { note = MacFiles.unreachable(error) || error is URLError ? "Can’t reach a Mac at this address. Is Tailscale on?" : error.localizedDescription; return }
         }
-        code = ""
-        await model.refresh()
-        if model.needsSignIn { note = "This address needs an access code." }
-        else if model.problem != nil { note = "Can’t reach the Mac at this address." }
-        else { dismiss() }
+        do {
+            _ = try await api.statusData()
+            code = ""
+            model.address = fixed
+            await model.refresh()
+            dismiss()
+        } catch APIError.signInNeeded {
+            note = code.isEmpty ? "This address needs its access code." : "The Mac didn’t take that access code."
+        } catch {
+            note = "Can’t reach a Mac at this address. Is Tailscale on?"
+        }
+    }
+}
+
+// How many parts of the Mac need a look, as the app last read it from the Mac's Health (Control's row and the Health
+// page read it; Status's chip shows it when the status itself doesn't say). Nil until read, and again once it can't be.
+@MainActor
+final class HealthSummary: ObservableObject {
+    static let shared = HealthSummary()
+    @Published private(set) var bad: Int?
+    private var asked = Date.distantPast
+    func set(_ r: MacReport?) { let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n } }
+    // For Status, from a Mac whose status doesn't carry the count: asked once a minute at most.
+    func refresh(_ api: API) {
+        guard Date().timeIntervalSince(asked) > 60 else { return }
+        asked = Date()
+        Task { if let r = try? await api.macHealth() { set(r) } }
     }
 }
 

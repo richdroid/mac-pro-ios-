@@ -25,6 +25,9 @@ struct ProcessesView: View {
     @State private var sort: ProcessSort
     @State private var report: ProcessReport?
     @State private var failed = false
+    // The list has stopped coming: said with its age, dimmed, and nothing in it can be quit until it's read again.
+    @State private var stale = false
+    @State private var lastRead: Date?
     @State private var misses = MissClock()
     @State private var pending: Pending?
     @State private var working: Int?
@@ -53,7 +56,7 @@ struct ProcessesView: View {
         else {
             Button { pending = Pending(process: p, force: false) } label: { face(p, by: by) }
                 .buttonStyle(.plain)
-                .disabled(working != nil)
+                .disabled(working != nil || stale)
                 .accessibilityHint("Asks before quitting")
                 // The question hangs off the row that was tapped.
                 .confirmationDialog(dialogTitle, isPresented: .init(get: { pending?.process.pid == p.pid }, set: { if !$0 { pending = nil } }), titleVisibility: .visible, presenting: pending) { q in
@@ -77,6 +80,7 @@ struct ProcessesView: View {
                 }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
             }
+            if notes, stale { Section { StaleLine(lastRead: lastRead) } }
             if notes, let note { Section { FailText(note) } }
             if chooser { Section { rowsBody(by) } } else { Section(by.title) { rowsBody(by) } }
         }
@@ -88,17 +92,22 @@ struct ProcessesView: View {
     }
     @ViewBuilder func rowsBody(_ by: ProcessSort) -> some View {
         if report == nil {
-            if failed { Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark").foregroundStyle(.secondary) }
+            if failed { Label(Phrase.macAway, systemImage: "wifi.exclamationmark").foregroundStyle(.secondary) }
             else { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) } }
         }
-        ForEach(rows(by)) { row($0, by: by).place($0.pid) }
+        ForEach(rows(by)) { row($0, by: by).opacity(stale ? staleDim : 1).place($0.pid) }
     }
 
     func load() async {
-        do { report = try await model.api.processes(); misses.hit(); failed = false }
+        do {
+            report = try await model.api.processes(); misses.hit(); failed = false; lastRead = Date()
+            // The build's shot of the list three minutes old.
+            if model.pose == "stale" { stale = true; lastRead = Date().addingTimeInterval(-190); return }
+            if stale { withAnimation(Motion.quick) { stale = false } }
+        }
         catch is CancellationError {}
         // Said only after 8 s without an answer; until then it's still connecting.
-        catch { if misses.miss() { failed = report == nil } }
+        catch { if misses.miss() { failed = report == nil; if report != nil, !stale { withAnimation(Motion.quick) { stale = true } } } }
     }
 
     func quit(_ p: Pending) async {
@@ -132,8 +141,9 @@ struct ProcessesView: View {
         .task {
             while !Task.isCancelled {
                 // The list stays put while a dialog is asking about one of its rows.
-                if pending == nil && working == nil { await load() }
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                // Nor under the Mac's screen. Once a read has missed it's asked again sooner, so 8 s of misses are noticed in 8.
+                if pending == nil && working == nil && !model.screenOpen { await load() }
+                try? await Task.sleep(nanoseconds: lastRead != nil && !stale && !failed ? 5_000_000_000 : 3_000_000_000)
             }
         }
     }

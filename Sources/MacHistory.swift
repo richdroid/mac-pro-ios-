@@ -81,7 +81,12 @@ struct HistoryView: View {
     @State private var points: [TrendPoint]
     @State private var loaded: Bool
     @State private var failed = false
+    @State private var missed = false
     @State private var misses = MissClock()
+    // The Mac has stopped answering (the app's own readings, or this page's): the figure under "Now" and the chart are
+    // the last it sent, said so with their age and dimmed.
+    var stale: Bool { !points.isEmpty && (missed || model.problem != nil || model.pose == "stale") }
+    @ViewBuilder var staleLine: some View { if stale { StaleLine(lastRead: model.pulse.lastFresh) } }
     init(metric: HistoryMetric) {
         self.metric = metric
         let kept = TrendCache.points[metric.key] ?? []
@@ -124,9 +129,10 @@ struct HistoryView: View {
         VStack(alignment: .leading, spacing: 1) {
             Text(pickedMark.map { metric.text($0.value) } ?? current.map(metric.text) ?? "–")
                 .font(.system(size: 34, weight: .semibold)).monospacedDigit().contentTransition(.numericText())
-            Text(pickedMark.map { $0.date.formatted(date: .omitted, time: .shortened) } ?? "Now").font(.footnote).foregroundStyle(.secondary)
+            Text(pickedMark.map { $0.date.formatted(date: .omitted, time: .shortened) } ?? (stale ? "Last reading" : "Now")).font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(stale ? staleDim : 1)
     }
     var range: some View {
         Picker("Period", selection: $hours) {
@@ -187,7 +193,7 @@ struct HistoryView: View {
             if points.isEmpty {
                 if failed {
                     ContentUnavailableView {
-                        Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark")
+                        Label(Phrase.macAway, systemImage: "wifi.exclamationmark")
                     } actions: {
                         Button("Try again") { Task { await load() } }.buttonStyle(.bordered)
                     }
@@ -227,13 +233,14 @@ struct HistoryView: View {
         if let sort = ProcessSort(metric: metric) { ProcessesLink(sort: sort) }
     }
     var body: some View {
+        let _ = SwipeLog.mark("history body")
         // Opened, turned or closed, the page comes back where he was: the figures scroll to what was at the top.
         ScrollViewReader { proxy in
         Group {
             if panes {
                 // The name first in the left pane, carried unseen in the right so both start level (PaneHeading).
                 FoldSplit {
-                    VStack(spacing: 14) { PaneHeading(title: metric.title); readout; chart.frame(maxHeight: .infinity) }
+                    VStack(spacing: 14) { PaneHeading(title: metric.title); staleLine; readout; chart.frame(maxHeight: .infinity).opacity(stale ? staleDim : 1) }
                         .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 20)
                 } right: {
                     ScrollView {
@@ -245,7 +252,7 @@ struct HistoryView: View {
                 }
             } else {
                 ScrollView {
-                    VStack(spacing: 14) { PaneHeading(title: metric.title).place("title"); readout.place("readout"); range.place("range"); chart.frame(height: 260).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
+                    VStack(spacing: 14) { PaneHeading(title: metric.title).place("title"); staleLine; readout.place("readout"); range.place("range"); chart.frame(height: 260).opacity(stale ? staleDim : 1).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
                         .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
                 }
                 .scrollsUnder()
@@ -261,23 +268,25 @@ struct HistoryView: View {
         // button is retarded and not iphone duo standard"). The name is placed as every pushed page's is.
         .pushedTitle()
         .animation(.easeOut(duration: 0.2), value: hours)
+        .animation(Motion.quick, value: stale)
         .onChange(of: marksKey, initial: true) { _, k in marksCache = (k, computeMarks()) }
         .navigationDestination(item: $model.processes) { ProcessesView(first: $0, model: model) }
         .task {
             // A new reading arrives once a minute. Until the first one gets through, it keeps trying every few seconds.
             while !Task.isCancelled {
-                await load()
-                try? await Task.sleep(nanoseconds: points.isEmpty ? 5_000_000_000 : 60_000_000_000)
+                if !model.screenOpen { await load() }
+                // Sooner again after a miss, so the page is back the moment the Mac is.
+                try? await Task.sleep(nanoseconds: points.isEmpty || missed ? 5_000_000_000 : 60_000_000_000)
             }
         }
     }
     func load() async {
-        do { points = try await model.api.trend(metric.key); misses.hit(); failed = false; TrendCache.points[metric.key] = points }
+        do { points = try await model.api.trend(metric.key); misses.hit(); failed = false; missed = false; TrendCache.points[metric.key] = points }
         catch is CancellationError { return }
         catch {
             // Said only after 8 s without an answer; until then the wait shows as waiting, not as "Collecting".
             guard misses.miss() else { return }
-            failed = points.isEmpty
+            failed = points.isEmpty; missed = true
         }
         loaded = true
     }
