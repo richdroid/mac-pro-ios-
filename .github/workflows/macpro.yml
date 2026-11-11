@@ -31,7 +31,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 30
+        timeout-minutes: 40
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -98,6 +98,22 @@ jobs:
           FILM_PORT=9012 film screen-wake-before-landscape 3 12 -tab 0 -pose screenslow -openScreen YES -screenDepth 32 -screenNoReask YES
           FILM_PORT=9012 film screen-wake-after-landscape 3 10 -tab 0 -pose screenslow -openScreen YES -screenDepth 32
           film screen-fps-landscape 3 8 -tab 0 -pose screenfps -openScreen YES
+          # Postures changing with the Screen up and the keyboard up: closed, opened again, upright, back.
+          D=/tmp/dh/.build/release/devicehubctl
+          xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/macpro-screen-kb-posture.mp4 > /dev/null 2>&1 & REC=$!
+          sleep 3
+          xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -pose screentyping -openScreen YES
+          sleep 9
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-screen-kb-1-open-typing.png
+          $D "$DEVICE" pose closed || true; sleep 6
+          xcrun simctl io "$DEVICE" screenshot --display=1 dist/macpro-screen-kb-2-closed.png
+          $D "$DEVICE" pose open || true; sleep 6
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-screen-kb-3-reopened.png
+          $D "$DEVICE" rotate 1 || true; sleep 5
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/macpro-screen-kb-4-upright.png
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          kill -INT $REC; wait $REC
+          xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) && cp "$c/Library/Caches/regions.txt" dist/macpro-regions.log || true
           ls dist
       - name: Publish
