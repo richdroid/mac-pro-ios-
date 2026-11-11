@@ -295,7 +295,9 @@ private struct ProblemBanner: View {
     @Environment(TVModel.self) var model
     var problem: String? {
         if !model.reachable { return "Can’t reach the Mac. Is Tailscale on?" }
-        if model.status?.online == false { return "The Mac can’t reach the TV" }
+        // On the Remote it's said in the dark picture itself, under its cut-wire glyph: the pill sat on the picture's edge
+        // upright, across the hinge open flat, and in the status strip folded (Remote gate 4).
+        if model.status?.online == false, model.tab != 0 { return "The Mac can’t reach the TV" }
         return nil
     }
     var body: some View {
@@ -1054,6 +1056,7 @@ struct NoPicture: View {
 struct EpisodeStill: View {
     @ObservedObject private var nextUp = NextUp.shared
     @State private var still: String?
+    @State private var looked = false
     // The still already known, so a return to the Remote draws it from the first frame.
     var known: String? {
         guard let s = nextUp.series, let e = NextUp.cached(s.imdb)?.episodes.first(where: { $0.id == s.current }), !e.thumb.isEmpty else { return nil }
@@ -1062,15 +1065,17 @@ struct EpisodeStill: View {
     var body: some View {
         ZStack {
             if let u = (still ?? known).flatMap(URL.init(string:)) {
-                Cover(url: u, mode: .fill) { NoPicture() }.transition(.opacity)
-            } else {
+                Cover(url: u, mode: .fill) { Color.clear }.transition(.opacity)
+            } else if looked {
                 NoPicture()
             }
+            // Until it's known there's no still, the dark glass: a cold launch on a show flashed the TV glyph for 0.4 s
+            // before the still (Remote gate 4).
         }
         .clipped()
         .task(id: nextUp.series) {
             guard let s = nextUp.series, let m = await NextUp.meta(s.imdb),
-                  let e = m.episodes.first(where: { $0.id == s.current }), !e.thumb.isEmpty else { still = nil; return }
+                  let e = m.episodes.first(where: { $0.id == s.current }), !e.thumb.isEmpty else { still = nil; looked = true; return }
             if still != e.thumb { withAnimation(.easeOut(duration: 0.25)) { still = e.thumb } }
         }
     }
@@ -1224,6 +1229,10 @@ struct RemoteTab: View {
     @ObservedObject private var nextUp = NextUp.shared
     // The build's shot of the typing bar opens with it up.
     @State private var typing = UserDefaults.standard.string(forKey: "pose") == "type"
+    // The layout's own idea of typing: on with the keyboard key, and off only once the keyboard has gone, so the page
+    // never lays itself out in the room a keyboard still on its way down leaves (Remote gate 4: for half a second it
+    // split into two columns upright, crushed open flat, and came back under the keyboard folded).
+    @State private var lay = UserDefaults.standard.string(forKey: "pose") == "type"
     // Arriving from a flick's controls, the pad and keys come in during the screen's move onto the picture above them.
     // Read only inside KeysArrive, so the keys coming in redraws them alone, not the whole Remote: as a plain @State it
     // re-laid out both open panes mid-move, the 147–177 ms hitch at +0.72 s (r27).
@@ -1324,7 +1333,10 @@ struct RemoteTab: View {
                     ZStack {
                         // Fully black: a faint last frame through it read as the TV still showing something (r26).
                         Color.black
-                        Image(systemName: unreachable ? "wifi.slash" : away?.glyph ?? "moon.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+                        VStack(spacing: 8) {
+                            Image(systemName: unreachable ? "wifi.slash" : away?.glyph ?? "moon.fill").font(.system(size: 26, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+                            if unreachable { Text("The Mac can’t reach the TV").font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.75)) }
+                        }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
                     .transition(.opacity)
@@ -1339,7 +1351,7 @@ struct RemoteTab: View {
             .layoutPriority(1)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in
                 if abs(w - pictureWidth) > 0.5 { pictureWidth = w }
-                if !typing, abs(w - calmPictureWidth) > 0.5 { calmPictureWidth = w }
+                if !lay, abs(w - calmPictureWidth) > 0.5 { calmPictureWidth = w }
             }
     }
     // Asleep, one big way to wake it over the pad, which wakes it too.
@@ -1373,11 +1385,12 @@ struct RemoteTab: View {
                 .slot()
                 GlassKey(icon: "line.3.horizontal", label: "Menu", key: "menu", size: grid.key).slot()
             }
-            // Folded, typing takes the transport's room: the keyboard sliced it in half, and its glow smeared through.
+            // Typing takes the transport's room, in every posture: folded the keyboard sliced it in half, and upright it sat
+            // across the hinge (Remote gate 4).
             // Only with something on to play: idle on the home screen, five transport keys did nothing.
             // The one transport, the same as Playing's, on the top row's five places.
             // Never under Mint's own player, online or dimmed out of reach: one condition in every state (gate, 2026-11-11).
-            if session && !musicShown && !(typing && size != .regular) { Transport(glow: !typing, size: grid.key, playSize: grid.play).transition(.opacity) }
+            if session && !musicShown && !lay { Transport(glow: !lay, size: grid.key, playSize: grid.play).transition(.opacity) }
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
         }
         // Five places of a key and a gap each: the first and last keys' edges land on the column's.
@@ -1430,10 +1443,10 @@ struct RemoteTab: View {
             // Typing, the episode line and Mint's player step aside, in every posture: open flat they sat half under the
             // keyboard, and upright the picture's pane gives its height to the bar and the keys (an episode line at the
             // shrunken picture's width read "Episo…", CI 69af3dc). Folded does the same.
-            if !typing { episodes.columnRole(.under); music.columnRole(.under) }
+            if !lay { episodes.columnRole(.under); music.columnRole(.under) }
             // Typing, the keyboard comes up over this pane's foot: the tiles and the send box step aside rather than show
             // through it.
-            if !typing {
+            if !lay {
                 // Out of reach, the tiles can't open anything on the TV: dimmed with every other key, the ring on the app in
                 // front with them (r33: bright, Stremio's ring lit, beside a dimmed pad).
                 if apps, model.status?.apps?.isEmpty == false {
@@ -1446,7 +1459,8 @@ struct RemoteTab: View {
                 if stackedUpright { Spacer(minLength: 0) }
                 SendBar(opensSearch: true).columnRole(.aligned)
             }
-            Spacer(minLength: 0)
+            // Upright the field is the pane's foot: a second spacer split the room and floated it (Remote gate 4).
+            if !stackedUpright { Spacer(minLength: 0) }
         }
         .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
         // The bar and the episode line come and go with the TV's status, which is set with no animation: faded in and
@@ -1472,13 +1486,17 @@ struct RemoteTab: View {
                 let d = min((grid.width * 0.6).rounded(), 210)
                 VStack(spacing: 14) {
                     Spacer(minLength: 0)
-                    if !typing { pad.frame(width: grid.width, height: d).transition(.opacity) }
-                    keysBlock(grid).frame(height: typing ? nil : grid.key + 12 + grid.play, alignment: .top)
+                    if !lay { pad.frame(width: grid.width, height: d).transition(.opacity) }
+                    keysBlock(grid).frame(height: lay ? nil : grid.key + 12 + grid.play, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(spacing: 14) { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity); keysBlock(grid) }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Typing, the pad steps aside here too, rather than shrink to a 60 pt miniature (Remote gate 4).
+                VStack(spacing: 14) {
+                    if lay { Spacer(minLength: 0) } else { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity).transition(.opacity) }
+                    keysBlock(grid)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .padding(.horizontal, 20).padding(.bottom, 16)
@@ -1489,12 +1507,14 @@ struct RemoteTab: View {
     // Open upright: one column, picture above the fold and the keys under it, in every state, typing included.
     // Read as typing begins and kept while it lasts: the app's pane reading flipped to two panes as the keyboard took the
     // height, and the page went side by side (CI 1180364 and 5767dcc, type-portrait).
-    var stackedUpright: Bool { size == .regular && !(typing ? calmPanes : panes) }
+    var stackedUpright: Bool { size == .regular && !(lay ? calmPanes : panes) }
     // The pane reading as last seen with no keyboard up. The keyboard only ever turns one column into two (it takes
     // height), never two into one, so a change to one column is always taken and a change to two only while not typing
     // (CI d0327e7: going by the keyboard's own notice let the flip through, the notice coming after it).
     @State private var calmPanes = false
     @State private var calmSet = false
+    @State private var calmWidth: CGFloat = 0
+    @State private var windowWidth: CGFloat = 0
     // Where the fold runs across this view open upright, in its own space: the hinge's own region when the system reports
     // it, otherwise the middle of the screen, 40 pt wide (about the crease's width).
     static func crease(in g: GeometryProxy) -> CGRect {
@@ -1521,7 +1541,7 @@ struct RemoteTab: View {
                 // gate 3). The page ignores the keyboard, so it stays one column; the keys' pane lifts its bar and keys.
                 GeometryReader { g in
                     let crease = Self.crease(in: g)
-                    if typing {
+                    if lay {
                         // Typing, the keyboard covers nearly all of the pane under the fold, so the bar and the keys' row
                         // come up above it, under the picture's pane (CI 219df47: under the fold they sat beneath the keyboard).
                         // At the column's width from before typing: the picture shrinks to give up the height, the keys don't.
@@ -1540,20 +1560,20 @@ struct RemoteTab: View {
                         }
                     }
                 }
-                .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
+                .ignoresSafeArea(lay ? .keyboard : [], edges: .bottom)
             } else if size == .regular {
                 FoldSplit {
                     // The apps come along when there's room, and step aside when held in portrait.
                     side(apps: panes)
                         // While typing on the TV the keyboard is for the other pane, so this one keeps its size under it
                         // rather than squeezing the screen and cutting its labels. Its own search box still lifts.
-                        .ignoresSafeArea(typing ? .keyboard : [], edges: .bottom)
+                        .ignoresSafeArea(lay ? .keyboard : [], edges: .bottom)
                 } right: { keysColumn }
             } else if vSize == .compact {
                 // Folded and turned sideways: the picture beside the pad, as open. Not through FoldSplit, whose split
                 // arrangement shows only its first pane on the folded display (54832f8's shot: no pad and no keys at all).
                 HStack(spacing: 0) {
-                    side(apps: false).ignoresSafeArea(typing ? .keyboard : [], edges: .bottom).frame(maxWidth: .infinity)
+                    side(apps: false).ignoresSafeArea(lay ? .keyboard : [], edges: .bottom).frame(maxWidth: .infinity)
                     keysColumn.frame(maxWidth: .infinity)
                 }
             } else {
@@ -1572,7 +1592,7 @@ struct RemoteTab: View {
                 // space either side of it, never pad. Typing keeps the column it had, so the keys stay where they were.
                 GeometryReader { geo in
                     let fresh = RemoteGrid.folded(width: geo.size.width, height: geo.size.height, under: Self.underRoom + 30)
-                    let grid = typing ? (foldedGrid ?? fresh) : fresh
+                    let grid = lay ? (foldedGrid ?? fresh) : fresh
                     // Typing, the picture stays, at whatever width fits above the bar and the keys' row (gate 3: 150 pt of
                     // empty art where it had been).
                     let typingPic = min(grid.width, max(0, geo.size.height - 30 - (14 + 50 + 12 + grid.key + 14)) * 16 / 9)
@@ -1581,7 +1601,7 @@ struct RemoteTab: View {
                         // straight from the picture, with no place kept for what isn't there; the pad and the keys are
                         // anchored from the foot, where the thumbs are, the transport's row always counted; the spare room is
                         // the one gap between them. Nothing moves either way as something starts or stops.
-                        if !typing {
+                        if !lay {
                             picture(closable: true).frame(width: grid.width, height: grid.width * 9 / 16).transition(.opacity)
                             if !musicShown { progress.frame(width: grid.width) }
                             episodes.frame(width: grid.width); music.frame(width: grid.width)
@@ -1591,8 +1611,8 @@ struct RemoteTab: View {
                         Spacer(minLength: 0)
                         Group {
                             // Typing, the pad steps aside: the bar and the keys' row sit at the foot, above the keyboard.
-                            if !typing { pad.frame(width: grid.width, height: grid.pad).transition(.opacity) }
-                            keysBlock(grid).frame(height: typing ? nil : grid.key + 12 + grid.play, alignment: .top)
+                            if !lay { pad.frame(width: grid.width, height: grid.pad).transition(.opacity) }
+                            keysBlock(grid).frame(height: lay ? nil : grid.key + 12 + grid.play, alignment: .top)
                         }
                         .modifier(KeysArrive(gate: keysGate))
                     }
@@ -1600,8 +1620,8 @@ struct RemoteTab: View {
                     // rail (CI ee66d34).
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     // Typing, clear of the keyboard's own soft edge, which faded the keys' row away above it (CI d2fba13).
-                    .padding(.bottom, typing ? 30 : 0)
-                    .onChange(of: fresh, initial: true) { _, g in if !typing { foldedGrid = g } }
+                    .padding(.bottom, lay ? 30 : 0)
+                    .onChange(of: fresh, initial: true) { _, g in if !lay { foldedGrid = g } }
                 }
                 .settledAnimation(.spring(response: 0.45, dampingFraction: 0.9), value: musicShown)
                 // As open: the lines under the picture fade with the TV's status rather than pop.
@@ -1619,9 +1639,28 @@ struct RemoteTab: View {
             // keyboard up read as down, CI f735bda). Put away, it's said by its own notice below.
             if let r = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect, r.height > 0 { keyboardTop = r.minY }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardTop = .infinity }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { n in
+            keyboardTop = .infinity
+            // The page comes back as one move, timed to the keyboard's own going.
+            let d = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+            if !typing && lay { withAnimation(.easeOut(duration: max(d, 0.2))) { lay = false } }
+        }
         #endif
-        .onChange(of: panes, initial: true) { _, p in if !calmSet || !typing || !p { calmPanes = p; calmSet = true } }
+        .onChange(of: panes, initial: true) { _, p in
+            // A real change of posture (the window's width changes; a keyboard only takes height) is always taken
+            // (Remote gate 4: unfolded with the keyboard up, the page stayed one narrow column across the hinge).
+            if !calmSet || !lay || !p || abs(windowWidth - calmWidth) > 1 { calmPanes = p; calmSet = true; calmWidth = windowWidth }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in
+            windowWidth = w
+            if abs(w - calmWidth) > 1 { calmPanes = panes; calmWidth = w }
+        }
+        .onChange(of: typing) { _, t in
+            if t { withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { lay = true }; return }
+            // Back once the keyboard has gone (its notice below), or straight away if it never came; never later than 0.8 s.
+            if keyboardTop == .infinity { withAnimation(.easeOut(duration: 0.25)) { lay = false } }
+            else { Task { try? await Task.sleep(nanoseconds: 800_000_000); if !typing && lay { withAnimation(.easeOut(duration: 0.25)) { lay = false } } } }
+        }
         // The build's typing film ("-typeCycle YES"): the keyboard comes and goes every 5 s, as the keyboard key would
         // have it, so typing in and out is filmed in every posture without a tap (Remote gate 3).
         .task {
@@ -1636,7 +1675,7 @@ struct RemoteTab: View {
         // keyboard simply covers it, and hiding it there re-laid the page out under the field as it took the keyboard,
         // which never came up (the reviews of 9c34a08 and 01fc626: no keyboard in any open-portrait search shot).
         #if os(iOS)
-        .toolbarVisibility((typing || model.typingIn != nil) && !(size == .regular && !panes) ? .hidden : .automatic, for: .tabBar)
+        .toolbarVisibility((lay || model.typingIn != nil) && !(size == .regular && !panes) ? .hidden : .automatic, for: .tabBar)
         #endif
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
