@@ -434,7 +434,7 @@ private struct PushedPage: ViewModifier {
             .contentMargins(.top, size == .regular ? 0 : nil, for: .scrollContent)
             // Open in portrait the tab bar runs along the foot under this page too: its rows fade out above the bar, as a
             // tab's do, never reading through it (build 204: "Never wake for…" beside the bar).
-            .modifier(TabBarFade())
+            .modifier(TabBarFade(top: size == .regular))
             .overSea()
             .pageLog(name)
             .toolbar(.visible, for: .navigationBar)

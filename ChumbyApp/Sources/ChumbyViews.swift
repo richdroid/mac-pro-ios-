@@ -309,17 +309,21 @@ struct TwoLine: View {
         }
     }
 }
-// A menu row whose label has two lines: the label left, the value always at the right, never stacked under the note as
-// the system's picker row does when the label runs long (the template's Afterwards, 11-11).
+// A menu row with a note: the title and the menu's value on the first line, the note under both across the row's full
+// width. Never the system's picker row, which stacked the value under a long label, and never the note squeezed into a
+// column beside a long value (the template's Afterwards, 11-11).
 struct MenuRow<V: Hashable, Options: View>: View {
     let title: String, note: String
     @Binding var selection: V
     @ViewBuilder let options: () -> Options
     var body: some View {
-        HStack(spacing: 12) {
-            TwoLine(title, note)
-            Spacer(minLength: 8)
-            Picker(title, selection: $selection, content: options).labelsHidden().pickerStyle(.menu).fixedSize()
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 12) {
+                Text(title)
+                Spacer(minLength: 8)
+                Picker(title, selection: $selection, content: options).labelsHidden().pickerStyle(.menu).layoutPriority(1)
+            }
+            Text(note).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 2)
     }
@@ -417,16 +421,25 @@ struct TwoPane<L: View, R: View>: View {
 // 0 pt tall and the words read through the bar anyway (r24/r25).
 struct TabBarFade: ViewModifier {
     static let fade: CGFloat = 18
+    // A pushed page open in portrait: its rows also fade out under the top bar (Back and the clock), never scrolling sharp
+    // against Back so a heading read as Back's label (designer, 11-11: "< Awake before it starts").
+    var top = false
     @State private var inset: CGFloat = 0
+    @State private var topInset: CGFloat = 0
     func body(content: Content) -> some View {
         content
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { inset = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
             .mask {
             GeometryReader { _ in
                 // Fades over the 18 pt above the bar's top edge, and nothing at all from that edge down, so no word reads
                 // through the bar. Only where a tab bar runs across the foot (an inset that tall); elsewhere, no mask.
                 let bar = inset > 40
                 VStack(spacing: 0) {
+                    if top && topInset > 0 {
+                        Color.clear.frame(height: max(0, topInset - Self.fade))
+                        LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)
+                    }
                     Color.black
                     if bar {
                         LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)
@@ -2265,11 +2278,12 @@ struct RowRemove: View {
         Button(action: action) {
             Image(systemName: icon).font(.system(size: 21)).symbolRenderingMode(.palette)
                 .foregroundStyle(.white, icon.hasPrefix("minus") ? ChumbyPalette.remove(scheme == .dark) : ChumbyPalette.acc(scheme == .dark))
-                .frame(width: 44, height: 44).contentShape(Rectangle())
+                .frame(width: 44, height: 44, alignment: .trailing).contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
-        // Laid out at 36 pt so a row with one is no taller than before; the 44 pt target hangs 4 pt past it all round.
-        .padding(-4)
+        // Laid out 23 pt wide and 36 tall: the disc's right edge on the row's content margin, where switches and steppers
+        // end, and no row taller than before; the 44 pt target reaches past it inward and 4 pt above and below.
+        .padding(.leading, -21).padding(.vertical, -4)
         .accessibilityLabel(label)
     }
 }

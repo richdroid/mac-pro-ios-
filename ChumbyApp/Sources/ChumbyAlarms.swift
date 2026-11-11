@@ -751,7 +751,14 @@ struct AlarmsTab: View {
     @State private var skipping = false
     @ViewBuilder var glance: some View {
         if !model.stateKnown {
-            HStack(spacing: 10) { ProgressView(); TwoLine("Reaching the Chumby…", "What rings next shows once it answers.").foregroundStyle(.secondary) }.padding(.vertical, 6)
+            HStack(spacing: 10) {
+                ProgressView()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Reaching the Chumby…").foregroundStyle(.secondary)
+                    Text("What rings next shows once it answers.").font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 6)
         } else if let n = model.nextRing() {
             // A "just this once" standing behind the Chumby's skip is that alarm moved for one ring, never a skip: the
             // moved time leads, the usual one is said in words, and "Back to 6:45 AM" takes it back (Richard,
@@ -914,8 +921,8 @@ struct AlarmsTab: View {
                 Label {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Add alarm").font(.body.weight(.semibold))
-                        if mine.isEmpty {
-                            Text(model.stateKnown ? "None of your own yet" : "Yours show once the Chumby answers").font(.subheadline).foregroundStyle(.secondary)
+                        if model.stateKnown && mine.isEmpty {
+                            Text("None of your own yet").font(.subheadline).foregroundStyle(.secondary)
                         }
                     }
                 } icon: { Image(systemName: "plus.circle.fill").font(.body.weight(.semibold)) }
@@ -1030,18 +1037,11 @@ struct AlarmsTab: View {
             } else if wake.rules.enabled {
                 Text("Chumby can’t see your calendar, so these can’t follow it.").foregroundStyle(.secondary)
             } else {
-                // Off, the row says what it is and that a tap turns it on; a bare label read as a row that opened something.
-                Button { Task { await wake.enable() } } label: {
-                    HStack(spacing: 8) {
-                        // What it does on the row's second line (it was the footer, under a near-capsule: designer, 11-11).
-                        Label { TwoLine("Wake me from my calendar", "Wakes you before the first thing each day.") } icon: { Image(systemName: "calendar.badge.clock") }
-                        Spacer(minLength: 8)
-                        Text("Turn on").font(.subheadline.weight(.semibold)).foregroundStyle(ChumbyPalette.cal(scheme == .dark))
-                            .padding(.horizontal, 12).padding(.vertical, 6).background(ChumbyPalette.cal(scheme == .dark).opacity(0.14), in: Capsule())
-                    }
-                    .contentShape(Rectangle())
+                // Off: the same switch as Calendar settings' (one setting, one look), with what it does on its second line
+                // (designer, 11-11). Turning it on asks for the calendar and starts the plan, as the "Turn on" row did.
+                Toggle(isOn: Binding(get: { wake.rules.enabled }, set: { on in if on { Task { await wake.enable() } } })) {
+                    TwoLine("Wake me from my calendar", "Wakes you before the first thing each day.")
                 }
-                .buttonStyle(.plain)
             }
             // Left on the Chumby when the plan stopped wanting them (Calendars turned off, an event gone): they still ring.
             ForEach(model.stateConfirmed && !CalendarWake.sample ? wake.strays(in: model.deviceState) : [], id: \.key) { a in

@@ -67,17 +67,25 @@ jobs:
               set -- $V
               one $d pose-$1$x 9 $3 -tab $2 "${@:4}"
             done
-            # The sheets' and pages' ends, which no resting shot reaches: dragged up twice, then shot.
-            for V in "editor 2 - -pose editor" "template 2 - -pose template" "caldayown 2 - -pose caldayown" "justonce 0 - -pose justonce" "calsettings 2 - -pose calsettings"; do
+            # The sheets' and pages' ends, which no resting shot reaches: dragged up twice, then shot. Open flat the pages
+            # sit in the right pane, so the drag is made there. Light, then the editor's and the template's in dark too.
+            local DX=0.5; [ "$x" = "-open" ] && DX=0.75
+            for V in "editor light 2 - -pose editor" "template light 2 - -pose template" "caldayown light 2 - -pose caldayown" "justonce light 0 - -pose justonce" "calsettings light 2 - -pose calsettings" \
+                     "editor dark 2 - -pose editor" "template dark 2 - -pose template"; do
               set -- $V
-              local ADDR=http://127.0.0.1:9000; [ "$3" != "-" ] && ADDR=$ADDR/$3
-              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $2 "${@:4}"
+              xcrun simctl ui "$DEVICE" appearance $2
+              local ADDR=http://127.0.0.1:9000; [ "$4" != "-" ] && ADDR=$ADDR/$4
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $3 "${@:5}"
               sleep 9
-              $D "$DEVICE" drag 0.5 0.85 0.5 0.2 || true; sleep 1
-              $D "$DEVICE" drag 0.5 0.85 0.5 0.2 || true; sleep 2
-              xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pose-$1-end$x.png
+              $D "$DEVICE" drag $DX 0.85 $DX 0.2 || true; sleep 1
+              $D "$DEVICE" drag $DX 0.85 $DX 0.2 || true; sleep 2
+              local N=$1-end; [ "$2" = dark ] && N=$1-end-dark
+              xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pose-$N$x.png
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
             done
+            xcrun simctl ui "$DEVICE" appearance dark
+            one $d pose-chadd-dark$x 9 - -tab 1 -pose chadd
+            xcrun simctl ui "$DEVICE" appearance light
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
