@@ -47,16 +47,15 @@ struct TVApp: App {
                         model.tab = 0
                         Task {
                             // Worked out afresh from what the TV is playing now, as the Remote's own ⏭ does it: what was
-                            // known before the app was put away may be the episode before's. The Remote's key shows its
-                            // light while that's done, and whichever has the answer first sends (a send repeated within
-                            // three seconds is one send).
+                            // known before the app was put away may be the episode before's. One wait and one answer:
+                            // the Remote's key shows its light for this one (`resolvingNext`) rather than starting its own.
+                            model.resolvingNext = true
+                            defer { model.resolvingNext = false }
                             await model.load()
                             NextUp.shared.forgetAll(); NextUp.shared.follow(model.status)
-                            try? await Task.sleep(nanoseconds: 400_000_000)
-                            NotificationCenter.default.post(name: ResolvingNextKey.press, object: nil)
                             for _ in 0..<30 where NextUp.shared.next == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
                             if let n = NextUp.shared.next { model.flick(FlickTarget(item: n, source: .stremio, ready: true, autoplay: true)) }
-                            else if model.flicking == nil { model.say("Couldn’t find the next episode") }
+                            else { model.say("Couldn’t find the next episode") }
                         }
                     }
                 }
@@ -805,8 +804,8 @@ struct KeptNote: View {
     let since: Date
     static let ago: RelativeDateTimeFormatter = { let f = RelativeDateTimeFormatter(); f.unitsStyle = .full; return f }()
     var body: some View {
-        // Said afresh each minute, so it's never left saying less than is true; under a minute it's "just now".
-        TimelineView(.periodic(from: .now, by: 60)) { ctx in
+        // Said afresh on each minute since then, so it's never left saying less than is true; under one it's "just now".
+        TimelineView(.periodic(from: since, by: 60)) { ctx in
             Text(ctx.date.timeIntervalSince(since) < 60 ? "Last seen just now" : "Last seen " + Self.ago.localizedString(for: since, relativeTo: ctx.date))
                 .font(.footnote.weight(.medium)).foregroundStyle(.secondary).padding(.horizontal, 20)
         }
@@ -1927,12 +1926,13 @@ struct ResolvingNextKey: View {
     static let press = Notification.Name("ResolvingNextKey.press")
     var body: some View {
         GlassButton(icon: "forward.end.fill", label: "Next episode", size: size) { go() }
-        .overlay { if busy { LoadingRing(radius: size / 2).frame(width: size, height: size).transition(.opacity) } }
-        .animation(.easeOut(duration: 0.15), value: busy)
+        // Its own press, or the Now Playing card's next-episode link working the same thing out.
+        .overlay { if busy || model.resolvingNext { LoadingRing(radius: size / 2).frame(width: size, height: size).transition(.opacity) } }
+        .animation(.easeOut(duration: 0.15), value: busy || model.resolvingNext)
         .onReceive(NotificationCenter.default.publisher(for: Self.press)) { _ in go() }
     }
     func go() {
-            guard !busy else { return }
+            guard !busy, !model.resolvingNext else { return }
             busy = true
             Task {
                 NextUp.shared.forget(); NextUp.shared.follow(model.status)

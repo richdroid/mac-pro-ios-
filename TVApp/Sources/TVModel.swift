@@ -358,6 +358,8 @@ final class TVModel {
             if let self, let o = self.openingApp, o.at == at { self.openingApp = nil }
         }
     }
+    // The Now Playing card's next-episode link is working out which episode that is: the Remote's ⏭ shows its light.
+    var resolvingNext = false
     var toast: String?
     var filmsNote: String? = "Loading your films…"
     // Browse used to be tab 4; the apps' banners lead there now.
