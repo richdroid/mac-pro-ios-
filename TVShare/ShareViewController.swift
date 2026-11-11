@@ -33,7 +33,10 @@ final class ShareViewController: UIViewController {
         var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 10
         r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")", forHTTPHeaderField: "Origin")
         r.setValue("1", forHTTPHeaderField: "x-dash"); r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        r.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text])
+        // The TV shows it arriving, as it does anything flicked from the app: a card naming the site, at its bottom edge.
+        let site = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.replacingOccurrences(of: "www.", with: "") ?? "Link"
+        let receipt: [String: Any] = ["id": UUID().uuidString, "title": site, "kind": site.contains("youtu") ? "video" : "link"]
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "receipt": receipt])
         guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { await finish("Can’t reach the Mac. Is Tailscale on?"); return }
         await finish(j["ok"] as? Bool == true ? "Sent to the TV" : "That link can’t open on the TV. Try AirPlay.")

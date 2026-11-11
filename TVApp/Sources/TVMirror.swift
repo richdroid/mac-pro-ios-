@@ -14,7 +14,7 @@ final class LiveMirror: ObservableObject {
     // When the stream last had a picture, set as it closes: the layer keeps that last frame, so coming back to the Remote
     // shows it at once, marked as old, rather than an older still.
     @Published private(set) var heldAt: Date?
-    // Asked for, and no picture within 1.5 s: a TV asleep, or a Mac with nothing to stream. Nothing on screen waits on it
+    // Asked for, and no picture within 2.2 s: a TV asleep, or a Mac with nothing to stream. Nothing on screen waits on it
     // from then (no endless spinner); it clears the moment a picture comes.
     @Published private(set) var stalled = false
     private var watchdog: Task<Void, Never>?
@@ -47,7 +47,9 @@ final class LiveMirror: ObservableObject {
         if !showing {
             watchdog?.cancel()
             watchdog = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                // A recording started from nothing has its first picture in 0.7 s on an idle box and 1.6 s with a video
+                // on (measured 2026-11-10): at 1.5 s the TV glyph came up a blink before the picture did.
+                try? await Task.sleep(nanoseconds: 2_200_000_000)
                 guard let self, !Task.isCancelled, gen == self.generation || self.feed == nil, !self.showing else { return }
                 if !self.stalled { self.stalled = true }
             }

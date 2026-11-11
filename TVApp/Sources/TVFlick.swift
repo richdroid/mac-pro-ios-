@@ -134,6 +134,48 @@ enum LinkPeek {
     }
 }
 
+// The flick's receipt on the TV (Richard, 2026-11-10: "a receipt of flick interface on tv", and "when i start to flick the
+// tv starts the expected work in background and theres a receipt interface that makes sense with the flick"). The TV is
+// told each step of the gesture, by the flick's own id: the lift (it begins what's likely coming where it can't be seen,
+// and shows a short line at its bottom edge), the throw (the card comes up from that edge there, leaning the way it was
+// thrown and as fast, and says how the start goes), or the put-back (gone). The phone's picture leaves by its top edge
+// and arrives at the TV's bottom edge: one motion. The Mac and the launcher do the rest (tv.js receiptSay, FlickReceipt.kt).
+enum FlickReceipt {
+    // What the TV's card shows. `kind`: film, episode, video, song, app, link. `shape`: poster, wide, square.
+    // An app is named by its package, and the TV draws its own banner for it.
+    static func body(id: String, title: String, line: String = "", art: String = "", kind: String, shape: String = "", pkg: String = "") -> [String: Any] {
+        var b: [String: Any] = ["id": id, "title": title, "kind": kind]
+        if !pkg.isEmpty { b["pkg"] = pkg }
+        if !line.isEmpty, line != title { b["line"] = line }
+        if art.hasPrefix("https://") { b["art"] = art }
+        if !shape.isEmpty { b["shape"] = shape }
+        return b
+    }
+    // The throw's own lean and speed, as the finger left it (points a second); a tap goes straight up.
+    static func thrown(_ b: [String: Any], velocity v: CGSize) -> [String: Any] {
+        var b = b
+        let speed = (v.width * v.width + v.height * v.height).squareRoot()
+        if speed > 50, v.height < 0 { b["vx"] = Double(v.width / speed); b["vy"] = Double(v.height / speed); b["speed"] = Double(speed) }
+        else { b["vx"] = 0.0; b["vy"] = -1.0; b["speed"] = 0.0 }
+        return b
+    }
+    // One lift at a time, and never the same one twice; the Mac keeps its own count too.
+    @MainActor private static var lifted = ""
+    @MainActor static func lift(_ b: [String: Any], lands: String?) {
+        guard let id = b["id"] as? String, id != lifted else { return }
+        lifted = id
+        var body: [String: Any] = ["receipt": b]
+        if let lands { body["lands"] = lands }
+        Task { _ = try? await TVBridge.post("flick-lift", body, timeout: 8) }
+    }
+    // Put back, or let go anywhere but toward the TV.
+    @MainActor static func cancel(_ id: String) {
+        guard id == lifted else { return }
+        lifted = ""
+        Task { _ = try? await TVBridge.post("flick-cancel", ["id": id], timeout: 8) }
+    }
+    @MainActor static func thrown(_ id: String) { if id == lifted { lifted = "" } }
+}
 struct FlickScreen: View {
     // Its entry in the side bar's Back, while choosing.
     @State private var showInfo = false
@@ -243,6 +285,43 @@ struct FlickScreen: View {
     @State private var linkTitle: String?
     @State private var linkArt: String?
     @State private var linkLooked = false
+    // How the finger left the row or the card at the throw, for the TV's card to come in the same way.
+    @State private var throwV = CGSize.zero
+    // Each lift is its own flick on the TV, until it's thrown: the id the Mac and the TV follow it by.
+    @State private var receiptID = UUID().uuidString
+    // What the TV's receipt shows for this pick: the same title and line the Remote shows while it starts.
+    var receipt: [String: Any] {
+        let kind: String
+        if video { kind = isSeries ? "episode" : "film" }
+        else if item.kind == "youtube" { kind = "video" }
+        else if isLink { kind = "link" }
+        else if target.image != nil || source == .mint || target.send?.0 == "flick" { kind = "song" }
+        else { kind = "film" }
+        let line: String
+        if let e = episode { line = "S\(e.season) E\(e.episode) · \(e.name)" }
+        else if isLink { line = linkTitle == nil ? "" : item.title }
+        else if kind == "film" { line = "" }
+        else { line = shown.subtitle }
+        let shape = kind == "song" ? "square" : kind == "film" || (kind == "episode" && episode?.thumb.isEmpty != false) ? "poster" : "wide"
+        return FlickReceipt.body(id: receiptID, title: shown.title, line: line, art: startingArt, kind: kind, shape: shape)
+    }
+    // The card or a row is in his hand: the TV begins what it can where it can't be seen (the Mac's flick-lift), and for
+    // a stream row that exact stream's link is resolved there now, ahead of the throw. Nothing for what's already on.
+    func liftedUp() {
+        guard !flown, !onTV else { return }
+        let id = UUID().uuidString
+        receiptID = id
+        var r = receipt
+        r["id"] = id
+        if video, let row = liftedID, let s = streams.first(where: { $0.id == row }) {
+            var b = prepareBody
+            b["token"] = s.token
+            Prepare.arm(b)
+        }
+        FlickReceipt.lift(r, lands: kindLands)
+    }
+    // Where a plain send lands, for the Mac to bring up out of sight: Mint for a song.
+    var kindLands: String? { !video && (target.image != nil || source == .mint || target.send?.0 == "flick") ? "mint" : nil }
     static let pose = UserDefaults.standard.string(forKey: "pose")
     static let posed = ["flickdemo", "flickdemo-stream", "streams"].contains(pose) || pose?.hasPrefix("flick-") == true
 
@@ -314,7 +393,11 @@ struct FlickScreen: View {
             .onChange(of: resumeKnown && !onTVUnsettled ? resumeTarget?.episode.id : nil) { _, id in
                 if let id, video, step == .episodes, let t = resumeTarget, !isOn(t.episode) { Prepare.arm(prepareBody(for: id)) }
             }
-            .onChange(of: liftedID != nil) { _, up in if up { FlickHaptic.lift(); FlickClock.touched() } }
+            .onChange(of: liftedID != nil) { _, up in
+                if up { FlickHaptic.lift(); FlickClock.touched(); liftedUp() }
+                // Down again without a throw: the TV lets its hint go. A throw clears the hand too, but it's `flown` by then.
+                else if !flown { FlickReceipt.cancel(receiptID) }
+            }
             .task { await opened() }
             // The picture the Remote shows while the TV starts (an episode's still, which the rows never showed), fetched
             // and shrunk while he's choosing, so at the pick it's in memory with its soft version.
@@ -904,6 +987,7 @@ struct FlickScreen: View {
                 if case .second(true, let d?) = v, -d.translation.height >= 90 || d.velocity.height <= -500, Self.meantThrow(liftedAt: liftedAt, movedAt: movedAt) {
                     // The pick, from where the row is now.
                     rects.map[id] = (rects.map[id] ?? .zero).offsetBy(dx: d.translation.width, dy: d.translation.height)
+                    throwV = d.velocity
                     send()
                 } else if Self.longTap(v) {
                     // A press that ran long and was let go where it landed is a tap, and a tap is the pick, however long
@@ -1007,6 +1091,7 @@ struct FlickScreen: View {
                         let still = abs(d.translation.width) < 6 && abs(d.translation.height) < 6
                         if still || -d.translation.height >= 90 || d.velocity.height <= -500 {
                             rects.map["card"] = (rects.map["card"] ?? .zero).offsetBy(dx: d.translation.width, dy: d.translation.height)
+                            throwV = still ? .zero : d.velocity
                             FlickHaptic.caught()
                             send(from: rects.map["card"])
                         } else { settle() }
@@ -1115,6 +1200,7 @@ struct FlickScreen: View {
         FlickClock.begin()
         releasedAt = Date()
         flown = true
+        FlickReceipt.thrown(receiptID)
         liftedID = nil
         answered = false; written = false
         flyFrom = flies ? from ?? rects.map["poster"] ?? CGRect(x: flickFrame.width / 2 - 60, y: flickFrame.height * 0.6, width: 120, height: 60) : .zero
@@ -1370,6 +1456,8 @@ struct FlickScreen: View {
         while true {
             // Made afresh each time round: after a list fetched again, the pick has a new token.
             var order = order
+            // The TV's own card of this flick comes in as the send lands there (never for one asked about `again`).
+            order.1["receipt"] = FlickReceipt.thrown(receipt, velocity: throwV)
             // The line dropped after the Mac had the send (the app put away, the tailnet blinking): asked how it went,
             // which joins that start or hears its answer again. Nothing is started twice.
             if dropped > 0, heard.yes { order.1["again"] = true }
