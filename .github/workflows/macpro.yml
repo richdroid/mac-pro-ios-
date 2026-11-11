@@ -60,9 +60,8 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
           # Closed (the cover), first.
-          FILM_PORT=9012 film screen-wake-before 1 14 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32 -screenNoReask YES
           FILM_PORT=9012 film screen-wake-after 1 10 -tab 0 -pose screenslow -openScreen YES -screenDepth 32
-          FILM_PORT=9013 film screen-wake-idle 1 10 -tab 0 -pose screenslow -openScreen YES -screenDepth 32
+          FILM_PORT=9013 film screen-wake-idle 1 10 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
           FILM_PORT=9011 film screen-slow-after 1 14 -tab 0 -pose screenslow -openScreen YES -screenDepth 16
           film screen-fps 1 8 -tab 0 -pose screenfps -openScreen YES
           film screen-kbkey-after 1 17 -tab 0 -pose screenkbfilm -openScreen YES
@@ -85,7 +84,7 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
           sleep 5
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
-          FILM_PORT=9013 film screen-wake-idle-portrait 3 10 -tab 0 -pose screenslow -openScreen YES -screenDepth 32
+          FILM_PORT=9013 film screen-wake-idle-portrait 3 10 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
           film screen-open-portrait 3 6 -tab 0 -pose screen -openScreen YES
           film screen-fps-portrait 3 8 -tab 0 -pose screenfps -openScreen YES
           shot screen-laptop-portrait 3 8 -tab 0 -pose screen -openScreen YES -screenPosture laptop
@@ -95,7 +94,8 @@ jobs:
           shot screen-landscape 3 8 -tab 0 -pose screen -openScreen YES
           shot screen-landscape-typing 3 8 -tab 0 -pose screentyping -openScreen YES
           shot screen-landscape-clip-none 3 8 -tab 0 -pose screenclipnone -openScreen YES
-          FILM_PORT=9012 film screen-wake-before-landscape 3 12 -tab 0 -pose screenslow -openScreen YES -screenDepth 32 -screenNoReask YES
+          FILM_PORT=9013 film screen-wake-idle-landscape 3 10 -tab 0 -pose screenslow -openScreen YES -showFPS YES -screenDepth 32
+          FILM_PORT=9011 film screen-slow-after-landscape 3 14 -tab 0 -pose screenslow -openScreen YES -screenDepth 16
           FILM_PORT=9012 film screen-wake-after-landscape 3 10 -tab 0 -pose screenslow -openScreen YES -screenDepth 32
           film screen-fps-landscape 3 8 -tab 0 -pose screenfps -openScreen YES
           # Postures changing with the Screen up and the keyboard up: closed, opened again, upright, back.
