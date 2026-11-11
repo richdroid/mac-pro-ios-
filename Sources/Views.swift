@@ -146,7 +146,7 @@ struct ScrollsUnder: ViewModifier {
     let id: Int
     init(id: Int) { self.id = id; _track = State(initialValue: Track(name: "list\(id)")) }
     @MainActor final class Track {
-        var rest: CGFloat?; var now: CGFloat = 0; var under = false
+        var rest: CGFloat?; var now: CGFloat = 0; var under = false; var geo = ""
         // The page moving, and past either end: the Mac's readings wait while it is (ScrollHold), and land once it has
         // been still, back in range, for 0.6 s. Read from the page's geometry, since a List reports no phase (CI 6da2654:
         // once a second the whole of Apps sat 76 pt higher for a frame while the finger held it past the top). Past the
@@ -162,6 +162,12 @@ struct ScrollsUnder: ViewModifier {
             .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, g in
                 track.now = g.contentOffset.y
                 track.watch.geometry(g)
+                // For the build's logs: what of the page's frame changed, beside the offset, so a jump at rest names its
+                // cause (the content's height, an inset, the container).
+                if SwipeLog.on {
+                    let geo = "content \(Int(g.contentSize.height.rounded())) top \(Int(g.contentInsets.top.rounded())) bottom \(Int(g.contentInsets.bottom.rounded())) container \(Int(g.containerSize.height.rounded()))"
+                    if geo != track.geo { track.geo = geo; SwipeLog.note("list\(id) \(geo)") }
+                }
                 guard let r = track.rest else { return }
                 let under = g.contentOffset.y > r + 4
                 if under != track.under { track.under = under; report(id, under) }
@@ -249,7 +255,7 @@ struct MarksPlace: ViewModifier {
     @Environment(\.placePage) private var page
     let id: AnyHashable
     func body(content: Content) -> some View {
-        content.onGeometryChange(for: Bool.self) { g in
+        content.modifier(LogsHeight(id: id)).onGeometryChange(for: Bool.self) { g in
             guard let page else { return false }
             // SwiftUI runs this off the main actor: MainActor.assumeIsolated here trapped (SIGTRAP, build dd1a9ce,
             // 2026-11-11), so the line is read from its own locked store, never from the main-actor PlaceKeeper.
@@ -260,6 +266,19 @@ struct MarksPlace: ViewModifier {
             let k = PlaceKeeper.page(page)
             if !k.settling { k.top = id }
         }
+    }
+}
+
+// For the build's logs only (-swipeLog YES): each placed row's height as it changes, so a page that grows or shrinks at
+// rest says which row did it.
+struct LogsHeight: ViewModifier {
+    let id: AnyHashable
+    func body(content: Content) -> some View {
+        if SwipeLog.on {
+            content.onGeometryChange(for: CGFloat.self) { ($0.size.height * 2).rounded() / 2 } action: { old, new in
+                SwipeLog.note("row \(id.base) h \(old) -> \(new)")
+            }
+        } else { content }
     }
 }
 
@@ -714,6 +733,7 @@ struct LiveTiles: View {
     @EnvironmentObject var store: LiveStore
     let s: Status
     var body: some View {
+        let _ = SwipeLog.mark("tiles body")
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net, h = store.live?.hist ?? s.hist, load = store.live?.load ?? s.load
         VStack(spacing: 12) {
             HStack(spacing: 12) {
@@ -742,6 +762,7 @@ struct TempDials: View {
         return (n + rows - 1) / rows
     }
     var body: some View {
+        let _ = SwipeLog.mark("dials body")
         let temps = store.live?.temps ?? s.temps ?? []
         let across = width > 0 ? Self.columns(temps.count, width: width) : 3
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: across), spacing: 16) {
@@ -767,6 +788,7 @@ struct Hero: View {
     @EnvironmentObject var model: AppModel
     let s: Status
     var body: some View {
+        let _ = SwipeLog.mark("hero body")
         VStack(spacing: 2) {
             Image("MacPro").resizable().scaledToFit().frame(height: 148)
                 // The glow fades to nothing inside the portrait's own height: a round one reached past the row's top and was
@@ -823,6 +845,7 @@ struct HeroChips: View {
         return (.green, "All running")
     }
     var body: some View {
+        let _ = SwipeLog.mark("chips body")
         if offline {
             TimelineView(.periodic(from: .now, by: 30)) { _ in
                 chip({ Circle().fill(Color.gray).frame(width: 9, height: 9) }, pulse.lastFresh.map { "Last read \(StaleLine.ago($0, now: Date()))" } ?? "Not reached yet")

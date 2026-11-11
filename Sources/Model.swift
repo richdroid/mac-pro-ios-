@@ -300,11 +300,13 @@ final class AppModel: ObservableObject {
             // The same answer as last time changes nothing on screen, so nothing is redrawn for it.
             if data == lastData, status != nil { markFresh(); openPending(); return }
             let file = Self.cacheFile
+            let asked = CFAbsoluteTimeGetCurrent()
             let decoded = try await Task.detached(priority: .userInitiated) {
                 let s = try JSONDecoder().decode(Status.self, from: data)
                 try? data.write(to: file, options: .atomic)
                 return s
             }.value
+            if SwipeLog.on { SwipeLog.note(String(format: "status read off main %.0f ms", (CFAbsoluteTimeGetCurrent() - asked) * 1000)) }
             lastData = data
             markFresh()
             var fresh = decoded
@@ -322,7 +324,9 @@ final class AppModel: ObservableObject {
             }
             if parks { SwipeLog.note("status held"); heldStatus = fresh; return }
             SwipeLog.note("status landed")
+            let t0 = CFAbsoluteTimeGetCurrent()
             apply(fresh)
+            if SwipeLog.on { SwipeLog.note(String(format: "status applied %.0f ms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)) }
         } catch APIError.signInNeeded {
             if !needsSignIn { needsSignIn = true }
             lastData = nil
