@@ -90,6 +90,7 @@ struct RemoteScreenView: View {
     @State private var shownAt = Date()
     // The display has been its real size long enough for changes of plan to be moves rather than the opening layout.
     @State private var settled = false
+    @State private var placed = false
 
     enum ClipState: Equatable {
         case idle, working, done, failed(String)
@@ -218,14 +219,29 @@ struct RemoteScreenView: View {
             let occ = g.reservedRegions(kind: .occlusion)
             RegionLog.note("display \(Int(g.size.width))x\(Int(g.size.height)) occlusion " + occ.map { "\($0.frame.debugDescription) margins t\(Int($0.margins.top)) l\(Int($0.margins.leading)) b\(Int($0.margins.bottom)) r\(Int($0.margins.trailing)) active \($0.isActive)" }.joined(separator: " | ")
                            + " inactive-too \(g.reservedRegions(kind: .occlusion, options: .includeInactive).map(\.frame.debugDescription))")
+            var covered = occ.map(\.frame)
+            var cores = occ.map { r -> CGRect in
+                let m = r.margins
+                return CGRect(x: r.frame.minX + m.leading, y: r.frame.minY + m.top,
+                              width: max(r.frame.width - m.leading - m.trailing, 1), height: max(r.frame.height - m.top - m.bottom, 1))
+            }
+            // The cover's camera is always there, but the system only says where a moment after the Screen has opened,
+            // and the tools' row started under the picture and then moved up beside the camera. Where it was is kept, by
+            // the cover's size, and used until the system says.
+            let w = g.size.width, h = g.size.height
+            if w > 1, w < 600, h > w {
+                let key = "screenCoverCamera \(Int(w))x\(Int(h))"
+                if covered.isEmpty, let saved = UserDefaults.standard.array(forKey: key) as? [[Double]] {
+                    let rects = saved.filter { $0.count == 4 }.map { CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) }
+                    covered = Array(rects.prefix(rects.count / 2)); cores = Array(rects.suffix(rects.count / 2))
+                } else if !covered.isEmpty, covered.count == cores.count {
+                    let all = (covered + cores).map { [Double($0.minX), Double($0.minY), Double($0.width), Double($0.height)] }
+                    if (UserDefaults.standard.array(forKey: key) as? [[Double]]) != all { UserDefaults.standard.set(all, forKey: key) }
+                }
+            }
             return Fold(crease: g.reservedRegions(kind: .division, options: .includeInactive).first?.frame,
                         folded: hingeFolded ?? !g.reservedRegions(kind: .division).isEmpty,
-                        covered: occ.map(\.frame),
-                        cores: occ.map { r in
-                            let m = r.margins
-                            return CGRect(x: r.frame.minX + m.leading, y: r.frame.minY + m.top,
-                                          width: max(r.frame.width - m.leading - m.trailing, 1), height: max(r.frame.height - m.top - m.bottom, 1))
-                        })
+                        covered: covered, cores: cores)
         }
         #endif
         return Fold()
@@ -515,7 +531,7 @@ struct RemoteScreenView: View {
             // The first-use card sits over the picture's touch surface, so its Got it can be pressed: under it, the picture
             // took the tap as a click on the Mac and the card could never be put away.
             if showHint, screen.hasPicture { place(gestureHint, p.picture) }
-            place(functionRow(tight: p.fnRow.width > 0 && p.fnRow.width < 400), p.fnRow)
+            place(functionRow(tight: p.fnRow.width > 0 && p.fnRow.width < 400, atTop: p.fnRow.minY < p.picture.minY), p.fnRow)
             // Folded beside the camera, the same tools down the side, each in its own place.
             ForEach(Array(zip(ScreenTool.allCases, p.tools)), id: \.0) { t, r in
                 tool(t).frame(width: r.width, height: r.height).position(x: r.midX, y: r.midY)
@@ -532,13 +548,30 @@ struct RemoteScreenView: View {
         // Not while the Screen is opening: its first layout is of an empty display (0 × 0, then the real size a moment
         // later, then the camera's and hinge's regions), and moving from that one to the real one grew every part out of
         // the top-left corner. The parts are simply put in place until the display has been its real size for a moment.
-        .animation(settled ? planMotion : nil, value: p)
-        .task(id: area.width > 1 && area.height > 1) {
+        // And only for what's meant to move: the system keyboard coming or going, and a change of posture. The camera's
+        // region reaching the plan a second after opening, or the Mac's picture changing shape, re-places the parts
+        // without a glide (the tools' row flew up the cover on every open, the designer's second review).
+        .animation(settled ? planMotion : nil, value: PlanMove(kind: p.kind, keyboard: keyboardHeight > 0))
+        // Nothing is seen of the opening's first layouts (an empty display, then one without its regions): the parts
+        // appear once the plan has held still for a moment.
+        .opacity(placed ? 1 : 0)
+        .task(id: p) {
             guard area.width > 1, area.height > 1, !settled else { return }
+            if !placed {
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                guard !Task.isCancelled else { return }
+                placed = true
+            }
             try? await Task.sleep(nanoseconds: 700_000_000)
             if !Task.isCancelled { settled = true }
         }
+        // Never left unseen or unmoving by a plan that keeps changing: both are on within a second and a half regardless.
+        .task {
+            try? await Task.sleep(nanoseconds: 600_000_000); placed = true
+            try? await Task.sleep(nanoseconds: 900_000_000); settled = true
+        }
     }
+    struct PlanMove: Equatable { var kind: ScreenPlan.Kind; var keyboard: Bool }
     func place<V: View>(_ v: V, _ r: CGRect) -> some View {
         Placed(content: v, rect: r)
     }
@@ -546,15 +579,16 @@ struct RemoteScreenView: View {
     // MARK: The function row
     // Where a MacBook's function keys are: the Mac's own shortcuts on the left, this screen's tools and Done on the right.
     // `tight`: beside the cover's camera the row is 370 pt, not 446, so its gaps and its keys' least width come in a little.
-    func functionRow(tight: Bool) -> some View {
+    // `atTop`: the row is above the picture, so what a tool says (the clipboard's message) goes under it, not off the display.
+    func functionRow(tight: Bool, atTop: Bool = false) -> some View {
         HStack(spacing: tight ? 3 : 5) {
             ForEach([ScreenTool.esc, .missionControl, .terminal, .spotlight, .switchApps], id: \.self) { tool($0, tight: tight) }
             Spacer(minLength: tight ? 2 : 6)
-            ForEach([ScreenTool.keyboard, .copy, .paste, .signIn, .fit, .done], id: \.self) { tool($0) }
+            ForEach([ScreenTool.keyboard, .copy, .paste, .signIn, .fit, .done], id: \.self) { tool($0, below: atTop) }
         }
     }
     var showsFit: Bool { zoomed || fillZoom > 1.01 }
-    @ViewBuilder func tool(_ t: ScreenTool, tight: Bool = false) -> some View {
+    @ViewBuilder func tool(_ t: ScreenTool, tight: Bool = false, below: Bool = false) -> some View {
         switch t {
         case .esc: fnKey("esc", nil, "Escape", tight: tight) { keys.tap(MacKey.esc) }
         case .missionControl: fnKey("", "rectangle.3.group", "Mission Control", tight: tight) { keys.tap(MacKey.up, with: [MacKey.control]) }
@@ -565,8 +599,8 @@ struct RemoteScreenView: View {
         case .spotlight: fnKey("", "magnifyingglass", "Spotlight", tight: tight) { keys.tap(MacKey.space, with: [MacKey.command]) }
         case .switchApps: fnKey("", "square.grid.3x1.below.line.grid.1x2", "Switch apps", tight: tight) { keys.switchApps() }
         case .keyboard: toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Dictate or type", on: typing, compact: true) { typing.toggle() }
-        case .copy: clipButton(paste: false, compact: true)
-        case .paste: clipButton(paste: true, compact: true)
+        case .copy: clipButton(paste: false, compact: true, below: below)
+        case .paste: clipButton(paste: true, compact: true, below: below)
         case .signIn: toolButton("key.fill", "Sign in to the Mac", compact: true) { signingIn = true }
         case .fit: if showsFit { toolButton(fitIcon, fitLabel, compact: true) { fitScreen() } }
         case .done: toolButton("xmark", "Done", on: true, compact: true) { model.screenOpen = false }
@@ -642,7 +676,7 @@ struct RemoteScreenView: View {
     // MARK: Clipboard
     // Copy and Paste carry text between the two clipboards. Done is a tick on the button itself, for a moment; a failure
     // says why, right at the button.
-    func clipButton(paste: Bool, compact: Bool = false, side: CGFloat? = nil) -> some View {
+    func clipButton(paste: Bool, compact: Bool = false, side: CGFloat? = nil, below: Bool = false) -> some View {
         let state = paste ? pasteState : copyState
         let icon: String
         switch state {
@@ -661,7 +695,7 @@ struct RemoteScreenView: View {
         .contentTransition(.symbolEffect(.replace))
         .animation(Motion.quick, value: state)
         // Centred above its button, nudged in only as far as it takes to stay 12 pt clear of the display's edges.
-        .overlay(alignment: .top) {
+        .overlay(alignment: below ? .bottom : .top) {
             if case .failed(let message) = state {
                 EdgeClamped {
                     Text(message).font(.caption.weight(.medium)).foregroundStyle(.white)
@@ -669,7 +703,7 @@ struct RemoteScreenView: View {
                         .background(Color.red.opacity(0.9), in: Capsule())
                         .fixedSize()
                 }
-                .offset(y: -48)
+                .offset(y: below ? 40 : -48)
                 .transition(.opacity)
                 .allowsHitTesting(false)
             }
@@ -1182,6 +1216,9 @@ struct RemoteScreenView: View {
         if dockOpen {
             MacKeyCap(label: "", icon: "delete.left", sym: MacKey.delete, keys: keys, a11y: "Delete").frame(width: k, height: k)
             MacKeyCap(label: "", icon: "return", sym: MacKey.returnKey, keys: keys, a11y: "Return").frame(width: k, height: k)
+            // Tab, which this posture has no other key for, in the ninth place; Fit takes the place while there's
+            // something to fit, so the capsule is always full and never has a gap the size of a missing key.
+            if !compact, !(zoomed || fillZoom > 1.01) { MacKeyCap(label: "", icon: "arrow.right.to.line", sym: MacKey.tab, keys: keys, a11y: "Tab").frame(width: k, height: k) }
             toolButton(typing ? "keyboard.chevron.compact.down" : "keyboard", typing ? "Hide keyboard" : "Show keyboard", on: typing, side: k) { typing.toggle() }
             if !compact, zoomed || fillZoom > 1.01 { toolButton(fitIcon, fitLabel, side: k) { fitScreen() } }
             if compact {
@@ -1226,7 +1263,18 @@ struct RemoteScreenView: View {
         case .connecting: ProgressView("Connecting…").tint(.white).foregroundStyle(.white)
         // Signed in, the picture not here yet: the same word stays until the picture is. It used to vanish at sign-in
         // and leave plain black for the half second to three that the first picture takes.
-        case .connected where !observed.hasPicture: ProgressView("Connecting…").tint(.white).foregroundStyle(.white)
+        // While the picture itself is on its way (seconds, on a slow link), how much of it has come.
+        case .connected where !observed.hasPicture:
+            TimelineView(.periodic(from: .now, by: 0.12)) { _ in
+                if let part = screen.firstPictureProgress, part > 0.03 {
+                    VStack(spacing: 10) {
+                        Text("Connecting…").foregroundStyle(.white)
+                        ProgressView(value: min(part, 1)).tint(.white).frame(width: 150)
+                    }
+                } else {
+                    ProgressView("Connecting…").tint(.white).foregroundStyle(.white)
+                }
+            }
         case .reconnecting where screen.slowReconnect:
             VStack {
                 Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath").font(.footnote.weight(.medium)).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 6).background(.black.opacity(0.65), in: Capsule()).padding(.top, 10)
