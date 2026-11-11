@@ -595,16 +595,16 @@ final class TVModel {
         // For the build's films only: how many readings came and how many were put on screen, between the slow frames.
         if !unchanged, s != status { Self.read += 1; if Self.read % 5 == 0 { HitchLog.shared.note("status: \(Self.read) readings with something new, \(Self.shown) shown") } }
         #endif
-        if !unchanged, s != status, !staleStatus, starting == nil, playHeld == nil, !Self.everyReading, let old = status, Self.onlyTheClock(old, s) {
-            // Nothing to show; the checks below still read this reading's own times.
-            settlePlayHold(s)
-            if openingApp != nil, s.app == openingApp?.pkg { openingApp = nil }
-            return
-        }
-        if !unchanged && s != status {
+        // Nothing to show: the page keeps the reading it has. Everything below that follows a reading still gets this one
+        // (the held press, the show's episodes being looked up, the phone's own player), with its own times.
+        let clockOnly: Bool = {
+            guard !unchanged, s != status, !staleStatus, starting == nil, playHeld == nil, !Self.everyReading, let old = status else { return false }
+            return Self.onlyTheClock(old, s)
+        }()
+        if openingApp != nil, s.app == openingApp?.pkg { openingApp = nil }
+        if !unchanged && s != status && !clockOnly {
             Self.shown += 1
             status = s
-            if openingApp != nil, s.app == openingApp?.pkg { openingApp = nil }
             // Every app's banner fetched once, as soon as the list first comes, so the Apps tab and the Remote's tiles
             // never wait on one.
             if !bannersWarm, let apps = s.apps, !apps.isEmpty {
@@ -723,6 +723,8 @@ final class TVModel {
     // before sending the next made a quick run of presses reach the TV a round trip late per press.
     func key(_ name: String, long: Bool = false, repeating: Bool = false) {
         lastKeyAt = Date(); lastTouch = Date()
+        // Home, Back or anything else pressed after a tile: the ring goes back to what the TV says is in front.
+        if openingApp != nil { openingApp = nil }
         if !repeating { tick() }
         // A hold can't get ahead of the connection, so lifting your finger stops the TV promptly.
         if repeating && repeatPending { return }
@@ -776,7 +778,11 @@ final class TVModel {
         lastTouch = Date()
         Task {
             let result = try? await URLSession.shared.data(for: r)
-            if (result?.1 as? HTTPURLResponse)?.statusCode != 200 { say("The TV didn’t get that") }
+            if (result?.1 as? HTTPURLResponse)?.statusCode != 200 {
+                // An app that didn't open doesn't keep the ring.
+                if path == "open" { openingApp = nil }
+                say("The TV didn’t get that")
+            }
             else { try? await Task.sleep(nanoseconds: 800_000_000); await load() }
         }
     }
@@ -784,6 +790,7 @@ final class TVModel {
     func send(_ text: String) {
         // A link flicks like anything else: its card, named for the site and the page, is a tap or a flick from the TV
         // (the 2026-11-10 ruling), never straight there.
+        if openingApp != nil { openingApp = nil }
         if SendBar.isLink(text) { flick(FlickTarget.link(text)); return }
         guard let r = request("send", ["text": text]) else { return }
         tick()

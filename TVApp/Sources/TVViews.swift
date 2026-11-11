@@ -1950,7 +1950,7 @@ struct Banner: View {
             .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
             .overlay { FrontRing(pkg: app.pkg) }
         }
-        .buttonStyle(PressCard()).accessibilityLabel(app.name)
+        .buttonStyle(PressCard()).accessibilityLabel(app.name).accessibilityAddTraits(model.frontApp == app.pkg ? .isSelected : [])
         .contextMenu { if browses { Button("Open on TV", systemImage: "tv") { open() } } }
     }
 }
@@ -1963,8 +1963,9 @@ private struct FrontRing: View {
         let on = model.frontApp == pkg
         RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous).strokeBorder(TVLook.accent, lineWidth: 2.5)
             .opacity(on ? 1 : 0)
-            .animation(.easeOut(duration: 0.15), value: on)
-            .accessibilityHidden(!on).accessibilityLabel("In front on the TV")
+            // Settled: coming back to the page, the ring is simply where it is; it only moves in front of him.
+            .settledAnimation(.easeOut(duration: 0.15), value: on)
+            .accessibilityHidden(true)
     }
 }
 // A banner drawn here, for an app whose own is missing or came out blank: its brand's colour, its mark where it has a
@@ -2792,7 +2793,8 @@ struct DiscoverColumn: View {
     func computeRows() -> [MediaRow] {
         // What a search found is shown as found, under its own name, however few: regrouped like the shelves, one show
         // found came out as "More to watch".
-        if !store.query.trimmingCharacters(in: .whitespaces).isEmpty { return store.rows }
+        // Only once the search has its answer: until then the page stays as it was, not the shelves as they came.
+        if !store.query.trimmingCharacters(in: .whitespaces).isEmpty { return store.answered(store.query) ? store.rows : (built ?? []) }
         func key(_ i: MediaItem) -> String { i.stremioRef?.imdb ?? i.id }
         let mine = Set((continuing?.items ?? []).map(key))
         let kept = store.rows.filter { $0.title != Self.continueTitle }.compactMap { r -> MediaRow? in
@@ -2813,8 +2815,13 @@ struct DiscoverColumn: View {
         part == .all ? rows : rows.enumerated().filter { ($0.offset % 2 == 0) == (part == .left) }.map(\.element)
     }
     func shelf(_ row: MediaRow) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            RowHeader(title: row.title, route: .media(row, .stremio)).padding(.leading, 20)
+        // What a search found is named for what it is ("Films", "Shows", as on the Apps page), not "Results"; and a list
+        // short enough to be all on screen has no door to a page of the same few cards.
+        let searched = !store.query.trimmingCharacters(in: .whitespaces).isEmpty && row.title == "Results"
+        let title = searched ? (kind == "movie" ? "Films" : "Shows") : row.title
+        return VStack(alignment: .leading, spacing: 0) {
+            if searched && row.items.count < 4 { RowTitle(title).padding(.leading, 20) }
+            else { RowHeader(title: title, route: .media(MediaRow(title: title, items: row.items), .stremio)).padding(.leading, 20) }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 10) {
                     ForEach(row.items) { item in FlickCardButton(item: item, source: .stremio, width: 124) }
