@@ -477,7 +477,7 @@ struct Notice: View {
                     Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading)
                     // One ✕, full strength, a 44 pt target: put away, the card comes back with the next run of misses.
                     Button { withAnimation(Motion.quick) { model.problemPutAway = true } } label: {
-                        Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.white).frame(width: 44, height: 30).contentShape(Rectangle())
+                        Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.primary).frame(width: 44, height: 30).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).accessibilityLabel("Dismiss")
                 }
