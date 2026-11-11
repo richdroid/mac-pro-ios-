@@ -56,7 +56,9 @@ struct ProcessesView: View {
         else {
             Button { pending = Pending(process: p, force: false) } label: { face(p, by: by) }
                 .buttonStyle(.plain)
-                .disabled(working != nil || stale)
+                // Stale, the row takes no touch but isn't "disabled": that dimmed the rows that can be quit a second time,
+                // beside locked rows dimmed once, as if some of the list were live.
+                .disabled(working != nil).allowsHitTesting(!stale)
                 .accessibilityHint("Asks before quitting")
                 // The question hangs off the row that was tapped.
                 .confirmationDialog(dialogTitle, isPresented: .init(get: { pending?.process.pid == p.pid }, set: { if !$0 { pending = nil } }), titleVisibility: .visible, presenting: pending) { q in

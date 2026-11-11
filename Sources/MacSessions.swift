@@ -185,14 +185,13 @@ struct SessionTerminal: View {
             }
             // A failure shows at the foot of the screen, right above the keys and the box that caused it.
             .overlay(alignment: .bottom) {
-                if let note = sendFailed ?? note {
+                if let note {
                     Text(note).font(.footnote.weight(.semibold)).foregroundStyle(.white).multilineTextAlignment(.center)
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .glassEffect(.regular.tint(.red.opacity(0.35)), in: Capsule())
                         .padding(.bottom, 10).padding(.horizontal, 12)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                        // A passing note goes after 3 s; a send that failed stays until one gets through.
-                        .task(id: note) { try? await Task.sleep(nanoseconds: 3_000_000_000); if sendFailed == nil { withAnimation(Motion.quick) { self.note = nil } } }
+                        .task(id: note) { try? await Task.sleep(nanoseconds: 3_000_000_000); withAnimation(Motion.quick) { self.note = nil } }
                 }
             }
             // Only new lines glide; the first text is laid out at the foot by the anchor alone.
@@ -293,7 +292,7 @@ struct SessionTerminal: View {
         VStack(spacing: 8) {
             // The name heads the screen's column (its pane open flat), as on every pushed page.
             PaneHeading(title: session.name)
-            stateChip
+            stateChip.opacity(stale ? staleDim : 1)
             if stale { StaleLine(lastRead: lastRead) }
             screen.opacity(stale ? staleDim : 1).onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("termcol")).minY } action: { screenTop = $0 }
         }
@@ -306,6 +305,21 @@ struct SessionTerminal: View {
             if !options.isEmpty { choices }
             Spacer(minLength: 0)
             keyRows.disabled(stale).opacity(stale ? staleDim : 1)
+            // A send that failed, said in the layout above the box its text went back to, never over the session's own
+            // lines (it stays until a send gets through, and laid over the screen it hid the menu being answered;
+            // designer, 2026-11-10). One ✕ puts it away.
+            if let f = sendFailed {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(f).font(.footnote.weight(.medium)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button { withAnimation(Motion.quick) { sendFailed = nil } } label: {
+                        Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.white).frame(width: 44, height: 28).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Dismiss")
+                }
+                .padding(.leading, 6)
+                .transition(.opacity)
+            }
             composer
         }
         .padding(.top, lead)

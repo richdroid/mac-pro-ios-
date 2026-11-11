@@ -218,7 +218,7 @@ final class AppModel: ObservableObject {
     // One missed answer from the Mac: unreachable once they've run 8 s with nothing between.
     private func missed() {
         guard Reach.shared.miss(), problem == nil else { return }
-        problem = "Mac Pro is unreachable. It may be restarting, or Tailscale may be off."
+        problem = Phrase.macAway
         liveStore.live = nil
     }
 
@@ -246,7 +246,7 @@ final class AppModel: ObservableObject {
             Reach.shared.hit()
             if problem != nil { problem = nil }
             if needsSignIn { needsSignIn = false }
-            func markFresh() { pulse.lastFresh = Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable, pose != "unreadable" { unreadable = false } }
+            func markFresh() { pulse.lastFresh = Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable != (pose == "unreadable") { unreadable = pose == "unreadable" } }
             // The build's shot of the Admin key row, in place well before the picture is taken.
             if pose == "api-sheet", !posedSheet {
                 posedSheet = true
@@ -276,8 +276,6 @@ final class AppModel: ObservableObject {
             if parks { SwipeLog.note("status held"); heldStatus = fresh; return }
             SwipeLog.note("status landed")
             apply(fresh)
-            // The build's shot of a status this build couldn't read.
-            if pose == "unreadable", !unreadable { unreadable = true }
         } catch APIError.signInNeeded {
             if !needsSignIn { needsSignIn = true }
             lastData = nil
@@ -411,24 +409,30 @@ final class Drafts: ObservableObject {
 @MainActor final class Reach {
     static let shared = Reach()
     private var since: Date?
+    private var count = 0
     private(set) var foregroundAt = Date()
-    func cameForward() { foregroundAt = Date(); since = nil }
-    func hit() { since = nil }
-    // A miss; true once they add up to unreachable.
+    func cameForward() { foregroundAt = Date(); since = nil; count = 0 }
+    func hit() { since = nil; count = 0 }
+    // A miss; true once they add up to unreachable: three unanswered in a row as well as 8 s. Time alone let two misses
+    // ten seconds apart say it, and a phone too busy to run for a while say it with one (the build's films, 2026-11-10:
+    // "can't reach" flashing against a Mac that was answering).
     func miss() -> Bool {
         let now = Date()
         if since == nil { since = now }
-        return now.timeIntervalSince(since!) >= 8 && now.timeIntervalSince(foregroundAt) >= 6
+        count += 1
+        return count >= 3 && now.timeIntervalSince(since!) >= 8 && now.timeIntervalSince(foregroundAt) >= 6
     }
 }
 // The same rule for a page's own reading (a history, the processes, a session's screen): its misses, counted from its
 // first, with the app's grace after coming back to the front.
 struct MissClock {
     private var since: Date?
-    mutating func hit() { since = nil }
+    private var count = 0
+    mutating func hit() { since = nil; count = 0 }
     @MainActor mutating func miss() -> Bool {
         let now = Date()
         if since == nil { since = now }
-        return now.timeIntervalSince(since!) >= 8 && now.timeIntervalSince(Reach.shared.foregroundAt) >= 6
+        count += 1
+        return count >= 3 && now.timeIntervalSince(since!) >= 8 && now.timeIntervalSince(Reach.shared.foregroundAt) >= 6
     }
 }

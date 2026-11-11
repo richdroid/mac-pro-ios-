@@ -86,7 +86,7 @@ struct HistoryView: View {
     // The Mac has stopped answering (the app's own readings, or this page's): the figure under "Now" and the chart are
     // the last it sent, said so with their age and dimmed.
     var stale: Bool { !points.isEmpty && (missed || model.problem != nil || model.pose == "stale") }
-    @ViewBuilder var staleLine: some View { if stale { StaleLine(lastRead: model.pulse.lastFresh) } }
+    @ViewBuilder var staleLine: some View { if stale { StaleLine(lastRead: model.pose == "stale" ? Date().addingTimeInterval(-190) : model.pulse.lastFresh) } }
     init(metric: HistoryMetric) {
         self.metric = metric
         let kept = TrendCache.points[metric.key] ?? []

@@ -782,7 +782,7 @@ struct HeroChips: View {
     var body: some View {
         if offline {
             TimelineView(.periodic(from: .now, by: 30)) { _ in
-                chip({ Circle().fill(Color.gray).frame(width: 9, height: 9) }, pulse.lastFresh.map { "Last read \(Format.ago(ms: $0.timeIntervalSince1970 * 1000))" } ?? "Not reached yet")
+                chip({ Circle().fill(Color.gray).frame(width: 9, height: 9) }, pulse.lastFresh.map { "Last read \(StaleLine.ago($0, now: Date()))" } ?? "Not reached yet")
             }
         } else {
             HStack(spacing: 8) {

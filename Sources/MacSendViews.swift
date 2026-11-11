@@ -220,7 +220,8 @@ struct MacPowerSections: View {
                 HStack {
                     Label(watch.active ? "Getting everything up" : "Everything on the Mac", systemImage: "checklist").lineLimit(1)
                     Spacer()
-                    if let s = summary, model.problem == nil {
+                    // None while a restart is under way: "Getting everything up · All running" said two things at once.
+                    if let s = summary, model.problem == nil, !watch.active {
                         let bad = s.parts.filter(\.bad).count
                         HStack(spacing: 6) {
                             Circle().fill(bad == 0 ? Color.green : Color.red).frame(width: 8, height: 8)

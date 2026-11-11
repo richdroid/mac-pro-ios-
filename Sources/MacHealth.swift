@@ -163,7 +163,10 @@ final class RestartWatch: ObservableObject {
         // The build's shots start clean, apart from the one of a restart under way.
         if let pose = d.string(forKey: "pose"), !pose.isEmpty, pose != "healthback", pose != "healthstuck" { askedAt = nil; wentAway = false }
     }
+    // The build's poses set a restart up for one shot; it isn't kept for the next launch.
+    private var posed: Bool { !(UserDefaults.standard.string(forKey: "pose") ?? "").isEmpty }
     private func save() {
+        if posed { return }
         UserDefaults.standard.set(askedAt, forKey: "restartAskedAt")
         UserDefaults.standard.set(wentAway, forKey: "restartWentAway")
     }
@@ -339,8 +342,10 @@ struct MacHealthView: View {
                 if side != .right, bannerLine != nil { Section { banner } }
                 // Folded or upright, Fix comes before the parts, where he looks first; open flat it has the right pane.
                 if side == .all { fixSection }
-                if side != .right { partsSection(heading: true) }
-                if side == .right { fixSection }
+                // Open flat with the Mac away there's nothing to fix, so the parts take the right pane and the banner has the
+                // left: the whole page sat in the left pane, cut off, beside an empty one (designer, 2026-11-10).
+                if side == .all || (side == .left && !down) || (side == .right && down) { partsSection(heading: true) }
+                if side == .right, !down { fixSection }
             }
             .contentMargins(.top, 4, for: .scrollContent)
             .scrollsUnder(side == .right ? 1 : 0)
