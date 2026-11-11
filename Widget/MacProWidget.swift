@@ -23,7 +23,9 @@ struct WidgetStatus: Decodable {
 }
 
 struct MacEntry: TimelineEntry {
-    enum State { case ok(WidgetStatus), noAddress, unreachable, sample }
+    // `unreadable`: the Mac answered, but not with a status this build can read (it wants its code, or its bridge has
+    // changed). Every failure used to read "Is Tailscale on?", which pointed at the wrong fix.
+    enum State { case ok(WidgetStatus), noAddress, unreachable, unreadable, sample }
     let date: Date
     let state: State
     var status: WidgetStatus? { if case .ok(let s) = state { return s }; return nil }
@@ -31,10 +33,14 @@ struct MacEntry: TimelineEntry {
     var problem: String? {
         switch state {
         case .noAddress: return "No address set."
-        case .unreachable: return "Can’t reach it. Is Tailscale on?"
+        case .unreachable: return "Can’t reach the Mac. Is Tailscale on?"
+        case .unreadable: return "The Mac answered, but this version can’t read it. Open the app."
         default: return nil
         }
     }
+    // When this reading was taken. A widget is redrawn when iOS allows, which can be hours after its quarter of an
+    // hour is up, and it showed the old figures with nothing to say how old (audit, 2026-11-10).
+    var asOf: Text { Text("as of \(date, style: .time)") }
     var temps: [WidgetStatus.Temp] { isSample ? [.init(name: "CPU", c: 54), .init(name: "GPU A", c: 44), .init(name: "GPU B", c: 45), .init(name: "Memory", c: 42)] : status?.temps ?? [] }
     var uptime: String {
         let u = Int(status?.uptime ?? 187200), d = u / 86400, h = u / 3600 % 24, m = u / 60 % 60
@@ -48,24 +54,31 @@ struct MacProvider: AppIntentTimelineProvider {
     func timeline(for c: WidgetAddress, in context: Context) async -> Timeline<MacEntry> {
         let e = await load(c)
         // Unreachable, it looks again in 2 minutes rather than saying so for a quarter of an hour.
-        if case .unreachable = e.state { return Timeline(entries: [e], policy: .after(Date().addingTimeInterval(120))) }
+        switch e.state {
+        case .unreachable, .unreadable: return Timeline(entries: [e], policy: .after(Date().addingTimeInterval(120)))
+        default: break
+        }
         return Timeline(entries: [e], policy: .after(Date().addingTimeInterval(15 * 60)))
     }
     private func load(_ c: WidgetAddress) async -> MacEntry {
+        // Its own field, else the address the app is using (shared with the widgets once the build has their App Group,
+        // MacPrefs.shared; until then this is the address baked into the build).
         var text = (c.address ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty { text = Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? "" }
+        if text.isEmpty { text = SavedAddress.value }
         if text.isEmpty { return MacEntry(date: Date(), state: .noAddress) }
         if !text.contains("://") { text = "https://" + text }
         guard let url = URL(string: text + "/api/status") else { return MacEntry(date: Date(), state: .noAddress) }
         var r = URLRequest(url: url); r.timeoutInterval = 8; r.cachePolicy = .reloadIgnoringLocalCacheData
         // One missed answer isn't the Mac being away (the app's rule, 2026-11-10: unreachable after 8 s of failures): asked
         // again a few seconds later before the widget says it.
+        var answered = false
         for attempt in 0..<3 {
             if attempt > 0 { try? await Task.sleep(nanoseconds: 3_000_000_000) }
-            if let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
-               let s = try? JSONDecoder().decode(WidgetStatus.self, from: d) { return MacEntry(date: Date(), state: .ok(s)) }
+            guard let (d, resp) = try? await URLSession.shared.data(for: r) else { continue }
+            answered = true
+            if (resp as? HTTPURLResponse)?.statusCode == 200, let s = try? JSONDecoder().decode(WidgetStatus.self, from: d) { return MacEntry(date: Date(), state: .ok(s)) }
         }
-        return MacEntry(date: Date(), state: .unreachable)
+        return MacEntry(date: Date(), state: answered ? .unreadable : .unreachable)
     }
 }
 
@@ -155,7 +168,7 @@ struct StatusView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("Mac Pro").font(.headline)
                         Text("CPU \(pct(n.cpu)) · Mem \(pct(n.mem))")
-                        Text("Up \(entry.uptime)").opacity(0.7)
+                        (Text("Up \(entry.uptime) · ") + entry.asOf).opacity(0.7)
                     }.font(.caption)
                 } else { Text("Mac Pro unreachable").font(.caption) }
             case .systemSmall:
@@ -166,6 +179,7 @@ struct StatusView: View {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("Mac Pro").font(.system(size: 16, weight: .semibold))
                                 Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7))
+                                if !entry.isSample { entry.asOf.font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.5)).lineLimit(1).minimumScaleFactor(0.8) }
                             }
                         }
                         Spacer(minLength: 6)
@@ -179,8 +193,9 @@ struct StatusView: View {
                 if let n {
                     HStack(spacing: 16) {
                         VStack(spacing: 6) {
-                            Image("MacPro").resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().frame(height: 100)
+                            Image("MacPro").resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit().frame(maxHeight: 100)
                             Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7))
+                            if !entry.isSample { entry.asOf.font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.5)).lineLimit(1).fixedSize() }
                         }
                         // The meters share the height evenly, the space falling between them rather than inside them.
                         VStack(alignment: .leading, spacing: 0) {
@@ -313,6 +328,8 @@ struct MacClaudeWidget: Widget {
 struct AppsView: View {
     let entry: MacEntry
     func left(_ a: WidgetStatus.SeedApp) -> (String, Color) {
+        // Richard's three apps come from TestFlight, which the Mac reports with no expiry: that read as "New".
+        if a.state == "testflight" { return ("TestFlight", .white.opacity(0.6)) }
         guard a.expires > 0 else { return (a.own ? "New" : "SideStore’s", .white.opacity(0.6)) }
         let d = Int(ceil((a.expires / 1000 - entry.date.timeIntervalSince1970) / 86400))
         return d > 0 ? ("\(d)d left", d > 1 ? .green : .orange) : ("Expired", .red)
@@ -323,7 +340,7 @@ struct AppsView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
                         Text("On this iPhone").font(.caption.weight(.semibold)); Spacer()
-                        Label(s.reachable ? "Mac can reach it" : "Away from the Mac", systemImage: s.reachable ? "wifi" : "airplane").font(.caption2).opacity(0.7)
+                        entry.asOf.font(.caption2).opacity(0.7)
                     }
                     ForEach(Array(s.apps.prefix(4)), id: \.name) { a in
                         let l = left(a)
@@ -339,8 +356,8 @@ struct AppsView: View {
 struct MacAppsWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: "MacProApps", intent: WidgetAddress.self, provider: MacProvider()) { AppsView(entry: $0).widgetURL(URL(string: "macproapp://tab/1")) }
-            .configurationDisplayName("Sideloaded Apps")
-            .description("Days left on your apps, before they need renewing.")
+            .configurationDisplayName("Apps on this iPhone")
+            .description("Your apps from the Mac, and the days left on any it signed.")
             .supportedFamilies([.systemMedium])
     }
 }
@@ -354,7 +371,6 @@ struct MacProWidgets: WidgetBundle {
         MacClaudeWidget()
         MacScreenControl()
         MacDisplayOffControl()
-        MacRenewControl()
         MacAppsWidget()
     }
 }

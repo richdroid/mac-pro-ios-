@@ -40,6 +40,10 @@ final class AppModel: ObservableObject {
     // unreachable (Richard, 2026-11-10, of the TV app: "cant reach the mac is tailscale on keeps happening"). An answer
     // the app couldn't read isn't the Mac being away and never counts. Every view that says it reads this (or Reach).
     @Published var problem: String?
+    // The Mac answered, but with a status this build can't read (the bridge changes daily; one renamed field was
+    // enough). It's reachable, so not `problem`; but nothing on screen is live, and the app says so instead of freezing
+    // every tab under a chip that read "Live" (audit, 2026-11-10).
+    @Published var unreadable = false
     // The Mac wants its access code. Shown as a row at the top of each tab; the sheet only opens by itself when there's
     // no address at all, so pressing Cancel is respected.
     @Published var needsSignIn = false
@@ -84,9 +88,11 @@ final class AppModel: ObservableObject {
         history = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         processes = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // The build's shots of the Control tab's pushed pages (health, a fix under way, back from a restart, the checks).
-        if ["health", "healthbad", "healthfixing", "healthback"].contains(pose) { macPage = .health }
+        if ["health", "healthbad", "healthfixing", "healthback", "healthstuck"].contains(pose) { macPage = .health }
         if ["restart", "restartred"].contains(pose) { macPage = .restart }
         if Self.reopen { reopenForShots() }
+        // The build's shot of the Connection sheet.
+        if pose == "signin" { signInSheet = true }
         // Show the last known state at once; fresh numbers replace it moments later.
         if let d = try? Data(contentsOf: Self.cacheFile) { status = try? JSONDecoder().decode(Status.self, from: d) }
         seedStore.set(status?.iosApps); sessionStore.set(status?.claude.sessions ?? [])
@@ -96,7 +102,7 @@ final class AppModel: ObservableObject {
     }
 
     // What's on screen is only the last the Mac sent: it can't be reached, or won't answer without its code.
-    var stale: Bool { problem != nil || needsSignIn }
+    var stale: Bool { problem != nil || needsSignIn || unreadable }
 
     var pose: String { UserDefaults.standard.string(forKey: "pose") ?? "" }
 
@@ -122,7 +128,7 @@ final class AppModel: ObservableObject {
             @MainActor func push() {
                 if let h { tab = 0; history = h }
                 else if let p { tab = 0; processes = p }
-                else if pose == "session" { tab = 2; openSession(key: "chumby") }
+                else if pose.hasPrefix("session") { tab = 2; openSession(key: "chumby") }
                 else if pose.hasPrefix("versions") { tab = 1; appHistory = "TV.ipa" }
             }
             try? await Task.sleep(nanoseconds: 12_000_000_000); push()
@@ -170,6 +176,8 @@ final class AppModel: ObservableObject {
         openPending()
         // Status's histories read ahead, so a tile opens onto a drawn chart.
         if tab == 0 { let api = api; Task { await TrendCache.prefetch(api, fresh) } }
+        // Status's health chip, from a Mac whose status doesn't count its parts yet: read from its Health now and then.
+        if tab == 0, fresh.healthBad == nil, pose.isEmpty { HealthSummary.shared.refresh(api) }
         AlertWatch.shared.sawInForeground(fresh.alerts ?? [])
     }
     private func releaseHeld() {
@@ -180,17 +188,17 @@ final class AppModel: ObservableObject {
     func start() {
         stop()
         ScrollHold.onRelease = { [weak self] in self?.releaseHeld() }
-        // One answer per build is all the Mac needs.
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
-        if UserDefaults.standard.string(forKey: "hotProbedBuild") != build {
-            Task { [weak self] in
-                // Not counted as tried if the Mac wasn't ready to hand it over.
-                if await self?.hotProbeOnce() == true { UserDefaults.standard.set(build, forKey: "hotProbedBuild") }
-            }
-        }
         loops = [
-            // Everything, every 10 seconds; the live numbers every second in between.
-            Task { [weak self] in while !Task.isCancelled { if self?.screenOpen != true { await self?.refresh() }; try? await Task.sleep(nanoseconds: UInt64(MacPrefs.fullEvery * 1e9)) } },
+            // Everything, every 10 seconds; the live numbers every second in between. While the Mac can't be reached it's
+            // asked every 3 s at most: the live numbers stop then, and only this brings the app back, which took up to a
+            // minute after Tailscale came on with "Everything else" set to a minute (audit, 2026-11-10).
+            Task { [weak self] in
+                while !Task.isCancelled {
+                    if self?.screenOpen != true { await self?.refresh() }
+                    let wait = self?.problem != nil ? min(MacPrefs.fullEvery, 3) : MacPrefs.fullEvery
+                    try? await Task.sleep(nanoseconds: UInt64(wait * 1e9))
+                }
+            },
             Task { [weak self] in while !Task.isCancelled { if self?.screenOpen != true { await self?.refreshLive() }; try? await Task.sleep(nanoseconds: UInt64(MacPrefs.liveEvery * 1e9)) } },
         ]
     }
@@ -200,37 +208,6 @@ final class AppModel: ObservableObject {
         guard Reach.shared.miss(), problem == nil else { return }
         problem = "Mac Pro is unreachable. It may be restarting, or Tailscale may be off."
         liveStore.live = nil
-    }
-
-    // Tests whether code fetched from the Mac can run here, and tells the Mac what happened.
-    func hotProbeOnce() async -> Bool {
-        // Whole, as it was signed: the signature was made for a framework bundle, and alone it was refused.
-        let fm = FileManager.default
-        let base = fm.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Hot").appendingPathComponent("HotProbe.framework")
-        try? fm.removeItem(at: base)
-        var binary = 0
-        for part in ["HotProbe", "Info.plist", "_CodeSignature/CodeResources"] {
-            guard let (data, resp) = try? await api.hotProbe(part), (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else {
-                return false
-            }
-            let file = base.appendingPathComponent(part)
-            try? fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            guard (try? data.write(to: file, options: .noFileProtection)) != nil else { _ = await run("ios-probe", ["result": "could not save \(part)"]); return false }
-            if part == "HotProbe" { binary = data.count }
-        }
-        var result: String
-        if let h = dlopen(base.appendingPathComponent("HotProbe").path, RTLD_NOW) {
-            typealias Probe = @convention(c) () -> UnsafePointer<CChar>?
-            if let sym = dlsym(h, "hot_probe"), let out = unsafeBitCast(sym, to: Probe.self)() { result = "OK: " + String(cString: out) }
-            else { result = "opened, but no function" }
-        } else {
-            // Paths are long and the reason comes last, so send the end of the message.
-            let message = dlerror().map { String(cString: $0) } ?? "unknown"
-            result = "whole framework failed: " + String(message.suffix(300))
-        }
-        result += " (\(binary) bytes)"
-        _ = await run("ios-probe", ["result": result])
-        return true
     }
 
     func refreshLive() async {
@@ -253,29 +230,31 @@ final class AppModel: ObservableObject {
         if address.isEmpty { if !needsSignIn { needsSignIn = true }; return }
         do {
             let data = try await api.statusData()
+            // It answered: reachable, whatever it said. Fresh only once what it said has been read (below).
             Reach.shared.hit()
-            pulse.lastFresh = Date(); pulse.beats &+= 1
             if problem != nil { problem = nil }
             if needsSignIn { needsSignIn = false }
-            if !gotFresh { gotFresh = true }
+            func markFresh() { pulse.lastFresh = Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable, pose != "unreadable" { unreadable = false } }
             // The build's shot of the Admin key row, in place well before the picture is taken.
             if pose == "api-sheet", !posedSheet {
                 posedSheet = true
                 Task { try? await Task.sleep(nanoseconds: 1_500_000_000); apiSetup = true }
             }
             // The same answer as last time changes nothing on screen, so nothing is redrawn for it.
-            if data == lastData, status != nil { openPending(); return }
-            lastData = data
+            if data == lastData, status != nil { markFresh(); openPending(); return }
             let file = Self.cacheFile
             let decoded = try await Task.detached(priority: .userInitiated) {
                 let s = try JSONDecoder().decode(Status.self, from: data)
                 try? data.write(to: file, options: .atomic)
                 return s
             }.value
+            lastData = data
+            markFresh()
             var fresh = decoded
             Self.applyPose(pose, to: &fresh)
             // The build's shot of a session's own page, opened as from the Claude tab.
-            if pose == "session", sessionScreen == nil, !Self.reopen { pendingSession = "chumby"; tab = 2 }
+            // (Also "sessionstale", its screen no longer coming, and "sessionfail", a message that didn't get through.)
+            if pose.hasPrefix("session"), sessionScreen == nil, !Self.reopen { pendingSession = "chumby"; tab = 2 }
             // The build's shot of an app's Version History, opened as from the Apps tab.
             if ["versions", "versionsfilm", "versionsupdate"].contains(pose), !posedHistory, !Self.reopen {
                 posedHistory = true; tab = 1
@@ -285,14 +264,18 @@ final class AppModel: ObservableObject {
             if parks { SwipeLog.note("status held"); heldStatus = fresh; return }
             SwipeLog.note("status landed")
             apply(fresh)
+            // The build's shot of a status this build couldn't read.
+            if pose == "unreadable", !unreadable { unreadable = true }
         } catch APIError.signInNeeded {
             if !needsSignIn { needsSignIn = true }
             lastData = nil
         } catch is CancellationError {
         } catch let e as URLError where e.code == .cancelled {
         } catch is DecodingError {
-            // The Mac answered with something this build can't read: it's there, and the last status stands.
+            // The Mac answered with something this build can't read: it's there, the last status stands, and the app
+            // says that's what it is showing.
             lastData = nil
+            if !unreadable { unreadable = true }
         } catch {
             lastData = nil
             missed()
@@ -303,6 +286,8 @@ final class AppModel: ObservableObject {
     static func applyPose(_ pose: String, to s: inout Status) {
         switch pose {
         case "alerts", "alertsdismiss": s.alerts = Status.Alert.samples
+        // Two parts of the Mac needing a look, as its bridge will count them: Status's chip says so and opens Health.
+        case "needslook": s.healthBad = 2
         case "api-none": s.apiUsage = Status.APIUsage(configured: false)
         case "api-refused": s.apiUsage = Status.APIUsage(configured: true, error: "Couldn’t read API usage: the Admin key was refused")
         case "api-live", "api-sheet": s.apiUsage = .sample
@@ -357,14 +342,17 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // Nil when it worked, or what went wrong in plain words: the Mac out of reach reads the way it does everywhere, never
+    // as the system's "The request timed out."
     func run(_ name: String, _ body: [String: Any] = [:]) async -> String? {
         do { try await api.action(name, body); await refresh(); return nil }
-        catch { return error.localizedDescription }
+        catch { return Self.say(error) }
     }
     func runSealed(_ name: String, secret: String, extra: [String: Any] = [:]) async -> String? {
         do { try await api.sendSealed(name, secret: secret, extra: extra); await refresh(); return nil }
-        catch { return error.localizedDescription }
+        catch { return Self.say(error) }
     }
+    static func say(_ error: Error) -> String { MacFiles.unreachable(error) ? Phrase.macAway : error.localizedDescription }
 }
 
 enum Format {

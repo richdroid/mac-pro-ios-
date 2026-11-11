@@ -50,6 +50,11 @@ struct SessionTerminal: View {
     @State private var message = ""
     @State private var misses = MissClock()
     @State private var note: String?
+    // A send that didn't reach the session: said until the next one that does, with what was typed put back in the box.
+    @State private var sendFailed: String?
+    // The screen has stopped coming (8 s of misses): how old it is, and nothing typed or pressed against it.
+    @State private var stale = false
+    @State private var lastRead: Date?
     @State private var sends = 0
     @State private var width: CGFloat = 0
     @State private var starting = false
@@ -104,19 +109,39 @@ struct SessionTerminal: View {
         }
     }
     func load() async {
-        do { show(try await model.api.termScreen(key)); misses.hit(); if note == "Can’t reach the Mac" { note = nil } }
+        do {
+            show(try await model.api.termScreen(key)); misses.hit(); lastRead = Date()
+            // The build's shots: the screen two minutes old, and a message that didn't get through, back in the box.
+            if model.pose == "sessionstale" { stale = true; lastRead = Date().addingTimeInterval(-130); return }
+            if model.pose == "sessionfail", sendFailed == nil { message = "run the tests again and tell me what fails"; sendFailed = "Not sent: \(Phrase.macAway) Your message is back in the box." }
+            if stale { withAnimation(Motion.quick) { stale = false } }
+            if note == Phrase.macAway { note = nil }
+        }
+        catch is CancellationError {}
         // Only after 8 s without an answer (MissClock): one missed screen said it at once.
-        catch { if misses.miss(), !loaded { note = "Can’t reach the Mac" } }
+        catch {
+            guard misses.miss() else { return }
+            if loaded { if !stale { withAnimation(Motion.quick) { stale = true } } } else { note = Phrase.macAway }
+        }
     }
     // One after another, in the order pressed: ↓ then Enter must never reach the Mac as Enter then ↓.
     @State private var queue: Task<Void, Never>?
-    func send(_ body: [String: Any]) {
+    // `restore` is a message from the box: if it doesn't reach the session it goes back in the box (ahead of anything
+    // typed since), and the failure stays said until a send gets through. It was cleared as it was sent and the note
+    // went after 3 s, so a long instruction typed at work was simply gone (audit, 2026-11-10).
+    func send(_ body: [String: Any], restore: String? = nil) {
         sends += 1
         let before = queue
         queue = Task {
             await before?.value
-            do { show(try await model.api.termSend(key, body)) }
-            catch { withAnimation(Motion.quick) { note = error.localizedDescription } }
+            do {
+                show(try await model.api.termSend(key, body)); lastRead = Date()
+                if sendFailed != nil { withAnimation(Motion.quick) { sendFailed = nil } }
+            } catch {
+                if let restore { message = message.isEmpty ? restore : restore + "\n" + message }
+                let why = MacFiles.unreachable(error) ? Phrase.macAway : error.localizedDescription
+                withAnimation(Motion.quick) { sendFailed = restore != nil ? "Not sent: \(why) Your message is back in the box." : why }
+            }
         }
     }
     func start() {
@@ -160,13 +185,14 @@ struct SessionTerminal: View {
             }
             // A failure shows at the foot of the screen, right above the keys and the box that caused it.
             .overlay(alignment: .bottom) {
-                if let note {
+                if let note = sendFailed ?? note {
                     Text(note).font(.footnote.weight(.semibold)).foregroundStyle(.white).multilineTextAlignment(.center)
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .glassEffect(.regular.tint(.red.opacity(0.35)), in: Capsule())
                         .padding(.bottom, 10).padding(.horizontal, 12)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .task(id: note) { try? await Task.sleep(nanoseconds: 3_000_000_000); withAnimation(Motion.quick) { self.note = nil } }
+                        // A passing note goes after 3 s; a send that failed stays until one gets through.
+                        .task(id: note) { try? await Task.sleep(nanoseconds: 3_000_000_000); if sendFailed == nil { withAnimation(Motion.quick) { self.note = nil } } }
                 }
             }
             // Only new lines glide; the first text is laid out at the foot by the anchor alone.
@@ -193,6 +219,7 @@ struct SessionTerminal: View {
                 .accessibilityLabel("Choose \(o.number), \(o.text)")
             }
         }
+        .disabled(stale).opacity(stale ? staleDim : 1)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
     func glyph(_ k: String, _ label: String) -> Text {
@@ -235,14 +262,15 @@ struct SessionTerminal: View {
                 .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             Button {
                 let m = message; message = ""
-                send(["text": m])
+                send(["text": m], restore: m)
             } label: {
                 Image(systemName: "arrow.up").font(.body.weight(.bold)).frame(width: 40, height: 40)
                     .background(macBlue, in: Circle()).foregroundStyle(.white)
             }
             .buttonStyle(.plain)
-            .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .opacity(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
+            // Not against a screen that has stopped coming: the box still takes what's typed, to send once it's back.
+            .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || stale)
+            .opacity(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || stale ? 0.4 : 1)
             .accessibilityLabel("Send")
         }
     }
@@ -266,7 +294,8 @@ struct SessionTerminal: View {
             // The name heads the screen's column (its pane open flat), as on every pushed page.
             PaneHeading(title: session.name)
             stateChip
-            screen.onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("termcol")).minY } action: { screenTop = $0 }
+            if stale { StaleLine(lastRead: lastRead) }
+            screen.opacity(stale ? staleDim : 1).onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("termcol")).minY } action: { screenTop = $0 }
         }
         .coordinateSpace(.named("termcol"))
     }
@@ -276,7 +305,7 @@ struct SessionTerminal: View {
         VStack(spacing: 8) {
             if !options.isEmpty { choices }
             Spacer(minLength: 0)
-            keyRows
+            keyRows.disabled(stale).opacity(stale ? staleDim : 1)
             composer
         }
         .padding(.top, lead)
@@ -311,7 +340,7 @@ struct SessionTerminal: View {
         // all of them, so the box is the same view through every change of posture, with its text and focus.
         GeometryReader { g in
             let live = arrangement(g)
-            let mode = NavTransit.shared.active ? (heldMode ?? live) : live
+            let mode = NavTransit.shared.inFlight ? (heldMode ?? live) : live
             SessionFoldLayout(mode: mode) {
                 terminalColumn
                 controls(lead: { if case .panes = mode { return screenTop } else { return 0 } }())
@@ -333,7 +362,8 @@ struct SessionTerminal: View {
         .sensoryFeedback(trigger: sends) { _, _ in MacPrefs.haptics ? .impact(weight: .light) : nil }
         .task {
             while !Task.isCancelled {
-                await load()
+                // Not under the Mac's screen, which has the link to itself while it's open.
+                if !model.screenOpen { await load() }
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
             }
         }

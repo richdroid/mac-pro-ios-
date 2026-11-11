@@ -7,7 +7,6 @@ struct MacShortcuts: AppShortcutsProvider {
         AppShortcut(intent: MacOpenScreenIntent(), phrases: ["Show the \(.applicationName) screen"], shortTitle: "Screen", systemImageName: "macwindow")
         AppShortcut(intent: MacDisplayOffIntent(), phrases: ["Turn off the \(.applicationName) display"], shortTitle: "Display Off", systemImageName: "moon")
         AppShortcut(intent: MacCopyIntent(), phrases: ["Copy from \(.applicationName)"], shortTitle: "Copy from Mac", systemImageName: "doc.on.doc")
-        AppShortcut(intent: MacSendIntent(), phrases: ["Send to \(.applicationName)"], shortTitle: "Send to Mac", systemImageName: "doc.on.clipboard")
-        AppShortcut(intent: MacRenewAppsIntent(), phrases: ["Renew my apps with \(.applicationName)"], shortTitle: "Renew Apps", systemImageName: "arrow.clockwise")
+        AppShortcut(intent: MacSendIntent(), phrases: ["Paste to \(.applicationName)", "Send to \(.applicationName)"], shortTitle: "Paste to Mac", systemImageName: "doc.on.clipboard")
     }
 }
