@@ -945,7 +945,10 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
       if (!msgs.length) return;
       const t = msgs[0];
       const need = t === 0 ? 20 : t === 2 ? (msgs.length >= 4 ? 4 + 4 * msgs.readUInt16BE(2) : 4) : t === 3 ? 10 : t === 4 ? 8 : t === 5 ? 6
-        : t === 6 ? (msgs.length >= 8 ? 8 + msgs.readUInt32BE(4) : 8) : 1;
+        // 250 and 251 are the app's own messages to the bridge (a smooth scroll, and its hello). Read as one byte each,
+        // the hello's three zero bytes began a 20-byte message that swallowed every request after it, three bytes out
+        // of step for good: the stand-in sent the first four pictures and then nothing, in every film since 2026-11-05.
+        : t === 6 ? (msgs.length >= 8 ? 8 + msgs.readUInt32BE(4) : 8) : t === 250 ? 8 : t === 251 ? 4 : 1;
       if (msgs.length < need) return;
       const m = msgs.subarray(0, need); msgs = msgs.subarray(need);
       if (t === 0) bpp = m[4] === 16 ? 16 : 32;
