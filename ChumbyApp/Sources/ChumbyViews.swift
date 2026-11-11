@@ -437,7 +437,11 @@ struct TwoPane<L: View, R: View>: View {
     // with the list rather than leaving it where the old layout had it.
     var restY: CGFloat?
     var box: CGRect = .zero
-    var atTop = true
+    // The list's scroll, from its top: the rest is taken only at exactly 0 (never mid-move, never in a bounce), and the
+    // pinned title shows the moment it is past 0 (gate 7: latched while "near the top", the rest followed the row through
+    // its first half point and the title stepped 1–2 px at the hand-over).
+    var offset: CGFloat = 0
+    var atRest: Bool { abs(offset) < 0.01 }
 }
 struct PinnedTitle<Bar: View>: ViewModifier {
     let on: Bool
@@ -447,12 +451,12 @@ struct PinnedTitle<Bar: View>: ViewModifier {
     func body(content: Content) -> some View {
         let box = row.box
         let restY = row.restY
-        let shown = on && restY != nil && row.frame.minY - box.minY < (restY ?? 0) - 0.5
+        let shown = on && restY != nil && row.offset > 0.01
         content
             .environment(row)
-            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top <= 0.5 } action: { _, top in
-                row.atTop = top
-                if top, row.frame != .zero { row.restY = row.frame.minY - row.box.minY }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, o in
+                row.offset = o
+                if row.atRest, row.frame != .zero { row.restY = row.frame.minY - row.box.minY }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { row.box = $0 }
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
@@ -487,7 +491,9 @@ struct PinnedRow: ViewModifier {
         content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
             guard let row else { return }
             row.frame = f
-            if row.atTop || row.restY == nil { row.restY = f.minY - row.box.minY }
+            // Only the first report: after that the rest is taken by the scroll reading at exactly 0, so a fling's first
+            // frame (the row already moved, the scroll not yet read) can never be taken for the rest.
+            if row.restY == nil, row.atRest { row.restY = f.minY - row.box.minY }
         }
     }
 }
