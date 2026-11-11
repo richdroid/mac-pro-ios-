@@ -128,7 +128,7 @@ struct HistoryView: View {
         guard metric.kind == .bytes || metric.kind == .rate else { return nil }
         let top = marks.map { max($0.value, $0.peak ?? 0) }.max() ?? 0
         guard top > 0 else { return nil }
-        let unit: Double = metric.kind == .bytes ? 1_073_741_824 : (top < 1_048_576 ? 1024 : 1_048_576)
+        let unit: Double = metric.kind == .bytes ? 1_073_741_824 : (top < 1024 ? 1 : top < 1_048_576 ? 1024 : 1_048_576)
         let raw = top / unit / 3
         let mag = pow(10, floor(log10(max(raw, 1e-9))))
         let step = ([1.0, 2, 5, 10].first { $0 * mag >= raw } ?? 10) * mag * unit
