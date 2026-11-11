@@ -150,14 +150,14 @@ struct SendSection: View {
         .task {
             if model.pose == "send" { sends.pose() }
             while !Task.isCancelled {
-                await sends.loadRecent()
+                if !model.screenOpen { await sends.loadRecent() }
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
             }
         }
         if !sends.recent.isEmpty || sends.recentFailed {
             Section {
                 if sends.recentFailed && sends.recent.isEmpty {
-                    Label("Can’t reach the Mac", systemImage: "wifi.exclamationmark").foregroundStyle(.secondary)
+                    Label(Phrase.macAway, systemImage: "wifi.exclamationmark").foregroundStyle(.secondary)
                 }
                 ForEach(showAll ? sends.recent : Array(sends.recent.prefix(4))) { f in recentRow(f) }
                 if sends.recent.count > 4 {
@@ -195,7 +195,7 @@ struct SendSection: View {
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 if shown == f.name { withAnimation(Motion.quick) { shown = nil } }
             } catch {
-                withAnimation(Motion.quick) { revealFail[f.name] = MacFiles.unreachable(error) ? "Can’t reach the Mac. Is Tailscale on?" : error.localizedDescription }
+                withAnimation(Motion.quick) { revealFail[f.name] = MacFiles.unreachable(error) ? Phrase.macAway : error.localizedDescription }
             }
         }
     }
@@ -206,13 +206,21 @@ struct MacPowerSections: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var watch = RestartWatch.shared
     @State private var summary: MacReport?
+    @State private var misses = MissClock()
+    // The row's summary is only ever what the Mac last said: a read that fails for 8 s takes it away (it kept its last
+    // green "All running" for as long as the Mac was gone), and none is shown while the app itself can't reach the Mac.
+    @discardableResult func read() async -> Bool {
+        do { summary = try await model.api.macHealth(); HealthSummary.shared.set(summary); misses.hit(); return true }
+        catch is CancellationError { return true }
+        catch { if misses.miss() { summary = nil; HealthSummary.shared.set(nil) }; return false }
+    }
     var body: some View {
         Section {
             Button { model.macPage = .health } label: {
                 HStack {
                     Label(watch.active ? "Getting everything up" : "Everything on the Mac", systemImage: "checklist").lineLimit(1)
                     Spacer()
-                    if let s = summary {
+                    if let s = summary, model.problem == nil {
                         let bad = s.parts.filter(\.bad).count
                         HStack(spacing: 6) {
                             Circle().fill(bad == 0 ? Color.green : Color.red).frame(width: 8, height: 8)
@@ -233,12 +241,13 @@ struct MacPowerSections: View {
         .task {
             if let p = MacHealthView.posed(model.pose == "send" ? "healthbad" : "health") , !model.pose.isEmpty { summary = p.report; return }
             while !Task.isCancelled {
-                if let r = try? await model.api.macHealth() { summary = r }
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                let ok = model.screenOpen ? true : await read()
+                // Sooner after a miss, so 8 s of them are noticed in about 8.
+                try? await Task.sleep(nanoseconds: ok ? 30_000_000_000 : 4_000_000_000)
             }
         }
         // Back from its page: the summary says what that page last saw.
-        .onChange(of: model.macPage) { _, p in if p == nil { Task { if let r = try? await model.api.macHealth() { summary = r } } } }
+        .onChange(of: model.macPage) { _, p in if p == nil { Task { await read() } } }
         Section {
             Button(role: .destructive) { model.macPage = .restart } label: {
                 HStack { Text("Restart the Mac…"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }

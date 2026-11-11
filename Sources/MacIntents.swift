@@ -47,7 +47,7 @@ enum MacBridge {
 }
 enum MacIntentError: LocalizedError {
     case noAnswer
-    var errorDescription: String? { "The Mac Pro didn’t answer. Is Tailscale on?" }
+    var errorDescription: String? { "Can’t reach the Mac. Is Tailscale on?" }
 }
 enum ScreenRequest {
     static let notification = Notification.Name("macOpenScreen")
@@ -77,11 +77,6 @@ struct MacDisplayOffIntent: AppIntent {
     static var description = IntentDescription("Darkens the computer’s display. It keeps running.")
     func perform() async throws -> some IntentResult { try await MacBridge.action("display-off"); return .result() }
 }
-struct MacRenewAppsIntent: AppIntent {
-    static var title: LocalizedStringResource = "Renew iPhone Apps"
-    static var description = IntentDescription("Asks the computer to sign and reinstall your apps. This phone must be on the same Wi-Fi.")
-    func perform() async throws -> some IntentResult { try await MacBridge.action("ios-resign"); return .result() }
-}
 struct MacOpenScreenIntent: AppIntent {
     static var title: LocalizedStringResource = "Show the Mac Pro Screen"
     static var description = IntentDescription("Opens straight into the computer’s screen.")
@@ -105,7 +100,9 @@ struct MacCopyIntent: AppIntent {
     }
 }
 struct MacSendIntent: AppIntent {
-    static var title: LocalizedStringResource = "Send to the Mac"
+    // "Paste", as the Status key that does the same is "Paste to Mac": "Send to Mac" is the files' name (Control, the
+    // share sheet).
+    static var title: LocalizedStringResource = "Paste Text to the Mac"
     static var description = IntentDescription("Puts text on the computer’s clipboard.")
     @Parameter(title: "Text") var text: String
     func perform() async throws -> some IntentResult { try await MacBridge.send("/api/clipboard", body: Data(text.utf8), json: false); return .result() }
@@ -122,6 +119,9 @@ enum SavedAddress {
     static var value: String {
         let stored = UserDefaults.standard.string(forKey: "address") ?? ""
         if !stored.isEmpty { return stored }
+        // In a widget or control: the address the app shares with them (MacPrefs.shareWithWidgets), once the build has
+        // the App Group. A widget kept using the baked address after it was changed in the app.
+        if let g = MacPrefs.shared?.string(forKey: "address"), !g.isEmpty { return g }
         if let k = keychain(), !k.isEmpty { return k }
         return Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? ""
     }

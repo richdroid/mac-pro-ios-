@@ -51,8 +51,9 @@ enum MacPrefs {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) == nil ? nil : UserDefaults(suiteName: groupID)
     }
     static func shareWithWidgets() {
-        guard let g = shared, g.string(forKey: "accent") != accent.rawValue || g.object(forKey: "celsius") as? Bool != celsius else { return }
-        g.set(accent.rawValue, forKey: "accent"); g.set(celsius, forKey: "celsius")
+        let address = d.string(forKey: "address") ?? ""
+        guard let g = shared, g.string(forKey: "accent") != accent.rawValue || g.object(forKey: "celsius") as? Bool != celsius || g.string(forKey: "address") != address else { return }
+        g.set(accent.rawValue, forKey: "accent"); g.set(celsius, forKey: "celsius"); g.set(address, forKey: "address")
         WidgetCenter.shared.reloadAllTimelines()
     }
     // Read by the widgets: the app's choices when shared, else nil, and the widget keeps its own look.

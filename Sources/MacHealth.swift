@@ -151,22 +151,29 @@ final class RestartWatch: ObservableObject {
     @Published var askedAt: Date? { didSet { save() } }
     @Published var wentAway = false { didSet { save() } }
     @Published var backAt: Date?
+    // The restart was sent but the Mac's answer never arrived (a timeout, the link dropping): it may be restarting.
+    @Published var unconfirmed = false
+    // An old restart is over, whatever happened.
+    static let longest: TimeInterval = 30 * 60
     private init() {
         let d = UserDefaults.standard
         askedAt = d.object(forKey: "restartAskedAt") as? Date
         wentAway = d.bool(forKey: "restartWentAway")
-        // An old restart is over, whatever happened.
-        if let a = askedAt, Date().timeIntervalSince(a) > 30 * 60 { askedAt = nil; wentAway = false }
+        expire()
         // The build's shots start clean, apart from the one of a restart under way.
-        if let pose = d.string(forKey: "pose"), !pose.isEmpty, pose != "healthback" { askedAt = nil; wentAway = false }
+        if let pose = d.string(forKey: "pose"), !pose.isEmpty, pose != "healthback", pose != "healthstuck" { askedAt = nil; wentAway = false }
     }
     private func save() {
         UserDefaults.standard.set(askedAt, forKey: "restartAskedAt")
         UserDefaults.standard.set(wentAway, forKey: "restartWentAway")
     }
     var active: Bool { askedAt != nil }
-    func asked() { askedAt = Date(); wentAway = false; backAt = nil }
-    func done() { askedAt = nil; wentAway = false }
+    func asked(confirmed: Bool = true) { askedAt = Date(); wentAway = false; backAt = nil; unconfirmed = !confirmed }
+    func done() { askedAt = nil; wentAway = false; unconfirmed = false }
+    // Checked at launch and every time the Mac fails to answer, so a page left open doesn't wait for ever either.
+    func expire() { if let a = askedAt, Date().timeIntervalSince(a) > Self.longest { done() } }
+    // Gone for over ten minutes (a minute's notice, then ten): it's not coming back by itself.
+    func stuck(_ now: Date) -> Bool { wentAway && backAt == nil && askedAt.map { now.timeIntervalSince($0) > 660 } == true }
 }
 
 // A part's row: its sign, its name, what it means, and what to do when it needs his hands.
@@ -256,6 +263,8 @@ struct MacHealthView: View {
                 }
             }
             .padding(.vertical, 4)
+            // A restart that never came back has an end: said in red after ten minutes, with a way to stop waiting.
+            if watch.stuck(now) { Button("Stop waiting") { withAnimation(Motion.quick) { watch.done() } } }
         }
     }
     struct Line { let symbol: String; let color: Color; let title: String; let detail: String }
@@ -264,8 +273,12 @@ struct MacHealthView: View {
         func minutes(_ s: TimeInterval) -> String { let m = max(1, Int((s / 60).rounded())); return m == 1 ? "1 minute" : "\(m) minutes" }
         if let a = watch.askedAt {
             let since = now.timeIntervalSince(a)
+            if watch.stuck(now) {
+                return Line(symbol: "exclamationmark.triangle.fill", color: .red, title: "The Mac hasn’t come back", detail: "Asked \(minutes(since)) ago. It may be stuck at startup and need someone at it.")
+            }
             if !watch.wentAway {
-                if since > 240 { return Line(symbol: "questionmark.circle", color: .orange, title: "The Mac hasn’t restarted", detail: "It was asked \(clock(since)) ago and is still answering. Check it with Remote desktop.") }
+                if watch.unconfirmed, since <= 240 { return Line(symbol: "questionmark.circle", color: .orange, title: "The Mac didn’t confirm", detail: "It may be restarting; watching for it. Asked \(clock(since)) ago.") }
+                if since > 240 { return Line(symbol: "questionmark.circle", color: .orange, title: "The Mac hasn’t restarted", detail: "It was asked \(clock(since)) ago and is still answering. Check it with Screen.") }
                 return Line(symbol: "arrow.clockwise.circle", color: .orange, title: "Restarting in about a minute", detail: since < 60 ? "Goes down in about \(clock(60 - since)). The app reconnects by itself." : "Going down any moment now. The app reconnects by itself.")
             }
             if let b = watch.backAt {
@@ -274,7 +287,7 @@ struct MacHealthView: View {
             }
             return Line(symbol: "power.circle", color: .secondary, title: "The Mac is restarting", detail: "Asked \(clock(since)) ago. It usually takes three to five minutes; each part below fills in by itself as it comes back.")
         }
-        if away { return Line(symbol: "wifi.exclamationmark", color: .red, title: "Can’t reach the Mac", detail: "It may be restarting, or Tailscale may be off on this iPhone.") }
+        if away { return Line(symbol: "wifi.exclamationmark", color: .red, title: Phrase.macAwayShort, detail: "It may be restarting, or Tailscale may be off on this iPhone.") }
         return nil
     }
 
@@ -308,7 +321,9 @@ struct MacHealthView: View {
                 MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id), starting: startingWindow).place(id)
             }
         } header: {
-            if heading {
+            // While the Mac is away nothing is known of its parts: the heading says so too, not what was last read.
+            if heading, down { Text("Waiting for the Mac") }
+            else if heading {
                 Text(report.map { r in
                     let n = r.parts.filter(\.bad).count
                     return n == 0 ? "All running" : startingWindow ? "\(n) still starting" : "\(n) need\(n == 1 ? "s" : "") a look"
@@ -352,11 +367,14 @@ struct MacHealthView: View {
         if let posed = Self.posed(model.pose) {
             report = posed.report
             if posed.fixing { fixing = Date().addingTimeInterval(-23) }
+            // "healthstuck": gone twelve minutes and not back.
+            if model.pose == "healthstuck" { watch.asked(); watch.askedAt = Date().addingTimeInterval(-720); watch.wentAway = true }
             if model.pose == "healthback" { watch.asked(); watch.askedAt = Date().addingTimeInterval(-200); watch.wentAway = true; watch.backAt = Date().addingTimeInterval(-20) }
             return
         }
         while !Task.isCancelled {
-            if fixing == nil { await read() }
+            // Not under the Mac's screen, which has the link to itself while it's open.
+            if fixing == nil, !model.screenOpen { await read() }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
     }
@@ -365,13 +383,20 @@ struct MacHealthView: View {
             let r = try await model.api.macHealth(fresh: watch.active)
             misses.hit(); away = false
             report = r
-            if watch.active {
-                // The Mac's uptime shorter than the time since he asked: it restarted, even if this page never saw it go.
-                if !watch.wentAway, let a = watch.askedAt, let up = model.status?.uptime, up + 30 < Date().timeIntervalSince(a) {
-                    watch.wentAway = true
-                    watch.backAt = Date().addingTimeInterval(-up)
+            HealthSummary.shared.set(r)
+            if watch.active, let a = watch.askedAt {
+                // Whether it restarted is the Mac's own uptime, asked now, never a guess from one missed answer: one
+                // timeout on cellular read as a restart done ("Everything is up"), or hid a real one (audit, 2026-11-10).
+                let up = (try? await model.api.live())?.uptime
+                let since = Date().timeIntervalSince(a)
+                if let up, up + 30 < since {
+                    // Up for less time than since the restart was asked: it restarted, even if this page never saw it go.
+                    if !watch.wentAway { watch.wentAway = true }
+                    if watch.backAt == nil { watch.backAt = Date().addingTimeInterval(-up) }
+                } else if let up, up >= since, watch.wentAway, watch.backAt == nil {
+                    // It answers and has been up since before it was asked: that miss wasn't the restart. Still waiting for it.
+                    watch.wentAway = false
                 }
-                if watch.wentAway, watch.backAt == nil { watch.backAt = Date() }
                 // All up after coming back: the restart is over; the page keeps saying so until he leaves.
                 if watch.backAt != nil, r.parts.allSatisfy({ !$0.bad }) { let b = watch.backAt; watch.done(); watch.backAt = b }
                 // Asked long ago and never went down: over too, said once.
@@ -382,6 +407,7 @@ struct MacHealthView: View {
         } catch {
             // A restart was asked for: the first miss after it is the Mac going down. Otherwise only 8 s of misses count.
             if watch.active, let a = watch.askedAt, Date().timeIntervalSince(a) > 20 { watch.wentAway = true; watch.backAt = nil }
+            watch.expire()
             if misses.miss() { away = true }
         }
     }
@@ -408,6 +434,7 @@ struct MacHealthView: View {
         case "health": return (r([:]), false)
         case "healthbad": return (r(two), false)
         case "healthfixing": return (r(two), true)
+        case "healthstuck": return (r([:]), false)
         case "healthback": return (r(["sessions": "3 of 6 running"], fixed: ["letterboxd": "Sign-in relay started"]), false)
         default: return nil
         }
@@ -499,7 +526,7 @@ struct MacRestartView: View {
             do { checks = try await model.api.macChecks(); return }
             catch {
                 if MacFiles.unreachable(error), Date().timeIntervalSince(started) < 10 { try? await Task.sleep(nanoseconds: 2_000_000_000); continue }
-                failure = MacFiles.unreachable(error) ? "Can’t reach the Mac to check it. Is Tailscale on?" : error.localizedDescription
+                failure = MacFiles.unreachable(error) ? Phrase.macAway : error.localizedDescription
                 return
             }
         }
@@ -517,7 +544,15 @@ struct MacRestartView: View {
                 refused = rep.parts.first { $0.part == "restart" }?.say ?? "The Mac refused: something above turned red."
             }
         } catch {
-            failure = MacFiles.unreachable(error) ? "Can’t reach the Mac. Nothing was restarted." : error.localizedDescription
+            // The Mac answers only once its restart script has run, so an answer that never arrived (a timeout, the link
+            // dropping mid-request) doesn't mean nothing happened: it may be restarting, and the page watches for it.
+            // Only a request that never left says "nothing was restarted".
+            if let u = error as? URLError, [.timedOut, .networkConnectionLost].contains(u.code) {
+                watch.asked(confirmed: false)
+                withAnimation(Motion.quick) { restarted = true }
+            } else {
+                failure = MacFiles.unreachable(error) ? "Can’t reach the Mac. Nothing was restarted." : error.localizedDescription
+            }
         }
     }
 
