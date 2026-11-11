@@ -191,6 +191,10 @@ jobs:
             shot unreachable$x $d 8 -tab 0 -pose unreachable
             shot claudecard$x $d 9 -tab 2 -pose claudecard
             shot tab1$x $d 7 -tab 1
+            # The stand-in Mac's own pose of his three TestFlight apps (one with a newer build waiting) beside one he added,
+            # and the once-only Automatic Updates tip: his own apps never carry a badge or an Update button.
+            shot apps-testflight$x $d 9 -tab 1 -pose testflight
+            shot apps-testflight-tip$x $d 9 -tab 1 -pose testflighttip
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
