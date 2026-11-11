@@ -1460,12 +1460,18 @@ struct UpgradeTab: View {
     var onTahoe: Bool { (Int(s.macos.split(separator: ".").first ?? "") ?? 0) >= 26 }
     // The update service's status line comes as a log line: "2026-11-04 03:30:15 healthy: macos 26.7.2 (25g332), oclp …".
     // The card says only its word ("Healthy"), with when it was checked under it; the versions are already on the line below.
-    var statusParts: (word: String, at: Date?) {
+    var statusParts: (word: String, at: Date?, step: String?) {
         var t = s.upgrade.status.trimmingCharacters(in: .whitespaces)
         var at: Date?
+        var step: String?
         if t.count >= 19, let d = Self.stamp.date(from: String(t.prefix(19))) { at = d; t = String(t.dropFirst(19)).trimmingCharacters(in: .whitespaces) }
-        if let colon = t.firstIndex(of: ":") { t = String(t[..<colon]) }
-        return (sentenceCase(t), at)
+        if let colon = t.firstIndex(of: ":") {
+            let rest = t[t.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            // Only a short step name: a healthy line goes on with the versions, already in Details.
+            if !rest.isEmpty, rest.count <= 32, !rest.lowercased().hasPrefix("macos") { step = rest }
+            t = String(t[..<colon])
+        }
+        return (sentenceCase(t), at, step)
     }
     static let stamp: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; return f }()
     var headline: String {
@@ -1503,7 +1509,10 @@ struct UpgradeTab: View {
         guard s.upgrade.installed else { return nil }
         let checked = statusParts.at.map { "checked \($0.formatted(.relative(presentation: .named)))" }
         if !logShown, !s.upgrade.log.isEmpty { return ["Up to date", checked].compactMap { $0 }.joined(separator: " · ") }
-        return checked.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        // Running or failed: which step, as the Mac names it after its word ("FAILED: root patch" → "Root patch").
+        let step = statusParts.step.map(sentenceCase)
+        let line = [step, checked].compactMap { $0 }.joined(separator: " · ")
+        return line.isEmpty ? nil : line.prefix(1).uppercased() + line.dropFirst()
     }
     // Only its word and when it was checked: the versions and the patch were under it and again in the rows card beside
     // it, four lines said twice (designer, 2026-11-11). The rows card carries them in every posture.
@@ -1660,7 +1669,7 @@ struct UpdateLog: View {
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .task {
                 // The build's shot of the log read part way up.
-                guard model.pose == "longlog" || model.pose == "upgradefail" else { return }
+                guard model.pose == "longlog" else { return }
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 proxy.scrollTo(lines.count / 2, anchor: .center)
             }
