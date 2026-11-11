@@ -228,11 +228,17 @@ final class PlaceKeeper {
     }
     var top: AnyHashable?
     var layout: Bool?
-    // Where the top of the page is on screen (its scroll view's top plus the bars over it), in the window's points.
-    var line: CGFloat = 120
     var restoring = Date.distantPast
     // While the rebuilt page lays out and scrolls back, its rows pass the line and must not count as his place.
     var settling: Bool { Date().timeIntervalSince(restoring) < 1.2 }
+}
+// Where the top of each page is on screen (its scroll view's top plus the bars over it), in the window's points. Read in
+// geometry transforms, which SwiftUI runs off the main actor, so it is behind a lock rather than on PlaceKeeper.
+final class PlaceLines: @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var lines: [String: CGFloat] = [:]
+    nonisolated static func line(_ page: String) -> CGFloat { lock.lock(); defer { lock.unlock() }; return lines[page] ?? 120 }
+    nonisolated static func set(_ page: String, _ y: CGFloat) { lock.lock(); lines[page] = y; lock.unlock() }
 }
 private struct PlacePageKey: EnvironmentKey { static let defaultValue: String? = nil }
 extension EnvironmentValues { var placePage: String? { get { self[PlacePageKey.self] } set { self[PlacePageKey.self] = newValue } } }
@@ -245,7 +251,9 @@ struct MarksPlace: ViewModifier {
     func body(content: Content) -> some View {
         content.onGeometryChange(for: Bool.self) { g in
             guard let page else { return false }
-            let f = g.frame(in: .global), line = MainActor.assumeIsolated { PlaceKeeper.page(page).line }
+            // SwiftUI runs this off the main actor: MainActor.assumeIsolated here trapped (SIGTRAP, build dd1a9ce,
+            // 2026-11-11), so the line is read from its own locked store, never from the main-actor PlaceKeeper.
+            let f = g.frame(in: .global), line = PlaceLines.line(page)
             return f.minY <= line && f.maxY > line
         } action: { on in
             guard on, let page else { return }
@@ -263,7 +271,7 @@ struct KeepsPlace: ViewModifier {
         content
             .environment(\.placePage, page)
             // The line is just under the bars over the page: the scroll view's top in the window plus its top inset.
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top + 8 } action: { PlaceKeeper.page(page).line = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top + 8 } action: { PlaceLines.set(page, $0) }
             .task(id: panes) {
                 let k = PlaceKeeper.page(page)
                 // Of two panes the first to appear starts the restore; the other, a moment later, scrolls too if it holds it.
