@@ -282,7 +282,9 @@ final class AppModel: ObservableObject {
     // One missed answer from the Mac: unreachable once they've run 8 s with nothing between.
     private func missed() {
         guard Reach.shared.miss(), problem == nil else { return }
-        problem = Phrase.macAway
+        // The card at the top of every tab arrives in one animated move, as it leaves: put in at once, the whole page under
+        // it dropped by the card's height in one frame, and rose again when the Mac answered.
+        withAnimation(Motion.quick) { problem = Phrase.macAway }
         // A new run of misses says it again, whatever was put away before.
         problemPutAway = false
         liveStore.live = nil
@@ -317,9 +319,9 @@ final class AppModel: ObservableObject {
             let data = try await api.statusData()
             // It answered: reachable, whatever it said. Fresh only once what it said has been read (below).
             Reach.shared.hit()
-            if problem != nil, pose != "unreachable" { problem = nil }
-            if needsSignIn { needsSignIn = false }
-            func markFresh() { unread = 0; pulse.lastFresh = pose == "unreachable" ? Date().addingTimeInterval(-25) : Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable != (pose == "unreadable") { unreadable = pose == "unreadable" } }
+            if problem != nil, pose != "unreachable" { withAnimation(Motion.quick) { problem = nil } }
+            if needsSignIn { withAnimation(Motion.quick) { needsSignIn = false } }
+            func markFresh() { unread = 0; pulse.lastFresh = pose == "unreachable" ? Date().addingTimeInterval(-25) : Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable != (pose == "unreadable") { withAnimation(Motion.quick) { unreadable = pose == "unreadable" } } }
             // The build's shot of the Admin key row, in place well before the picture is taken.
             if pose == "api-sheet", !posedSheet {
                 posedSheet = true
@@ -356,7 +358,7 @@ final class AppModel: ObservableObject {
             apply(fresh)
             if SwipeLog.on { SwipeLog.note(String(format: "status applied %.0f ms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)) }
         } catch APIError.signInNeeded {
-            if !needsSignIn { needsSignIn = true }
+            if !needsSignIn { withAnimation(Motion.quick) { needsSignIn = true } }
             lastData = nil
         } catch is CancellationError {
         } catch let e as URLError where e.code == .cancelled {
@@ -367,7 +369,7 @@ final class AppModel: ObservableObject {
             // restarts, and one of those is not a version the app can't read.
             lastData = nil
             unread += 1
-            if unread >= 2, !unreadable { unreadable = true }
+            if unread >= 2, !unreadable { withAnimation(Motion.quick) { unreadable = true } }
         } catch {
             lastData = nil
             SwipeLog.note("status missed: \(error)")
