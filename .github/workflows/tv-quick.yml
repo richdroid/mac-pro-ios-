@@ -100,10 +100,33 @@ jobs:
             sleep 2
             tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-$name-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-$name-hitches.log
           }
-          if has tour; then
-            tourfilm tour 1
+          shot() {
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          if has pages; then
+            # The searches, folded and then open upright: the Apps page's (films, shows and music found together) and
+            # Watch's own with one film found. A simulator's first keyboard is slow, so the first search shot is retaken.
+            shot search 1 12 $M -tab 1 -pose search
+            shot search 1 12 $M -tab 1 -pose search
+            shot watchsearch 1 10 $M -tab 3 -pose watchsearch
             $D "$DEVICE" pose open; sleep 5
             $D "$DEVICE" rotate 1; sleep 5
+            OPENED=1
+            shot search-portrait 3 12 $M -tab 1 -pose search
+            shot search-portrait 3 12 $M -tab 1 -pose search
+            shot watchsearch-portrait 3 10 $M -tab 3 -pose watchsearch
+            shot tab1-portrait 3 7 $M -tab 1
+            shot tab3-portrait 3 7 $M -tab 3
+            shot tab0-portrait 3 8 $M/repisode -tab 0
+            shot tab2-portrait 3 8 $M/repisode -tab 2
+          fi
+          if has tour; then
+            [ -z "$OPENED" ] && tourfilm tour 1
+            [ -z "$OPENED" ] && { $D "$DEVICE" pose open; sleep 5; $D "$DEVICE" rotate 1; sleep 5; }
             tourfilm tour-portrait 3
             # A film playing, its clock running: how many of the TV's readings are put on screen, as before and now.
             SCENE=$M/rfilm tourfilm tour-film-every 3 -everyReading YES
