@@ -40,7 +40,7 @@ struct TVApp: App {
                     }
                 }
                 .onOpenURL { u in
-                    if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 4 ? 1 : t }
+                    if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 4 ? 1 : t }  // 9: Status, Settings pushed
                     // The Now Playing card's next-episode key: the Remote, and that episode's streams as soon as it's
                     // known (a launch from cold has to hear from the TV first; about three seconds at most, then said).
                     if u.host == "next" {
@@ -118,7 +118,7 @@ struct RootView: View {
             return
         }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
-        if ["tour", "type", "episodes", "scrub", "island", "connection", "tvsettings", "tvapps"].contains(pose) { return }
+        if ["tour", "type", "episodes", "scrub", "island", "connection", "tvsettings", "tvapps", "settingsnav", "settingsscript", "stremiotile"].contains(pose) { return }
         // The Remote's picture hidden, then shown again, as its held menu does it: filmed, so each change is seen to fade.
         if pose == "mirror" {
             Task {
@@ -240,21 +240,21 @@ struct RootView: View {
                 if t == 6 { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1 }
                 resets[t, default: 0] += 1
             }) {
+                // Six tabs, in Richard's order (2026-11-11): Remote, Watch, Playing, Search, Apps, Status. Settings is behind a
+                // gear on Status. The values are the old ones, so every link, widget and intent still lands where it did.
                 Tab(value: 0) { Page(title: "Remote", alwaysInline: true, retaps: resets[0, default: 0]) { RemoteTab() } } label: { tabLabel("Remote", "av.remote") }
-                Tab(value: 1) { Page(title: "Apps", retaps: resets[1, default: 0]) { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
+                Tab(value: 3) { Page(title: "Watch", retaps: resets[3, default: 0]) { FilmsTab() } } label: { tabLabel("Watch", "film") }
                 Tab(value: 2) { Page(title: "Playing", retaps: resets[2, default: 0]) { PlayingTab() } } label: {
                     // What kind of thing is on, in the side bar's own glyphs: a cover or an app's banner squeezed into it
                     // read as a clipped "YouTub" among the symbols (Richard, 2026-11-05: "makes no sense").
                     tabLabel("Playing", playingSymbol)
                 }
-                Tab(value: 3) { Page(title: "Watch", retaps: resets[3, default: 0]) { FilmsTab() } } label: { tabLabel("Watch", "film") }
-                Tab(value: 5) { Page(title: "Status", retaps: resets[5, default: 0]) { DeviceTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
-                // Last, so it sits at the foot of the side bar, as in the other apps.
-                Tab(value: 9) { TVSettingsTab(retaps: resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
                 // The one search, for everything (Richard, 2026-11-11). A plain tab, not the system's search role: open
                 // upright the search-role tab took the keyboard from the page's own field the moment it had it (every
                 // open-upright run, 829e7c4 to c70f989: focus on, then off), and on the Duo it isn't set apart anyway.
                 Tab(value: 6) { Page(title: "Search", retaps: resets[6, default: 0]) { SearchPage() } } label: { tabLabel("Search", "magnifyingglass") }
+                Tab(value: 1) { Page(title: "Apps", retaps: resets[1, default: 0]) { AppsTab() } } label: { tabLabel("Apps", "square.grid.2x2") }
+                Tab(value: 5) { Page(title: "Status", showsBar: true, retaps: resets[5, default: 0]) { StatusTab() } } label: { tabLabel("Status", "gauge.with.dots.needle.33percent") }
             }
             .onChange(of: model.tab) { was, t in
                 #if os(iOS)
@@ -285,7 +285,7 @@ struct RootView: View {
         .background { StatusFollower(playingSymbol: $playingSymbol) }
         .overlay(alignment: .top) { ProblemBanner() }
         .overlay(alignment: .bottom) { ToastBubble() }
-        .onAppear { followRequest(); poseForShots(); TabTour.run([0, 1, 2, 3, 5, 9]) { model.tab = $0 } }
+        .onAppear { followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [0, 3, 2, 6, 1, 5]) { model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
         .task { await BrowseStore.shared(.stremio).loadHome() }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
@@ -408,12 +408,21 @@ struct Page<C: View>: View {
     @Environment(\.paneLayout) private var panes
     let title: String
     var alwaysInline = false
+    // The system's bar shown over the page's own heading, for a toolbar item of its own (Status' gear); no title in it.
+    var showsBar = false
     // Taps on this tab's button while it's already showing.
     var retaps = 0
     @ViewBuilder let content: () -> C
     @State private var path = NavigationPath()
     @State private var top = 0
     @State private var scrolled = PageScrollY()
+    // With the bar shown (Status' gear), the room it takes above the heading where iOS puts its items in the side strip
+    // (folded, open flat): taken back, so the heading sits where every other tab's does (gate of 96f5f42: 15 pt lower).
+    // Open upright the bar is the top bar the clock already keeps clear, and costs nothing. Measured on the gate's shots:
+    // 43 px at 3x (Status' words at 114 px against 71 px). Every attempt to measure it live (insets, an empty stack, the
+    // heading's own frame) missed by 9 pt or more by posture, or chased its own move (gates of b01454f to bc5d7cd).
+    @Environment(\.horizontalSizeClass) private var hSize
+    var barRoom: CGFloat { showsBar && !(hSize == .regular && !panes) ? 43.0 / 3 : 0 }
     var body: some View {
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
@@ -428,8 +437,18 @@ struct Page<C: View>: View {
                 // "Watch" printed over "Continue watching" (Richard, 2026-11-07: "look at how the watch header interacts
                 // with the other text"): it can only follow a scroll view it finds at the page's root, and the pages'
                 // own layouts (two panes, overlays) hid it.
-                .safeAreaInset(edge: .top, spacing: 0) { if !alwaysInline { MovingTitle(title: title, scrolled: scrolled) } }
-                .toolbar(alwaysInline ? .automatic : .hidden, for: .navigationBar)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if !alwaysInline {
+                        MovingTitle(title: title, scrolled: scrolled)
+                    }
+                }
+                // Status' page, heading and all, moved up by the bar's room as one: a move, not a new layout, so nothing
+                // under it measures itself again; its foot reaches down as far.
+                .padding(.bottom, -barRoom)
+                .offset(y: -barRoom)
+                .toolbar(alwaysInline || showsBar ? .automatic : .hidden, for: .navigationBar)
+                // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
+                .environment(\.pagePush, PagePush(push: { path.append($0) }, pop: { if !path.isEmpty { path.removeLast() } }))
                 .navigationDestination(for: RowRoute.self) { $0.page.underFlick(barHidden: true).modifier(TypingHidesTabBar(enabled: !alwaysInline)) }
                 .containerBackground(.clear, for: .navigation)
                 .toolbarBackground(.hidden, for: .navigationBar)
@@ -660,71 +679,6 @@ extension View {
     // A page opened from a tab, with its bar. The page draws its own PageHeading at the top of what scrolls.
     func barPage<A: View>(@ViewBuilder actions: @escaping () -> A) -> some View { modifier(BarPage(actions: actions)) }
     func barPage() -> some View { modifier(BarPage(actions: { EmptyView() })) }
-}
-
-// The TV's own settings and this app's connection, as a tab at the foot of the side bar.
-struct TVSettingsTab: View {
-    @Environment(TVModel.self) var model
-    @Environment(\.paneLayout) private var panes
-    var retaps = 0
-    @State private var path: [ManagePage] = []
-    @StateObject private var store = ManageStore()
-    // How far the list has scrolled, for the title going up with it, as on every other tab.
-    @State private var scrolled = PageScrollY()
-    var manage: some View { TVManageSections() }
-    // What the phone can have the TV do: the launcher's own two jobs and the screensaver, each said in full.
-    var actions: some View { TVActionSections() }
-    func page(_ content: some View) -> some View {
-        ScrollView { VStack(alignment: .leading, spacing: 26) { content }.padding(.horizontal, 20).padding(.top, 6).padding(.bottom, 24) }
-    }
-    var body: some View {
-        NavigationStack(path: $path) {
-            ScrollViewReader { proxy in
-                Group {
-                    // Unfolded, one list each side of the fold rather than one list across it.
-                    if panes {
-                        FoldSplit { page(TVManageSections(level: true)).modifier(FollowsScroll(scrolled: scrolled)) } right: {
-                            page(actions).poseScroll().modifier(FollowsScroll(scrolled: scrolled))
-                        }
-                    } else {
-                        page(Group { manage; actions }).poseScroll().modifier(FollowsScroll(scrolled: scrolled))
-                    }
-                }
-                .topShade().topFade()
-                // The page's own name, going up with the list, as every other tab's does (Page): the system's large title sat
-                // 23 pt lower here than on the other tabs, folded (review of dfd490e, tv-9).
-                .safeAreaInset(edge: .top, spacing: 0) { MovingTitle(title: "Settings", scrolled: scrolled) }
-                .toolbar(.hidden, for: .navigationBar)
-                // Tapping the tab again: out of a page opened from here, else back to the top.
-                .onChange(of: retaps) { _, _ in
-                    if path.isEmpty { withAnimation(.snappy) { proxy.scrollTo(ManagePage.apps, anchor: .top) } } else { path = [] }
-                }
-            }
-            .navigationDestination(for: ManagePage.self) { page in
-                switch page {
-                case .apps: ManageAppsView(store: store)
-                case .settings: ManageSettingsView(store: store)
-                case .connection: ConnectionView()
-                }
-            }
-            .background { Ambience() }
-            // The build's shots of the pages opened from here ("-pose connection", "-pose tvsettings").
-            .task {
-                switch UserDefaults.standard.string(forKey: "pose") {
-                case "connection": path = [.connection]
-                case "tvsettings": path = [.settings]
-                case "tvapps": path = [.apps]
-                default: break
-                }
-            }
-            .navigationTitle("Settings")
-            // The same title as every other tab: large, folded or open.
-            .navigationBarTitleDisplayMode(.large)
-        }
-        #if os(iOS)
-        .onChange(of: path) { was, now in HitchLog.shared.note("Settings \(now.count > was.count ? "push" : "pop") \(was.count)→\(now.count)") }
-        #endif
-    }
 }
 
 // Where the Mac is, and what it takes to reach it from away.
@@ -1473,8 +1427,7 @@ struct RemoteTab: View {
                     QuickApps().opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
                         .settledAnimation(.easeInOut(duration: 0.3), value: unreachable).columnRole(.aligned)
                 }
-                // Right under the tiles, not pushed to the foot with dead space above it.
-                SendBar(opensSearch: true).columnRole(.aligned)
+                // No search box here: Search is its own tab (Richard, 2026-11-11).
             }
             Spacer(minLength: 0)
         }
@@ -2021,7 +1974,9 @@ struct Banner: View {
     var body: some View {
         Button {
             // An app with something to choose from opens that here; the rest go straight to the TV.
-            if browses, let s = MediaSource.of(pkg: app.pkg) { model.tick(); model.browsing = s }
+            // Stremio's tile is Watch, where its shelves already are (Richard, 2026-11-11).
+            if browses, app.pkg == "com.stremio.one" { model.tick(); model.tab = 3 }
+            else if browses, let s = MediaSource.of(pkg: app.pkg) { model.tick(); model.browsing = s }
             else if browses, app.pkg == "com.mint.letterboxd" { model.tick(); model.tab = 3 }
             else { open() }
         } label: {
@@ -2047,6 +2002,7 @@ struct Banner: View {
             .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
             .overlay { FrontRing(pkg: app.pkg) }
             .overlay(alignment: .topTrailing) { OnTVMark(pkg: app.pkg) }
+            .shotSpot(browses && app.pkg == "com.stremio.one" ? "stremio" : "", pose: "stremiotile")
         }
         .buttonStyle(PressCard()).accessibilityLabel(app.name).accessibilityAddTraits(model.frontApp == app.pkg ? .isSelected : [])
         .contextMenu { if browses { Button("Open on TV", systemImage: "tv") { open() } } }

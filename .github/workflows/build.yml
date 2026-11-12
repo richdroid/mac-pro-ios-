@@ -83,7 +83,7 @@ jobs:
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$T$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || echo "Chumby tab $T was not running"
             done
-            for T in 0 1 2 3 5 9; do
+            for T in 0 3 2 6 1 5 9; do
               rm -f /tmp/tv-home-fetches.log /tmp/tv-home-applied.log
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab $T
               sleep 7

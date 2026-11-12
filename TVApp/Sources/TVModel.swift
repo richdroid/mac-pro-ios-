@@ -365,7 +365,17 @@ final class TVModel {
     // Browse used to be tab 4; the apps' banners lead there now.
     // Changing tab puts the keyboard away, except when the change is for a search field about to take it (the Remote's
     // field opening the Apps page): resigning the responder in the same turn raced the field's own focus.
-    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t }() { didSet { if tab != oldValue, !SendDraft.shared.wantsFocus { Keyboard.dismiss() } } }
+    // Settings was tab 9; it sits behind a gear on Status now (Richard, 2026-11-11): asked for as tab 9 (a link, the build's
+    // shots, the tab he last left it on), it's Status with Settings pushed.
+    var tab = { let t = UserDefaults.standard.integer(forKey: "tab"); return t == 4 ? 1 : t == 9 ? 5 : t }() {
+        didSet {
+            if tab == 9 { tab = 5; settingsAsked += 1; return }
+            if tab != oldValue, !SendDraft.shared.wantsFocus { Keyboard.dismiss() }
+        }
+    }
+    // Each ask for Settings (tab 9), for Status to push it.
+    // A phone coming from a build with a Settings tab: Status is saved in its place, so Settings is pushed this once only.
+    var settingsAsked = { guard UserDefaults.standard.integer(forKey: "tab") == 9 else { return 0 }; UserDefaults.standard.set(5, forKey: "tab"); return 1 }()
     var address: String { didSet { SavedAddress.save(address) } }
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var toastTask: Task<Void, Never>?

@@ -60,7 +60,7 @@ jobs:
           # Everything that changed lately, in one posture (display, suffix).
           poses() {
             local d=$1 x=$2
-            for T in 0 1 2 3 5 9; do shot tab$T$x $d 7 $M -tab $T; done
+            for T in 0 3 2 6 1 5 9; do shot tab$T$x $d 7 $M -tab $T; done
             for T in 1 2 3 5; do shot scroll-$T$x $d 9 $M -tab $T -scroll 30; done
             for S in rmint rmintplain ryoutube ryoutubebare repisode; do shot playing-$S$x $d 8 $M/$S -tab 2; done
             for S in ridle repisode rfilm ryoutube roffline; do shot remote-$S$x $d 8 $M/$S -tab 0; done
