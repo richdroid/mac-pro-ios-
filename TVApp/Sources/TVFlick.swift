@@ -56,7 +56,7 @@ import UIKit
     // the Remote's own backdrop (the poster's colour on black, as AmbienceView draws it) while the picture flies over it,
     // so the row he let go of doesn't sit on a frozen page beside its own picture through the turn that brings the Remote
     // up (CI 7bbaf47: 0.4 s of the lifted row left behind). The Remote's keys then come up through it at lift.
-    static func dissolve(_ rect: CGRect, soft: TVImage?, tint: Color?, duration: Double = 0.2) {
+    static func dissolve(_ rect: CGRect, hole picked: CGRect? = nil, soft: TVImage?, tint: Color?, duration: Double = 0.2) {
         #if os(iOS)
         guard let v = veil, let w = v.superview as? UIWindow, rect.width > 20, rect.height > 20 else { return }
         // The page's whole height, its own bar at the top included (left on the still, it was a black band over the
@@ -84,6 +84,14 @@ import UIKit
         ground.frame = w.bounds.offsetBy(dx: -r.minX, dy: -r.minY)
         clip.addSubview(ground)
         still.frame = r; still.isUserInteractionEnabled = false
+        // The picked row's own place is empty from the first frame: what's in the air is the only copy of it.
+        if let picked, picked.width > 4 {
+            let m = CAShapeLayer()
+            let pp = UIBezierPath(rect: still.bounds)
+            pp.append(UIBezierPath(roundedRect: picked.offsetBy(dx: -r.minX, dy: -r.minY).insetBy(dx: -6, dy: -6), cornerRadius: 18))
+            m.path = pp.cgPath; m.fillRule = .evenOdd
+            still.layer.mask = m
+        }
         w.insertSubview(clip, aboveSubview: v)
         w.insertSubview(still, aboveSubview: clip)
         extras += [clip, still]
@@ -117,42 +125,18 @@ import UIKit
     #endif
 }
 
-// The side bar's mark, moved by the flick without a slide: the tab changes under a still (the pick, the warm build, a
-// put-back), and the system's own slide of the selection then ran on past the still, the Remote up with Apps still lit
-// for 0.2 s beside it (CI ba7cee1, open flat). After SwiftUI has handed the change to the tab bar, every animation
-// outside the page itself is cut to its end, twice (the selection can land a frame late).
+// The side bar's mark, moved by the flick without a slide: the tab changes under a still (the pick, a put-back), and the
+// system's own slide of the selection ran on past the still, the Remote up with Apps still lit for 0.2 s beside it (CI
+// ba7cee1, open flat). The change is laid out at once with UIKit's animations off, so the mark is simply where it goes.
+// (Cutting the bar's animations after the fact, d5d94f4, left the bar without its capsule and its Remote item.)
 @MainActor enum RailMark {
     static func settle() {
         #if os(iOS)
-        let once = {
-            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            guard let root = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.keyWindow?.rootViewController,
-                  let tbc = find(root) else { return }
-            strip(tbc.view, sparing: tbc.selectedViewController?.view)
-        }
-        DispatchQueue.main.async { once(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.034) { once() } }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let w = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.keyWindow else { return }
+        UIView.performWithoutAnimation { w.layoutIfNeeded() }
         #endif
     }
-    #if os(iOS)
-    private static func find(_ vc: UIViewController) -> UITabBarController? {
-        if let t = vc as? UITabBarController { return t }
-        for c in vc.children { if let t = find(c) { return t } }
-        return nil
-    }
-    // Only the bar's own views (the tab bar, the side bar and their floating forms), never the pages or the tab
-    // controller's own transition: cutting everything outside the page (d5d94f4) left the Remote's picture unmeasured
-    // open flat and upright, and the pick fell back to the page it came from.
-    private static func strip(_ v: UIView, sparing content: UIView?) {
-        if let c = content, v === c || v.isDescendant(of: c) { return }
-        let name = String(describing: type(of: v))
-        if v is UITabBar || name.contains("TabBar") || name.contains("Sidebar") || name.contains("FloatingBar") {
-            func layers(_ l: CALayer) { l.removeAllAnimations(); l.sublayers?.forEach(layers) }
-            layers(v.layer)
-            return
-        }
-        v.subviews.forEach { strip($0, sparing: content) }
-    }
-    #endif
 }
 
 // The pick's picture on its way into the Remote, moved by Core Animation in the render server: it leaves the row (or the
@@ -165,6 +149,7 @@ import UIKit
     private static var poster: UIView?
     private static var card: UIView?
     private static var wide = false
+    private static var hasImage = false
     #endif
     static var flying: Bool {
         #if os(iOS)
@@ -213,14 +198,15 @@ import UIKit
         p.contentMode = .scaleAspectFill
         p.frame = from
         p.layer.cornerRadius = 14; p.layer.cornerCurve = .continuous; p.clipsToBounds = true
-        p.alpha = image == nil ? 0 : 1
+        // The poster comes up over the row's still as the shape opens, in the same spring (not cut in over the row in the
+        // first frame: a flat slab with the row's text clipped at its edge, then the text again, CI d5d94f4).
+        p.alpha = 0
         p.isUserInteractionEnabled = false
         w.addSubview(g)
         if let c { w.addSubview(c) }
         w.addSubview(p)
         ground = g; poster = p; card = c
-        // The still of the row gives way to the poster as it leaves.
-        if image != nil, let c { c.alpha = 1; UIView.animate(withDuration: 0.12, delay: 0, options: [.curveEaseOut]) { c.alpha = 0 } }
+        hasImage = image != nil
         #endif
     }
     // Toward the Remote's picture, `to` in window points; again later, from wherever it is, if that place moves.
@@ -231,7 +217,8 @@ import UIKit
         let anim = {
             g.frame = to; g.alpha = 1; g.layer.cornerRadius = TVLook.card
             p.frame = end; p.layer.cornerRadius = wide ? TVLook.card : 8
-            if let c = card { c.frame = end; if p.alpha == 0 { c.alpha = 0.35 } }
+            if hasImage { p.alpha = 1 }
+            if let c = card { c.frame = end; c.alpha = hasImage ? 0 : 0.35 }
         }
         if first {
             // goRemote's own spring (response 0.36, damping 0.86).
@@ -247,8 +234,8 @@ import UIKit
     // over the still of the card wherever the flight has got to, so it never lands as an empty ground (item 5, 11-12).
     static func picture(_ image: TVImage) {
         #if os(iOS)
-        guard let p = poster as? UIImageView, p.alpha == 0 else { return }
-        p.image = image
+        guard let p = poster as? UIImageView, !hasImage else { return }
+        p.image = image; hasImage = true
         UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
             p.alpha = 1; card?.alpha = 0
         }
@@ -827,8 +814,8 @@ struct FlickScreen: View {
         .preferredColorScheme(.dark)
         // The build's recording only: what the flick is doing, so a frame can be read against the code. Top left, clear of
         // the page's heading.
-        .overlay(alignment: .topLeading) {
-            // Only on the flick's own timing poses; the plain page shots stay clean so the page itself can be judged.
+        .overlay(alignment: .bottomLeading) {
+            // Only on the flick's own timing poses (at the foot, clear of the close control and the top of the page); the plain page shots stay clean so the page itself can be judged.
             if Self.pose?.hasPrefix("flick-") == true || Self.pose?.hasPrefix("flickdemo") == true {
                 // Milliseconds since the pick, and since the card's press for the list, so a frame can be read against the
                 // targets: streams within 150 ms of the press when cached, the Remote within 400 ms of the pick.
@@ -837,7 +824,8 @@ struct FlickScreen: View {
                     let t = releasedAt == .distantPast ? -1 : Int(ctx.date.timeIntervalSince(releasedAt) * 1000)
                     let l = streamsAt.map { Int($0.timeIntervalSince(StreamCache.pressedAt ?? openedAt) * 1000) } ?? -1
                     Text("t=\(t) list \(l) step \(step.rawValue) flown \(flown ? 1 : 0) move \(toRemote ? 1 : 0) phase \(phase ?? "-") answered \(answered ? 1 : 0)")
-                        .font(.system(size: 11, design: .monospaced)).padding(6).background(.black.opacity(0.7)).foregroundStyle(.yellow)
+                        .font(.system(size: 9, design: .monospaced)).padding(4).background(.black.opacity(0.7)).foregroundStyle(.yellow)
+                        .allowsHitTesting(false)
                 }
             }
         }
@@ -1295,7 +1283,8 @@ struct FlickScreen: View {
     }
     // Rows come in one after another, a beat apart; a list that was already in the cache is simply there.
     func arriving(_ i: Int) -> AnyTransition {
-        if streamsQuick { return .opacity }
+        // One fade with the page for a list there at its arrival or just after; the cascade only for one that was slow.
+        if streamsQuick || !slowList { return .opacity }
         let spring = Animation.spring(response: 0.45, dampingFraction: 0.85).delay(Double(min(i, 8)) * 0.035)
         return .asymmetric(insertion: AnyTransition.opacity.combined(with: .offset(y: 14)).animation(spring), removal: .opacity)
     }
@@ -1716,13 +1705,12 @@ struct FlickScreen: View {
         model.remoteWarming = true
         var q = Transaction(); q.disablesAnimations = true
         withTransaction(q) { model.tab = 0 }
-        RailMark.settle()
         // The turn that put it up built it; the next one takes it down again.
         try? await Task.sleep(nanoseconds: 20_000_000)
         // Where its picture is, for the first pick's flight to aim at from the start.
         if let s = model.mirrorSlot, s.width > 20 { model.rememberSlot(s, "warm" + slotKey) }
         // Picked in the meantime: the Remote is where it's going, so it stays.
-        if !flown { withTransaction(q) { model.tab = back }; RailMark.settle() }
+        if !flown { withTransaction(q) { model.tab = back } }
         await Self.settleFrames()
         model.remoteWarming = false
         SwipeLog.note("remote warmed")
@@ -1773,7 +1761,7 @@ struct FlickScreen: View {
                 RenderFlight.aim(CGRect(x: flickFrame.midX - w / 2, y: flickFrame.minY + 70, width: w, height: w * 9 / 16), first: true); renderAimed = true
             }
             renderFlown = true
-            ScreenVeil.dissolve(flickFrame, soft: softImage, tint: tint)
+            ScreenVeil.dissolve(flickFrame, hole: flyFrom.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), soft: softImage, tint: tint)
             var under = Transaction(); under.disablesAnimations = true
             withTransaction(under) { fadingOut = true }
         }
