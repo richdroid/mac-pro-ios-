@@ -30,11 +30,11 @@ import UIKit
         #if os(iOS)
         guard veil == nil, let w = window else { return }
         let flying = underFlight ? RenderFlight.views : []
-        flying.forEach { $0.isHidden = true }
-        let snap = w.snapshotView(afterScreenUpdates: underFlight)
-        flying.forEach { $0.isHidden = false }
-        guard let v = snap else { return }
-        v.frame = w.bounds
+        // Under a flight: the app's own view, not the window, so the flight (the window's own subviews) isn't in it
+        // without being hidden for it (hiding it for a drawn snapshot showed the screen without it for a frame, 17522ec).
+        let source: UIView = underFlight ? (w.rootViewController?.view ?? w) : w
+        guard let v = source.snapshotView(afterScreenUpdates: underFlight) else { return }
+        v.frame = source === w ? w.bounds : source.convert(source.bounds, to: w)
         v.isUserInteractionEnabled = false
         if let lowest = flying.first { w.insertSubview(v, belowSubview: lowest) } else { w.addSubview(v) }
         veil = v
