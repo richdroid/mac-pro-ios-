@@ -347,7 +347,9 @@ struct KeepsPlace: ViewModifier {
             .task(id: "\(panes)\(compactWindow)") {
                 let k = PlaceKeeper.page(page), layout = "\(panes)\(compactWindow)"
                 // Of two panes the first to appear starts the restore; the other, a moment later, scrolls too if it holds it.
-                if let was = k.layout, was != layout, k.top != nil { k.restoring = Date() }
+                // Any change of layout starts the quiet time, his place or not: the new layout's rows settling at the top
+                // aren't his choice (designer, regate of 23292ae: flat noted the top as his place and the turn back went there).
+                if let was = k.layout, was != layout { k.restoring = Date() }
                 k.layout = layout
                 guard Date().timeIntervalSince(k.restoring) < 1.5, let top = k.top else { return }
                 try? await Task.sleep(nanoseconds: 250_000_000)
