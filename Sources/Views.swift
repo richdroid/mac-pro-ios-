@@ -792,14 +792,13 @@ struct TempsHeader: View {
     let s: Status
     var body: some View {
         let temps = store.live?.temps ?? s.temps ?? []
-        HStack(alignment: .firstTextBaseline) {
-            Text("Temperatures")
-            Spacer(minLength: 8)
-            if let top = temps.max(by: { $0.c < $1.c }) {
-                let word = top.c >= 90 ? "Hot" : top.c >= 75 ? "Warm" : "Normal"
-                Text("\(word) · hottest \(top.name) \(Heat.shown(top.c))°")
-                    .foregroundStyle(top.c >= 75 ? Heat.color(top.c) : .secondary).monospacedDigit().lineLimit(1)
-            }
+        let top = temps.max(by: { $0.c < $1.c })
+        let word = (top?.c ?? 0) >= 90 ? "Hot" : (top?.c ?? 0) >= 75 ? "Warm" : "Normal"
+        let summary = top.map { Text("\(word) · hottest \(appleCased($0.name)) \(Heat.shown($0.c))°").foregroundStyle($0.c >= 75 ? Heat.color($0.c) : .secondary).monospacedDigit() }
+        // Beside the heading where it fits whole, else on its own line under it: never cut (designer, 2026-11-12).
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline) { Text("Temperatures"); Spacer(minLength: 8); summary.lineLimit(1) }
+            VStack(alignment: .leading, spacing: 2) { Text("Temperatures"); summary.lineLimit(1).font(.subheadline) }
         }
     }
 }

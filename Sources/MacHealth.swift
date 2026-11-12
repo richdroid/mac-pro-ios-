@@ -358,7 +358,9 @@ struct MacHealthView: View {
             // Nor while a restart is asked and the Mac isn't back from it: "All running" over a banner that says it may be
             // restarting said two things at once (designer, 2026-11-11). The rows keep what was last read.
             // Open flat the verdict card beside says it; here only the parts' name.
-            if heading, !down, !awaited { Text(panes || !bad.isEmpty ? "Parts" : headline ?? "Checking") }
+            // In one column the parts themselves are the verdict's card (what needs a look is first, with what to do), so the
+            // heading carries the verdict and nothing names a part twice (designer, 2026-11-12).
+            if heading, !down, !awaited { Text(panes ? "Parts" : headline ?? "Checking") }
         }
     }
     func list(_ side: Side) -> some View {
@@ -368,7 +370,7 @@ struct MacHealthView: View {
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right, bannerLine != nil { Section { banner } }
                 // Folded or upright, Fix comes before the parts, where he looks first; open flat it has the right pane.
-                if side == .all { if !bad.isEmpty { verdictSection }; fixSection }
+                if side == .all { fixSection }
                 // Open flat with the Mac away there's nothing to fix, so the parts take the right pane and the banner has the
                 // left: the whole page sat in the left pane, cut off, beside an empty one (designer, 2026-11-10).
                 if side == .all || (side == .left && !down) || (side == .right && down) { partsSection(heading: true) }

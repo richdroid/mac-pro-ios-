@@ -270,7 +270,9 @@ final class AppModel: ObservableObject {
 
     func refreshLive() async {
         // Only the live views watch this, so the other tabs and lists stay still.
-        guard tab == 0, problem == nil, !address.isEmpty else { return }
+        // Also while the Mac counts as away: its live figures are the quickest sign it's back (a 6 s ask, every second),
+        // where the full status could sit 25 s on a request sent while the link was down.
+        guard tab == 0, !address.isEmpty else { return }
         // A reading that failed to come back drops the last one, so the tiles fall back to the full status
         // rather than holding an old number over newer ones.
         // Missed once, the last reading stays: it's dropped only when the Mac counts as unreachable (missed).
@@ -287,6 +289,7 @@ final class AppModel: ObservableObject {
             return
         }
         Reach.shared.hit()
+        if problem != nil, pose != "unreachable" { problem = nil; Task { await refresh() } }
         // Not while a page is moving under his finger: a row changing height mid-bounce snaps the page back.
         if parks { heldLive = l; return }
         if liveStore.live != l { SwipeLog.note("live landed"); liveStore.live = l }

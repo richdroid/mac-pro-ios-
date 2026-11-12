@@ -144,7 +144,9 @@ struct HistoryView: View {
         return marks.min { abs($0.date.timeIntervalSince(picked)) < abs($1.date.timeIntervalSince(picked)) }
     }
     // Never a dash while a figure is known: the live reading, the day's last point, or what Status last showed.
-    var current: Double? { metric.now(store.live) ?? points.last?.v ?? metric.now(model.status) }
+    // The reading the page's tile or dial shows, never the last bucket's average when the status has a newer one: a
+    // dial at 111° opened a history saying 44° (designer, 2026-11-12).
+    var current: Double? { metric.now(store.live) ?? metric.now(model.status) ?? points.last?.v }
 
     var readout: some View {
         VStack(alignment: .leading, spacing: 1) {
