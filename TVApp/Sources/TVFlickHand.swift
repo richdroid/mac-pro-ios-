@@ -19,7 +19,7 @@ struct FlickHand {
         // Let go within this of where it was lifted: a press that ran long, so a tap.
         var still: CGFloat = 10
         // Carried up this far and let go, at any speed: thrown.
-        var carry: CGFloat = 70
+        var carry: CGFloat = 66
         // Once lit, brought back down this far under the line before it goes out.
         var unarm: CGFloat = 24
         // Or flung up this fast (points a second, the fastest stretch of the last tenth of a second, so a finger that
