@@ -1124,6 +1124,7 @@ struct HomeTab: View {
             NowPlaying(tab: 0, failID: "homeVolume")
                 .padding(.horizontal, 18).padding(.vertical, 10)
                 .card()
+                .id("homeplaying")
                 .padding(.top, Self.sectionGap)
                 .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
         }
@@ -1202,6 +1203,12 @@ struct HomeTab: View {
                     guard ChumbyModel.pose == "homebar" else { return }
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
                     scroll.scrollTo("homebar", anchor: .bottom)
+                }
+                // For the branch film of a song chosen on Sounds: Home brought to its Playing card while it starts.
+                .task(id: model.macStarting != nil) {
+                    guard ChumbyModel.pose == "machome", model.macStarting != nil else { return }
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    withAnimation(.snappy) { scroll.scrollTo("homeplaying", anchor: .bottom) }
                 }
                 }
             }
@@ -1481,7 +1488,8 @@ struct NightButton: View {
 // MARK: - Channels
 struct EditorRow: Identifiable, Equatable { let id: String; var name: String; var on: Bool; var secs: Int; var own: Int }
 let widgetTimes = [10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600]
-func timeText(_ t: Int) -> String { t < 60 ? "\(t) sec" : "\(t / 60) min" }
+// 90 reads "1 min 30 sec": cut to whole minutes it said "1 min" twice in the menu (designer, 11-12).
+func timeText(_ t: Int) -> String { t < 60 ? "\(t) sec" : t % 60 == 0 ? "\(t / 60) min" : "\(t / 60) min \(t % 60) sec" }
 
 struct ChannelsTab: View {
     @EnvironmentObject var model: ChumbyModel
@@ -1933,29 +1941,42 @@ struct NowPlaying: View {
         let song = mac.map { Song(t: 0, title: $0.name, artist: $0.artist, album: $0.album) } ?? nowSong
         let playing = model.state.musicPlaying || mac != nil
         let f = song.flatMap { art.found[SongArt.key($0)] }
+        // What's named, as one thing: cover and words change together in one fade (11-12 gate: a failed start blanked the
+        // cover, then printed "Nothing playing" over the song, then the note came, in three beats).
+        let identity = song.map(SongArt.key) ?? (playing ? "playing" : "none")
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
-                // The stand-in stays underneath and the cover fades in over it when it arrives, never a swap in one frame.
-                ZStack {
-                    ZStack {
-                        ChumbyPalette.hex(0x2c5bae).opacity(playing ? 1 : 0.45)
-                        if playing { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
-                        else { OctopusMark(color: .white.opacity(0.85), eyes: ChumbyPalette.hex(0x2c5bae), blink: 0.08).padding(14) }
+                ZStack(alignment: .leading) {
+                    HStack(spacing: 14) {
+                        // The stand-in stays underneath and the cover fades in over it when it arrives, never a swap in one frame.
+                        ZStack {
+                            ZStack {
+                                ChumbyPalette.hex(0x2c5bae).opacity(playing ? 1 : 0.45)
+                                if playing { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
+                                else { OctopusMark(color: .white.opacity(0.85), eyes: ChumbyPalette.hex(0x2c5bae), blink: 0.08).padding(14) }
+                            }
+                            if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
+                        }
+                        .animation(.easeInOut(duration: 0.35), value: f?.image != nil)
+                        .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        VStack(alignment: .leading, spacing: 3) {
+                            if let song {
+                                Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
+                                // Chosen a moment ago and not yet sounding: said so, where its artist will be.
+                                // Two lines while starting, so the one status of the wait is never cut short beside the spinner.
+                                Text(starting != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(starting != nil ? 2 : 1)
+                                    .contentTransition(.opacity)
+                            } else {
+                                Text(playing ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
+                            }
+                        }
                     }
-                    if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
+                    // Old out, then new in, never both drawn (11-12 gate: a crossfade printed one song over the other).
+                    .id(identity).transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.16).delay(0.12)),
+                                                         removal: .opacity.animation(.easeIn(duration: 0.12))))
                 }
-                .animation(.easeInOut(duration: 0.35), value: f?.image != nil)
-                .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
-                    if let song {
-                        Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
-                        // Chosen a moment ago and not yet sounding: said so, where its artist will be.
-                        Text(starting != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(1)
-                            .contentTransition(.opacity)
-                    } else {
-                        Text(playing ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
-                    }
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(.easeInOut(duration: 0.3), value: identity)
                 Spacer(minLength: 8)
                 // Stop only while something plays: with nothing to stop, it's a dead button.
                 if starting != nil {
@@ -2011,6 +2032,27 @@ struct SoundsTab: View {
     @State private var addStream = false
     @State private var addStation = false
     @State private var pickSong = false
+    @Environment(\.paneLayout) private var wide
+    // Where the song picker opened (the right pane open flat, a cover otherwise), kept while the keyboard is up: open
+    // upright the keyboard shortens the page until it reads as sideways, which closed the cover for a pane and back
+    // (11-12 branch film). A real turn or fold with the keyboard down moves it.
+    @State private var pickPane = false
+    @State private var keyboardUp = false
+    @StateObject private var draft = MacSongDraft()
+    // Open flat, the pane's pages change as Alarms' do: out in 0.12 s, swapped unseen, in over 0.2 s (11-12 gate: a
+    // pick closed the picker with its rows drawn through Sounds' own).
+    @State private var paneFaded = false
+    // What he typed is kept while the picker moves by a turn or fold, and starts afresh at each opening (not cleared as
+    // it closes, which would empty the list as it leaves).
+    func openPicker() { draft.clear(); pickPane = wide; pickSong = true }
+    func closePane() {
+        withAnimation(.easeIn(duration: 0.12)) { paneFaded = true }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            pickSong = false
+            withAnimation(.easeOut(duration: 0.2)) { paneFaded = false }
+        }
+    }
     @State private var stationLink = ""
     @State private var streamURL = ""
     @State private var streamName = ""
@@ -2076,7 +2118,9 @@ struct SoundsTab: View {
     }
 
     var body: some View {
-        TwoPane {
+        // Open flat, the song picker takes the right pane (its own title row and list), with the Now card live beside it.
+        TwoPane(rightTitle: pickSong && pickPane ? nil : " ", rightShown: !(wide && paneFaded),
+                rightPage: pickSong && pickPane ? AnyView(MacSongPicker(draft: draft, pane: { closePane() }).environmentObject(model)) : nil) {
             PageTitle("Sounds")
             ReachRow()
             // AirPlay in the Now card, under the volume: it's how music reaches the Chumby, and alone it was a one-row
@@ -2090,11 +2134,12 @@ struct SoundsTab: View {
                 // Any song in his Mac's Music library, played here by the Mac: only where the app knows the Mac, and
                 // while the Chumby accepts AirPlay, which is how the Mac reaches it.
                 if MacMusic.reachable && model.sys.airplayOn {
-                    Button { pickSong = true } label: {
+                    Button { openPicker() } label: {
                         Label("Play a song from the Mac", systemImage: "music.note.list")
                             .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
                     }
                     .foregroundStyle(.tint).disabled(model.unreachable)
+                    .task { await MacMusicPose.sounds(model) { openPicker() } }
                 }
             } header: { SectionHead(icon: "speaker.wave.2.fill", text: "Now") }
             WokeUpTo()
@@ -2196,7 +2241,20 @@ struct SoundsTab: View {
         .seaList()
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
-        .fillCover(isPresented: $pickSong) { MacSongPicker().environmentObject(model) }
+        .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 && !pickPane { pickSong = false } })) { MacSongPicker(draft: draft, toPane: { pickPane = true }).environmentObject(model) }
+        // The keyboard's flip comes before the keyboard says it's showing, so a change is only taken once it has held
+        // for a moment with the keyboard down.
+        // Checked again when the keyboard goes down, for a turn made while it was up. (The cover closing for the pane
+        // reports itself closed: that must not close the picker, so the cover's setter ignores it once it's the pane's.)
+        .task(id: "\(wide) \(keyboardUp)") {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            if !Task.isCancelled, pickSong, !keyboardUp, pickPane != wide { pickPane = wide }
+        }
+
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in keyboardUp = false }
+        #endif
         .alert("Add a Pandora station", isPresented: $addStation) {
             TextField("Pandora link", text: $stationLink).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
             Button("Add") { let l = stationLink; stationLink = ""; Task { await model.addPandora(l) } }

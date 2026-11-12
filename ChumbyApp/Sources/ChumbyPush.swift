@@ -141,7 +141,7 @@ struct NotifySettings: View {
     var body: some View {
         Section {
             // What it sends, said in the row (it was the footer, under a one-row capsule: designer, 11-11).
-            Toggle(isOn: $enabled) { TwoLine("Notify this iPhone", "Only when an alarm was missed or may not ring.") }
+            Toggle(isOn: $enabled) { TwoLine("Notify this iPhone", "Only when an alarm was missed, silent or may not ring.") }
                 .onChange(of: enabled) { _, on in
                     if on { Task { denied = !(await ChumbyNotify.shared.ask()) } }
                     ChumbyNotify.shared.share()

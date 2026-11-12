@@ -549,6 +549,14 @@ struct AlarmsTab: View {
     @Namespace private var editNS
 
     var dismissed: Set<String> { Set(dismissedRaw.split(separator: "\n").map(String.init)) }
+    // Why, for what's listed: a ring with no sound wasn't the Chumby being frozen or off (designer, 11-12).
+    var missedWhy: String {
+        let silent = missed.contains { $0.silent == true }, other = missed.contains { $0.silent != true }
+        let these = missed.count == 1 ? "it" : "these"
+        if silent && other { return "The Chumby was frozen or off when some came due, and \(missed.filter { $0.silent == true }.count == 1 ? "one" : "some") rang with no sound." }
+        if silent { return "The Chumby rang, but no sound came from \(missed.count == 1 ? "it" : "them")." }
+        return "The Chumby was frozen or off when \(these) came due."
+    }
     var missed: [ChumbyState.Missed] { model.state.missed.filter { Date().timeIntervalSince1970 - $0.at < 86400 && !dismissed.contains($0.id) }.suffix(3).reversed().map { $0 } }
     // A "just this once" standing in for one of these is told on that alarm's row, never listed as an alarm of its own.
     var folded: String? { model.state.justOnce().flatMap { $0.original != nil ? $0.alarm.key : nil } }
@@ -640,7 +648,7 @@ struct AlarmsTab: View {
                             RowRemove(label: "Dismiss", icon: "xmark.circle.fill") { withAnimation(.snappy) { dismissedRaw = (dismissed.union([m.id])).joined(separator: "\n") } }
                         }
                     }
-                } footer: { SectionFoot("The Chumby was frozen or off when these came due.") }
+                } footer: { SectionFoot(missedWhy) }
             }
             yours
         } right: {

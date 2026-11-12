@@ -108,6 +108,9 @@ targets:
         NSLocalNetworkUsageDescription: Chumby connects to your Chumby on your home network.
         # Where the app hands the Mac its notification token; baked in at signing, like DefaultAddress, never in the repo.
         MacAddress: ""
+        # "Play a song from the Mac" on Sounds: off until the Mac answers a search in under a second (an index of the
+        # library; music.js takes 8 to 12 s today, measured 11-12). The build's films turn it on with -mac.
+        MacMusicOn: false
         UIBackgroundModes: [fetch, remote-notification]
         NSBonjourServices: [_http._tcp]
         NSAppTransportSecurity:
