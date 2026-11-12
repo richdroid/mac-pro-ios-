@@ -313,16 +313,43 @@ struct MacHealthView: View {
             } footer: { Text("Restarts what’s down on the Mac. Parts that need you say what to do.") }
         } else if let fixNote {
             Section { FailText(fixNote) }
-        } else if panes, let r = report, !down, !awaited {
+        }
+    }
+    // The page's one verdict, said the same in the parts' heading and over the card that names them (Richard, 2026-11-12,
+    // of "1 needs a look" over all-green rows beside "1 needs your hands" naming nothing: "wow u fucked this up bad").
+    var headline: String? {
+        guard let r = report, !down, !awaited else { return nil }
+        let n = r.parts.filter(\.bad).count
+        return n == 0 ? "All running" : startingWindow ? "\(n) still starting" : "\(n) need\(n == 1 ? "s" : "") a look"
+    }
+    // What needs a look, each by name, what's wrong and what to do; or, when nothing does, that all is running.
+    @ViewBuilder var verdictSection: some View {
+        if let line = headline, fixing == nil {
             Section {
-                Label(bad.isEmpty ? "Nothing needs you" : "\(bad.count) need\(bad.count == 1 ? "s" : "") your hands", systemImage: bad.isEmpty ? "checkmark.circle" : "hand.raised")
-                Text("Checked \(Format.ago(ms: r.at)). It checks again every few seconds while this page is open.").font(.footnote).foregroundStyle(.secondary)
-            }
+                if bad.isEmpty {
+                    Label("Every part is running", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                } else {
+                    ForEach(bad) { p in
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: MacParts.symbol(p.part)).foregroundStyle(.red).frame(width: 26).padding(.top, 1)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(MacParts.name(p.part)).font(.body.weight(.semibold))
+                                Text(MacParts.say(p)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                                Text(MacParts.hand(p.part) ?? (MacParts.fixable.contains(p.part) ? "The Mac can bring this back: tap Fix." : "A restart may bring it back."))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            } header: { Text(line) }
         }
     }
     func partsSection(heading: Bool) -> some View {
         Section {
-            ForEach(ids, id: \.self) { id in
+            // Anything that needs a look first, so it's never below the fold under a heading that counts it.
+            ForEach(ids.filter { id in bad.contains { $0.part == id } } + ids.filter { id in !bad.contains { $0.part == id } }, id: \.self) { id in
                 MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id), starting: startingWindow).place(id)
             }
         } header: {
@@ -330,12 +357,8 @@ struct MacHealthView: View {
             // what was last read.
             // Nor while a restart is asked and the Mac isn't back from it: "All running" over a banner that says it may be
             // restarting said two things at once (designer, 2026-11-11). The rows keep what was last read.
-            if heading, !down, !awaited {
-                Text(report.map { r in
-                    let n = r.parts.filter(\.bad).count
-                    return n == 0 ? "All running" : startingWindow ? "\(n) still starting" : "\(n) need\(n == 1 ? "s" : "") a look"
-                } ?? "Checking")
-            }
+            // Open flat the verdict card beside says it; here only the parts' name.
+            if heading, !down, !awaited { Text(panes || !bad.isEmpty ? "Parts" : headline ?? "Checking") }
         }
     }
     func list(_ side: Side) -> some View {
@@ -345,11 +368,11 @@ struct MacHealthView: View {
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right, bannerLine != nil { Section { banner } }
                 // Folded or upright, Fix comes before the parts, where he looks first; open flat it has the right pane.
-                if side == .all { fixSection }
+                if side == .all { if !bad.isEmpty { verdictSection }; fixSection }
                 // Open flat with the Mac away there's nothing to fix, so the parts take the right pane and the banner has the
                 // left: the whole page sat in the left pane, cut off, beside an empty one (designer, 2026-11-10).
                 if side == .all || (side == .left && !down) || (side == .right && down) { partsSection(heading: true) }
-                if side == .right, !down { fixSection }
+                if side == .right, !down { verdictSection; fixSection }
             }
             .contentMargins(.top, 4, for: .scrollContent)
             .scrollsUnder(side == .right ? 1 : 0)
@@ -444,6 +467,8 @@ struct MacHealthView: View {
         switch pose {
         case "health": return (r([:]), false)
         case "healthbad": return (r(two), false)
+        // One part that needs his hands, as in Richard's screenshot of 2026-11-12: named in the card, first in the list.
+        case "healthone": return (r(["stuck": "2 programs not responding"]), false)
         case "healthfixing": return (r(two), true)
         case "healthstuck", "didntconfirm": return (r([:]), false)
         case "healthback": return (r(["sessions": "3 of 6 running"], fixed: ["letterboxd": "Sign-in relay started"]), false)

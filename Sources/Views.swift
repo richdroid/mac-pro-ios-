@@ -760,22 +760,47 @@ struct TempDials: View {
     var body: some View {
         let temps = store.live?.temps ?? s.temps ?? []
         let across = width > 0 ? Self.columns(temps.count, width: width) : 3
+        let hottest = temps.max { $0.c < $1.c }?.name
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: across), spacing: 16) {
             ForEach(temps) { t in
                 VStack(spacing: 6) {
                     ArcGauge(Heat.level(t.c), heat: true, ticks: 32, length: 7, width: 2.2) {
                         Text("\(Heat.shown(t.c))°").font(.system(.body).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
                     }
-                    Text(t.name).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                    // The hottest sensor's name stands out, so the one to watch is found at a glance (Richard, 2026-11-12:
+                    // "iterate on the features u removed and make it even better").
+                    Text(t.name).font(.caption2.weight(t.name == hottest && temps.count > 1 ? .semibold : .regular))
+                        .foregroundStyle(t.name == hottest && temps.count > 1 ? AnyShapeStyle(Heat.color(t.c) == .white ? Color.primary : Heat.color(t.c)) : AnyShapeStyle(.secondary))
+                        .lineLimit(1).minimumScaleFactor(0.8)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { model.history = .temperature(t.name) }
+                .accessibilityHint("Shows its last 24 hours")
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isButton)
             }
         }
         .padding(.vertical, 6)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+}
+
+// Over the dials: which sensor is hottest and how the Mac is doing for heat, in words (normal, warm, hot) from the same
+// thresholds the dials colour by. A tap on any dial opens its 24 hours, as the tiles do.
+struct TempsHeader: View {
+    @EnvironmentObject var store: LiveStore
+    let s: Status
+    var body: some View {
+        let temps = store.live?.temps ?? s.temps ?? []
+        HStack(alignment: .firstTextBaseline) {
+            Text("Temperatures")
+            Spacer(minLength: 8)
+            if let top = temps.max(by: { $0.c < $1.c }) {
+                let word = top.c >= 90 ? "Hot" : top.c >= 75 ? "Warm" : "Normal"
+                Text("\(word) · hottest \(top.name) \(Heat.shown(top.c))°")
+                    .foregroundStyle(top.c >= 75 ? Heat.color(top.c) : .secondary).monospacedDigit().lineLimit(1)
+            }
+        }
     }
 }
 
@@ -977,7 +1002,7 @@ struct StatusTab: View {
         let dim = model.stale ? staleDim : 1
         Section { LiveTiles(s: s).opacity(dim).place("tiles") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         if showTemps, let temps = s.temps, !temps.isEmpty {
-            Section("Temperatures") { TempDials(s: s).opacity(dim).place("temps") }
+            Section { TempDials(s: s).opacity(dim).place("temps") } header: { TempsHeader(s: s) }
         }
         if showDisk {
             Section("Disk") {

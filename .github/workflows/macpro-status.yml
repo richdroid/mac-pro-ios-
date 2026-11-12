@@ -95,6 +95,10 @@ jobs:
             for T in 0 1 2 5 9; do scrolled tab$T$x $d -tab $T; done
             shot alerts$x $d 8 -tab 0 -pose alerts
             shot disk-history$x $d 10 -tab 0 -openHistory disk
+            shot health$x $d 9 -tab 5 -pose health
+            shot healthone$x $d 9 -tab 5 -pose healthone
+            shot healthbad$x $d 9 -tab 5 -pose healthbad
+            shot temp-history$x $d 10 -tab 0 -openHistory temp:GPU\ A
           }
           films() {
             local d=$1 x=$2

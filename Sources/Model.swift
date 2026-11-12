@@ -128,7 +128,7 @@ final class AppModel: ObservableObject {
         let h = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         let p = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // The build's shots of the Control tab's pushed pages (health, a fix under way, back from a restart, the checks).
-        let page: MacPage? = ["health", "healthbad", "healthfixing", "healthback", "healthstuck"].contains(pose) || pose == "didntconfirm" ? .health : ["restart", "restartred"].contains(pose) ? .restart : nil
+        let page: MacPage? = ["health", "healthbad", "healthone", "healthfixing", "healthback", "healthstuck"].contains(pose) || pose == "didntconfirm" ? .health : ["restart", "restartred"].contains(pose) ? .restart : nil
         if Self.reopen { history = h; processes = p; reopenForShots() }
         else if h != nil || p != nil || page != nil { whenDrawn { [weak self] in self?.history = h; self?.processes = p; self?.macPage = page } }
         // The build's shot of the unreachable card, as it is said now.
