@@ -15,7 +15,7 @@ struct MacProApp: App {
     init() { AlertWatch.shared.install() }
     var body: some Scene {
         WindowGroup {
-            RootView().environmentObject(model).environmentObject(model.liveStore)
+            RootView(seeds: model.seedStore).modifier(StatusBarTopReader()).environmentObject(model).environmentObject(model.notice).environmentObject(model.liveStore).environmentObject(model.liveStore.display)
                 .otaOffer(model)
                 .preferredColorScheme(.dark)   // black, like the machine and the web dashboard
                 .onChange(of: phase) { _, p in
@@ -61,6 +61,15 @@ struct MacProApp: App {
 // and back, then the screen opening and closing. Only with the "transitions" pose; never on the phone.
 enum TransitionTour {
     @MainActor static func run(_ model: AppModel) {
+        // The resize check's film of a tab come back to: Status, Apps from 10 s to 42 s (an alert arrives meanwhile), then
+        // Status again. Set here rather than tapped: the simulator's taps on the tab bar landed on the wrong tab or not at all.
+        if model.pose == "tabback" {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 10_000_000_000); SwipeLog.note("tab to Apps"); model.tab = 1
+                try? await Task.sleep(nanoseconds: 32_000_000_000); SwipeLog.note("tab to Status"); model.tab = 0
+            }
+            return
+        }
         guard model.pose == "transitions" else { return }
         let steps: [(Double, () -> Void)] = [
             (3.0, { model.history = .cpu }), (5.0, { model.processes = .cpu }), (7.0, { model.processes = nil }), (8.5, { model.history = nil }),
@@ -128,6 +137,41 @@ struct TopEdge: ViewModifier {
         #endif
     }
 }
+// The window's own top inset (the status bar), read at layout and handed down, so a page's first line moves with a fold or
+// a turn as it happens. Read statically in each body (TopEdge.statusBar), it kept the old posture's value until the next
+// reading redrew the page, and the whole page dropped 14 pt seconds after the turn, untouched (designer, resize regate).
+private struct StatusBarTopKey: EnvironmentKey { static let defaultValue: CGFloat = 59 }
+private struct CompactWindowKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var compactWindow: Bool { get { self[CompactWindowKey.self] } set { self[CompactWindowKey.self] = newValue } } }
+extension EnvironmentValues { var statusBarTop: CGFloat { get { self[StatusBarTopKey.self] } set { self[StatusBarTopKey.self] = newValue } } }
+struct StatusBarTopReader: ViewModifier {
+    @State private var top = TopEdge.statusBar
+    @State private var compact = false
+    func body(content: Content) -> some View {
+        content
+            .environment(\.statusBarTop, top)
+            .environment(\.compactWindow, compact)
+            // The window's new size arrives as a turn starts; its new top inset only as it ends (CI 7169d6b: 0.45 s later),
+            // so the title moved after the page had settled. On the Duo the status bar is along the top only open upright
+            // (wide enough for two columns, taller than wide), so the new posture's value is taken from the size at once;
+            // the inset, when it comes, agrees.
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                guard size.width > 0 else { return }
+                let upright = size.width > 600 && size.height > size.width
+                // The outer display, upright or on its side: the window's short side under 520 (designer, regate of
+                // 5b34ffc: on its side, 678 by 466, it drew the full-size Mac with a tile row cut by the edge).
+                let small = min(size.width, size.height) < 520
+                if small != compact { compact = small }
+                let predicted: CGFloat = upright ? max(top, 20) : min(top, 19)
+                if (predicted < 20) != (top < 20) { top = predicted }
+            }
+            // The system gives the new inset as a turn ends; the title's 14 pt step then eases rather than jumps.
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { v in
+                guard v != top else { return }
+                if (v < 20) != (top < 20) { withAnimation(Motion.quick) { top = v } } else { top = v }
+            }
+    }
+}
 private struct TopEdgeUnderKey: EnvironmentKey { static let defaultValue: (Int, Bool) -> Void = { _, _ in } }
 extension EnvironmentValues {
     var topEdgeUnder: (Int, Bool) -> Void { get { self[TopEdgeUnderKey.self] } set { self[TopEdgeUnderKey.self] = newValue } }
@@ -146,7 +190,7 @@ struct ScrollsUnder: ViewModifier {
     let id: Int
     init(id: Int) { self.id = id; _track = State(initialValue: Track(name: "list\(id)")) }
     @MainActor final class Track {
-        var rest: CGFloat?; var now: CGFloat = 0; var under = false
+        var rest: CGFloat?; var now: CGFloat = 0; var under = false; var geo = ""
         // The page moving, and past either end: the Mac's readings wait while it is (ScrollHold), and land once it has
         // been still, back in range, for 0.6 s. Read from the page's geometry, since a List reports no phase (CI 6da2654:
         // once a second the whole of Apps sat 76 pt higher for a frame while the finger held it past the top). Past the
@@ -162,6 +206,12 @@ struct ScrollsUnder: ViewModifier {
             .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, g in
                 track.now = g.contentOffset.y
                 track.watch.geometry(g)
+                // For the build's logs: what of the page's frame changed, beside the offset, so a jump at rest names its
+                // cause (the content's height, an inset, the container).
+                if SwipeLog.on {
+                    let geo = "content \(Int(g.contentSize.height.rounded())) top \(Int(g.contentInsets.top.rounded())) bottom \(Int(g.contentInsets.bottom.rounded())) container \(Int(g.containerSize.height.rounded()))"
+                    if geo != track.geo { track.geo = geo; SwipeLog.note("list\(id) \(geo)") }
+                }
                 guard let r = track.rest else { return }
                 let under = g.contentOffset.y > r + 4
                 if under != track.under { track.under = under; report(id, under) }
@@ -209,7 +259,11 @@ extension View {
     func scrollsUnder(_ id: Int = 0) -> some View { modifier(ScrollsUnder(id: id)) }
     // A row that can be his place on its page: given an id to scroll to, and noted as the place while it's the row at the
     // top of the page.
-    func place<ID: Hashable>(_ id: ID) -> some View { self.id(id).modifier(MarksPlace(id: AnyHashable(id))) }
+    // The id goes on last, outside everything else on the row: a List finds a row to scroll to only by the id on its
+    // outermost view, and with the place's own modifiers wrapped around it every scroll to a row did nothing (CI 90476df:
+    // a turn restored Apps to its place nine times and the page never left its top; the build's scroll to the dials
+    // never moved Status either).
+    func place<ID: Hashable>(_ id: ID) -> some View { self.modifier(MarksPlace(id: AnyHashable(id))).id(id) }
     // On a page's scroll view, under a ScrollViewReader: puts the page back at his place when a change of posture rebuilt it.
     func keepsPlace(_ page: String, _ proxy: ScrollViewProxy) -> some View { modifier(KeepsPlace(page: page, proxy: proxy)) }
 }
@@ -227,10 +281,23 @@ final class PlaceKeeper {
         let p = PlaceKeeper(); pages[name] = p; return p
     }
     var top: AnyHashable?
-    var layout: Bool?
+    var layout: String?  // panes, and the outer display or not: a fold rebuilds the page as much as a turn does
     var restoring = Date.distantPast
     // While the rebuilt page lays out and scrolls back, its rows pass the line and must not count as his place.
-    var settling: Bool { Date().timeIntervalSince(restoring) < 1.2 }
+    var settling: Bool { (pending && Date().timeIntervalSince(restoring) < 5) || Date().timeIntervalSince(restoring) < 2.0 }
+    // A restore asked for by a change of layout and not yet carried through: the page can be rebuilt again as a turn
+    // settles, cancelling the restore under way (CI 4eef8a9: one attempt, then the page sat at its top), so whichever
+    // list appears next carries it on.
+    var pending = false
+    static let restores = false
+    // Whether he had scrolled the page off its top, read at rest in the layout the place was noted in. A page at its top
+    // has no place to keep: folding an untouched Status restored it to the Mac row the unfold's layout had noted, its
+    // title cut off (designer, regate of 3bcef0e).
+    var scrolled = false
+    // When the page's content last changed height: the one restore waits for it to stop (a restore while rows were still
+    // growing slid the page away and a second one cut it back; designer, regate of 3bcef0e).
+    var grew = Date.distantPast
+    var y: CGFloat = 0  // the page's offset now, whatever is moving it
 }
 // Where the top of each page is on screen (its scroll view's top plus the bars over it), in the window's points. Read in
 // geometry transforms, which SwiftUI runs off the main actor, so it is behind a lock rather than on PlaceKeeper.
@@ -247,9 +314,11 @@ extension EnvironmentValues { var placePage: String? { get { self[PlacePageKey.s
 // changes once per row passing, so scrolling costs a comparison per row and frame and redraws nothing.
 struct MarksPlace: ViewModifier {
     @Environment(\.placePage) private var page
+    @Environment(\.paneLayout) private var panes
+    @Environment(\.compactWindow) private var compactWindow
     let id: AnyHashable
     func body(content: Content) -> some View {
-        content.onGeometryChange(for: Bool.self) { g in
+        content.modifier(LogsHeight(id: id)).onGeometryChange(for: Bool.self) { g in
             guard let page else { return false }
             // SwiftUI runs this off the main actor: MainActor.assumeIsolated here trapped (SIGTRAP, build dd1a9ce,
             // 2026-11-11), so the line is read from its own locked store, never from the main-actor PlaceKeeper.
@@ -258,29 +327,96 @@ struct MarksPlace: ViewModifier {
         } action: { on in
             guard on, let page else { return }
             let k = PlaceKeeper.page(page)
-            if !k.settling { k.top = id }
+            // Only from the layout the place was noted in: on a turn the new layout's first rows cross the line before its
+            // restore begins, and noted the top of the page as his place, so the turn put him back at the top (designer,
+            // regate of 5b34ffc: Apps scrolled down, turned flat and back, came back at its top).
+            if !k.settling, k.layout == nil || k.layout == "\(panes)\(compactWindow)", k.top != id {
+                k.top = id
+                if SwipeLog.on { SwipeLog.note("place \(page) \(id.base)") }
+            }
         }
+    }
+}
+
+// For the build's logs only (-swipeLog YES): each placed row's height as it changes, so a page that grows or shrinks at
+// rest says which row did it.
+struct LogsHeight: ViewModifier {
+    let id: AnyHashable
+    func body(content: Content) -> some View {
+        if SwipeLog.on {
+            content.onGeometryChange(for: CGFloat.self) { ($0.size.height * 100).rounded() / 100 } action: { old, new in
+                SwipeLog.note("row \(id.base) h \(old) -> \(new)")
+            }
+        } else { content }
     }
 }
 
 struct KeepsPlace: ViewModifier {
     @Environment(\.paneLayout) private var panes
+    @Environment(\.compactWindow) private var compactWindow
     let page: String
     let proxy: ScrollViewProxy
+    private struct Reading: Equatable { var y: CGFloat; var end: CGFloat }
+    // This list's own end (of two panes, each has its own), kept off SwiftUI's state so reading it redraws nothing.
+    private final class Own { var end: CGFloat = 0 }
+    @State private var own = Own()
     func body(content: Content) -> some View {
         content
             .environment(\.placePage, page)
             // The line is just under the bars over the page: the scroll view's top in the window plus its top inset.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top + 8 } action: { PlaceLines.set(page, $0) }
-            .task(id: panes) {
+            .onScrollGeometryChange(for: Reading.self) { g in
+                // Its end, not just its content: open flat the bars' insets settled after the content had, and the end
+                // moved 47 to 27 under a restore made at 47 (CI 8505660).
+                Reading(y: (g.contentOffset.y + g.contentInsets.top).rounded(),
+                        end: (g.contentSize.height + g.contentInsets.top + g.contentInsets.bottom - g.containerSize.height).rounded())
+            } action: { old, new in
                 let k = PlaceKeeper.page(page)
+                if old.end != new.end { k.grew = Date() }
+                own.end = new.end
+                k.y = new.y
+                // Only his own scrolling, in the layout the place belongs to: never the new layout settling, nor the restore.
+                if !k.settling, k.layout == "\(panes)\(compactWindow)" { k.scrolled = new.y > 8 }
+            }
+            .task(id: "\(panes)\(compactWindow)") {
+                let k = PlaceKeeper.page(page), layout = "\(panes)\(compactWindow)"
                 // Of two panes the first to appear starts the restore; the other, a moment later, scrolls too if it holds it.
-                if let was = k.layout, was != panes, k.top != nil { k.restoring = Date() }
-                k.layout = panes
-                guard Date().timeIntervalSince(k.restoring) < 0.5, let top = k.top else { return }
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                // Any change of layout starts the quiet time, his place or not: the new layout's rows settling at the top
+                // aren't his choice (designer, regate of 23292ae: flat noted the top as his place and the turn back went there).
+                if let was = k.layout, was != layout { k.restoring = Date(); k.pending = k.top != nil && k.scrolled }
+                k.layout = layout
+                // Off for now: a restore made after the turn's first frame shows the page at its top and then cuts to his
+                // row, a 314 pt jump each time he turns back (designer, full regate of 1f6ad94). Top after a turn, with no
+                // jump, until his place can be set in the new layout's first pass.
+                guard PlaceKeeper.restores else { k.pending = false; return }
+                guard k.pending, Date().timeIntervalSince(k.restoring) < 5, let top = k.top else { return }
+                // Once, without animation, when the rebuilt page's rows have stopped growing (none for 200 ms, at most
+                // 1.5 s in): retries 250, 350 and 600 ms in landed, slid away as rows grew, and were cut back (designer,
+                // regate of 3bcef0e). A rebuild that cancels this leaves it pending for the next list to carry out.
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                let start = Date()
+                while !Task.isCancelled, Date().timeIntervalSince(k.grew) < 0.2, Date().timeIntervalSince(start) < 1.5 {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
                 guard !Task.isCancelled else { return }
-                proxy.scrollTo(top, anchor: .top)
+                // A list that all but fits has no place to keep: open flat, Apps' left pane scrolls 27 pt, its rows all in
+                // sight. Restored to his row it went to its end, then sprang back 20 pt as a row below settled (CI 871244b).
+                // It stays at its top; his place stays noted for the next posture.
+                if own.end < 80 {
+                    SwipeLog.note("place kept, not restored \(page): end \(Int(own.end)) (\(layout))")
+                    k.pending = false; k.restoring = Date(); return
+                }
+                SwipeLog.note("place restore \(page) to \(top.base) (\(layout))")
+                var still = Transaction(); still.disablesAnimations = true
+                withTransaction(still) { proxy.scrollTo(top, anchor: .top) }
+                // Once more only if that one didn't move the page at all (folded, CI 8505660: a restore to the Mac row
+                // left Status at its top). Never a second scroll on a page the first one moved.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if !Task.isCancelled, k.y <= 8 {
+                    SwipeLog.note("place restore again \(page) to \(top.base) (\(layout))")
+                    withTransaction(still) { proxy.scrollTo(top, anchor: .top) }
+                }
+                k.pending = false; k.restoring = Date()
             }
     }
 }
@@ -343,7 +479,10 @@ struct RootView: View {
     @AppStorage("celsius") private var celsius = false
     @State private var resets: [Int: Int] = [:]
     @ObservedObject private var ota = OTAInstaller.shared
-    private var updateCount: Int { model.status?.iosApps.map { UpdatesSection.updates($0).count } ?? 0 }
+    // His apps, set only when they change: the root never redraws for a reading (StatusStore).
+    @ObservedObject private var seeds: SeedStore
+    init(seeds: SeedStore) { _seeds = ObservedObject(wrappedValue: seeds) }
+    private var updateCount: Int { seeds.seed.map { UpdatesSection.updates($0).count } ?? 0 }
     // A new colour redraws the other tabs; Settings, where it was picked, stays put so the swatch can animate.
     func key(_ t: Int) -> String { "\(accent)-\(resets[t, default: 0])" }
     var body: some View {
@@ -445,12 +584,13 @@ extension View {
 // A page's name as its first line, at the tabs' size and height (paneTitle). The right pane carries it unseen, so both
 // panes' first cards start level.
 struct PaneHeading: View {
+    @Environment(\.statusBarTop) private var statusBarTop
     let title: String
     var shown = true
     var body: some View {
         Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, TopEdge.statusBar < 20 ? 14 : 0)
+            .padding(.top, statusBarTop < 20 ? 14 : 0)
             .opacity(shown ? 1 : 0)
             .accessibilityHidden(!shown)
             .accessibilityAddTraits(.isHeader)
@@ -470,6 +610,7 @@ func sentenceCase(_ t: String) -> String { t.prefix(1).uppercased() + t.dropFirs
 
 // Can't reach the Mac, or it wants its code: said once at the top of every tab, each with what to do about it.
 struct Notice: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     @Environment(\.openURL) private var openURL
     @State private var retrying = false
@@ -516,7 +657,9 @@ struct Notice: View {
 // Shared frame for each tab: a large title, the notice above, and pull to refresh. Updates draws its own page, so its
 // header can stay put while the log scrolls.
 struct Screen<Content: View>: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
+    @Environment(\.statusBarTop) private var statusBarTop
     @Environment(\.paneLayout) private var panes
     let tab: Int
     let title: String
@@ -524,6 +667,21 @@ struct Screen<Content: View>: View {
     let content: (Status, Side) -> Content
     init(tab: Int, title: String, listed: Bool = true, @ViewBuilder content: @escaping (Status, Side) -> Content) {
         self.tab = tab; self.title = title; self.listed = listed; self.content = content
+    }
+    // The status this tab shows. Taken from the store (never watched through the model, whose every landing redrew the whole
+    // app), and only while this is the tab in front: a tab behind takes the latest as it comes forward.
+    @State private var shown: Status?
+    private func take(_ s: Status?) {
+        guard let s else { return }
+        // A tab behind takes it too, silently, so it is already as it is when he comes back to it: taken on the way back, a
+        // card that had arrived meanwhile slid the page down in front of him (designer, resize gate on cbdef0e: in place,
+        // nothing settling on arrival).
+        guard model.tab == tab || shown == nil else {
+            var still = Transaction(); still.disablesAnimations = true
+            withTransaction(still) { shown = s }
+            return
+        }
+        if model.statusStore.moves { withAnimation(Motion.quick) { shown = s } } else { shown = s }
     }
     @ViewBuilder var connecting: some View {
         if !Notice.shows(model) { HStack { ProgressView(); Text("Connecting…").foregroundStyle(.secondary) } }
@@ -535,9 +693,9 @@ struct Screen<Content: View>: View {
                 // title collapsed into the bar, and the rows ran on under it ("Open on the Mac (13)" printed behind
                 // "Apps", 2026-11-07). The TV app does the same.
                 // At the cards' edge and as far down as the system's large title sat, so nothing moved but its behaviour.
-                Section { paneTitle(side).padding(.top, TopEdge.statusBar < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+                Section { paneTitle(side).padding(.top, statusBarTop < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right, Notice.shows(model) { Section { Notice() } }
-                if let s = model.status { content(s, side) }
+                if let s = shown ?? model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
             }
             // One gap between the blocks on Status, where they sit on the page's own background.
@@ -576,6 +734,13 @@ struct Screen<Content: View>: View {
                     return
                 }
                 // The build's shot of Status scrolled down to the dials and the disk.
+                // The build's film of Status left at its end, where the top processes are (the resize check).
+                if model.pose == "scrolledend", tab == 0, side != .right {
+                    for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    proxy.scrollTo("procs-all", anchor: .bottom)
+                    return
+                }
                 guard tab == 0, side != .left, model.pose == "scrolled" || model.pose == "scrollfilm" else { return }
                 // A cold launch in the build's simulator takes ~10 s to show Status: wait for it, so the film shows scrolling.
                 for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
@@ -606,11 +771,11 @@ struct Screen<Content: View>: View {
         VStack(spacing: 12) {
             // As high as the listed tabs' titles (the list's 4 pt margin, and 14 pt more where the clock is on the side):
             // macOS's sat 18 pt above Apps' folded, so the title jumped going from one tab to the next.
-            paneTitle(side).padding(.top, (TopEdge.statusBar < 20 ? 14 : 0) + 4)
+            paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 4)
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             }
-            if let s = model.status { content(s, side) }
+            if let s = shown ?? model.status { content(s, side) }
             else if side != .right { connecting.frame(maxHeight: .infinity) }
         }
         .modifier(PageLead(on: side != .right))
@@ -639,6 +804,13 @@ struct Screen<Content: View>: View {
             .navigationBarTitleDisplayMode(.large)
             .toolbarVisibility(.hidden, for: .navigationBar)
             .modifier(StackPages(tab: tab, model: model, nav: model.nav))
+        }
+        .onReceive(model.statusStore.$status) { take($0) }
+        // Come back to with something added or gone while away (an alert, a sensor, a process): it moves in, not in one frame.
+        .onChange(of: model.tab) { _, t in
+            guard t == tab, let s = model.status else { return }
+            var still = Transaction(); still.disablesAnimations = true
+            withTransaction(still) { shown = s }
         }
     }
 }
@@ -694,6 +866,14 @@ struct WebTile: View {
     var top: Double?
     var read: (Double) -> String = { _ in "" }
     var open: () -> Void = {}
+    var figure: Text {
+        let big = Font.system(size: 26, weight: .semibold).monospacedDigit()
+        let small = Font.system(size: 17, weight: .semibold)
+        // "%" is a unit like the others (designer, resize gate): small beside its number.
+        if value.hasSuffix("%") { return Text(value.dropLast()).font(big) + Text("%").font(small) }
+        guard let gap = value.lastIndex(of: " ") else { return Text(value).font(big) }
+        return Text(value[..<gap]).font(big) + Text(value[gap...]).font(small)
+    }
     var body: some View {
         Button(action: open) {
             VStack(alignment: .leading, spacing: 1) {
@@ -703,11 +883,14 @@ struct WebTile: View {
                     Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
                 // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
-                Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
+                // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
+                // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
+                figure.lineLimit(1).fixedSize(horizontal: false, vertical: true).contentTransition(.numericText())
                     // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                     // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
-                    .animation(NavTransit.shared.active ? nil : .easeOut(duration: 0.2), value: value)
-                Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
+                    .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
+                Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
                 if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                     SparkLine(values: spark, top: top)
@@ -730,6 +913,7 @@ struct LiveTiles: View {
     @EnvironmentObject var store: LiveStore
     let s: Status
     var body: some View {
+        let _ = SwipeLog.mark("tiles body")
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net, h = store.live?.hist ?? s.hist, load = store.live?.load ?? s.load
         VStack(spacing: 12) {
             HStack(spacing: 12) {
@@ -749,19 +933,15 @@ struct TempDials: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var store: LiveStore
     let s: Status
-    @State private var width: CGFloat = 0
-    // As many across as fit, then evened out, so the last row is never one short (eight dials are 4 + 4, not 3 + 3 + 2).
-    static func columns(_ n: Int, width: CGFloat) -> Int {
-        let fit = max(Int((width + 12) / 76), 1)
-        guard n > fit else { return max(n, 1) }
-        let rows = (n + fit - 1) / fit
-        return (n + rows - 1) / rows
-    }
     var body: some View {
-        let temps = store.live?.temps ?? s.temps ?? []
-        let across = width > 0 ? Self.columns(temps.count, width: width) : 3
+        let _ = SwipeLog.mark("dials body")
+        // The status's sensors, with the live reading's figures: a live reading with fewer (or none) never takes a row away.
+        let live = store.live?.temps ?? []
+        let temps = (s.temps ?? live).map { t in live.first { $0.name == t.name } ?? t }
         let hottest = temps.max { $0.c < $1.c }?.name
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: across), spacing: 16) {
+        // Laid out in the one pass from the width it is given (EvenGrid): read back with onGeometryChange, the grid was
+        // three across for its first frame each time it was built, then four, and the page grew and shrank by a row.
+        EvenGrid(spacing: 12, rowSpacing: 16) {
             ForEach(temps) { t in
                 VStack(spacing: 6) {
                     ArcGauge(Heat.level(t.c), heat: true, ticks: 32, length: 7, width: 2.2) {
@@ -781,7 +961,62 @@ struct TempDials: View {
             }
         }
         .padding(.vertical, 6)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+}
+
+// As many across as fit (76 pt each), then evened out, so the last row is never one short (eight dials are 4 + 4, not
+// 3 + 3 + 2). Columns are equal; each row is as tall as its tallest, items at its top.
+struct EvenGrid: Layout {
+    var spacing: CGFloat = 12
+    var rowSpacing: CGFloat = 16
+    // A dial is never wider than this, centred in its column: sized by the column, it grew and shrank with every change of
+    // the page's width (a turn into open portrait laid the dials out at 311 pt, then 343 as the side bar's inset went to the
+    // foot; designer, resize regate). Wide pages had over-large dials anyway; folded and in a pane they're narrower than this.
+    var largest: CGFloat = 96
+    // To whole steps of 8 pt: the page's width settles a few points at a time after a turn (the side bar's inset arriving),
+    // and each step resized the dials and their row (CI 7169d6b: 220.5, 212.5, 212.0, 211.5 pt).
+    static func dial(_ cell: CGFloat, _ largest: CGFloat) -> CGFloat { min((cell / 8).rounded(.down) * 8, largest) }
+    static func columns(_ n: Int, width: CGFloat) -> Int {
+        let fit = max(Int((width + 12) / 76), 1)
+        guard n > fit else { return max(n, 1) }
+        let rows = (n + fit - 1) / fit
+        return (n + rows - 1) / rows
+    }
+    private func grid(_ width: CGFloat, _ subviews: Subviews) -> (across: Int, cell: CGFloat, rows: [CGFloat]) {
+        let across = Self.columns(subviews.count, width: width)
+        let cell = max((width - spacing * CGFloat(across - 1)) / CGFloat(across), 0)
+        var rows: [CGFloat] = []
+        for (i, v) in subviews.enumerated() {
+            let h = v.sizeThatFits(ProposedViewSize(width: Self.dial(cell, largest), height: nil)).height
+            if i % across == 0 { rows.append(h) } else { rows[rows.count - 1] = max(rows[rows.count - 1], h) }
+        }
+        return (across, cell, rows)
+    }
+    // Each dial is measured once per width, not again to place it: building the row mid-scroll measured all eight twice.
+    struct Cache { var width: CGFloat = -1; var grid: (across: Int, cell: CGFloat, rows: [CGFloat]) = (1, 0, []) }
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache.width = -1 }
+    private func cached(_ width: CGFloat, _ subviews: Subviews, _ cache: inout Cache) -> (across: Int, cell: CGFloat, rows: [CGFloat]) {
+        if cache.width != width { cache.grid = grid(width, subviews); cache.width = width }
+        return cache.grid
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let width = proposal.width ?? 76 * 4
+        let g = cached(width, subviews, &cache)
+        return CGSize(width: width, height: g.rows.reduce(0, +) + rowSpacing * CGFloat(max(g.rows.count - 1, 0)))
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let g = cached(bounds.width, subviews, &cache)
+        var y = bounds.minY
+        for (r, h) in g.rows.enumerated() {
+            for c in 0..<g.across {
+                let i = r * g.across + c
+                guard i < subviews.count else { break }
+                let w = Self.dial(g.cell, largest)
+                subviews[i].place(at: CGPoint(x: bounds.minX + CGFloat(c) * (g.cell + spacing) + (g.cell - w) / 2, y: y), proposal: ProposedViewSize(width: w, height: h))
+            }
+            y += h + rowSpacing
+        }
     }
 }
 
@@ -804,9 +1039,11 @@ struct TempsHeader: View {
 }
 
 struct Hero: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     let s: Status
     var body: some View {
+        let _ = SwipeLog.mark("hero body")
         VStack(spacing: 2) {
             Image("MacPro").resizable().scaledToFit().frame(height: 148)
                 // The glow fades to nothing inside the portrait's own height: a round one reached past the row's top and was
@@ -814,7 +1051,7 @@ struct Hero: View {
                 .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: 148))
                 .accessibilityLabel("Mac Pro, Late 2013")
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
-            Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
+            Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
             // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
             HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale, fresh: model.gotFresh, route: model.route, pulse: model.pulse) {
                 model.tab = 5; model.macPage = .health
@@ -865,6 +1102,7 @@ struct HeroChips: View {
         return (.green, "All running")
     }
     var body: some View {
+        let _ = SwipeLog.mark("chips body")
         if offline {
             TimelineView(.periodic(from: .now, by: 30)) { _ in
                 chip({ Circle().fill(Color.gray).frame(width: 9, height: 9) }, pulse.lastFresh.map { "Last read \(StaleLine.ago($0, now: Date()))" } ?? "Not reached yet")
@@ -899,7 +1137,11 @@ struct HeroChips: View {
 
 // The things reached for most, one tap from the top of the app. Done shows as a tick on the button; a problem, under it.
 struct QuickActions: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
+    // The display's state as the last full status said, for the Display key between live readings.
+    var displayOn: Bool?
+    var displayOff = false
     @State private var done: Set<String> = []
     @State private var fails: [String: String] = [:]
     @State private var successes = 0
@@ -936,7 +1178,7 @@ struct QuickActions: View {
             // 2026-11-11), and waits only when the Mac can't be reached or wants its code.
             button("screen", "macwindow", "Screen", waits: model.problem != nil || model.needsSignIn) { model.openScreen() }
             // Dims itself, in its own colours, to match the other three.
-            DisplayHoldButton().disabled(model.stale)
+            DisplayHoldButton(statusOn: displayOn, statusOff: displayOff).disabled(model.stale)
             button("copy", "doc.on.doc", "Copy from Mac") {
                 fails["copy"] = nil
                 Task {
@@ -980,6 +1222,7 @@ struct QuickActions: View {
 }
 
 struct StatusTab: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     // What the page shows, chosen in Settings.
     @AppStorage("showQuick") private var showQuick = true
@@ -1069,7 +1312,7 @@ struct StatusTab: View {
             // Updates waiting are the number on the Apps tab, not a problem with the Mac.
             if let alerts = s.alerts?.filter({ $0.id != OTAInstaller.alertID }), !alerts.isEmpty { AlertBanner(alerts: alerts) }
             Section { Hero(s: s).place("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
-            if showQuick { Section { QuickActions().place("quick") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
+            if showQuick { Section { QuickActions(displayOn: s.displayOn, displayOff: s.screen == "display off").place("quick") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
         }
         if side != .left { graphics }
         if side != .right { text }
@@ -1124,8 +1367,9 @@ struct AppsTab: View {
                     // seemingly actionable r confusing and fucked"). Never a swipe (no swipe-to-delete on glass cards).
                     HStack(spacing: 12) {
                         VStack(alignment: .leading) {
-                            Text(a.name)
-                            Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                            // One line each, so the CPU figure coming and going with each reading never changes the row's height.
+                            Text(a.name).lineLimit(1)
+                            Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
                         }
                         Spacer(minLength: 8)
                         if working == a.pid { ProgressView().frame(width: 60) }

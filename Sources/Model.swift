@@ -2,7 +2,17 @@ import Foundation
 import SwiftUI
 
 @MainActor
-final class LiveStore: ObservableObject { @Published var live: LiveStatus? }
+final class LiveStore: ObservableObject {
+    @Published var live: LiveStatus? { didSet { display.set(live?.displayOn) } }
+    // The display's state alone, published only when it changes: the Display key watches this, so its row isn't worked
+    // out again with every reading.
+    let display = DisplayState()
+}
+@MainActor
+final class DisplayState: ObservableObject {
+    @Published private(set) var on: Bool?
+    func set(_ v: Bool?) { if v != on { on = v } }
+}
 
 // What the pushed pages show from the status, kept apart from it: Version History its app's entry, a session's page its
 // session. Each is set only when it changed, so a page watching these never redraws for a reading (the status itself is
@@ -16,6 +26,28 @@ final class SeedStore: ObservableObject {
 final class SessionStore: ObservableObject {
     @Published private(set) var sessions: [Status.Session] = []
     func set(_ s: [Status.Session]) { if s != sessions { sessions = s } }
+}
+
+// The Mac's status, kept apart from the model (gate 3, 2026-11-11). On the model, every landing published to the whole
+// app: the root, every tab's frame and the Status page were worked out again on the main thread, a 60 to 180 ms late frame
+// each time, and in the first frames of a pull's spring when held readings landed as it ended. Only each tab's frame takes
+// it (Screen, and only while its tab is the one in front) and the pages that ask for it.
+@MainActor
+final class StatusStore: ObservableObject {
+    @Published var status: Status?
+    // This landing adds or takes away a row: whoever takes it on screen does so in one animated move.
+    var moves = false
+}
+
+// Whether what's on screen is only the last the Mac sent, and why: kept apart from the model the way the status is (resize
+// regate, 2026-11-11). On the model, the "Can't reach the Mac" card arriving redrew the root and every view in the app,
+// and froze the phone 1.4 s just as it came. Only the views that say or dim for it watch this.
+@MainActor
+final class NoticeStore: ObservableObject {
+    @Published var problem: String?
+    @Published var unreadable = false
+    @Published var problemPutAway = false
+    @Published var needsSignIn = false
 }
 
 // When the Mac last answered. Kept apart from the model so the beat on each refresh redraws only the chip that shows it.
@@ -45,6 +77,8 @@ final class AppModel: ObservableObject {
     let seedStore = SeedStore()
     let sessionStore = SessionStore()
     let pulse = Pulse()
+    let statusStore = StatusStore()
+    let notice = NoticeStore()
     let screen = RemoteScreen()
     @Published var screenOpen = false { didSet { screen.paused = !screenOpen } }
     // The Screen opens in place, with no slide up from the foot: its parts appear where they belong as the slide was
@@ -55,23 +89,26 @@ final class AppModel: ObservableObject {
         withTransaction(t) { screenOpen = true }
     }
     @Published var signingIn = false
-    @Published var status: Status? { didSet { seedStore.set(status?.iosApps); sessionStore.set(status?.claude.sessions ?? []) } }
+    var status: Status? {
+        get { statusStore.status }
+        set { statusStore.status = newValue; seedStore.set(newValue?.iosApps); sessionStore.set(newValue?.claude.sessions ?? []) }
+    }
     // Can't reach the Mac: said only once it has failed to answer for 8 s straight, and never in the first 6 s back in
     // front (Tailscale wakes up after the app does), so one missed reading or the bridge restarting never flips the app to
     // unreachable (Richard, 2026-11-10, of the TV app: "cant reach the mac is tailscale on keeps happening"). An answer
     // the app couldn't read isn't the Mac being away and never counts. Every view that says it reads this (or Reach).
-    @Published var problem: String?
+    var problem: String? { get { notice.problem } set { notice.problem = newValue } }
     // The Mac answered, but with a status this build can't read (the bridge changes daily; one renamed field was
     // enough). It's reachable, so not `problem`; but nothing on screen is live, and the app says so instead of freezing
     // every tab under a chip that read "Live" (audit, 2026-11-10).
-    @Published var unreadable = false
+    var unreadable: Bool { get { notice.unreadable } set { notice.unreadable = newValue } }
     // The unreachable card put away with its ✕ (a note that stays can be dismissed). The Mac is still away, and the chips
     // and dimmed keys go on saying so; the card returns with the next run of misses, or the next launch.
-    @Published var problemPutAway = false
+    var problemPutAway: Bool { get { notice.problemPutAway } set { notice.problemPutAway = newValue } }
     private var unread = 0
     // The Mac wants its access code. Shown as a row at the top of each tab; the sheet only opens by itself when there's
     // no address at all, so pressing Cancel is respected.
-    @Published var needsSignIn = false
+    var needsSignIn: Bool { get { notice.needsSignIn } set { notice.needsSignIn = newValue } }
     @Published var signInSheet = false
     @Published var apiSetup = false      // the Admin key row in the Usage card; here, so leaving the tab doesn't lose it
     @Published var gotFresh = false      // the Mac has answered at least once since launch, not just the cache
@@ -100,7 +137,10 @@ final class AppModel: ObservableObject {
     private var pendingSession: String?
     private var lastData: Data?
     // The tab chosen to open on in Settings, or else the one last used.
-    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab { didSet { if tab != oldValue { tabSince = Date() } } }
+    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab { didSet { if tab != oldValue { tabSince = Date(); Self.arrivedAt = Date() } } }
+    // When a tab last came to the front: figures don't roll for the moment after (they're simply there as he arrives).
+    static var arrivedAt = Date.distantPast
+    static var justArrived: Bool { Date().timeIntervalSince(arrivedAt) < 1.5 }
     // Counts each ask for the usage, which lives on the Claude tab: the Claude tab scrolls to it.
     @Published var usageAsked = AppModel.firstTab == 3 ? 1 : 0
     var usageShown = 0
@@ -216,9 +256,27 @@ final class AppModel: ObservableObject {
         // An app opening or quitting on the Mac, or one of his apps coming or going, slides its row in or out with the list's
         // own animation; put in at once, the rows under it jumped a row's height in one frame (designer, CI 836207d: the
         // foot of Apps went 90→76 between two frames as TextEdit came and went, the page at rest at its end).
-        func rows(_ s: Status?) -> [String] { (s?.apps.filter { $0.mem != nil }.map { "\($0.pid)" } ?? []) + (s?.iosApps?.apps.map(\.id) ?? []) }
-        if status != nil, rows(status) != rows(fresh) { withAnimation(Motion.quick) { status = fresh } }
-        else { status = fresh }
+        // The same for anything that adds or takes away a row or a card: an alert arriving or going at the top of Status (the
+        // whole page under it moved down a row in one frame), a session, a sensor, a top process.
+        func rows(_ s: Status?) -> [String] { Self.rows(s) }
+        statusStore.moves = status != nil && rows(status) != rows(fresh)
+        if statusStore.moves { withAnimation(Motion.quick) { status = fresh } } else { status = fresh }
+        statusStore.moves = false
+        afterApply(fresh)
+    }
+    // What adds or takes away a row or a card, for telling a landing that moves the page from one that only changes figures.
+    static func rows(_ s: Status?) -> [String] {
+            guard let s else { return [] }
+            var r: [String] = s.apps.filter { $0.mem != nil }.map { "\($0.pid)" }
+            r += (s.iosApps?.apps ?? []).map { $0.id }
+            r += (s.alerts ?? []).map { "alert:" + $0.id }
+            r += s.claude.sessions.map { "session:" + $0.id }
+            r += (s.temps ?? []).map { "temp:" + $0.name }
+            r.append("procs:\(s.procs.count)")
+            r.append("health:\(s.healthBad ?? -1)")
+            return r
+    }
+    private func afterApply(_ fresh: Status) {
         IconCache.prefetch(fresh, api: api)
         openPending()
         // Status's histories read ahead, so a tile opens onto a drawn chart.
@@ -263,7 +321,9 @@ final class AppModel: ObservableObject {
     // stay on screen through it and after: blanked, the tiles fell back to the older full status (Richard, 2026-11-12).
     private func missed(since started: Date) {
         guard Reach.shared.miss(started: started), problem == nil else { return }
-        problem = Phrase.macAway
+        // The card at the top of every tab arrives in one animated move, as it leaves: put in at once, the whole page under
+        // it dropped by the card's height in one frame, and rose again when the Mac answered.
+        withAnimation(Motion.quick) { problem = Phrase.macAway }
         // A new run of misses says it again, whatever was put away before.
         problemPutAway = false
     }
@@ -302,9 +362,9 @@ final class AppModel: ObservableObject {
             let data = try await api.statusData()
             // It answered: reachable, whatever it said. Fresh only once what it said has been read (below).
             Reach.shared.hit()
-            if problem != nil, pose != "unreachable" { problem = nil }
-            if needsSignIn { needsSignIn = false }
-            func markFresh() { unread = 0; pulse.lastFresh = pose == "unreachable" ? Date().addingTimeInterval(-25) : Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable != (pose == "unreadable") { unreadable = pose == "unreadable" } }
+            if problem != nil, pose != "unreachable" { withAnimation(Motion.quick) { problem = nil } }
+            if needsSignIn { withAnimation(Motion.quick) { needsSignIn = false } }
+            func markFresh() { unread = 0; pulse.lastFresh = pose == "unreachable" ? Date().addingTimeInterval(-25) : Date(); pulse.beats &+= 1; if !gotFresh { gotFresh = true }; if unreadable != (pose == "unreadable") { withAnimation(Motion.quick) { unreadable = pose == "unreadable" } } }
             // The build's shot of the Admin key row, in place well before the picture is taken.
             if pose == "api-sheet", !posedSheet {
                 posedSheet = true
@@ -313,11 +373,13 @@ final class AppModel: ObservableObject {
             // The same answer as last time changes nothing on screen, so nothing is redrawn for it.
             if data == lastData, status != nil { markFresh(); openPending(); return }
             let file = Self.cacheFile
+            let asked = CFAbsoluteTimeGetCurrent()
             let decoded = try await Task.detached(priority: .userInitiated) {
                 let s = try JSONDecoder().decode(Status.self, from: data)
                 try? data.write(to: file, options: .atomic)
                 return s
             }.value
+            if SwipeLog.on { SwipeLog.note(String(format: "status read off main %.0f ms", (CFAbsoluteTimeGetCurrent() - asked) * 1000)) }
             lastData = data
             markFresh()
             var fresh = decoded
@@ -335,9 +397,11 @@ final class AppModel: ObservableObject {
             }
             if parks { SwipeLog.note("status held"); heldStatus = fresh; return }
             SwipeLog.note("status landed")
+            let t0 = CFAbsoluteTimeGetCurrent()
             apply(fresh)
+            if SwipeLog.on { SwipeLog.note(String(format: "status applied %.0f ms", (CFAbsoluteTimeGetCurrent() - t0) * 1000)) }
         } catch APIError.signInNeeded {
-            if !needsSignIn { needsSignIn = true }
+            if !needsSignIn { withAnimation(Motion.quick) { needsSignIn = true } }
             lastData = nil
         } catch is CancellationError {
         } catch let e as URLError where e.code == .cancelled {
@@ -348,7 +412,7 @@ final class AppModel: ObservableObject {
             // restarts, and one of those is not a version the app can't read.
             lastData = nil
             unread += 1
-            if unread >= 2, !unreadable { unreadable = true }
+            if unread >= 2, !unreadable { withAnimation(Motion.quick) { unreadable = true } }
         } catch {
             lastData = nil
             SwipeLog.note("status missed: \(error)")

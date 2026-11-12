@@ -182,6 +182,7 @@ struct SendSection: View {
 
 // The Control tab's ways to the Mac's health and its restart, apart from the everyday buttons.
 struct MacPowerSections: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     @ObservedObject private var watch = RestartWatch.shared
     @State private var summary: MacReport?

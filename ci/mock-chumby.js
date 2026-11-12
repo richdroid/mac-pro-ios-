@@ -132,19 +132,54 @@ http.createServer((q, s) => {
   if (++slowReads % 7 === 0) return q.socket.destroy();
   setTimeout(() => macRoutes(q, s, liveMacStatus, liveMacLive), 2000 + (slowReads * 733) % 3000);
 }).listen(9031, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
-// A cold open over a slow link (9041): every reading takes 4 s to come, so the app opens on last time's figures and must
+// The Mac as his really reads (9041), for the films of Status at rest and pulled (Richard, 2026-11-11: "that same
+// resizing issue in the mac pro app is still happening"): the shape of the bridge's own answers on a busy night (made-up
+// values, nothing of his). Eight top processes whose names and order change with each reading, some long; network rates
+// from a few KB/s to tens of MB/s, so a figure's width changes; 120-point histories; the uptime counting on; the health
+// counted (healthBad 0); every reading 0.1 to 0.9 s late, as over Tailscale with the Mac loaded. Asked for at the phone's
+// own pace (live every second, everything every 10 s), never faster.
+const realBoot = Date.now() / 1000 - 49000;
+const realNames = ['Claude Code', 'node', 'WindowServer', 'Google Chrome Helper (Renderer)', 'awk', 'sysmond', 'otool-classic', 'fileproviderd', 'mds_stores', 'Code Helper (Plugin)', 'kernel_task', 'swift-frontend'];
+const realMac = () => {
+  const now = Date.now() / 1000, n = Math.floor(now), m = JSON.parse(macStatus);
+  m.uptime = Math.floor(now - realBoot);
+  m.healthBad = 0;
+  m.cpu.total = 80 + (n * 7) % 19; m.cpu.per = m.cpu.per.map((v, i) => 70 + ((n * 13 + i * 5) % 30));
+  m.mem.used = 1.45e10 + ((n * 11) % 23) * 3e7; m.mem.total = 34359738368;
+  m.load = [29 + (n % 9), 33.4, 28.3];
+  const rx = [3477, 21907, 48427151, 159693, 6879, 628813, 12716515, 42351], tx = [2971, 746060, 17843, 311321, 4296, 819439, 9610, 148404];
+  m.net.rxRate = rx[n % rx.length] * (0.9 + (n % 3) / 10); m.net.txRate = tx[(n * 3) % tx.length];
+  for (const k of Object.keys(m.hist)) { const h = Array.from({ length: 120 }, (_, i) => { const j = n - 120 + i; return k === 'cpu' ? 80 + (j * 7) % 19 : k === 'mem' ? 43 + (j % 3) : (rx[(j * 5) % rx.length] / (k === 'tx' ? 9 : 1)); }); m.hist[k] = h; }
+  m.temps = [['CPU', 81.7], ['GPU A', 62.9], ['GPU B', 63.1], ['Memory', 59.2], ['Chipset', 59], ['Drive', 52.1], ['Power supply', 63.8], ['Intake air', 30.6]].map(([name, c], i) => ({ name, c: Math.round((c + ((n * (i + 3)) % 5) * 0.4 - 0.8) * 10) / 10 }));
+  m.procs = Array.from({ length: 8 }, (_, i) => { const name = realNames[(n * 5 + i * 7) % realNames.length]; return { pid: 1000 + ((n + i * 3) % 12), cpu: Math.round((24.8 - i * 2.6 + (n % 4)) * 10) / 10, mem: Math.round(((n + i) % 7) * 6) / 10, name }; });
+  m.disk.used = 185245831168 + (n % 50) * 4e5; m.disk.free = 65544605696 - (n % 50) * 4e5; m.disk.total = 250790436864;
+  m.at = n * 1000;
+  return m;
+};
+const realLive = () => { const m = realMac(); return JSON.stringify({ uptime: m.uptime, load: m.load, cpu: m.cpu, mem: m.mem, net: m.net, hist: m.hist, temps: m.temps, displayOn: m.displayOn }); };
+let realReads = 0;
+http.createServer((q, s) => {
+  if (!/^\/api\/(live|status)/.test(q.url)) return macRoutes(q, s, () => JSON.stringify(realMac()), realLive);
+  setTimeout(() => macRoutes(q, s, () => JSON.stringify(realMac()), realLive), 100 + (++realReads * 373) % 800);
+}).listen(9041, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// The same Mac on 9042, where an alert (and an eighth app) arrives 20 s after the app first asks: for the film that leaves
+// Status for Apps while it comes, then goes back (resize regate: a tab coming back must not change in one frame).
+let alertFrom = 0, alertAsked = 0;
+const alertMac = () => { const m = realMac(); if (Date.now() - alertFrom > 20000) { m.alerts = [{ id: 'temp:CPU', level: 'warning', kind: 'temp', metric: 'CPU', title: 'CPU is hot', detail: '192°F', since: alertFrom + 20000, c: 89 }]; m.healthBad = 1; } return m; };
+http.createServer((q, s) => { if (!alertFrom || Date.now() - alertAsked > 25000) alertFrom = Date.now(); alertAsked = Date.now(); macRoutes(q, s, () => JSON.stringify(alertMac()), realLive); }).listen(9042, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// A cold open over a slow link (9051): every reading takes 4 s to come, so the app opens on last time's figures and must
 // look fully live, never dimmed, while the first answer comes (Richard, 2026-11-12: "it was slightly darkened").
 http.createServer((q, s) => {
   if (!/^\/api\/(live|status)/.test(q.url)) return macRoutes(q, s, liveMacStatus, liveMacLive);
   setTimeout(() => macRoutes(q, s, liveMacStatus, liveMacLive), 4000);
-}).listen(9041, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
-// A Mac that doesn't answer for 40 s from GET /arm (9042), then answers again: nothing may be said before ~25 s.
+}).listen(9051, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// A Mac that doesn't answer for 40 s from GET /arm (9052), then answers again: nothing may be said before ~25 s.
 let deadUntil = 0;
 http.createServer((q, s) => {
   if (q.url === '/arm') { deadUntil = Date.now() + 40000; return s.end('armed'); }
   if (Date.now() < deadUntil && /^\/api\//.test(q.url)) return;   // never answered: the request hangs until the app gives up
   macRoutes(q, s, liveMacStatus, liveMacLive);
-}).listen(9042, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+}).listen(9052, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
 // The same Mac opened while its display is asleep or waking, as Screen Sharing really answers then (2026-11-10): a 2 x 2

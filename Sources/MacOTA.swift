@@ -117,9 +117,12 @@ struct OTAOffer: ViewModifier {
     @Environment(\.scenePhase) private var phase
     @AppStorage(OTAInstaller.offerKey) private var offerOn = false
 
-    // Changes when there's something new to offer or the Mac first answers.
-    private var trigger: String {
-        "\(model.gotFresh)|" + OTAInstaller.ready(model.status).map { "\($0.id)@\($0.build)" }.joined(separator: ",")
+    // Changes when there's something new to offer or the Mac first answers. Worked out as a status lands (StatusStore), so
+    // the whole app isn't watching every reading for it.
+    @State private var trigger = ""
+    private func retrigger(_ s: Status?) {
+        let t = "\(model.gotFresh)|" + OTAInstaller.ready(s).map { "\($0.id)@\($0.build)" }.joined(separator: ",")
+        if t != trigger { trigger = t }
     }
     func body(content: Content) -> some View {
         content
@@ -136,6 +139,8 @@ struct OTAOffer: ViewModifier {
                 if p == .background { ota.offeredThisVisit = false }
                 if p == .active { consider() }
             }
+            .onReceive(model.statusStore.$status) { retrigger($0) }
+            .onChange(of: model.gotFresh) { retrigger(model.status) }
             .onChange(of: trigger) { consider() }
             .onChange(of: ota.wanted) { consider() }
             .onAppear { consider() }
