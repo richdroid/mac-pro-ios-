@@ -537,12 +537,15 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
-  if (scene === 'real') { tvReal.known = false; return tvReal(q, s, path, query, json); }
+  if (scene === 'real') { tvReal.known = false; tvReal.long = false; return tvReal(q, s, path, query, json); }
+  // The same show with a name that takes two lines and words that run past every reserve: the cut description (faded,
+  // "More") and, open flat, the poster's budget under a two-line name with "On the TV" at the foot.
+  if (scene === 'reallong') { tvReal.known = false; tvReal.long = true; return tvReal(q, s, path, query, json); }
   // The real scene with the episode's length known from the start, for the shot of a drag along the bar with its bubble.
-  if (scene === 'realscrub') { tvReal.known = true; return tvReal(q, s, path, query, json); }
+  if (scene === 'realscrub') { tvReal.known = true; tvReal.long = false; return tvReal(q, s, path, query, json); }
   if (/^f(normal|slow|fail|offline|already|bridgeon|joined)$/.test(scene || '')) return tvFlickStart(scene.slice(1), q, s, path, json);
   // The prepare call's answer everywhere else too, in the bridge's own shape.
   if (q.method === 'POST' && path === '/api/tv/prepare') { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} json({ ok: true, awake: true, fresh: !!v.token }); }); return true; }
@@ -754,11 +757,15 @@ function tvReal(q, s, path, query, json) {
   const log = (what, body) => fs.appendFileSync('/tmp/tv-real-sends.log', JSON.stringify({ t: Math.round(t * 10) / 10, what, body }) + '\n');
   const late = (ms, f) => { setTimeout(f, ms); return true; };
   const read = f => { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} f(v); }); return true; };
-  const show = { title: 'Sample Show', subtitle: 'S2 E3', art: tvBase + '/poster.png', id: 'tt1234567', kind: 'series', progress: 0.1, about: 'A made-up comedy about a made-up family.' };
+  const NAME = tvReal.long ? 'The Remarkably Long Saga of the Upper Valley Family' : 'Sample Show';
+  const ABOUT = tvReal.long
+    ? 'A made-up comedy about a made-up family who run the last hardware shop in a valley that keeps flooding. Each season follows one winter: the river rises, the shop moves its stock upstairs, and someone in the family falls for someone they should not. Nobody in it is real, and none of it happened, but it goes on long enough to need a More.'
+    : 'A made-up comedy about a made-up family.';
+  const show = { title: NAME, subtitle: 'S2 E3', art: tvBase + '/poster.png', id: 'tt1234567', kind: 'series', progress: 0.1, about: ABOUT };
   const home = { rows: [
     { title: 'Continue watching', items: [show, { title: 'A Long Film', subtitle: '88 min left', art: tvBase + '/poster.png', id: 'tt7654321', kind: 'movie', progress: 0.3, about: 'A made-up film.' }] },
     { title: 'Popular movies', items: ['Heat', 'Night Harbour'].map((title, n) => ({ title, subtitle: '1995 · ★ 8.3', art: tvBase + '/poster.png', id: 'tt76543' + n, kind: 'movie', about: 'A made-up film.' })) },
-    { title: 'Popular series', items: ['Sample Show', 'Quiet Valley', 'Paper Town'].map((title, n) => ({ title, subtitle: '2004 · ★ 8.7', art: tvBase + '/poster.png', id: n ? 'tt12345' + n : 'tt1234567', kind: 'series', about: 'A made-up series.' })) },
+    { title: 'Popular series', items: [NAME, 'Quiet Valley', 'Paper Town'].map((title, n) => ({ title, subtitle: '2004 · ★ 8.7', art: tvBase + '/poster.png', id: n ? 'tt12345' + n : 'tt1234567', kind: 'series', about: 'A made-up series.' })) },
     { title: 'New and notable', items: [{ title: 'Late Train', subtitle: '2025', art: tvBase + '/poster.png', id: 'tt7654399', kind: 'movie', about: 'A made-up film.' }] },
   ] };
   if (path === '/api/tv/status') {
@@ -768,7 +775,7 @@ function tvReal(q, s, path, query, json) {
     v.app = 'com.stremio.one';
     // Mint's session stays listed, paused, after a film has started over it.
     v.music = { title: 'A Paused Song', artist: 'Some Band', album: 'Some Album', art: tvBase + '/art.png', playing: false, position: 61000, duration: 214000, sampledAt: now - 600000 };
-    const session = { pkg: 'com.stremio.one', playing: r.playing, description: ['Sample Show - S02E03 - The Third One'], position: Math.max(0, Math.round(here())), sampledAt: now, canSeek: true, art: tvBase + '/poster.png', show: 'Sample Show', season: 2, episode: 3, episodeTitle: 'The Third One' };
+    const session = { pkg: 'com.stremio.one', playing: r.playing, description: [NAME + ' - S02E03 - The Third One'], position: Math.max(0, Math.round(here())), sampledAt: now, canSeek: true, art: tvBase + '/poster.png', show: NAME, season: 2, episode: 3, episodeTitle: 'The Third One' };
     if (r.seeked || tvReal.known) session.duration = REAL_MS; else if (t >= 20) session.duration = CATALOGUE_MS;
     v.session = session;
     return late(r.asks % 7 === 0 ? 2000 : 300 + Math.round(Math.random() * 600), () => json(v));
@@ -776,7 +783,7 @@ function tvReal(q, s, path, query, json) {
   // The series lookup takes a few seconds, as the real catalogue can, so ⏭ pressed before it's in shows its light (r21).
   if (path === '/api/tv/stremio-meta') {
     const eps = [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' })));
-    return late(3000, () => json({ about: 'A made-up comedy about a made-up family.', episodes: eps }));
+    return late(3000, () => json({ about: ABOUT, episodes: eps }));
   }
   if (path === '/api/tv/stremio' || (path === '/api/tv/discover' && !query.get('genre'))) {
     const term = (query.get('q') || '').toLowerCase();

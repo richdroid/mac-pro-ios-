@@ -518,6 +518,14 @@ jobs:
               done
             done
             xcrun simctl ui "$DEVICE" appearance light
+            DISP=3 SUF=-portrait
+            # A show whose name takes two lines and whose words run past every reserve: the cut description (faded last line,
+            # "More"), and open flat the poster's budget with "On the TV" at the pane's foot (gate of tv-gate-fix).
+            curl -s http://127.0.0.1:9002/reallong/reset > /dev/null
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/reallong -tab 3 -pose realseries
+            sleep 14
+            xcrun simctl io "$DEVICE" screenshot --display=$DISP dist/tv-reallong$SUF.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             # The Playing tab in this posture with each kind of thing on: Mint's song, a YouTube video with its still, and
             # one the Mac hasn't found yet (r35: "spacing here is fucked", and an empty picture box).
             # Each shot must be of its own scene: the mock logs whose status was asked for (review of dfd490e: the video
@@ -563,6 +571,14 @@ jobs:
           # reports each step, and the status goes asleep, on, Stremio open, paused, playing), a still while it's on its way,
           # and the rebuilt flick's starts (tv_flickstarts). simctl records at the display's own rate, up to 60 frames a second.
           tv_poses() { # display, file suffix
+            DISP=$1 SUF=$2
+            # A show whose name takes two lines and whose words run past every reserve: the cut description (faded last line,
+            # "More"), and open flat the poster's budget with "On the TV" at the pane's foot (gate of tv-gate-fix).
+            curl -s http://127.0.0.1:9002/reallong/reset > /dev/null
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/reallong -tab 3 -pose realseries
+            sleep 14
+            xcrun simctl io "$DEVICE" screenshot --display=$DISP dist/tv-reallong$SUF.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             for T in 1 2 3 5 9; do
               xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002 -tab $T -scroll 40
               sleep 9
