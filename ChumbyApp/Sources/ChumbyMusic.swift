@@ -225,6 +225,10 @@ struct MacSongPicker: View {
     // Set when the page is in the right pane open flat: how it closes there.
     @ObservedObject var draft: MacSongDraft
     var pane: (() -> Void)?
+    // As a cover: whether it's now open flat. Sounds, under a cover, doesn't hear the turn itself (11-12 film: turned
+    // back flat with the keyboard down, the cover stayed across the fold), so the cover says.
+    var wideChanged: ((Bool) -> Void)?
+    @Environment(\.horizontalSizeClass) private var size
     @State private var searching = false
     @State private var problem: String?
     // "Still trying" is a live status, not a note to put away: it goes by itself when the Mac answers.
@@ -321,6 +325,7 @@ struct MacSongPicker: View {
                 }
                 .horizontalBars()
                 .tint(ChumbyPalette.acc(scheme == .dark))
+                .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { wideChanged?($0 && size == .regular) } }
             }
         }
         .animation(.snappy, value: draft.songs)
