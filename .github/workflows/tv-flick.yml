@@ -77,7 +77,7 @@ jobs:
             curl -s $M/$scene/reset > /dev/null
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/$scene -tab 1 -pose flick-stage
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/$scene -tab 1 -pose flick-stage -swipeLog YES
             sleep 12
             local at x y
             at=$(grep -o 'what=row&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
@@ -89,6 +89,9 @@ jobs:
                 # A swipe as a finger makes it, moving from the touch on (Device Hub's own drag lands in too few steps
                 # for the list to follow it: CI 0880cb0, a long list never moved).
                 swipe) $D "$DEVICE" path $x $y 0.02 $x 0.2 0.15 0 || echo "path failed" ;;
+                # The same swipe begun above the rows (on the heading), to tell a row that holds the list from a list
+                # that won't move at all.
+                swipehead) $D "$DEVICE" path $x $(echo "$y - 0.2" | bc -l) 0.02 $x 0.1 0.15 0 || echo "path failed" ;;
                 # Held, then: a short sharp flick (about 45 pt in 80 ms); a flick easing to a stop before it lifts; a
                 # slow carry well past the line and a rest; carried up then brought back down (must go back); a resting
                 # thumb that swipes as the row lifts (must not send).
@@ -107,6 +110,8 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             # What the mock was sent: a swipe must have sent nothing.
             cp /tmp/tv-flick-sends.log dist/tv-$name-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$name-sends.log
+            # The page's scroll readings ("page y …") and the main thread's turns, beside the finger.
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/tv-$name-main.log || true
           }
           # A card on a shelf, held and thrown with a real finger (Watch, tab 3, at a fixed place: the first card of the
           # first shelf), and the same card held and put back. What the stand-in Mac was sent says whether it went.
@@ -162,6 +167,7 @@ jobs:
             fingerfilm finger-swipe$x $d swipe
             # The same swipe on a list longer than the screen (freal's dozen rows): the list must follow the finger.
             fingerfilm finger-swipelong$x $d swipe freal
+            fingerfilm finger-swipehead$x $d swipehead freal
             for H in shortflick easeflick carry backdown latescroll; do fingerfilm finger-$H$x $d $H; done
             shelffilm shelf-throw$x $d 0.15 0.33 throw
             shelffilm shelf-back$x $d 0.15 0.33 back
