@@ -17,7 +17,13 @@ enum MacMusic {
         if let a = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["mac"] as? String { return a }
         return Bundle.main.object(forInfoDictionaryKey: "MacAddress") as? String ?? ""
     }
-    static var reachable: Bool { URL(string: address)?.host != nil }
+    // Shown only where the app knows the Mac, and only when switched on (MacMusicOn, project.yml) or for the build's
+    // films: the Mac's search takes 8 to 12 s on his library (measured 11-12), too slow for his phone (gate, 11-12).
+    static var on: Bool {
+        UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["mac"] != nil
+            || Bundle.main.object(forInfoDictionaryKey: "MacMusicOn") as? Bool == true
+    }
+    static var reachable: Bool { on && URL(string: address)?.host != nil }
     // How long the Mac may go unanswering before it's said (the 11-11 ruling: never on a single miss; opening on cellular,
     // Tailscale takes a few seconds to wake). Until then it's asked again every two seconds, quietly.
     static let patience: TimeInterval = 25
@@ -159,7 +165,7 @@ extension ChumbyModel {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             switch pose {
             case "macgone": model.playOnChumby(song)
-            case "macpick", "macpickgone", "macplay", "machome", "macfail", "macsecond", "macdrag":
+            case "macpick", "macpickgone", "macplay", "machome", "macfail", "macsecond", "macdrag", "macclose", "macpicknokb":
                 open()
                 guard pose == "macsecond" else { return }
                 // The second pick lands while the first is still starting (searches take 9 s, as his library's do).
@@ -178,8 +184,15 @@ extension ChumbyModel {
     }
     // With the list there, whether to pick its first song (the flows), once per opening.
     static func shouldPick() -> Bool {
-        guard active, !["macpick", "macpickgone", "macdrag"].contains(pose), picks < opens else { return false }
+        guard active, !["macpick", "macpickgone", "macdrag", "macclose", "macpicknokb"].contains(pose), picks < opens else { return false }
         picks += 1
+        return true
+    }
+    // The Close button's path, once per launch.
+    static var closed = false
+    static func shouldClose() -> Bool {
+        guard pose == "macclose", !closed else { return false }
+        closed = true
         return true
     }
     // Home: the pick made on Sounds, then Home, where the Playing card carries it on.
@@ -187,6 +200,15 @@ extension ChumbyModel {
         guard pose == "machome" else { return }
         Task { try? await Task.sleep(nanoseconds: 1_500_000_000); model.tab = 0 }
     }
+}
+
+// What he has typed in the picker and what came back, kept by Sounds rather than the page: the page is a cover or a
+// pane by posture, two different views, and a turn or fold must never lose what he typed (11-11 ruling).
+@MainActor final class MacSongDraft: ObservableObject {
+    @Published var text = ""
+    @Published var songs: [MacSong] = []
+    @Published var searched = ""
+    func clear() { text = ""; songs = []; searched = "" }
 }
 
 // Choosing the song: a search of the Mac's Music library. Folded and open upright, edge to edge with Close in a bar
@@ -201,10 +223,8 @@ struct MacSongPicker: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     // Set when the page is in the right pane open flat: how it closes there.
+    @ObservedObject var draft: MacSongDraft
     var pane: (() -> Void)?
-    @State private var text = ""
-    @State private var songs: [MacSong] = []
-    @State private var searched = ""
     @State private var searching = false
     @State private var problem: String?
     // "Still trying" is a live status, not a note to put away: it goes by itself when the Mac answers.
@@ -212,12 +232,13 @@ struct MacSongPicker: View {
     @FocusState private var fieldOn: Bool
     static let title = "Play on the Chumby"
     func length(_ secs: Int) -> String { String(format: "%d:%02d", secs / 60, secs % 60) }
-    func close() { if let pane { pane() } else { dismiss() } }
+    // The keyboard is let go first, so it goes down with the page rather than lingering over Sounds (11-12 gate).
+    func close() { fieldOn = false; if let pane { pane() } else { dismiss() } }
     func choose(_ s: MacSong) { model.playOnChumby(s); close(); MacMusicPose.afterPick(model) }
     var field: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Song, artist or album", text: $text)
+            TextField("Song, artist or album", text: $draft.text)
                 .focused($fieldOn).submitLabel(.search)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
         }
@@ -229,14 +250,14 @@ struct MacSongPicker: View {
         Section {
             // One calm line for the wait, whatever it is: the library being looked through, or the Mac not answering yet
             // (never a red note as well: 11-12 gate).
-            if searching && (songs.isEmpty || stillTrying) {
+            if searching && (draft.songs.isEmpty || stillTrying) {
                 HStack(spacing: 10) {
                     ProgressView()
                     Text(stillTrying ? "Can’t reach the Mac. Still trying…" : "Looking in the Mac’s library…").foregroundStyle(.secondary)
                         .contentTransition(.opacity)
                 }
             }
-            ForEach(songs) { s in
+            ForEach(draft.songs) { s in
                 Button { choose(s) } label: {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -253,7 +274,7 @@ struct MacSongPicker: View {
                 .opacity(searching ? 0.45 : 1)
                 .accessibilityHint("Plays it on the Chumby")
             }
-            if songs.isEmpty && !searching && !searched.isEmpty && searched == text.trimmingCharacters(in: .whitespaces) && problem == nil {
+            if draft.songs.isEmpty && !searching && !draft.searched.isEmpty && draft.searched == draft.text.trimmingCharacters(in: .whitespaces) && problem == nil {
                 Text("No songs like that in the Mac’s library.").foregroundStyle(.secondary)
             }
         }
@@ -302,20 +323,25 @@ struct MacSongPicker: View {
                 .tint(ChumbyPalette.acc(scheme == .dark))
             }
         }
-        .animation(.snappy, value: songs)
+        .animation(.snappy, value: draft.songs)
         .animation(.snappy, value: stillTrying)
         // The keyboard comes up with the page, not after it.
-        .defaultFocus($fieldOn, true)
-        .onAppear { fieldOn = true }
-        .task { if let words = await MacMusicPose.typing() { text = words } }
-        .onChange(of: songs) {
-            guard !searching, let first = songs.first, MacMusicPose.shouldPick() else { return }
-            Task { try? await Task.sleep(nanoseconds: 1_500_000_000); choose(first) }
+        // (Moved by a turn or fold with words already typed, it comes back as it was, without pushing the keyboard up.)
+        .defaultFocus($fieldOn, draft.text.isEmpty)
+        .onAppear { if draft.text.isEmpty { fieldOn = true } }
+        .task { if draft.text.isEmpty, let words = await MacMusicPose.typing() { draft.text = words } }
+        .onChange(of: draft.songs) {
+            guard !searching, let first = draft.songs.first else { return }
+            if MacMusicPose.shouldPick() { Task { try? await Task.sleep(nanoseconds: 1_500_000_000); choose(first) } }
+            else if MacMusicPose.shouldClose() { Task { try? await Task.sleep(nanoseconds: 1_500_000_000); close() } }
+            else if MacMusicPose.pose == "macpicknokb" { Task { try? await Task.sleep(nanoseconds: 800_000_000); fieldOn = false } }
         }
         // Asked a moment after he stops typing, and only the newest question's answer is shown.
-        .task(id: text) {
-            let q = text.trimmingCharacters(in: .whitespaces)
-            guard q.count >= 2 else { songs = []; searching = false; stillTrying = false; return }
+        .task(id: draft.text) {
+            let q = draft.text.trimmingCharacters(in: .whitespaces)
+            guard q.count >= 2 else { draft.songs = []; searching = false; stillTrying = false; return }
+            // Already answered (the page moved by a turn or fold): kept as it is, not asked again.
+            if draft.searched == q && !draft.songs.isEmpty { return }
             try? await Task.sleep(nanoseconds: 450_000_000)
             if Task.isCancelled { return }
             searching = true
@@ -327,7 +353,7 @@ struct MacSongPicker: View {
                     let found = try await MacMusic.search(q)
                     if Task.isCancelled { return }
                     searching = false
-                    songs = found; searched = q
+                    draft.songs = found; draft.searched = q
                     withAnimation(.snappy) { problem = nil; stillTrying = false }
                     return
                 } catch MacMusic.Trouble.noAnswer {
@@ -337,7 +363,7 @@ struct MacSongPicker: View {
                 } catch {
                     if Task.isCancelled { return }
                     searching = false
-                    songs = []; searched = q
+                    draft.songs = []; draft.searched = q
                     withAnimation(.snappy) { stillTrying = false; problem = error.localizedDescription }
                     return
                 }

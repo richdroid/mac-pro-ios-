@@ -2038,7 +2038,21 @@ struct SoundsTab: View {
     // (11-12 branch film). A real turn or fold with the keyboard down moves it.
     @State private var pickPane = false
     @State private var keyboardUp = false
-    func openPicker() { pickPane = wide; pickSong = true }
+    @StateObject private var draft = MacSongDraft()
+    // Open flat, the pane's pages change as Alarms' do: out in 0.12 s, swapped unseen, in over 0.2 s (11-12 gate: a
+    // pick closed the picker with its rows drawn through Sounds' own).
+    @State private var paneFaded = false
+    // What he typed is kept while the picker moves by a turn or fold, and starts afresh at each opening (not cleared as
+    // it closes, which would empty the list as it leaves).
+    func openPicker() { draft.clear(); pickPane = wide; pickSong = true }
+    func closePane() {
+        withAnimation(.easeIn(duration: 0.12)) { paneFaded = true }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            pickSong = false
+            withAnimation(.easeOut(duration: 0.2)) { paneFaded = false }
+        }
+    }
     @State private var stationLink = ""
     @State private var streamURL = ""
     @State private var streamName = ""
@@ -2105,8 +2119,8 @@ struct SoundsTab: View {
 
     var body: some View {
         // Open flat, the song picker takes the right pane (its own title row and list), with the Now card live beside it.
-        TwoPane(rightTitle: pickSong && pickPane ? nil : " ",
-                rightPage: pickSong && pickPane ? AnyView(MacSongPicker(pane: { withAnimation(.snappy) { pickSong = false } }).environmentObject(model)) : nil) {
+        TwoPane(rightTitle: pickSong && pickPane ? nil : " ", rightShown: !(wide && paneFaded),
+                rightPage: pickSong && pickPane ? AnyView(MacSongPicker(draft: draft, pane: { closePane() }).environmentObject(model)) : nil) {
             PageTitle("Sounds")
             ReachRow()
             // AirPlay in the Now card, under the volume: it's how music reaches the Chumby, and alone it was a one-row
@@ -2227,13 +2241,15 @@ struct SoundsTab: View {
         .seaList()
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
-        .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 { pickSong = false } })) { MacSongPicker().environmentObject(model) }
+        .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 { pickSong = false } })) { MacSongPicker(draft: draft).environmentObject(model) }
         // The keyboard's flip comes before the keyboard says it's showing, so a change is only taken once it has held
         // for a moment with the keyboard down.
-        .task(id: wide) {
+        // Checked again when the keyboard goes down, for a turn made while it was up.
+        .task(id: "\(wide) \(keyboardUp)") {
             try? await Task.sleep(nanoseconds: 800_000_000)
-            if !Task.isCancelled, pickSong, !keyboardUp, pickPane != wide { withAnimation(.snappy) { pickPane = wide } }
+            if !Task.isCancelled, pickSong, !keyboardUp, pickPane != wide { pickPane = wide }
         }
+
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in keyboardUp = false }

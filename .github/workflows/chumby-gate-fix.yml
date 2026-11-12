@@ -118,6 +118,24 @@ jobs:
             film 3 warm-open 6 $M/mac -tab 3
             film 3 macpick-open 16 $M/mac -tab 3 -pose macpick
             film 3 macplay-open 40 $M/macplay-open -tab 3 -pose macplay
+            # The Close button's path in the pane: out, swapped unseen, in.
+            film 3 macclose-open 20 $M/mac -tab 3 -pose macclose
+            # Turned with "blue" typed and its results up, keyboard up then down: flat to upright and back. The words and
+            # the first row must survive both turns.
+            for K in macpick macpicknokb; do
+              sleep 3
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/chumby-turn-$K.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -mac $M/mac -tab 3 -pose $K
+              sleep 16
+              xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-turn-$K-1flat.png
+              $D "$DEVICE" rotate 1 || echo "rotate failed"; sleep 6
+              xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-turn-$K-2upright.png
+              $D "$DEVICE" rotate 3 || echo "rotate failed"; sleep 6
+              xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-turn-$K-3flat.png
+              kill -INT $REC; wait $REC; echo "film turn-$K exit $?"
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
           }
           # Dark: the picker, a pick to playing, and a start turned down.
           films_dark() { # display, suffix
