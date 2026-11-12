@@ -442,20 +442,22 @@ struct Page<C: View>: View {
                 // own layouts (two panes, overlays) hid it.
                 .safeAreaInset(edge: .top, spacing: 0) {
                     if !alwaysInline {
-                        MovingTitle(title: title, scrolled: scrolled)
-                            // Where the heading rests, at the top of the page: the other tabs keep theirs for Status, which
-                            // sets its own against it (its height before the bar's room is taken back).
-                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { y in
-                                guard scrolled.y <= 0.5, !sizeKey.isEmpty else { return }
-                                if showsBar { let rest = y + barRoom; if abs(rest - titleY) > 0.5 { titleY = rest } }
-                                else { TabTop.shared.set(sizeKey, y) }
-                                #if os(iOS)
-                                HitchLog.shared.note("heading \(title) \(sizeKey) at \(Int(y)) ref \(TabTop.shared.tops[sizeKey].map { Int($0) } ?? -1) room \(Int(barRoom))")
-                                #endif
-                            }
-                            .padding(.top, -barRoom)
+                        // Where the heading's words rest at the top of the page: the other tabs keep theirs for Status,
+                        // which sets its own against it (where it would rest before the bar's room is taken back).
+                        MovingTitle(title: title, scrolled: scrolled) { y in
+                            guard !sizeKey.isEmpty else { return }
+                            if showsBar { let rest = y + barRoom; if abs(rest - titleY) > 0.5 { titleY = rest } }
+                            else { TabTop.shared.set(sizeKey, y) }
+                            #if os(iOS)
+                            HitchLog.shared.note("heading \(title) \(sizeKey) at \(Int(y)) ref \(TabTop.shared.tops[sizeKey].map { Int($0) } ?? -1) room \(Int(barRoom))")
+                            #endif
+                        }
                     }
                 }
+                // Status' page, heading and all, moved up by the bar's room as one: a move, not a new layout, so nothing
+                // under it measures itself again; its foot reaches down as far.
+                .padding(.bottom, -barRoom)
+                .offset(y: -barRoom)
                 .toolbar(alwaysInline || showsBar ? .automatic : .hidden, for: .navigationBar)
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
                 .environment(\.pagePush, PagePush(push: { path.append($0) }))
@@ -521,6 +523,8 @@ extension EnvironmentValues { var pageScroll: PageScrollY? { get { self[PageScro
 private struct MovingTitle: View {
     let title: String
     let scrolled: PageScrollY
+    // Where the words rest (global y of their top) while the page is at its top.
+    var rests: (CGFloat) -> Void = { _ in }
     // What the display already keeps clear above the page: the clock's row open upright; nothing folded or open flat,
     // where the clock is on the side and the name sat 13 pt from the glass (Richard, 2026-11-09, Playing folded: "too
     // close to top edge"). It takes the same air from the top as from the side then, 22 pt to its cap, every tab alike.
@@ -528,6 +532,7 @@ private struct MovingTitle: View {
     var body: some View {
         let y = max(0, scrolled.y)
         PageHeading(title)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { y in if scrolled.y <= 0.5 { rests(y) } }
             .padding(.horizontal, 20).padding(.top, max(4, 13 - above)).padding(.bottom, 8)
             .background { Color.clear.ignoresSafeArea(edges: .top).onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { above = $0 } }
             .offset(y: -y)
