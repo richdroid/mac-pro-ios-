@@ -59,9 +59,12 @@ import UIKit
     static func dissolve(_ rect: CGRect, soft: TVImage?, tint: Color?, duration: Double = 0.2) {
         #if os(iOS)
         guard let v = veil, let w = v.superview as? UIWindow, rect.width > 20, rect.height > 20 else { return }
+        // The page's whole height, its own bar at the top included (left on the still, it was a black band over the
+        // ground: d5d94f4). With the tab bar showing (upright) the whole screen, the bar itself kept on its own still;
+        // beside a side bar, the page's columns only.
+        let bar = Self.bottomBar(in: w).flatMap { w.bounds.intersects($0) ? $0 : nil }
         var r = rect.intersection(w.bounds)
-        // A bar along the foot (upright, folded small) stays: the page stops above it.
-        if let bar = Self.bottomBar(in: w), bar.minY > w.bounds.midY, bar.minY < r.maxY { r.size.height = max(0, bar.minY - r.minY) }
+        r = bar != nil ? w.bounds : CGRect(x: r.minX, y: 0, width: r.width, height: w.bounds.height)
         guard r.height > 20, let still = w.resizableSnapshotView(from: r, afterScreenUpdates: false, withCapInsets: .zero) else { return }
         let ground = UIView(frame: w.bounds)
         ground.backgroundColor = .black
@@ -84,6 +87,17 @@ import UIKit
         w.insertSubview(clip, aboveSubview: v)
         w.insertSubview(still, aboveSubview: clip)
         extras += [clip, still]
+        if let bar, let kept = w.resizableSnapshotView(from: bar, afterScreenUpdates: false, withCapInsets: .zero) {
+            kept.frame = bar; kept.isUserInteractionEnabled = false
+            w.insertSubview(kept, aboveSubview: still)
+            extras.append(kept)
+        }
+        // The still of the page goes from under the ground, so the two fading together at the lift never show the page
+        // again through it (d5d94f4: the list came back faintly as the Remote came up).
+        let hole = CAShapeLayer()
+        let path = UIBezierPath(rect: v.bounds); path.append(UIBezierPath(rect: v.convert(r, from: w)))
+        hole.path = path.cgPath; hole.fillRule = .evenOdd
+        v.layer.mask = hole
         UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { still.alpha = 0 }
         CATransaction.flush()
         #endif
@@ -125,13 +139,18 @@ import UIKit
         for c in vc.children { if let t = find(c) { return t } }
         return nil
     }
+    // Only the bar's own views (the tab bar, the side bar and their floating forms), never the pages or the tab
+    // controller's own transition: cutting everything outside the page (d5d94f4) left the Remote's picture unmeasured
+    // open flat and upright, and the pick fell back to the page it came from.
     private static func strip(_ v: UIView, sparing content: UIView?) {
-        if let c = content {
-            if v === c { return }
-            if c.isDescendant(of: v) { v.subviews.forEach { strip($0, sparing: c) }; return }
+        if let c = content, v === c || v.isDescendant(of: c) { return }
+        let name = String(describing: type(of: v))
+        if v is UITabBar || name.contains("TabBar") || name.contains("Sidebar") || name.contains("FloatingBar") {
+            func layers(_ l: CALayer) { l.removeAllAnimations(); l.sublayers?.forEach(layers) }
+            layers(v.layer)
+            return
         }
-        func layers(_ l: CALayer) { l.removeAllAnimations(); l.sublayers?.forEach(layers) }
-        layers(v.layer)
+        v.subviews.forEach { strip($0, sparing: content) }
     }
     #endif
 }
@@ -941,8 +960,11 @@ struct FlickScreen: View {
     // whatever the bar would make it. Never a hand-made circle over the poster or title.
     static var closeGlyph: Image {
         #if os(iOS)
-        if let u = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)) {
-            return Image(uiImage: u.withTintColor(.white, renderingMode: .alwaysOriginal))
+        // Drawn into a plain bitmap, white: as a symbol image the bar restyled it (grey in CI 7bbaf47, black in d5d94f4).
+        if let u = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold))?
+            .withTintColor(.white, renderingMode: .alwaysOriginal) {
+            let drawn = UIGraphicsImageRenderer(size: u.size).image { _ in u.draw(at: .zero) }
+            return Image(uiImage: drawn.withRenderingMode(.alwaysOriginal)).renderingMode(.original)
         }
         #endif
         return Image(systemName: "xmark")
@@ -1810,7 +1832,7 @@ struct FlickScreen: View {
             // so the move starts as soon as any other, and follows the real place below once the Remote gives it. Only
             // with neither (the first pick ever in this posture) is the Remote waited for.
             var remembered = false
-            if slot == nil, let m = model.rememberedSlot(slotKey) { slot = m; remembered = true }
+            if slot == nil, let m = model.rememberedSlot(slotKey) ?? model.rememberedSlot("warm" + slotKey) { slot = m; remembered = true }
             for _ in 0..<(slot == nil ? 40 : 0) {
                 if let s = model.mirrorSlot, s.width > 20 {
                     if let p = seen, abs(p.minX - s.minX) + abs(p.minY - s.minY) + abs(p.width - s.width) < 0.5 { slot = s; break }
