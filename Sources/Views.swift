@@ -289,6 +289,7 @@ final class PlaceKeeper {
     // settles, cancelling the restore under way (CI 4eef8a9: one attempt, then the page sat at its top), so whichever
     // list appears next carries it on.
     var pending = false
+    static let restores = false
     // Whether he had scrolled the page off its top, read at rest in the layout the place was noted in. A page at its top
     // has no place to keep: folding an untouched Status restored it to the Mac row the unfold's layout had noted, its
     // title cut off (designer, regate of 3bcef0e).
@@ -384,6 +385,10 @@ struct KeepsPlace: ViewModifier {
                 // aren't his choice (designer, regate of 23292ae: flat noted the top as his place and the turn back went there).
                 if let was = k.layout, was != layout { k.restoring = Date(); k.pending = k.top != nil && k.scrolled }
                 k.layout = layout
+                // Off for now: a restore made after the turn's first frame shows the page at its top and then cuts to his
+                // row, a 314 pt jump each time he turns back (designer, full regate of 1f6ad94). Top after a turn, with no
+                // jump, until his place can be set in the new layout's first pass.
+                guard PlaceKeeper.restores else { k.pending = false; return }
                 guard k.pending, Date().timeIntervalSince(k.restoring) < 5, let top = k.top else { return }
                 // Once, without animation, when the rebuilt page's rows have stopped growing (none for 200 ms, at most
                 // 1.5 s in): retries 250, 350 and 600 ms in landed, slid away as rows grew, and were cut back (designer,
