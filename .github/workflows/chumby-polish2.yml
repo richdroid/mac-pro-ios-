@@ -116,10 +116,10 @@ jobs:
           # menu, then an item in the menu is picked by its name. The editor: Jazz Radio, Morning Mix, Silent, then Beep again,
           # each from the one Plays menu, then that menu opened and closed by a tap on the Afterwards heading. On the live
           # scene, whose readings change every few seconds as the real Chumby's do.
-          swiftc -O -o /tmp/findtext ci/find-text.swift
+          swiftc -O -o /tmp/findtext ci/find-text.swift > dist/findtext-build.log 2>&1; ls -la /tmp/findtext >> dist/findtext-build.log 2>&1 || true
           tapt() { # display, words, minX (fraction), nth
             xcrun simctl io "$DEVICE" screenshot --display=$1 /tmp/ft.png > /dev/null 2>&1
-            local P; P=$(/tmp/findtext /tmp/ft.png "$2" ${4:-1} ${3:-0}) && { echo "tap '$2' at $P"; $D "$DEVICE" touch $P; } || echo "no '$2' on screen"
+            local P; P=$(/tmp/findtext /tmp/ft.png "$2" ${4:-1} ${3:-0} 2>> dist/findtext.log) && { echo "tap '$2' at $P"; $D "$DEVICE" touch $P; } || echo "no '$2' on screen ($?)" | tee -a dist/findtext.log
           }
           pick() { # display, current value, item, still name
             tapt $1 "$2" 0.5; sleep 2

@@ -658,13 +658,9 @@ struct KeepsPlace: ViewModifier {
                     // its rows reflow, so its place is put back by row, as a new one's is.
                     if resized, PagePlace.turning, tracker.restored, PagePlace.anchor[key] != nil { putBack(key) }
                 }
-                .onAppear {
-                    guard let key else { return }
-                    // Opened afresh (no turn just now): at its top, and the old place forgotten.
-                    if !PagePlace.turning { PagePlace.anchor[key] = nil; tracker.restored = true; return }
-                    guard PagePlace.anchor[key] != nil else { tracker.restored = true; return }
-                    putBack(key)
-                }
+                .onAppear { arrived() }
+                // A pane's list taking a page (its key set) is that page arriving: the list stays the same view.
+                .onChange(of: key) { _, _ in tracker.restored = false; arrived() }
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, o in
                     guard let key else { return }
                     // Only his own scrolling at a steady size: never while the turn resizes the list, never while it's
@@ -677,6 +673,13 @@ struct KeepsPlace: ViewModifier {
                     PagePlace.offset[key] = o
                     #endif
                 }
+    }
+    func arrived() {
+        guard let key else { return }
+        // Opened afresh (no turn just now): at its top, and the old place forgotten.
+        if !PagePlace.turning { PagePlace.anchor[key] = nil; tracker.restored = true; return }
+        guard PagePlace.anchor[key] != nil else { tracker.restored = true; return }
+        putBack(key)
     }
     // Put back, and checked: the row's own position read from the scroll view, the offset set to it, until it holds through
     // the rest of the turn (the turn may lay the list out again after it first lands); then logged where it landed, in the
@@ -763,7 +766,11 @@ struct StaysAtTop: ViewModifier {
                         if holder.atTop { learn() }
                     }
                 }
-                .onAppear { if PagePlace.turning, holder.atTop { settle(proxy) } }
+                .onAppear {
+                    if PagePlace.turning, holder.atTop { settle(proxy) }
+                    // A title's rest learned from a list that opens at its top at rest (launch has no scroll of its own).
+                    Task { @MainActor in try? await Task.sleep(nanoseconds: 1_200_000_000); if holder.atTop { learn() } }
+                }
         }
     }
     // Checked as the turn's layout lands and again as it settles.
@@ -775,6 +782,7 @@ struct StaysAtTop: ViewModifier {
                 guard !Task.isCancelled, holder.atTop else { return }
                 putBack(proxy)
             }
+            learn()
         }
     }
     #if canImport(UIKit)
@@ -794,7 +802,9 @@ struct StaysAtTop: ViewModifier {
     }
     func learn() {
         #if canImport(UIKit)
-        guard !PagePlace.turning, let sv = holder.scroll, !sv.isTracking, !sv.isDecelerating, let g = titleGap(), g >= 0, g <= 20 else { return }
+        guard !PagePlace.turning, let sv = holder.scroll, !sv.isTracking, !sv.isDecelerating, let g = titleGap() else { return }
+        SwipeLog.note("title gap \(String(format: "%.1f", g)) rest \(TitleRest.gap.map { String(format: "%.1f", $0) } ?? "-") inset ui \(Int(sv.adjustedContentInset.top)) swiftui \(Int(holder.inset)) offset \(Int(sv.contentOffset.y))")
+        guard g >= 0, g <= 20 else { return }
         if TitleRest.gap.map({ g < $0 - 0.25 }) ?? true { TitleRest.gap = g; SwipeLog.note("title rest \(String(format: "%.1f", g))") }
         #endif
     }

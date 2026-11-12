@@ -14,7 +14,10 @@ let minX = a.count > 4 ? Double(a[4]) ?? 0 : 0
 let req = VNRecognizeTextRequest()
 req.recognitionLevel = .accurate
 req.usesLanguageCorrection = false
-try? VNImageRequestHandler(cgImage: cg).perform([req])
+// A runner has no GPU to spare: on the CPU, and any failure said.
+req.usesCPUOnly = true
+do { try VNImageRequestHandler(cgImage: cg).perform([req]) } catch { FileHandle.standardError.write("vision: \(error)\n".data(using: .utf8)!) }
+FileHandle.standardError.write("lines: \((req.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " | "))\n".data(using: .utf8)!)
 var hits: [(Double, Double)] = []
 for o in req.results ?? [] {
     guard let t = o.topCandidates(1).first?.string else { continue }
