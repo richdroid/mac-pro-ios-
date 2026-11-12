@@ -193,8 +193,8 @@ struct ChumbyState: Decodable {
     var channelNames: [String] = []
     var widgetNames: [String] = []
     var mine: [MineWidget] = []
-    // Alarms that came due while it was frozen, off or restarting.
-    struct Missed: Decodable, Identifiable, Hashable { let at: Double; let rang: Bool; let name: String; var id: String { "\(at) \(name)" } }
+    // Alarms that came due while it was frozen, off or restarting; `silent`: it rang, but the Chumby heard no sound from it.
+    struct Missed: Decodable, Identifiable, Hashable { let at: Double; let rang: Bool; var silent: Bool? = nil; let name: String; var id: String { "\(at) \(name)" } }
     var missed: [Missed] = []
     // The one set of settings every calendar alarm rings with, once one has been saved as it. Null until then.
     var calTpl: Alarm?

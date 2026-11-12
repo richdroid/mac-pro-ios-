@@ -607,7 +607,7 @@ struct AlarmsTab: View {
                     ForEach(missed) { m in
                         HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 2) {
-                                RowNote(icon: "alarm.waves.left.and.right.fill", text: m.rang ? "Rang late" : "Missed")
+                                RowNote(icon: "alarm.waves.left.and.right.fill", text: m.silent == true ? "Rang with no sound" : m.rang ? "Rang late" : "Missed")
                                 Text([Date(timeIntervalSince1970: m.at).formatted(.dateTime.weekday(.abbreviated).hour().minute()), m.name.hasPrefix(Alarm.calendarPrefix) ? String(m.name.dropFirst(Alarm.calendarPrefix.count)) : m.name].filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                             }
                             Spacer(minLength: 0)
