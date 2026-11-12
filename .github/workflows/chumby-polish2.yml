@@ -1,0 +1,165 @@
+name: Chumby polish (branch)
+# A working branch's own short run: the Chumby app alone, every tab and the sheets the 11-11 polish touched, light and dark,
+# folded, open in portrait (the posture he holds) and open flat. Only for pushes to chumby-polish2; published to the
+# chumby-polish2-shots release. The full build, its runs and its releases are untouched.
+on:
+  push:
+    branches: [chumby-polish2]
+permissions:
+  contents: write
+concurrency:
+  group: chumby-polish2
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 90
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          node ci/mock-chumby.js &
+          sleep 2
+          one() { # display, file name, wait, address suffix (- for none), launch args...
+            local d=$1 name=$2 wait=$3 sfx=$4; shift 4
+            local ADDR=http://127.0.0.1:9000; [ "$sfx" != "-" ] && ADDR=$ADDR/$sfx
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          # display, suffix: every tab light and dark, then the sheets and pages this pass changed (light), and Home and
+          # Sounds while music plays.
+          set_() {
+            local d=$1 x=$2
+            for M in light dark; do
+              xcrun simctl ui "$DEVICE" appearance $M
+              for T in 0 1 2 3 4; do one $d $T-$M$x 7 - -tab $T; done
+              one $d pose-justonce-$M$x 9 - -tab 0 -pose justonce
+              one $d pose-editor-$M$x 9 - -tab 2 -pose editor
+            done
+            xcrun simctl ui "$DEVICE" appearance light
+            for V in "calsettings 2 - -pose calsettings" "calday 2 - -pose calday" "caldayedit 2 - -pose caldayedit" "template 2 - -pose template" \
+                     "chadd 1 - -pose chadd" "playing 3 playing" "homeplaying 0 playing" "moved-alarms 2 moved" "firstrun 2 slow -pose firstrun"; do
+              set -- $V
+              one $d pose-$1$x 9 $3 -tab $2 "${@:4}"
+            done
+            # The sheets' and pages' ends, which no resting shot reaches: dragged up twice, then shot. Open flat the pages
+            # sit in the right pane, so the drag is made there. Light, then the editor's and the template's in dark too.
+            local DX=0.5; [ "$x" = "-open" ] && DX=0.75
+            for V in "editor light 2 - -pose editor" "template light 2 - -pose template" "caldayown light 2 - -pose caldayown" "justonce light 0 - -pose justonce" "calsettings light 2 - -pose calsettings" \
+                     "editor dark 2 - -pose editor" "template dark 2 - -pose template"; do
+              set -- $V
+              xcrun simctl ui "$DEVICE" appearance $2
+              local ADDR=http://127.0.0.1:9000; [ "$4" != "-" ] && ADDR=$ADDR/$4
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $3 "${@:5}"
+              sleep 9
+              $D "$DEVICE" drag $DX 0.85 $DX 0.2 || true; sleep 1
+              $D "$DEVICE" drag $DX 0.85 $DX 0.2 || true; sleep 2
+              local N=$1-end; [ "$2" = dark ] && N=$1-end-dark
+              xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pose-$N$x.png
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
+            xcrun simctl ui "$DEVICE" appearance dark
+            one $d pose-chadd-dark$x 9 - -tab 1 -pose chadd
+            xcrun simctl ui "$DEVICE" appearance light
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          # Films, for what stills can't show: Back from Calendar settings and a scrolled day (both pages whole, nothing
+          # re-laid out, the top fade not flashing), Calendar settings flung and held in portrait under its top fade, and
+          # Alarms' calendar switch tapped on (it must hold on through the permission alert, never spring back), then refused.
+          film() { # display, file name, launch suffix, launch args...
+            local d=$1 name=$2 sfx=$3; shift 3
+            local ADDR=http://127.0.0.1:9000; [ "$sfx" != "-" ] && ADDR=$ADDR/$sfx
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR "$@"
+            sleep 9
+          }
+          endfilm() { sleep 4; kill -INT $REC; wait $REC; echo "film $1 exit $?"; xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true; }
+          films() { # display, suffix, Back's place (x y, fractions of the screenshot; the inner display's tree is empty to
+            # devicehubctl, so a tap by label never lands there)
+            local d=$1 x=$2 bx=$3 by=$4
+            back() { $D "$DEVICE" tap "Back" 2>/dev/null || $D "$DEVICE" touch $bx $by || echo "no Back"; }
+            film $d back-calsettings$x live -tab 2 -pose calsettings -swipeLog YES; back; endfilm back-calsettings$x
+            film $d back-calday$x live -tab 2 -pose calday -swipeLog YES; $D "$DEVICE" drag 0.5 0.7 0.5 0.4 0.3 || true; sleep 2.5; back; endfilm back-calday$x
+            film $d scroll-calsettings$x - -tab 2 -pose calsettings; $D "$DEVICE" drag 0.5 0.85 0.5 0.25 0.4 || true; sleep 2; $D "$DEVICE" drag 0.5 0.3 0.5 0.8 0.4 || true; endfilm scroll-calsettings$x
+          }
+          # Folded first (the narrowest, where rows wrap; it ran out of time last), then open in portrait, then open flat.
+          set_ 1 ""
+          films 1 "" 0.897 0.29
+          $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          set_ 3 -portrait
+          films 3 -portrait 0.065 0.05
+          $D "$DEVICE" rotate 3; sleep 5
+          set_ 3 -open
+          # Open flat: the right pane changing pages (a calendar day, then an alarm's editor, in and out: the alarmsdemo
+          # pose), and the editor dragged slowly past its pinned title's 48 pt.
+          film 3 panes-open live -tab 2 -pose alarmsdemo; sleep 20; endfilm panes-open
+          film 3 pinned-editor-open - -tab 2 -pose editor; $D "$DEVICE" drag 0.75 0.8 0.75 0.45 2.5 || true; sleep 2; $D "$DEVICE" drag 0.75 0.45 0.75 0.8 2.5 || true; endfilm pinned-editor-open
+          # Dragged from low in the pane, clear of the segmented control and steppers, far enough to scroll past the title.
+          film 3 pinned-day-open - -tab 2 -pose caldayown; $D "$DEVICE" drag 0.75 0.9 0.75 0.3 2.5 || true; sleep 2; $D "$DEVICE" drag 0.75 0.3 0.75 0.9 2.5 || true; endfilm pinned-day-open
+          film 3 pinned-calsettings-open - -tab 2 -pose calsettings; $D "$DEVICE" drag 0.75 0.9 0.75 0.3 2.5 || true; sleep 2; $D "$DEVICE" drag 0.75 0.3 0.75 0.9 2.5 || true; endfilm pinned-calsettings-open
+          # Flung, not dragged: a 0.15 s throw up and release, then thrown back past the top (the pinned title must hold its
+          # rest pixel from the first frame after release).
+          film 3 pinned-editor-fling-open - -tab 2 -pose editor; $D "$DEVICE" drag 0.75 0.9 0.75 0.25 0.15 || true; sleep 3; $D "$DEVICE" drag 0.75 0.25 0.75 0.9 0.15 || true; endfilm pinned-editor-fling-open
+          film 3 pinned-calsettings-fling-open - -tab 2 -pose calsettings; $D "$DEVICE" drag 0.75 0.9 0.75 0.25 0.15 || true; sleep 3; $D "$DEVICE" drag 0.75 0.25 0.75 0.9 0.15 || true; endfilm pinned-calsettings-fling-open
+          # Turned mid-scroll: Calendar settings open flat, scrolled so its title is pinned, turned to open portrait and back.
+          film 3 pinned-turn-open - -tab 2 -pose calsettings; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.0 || true; sleep 2
+          $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5
+          # Back open flat: it must be where it was; then down to the top and up again past the title, to see the rest.
+          $D "$DEVICE" drag 0.75 0.3 0.75 0.95 1.0 || true; sleep 2; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.5 || true; sleep 2; endfilm pinned-turn-open
+          # Turned at rest, then scrolled past the title.
+          film 3 pinned-turnrest-open - -tab 2 -pose calsettings; $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5
+          $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.5 || true; sleep 2; endfilm pinned-turnrest-open
+          # An alarm's editor open flat, scrolled, turned to portrait and back.
+          film 3 editor-turn-open - -tab 2 -pose editor; $D "$DEVICE" drag 0.75 0.9 0.75 0.4 1.0 || true; sleep 2
+          $D "$DEVICE" rotate 1 || true; sleep 5; $D "$DEVICE" rotate 3 || true; sleep 5; endfilm editor-turn-open
+          # Last of all: Alarms' calendar switch tapped on, open in portrait then folded. It raises the system's calendar
+          # permission alert, which stays up over everything after it, so nothing is shot after these.
+          $D "$DEVICE" rotate 1; sleep 5
+          film 3 calswitch-portrait slow -tab 2 -pose firstrun; sleep 3; $D "$DEVICE" touch 0.896 0.456 || echo "no switch"; sleep 4; $D "$DEVICE" touch 0.5 0.68 || echo "no refusal"; sleep 4; endfilm calswitch-portrait
+          $D "$DEVICE" pose closed; sleep 5
+          film 1 calswitch slow -tab 2 -pose firstrun; sleep 3; $D "$DEVICE" tap "Wake me from my calendar" || echo "no switch"; sleep 6; endfilm calswitch
+      - name: Collect crash reports
+        if: always()
+        run: |
+          mkdir -p dist/crashes
+          cp ~/Library/Logs/DiagnosticReports/*.ips dist/crashes/ 2>/dev/null || true
+      - name: Publish the result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.ips' '*.mp4' || zip -q ../shots.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-polish2-shots >/dev/null 2>&1 || gh release create chumby-polish2-shots --target chumby-polish2 --prerelease --title "Chumby polish (branch)" --notes "Branch-only shots."
+          for f in shots.zip status.txt; do
+            for i in 1 2 3 4; do gh release upload chumby-polish2-shots "$f" --clobber && break; echo "upload of $f failed, try $i"; sleep 20; done
+          done

@@ -23,7 +23,7 @@ struct FailNote: View {
             if let dismiss {
                 Spacer(minLength: 8)
                 Button(action: dismiss) {
-                    Image(systemName: "xmark.circle.fill").font(.body).foregroundStyle(.secondary)
+                    Image(systemName: "xmark.circle.fill").font(.body).symbolRenderingMode(.palette).foregroundStyle(.white, ChumbyPalette.acc(scheme == .dark))
                         .frame(minWidth: 44, minHeight: 32, alignment: .trailing).contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
@@ -49,7 +49,7 @@ struct MarkNote: View {
                     Spacer(minLength: 8)
                     // Or let it go: the control beside it already shows what the Chumby holds.
                     Button { model.dismiss(mark) } label: {
-                        Image(systemName: "xmark.circle.fill").font(.body).foregroundStyle(.secondary)
+                        Image(systemName: "xmark.circle.fill").font(.body).symbolRenderingMode(.palette).foregroundStyle(.white, ChumbyPalette.acc(scheme == .dark))
                             .frame(minWidth: 44, minHeight: 32, alignment: .trailing).contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
@@ -420,6 +420,7 @@ struct WokeUpTo: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject private var art = SongArt.shared
     @Environment(\.openURL) private var openURL
+    @State private var width: CGFloat = 0
     // For each time an alarm went off, the first song Pandora played in the 45 minutes after it.
     // From the Chumby's own log of rings when it has one: each ring's first song within 45 minutes, named as the alarm was.
     // A once-only calendar alarm leaves the alarm list once it fires, so pairing with the list found nothing for it (Richard,
@@ -465,33 +466,44 @@ struct WokeUpTo: View {
         // blank tile, and slides the others along in one spring rather than a frame.
         let list = all.filter { art.found[SongArt.key($0.song)] != nil }
         if !list.isEmpty {
+            // The covers fill the card when they all fit (open portrait had three small ones and 40% of the card bare), and
+            // scroll at their smallest when they don't, sliding out under the card's own edge on both sides alike.
+            let n = CGFloat(list.count)
+            let avail = width - 2 * Self.inset
+            let fits = width > 0 && n * Self.smallest + (n - 1) * Self.gap <= avail
+            let side = fits ? min(Self.largest, ((avail - (n - 1) * Self.gap) / n).rounded(.down)) : Self.smallest
             Section {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(list, id: \.song.id) { w in tile(w.song).transition(.opacity.combined(with: .scale(scale: 0.92))) }
+                    HStack(alignment: .top, spacing: Self.gap) {
+                        ForEach(list, id: \.song.id) { w in tile(w.song, side: side).transition(.opacity.combined(with: .scale(scale: 0.92))) }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 14)
                     .animation(.snappy, value: list.map(\.song.id))
                 }
-                .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
-            } header: { SectionHead(icon: "sunrise.fill", text: "Woke up to", color: ChumbyPalette.sub(scheme == .dark)) }
+                .contentMargins(.horizontal, Self.inset, for: .scrollContent)
+                .scrollDisabled(fits)
+                .clipShape(RoundedRectangle(cornerRadius: SoloCard.radius, style: .continuous))
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+                .listRowInsets(EdgeInsets())
+            } header: { SectionHead(icon: "sunrise.fill", text: "Woke up to") }
         }
     }
-    func tile(_ s: Song) -> some View {
+    static let gap: CGFloat = 10, inset: CGFloat = 14, smallest: CGFloat = 100, largest: CGFloat = 200
+    func tile(_ s: Song, side: CGFloat) -> some View {
         let f = art.found[SongArt.key(s)]
         return Button {
             var c = URLComponents(string: "https://music.apple.com/search")!
             c.queryItems = [.init(name: "term", value: s.artist + " " + s.title)]
             if let u = f?.link ?? c.url { openURL(u) }
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 ZStack {
                     if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
                     else if f != nil {
                         // Looked for and none found: the octopus on the Chumby's own blue, never a grey box.
                         ZStack {
                             ChumbyPalette.hex(0x2c5bae)
-                            OctopusMark(color: .white.opacity(0.9), eyes: ChumbyPalette.hex(0x2c5bae)).padding(26)
+                            OctopusMark(color: .white.opacity(0.9), eyes: ChumbyPalette.hex(0x2c5bae)).padding(side * 0.23)
                         }
                         .transition(.opacity)
                     } else {
@@ -499,13 +511,15 @@ struct WokeUpTo: View {
                         GlassRow().transition(.opacity)
                     }
                 }
-                .frame(width: 112, height: 112).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                // Two lines, kept even for a short one, so the tiles' artist and time lines stay level across the row.
-                Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(2, reservesSpace: true).multilineTextAlignment(.leading)
-                Text(s.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                Text(Date(timeIntervalSince1970: s.t).formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.footnote).foregroundStyle(.secondary)
+                .frame(width: side, height: side).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(.bottom, 3)
+                // Top-aligned, the artist straight under the title: a one-line title no longer leaves a gap that a
+                // two-line one doesn't, so every caption starts the same distance under its cover (designer, 11-11).
+                Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                Text(s.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                Text(Date(timeIntervalSince1970: s.t).formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
-            .frame(width: 112, alignment: .leading)
+            .frame(width: side, alignment: .leading)
         }
         .buttonStyle(.plain)
         .onAppear { art.look(s) }
@@ -517,6 +531,7 @@ struct WokeUpTo: View {
 struct AlarmsTab: View {
     @EnvironmentObject var model: ChumbyModel
     @ObservedObject private var wake = CalendarWake.shared
+    @State private var turningOn = false
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
     @State private var editing: EditTarget?
@@ -541,6 +556,16 @@ struct AlarmsTab: View {
     // as an alarm that's "off" (11-10: yesterday's one-off and its "just this once" sat in his list as two dead rows).
     var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" && $0.key != folded && !ChumbyState.isExpired($0, chumby: model.state.chumbyNow) }.sorted { $0.localMinutes < $1.localMinutes } }
     var paneShown: Pane { wide ? pane : .schedule }
+    // Pages that bring their own list and title row (editor, day), shown in the right pane in place of its list.
+    var rightPage: AnyView? {
+        switch paneShown {
+        case .editor(let a): return AnyView(AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new"))
+        case .napEditor(let a): return AnyView(AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new")))
+        case .day(let k): return AnyView(CalendarDaySheet(key: k, close: { show(.schedule) }).id(k))
+        case .template: return AnyView(AlarmEditor(calendarTemplate: true, close: { show(paneBack) }))
+        default: return nil
+        }
+    }
     // Pages that bring their own title row (editor, day) have none from here.
     var rightTitle: String? {
         switch paneShown {
@@ -596,7 +621,7 @@ struct AlarmsTab: View {
     // and say when they repeat (Richard, 2026-11-05: "theres little to no distinction between daily alarms and calendar
     // alarms its just super unintuitive"). Night times moved to Tinker, and "Woke up to" to Sounds.
     var page: some View {
-        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !(wide && paneFaded)) {
+        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !(wide && paneFaded), rightPage: rightPage) {
             // Add alarm is never a loose circle: it's the last row of My alarms (below).
             PageTitle("Alarms")
             ReachRow()
@@ -615,7 +640,7 @@ struct AlarmsTab: View {
                             RowRemove(label: "Dismiss", icon: "xmark.circle.fill") { withAnimation(.snappy) { dismissedRaw = (dismissed.union([m.id])).joined(separator: "\n") } }
                         }
                     }
-                } footer: { Text("The Chumby was frozen or off when these came due.") }
+                } footer: { SectionFoot("The Chumby was frozen or off when these came due.") }
             }
             yours
         } right: {
@@ -626,10 +651,7 @@ struct AlarmsTab: View {
                 calendar
                 nap
             case .settings: CalendarSettingsSections()
-            case .editor(let a): AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new")
-            case .napEditor(let a): AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new"))
-            case .day(let k): CalendarDaySheet(key: k, close: { show(.schedule) }).id(k)
-            case .template: AlarmEditor(calendarTemplate: true, close: { show(paneBack) })
+            default: EmptyView()
             }
         }
         .seaList()
@@ -736,8 +758,18 @@ struct AlarmsTab: View {
     // What rings next, first, so it never has to be worked out from the list: what kind it is, the time, when, and Skip.
     @State private var skipping = false
     @ViewBuilder var glance: some View {
-        if !model.stateKnown {
-            HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) }.padding(.vertical, 6)
+        if !model.stateKnown && model.unreachable {
+            // Out of reach, no spinner promising an answer that can't come: the Offline row above says why.
+            Text("What rings next shows once the Chumby answers.").font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 6)
+        } else if !model.stateKnown {
+            HStack(spacing: 10) {
+                ProgressView()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Reaching the Chumby…").foregroundStyle(.secondary)
+                    Text("What rings next shows once it answers.").font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 6)
         } else if let n = model.nextRing() {
             // A "just this once" standing behind the Chumby's skip is that alarm moved for one ring, never a skip: the
             // moved time leads, the usual one is said in words, and "Back to 6:45 AM" takes it back (Richard,
@@ -869,9 +901,6 @@ struct AlarmsTab: View {
     // His own alarms: blue alarm tiles, each saying when it repeats and what it plays.
     var yours: some View {
         Section {
-            if model.stateKnown && mine.isEmpty {
-                Text("None of your own yet.").foregroundStyle(.secondary)
-            }
             ForEach(mine, id: \.key) { a in
                 AlarmRow(clock: (a.clock, a.meridiem), title: a.name.isEmpty ? "Alarm" : a.name,
                          detail: [a.whenUnlessNamed, a.soundText].filter { !$0.isEmpty }.joined(separator: " · "), on: a.isOn, mark: a.key,
@@ -899,7 +928,15 @@ struct AlarmsTab: View {
             // The end of the card: one row, tapped anywhere, as Channels' Add widgets. Nothing floats over the page, so
             // nothing can cover the Nap chips under it (Richard's Alarms shot, 2026-11-05).
             Button { edit(nil) } label: {
-                Label("Add alarm", systemImage: "plus.circle.fill").font(.body.weight(.semibold))
+                // With none of his own, the row says so on its second line: one card row, never a lone capsule.
+                Label {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Add alarm").font(.body.weight(.semibold))
+                        if model.stateKnown && mine.isEmpty {
+                            Text("None of your own yet").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    }
+                } icon: { Image(systemName: "plus.circle.fill").font(.body.weight(.semibold)) }
                     .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
                     .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
             }
@@ -907,7 +944,7 @@ struct AlarmsTab: View {
             .accessibilityLabel("Add an alarm")
             .zoomSource("new", in: editNS)
         } header: { SectionHead(icon: "alarm", text: "My alarms", color: ChumbyPalette.acc(scheme == .dark)) } footer: {
-            if model.state.pending { Text("The Chumby is putting your last change in place.") }
+            if model.state.pending { SectionFoot("The Chumby is putting your last change in place.") }
         }
     }
 
@@ -1011,17 +1048,17 @@ struct AlarmsTab: View {
             } else if wake.rules.enabled {
                 Text("Chumby can’t see your calendar, so these can’t follow it.").foregroundStyle(.secondary)
             } else {
-                // Off, the row says what it is and that a tap turns it on; a bare label read as a row that opened something.
-                Button { Task { await wake.enable() } } label: {
-                    HStack(spacing: 8) {
-                        Label("Wake me from my calendar", systemImage: "calendar.badge.clock")
-                        Spacer(minLength: 8)
-                        Text("Turn on").font(.subheadline.weight(.semibold)).foregroundStyle(ChumbyPalette.cal(scheme == .dark))
-                            .padding(.horizontal, 12).padding(.vertical, 6).background(ChumbyPalette.cal(scheme == .dark).opacity(0.14), in: Capsule())
-                    }
-                    .contentShape(Rectangle())
+                // Off: the same switch as Calendar settings' (one setting, one look), with what it does on its second line
+                // (designer, 11-11). Turning it on asks for the calendar and starts the plan, as the "Turn on" row did.
+                // The switch holds what he asked for while the calendar's permission is asked and the plan starts, rather
+                // than springing back off under the alert; a refusal lets it go, and the note under the card says why.
+                Toggle(isOn: Binding(get: { wake.rules.enabled || turningOn }, set: { on in
+                    guard on, !turningOn else { return }
+                    turningOn = true
+                    Task { await wake.enable(); withAnimation(.snappy) { turningOn = false } }
+                })) {
+                    TwoLine("Wake me from my calendar", CalendarWake.what)
                 }
-                .buttonStyle(.plain)
             }
             // Left on the Chumby when the plan stopped wanting them (Calendars turned off, an event gone): they still ring.
             ForEach(model.stateConfirmed && !CalendarWake.sample ? wake.strays(in: model.deviceState) : [], id: \.key) { a in
@@ -1048,20 +1085,24 @@ struct AlarmsTab: View {
         } footer: {
             // Only what's wrong or waiting, and what turning it on does. No reassurance (Richard, 2026-11-05: "i dont need
             // this message abt it ringing when my phone isnt on esp not twice").
-            if let n = wake.note { Text(n) }
-            else if !wake.rules.enabled { Text("Wakes you before the first thing each day.") }
+            if let n = wake.note { SectionFoot(n) }
         }
     }
 }
-// A section's heading with its kind's glyph and colour, so the two kinds of alarm can be told apart at a glance.
+// Every section's heading, in every tab and sheet: a glyph and the words in the quiet sub colour. Colour only where it
+// marks an alarm's kind (My alarms in the accent blue, Calendar in coral), so the two kinds can be told apart at a glance.
+// The sheets' plain "When" and "Sound" were a third style (designer, 11-11).
 struct SectionHead: View {
-    let icon: String, text: String, color: Color
+    let icon: String, text: String
+    var color: Color?
+    @Environment(\.colorScheme) private var scheme
+    init(icon: String, text: String, color: Color? = nil) { self.icon = icon; self.text = text; self.color = color }
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: icon).font(.subheadline.weight(.semibold))
             Text(text).font(.custom("Trebuchet MS", size: 16).weight(.bold))
         }
-        .foregroundStyle(color).textCase(nil)
+        .foregroundStyle(color ?? ChumbyPalette.sub(scheme == .dark)).textCase(nil)
     }
 }
 // The tile at the head of an alarm row. A calendar alarm's is a little page of a calendar in coral (its weekday over its
@@ -1342,22 +1383,23 @@ struct AlarmEditor: View {
 
     var body: some View {
         if let close {
-            // In the right pane: its own title row with Cancel and Save, then the same sections, clear of the fold.
-            Group {
-                PageTitle(title) {
-                    HStack(spacing: 16) {
-                        Button("Cancel") { stopTest(); close() }.disabled(saving)
-                        if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
-                    }
-                    .foregroundStyle(.tint)
-                }
-                .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
-                .onDisappear { model.editingAlarm = false }
-                // On this one row, never on the group: inside the pane's list a modifier on the group lands on every
-                // row, and a sheet bound to the same state from many rows presents from none (build 204, open flat).
-                .fillCover(isPresented: $justOnce) { justOnceSheet }
-                sections
+            // In the right pane: its own list, its title row with Cancel and Save, then the same sections, clear of the
+            // fold. The title row stays pinned once the page is scrolled, so Save is always in reach.
+            let buttons = HStack(spacing: 16) {
+                Button("Cancel") { stopTest(); close() }.disabled(saving)
+                if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
             }
+            .foregroundStyle(.tint)
+            List {
+                PageTitle(title, pins: true) { buttons }
+                sections.listRowBackground(GlassRow())
+            }
+            .pinsTitle { PageTitle(title) { buttons } }
+            // On the list, never on a row: a lazy row scrolled off would end the edit (held readings landing) or present
+            // nothing. (Build 204's "presents from none" was a sheet bound from many rows of the pane's shared list.)
+            .onAppear { if !loaded { load(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
+            .onDisappear { model.editingAlarm = false }
+            .fillCover(isPresented: $justOnce) { justOnceSheet }
         } else {
             // Presented edge to edge (fillCover, from Alarms and the calendar's sound row), with Cancel and Save as the
             // system's items, each with a glyph, so on the Duo they take the side bar, Cancel at the top where Back goes
@@ -1422,7 +1464,7 @@ struct AlarmEditor: View {
                         }
                         .listRowSeparator(.hidden)
                         Text(napIn).font(.subheadline).foregroundStyle(.secondary).contentTransition(.numericText())
-                    } header: { Text("Wake me in") } footer: { if nap && original == nil { Text("Rings once, as your other alarms do, and never turns them off.") } }
+                    } header: { SectionHead(icon: "timer", text: "Wake me in") } footer: { if nap && original == nil { SectionFoot("Rings once, as your other alarms do, and never turns them off.") } }
                 }
                 if !calendarTemplate && !nap {
                 Section { DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute).datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity) }
@@ -1445,12 +1487,16 @@ struct AlarmEditor: View {
                     }
                 }
                 }
-                Section("Sound") { SoundRows(choice: $sound, alarm: $alarm) }
+                Section { SoundRows(choice: $sound, alarm: $alarm) } header: { SectionHead(icon: "music.note", text: "Sound") }
                 Section {
                     // No Backup beep switch: the Chumby saves every alarm with backup 0 whatever it's sent (do_save, since
                     // 11-05: the stock beeper killed the alarm panel), so turning it on here came back off after Save.
-                    Picker("Then", selection: $after) { ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) } }
-                } header: { Text("Afterwards") } footer: { if calendarTemplate { Text("Applies to every alarm your calendar sets, now and later.") } }
+                    // What it's for, said in the row: alone, "Then" was a one-row capsule (designer, 11-11).
+                    // The value stays at the right whatever the width (the system's row stacked it under a long label).
+                    MenuRow(title: "Then", note: "What the screen does once it stops ringing.", selection: $after) {
+                        ForEach(afterOptions, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                } header: { SectionHead(icon: "arrow.turn.down.right", text: "Afterwards") }
                 // One of his repeating alarms: later or another sound for its next ring only (the Chumby's skip is pinned by name,
                 // so it needn't be the next alarm to ring).
                 if let original, !calendarTemplate, original.when != "once", original.isOn,
@@ -1461,11 +1507,11 @@ struct AlarmEditor: View {
                             saving = true; problem = nil
                             Task { let why = await model.undoJustOnce(); saving = false; if let why { problem = why } else { finish() } }
                         }.foregroundStyle(.tint).disabled(saving)
-                    } header: { Text("Just this once") }
+                    } header: { SectionHead(icon: "clock.arrow.circlepath", text: "Just this once") }
                 } else if let original, !calendarTemplate, original.when != "once", original.isOn {
                     switch model.justOnceOffer(for: original) {
                     case .hidden: EmptyView()
-                    case .note(let why): Section { Text(why).font(.subheadline).foregroundStyle(.secondary) } header: { Text("Just this once") }
+                    case .note(let why): Section { Text(why).font(.subheadline).foregroundStyle(.secondary) } header: { SectionHead(icon: "clock.arrow.circlepath", text: "Just this once") }
                     case .ok(_, let due, let warning):
                         Section {
                             Button { justOnce = true } label: {
@@ -1475,7 +1521,7 @@ struct AlarmEditor: View {
                                 }
                             }
                             if let warning { RowNote(icon: "exclamationmark.circle.fill", text: warning) }
-                        } header: { Text("Just this once") }
+                        } header: { SectionHead(icon: "clock.arrow.circlepath", text: "Just this once") }
                     }
                 }
                 // A "just this once" goes back to the usual time rather than just going: deleting it alone would leave the
@@ -1485,7 +1531,9 @@ struct AlarmEditor: View {
                         saving = true; problem = nil
                         Task { let why = await model.undoJustOnce(); saving = false; if let why { problem = why } else { finish() } }
                     }.foregroundStyle(.tint).disabled(saving)
-                } footer: { Text("The usual alarm rings again and this one goes.") } }
+                    // The section's only row (the pinned case with its note is the section above), so a solo card.
+                    .soloCard(note: "The usual alarm rings again and this one goes.")
+                } }
                 else if nap, original != nil { Section {
                     // Calling the nap off, from its editor too; it goes without asking, since it was one tap to set.
                     Button("Cancel nap", role: .destructive) { run(.cancelNap) }.foregroundStyle(.red).disabled(saving)
