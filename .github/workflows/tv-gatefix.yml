@@ -1,0 +1,89 @@
+name: TV gate fix shots
+# Branch-only: the tv-gate-fix branch's shots for the design gate (the six-tab bar with Settings behind Status' gear, the
+# streams page, a show's page, the search's descriptions), in every posture. Published to the tv-gatefix-ci release.
+# Deleted before the branch merges.
+on:
+  push:
+    branches: [tv-gate-fix]
+permissions:
+  contents: write
+concurrency:
+  group: tv-gatefix
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 35
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          shot() {
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          poses() {
+            local d=$1 x=$2
+            for T in 0 3 2 6 1 5 9; do shot tab$T$x $d 7 $M -tab $T; done
+            shot remote-repisode$x $d 8 $M/repisode -tab 0
+            shot tvsettings$x $d 10 $M -tab 9 -pose tvsettings
+            shot streams$x $d 9 $M -tab 1 -pose streams
+            shot search$x $d 12 $M -tab 1 -pose search
+            shot search$x $d 12 $M -tab 1 -pose search
+            curl -s $M/real/reset > /dev/null; shot realseries-end$x $d 14 $M/real -tab 3 -pose realseries
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          # Open upright, the posture he holds.
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          poses 3 -portrait
+          # Open flat, two panes.
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          poses 3 -open
+          # Folded, upright on the outer display.
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          $D "$DEVICE" pose closed || true; sleep 5
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          poses 1 ""
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' || zip -q ../shots.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-gatefix-ci >/dev/null 2>&1 || gh release create tv-gatefix-ci --prerelease --title "TV gate fix shots" --notes "Shots from the tv-gate-fix branch."
+          for f in shots.zip status.txt; do
+            for i in 1 2 3; do gh release upload tv-gatefix-ci "$f" --clobber && break; sleep 15; done
+          done

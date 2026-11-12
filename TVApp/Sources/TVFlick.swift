@@ -267,6 +267,9 @@ struct FlickScreen: View {
     @State private var rects = RectBox()
     // The row (or the card) held and in the hand: it follows the finger, and let go upward it's the pick.
     @State private var liftedID: String?
+    // Open, the left pane's height: the poster is held small enough that the words and "More" (six lines' room) end above
+    // the big key at the pane's foot, never under it (gate of 9a5c774: "On the TV" over "More").
+    @State private var leftPaneH: CGFloat = 0
     // Where the finger has it and how it leans, in a box only the lifted thing's own look reads (LiftedLook): as state of
     // this screen, every point the finger moved redrew the whole streams page under the row in the hand.
     @State private var lift = LiftBox()
@@ -640,7 +643,7 @@ struct FlickScreen: View {
         VStack(alignment: .leading, spacing: 16) {
             titles(big: true)
             poster.aspectRatio(2 / 3, contentMode: .fit)
-                .containerRelativeFrame(.horizontal) { w, _ in min(w * 0.6, 300) }
+                .containerRelativeFrame(.horizontal) { w, _ in min(w * 0.6, 300, leftPaneH > 0 ? max(140, (leftPaneH - 380) * 2 / 3) : 300) }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map["poster"] = $0 }
             blurb(6)
@@ -761,7 +764,9 @@ struct FlickScreen: View {
         // foot for the bar, so the last row can always be scrolled clear of it. Still while a row is in the hand.
         if panes {
             FoldSplit {
-                ScrollView { bigHeading.padding(.horizontal, 20).padding(.top, 36).padding(.bottom, 84) }.topFade().summonsBar()
+                ScrollView { bigHeading.padding(.horizontal, 20).padding(.top, 36).padding(.bottom, 84) }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in if abs(h - leftPaneH) > 1 { leftPaneH = h } }
+                    .topFade().summonsBar()
             } right: {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) { content() }

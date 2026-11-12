@@ -1,0 +1,86 @@
+import SwiftUI
+
+// Settings, behind a gear on Status rather than a tab of its own (Richard's answers, 2026-11-11: six tabs, "Settings sits
+// behind a gear on Status"). The gear is the system's own toolbar item, laid out by iOS the Duo's way (at the top of the
+// side strip folded and open in landscape, in the top bar open in portrait), and Settings is pushed with the system's Back,
+// as every other page opened from a tab is (Apple's HIG for iPhone Duo; Richard, 2026-11-08).
+
+// The page Settings is pushed as, on Status' own stack.
+enum SettingsRoute: Hashable { case root }
+
+// A tab's page pushing onto its own stack when asked from outside a link (Settings asked for as tab 9). An existential, so
+// NavigationPath.append opens it to the concrete type its destination is registered for (never AnyHashable).
+struct PagePush { var push: (any Hashable) -> Void = { _ in } }
+private struct PagePushKey: EnvironmentKey { static let defaultValue = PagePush() }
+extension EnvironmentValues { var pagePush: PagePush { get { self[PagePushKey.self] } set { self[PagePushKey.self] = newValue } } }
+
+struct StatusTab: View {
+    @Environment(TVModel.self) var model
+    @Environment(\.pagePush) private var pagePush
+    @StateObject private var store = ManageStore()
+    // The last ask for Settings acted on, so coming back to the tab doesn't push it again.
+    @State private var seen = 0
+    var body: some View {
+        DeviceTab()
+            // The bar carries the gear only: the page draws its own large heading.
+            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { model.tick(); pagePush.push(SettingsRoute.root) } label: { Image(systemName: "gearshape") }
+                        .accessibilityLabel("Settings")
+                }
+            }
+            .navigationDestination(for: SettingsRoute.self) { _ in TVSettingsPage() }
+            .navigationDestination(for: ManagePage.self) { page in
+                switch page {
+                case .apps: ManageAppsView(store: store)
+                case .settings: ManageSettingsView(store: store)
+                case .connection: ConnectionView()
+                }
+            }
+            .onChange(of: model.settingsAsked, initial: true) { _, n in
+                guard n > seen else { return }
+                seen = n
+                openSettings()
+            }
+    }
+    // Settings, and for the build's shots the page opened from it ("-pose connection", "-pose tvsettings", "-pose tvapps").
+    func openSettings() {
+        pagePush.push(SettingsRoute.root)
+        switch UserDefaults.standard.string(forKey: "pose") {
+        case "connection": pagePush.push(ManagePage.connection)
+        case "tvsettings": pagePush.push(ManagePage.settings)
+        case "tvapps": pagePush.push(ManagePage.apps)
+        default: break
+        }
+    }
+}
+
+// The TV's own settings and this app's connection, pushed from Status. Its heading is drawn in the page, as the pages
+// pushed from it draw theirs; the bar carries only the system's Back.
+struct TVSettingsPage: View {
+    @Environment(\.paneLayout) private var panes
+    func page(_ content: some View) -> some View {
+        ScrollView { VStack(alignment: .leading, spacing: 26) { content }.padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 24) }
+    }
+    var body: some View {
+        Group {
+            // Unfolded, one list each side of the fold rather than one list across it, the two cards level.
+            if panes {
+                FoldSplit {
+                    page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections(level: true) })
+                } right: {
+                    page(Group { PageHeading(" ").padding(.horizontal, 4).hidden(); TVActionSections() })
+                }
+            } else {
+                page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections(); TVActionSections() })
+            }
+        }
+        .summonsBar()
+        .topShade().topFade()
+        // The same wall as the pages opened from here, outside the fade's mask so its top isn't a black band.
+        .background { Ambience() }
+        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .barPage()
+    }
+}
