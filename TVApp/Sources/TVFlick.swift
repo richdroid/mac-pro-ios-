@@ -951,6 +951,8 @@ struct FlickScreen: View {
         // Thrown from its shelf: nothing to choose (a video, a song, a link) goes now; a show with no episode named opens
         // its page as a tap would, and the TV lets the lift's screen go.
         if target.thrown != nil {
+            // Never left in the air: whatever kept the pick from being made, the card goes once the shelf's still does.
+            Task { try? await Task.sleep(nanoseconds: 3_000_000_000); if !flown, RenderFlight.flying { RenderFlight.land(after: 0) } }
             if step == .card { Task { try? await Task.sleep(nanoseconds: 34_000_000); FlickHaptic.caught(); send(from: shelfFrom) } }
             else if step == .episodes { FlickReceipt.cancel(receiptID); RenderFlight.land(after: 0) }
         }
@@ -969,6 +971,9 @@ struct FlickScreen: View {
             if info == nil { Task { let i = await SeriesInfo.load(ref.imdb); withAnimation(.easeOut(duration: 0.2)) { info = i } } }
         }
         if step == .streams && streams.isEmpty { await findStreams() }
+        // The list already in hand (fetched as the card was held): a card thrown from its shelf goes now. Waiting on a
+        // lookup that never ran left it parked in the air over the page and sent nothing (CI 9876424, open flat).
+        else if step == .streams { throwPick(streams) }
         await details
     }
     var slide: AnyTransition {
@@ -1652,6 +1657,14 @@ struct FlickScreen: View {
         }
         send(from: target.thrown != nil ? shelfFrom : rects.map[s.id] ?? rects.map["poster"])
     }
+    // Thrown from its shelf: the stream he'd most likely pick (Best: the top one that hasn't failed and isn't a dub),
+    // sent as if he'd thrown its row.
+    func throwPick(_ found: [StremioStream]) {
+        guard target.thrown != nil, !flown, !leaving else { return }
+        if let best = found.first(where: { !failedTokens.contains($0.token) && $0.stalled != true && $0.dubbed != true }) ?? found.first(where: { !failedTokens.contains($0.token) }) {
+            pick(best)
+        }
+    }
     // Where a card thrown from its shelf was let go, in this screen's space.
     var shelfFrom: CGRect? { target.origin.map { $0.offsetBy(dx: -flickOrigin.x, dy: -flickOrigin.y) } }
     func findStreams(again: Bool = false) async {
@@ -1684,11 +1697,7 @@ struct FlickScreen: View {
         streamsAt = Date()
         // Thrown from its shelf: the stream he'd most likely pick (Best: the top one that hasn't failed and isn't a dub),
         // sent as if he'd thrown its row. The tap still shows the list (Richard, 2026-11-10); the throw is the flick.
-        if target.thrown != nil, !flown, !leaving, !again {
-            if let best = found.first(where: { !failedTokens.contains($0.token) && $0.stalled != true && $0.dubbed != true }) ?? found.first(where: { !failedTokens.contains($0.token) }) {
-                pick(best)
-            }
-        }
+        if !again { throwPick(found) }
         // How long he waited for the list, from the card's press and from this page opening, into the Mac's timing log, so
         // the phone's own share of "the stremio streams take much too long" is measured on his phone (2026-11-07).
         if !again, openedAt != .distantPast, !leaving {
