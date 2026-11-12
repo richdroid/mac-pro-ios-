@@ -72,12 +72,12 @@ jobs:
           # A real finger on the first stream row (where the app says it is), filmed: "tap" a quick tap, "long" a press
           # held 0.7 s and let go where it was (the pick), "swipe" a fast swipe up from the row (a scroll: nothing sent).
           fingerfilm() {
-            local name=$1 display=$2 how=$3
+            local name=$1 display=$2 how=$3 scene=${4:-fnormal}
             rm -f /tmp/tv-home-applied.log
-            curl -s $M/fnormal/reset > /dev/null
+            curl -s $M/$scene/reset > /dev/null
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose flick-stage
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/$scene -tab 1 -pose flick-stage
             sleep 12
             local at x y
             at=$(grep -o 'what=row&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
@@ -156,6 +156,8 @@ jobs:
             fingerfilm finger-tap$x $d tap
             fingerfilm finger-long$x $d long
             fingerfilm finger-swipe$x $d swipe
+            # The same swipe on a list longer than the screen (freal's dozen rows): the list must follow the finger.
+            fingerfilm finger-swipelong$x $d swipe freal
             for H in shortflick easeflick carry backdown latescroll; do fingerfilm finger-$H$x $d $H; done
             shelffilm shelf-throw$x $d 0.15 0.33 throw
             shelffilm shelf-back$x $d 0.15 0.33 back
