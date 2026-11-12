@@ -97,8 +97,14 @@ final class TVModel {
     var recommended: [Film] = []
     var flicking: FlickTarget?
     @ObservationIgnored private var lastFlick: (id: String, at: Date)?
-    // The colour of wherever you are: an app's own, or whatever you've picked. Nil lets what's playing set it.
-    var mood: Color?
+    // The colour of wherever you are: an app's own, or whatever you've picked. Nil lets what's playing set it. Set to what
+    // it already is, nothing redraws: every page's ground reads it, and the pick set it again to the same colour in the
+    // turn that brings the Remote up.
+    var mood: Color? {
+        get { access(keyPath: \.mood); return moodStore }
+        set { guard newValue != moodStore else { return }; withMutation(keyPath: \.mood) { moodStore = newValue } }
+    }
+    @ObservationIgnored private var moodStore: Color?
     // The cover of the last thing flicked, for when the TV's player has none of its own to show.
     var lastArt: String?
     var lastArtPkg: String?

@@ -20,6 +20,8 @@ struct FlickHand {
         var still: CGFloat = 10
         // Carried up this far and let go, at any speed: thrown.
         var carry: CGFloat = 80
+        // Once lit, brought back down this far under the line before it goes out.
+        var unarm: CGFloat = 24
         // Or flung up this fast (points a second, the fastest stretch of the last tenth of a second, so a finger that
         // slows as it leaves still counts) having risen at least `flingRise`.
         var fling: CGFloat = 350
@@ -156,7 +158,9 @@ struct FlickHand {
             samples.append((t, p))
             if samples.count > 40 { samples.removeFirst(samples.count - 40) }
             if movedAt == nil, hypot(p.x - liftPoint.x, p.y - liftPoint.y) > rules.still { movedAt = t }
-            let now = wouldThrow(at: t)
+            // Lit at the line, and kept lit until it's brought well back under it (`unarm` below), so a finger resting on
+            // the line doesn't flicker the edge on and off.
+            let now = wouldThrow(at: t) || (armed && keepsArm(at: t))
             if now != armed { armed = now; return [.armed(now)] }
             return []
         default: return []
@@ -171,7 +175,8 @@ struct FlickHand {
         case .lifted:
             _ = move(p, at: t)
             phase = .done
-            if wouldThrow(at: t) { return .thrown }
+            // Lit as he let go: it goes, as the edge said it would.
+            if armed || wouldThrow(at: t) { return .thrown }
             if let f = fling, flung(f, rise: -offset.height), meant(at: t), steepEnough { return .thrown }
             if let r = real, flung(Self.speed(r), rise: -offset.height), meant(at: t), steepEnough { return .thrown }
             let o = offset
@@ -205,6 +210,11 @@ struct FlickHand {
     }
     private func flung(_ v: CGVector, rise: CGFloat) -> Bool {
         -v.dy >= rules.fling && rise >= rules.flingRise && -v.dy >= rules.steep * abs(v.dx)
+    }
+    // Already lit: stays lit while it's still up, steeply enough, within `unarm` of the line.
+    private func keepsArm(at t: Double) -> Bool {
+        let rise = -offset.height
+        return rise >= rules.carry - rules.unarm && rise >= rules.steep * abs(offset.width) && meant(at: t)
     }
     private var steepEnough: Bool { let o = offset; return -o.height > 0 && -o.height >= rules.steep * abs(o.width) }
     private func meant(at t: Double) -> Bool {
@@ -326,6 +336,11 @@ extension FlickHand {
                             + stroke(from: 0.65, 200, 280, by: 0, 115, ms: 250) + [(0.95, .up(200, 395))],
                         want: .putBack, what: "carried up past the line, then brought back down: changed his mind, not sent",
                         events: [.lifted, .armed(true), .armed(false)]))
+        s.append(Script(name: "resting-on-the-line", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 0, -86, ms: 400)
+                            + stroke(from: 0.85, 200, 314, by: 0, 20, ms: 300) + [(1.4, .up(200, 334))],
+                        want: .thrown, what: "carried just past the line, then sagging 20 pt under it: the edge stays lit, and it goes",
+                        events: [.lifted, .armed(true)]))
         s.append(Script(name: "cancelled-while-lifted", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.4, 200, 400, by: 0, -50, ms: 100) + [(0.55, .cancel)],
                         want: .cancelled, what: "the system takes the touch while it's in the hand: put back, never left floating"))
