@@ -313,7 +313,10 @@ struct MarksPlace: ViewModifier {
             // Only from the layout the place was noted in: on a turn the new layout's first rows cross the line before its
             // restore begins, and noted the top of the page as his place, so the turn put him back at the top (designer,
             // regate of 5b34ffc: Apps scrolled down, turned flat and back, came back at its top).
-            if !k.settling, k.layout == nil || k.layout == "\(panes)\(compactWindow)" { k.top = id }
+            if !k.settling, k.layout == nil || k.layout == "\(panes)\(compactWindow)", k.top != id {
+                k.top = id
+                if SwipeLog.on { SwipeLog.note("place \(page) \(id.base)") }
+            }
         }
     }
 }
@@ -346,9 +349,10 @@ struct KeepsPlace: ViewModifier {
                 // Of two panes the first to appear starts the restore; the other, a moment later, scrolls too if it holds it.
                 if let was = k.layout, was != layout, k.top != nil { k.restoring = Date() }
                 k.layout = layout
-                guard Date().timeIntervalSince(k.restoring) < 0.5, let top = k.top else { return }
+                guard Date().timeIntervalSince(k.restoring) < 1.5, let top = k.top else { return }
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 guard !Task.isCancelled else { return }
+                SwipeLog.note("place restore \(page) to \(top.base) (\(layout))")
                 proxy.scrollTo(top, anchor: .top)
             }
     }

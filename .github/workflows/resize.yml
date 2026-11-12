@@ -200,7 +200,7 @@ jobs:
           tabfilm tabback-portrait 3
           # Apps, a page that scrolls open (Status fits whole there), dragged part way down in open portrait, then turned
           # flat, upright and flat: the same row at its top after each move (designer, regate of 32dd2bd).
-          TFTAB=1 TFDRAGX=0.5 turnfilm turn-apps-scrolled 3 "scroll" "rotate 3" "rotate 1" "rotate 3"
+          TFTAB=1 TFDRAGX="0.5 0.5" turnfilm turn-apps-scrolled 3 "scroll" "rotate 3" "rotate 1" "rotate 3"
           $D "$DEVICE" rotate 1 || true; sleep 5
           $D "$DEVICE" pose closed || true; sleep 5
           posture 1 "" 0.45
