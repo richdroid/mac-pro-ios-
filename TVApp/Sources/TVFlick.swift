@@ -2,9 +2,6 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
-#if os(iOS)
-import UIKit.UIGestureRecognizerSubclass
-#endif
 
 // The flick page's arrival and its close, faded by Core Animation in the render server: the screen as it was, a still
 // laid over the window, fades off what is already built under it. A long main-thread turn while it fades (the page's own
@@ -65,7 +62,9 @@ import UIKit.UIGestureRecognizerSubclass
     // the Remote's own backdrop (the poster's colour on black, as AmbienceView draws it) while the picture flies over it,
     // so the row he let go of doesn't sit on a frozen page beside its own picture through the turn that brings the Remote
     // up (CI 7bbaf47: 0.4 s of the lifted row left behind). The Remote's keys then come up through it at lift.
-    static func dissolve(_ rect: CGRect, hole picked: CGRect? = nil, soft: TVImage?, tint: Color?, duration: Double = 0.2, flush: Bool = true) {
+    // `animate` false: laid out and left for `run()`, so its fade starts in a turn of its own and isn't spent inside a
+    // long commit (an animation added before a long layout is mostly over by the time it's first drawn: CI 82e1830).
+    static func dissolve(_ rect: CGRect, hole picked: CGRect? = nil, soft: TVImage?, tint: Color?, duration: Double = 0.2, flush: Bool = true, animate: Bool = true) {
         #if os(iOS)
         guard let v = veil, let w = v.superview as? UIWindow, rect.width > 20, rect.height > 20 else { return }
         // The page's whole height, its own bar at the top included (left on the still, it was a black band over the
@@ -115,8 +114,21 @@ import UIKit.UIGestureRecognizerSubclass
         let path = UIBezierPath(rect: v.bounds); path.append(UIBezierPath(rect: v.convert(r, from: w)))
         hole.path = path.cgPath; hole.fillRule = .evenOdd
         v.layer.mask = hole
-        UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { still.alpha = 0 }
+        if animate {
+            UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { still.alpha = 0 }
+        } else { pending = still }
         if flush { CATransaction.flush() }
+        #endif
+    }
+    #if os(iOS)
+    private static weak var pending: UIView?
+    #endif
+    // The dissolve laid out by `dissolve(animate: false)`, run now.
+    static func run(_ duration: Double = 0.2) {
+        #if os(iOS)
+        guard let still = pending else { return }
+        pending = nil
+        UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { still.alpha = 0 }
         #endif
     }
     #if os(iOS)
@@ -250,7 +262,7 @@ import UIKit.UIGestureRecognizerSubclass
         guard ground != nil, let w = window else { return }
         let W = w.bounds.width
         let to = slot ?? CGRect(x: w.bounds.midX - W * 0.4, y: w.safeAreaInsets.top + 40, width: W * 0.8, height: W * 0.45)
-        aim(to, first: true, flush: false)
+        aim(to, first: true, flush: true)
         #endif
     }
     // The picture, arrived after it left (not in memory at the pick: a link's page picture, YouTube's banner): it comes up
@@ -1437,6 +1449,7 @@ struct FlickScreen: View {
                     // Lifted now: the hold's clock ran out with the finger still within the slop.
                     hands.id = id; hands.base = Date().addingTimeInterval(-rules.hold); hands.hand = FlickHand(rules)
                     _ = hands.hand.down(.zero, at: 0)
+                    hands.hand.realLift = TouchLedger.sinceDown()
                     handle(hands.hand.held(at: rules.hold), id: id, scale: 1.04)
                 }
                 if let d { follow(d, id: id) }
@@ -1791,7 +1804,7 @@ struct FlickScreen: View {
         // The picture leaves his finger now, in the render server, over a still of this page that dissolves into the
         // Remote's ground; the Remote comes up under it in the next turn, the long one, and the still fades off it once
         // that turn is over (goRemote).
-        var aimed = false
+        var aimTo: CGRect?
         let rendered = flies && fromRect.width > 4
         if rendered {
             ScreenVeil.cover()
@@ -1799,17 +1812,16 @@ struct FlickScreen: View {
             if !RenderFlight.flying { RenderFlight.launch(from: fromRect.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), image: image, soft: soft, tint: tint,
                                 wide: image.map(PosterOnBlur.isWide) ?? (shown.kind == "youtube" || isLink)) }
             if let aim = model.mirrorSlot.flatMap({ $0.width > 20 ? $0 : nil }) ?? model.rememberedSlot(slotKey) ?? model.rememberedSlot("warm" + slotKey) {
-                RenderFlight.aim(aim, first: true, flush: false); aimed = true
+                aimTo = aim
             } else if flickFrame.width > 0 {
                 // Nowhere known yet (the first pick ever on a screen this size): up toward the top, where the picture is,
                 // and on to the real place the moment the Remote says it.
                 let w = flickFrame.width * 0.8
-                RenderFlight.aim(CGRect(x: flickFrame.midX - w / 2, y: flickFrame.minY + 70, width: w, height: w * 9 / 16), first: true, flush: false); aimed = true
+                aimTo = CGRect(x: flickFrame.midX - w / 2, y: flickFrame.minY + 70, width: w, height: w * 9 / 16)
             }
-            ScreenVeil.dissolve(flickFrame, hole: fromRect.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), soft: soft, tint: tint, flush: false)
-            #if os(iOS)
-            CATransaction.flush()
-            #endif
+            // Laid out now, over the page as it is; set going at the start of the next turn (handOver), once this turn's
+            // commit, which lays the page out again, is over.
+            ScreenVeil.dissolve(flickFrame, hole: fromRect.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), soft: soft, tint: tint, flush: false, animate: false)
             SwipeLog.note("send flown")
         }
         flown = true
@@ -1830,7 +1842,7 @@ struct FlickScreen: View {
                     RenderFlight.picture(i)
                 }
             }
-            if aimed { renderAimed = true }
+            if aimTo != nil { renderAimed = true }
             renderFlown = true
             var under = Transaction(); under.disablesAnimations = true
             withTransaction(under) { fadingOut = true }
@@ -1838,11 +1850,18 @@ struct FlickScreen: View {
         // The Remote's tab is the long turn: it comes in the next one, after this one has been drawn and the flight and
         // the dissolve are running in the render server, so nothing he sees waits on it. (A timer, not a task: a task
         // queued on the main queue runs before the screen is drawn.)
-        let hand = { @MainActor in self.handOver() }
+        let hand = { @MainActor in self.handOver(aim: aimTo) }
         if rendered { Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { hand() } } } else { hand() }
     }
-    func handOver() {
+    func handOver(aim: CGRect? = nil) {
         SwipeLog.note("send hand-over")
+        // First, in a turn with nothing laid out yet: the flight and the dissolve set going and sent to the render server,
+        // so they run whole however long the Remote's tab then takes.
+        if let aim { RenderFlight.aim(aim, first: true, flush: false) }
+        ScreenVeil.run()
+        #if os(iOS)
+        CATransaction.flush()
+        #endif
         // The start is the model's from the pick: the Remote lays out under this screen with its poster, its bar's place
         // and its line already there, so nothing comes in late once it's in sight.
         if !alreadyOn, video || target.image != nil || flies {
@@ -2276,60 +2295,58 @@ final class HandBox {
     var base = Date()
 }
 // The finger by the screen's own clock: every touch's timestamp and place (each coalesced sample too), from its
-// touch-down, read by a recognizer on the window that never recognizes, never delays a touch and never takes one. The
+// touch-down, read off the window's own event delivery before any gesture sees it. Nothing is added to the gesture
+// system: a recognizer on the window (ef52168) may have kept the lists from scrolling under a swipe in the films. The
 // gestures' callbacks come when the main thread gets to them; these say when the finger really moved (FlickHand.real).
 #if os(iOS)
-final class TouchLedger: UIGestureRecognizer, UIGestureRecognizerDelegate {
-    @MainActor private static var samples: [(t: Double, p: CGPoint)] = []
-    @MainActor private static var downAt = 0.0
-    private weak var tracked: UITouch?
-    @MainActor static func install() {
-        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
-            for w in scene.windows where !(w.gestureRecognizers ?? []).contains(where: { $0 is TouchLedger }) {
-                let g = TouchLedger(target: nil, action: nil)
-                g.cancelsTouchesInView = false; g.delaysTouchesBegan = false; g.delaysTouchesEnded = false
-                g.delegate = g
-                w.addGestureRecognizer(g)
+extension UIWindow {
+    @objc dynamic func tvLedger_sendEvent(_ event: UIEvent) {
+        if event.type == .touches { TouchLedger.see(event) }
+        tvLedger_sendEvent(event)   // the system's own, after the exchange
+    }
+}
+@MainActor enum TouchLedger {
+    private static var samples: [(t: Double, p: CGPoint)] = []
+    private static var downAt = 0.0
+    private static weak var tracked: UITouch?
+    private static var installed = false
+    static func install() {
+        guard !installed, let a = class_getInstanceMethod(UIWindow.self, #selector(UIWindow.sendEvent(_:))),
+              let b = class_getInstanceMethod(UIWindow.self, #selector(UIWindow.tvLedger_sendEvent(_:))) else { return }
+        installed = true
+        method_exchangeImplementations(a, b)
+    }
+    static func see(_ event: UIEvent) {
+        guard let all = event.allTouches else { return }
+        if let t = tracked, all.contains(t) {
+            switch t.phase {
+            case .moved:
+                for c in event.coalescedTouches(for: t) ?? [t] { samples.append((c.timestamp - downAt, c.location(in: nil))) }
+                if samples.count > 240 { samples.removeSubrange(1..<(samples.count - 200)) }
+            case .ended, .cancelled:
+                samples.append((t.timestamp - downAt, t.location(in: nil)))
+                tracked = nil
+            default: break
             }
+            return
         }
+        // A new touch-down with none tracked: the one this ledger follows until it's lifted.
+        guard tracked == nil || tracked?.phase == .ended || tracked?.phase == .cancelled,
+              let t = all.first(where: { $0.phase == .began }) else { return }
+        tracked = t
+        downAt = t.timestamp
+        samples = [(0, t.location(in: nil))]
     }
     // The current (or last) touch, seconds from its touch-down; nil when there's none.
-    @MainActor static func feel() -> [(t: Double, p: CGPoint)]? { samples.count > 0 ? samples : nil }
-    private func note(_ t: UITouch, _ event: UIEvent) {
-        for c in event.coalescedTouches(for: t) ?? [t] {
-            Self.samples.append((c.timestamp - Self.downAt, c.location(in: nil)))
-        }
-        if Self.samples.count > 240 { Self.samples.removeSubrange(1..<(Self.samples.count - 200)) }
-    }
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        for t in touches where t !== tracked { if tracked != nil { ignore(t, for: event) } }
-        guard tracked == nil, let t = touches.first else { return }
-        tracked = t
-        Self.downAt = t.timestamp
-        Self.samples = [(0, t.location(in: nil))]
-    }
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard let t = tracked, touches.contains(t) else { return }
-        note(t, event)
-    }
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard let t = tracked, touches.contains(t) else { return }
-        Self.samples.append((t.timestamp - Self.downAt, t.location(in: nil)))
-        tracked = nil; state = .failed
-    }
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard let t = tracked, touches.contains(t) else { return }
-        tracked = nil; state = .failed
-    }
-    override func reset() { tracked = nil }
-    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
-    func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool { false }
-    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool { false }
+    static func feel() -> [(t: Double, p: CGPoint)]? { samples.count > 0 ? samples : nil }
+    // Now, by the same clock: seconds since the current touch came down.
+    static func sinceDown() -> Double? { samples.count > 0 ? ProcessInfo.processInfo.systemUptime - downAt : nil }
 }
 #else
 enum TouchLedger {
     @MainActor static func install() {}
     @MainActor static func feel() -> [(t: Double, p: CGPoint)]? { nil }
+    @MainActor static func sinceDown() -> Double? { nil }
 }
 #endif
 // A row or the card in the hand: its shadow, the light round its edge as it rises, its swell, its lean and its place
@@ -2730,6 +2747,7 @@ struct ShelfFlick: ViewModifier {
                 if !up {
                     hands.base = Date().addingTimeInterval(-rules.hold); hands.hand = FlickHand(rules)
                     _ = hands.hand.down(.zero, at: 0)
+                    hands.hand.realLift = TouchLedger.sinceDown()
                     _ = hands.hand.held(at: rules.hold)
                     lifted()
                 }
@@ -2814,7 +2832,9 @@ struct ShelfFlick: ViewModifier {
                                 tint: ImageStore.shared.cachedBand(u), wide: item.isYouTube)
             ShelfHand.shared.item = nil
             ScreenVeil.cover(underFlight: true, for: 3)
-            RenderFlight.rise(toward: model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil })
+            // Set going in the next turn, once this one's commit (the page it opens, laid out unseen) is over.
+            let slot = model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil }
+            Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { RenderFlight.rise(toward: slot) } }
         }
         var t: FlickTarget
         if item.isYouTube {

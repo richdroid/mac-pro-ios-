@@ -94,7 +94,9 @@ jobs:
                 easeflick) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.15" | bc -l) 0.15 1 $x $(echo "$y - 0.15" | bc -l) 0.03 0 || echo "path failed" ;;
                 carry) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.3" | bc -l) 0.6 0 $x $(echo "$y - 0.3" | bc -l) 0.3 0 || echo "path failed" ;;
                 backdown) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.3" | bc -l) 0.4 0 $x $y 0.4 0 || echo "path failed" ;;
-                latescroll) $D "$DEVICE" path $x $y 0.31 $x $(echo "$y - 0.3" | bc -l) 0.12 0 || echo "path failed" ;;
+                # (Asked for at 0.12 s: the injector's first move reaches the app 0.17-0.3 s after it's asked for, so asked
+                # at 0.31 it came 0.48-0.62 s after the touch, a swipe begun well after the lift, CI 82e1830.)
+                latescroll) $D "$DEVICE" path $x $y 0.12 $x $(echo "$y - 0.3" | bc -l) 0.12 0 || echo "path failed" ;;
               esac
             else echo "no row position for $name"; fi
             sleep 14

@@ -32,6 +32,9 @@ struct FlickHand {
         // carried at least `carried` in all. A thumb resting on a row and then swiping the list up lifts the row just as
         // the swipe begins; that's a scroll that came late, and it never sends anything.
         var beat: Double = 0.08
+        // By the finger's own clock: the least time after the lift for a move to be an answer to it (seeing or feeling
+        // the row come up and then moving takes a person longer than this).
+        var react: Double = 0.15
         var carried: Double = 0.25
         static let list = Rules(hold: 0.3)
         static let card = Rules(hold: 0, beat: 0, carried: 0)
@@ -72,15 +75,17 @@ struct FlickHand {
     // in all three postures), and bunches a quick flick's moves so it reads slow. The finger's own clock settles both:
     // moving already as the row lifted is a scroll come late, never a throw; and its own speed as it left is the fling.
     var real: [(t: Double, p: CGPoint)]?
+    // When the row lifted, by the same clock (seconds from the touch-down).
+    var realLift: Double?
     init(_ rules: Rules) { self.rules = rules }
-    // Already on its way within a beat of the lift, by the finger's own clock: it began as a scroll. Any sample up to
-    // `hold + beat` (and the 40 ms after, as the screen reports moves no more often than that) more than twice `still`
-    // from where it came down. Never interpolated: a finger that reports no moves is resting (interpolating across a
-    // rest read a flick begun at 0.45 s as moving at 0.38 s, and put it back: CI ff4b315, easeflick open upright).
-    static func rushed(_ real: [(t: Double, p: CGPoint)], _ rules: Rules) -> Bool {
+    // Already on its way before he could have seen the lift and answered it, by the finger's own clock: it began as a
+    // scroll. Any reported position more than twice `still` from where it came down, before the lift (`lift`, as the
+    // screen's clock read it when the row lifted; the hold at the earliest) plus `react`. Never interpolated: a finger
+    // that reports no moves is resting (interpolating across a rest read a flick begun after one as already moving).
+    static func rushed(_ real: [(t: Double, p: CGPoint)], _ rules: Rules, lift: Double? = nil) -> Bool {
         guard rules.hold > 0, let first = real.first else { return false }
-        let at = rules.hold + rules.beat + 0.04
-        return real.contains { $0.t <= at && hypot($0.p.x - first.p.x, $0.p.y - first.p.y) > rules.still * 2 }
+        let until = max(rules.hold, lift ?? 0) + rules.react
+        return real.contains { $0.t < until && hypot($0.p.x - first.p.x, $0.p.y - first.p.y) > rules.still * 2 }
     }
     // The fastest upward stretch of at least 30 ms ending in the last 150 ms, in points a second (negative is up).
     static func speed(_ samples: [(t: Double, p: CGPoint)]) -> CGVector {
@@ -106,9 +111,9 @@ struct FlickHand {
         guard let r = real, let f = r.first, let l = r.last else { return "real none" }
         let moved = r.first { hypot($0.p.x - f.p.x, $0.p.y - f.p.y) > rules.still }?.t ?? -1
         let v = Self.speed(r)
-        return String(format: "real n=%d moved=%.2f up=%.2f rise=%.0f rv=%.0f rushed=%d", r.count, moved, l.t, f.p.y - l.p.y, v.dy, isRushed ? 1 : 0)
+        return String(format: "real n=%d moved=%.2f up=%.2f rise=%.0f rv=%.0f rushed=%d", r.count, moved, l.t, f.p.y - l.p.y, v.dy, isRushed ? 1 : 0) + String(format: " lift=%.2f", realLift ?? -1)
     }
-    private var isRushed: Bool { real.map { Self.rushed($0, rules) } ?? false }
+    private var isRushed: Bool { real.map { Self.rushed($0, rules, lift: realLift) } ?? false }
 
     // Where the finger has it, from where it was lifted.
     var offset: CGSize {
@@ -222,7 +227,7 @@ struct FlickHand {
         if rules.hold <= 0 { return true }
         // The finger's own clock, when there is one, is the only word on it.
         // Until it reads past the beat, it can't yet say: not meant (never lit early by a scroll's first moves).
-        if let r = real { return (r.last?.t ?? 0) >= rules.hold + rules.beat && !isRushed }
+        if let r = real { return (r.last?.t ?? 0) >= max(rules.hold, realLift ?? 0) + rules.react && !isRushed }
         guard let movedAt else { return false }
         return movedAt - liftedAt >= rules.beat || t - liftedAt >= rules.carried
     }
