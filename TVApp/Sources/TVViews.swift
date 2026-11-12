@@ -238,8 +238,6 @@ struct RootView: View {
             }
             // A card held on a shelf, over everything, where the finger has it (ShelfFlick).
             .overlay { ShelfLiftOverlay() }
-            // The Remote drawn once, unseen, after launch (RemoteWarmup).
-            .background { RemoteWarmup() }
             // Over everything, side bar included, and edge to edge. Not a presented screen: the system slides those up
             // from the bottom, a blurred panel with a hard top edge. The flick fades its own way in and out.
             .overlay {

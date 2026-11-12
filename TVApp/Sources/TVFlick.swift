@@ -2260,19 +2260,3 @@ struct ShelfFlick: ViewModifier {
     }
 }
 
-// The Remote, drawn once off screen soon after launch, so the first pick doesn't pay for its first drawing as the
-// picture moves (CI: a 600-900 ms turn at the move's start when the Remote had never been shown). Invisible, untouchable,
-// and gone after a second; never when the Remote is already the tab in front.
-struct RemoteWarmup: View {
-    @Environment(TVModel.self) var model
-    @State private var done = false
-    var body: some View {
-        if !done && model.tab != 0 {
-            Page(title: "Remote", alwaysInline: true) { RemoteTab() }
-                .opacity(0.001)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-                .task { try? await Task.sleep(nanoseconds: 1_200_000_000); done = true }
-        }
-    }
-}
