@@ -2241,10 +2241,11 @@ struct SoundsTab: View {
         .seaList()
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
-        .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 { pickSong = false } })) { MacSongPicker(draft: draft).environmentObject(model) }
+        .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 && !pickPane { pickSong = false } })) { MacSongPicker(draft: draft).environmentObject(model) }
         // The keyboard's flip comes before the keyboard says it's showing, so a change is only taken once it has held
         // for a moment with the keyboard down.
-        // Checked again when the keyboard goes down, for a turn made while it was up.
+        // Checked again when the keyboard goes down, for a turn made while it was up. (The cover closing for the pane
+        // reports itself closed: that must not close the picker, so the cover's setter ignores it once it's the pane's.)
         .task(id: "\(wide) \(keyboardUp)") {
             try? await Task.sleep(nanoseconds: 800_000_000)
             if !Task.isCancelled, pickSong, !keyboardUp, pickPane != wide { pickPane = wide }
