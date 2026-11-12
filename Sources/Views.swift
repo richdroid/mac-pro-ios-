@@ -280,7 +280,11 @@ final class PlaceKeeper {
     var layout: String?  // panes, and the outer display or not: a fold rebuilds the page as much as a turn does
     var restoring = Date.distantPast
     // While the rebuilt page lays out and scrolls back, its rows pass the line and must not count as his place.
-    var settling: Bool { Date().timeIntervalSince(restoring) < 2.0 }
+    var settling: Bool { (pending && Date().timeIntervalSince(restoring) < 5) || Date().timeIntervalSince(restoring) < 2.0 }
+    // A restore asked for by a change of layout and not yet carried through: the page can be rebuilt again as a turn
+    // settles, cancelling the restore under way (CI 4eef8a9: one attempt, then the page sat at its top), so whichever
+    // list appears next carries it on.
+    var pending = false
 }
 // Where the top of each page is on screen (its scroll view's top plus the bars over it), in the window's points. Read in
 // geometry transforms, which SwiftUI runs off the main actor, so it is behind a lock rather than on PlaceKeeper.
@@ -349,9 +353,9 @@ struct KeepsPlace: ViewModifier {
                 // Of two panes the first to appear starts the restore; the other, a moment later, scrolls too if it holds it.
                 // Any change of layout starts the quiet time, his place or not: the new layout's rows settling at the top
                 // aren't his choice (designer, regate of 23292ae: flat noted the top as his place and the turn back went there).
-                if let was = k.layout, was != layout { k.restoring = Date() }
+                if let was = k.layout, was != layout { k.restoring = Date(); k.pending = k.top != nil }
                 k.layout = layout
-                guard Date().timeIntervalSince(k.restoring) < 1.5, let top = k.top else { return }
+                guard k.pending, Date().timeIntervalSince(k.restoring) < 5, let top = k.top else { return }
                 // Again as the new layout settles: a single scroll 250 ms in came before the list had laid its rows out
                 // after a slow turn, and did nothing (CI df10d36: restored to a row, the page stayed at its top).
                 for wait in [250, 350, 600] as [UInt64] {
@@ -361,6 +365,7 @@ struct KeepsPlace: ViewModifier {
                     var still = Transaction(); still.disablesAnimations = true
                     withTransaction(still) { proxy.scrollTo(top, anchor: .top) }
                 }
+                k.pending = false; k.restoring = Date()
             }
     }
 }
