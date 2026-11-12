@@ -430,7 +430,7 @@ struct RootView: View {
         .fillCover(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
     }
 }
-// "Offline · last seen 7:12" as a row under a page's title, never floating over the list; a tap says what to do.
+// "Can’t reach the Mac · last seen 7:12" (or "Not answering") as a row under a page's title, never floating over the list; a tap says what to do.
 struct ReachRow: View {
     @EnvironmentObject var model: ChumbyModel
     @State private var open = false
@@ -446,10 +446,10 @@ struct ReachRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
                     Circle().fill(.red).frame(width: 8, height: 8)
-                    Text((model.dead ? "Not answering" : "Offline") + seen).font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1)
+                    Text((model.dead ? "Not answering" : "Can’t reach the Mac") + seen).font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1)
                 }
                 if open {
-                    Text(model.dead ? model.deadText : "Can’t reach the Mac or the Chumby. Check Tailscale; the Chumby may also be restarting.")
+                    Text(model.dead ? model.deadText : "This phone can’t reach the Mac, so this is what the Chumby last said. The Chumby itself may be fine. Check Tailscale on this phone.")
                         .font(.custom("Trebuchet MS", size: 15)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 300, alignment: .leading)
                 }
             }
@@ -520,8 +520,9 @@ struct LiveOctopus: View {
     }
     var body: some View {
         // Ringing, he wobbles hard; gone quiet, he sinks a little with his eyes shut.
-        let asleep = model.unreachable
-        let ringing = !asleep && (model.sys.ringing.map { !$0.snoozed } ?? false)
+        // Only when the Chumby itself has gone quiet: a route this phone can't use says nothing about him (2026-11-11).
+        let asleep = model.dead
+        let ringing = !model.unreachable && (model.sys.ringing.map { !$0.snoozed } ?? false)
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: still || model.tab != 0)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             // The same curves as the web app's CSS: ease-in-out both ways, as a sine.

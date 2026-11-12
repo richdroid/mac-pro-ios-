@@ -353,10 +353,23 @@ function kept(state, f) {
   });
   return out.filter((a, i) => !out.some((b, j) => j !== i && key(b) === key(a) && (b.enabled === '1' && a.enabled !== '1' || (j > i && (b.enabled === '1') === (a.enabled === '1')))));
 }
+const reachClock = {};
 function chumbyScene(q, s) {
   const a = new URL(q.url, 'http://x').searchParams.get('a');
   // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
   const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
+  // The route failing, not the Chumby (2026-11-11, "i hate opening the app and getting an its offline message"):
+  // blip: for the first 7 s after the app opens nothing answers (each request hangs past the app's 8 s timeout and is
+  //       dropped), then everything answers as usual. Nothing about it may reach the screen.
+  // gone: nothing ever answers. Only after about 25 s, with every route tried, may a calm line say so.
+  // A request after a quiet minute is a new launch, which starts the clock again.
+  const reach = (q.url.match(/^\/(blip|gone)\//) || [])[1];
+  if (reach) {
+    const now = Date.now(), r = reachClock[reach];
+    if (!r || now - r.last > 60000) reachClock[reach] = { start: now, last: now }; else r.last = now;
+    if (reach === 'gone' || now - reachClock[reach].start < 7000) { setTimeout(() => s.destroy(), 9000); return true; }
+    return false;
+  }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
   const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap)\//);
   if (!m) return false;
