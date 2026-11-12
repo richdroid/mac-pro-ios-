@@ -126,6 +126,38 @@ jobs:
           poses 1 ""
           films 1 ""
           ls dist
+      - name: Baseline tour on 9a5c774
+        continue-on-error: true
+        timeout-minutes: 25
+        run: |
+          set +e
+          exec > >(tee dist/base.log) 2>&1
+          # The same tour on main before this branch, same runner, for the hitch logs to be read against.
+          git init -q /tmp/base && cd /tmp/base && git remote add origin https://github.com/richdroid/mac-pro-ios-.git
+          git fetch -q --depth 1 origin 9a5c774ed0c113e2ef0af0117fab12c9e95a268b && git checkout -q FETCH_HEAD
+          xcodegen generate > /dev/null
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator -derivedDataPath /tmp/base-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -1
+          cd "$GITHUB_WORKSPACE"
+          DEVICE=$(xcrun simctl list devices booted -j | jq -r '[.devices[][]][0].udid')
+          D=/tmp/dh/.build/release/devicehubctl
+          xcrun simctl install "$DEVICE" /tmp/base-sim/Build/Products/Debug-iphonesimulator/TV.app
+          M=http://127.0.0.1:9002
+          curl -s $M/ > /dev/null || { node ci/mock-chumby.js & sleep 2; }
+          base() {
+            local d=$1 x=$2
+            local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES
+            sleep 25
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            sleep 2
+            tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-tourbase$x-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-tourbase$x-hitches.log
+          }
+          # Folded now (the shots ended there), then open upright, then open flat.
+          base 1 ""
+          $D "$DEVICE" pose open; sleep 5; $D "$DEVICE" rotate 1; sleep 5
+          base 3 -portrait
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          base 3 -open
       - name: Publish
         if: always()
         env:

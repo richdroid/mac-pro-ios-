@@ -418,6 +418,7 @@ struct Page<C: View>: View {
     @State private var scrolled = PageScrollY()
     // With the bar shown (Status' gear), the room it takes above the heading where iOS puts its items in the side strip
     // (folded, open flat): taken back, so the heading sits where every other tab's does (gate of 96f5f42: 15 pt lower).
+    // outerTop is a bar-hidden stack's inset in the same place.
     @State private var outerTop: CGFloat = 0
     @State private var innerTop: CGFloat = 0
     var barRoom: CGFloat { showsBar ? max(0, innerTop - outerTop) : 0 }
@@ -450,7 +451,18 @@ struct Page<C: View>: View {
         }
         .topShade()
         .background { Ambience() }
-        .background { if showsBar { Color.clear.onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { t in if abs(t - outerTop) > 0.5 { outerTop = t } } } }
+        // The top inset a tab without the bar has here, read from an empty stack with its bar hidden, as every other
+        // tab's is: the tab view's own inset alone is about 9 pt less, and taking that back put Status' heading 9 pt high
+        // (gate of b01454f).
+        .background {
+            if showsBar {
+                NavigationStack {
+                    Color.clear.toolbar(.hidden, for: .navigationBar)
+                        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { t in if abs(t - outerTop) > 0.5 { outerTop = t } }
+                }
+                .hidden().allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
         // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
         .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
