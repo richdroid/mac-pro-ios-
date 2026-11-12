@@ -73,7 +73,8 @@ jobs:
             # The Disk tile tapped with a finger (dx, dy), the chart's first frames filmed, then Back.
             $D "$DEVICE" touch $dx $dy 0.08 || echo "tap failed"; sleep 4
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-disk.png
-            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 3
+            # A short tap: a held one opens Back's own history menu.
+            $D "$DEVICE" touch $bx $by 0.03 || echo "tap failed"; sleep 3
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-back.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
