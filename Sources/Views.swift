@@ -280,7 +280,7 @@ final class PlaceKeeper {
     var layout: String?  // panes, and the outer display or not: a fold rebuilds the page as much as a turn does
     var restoring = Date.distantPast
     // While the rebuilt page lays out and scrolls back, its rows pass the line and must not count as his place.
-    var settling: Bool { Date().timeIntervalSince(restoring) < 1.2 }
+    var settling: Bool { Date().timeIntervalSince(restoring) < 2.0 }
 }
 // Where the top of each page is on screen (its scroll view's top plus the bars over it), in the window's points. Read in
 // geometry transforms, which SwiftUI runs off the main actor, so it is behind a lock rather than on PlaceKeeper.
