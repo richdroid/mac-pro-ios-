@@ -58,7 +58,7 @@ import UIKit
     // up (CI 7bbaf47: 0.4 s of the lifted row left behind). The Remote's keys then come up through it at lift.
     static func dissolve(_ rect: CGRect, soft: TVImage?, tint: Color?, duration: Double = 0.2) {
         #if os(iOS)
-        guard let v = veil, let w = v.superview, rect.width > 20, rect.height > 20 else { return }
+        guard let v = veil, let w = v.superview as? UIWindow, rect.width > 20, rect.height > 20 else { return }
         var r = rect.intersection(w.bounds)
         // A bar along the foot (upright, folded small) stays: the page stops above it.
         if let bar = Self.bottomBar(in: w), bar.minY > w.bounds.midY, bar.minY < r.maxY { r.size.height = max(0, bar.minY - r.minY) }
@@ -228,7 +228,7 @@ import UIKit
     // over the still of the card wherever the flight has got to, so it never lands as an empty ground (item 5, 11-12).
     static func picture(_ image: TVImage) {
         #if os(iOS)
-        guard let p = poster, p.alpha == 0 else { return }
+        guard let p = poster as? UIImageView, p.alpha == 0 else { return }
         p.image = image
         UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
             p.alpha = 1; card?.alpha = 0
