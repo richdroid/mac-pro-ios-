@@ -24,8 +24,8 @@ struct FlickHand {
         var unarm: CGFloat = 24
         // Or flung up this fast (points a second, the fastest stretch of the last tenth of a second, so a finger that
         // slows as it leaves still counts) having risen at least `flingRise`.
-        var fling: CGFloat = 350
-        var flingRise: CGFloat = 20
+        var fling: CGFloat = 280
+        var flingRise: CGFloat = 30
         // Up, not sideways: the rise is at least this share of the sideways travel (about 60° either side of straight up).
         var steep: CGFloat = 0.6
         // In a list, a throw is only meant when the thing was in the hand first: still for this long after the lift, or

@@ -86,7 +86,9 @@ jobs:
               case $how in
                 tap) $D "$DEVICE" touch $x $y 0.08 || echo "touch failed" ;;
                 long) $D "$DEVICE" touch $x $y 0.7 || echo "long touch failed" ;;
-                swipe) $D "$DEVICE" drag $x $y $x 0.2 0.15 || echo "drag failed" ;;
+                # A swipe as a finger makes it, moving from the touch on (Device Hub's own drag lands in too few steps
+                # for the list to follow it: CI 0880cb0, a long list never moved).
+                swipe) $D "$DEVICE" path $x $y 0.02 $x 0.2 0.15 0 || echo "path failed" ;;
                 # Held, then: a short sharp flick (about 45 pt in 80 ms); a flick easing to a stop before it lifts; a
                 # slow carry well past the line and a rest; carried up then brought back down (must go back); a resting
                 # thumb that swipes as the row lifts (must not send).
