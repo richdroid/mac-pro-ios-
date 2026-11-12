@@ -19,7 +19,7 @@ struct FlickHand {
         // Let go within this of where it was lifted: a press that ran long, so a tap.
         var still: CGFloat = 10
         // Carried up this far and let go, at any speed: thrown.
-        var carry: CGFloat = 80
+        var carry: CGFloat = 70
         // Once lit, brought back down this far under the line before it goes out.
         var unarm: CGFloat = 24
         // Or flung up this fast (points a second, the fastest stretch of the last tenth of a second, so a finger that
@@ -87,13 +87,15 @@ struct FlickHand {
         let until = max(rules.hold, lift ?? 0) + rules.react
         return real.contains { $0.t < until && hypot($0.p.x - first.p.x, $0.p.y - first.p.y) > rules.still * 2 }
     }
-    // The fastest upward stretch of at least 30 ms ending in the last 150 ms, in points a second (negative is up).
+    // The fastest upward stretch of at least 30 ms ending in the last quarter second, in points a second (negative is
+    // up): a flick that eases to a stop and rests a moment before the finger leaves the glass is still the flick (a
+    // finger at rest reports no moves, so the rest itself has no samples to read).
     static func speed(_ samples: [(t: Double, p: CGPoint)]) -> CGVector {
         guard let last = samples.last else { return .zero }
         var best = CGVector.zero
         for i in samples.indices.reversed() {
             let end = samples[i]
-            if last.t - end.t > 0.15 { break }
+            if last.t - end.t > 0.25 { break }
             guard let j = samples[..<i].lastIndex(where: { end.t - $0.t >= 0.03 }) else { continue }
             let dt = end.t - samples[j].t
             let v = CGVector(dx: (end.p.x - samples[j].p.x) / dt, dy: (end.p.y - samples[j].p.y) / dt)
