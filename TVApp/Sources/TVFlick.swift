@@ -3,6 +3,53 @@ import SwiftUI
 import UIKit
 #endif
 
+// The flick page's arrival and its close, faded by Core Animation in the render server: the screen as it was, a still
+// laid over the window, fades off what is already built under it. A long main-thread turn while it fades (the page's own
+// first layout, the Remote's) can't hold it: the SwiftUI fade it replaces was a held half-blend then a cut (CI 148b049,
+// 515 ms on the main thread 90 ms into the fade).
+@MainActor enum ScreenVeil {
+    #if os(iOS)
+    private static var veil: UIView?
+    private static var raised = 0
+    private static var window: UIWindow? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        return scene?.keyWindow ?? scene?.windows.first
+    }
+    #endif
+    static var up: Bool {
+        #if os(iOS)
+        return veil != nil
+        #else
+        return false
+        #endif
+    }
+    // The screen as it is now, over everything, until lift. Never more than one.
+    static func cover() {
+        #if os(iOS)
+        guard veil == nil, let w = window, let v = w.snapshotView(afterScreenUpdates: false) else { return }
+        v.frame = w.bounds
+        v.isUserInteractionEnabled = false
+        w.addSubview(v)
+        veil = v
+        raised += 1
+        let n = raised
+        // Never left up: whatever was meant to lift it, it goes on its own after a second and a half.
+        Task { try? await Task.sleep(nanoseconds: 1_500_000_000); if raised == n { lift(0.2) } }
+        #endif
+    }
+    static func lift(_ duration: Double = 0.22) {
+        #if os(iOS)
+        guard let v = veil else { return }
+        veil = nil
+        SwipeLog.note("veil lift")
+        UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]) {
+            v.alpha = 0
+        } completion: { _ in v.removeFromSuperview() }
+        #endif
+    }
+}
+
 // One way to send anything to the TV: the thing's own page, its choices on it (an episode, then a stream), and the choice
 // he makes is the flick. Picking a stream, by a tap or by holding it and flicking it up, is the send: the request leaves
 // at once, and its picture goes straight into the Remote's own picture of the TV in one short move, the Remote coming up
@@ -270,6 +317,7 @@ struct FlickScreen: View {
     // The tab he picked from, while the Remote comes up under this screen.
     @State private var tabBefore: Int?
     @State private var restoredTab: Int?
+    @State private var warmBack: Int?
     // Where this screen sits on the display, to place things measured elsewhere.
     @State private var flickFrame = CGRect.zero
     // Held where it was as the Remote's tab comes up under it, so the tab changing can't lay it out again mid-move.
@@ -419,7 +467,7 @@ struct FlickScreen: View {
 
     var body: some View {
         screen
-            .opacity(fadingOut ? 0 : onScreen ? 1 : 0.02)
+            .opacity(fadingOut ? 0 : 1)
             // The TV made ready, with what's coming, at each point he shows he means it: the show's page with its Resume,
             // and the streams opening. Nothing is prepared for what's already on the TV (r18).
             .onChange(of: step) { _, now in if now == .streams && video && !onTV { Prepare.arm(prepareBody) } }
@@ -453,19 +501,18 @@ struct FlickScreen: View {
                 // The ground's soft picture and colour from memory, so the page arrives in its colour, not on black.
                 if softImage == nil, let u = screenURL ?? URL(string: item.art) { softImage = ImageStore.shared.small(u, 16) }
                 if tint == nil { tint = ImageStore.shared.cachedBand(URL(string: item.art)) }
-                // Out of the quiet transaction that put the screen up (under it the fade didn't run: a cut), then the
-                // pages under it go once it's fully up.
+                // Built whole under the still of the screen he tapped (ScreenVeil, put up with the page), which fades off it
+                // now, in the same frame the page is first drawn: the render server runs the fade, so the main thread's
+                // turns after it (the page's tasks, its pictures) can't hold it half way.
                 SwipeLog.note("flick open")
+                ScreenVeil.lift()
+                onScreen = true
+                upAt = Date().addingTimeInterval(0.24)
+                if !model.flickArrived { var q = Transaction(); q.disablesAnimations = true; withTransaction(q) { model.flickArrived = true } }
+                // The Remote built once, unseen, ahead of the first pick, so the pick's move never waits on it.
                 Task {
-                    await Self.settleFrames()
-                    SwipeLog.note("flick fade")
-                    // The page under it goes in the same step, slowly at first (UnderFlick), so the strip round the bars
-                    // darkens with the fade rather than after it.
-                    withAnimation(.easeOut(duration: 0.18)) { onScreen = true }
-                    upAt = Date().addingTimeInterval(0.2)
-                    // The pages under it go once it's fully up: covering them mid-fade put their redraw inside the fade.
-                    try? await Task.sleep(nanoseconds: 200_000_000)
-                    if !leaving { SwipeLog.note("flick covers"); model.flickArrived = true }
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    await warmRemote()
                 }
             }
     }
@@ -525,7 +572,7 @@ struct FlickScreen: View {
                 // Its own putting back of the page he came from isn't him picking a tab, nor is the Remote being brought up
                 // under this screen at the pick.
                 if t == restoredTab { restoredTab = nil; return }
-                if model.flickHandoff || flown { return }
+                if model.flickHandoff || flown || model.remoteWarming { return }
                 if !leaving { leave() }
             }
             .toolbarBackground(.hidden, for: .navigationBar)
@@ -533,17 +580,6 @@ struct FlickScreen: View {
             .containerBackground(.clear, for: .navigation)
         }
         .scrollEdgeEffectStyle(.soft, for: .top)
-        // Close: the app's own glass circle with a white ✕, top-leading inside the screen's safe area, where the bar's
-        // items sit (open upright the bar drew its own ✕ grey whatever it was given). Back, while there's a step to go
-        // back to, stays the system's. Outside the stack, so the bar's height doesn't push it down onto the page.
-        .overlay(alignment: .topLeading) {
-            if previous == nil, !flown {
-                GlassButton(icon: "xmark", label: "Close", size: 44) { if !flown { leave() } }
-                    .foregroundStyle(Color.white)
-                    .padding(.leading, 16).padding(.top, 4)
-                    .opacity(barShown ? 1 : 0)
-            }
-        }
         .preferredColorScheme(.dark)
         // The build's recording only: what the flick is doing, so a frame can be read against the code. Top left, clear of
         // the page's heading.
@@ -674,11 +710,23 @@ struct FlickScreen: View {
     var footFade: Bool { sizeClass == .regular && !panes }
 
     // One control at the top of the bar, as the Duo reserves it: Back while there's a step to go back to, else Close.
+    // The lead's ruling (2026-11-11, after Richard's 11-08 Back ruling): folded and open flat, where the side strip carries
+    // the system's Back, Back is the one control, a step back while there is one and otherwise out of the page; never a ✕
+    // as well. Open upright, where there's no Back to dismiss the page, the system's own Close (cancellationAction), white
+    // whatever the bar would make it. Never a hand-made circle over the poster or title.
     @ToolbarContentBuilder var bar: some ToolbarContent {
-        if let previous, !flown {
-            ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
+        if !flown {
+            if let previous {
+                ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
+            } else if footFade {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(role: .cancel) { if !flown { leave() } } label: { Label("Close", systemImage: "xmark") }
+                        .tint(.white).foregroundStyle(.white)
+                }
+            } else {
+                ToolbarItem(placement: .navigation) { Button { if !flown { leave() } } label: { Label("Back", systemImage: "chevron.left") } }
+            }
         }
-        // Close is the page's own glass circle (the overlay in `screen`), not a bar item.
     }
 
     // The card's own picture, from memory in the first frame when the card that was tapped has it (it always has):
@@ -1385,12 +1433,36 @@ struct FlickScreen: View {
         if !toRemote { backToThrownFrom() }
         leaving = true; closing = true
         if restoreMood, let prior = priorMood { model.mood = prior }
-        // The whole screen, bar included, fades as one: its item taken off alone left its glass disc behind.
-        withAnimation(.easeOut(duration: 0.2)) { arrived = false; fadingOut = true }
-        Task {
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            model.closeFlick()
-        }
+        // The whole screen, bar included, goes as one under a still of it that fades off what's under it (ScreenVeil), in
+        // the render server, so the pages coming back can't hold the fade.
+        ScreenVeil.cover()
+        var q = Transaction(); q.disablesAnimations = true
+        withTransaction(q) { arrived = false; fadingOut = true }
+        model.closeFlick()
+        ScreenVeil.lift(0.22)
+    }
+    // The Remote's first build (200-700 ms in CI, the first pick's stall) done once, ahead of the pick, while the page is
+    // at rest: its tab put up under this opaque page and back in two quiet steps, under a still of the screen, so neither
+    // the Remote nor the side bar's mark moving is ever seen. Nothing of it starts meanwhile (remoteWarming: no live
+    // picture). Only on a stream or a show's page, never once something's been picked or the page is going.
+    func warmRemote() async {
+        guard !model.remoteBuilt, model.tab != 0, step != .card, !flown, !leaving, !closing, liftedID == nil,
+              model.flicking?.id == target.id, !ScreenVeil.up else { return }
+        let back = model.tab
+        warmBack = back
+        SwipeLog.note("remote warm")
+        ScreenVeil.cover()
+        model.remoteWarming = true
+        var q = Transaction(); q.disablesAnimations = true
+        withTransaction(q) { model.tab = 0 }
+        // The turn that put it up built it; the next one takes it down again.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        // Picked in the meantime: the Remote is where it's going, so it stays.
+        if !flown { withTransaction(q) { model.tab = back } }
+        await Self.settleFrames()
+        model.remoteWarming = false
+        SwipeLog.note("remote warmed")
+        ScreenVeil.lift(0.12)
     }
     // The send (the pick). t = 0 at the pick: the request leaves now; the start is the model's from now, so the Remote
     // comes up with it; the Remote's tab comes up under this opaque screen; and as soon as its picture's place is known the
@@ -1420,7 +1492,8 @@ struct FlickScreen: View {
         }
         // The Remote's tab up under this screen now, its picture kept hidden until this one lands on it.
         if model.tab != 0 || tabBefore == nil {
-            tabBefore = tabBefore ?? model.tab
+            // Picked while the Remote was being built unseen: the page he came from is the one it was built from.
+            tabBefore = tabBefore ?? (model.remoteWarming ? warmBack : nil) ?? model.tab
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { model.remoteArrival = Date(); model.flickHandoff = true; model.tab = 0; model.keepMood(until: item.art); model.mood = tint }
         }

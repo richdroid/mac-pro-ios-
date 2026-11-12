@@ -147,6 +147,8 @@ jobs:
             posefilm flicktap$x $d flick-tap 1
             posefilm flicklink$x $d flick-link 0
             posefilm flicklinkart$x $d flick-link-art 0
+            # A quick pass (ci/flick-quick in the tree): the poses alone, for iterating on the page's own motion.
+            [ -f ci/flick-quick ] && return
             fingerfilm finger-tap$x $d tap
             fingerfilm finger-long$x $d long
             fingerfilm finger-swipe$x $d swipe

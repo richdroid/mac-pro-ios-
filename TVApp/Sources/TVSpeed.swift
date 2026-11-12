@@ -240,6 +240,9 @@ final class HitchLog: NSObject {
         guard gap > 34 else { return }
         hitches.append(["ms": Int(gap), "at": Date().timeIntervalSince1970 * 1000])
         print("HITCH \(Int(gap)) ms")
+        // Beside the flick's steps in the films' main log: a frame the screen really missed, unlike a long turn, which
+        // can be many frames' work with no wait between.
+        SwipeLog.note("late frame \(Int(gap)) ms")
         flushSoon()
     }
 }

@@ -70,6 +70,11 @@ final class TVModel {
     // The flick's stage is up over a page (not yet moving onto the Remote): the page steps out of sight under it, so its
     // rows never ghost through the stage's fade (r18).
     var flickCovering = false
+    // The Remote's tab has been built once (its first build is the costly one: 200-700 ms in CI), and it is being built
+    // now, unseen under a flick's page and a veil, ahead of the first pick (FlickScreen.warmRemote). While warming nothing
+    // of it starts: no live picture, no reading.
+    @ObservationIgnored var remoteBuilt = false
+    @ObservationIgnored var remoteWarming = false
     // A film's colour kept on the pages behind after the flick closes, until something else is playing.
     @ObservationIgnored var moodArt: String?
     func keepMood(until art: String) { moodArt = art }
@@ -142,7 +147,10 @@ final class TVModel {
         // Choosing from the first frame, in the same quiet transaction: set by the screen once it was up, the change
         // animated the host's inset and the new page's first layout with it, so the page grew in from a narrow column
         // ("Choos / e on / the TV", CI tv-flicktap at 13 s).
-        withTransaction(t) { flicking = target; flickRetired = false; flickChoosing = true; flickArrived = false }
+        // The screen as it is, held over the window while the page is built under it (ScreenVeil); the page lifts it in
+        // its first frame, so the fade can't be held by the build. Under it the pages beneath go out of sight at once.
+        ScreenVeil.cover()
+        withTransaction(t) { flicking = target; flickRetired = false; flickChoosing = true; flickArrived = true }
     }
     // The thing on a card is what the TV is playing now (the same film, or the episode named on the card): tapping it goes
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
@@ -502,7 +510,7 @@ final class TVModel {
     // The live stream started early, as the Remote comes up, so its first picture is there by the time it's looked at.
     func warmMirror() {
         #if os(iOS)
-        if mirrorLive && !filmOnScreen && !flickHandoff { live.start(url("/api/tv/screen-live")) }
+        if mirrorLive && !filmOnScreen && !flickHandoff && !remoteWarming { live.start(url("/api/tv/screen-live")) }
         #endif
     }
     // The Remote's picture of the TV coming on and off the screen.
@@ -510,7 +518,7 @@ final class TVModel {
         mirrorViewers = max(0, mirrorViewers + (on ? 1 : -1))
         if on {
             warmMirror()
-            if mirrorLive && !liveShowing && !flickHandoff { Task { await loadMirror() } }
+            if mirrorLive && !liveShowing && !flickHandoff && !remoteWarming { Task { await loadMirror() } }
         } else if mirrorViewers == 0 {
             mirrorSlot = nil
             #if os(iOS)

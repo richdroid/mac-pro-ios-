@@ -390,7 +390,7 @@ struct Page<C: View>: View {
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
-                .underFlick()
+                .underFlick(warms: alwaysInline)
                 .modifier(TabBarFade())
                 .modifier(TypingHidesTabBar(enabled: !alwaysInline))
                 .environment(\.backToTop, top)
@@ -412,6 +412,9 @@ struct Page<C: View>: View {
         }
         .topShade()
         .background { Ambience() }
+        // Over the art too, so the strip round the bars beside or under a flick's page is black like the page's own foot,
+        // never a lighter band of the tab's art (open upright, under the tab bar).
+        .modifier(UnderFlickGround(warms: alwaysInline))
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
         // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
         .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
@@ -1502,7 +1505,7 @@ struct RemoteTab: View {
         #endif
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
-        .onAppear { model.warmMirror() }
+        .onAppear { model.remoteBuilt = true; model.warmMirror() }
         // Leaving the tab leaves the typing too, so coming back never finds the keyboard already up.
         .onDisappear { typing = false }
         // The app tiles' banners fetched once, ahead, so the open Remote's tiles never show their stand-ins first.
@@ -3326,10 +3329,13 @@ struct UnderFlick: ViewModifier {
     // A page pushed over a tab that draws its own large heading: the system's bar stays, for its Back (the Duo's own,
     // 2026-11-08), but carries no title, so the heading isn't printed twice.
     var barHidden = false
+    // The Remote's page: drawn, not hidden, while it's built unseen ahead of the first pick (remoteWarming), so its text and
+    // pictures are drawn then rather than at the pick.
+    var warms = false
     func body(content: Content) -> some View {
         // Not once a pick is on its way to the Remote (flickHandoff): the Remote's tab is up under the flick's page then,
         // and must be drawn there for the picture to land on, while the page's own rail stays beside it.
-        let covered = (model.flickChoosing && model.flickArrived && !model.flickHandoff) || model.flickCovering
+        let covered = ((model.flickChoosing && model.flickArrived && !model.flickHandoff) || model.flickCovering) && !(warms && model.remoteWarming)
         content
             .opacity(covered ? 0 : 1)
             // Black under the side bar too while covered: the strip beside a show's or stream's page showed whatever lay
@@ -3344,6 +3350,17 @@ struct UnderFlick: ViewModifier {
             #endif
     }
 }
+// The black over a whole tab's stack, art included, while a flick's page covers it (the same rule as UnderFlick).
+struct UnderFlickGround: ViewModifier {
+    @Environment(TVModel.self) private var model
+    var warms = false
+    func body(content: Content) -> some View {
+        let covered = ((model.flickChoosing && model.flickArrived && !model.flickHandoff) || model.flickCovering) && !(warms && model.remoteWarming)
+        content
+            .overlay { Color.black.ignoresSafeArea().opacity(covered ? 1 : 0).allowsHitTesting(false) }
+            .animation(covered ? .easeIn(duration: 0.22) : .easeOut(duration: 0.15), value: covered)
+    }
+}
 // The bar's title emptied for a page that draws its own heading; off, whatever the page set stands.
 private struct Untitled: ViewModifier {
     let on: Bool
@@ -3351,7 +3368,7 @@ private struct Untitled: ViewModifier {
         if on { content.navigationTitle("").navigationBarTitleDisplayMode(.inline) } else { content }
     }
 }
-extension View { func underFlick(barHidden: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden)) } }
+extension View { func underFlick(barHidden: Bool = false, warms: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden, warms: warms)) } }
 
 // While a search or send box has the keyboard, the tab bar steps aside, as the Remote's does while typing on the TV: the
 // keyboard sliced the side bar and left half a button peeking over it (review of dfd490e, tv-realsearch 12–14 s). The
