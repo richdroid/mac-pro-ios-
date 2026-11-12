@@ -518,6 +518,7 @@ struct Notice: View {
 struct Screen<Content: View>: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.paneLayout) private var panes
+    @State private var compact = false
     let tab: Int
     let title: String
     let listed: Bool
@@ -543,6 +544,9 @@ struct Screen<Content: View>: View {
             // One gap between the blocks on Status, where they sit on the page's own background.
             .listSectionSpacing(tab == 0 ? .custom(28) : .default)
             .scrollsUnder(side == .right ? 1 : 0)
+            // One column on the outer display: Status draws its Mac and tiles a little smaller (StatusTab).
+            .onGeometryChange(for: Bool.self) { side == .all && $0.size.width < 520 && $0.size.height < 760 } action: { compact = $0 }
+            .environment(\.statusCompact, compact)
             .keepsPlace("tab\(tab)", proxy)
             // No pull to refresh: every figure follows the Mac by itself (each second on Status, every 10 seconds
             // otherwise, and at once on opening a tab), so pulling only ever showed what was already there (Richard,
@@ -689,18 +693,12 @@ struct StateRow: View {
 
 // The web dashboard's tile: a label, a big number and a line you can drag along to read the past.
 // Folded, Status's Mac and tiles are drawn a little smaller, so the Disk tile shows in the first screenful without a
-// scroll (designer, 2026-11-11). Only the outer display: narrow and short.
-enum StatusFit {
-    static var folded: Bool {
-        #if canImport(UIKit)
-        let b = UIScreen.main.bounds
-        return min(b.width, b.height) < 520 && max(b.width, b.height) < 760
-        #else
-        return false
-        #endif
-    }
-}
+// scroll (designer, 2026-11-11). Only the outer display, read from the page's own size as laid out (one column, narrow
+// and short), so opening or folding mid-view follows; never the screen's fixed bounds, which said "folded" open too.
+private struct StatusCompactKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var statusCompact: Bool { get { self[StatusCompactKey.self] } set { self[StatusCompactKey.self] = newValue } } }
 struct WebTile: View {
+    @Environment(\.statusCompact) private var compact
     let title: String, value: String, detail: String
     var spark: [Double] = []
     var top: Double?
@@ -717,7 +715,8 @@ struct WebTile: View {
                     Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
                 // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
-                Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
+                // Never squeezed by the tile's height, only by its width: one figure size across the five tiles (designer, 2026-11-11).
+                Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).fixedSize(horizontal: false, vertical: true).contentTransition(.numericText())
                     // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                     // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                     .animation(NavTransit.shared.active ? nil : .easeOut(duration: 0.2), value: value)
@@ -728,7 +727,7 @@ struct WebTile: View {
                 } else if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                     SparkLine(values: spark, top: top)
-                        .frame(height: StatusFit.folded ? 30 : 42).padding(.top, StatusFit.folded ? 6 : 8)
+                        .frame(height: compact ? 30 : 42).padding(.top, compact ? 6 : 8)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -804,13 +803,14 @@ struct TempDials: View {
 
 struct Hero: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.statusCompact) private var compact
     let s: Status
     var body: some View {
         VStack(spacing: 2) {
-            Image("MacPro").resizable().scaledToFit().frame(height: StatusFit.folded ? 100 : 148)
+            Image("MacPro").resizable().scaledToFit().frame(height: compact ? 100 : 148)
                 // The glow fades to nothing inside the portrait's own height: a round one reached past the row's top and was
                 // cut there in a straight line.
-                .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: StatusFit.folded ? 100 : 148))
+                .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: compact ? 100 : 148))
                 .accessibilityLabel("Mac Pro, Late 2013")
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
