@@ -688,6 +688,18 @@ struct StateRow: View {
 }
 
 // The web dashboard's tile: a label, a big number and a line you can drag along to read the past.
+// Folded, Status's Mac and tiles are drawn a little smaller, so the Disk tile shows in the first screenful without a
+// scroll (designer, 2026-11-11). Only the outer display: narrow and short.
+enum StatusFit {
+    static var folded: Bool {
+        #if canImport(UIKit)
+        let b = UIScreen.main.bounds
+        return min(b.width, b.height) < 520 && max(b.width, b.height) < 760
+        #else
+        return false
+        #endif
+    }
+}
 struct WebTile: View {
     let title: String, value: String, detail: String
     var spark: [Double] = []
@@ -711,11 +723,12 @@ struct WebTile: View {
                     .animation(NavTransit.shared.active ? nil : .easeOut(duration: 0.2), value: value)
                 Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                 if let fill {
-                    ProgressView(value: min(max(fill, 0), 1)).tint(fill > 0.9 ? .red : macBlue).padding(.top, 10)
+                    // Orange from 80 %, red from 90 % (designer, 2026-11-11).
+                    ProgressView(value: min(max(fill, 0), 1)).tint(fill > 0.9 ? .red : fill > 0.8 ? .orange : macBlue).padding(.top, 10)
                 } else if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                     SparkLine(values: spark, top: top)
-                        .frame(height: 42).padding(.top, 8)
+                        .frame(height: StatusFit.folded ? 30 : 42).padding(.top, StatusFit.folded ? 6 : 8)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -794,10 +807,10 @@ struct Hero: View {
     let s: Status
     var body: some View {
         VStack(spacing: 2) {
-            Image("MacPro").resizable().scaledToFit().frame(height: 148)
+            Image("MacPro").resizable().scaledToFit().frame(height: StatusFit.folded ? 100 : 148)
                 // The glow fades to nothing inside the portrait's own height: a round one reached past the row's top and was
                 // cut there in a straight line.
-                .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: 148))
+                .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: StatusFit.folded ? 100 : 148))
                 .accessibilityLabel("Mac Pro, Late 2013")
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
