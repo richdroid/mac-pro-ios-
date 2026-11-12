@@ -32,6 +32,7 @@ extension View { func flattened() -> some View { self.colorMultiply(.black).colo
     var lost: ChumbyEntry { var s = ChumbyEntry(date: Date()); s.lastSeen = Date().addingTimeInterval(-25 * 60); return s }
     var page: Int { UserDefaults.standard.integer(forKey: "page") }
     var body: some Scene { WindowGroup {
+        if UserDefaults.standard.bool(forKey: "sheets") { ChumbySheets() } else {
         VStack(spacing: 14) {
             switch page {
             case 1:
@@ -69,5 +70,6 @@ extension View { func flattened() -> some View { self.colorMultiply(.black).colo
         }
         .padding(10).frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(page == 3 ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.86, green: 0.55, blue: 0.72), Color(red: 0.72, green: 0.42, blue: 0.62)], startPoint: .top, endPoint: .bottom)) : page == 2 ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.12, green: 0.2, blue: 0.35), Color(red: 0.35, green: 0.25, blue: 0.4)], startPoint: .top, endPoint: .bottom)) : AnyShapeStyle(Color(white: 0.8)))
+        }
     } }
 }

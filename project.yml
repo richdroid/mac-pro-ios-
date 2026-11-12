@@ -205,7 +205,9 @@ targets:
       - Widget/MacProWidget.swift
       - Widget/Assets.xcassets
       - Shared/Gauges.swift
+      - Sources/MacIntents.swift
       - ci/gallery-mac
+      - ci/widget-sheet
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryMac
@@ -221,6 +223,7 @@ targets:
       - ChumbyApp/Sources/ChumbyArt.swift
       - ChumbyApp/Sources/ChumbyIntents.swift
       - ci/gallery-chumby
+      - ci/widget-sheet
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryChumby
@@ -236,6 +239,7 @@ targets:
       - TVApp/Sources/TVTheme.swift
       - TVApp/Sources/TVIsland.swift
       - ci/gallery-tv
+      - ci/widget-sheet
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryTV
