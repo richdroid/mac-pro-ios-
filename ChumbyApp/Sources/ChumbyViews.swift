@@ -592,7 +592,9 @@ struct ChumbyPaneReader<C: View>: View {
     // The mark the list's top is in: the lowest one at or above the top (with a little give), or none at the top.
     func anchor(offset: CGFloat) -> String? {
         guard offset > 1 else { return nil }
-        return marks.filter { $0.value <= box.minY + 24 }.max { $0.value < $1.value }?.key
+        // None above the top (a page whose first mark is below its title, coming back from past its end): the first one
+        // under the top, never "the top" for a list that isn't there (gate B4: a day written as "top" mid-bounce).
+        return marks.filter { $0.value <= box.minY + 24 }.max { $0.value < $1.value }?.key ?? marks.min { $0.value < $1.value }?.key
     }
     #if canImport(UIKit)
     // How far the list's top is past the top of row `id`, in points, while that row is laid out.
@@ -821,15 +823,17 @@ struct StaysAtTop: ViewModifier {
         #if canImport(UIKit)
         if let sv = holder.scroll, sv.window != nil {
             guard !sv.isTracking, !sv.isDecelerating else { return }
+            // Its top, levelled: the title row where a title rests, whatever space the list was left with above it; set in
+            // one step, so a list already levelled is left alone.
             let top = -sv.adjustedContentInset.top
-            if abs(sv.contentOffset.y - top) > 0.5 { sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: top), animated: false); SwipeLog.note("list kept at top") }
-            // Then level: the title row where a title rests, whatever inset the list was left with.
+            var target = top
             if let rest = TitleRest.gap, let g = titleGap() {
-                let d = g - rest
-                if d > 0.5 && d < 120 {
-                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: sv.contentOffset.y + d), animated: false)
-                    SwipeLog.note("list levelled \(String(format: "%.1f", d)) inset ui \(Int(sv.adjustedContentInset.top)) swiftui \(Int(holder.inset))")
-                }
+                let d = sv.contentOffset.y + (g - rest) - top
+                if d > 0.5 && d < 120 { target = top + d }
+            }
+            if abs(sv.contentOffset.y - target) > 0.5 {
+                sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: target), animated: false)
+                SwipeLog.note(target == top ? "list kept at top" : "list levelled \(String(format: "%.1f", target - top)) inset ui \(Int(sv.adjustedContentInset.top)) swiftui \(Int(holder.inset))")
             }
             return
         }

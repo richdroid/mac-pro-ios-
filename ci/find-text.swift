@@ -28,8 +28,10 @@ FileHandle.standardError.write("lines: \(found.compactMap { $0.topCandidates(1).
 var hits: [(Double, Double)] = []
 for o in found {
     guard let t = o.topCandidates(1).first?.string else { continue }
-    let s = t.lowercased().trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "✓◇⌃⌄"))
-        .trimmingCharacters(in: .whitespaces)
+    // A menu's value reads with its chevrons as a stray mark ("Beep =", "Morning Mix v"): trailing one-character marks go.
+    var words = t.lowercased().split(separator: " ").map(String.init)
+    while let w = words.last, words.count > 1, w.count == 1, !(w.first!.isLetter && w != "v") || w == "v" { words.removeLast() }
+    let s = words.joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: "✓◇⌃⌄ "))
     guard s == want else { continue }
     let b = o.boundingBox
     let x = Double(b.midX), y = 1 - Double(b.midY)
