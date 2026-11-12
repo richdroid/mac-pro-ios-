@@ -149,6 +149,8 @@ jobs:
             posefilm flicklinkart$x $d flick-link-art 0
             # The same flow on the list as the bridge really hands it over (freal): a dozen rows, long names, dubbed files.
             posefilm flickreal$x $d flick-starting 1 freal
+            # The list two seconds coming: the page's waiting rows breathing, then the list in one fade, then the pick.
+            posefilm flickslowlist$x $d flick-starting 1 fslowlist
             # A quick pass (ci/flick-quick in the tree): the poses alone, for iterating on the page's own motion.
             [ -f ci/flick-quick ] && return
             fingerfilm finger-tap$x $d tap

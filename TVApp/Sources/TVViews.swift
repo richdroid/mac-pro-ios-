@@ -235,6 +235,7 @@ struct RootView: View {
     // never redraws the whole tab view.
     @State private var playingSymbol = "play.circle"
     var body: some View {
+        let _ = SwipeLog.mark("body root")
         PaneReader {
             TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
                 // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
@@ -1500,6 +1501,7 @@ struct RemoteTab: View {
             .modifier(KeysArrive(gate: keysGate))
     }
     var body: some View {
+        let _ = SwipeLog.mark("body remote")
         Group {
             if size == .regular {
                 FoldSplit {
@@ -1569,6 +1571,10 @@ struct RemoteTab: View {
         }
         .task(id: model.remoteArrival) {
             guard Date().timeIntervalSince(model.remoteArrival) < 1 else { return }
+            // The pick's picture flying in the render server: the flick's page went under the still at the pick, so there
+            // is nothing of it to sit on the keys, and the keys come up with the rest of the Remote as the still fades off
+            // it (gated, they came 0.3 s after the picture had landed: the review of d5d94f4).
+            guard !RenderFlight.flying else { return }
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { keysGate.shown = false }
             // Once the flick's title, poster and controls are nearly gone (they fade in 0.12 s from the move's start), so the
@@ -2257,6 +2263,7 @@ struct AppsTab: View {
         .padding(.horizontal, 20).frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
     }
     var body: some View {
+        let _ = SwipeLog.mark("body apps")
         content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).modifier(TypingHidesTabBar()) }
             #if os(iOS)
             .onChange(of: model.browsing) { _, b in HitchLog.shared.note(b == nil ? "Apps pop app page" : "Apps push app page") }
@@ -2881,6 +2888,7 @@ struct PlayingTab: View {
         .settledAnimation(.easeOut(duration: 0.3), value: watching)
     }
     var body: some View {
+        let _ = SwipeLog.mark("body playing")
         Group {
             if panes {
                 FoldSplit { ScrollView { nowPane }.backToTop() } right: {
@@ -2979,6 +2987,7 @@ struct FilmsTab: View {
     static let genres = ["Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "History", "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "War", "Western"]
     @Environment(\.paneLayout) private var panes
     var body: some View {
+        let _ = SwipeLog.mark("body films")
         // Films or shows only swaps the rows: the switch itself, the search and the place on the page stay put.
         Group {
             // Unfolded, the rows take turns on each side of the fold, as on an app's own page, rather than running across it.
