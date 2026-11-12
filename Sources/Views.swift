@@ -352,10 +352,15 @@ struct KeepsPlace: ViewModifier {
                 if let was = k.layout, was != layout { k.restoring = Date() }
                 k.layout = layout
                 guard Date().timeIntervalSince(k.restoring) < 1.5, let top = k.top else { return }
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                guard !Task.isCancelled else { return }
-                SwipeLog.note("place restore \(page) to \(top.base) (\(layout))")
-                proxy.scrollTo(top, anchor: .top)
+                // Again as the new layout settles: a single scroll 250 ms in came before the list had laid its rows out
+                // after a slow turn, and did nothing (CI df10d36: restored to a row, the page stayed at its top).
+                for wait in [250, 350, 600] as [UInt64] {
+                    try? await Task.sleep(nanoseconds: wait * 1_000_000)
+                    guard !Task.isCancelled else { return }
+                    SwipeLog.note("place restore \(page) to \(top.base) (\(layout))")
+                    var still = Transaction(); still.disablesAnimations = true
+                    withTransaction(still) { proxy.scrollTo(top, anchor: .top) }
+                }
             }
     }
 }
