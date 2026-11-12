@@ -557,13 +557,16 @@ struct AlarmsTab: View {
     var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" && $0.key != folded && !ChumbyState.isExpired($0, chumby: model.state.chumbyNow) }.sorted { $0.localMinutes < $1.localMinutes } }
     var paneShown: Pane { wide ? pane : .schedule }
     // Pages that bring their own list and title row (editor, day), shown in the right pane in place of its list.
-    // An editor opened in the pane stays the same view through a turn: drawn over the whole page upright (TwoPane), and
-    // back in its pane open flat, with what's typed and where it was. Never a cover made for it by the turn.
+    // A page opened in the pane (an editor, a day, Calendar settings) stays the same view through a turn: drawn over the
+    // whole page upright (TwoPane), with its own Done or Cancel and Save, and back in its pane open flat, with what's typed
+    // and where it was. Never a cover or a push made for it by the turn: a push mid-turn showed the navigation's white
+    // page for half a second (gate B4), where the editor, kept in the tab's own tree, showed none.
     var rightPage: AnyView? {
         switch pane {
         case .editor(let a): return AnyView(AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new"))
         case .napEditor(let a): return AnyView(AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new")))
-        case .day(let k): return wide ? AnyView(CalendarDaySheet(key: k, close: { show(.schedule) }).id(k)) : nil
+        case .day(let k): return AnyView(CalendarDaySheet(key: k, close: { show(.schedule) }).id(k))
+        case .settings: return AnyView(PaneSettingsPage(done: { show(.schedule) }))
         case .template: return AnyView(AlarmEditor(calendarTemplate: true, close: { closeTemplate() }))
         default: return nil
         }
@@ -572,7 +575,6 @@ struct AlarmsTab: View {
     var rightTitle: String? {
         switch paneShown {
         case .schedule: return " "
-        case .settings: return "Calendar settings"
         default: return nil
         }
     }
@@ -608,6 +610,9 @@ struct AlarmsTab: View {
     func openDay(_ k: String) { if wide { show(.day(k)) } else { dayPage = k; model.alarmsPage = true } }
     func openSettings() { if wide { show(.settings) } else { dayPage = nil; model.alarmsPage = true } }
     @State private var dayPage: String?
+    #if os(iOS)
+    @State private var navFinder = NavFinder()
+    #endif
 
     // For the build's film: a row to bring on screen, so the nap's chip and countdown are filmed, not run below the fold.
     @State private var scrollTo: String?
@@ -629,7 +634,7 @@ struct AlarmsTab: View {
     // and say when they repeat (Richard, 2026-11-05: "theres little to no distinction between daily alarms and calendar
     // alarms its just super unintuitive"). Night times moved to Tinker, and "Woke up to" to Sounds.
     var page: some View {
-        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !paneFaded, rightPage: rightPage) {
+        TwoPane(rightTitle: rightTitle, rightTrailing: nil, rightShown: !paneFaded, rightPage: rightPage) {
             // Add alarm is never a loose circle: it's the last row of My alarms (below).
             PageTitle("Alarms")
             ReachRow()
@@ -658,11 +663,13 @@ struct AlarmsTab: View {
                 // cross panes whenever the calendar had nothing listed, so it was never in one place.
                 calendar
                 nap
-            case .settings: CalendarSettingsSections()
             default: EmptyView()
             }
         }
         .seaList()
+        #if os(iOS)
+        .background { NavProbe(finder: navFinder) }
+        #endif
         // A nap set or called off moves anything it touches (the next alarm, the chip) in one spring, never in one frame.
         .animation(.snappy, value: model.napDue)
         .onChange(of: model.napDue) { _, _ in napMoves() }
@@ -686,22 +693,15 @@ struct AlarmsTab: View {
         .onChange(of: wide) { _, w in
             paneSwap?.cancel(); paneSwap = nil; paneFaded = false
             var still = Transaction(); still.disablesAnimations = true
-            // An editor opened in the pane (or the template's) is left where it is: the same view, over the whole page upright
-            // and back in its pane open flat (the lead's ruling, 11-11). One opened folded stays a cover.
-            switch pane { case .editor, .napEditor, .template: return; default: break }
-            if w {
-                if model.alarmsPage { withTransaction(still) { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false } }
-                else { pane = .schedule }
-            } else {
-                withTransaction(still) {
-                    switch pane {
-                    case .settings: dayPage = nil; model.alarmsPage = true
-                    case .day(let k): dayPage = k; model.alarmsPage = true
-                    default: break
-                    }
-                    pane = .schedule
-                }
-            }
+            // A page in the pane is left where it is: the same view, over the whole page upright and back in its pane open
+            // flat (the lead's ruling, 11-11). One opened folded stays a cover.
+            guard w, pane == .schedule, model.alarmsPage else { return }
+            // A page pushed upright, turned flat: into the pane, the push taken away by UIKit itself without its slide
+            // (SwiftUI's pop slid the page off, and the Alarms page in from the left, over the navigation's white page).
+            #if os(iOS)
+            navFinder.nav?.popToRootViewController(animated: false)
+            #endif
+            withTransaction(still) { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false }
         }
         .onAppear {
             wake.refreshPlan()
@@ -1244,24 +1244,17 @@ struct SoundRows: View {
     @Binding var alarm: Alarm
     // Laid under the last row, for a sheet that measures where its rows end (a calendar day's).
     var tail: AnyView? = nil
-    // Silent has no length row. While the menu closes on a pick to or from Silent, whether it was silent is held, and the
-    // row comes or goes once the menu has gone (MenuClose), in one fade: the only pick that adds or removes a row.
-    @State private var wasSilent: Bool?
+    // What the sound was while its menu closes on a pick: what depends on the kind (the try beside the label, Plays for
+    // dimmed for Silent) changes once the menu has gone (MenuClose), in one fade. No pick adds or removes a row (gate B4).
+    @State private var closingKind: String?
     var kind: String { choice.kind }
+    var shownKind: String { closingKind ?? choice.kind }
     var stations: [NamedID] { model.pandoraStations }
     // One menu for the sound, in sections (Tones, Radio, Pandora, Silent), as the Sounds tab has it: a pick fills this one
     // row, and no row comes or goes under the menu as it closes (Richard, 11-12: "the animation for the sound selection
     // window … is gross": Plays, then Tone or Station, swapped rows 0.35 s after the menu went, printed over each other).
     var tag: Binding<String> {
-        Binding(get: {
-            switch choice.kind {
-            case "beep": return "beep:" + choice.tone
-            case "stream": return "stream:\(choice.streamIndex)"
-            case "pandora": return "pandora:" + choice.pandoraID
-            case "none": return "none"
-            default: return "keep"
-            }
-        }, set: { t in
+        Binding(get: { currentTag }, set: { t in
             var c = choice
             if t.hasPrefix("beep:") { c.kind = "beep"; c.tone = String(t.dropFirst(5)) }
             else if t.hasPrefix("stream:") { c.kind = "stream"; c.streamIndex = Int(t.dropFirst(7)) ?? 0 }
@@ -1269,16 +1262,51 @@ struct SoundRows: View {
             else if t == "none" { c.kind = "none" }
             else { return }
             guard c != choice else { return }
-            let silent = choice.kind == "none"
+            let was = choice.kind
             choice = c
-            if silent != (c.kind == "none") {
-                wasSilent = silent
-                MenuClose.then { wasSilent = nil }
+            if was != c.kind {
+                closingKind = was
+                MenuClose.then { closingKind = nil }
             }
         })
     }
+    var currentTag: String {
+        switch choice.kind {
+        case "beep": return "beep:" + choice.tone
+        case "stream": return "stream:\(choice.streamIndex)"
+        case "pandora": return "pandora:" + choice.pandoraID
+        case "none": return "none"
+        default: return "keep"
+        }
+    }
+    // Whether the menu's own options hold the current sound: before the Chumby has answered (no tones yet), or for a sound
+    // since removed, they don't, and the row would read blank (gate B4), so it's carried as an option of its own.
+    var listed: Bool {
+        switch choice.kind {
+        case "beep": return model.state.tones.contains(choice.tone)
+        case "stream": return model.state.streams.indices.contains(choice.streamIndex)
+        case "pandora": return stations.contains { $0.id == choice.pandoraID }
+        default: return true
+        }
+    }
+    var canTry: Bool { !model.state.tones.isEmpty && !model.offline }
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 4) {
+            Text("Plays")
+            // A tone is tried on the Chumby from beside the label, so trying one never adds or removes a row, and the
+            // value keeps the trailing edge for every sound, in line with Plays for and Snooze (gate B4).
+            Button {
+                Task { do { try await model.api?.post("test", extra: "&tone=" + ChumbyAPI.enc(choice.tone)) } catch { model.fail("test", "Couldn’t play it. \(AlarmWriter.explain(error))") } }
+            } label: {
+                Image(systemName: "play.circle.fill").font(.title3)
+                    .frame(width: 44, height: 30).contentShape(Rectangle().inset(by: -7))
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.tint)
+            .accessibilityLabel("Play on the Chumby")
+            .opacity(shownKind == "beep" ? (canTry ? 1 : 0.35) : 0)
+            .disabled(shownKind != "beep" || !canTry)
+            Spacer(minLength: 8)
             Picker("Plays", selection: tag) {
                 Section("Tones") { ForEach(model.state.tones, id: \.self) { Text($0).tag("beep:" + $0) } }
                 if !model.state.streams.isEmpty {
@@ -1287,36 +1315,28 @@ struct SoundRows: View {
                 if !stations.isEmpty { Section("Pandora") { ForEach(stations) { Text($0.name).tag("pandora:" + $0.id) } } }
                 Text("Silent").tag("none")
                 if kind == "keep" { Text(alarm.soundText).tag("keep") }
+                else if !listed { Text(kind == "beep" ? choice.tone : alarm.soundText).tag(currentTag) }
             }
-            // A tone is tried on the Chumby from its own row, so trying one never adds or removes a row. Its place is kept
-            // for every sound, so the menu's value (the menu's anchor) never moves as it closes.
-            Button {
-                Task { do { try await model.api?.post("test", extra: "&tone=" + ChumbyAPI.enc(choice.tone)) } catch { model.fail("test", "Couldn’t play it. \(AlarmWriter.explain(error))") } }
-            } label: { Image(systemName: "play.circle.fill").font(.title2).symbolRenderingMode(.hierarchical) }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.tint)
-            .accessibilityLabel("Play on the Chumby")
-            .opacity(kind == "beep" ? 1 : 0)
-            .disabled(kind != "beep")
+            .labelsHidden()
+            .fixedSize()
         }
         // Where the row is, for the build's films (their taps open its menu by this when words can't be read).
         .pageLog("soundrow")
         if let f = model.failed("test") { FailNote(text: f) }
         if kind == "stream" && model.state.streams.isEmpty { Text("Add a radio stream on the Sounds tab first.").foregroundStyle(.secondary) }
         if kind == "pandora" && stations.isEmpty { Text("No Pandora stations on the Chumby yet.").foregroundStyle(.secondary) }
-        if !(wasSilent ?? (kind == "none")) {
-            let music = choice.isMusic || kind == "keep"
-            Picker("Plays for", selection: playsFor) {
-                ForEach(SoundRows.lengths(including: alarm.duration), id: \.0) { Text($0.1).tag($0.0) }
-                Text("Until I stop it").tag("-1")
-                // Only music can end by itself; the Chumby never rings a tone marked that way.
-                if music {
-                    Section {
-                        ForEach(SoundRows.lengths(including: alarm.duration).filter { $0.0 != "1" }, id: \.0) { Text("\($0.1), ends by itself").tag("auto:" + $0.0) }
-                    }
+        // Silent has no length: the row stays, dimmed and inert, so the card never changes height on a pick.
+        Picker("Plays for", selection: playsFor) {
+            ForEach(SoundRows.lengths(including: alarm.duration), id: \.0) { Text($0.1).tag($0.0) }
+            Text("Until I stop it").tag("-1")
+            // Only music can end by itself; the Chumby never rings a tone marked that way.
+            if choice.isMusic || kind == "keep" {
+                Section {
+                    ForEach(SoundRows.lengths(including: alarm.duration).filter { $0.0 != "1" }, id: \.0) { Text("\($0.1), ends by itself").tag("auto:" + $0.0) }
                 }
             }
         }
+        .disabled(shownKind == "none")
         Picker("Snooze", selection: $alarm.snooze) {
             ForEach(SoundRows.snoozes(including: alarm.snooze), id: \.self) { Text("\($0) min").tag($0) }
         }

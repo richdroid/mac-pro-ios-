@@ -125,6 +125,10 @@ jobs:
           # for the screen's size), and a menu item's place from the row, the checked item sitting on the row and the
           # others 42 pt apart with a 28 pt section heading between kinds (Tones: Beep 0, Bells, Chime; Jazz Radio 154;
           # Morning Mix 224; Silent 274).
+          tapy() { # display, words, x (fraction): a tap at x on the line the words are on (a switch at the row's end)
+            xcrun simctl io "$DEVICE" screenshot --display=$1 /tmp/ft.png > /dev/null 2>&1
+            local P; P=$(/tmp/findtext /tmp/ft.png "$2" 1 0 2>> dist/findtext.log) && { set -- $1 "$2" $3 $P; echo "tap row '$2' at $3 $5"; $D "$DEVICE" touch $3 $5; } || echo "no '$2' on screen ($?)" | tee -a dist/findtext.log
+          }
           menupos() { case "$1" in Beep) echo 0;; Bells) echo 42;; Chime) echo 84;; "Jazz Radio") echo 154;; "Morning Mix") echo 224;; Silent) echo 274;; *) echo 0;; esac; }
           rowtap() { # value fraction across the row, item offset in pt below the row's middle
             local C; C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) || { echo "no container"; return; }
@@ -159,6 +163,10 @@ jobs:
             $D "$DEVICE" drag $DX 0.85 $DX 0.35 1.0 || true; sleep 2
             pick $d "Jazz Radio" "Morning Mix" daysound-$name-pandora
             pick $d "Morning Mix" "Beep" daysound-$name-beep
+            pick $d "Beep" "Silent" daysound-$name-silent
+            pick $d "Silent" "Beep" daysound-$name-back
+            # The day's Same as the others / Different (its own rows go and come back, by design).
+            tapt $d "Same as the others" 0; sleep 3; tapt $d "Different" 0; sleep 3
             endfilm daysound-$name
             film $d capsule-$name live -tab 3 -swipeLog YES
             pick $d "Beep" "Jazz Radio" capsule-$name-radio
@@ -202,9 +210,9 @@ jobs:
           # Last of all: Alarms' calendar switch tapped on, open in portrait then folded. It raises the system's calendar
           # permission alert, which stays up over everything after it, so nothing is shot after these.
           $D "$DEVICE" rotate 1; sleep 5
-          film 3 calswitch-portrait slow -tab 2 -pose firstrun; sleep 3; $D "$DEVICE" touch 0.896 0.456 || echo "no switch"; sleep 4; $D "$DEVICE" touch 0.5 0.68 || echo "no refusal"; sleep 4; endfilm calswitch-portrait
+          film 3 calswitch-portrait slow -tab 2 -pose firstrun; sleep 3; tapy 3 "Wake me from my calendar" 0.88; sleep 4; tapt 3 "Don't Allow" 0 || true; tapt 3 "Don’t Allow" 0; sleep 4; endfilm calswitch-portrait
           $D "$DEVICE" pose closed; sleep 5
-          film 1 calswitch slow -tab 2 -pose firstrun; sleep 3; $D "$DEVICE" tap "Wake me from my calendar" || echo "no switch"; sleep 6; endfilm calswitch
+          film 1 calswitch slow -tab 2 -pose firstrun; sleep 3; tapy 1 "Wake me from my calendar" 0.75; sleep 6; endfilm calswitch
       - name: Collect crash reports
         if: always()
         run: |

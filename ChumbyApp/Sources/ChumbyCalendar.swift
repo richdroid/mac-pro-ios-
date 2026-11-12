@@ -412,6 +412,18 @@ struct CalendarWakeSettings: View {
             .hiddenOnceSplit()
     }
 }
+// Calendar settings opened in the right pane: its own list and title row with Done, pinned once scrolled, so it is one
+// page in the pane open flat and over the whole page upright after a turn (TwoPane), never handed to a push mid-turn.
+struct PaneSettingsPage: View {
+    let done: () -> Void
+    var body: some View {
+        let doneButton = Button("Done") { done() }.fontWeight(.semibold).foregroundStyle(.tint)
+        List { PageTitle("Calendar settings", pins: true) { doneButton }; CalendarSettingsSections().listRowBackground(GlassRow()) }
+            .pinsTitle { PageTitle("Calendar settings") { doneButton } }
+            .keepsPlace("page:Calendar settings")
+            .staysAtTop()
+    }
+}
 // A calendar day pushed over Alarms (folded, and open in portrait): the day's own settings, with the system's Back.
 struct CalendarDayPage: View {
     @EnvironmentObject var model: ChumbyModel

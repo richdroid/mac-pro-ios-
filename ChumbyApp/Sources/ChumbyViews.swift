@@ -853,6 +853,23 @@ struct HiddenOnceSplit: ViewModifier {
             #endif
     }
 }
+#if os(iOS)
+// The navigation controller a view sits in, found up its responder chain, so a push can be taken away without its slide.
+final class NavFinder { weak var nav: UINavigationController? }
+final class NavProbeView: UIView {
+    var finder: NavFinder?
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        var r: UIResponder? = self
+        while let x = r { if let n = x as? UINavigationController { finder?.nav = n; return }; r = x.next }
+    }
+}
+struct NavProbe: UIViewRepresentable {
+    let finder: NavFinder
+    func makeUIView(context: Context) -> NavProbeView { let v = NavProbeView(); v.isUserInteractionEnabled = false; v.finder = finder; return v }
+    func updateUIView(_ v: NavProbeView, context: Context) { v.finder = finder }
+}
+#endif
 // The first row's report of its list's scroll view, for StaysAtTop.
 struct TopProbe: View {
     @Environment(\.topHolder) private var holder
