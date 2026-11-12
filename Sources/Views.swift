@@ -289,6 +289,13 @@ final class PlaceKeeper {
     // settles, cancelling the restore under way (CI 4eef8a9: one attempt, then the page sat at its top), so whichever
     // list appears next carries it on.
     var pending = false
+    // Whether he had scrolled the page off its top, read at rest in the layout the place was noted in. A page at its top
+    // has no place to keep: folding an untouched Status restored it to the Mac row the unfold's layout had noted, its
+    // title cut off (designer, regate of 3bcef0e).
+    var scrolled = false
+    // When the page's content last changed height: the one restore waits for it to stop (a restore while rows were still
+    // growing slid the page away and a second one cut it back; designer, regate of 3bcef0e).
+    var grew = Date.distantPast
 }
 // Where the top of each page is on screen (its scroll view's top plus the bars over it), in the window's points. Read in
 // geometry transforms, which SwiftUI runs off the main actor, so it is behind a lock rather than on PlaceKeeper.
@@ -347,28 +354,40 @@ struct KeepsPlace: ViewModifier {
     @Environment(\.compactWindow) private var compactWindow
     let page: String
     let proxy: ScrollViewProxy
+    private struct Reading: Equatable { var scrolled: Bool; var height: CGFloat }
     func body(content: Content) -> some View {
         content
             .environment(\.placePage, page)
             // The line is just under the bars over the page: the scroll view's top in the window plus its top inset.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top + 8 } action: { PlaceLines.set(page, $0) }
+            .onScrollGeometryChange(for: Reading.self) { g in
+                Reading(scrolled: g.contentOffset.y + g.contentInsets.top > 8, height: (g.contentSize.height).rounded())
+            } action: { old, new in
+                let k = PlaceKeeper.page(page)
+                if old.height != new.height { k.grew = Date() }
+                // Only his own scrolling, in the layout the place belongs to: never the new layout settling, nor the restore.
+                if !k.settling, k.layout == "\(panes)\(compactWindow)" { k.scrolled = new.scrolled }
+            }
             .task(id: "\(panes)\(compactWindow)") {
                 let k = PlaceKeeper.page(page), layout = "\(panes)\(compactWindow)"
                 // Of two panes the first to appear starts the restore; the other, a moment later, scrolls too if it holds it.
                 // Any change of layout starts the quiet time, his place or not: the new layout's rows settling at the top
                 // aren't his choice (designer, regate of 23292ae: flat noted the top as his place and the turn back went there).
-                if let was = k.layout, was != layout { k.restoring = Date(); k.pending = k.top != nil }
+                if let was = k.layout, was != layout { k.restoring = Date(); k.pending = k.top != nil && k.scrolled }
                 k.layout = layout
                 guard k.pending, Date().timeIntervalSince(k.restoring) < 5, let top = k.top else { return }
-                // Again as the new layout settles: a single scroll 250 ms in came before the list had laid its rows out
-                // after a slow turn, and did nothing (CI df10d36: restored to a row, the page stayed at its top).
-                for wait in [250, 350, 600] as [UInt64] {
-                    try? await Task.sleep(nanoseconds: wait * 1_000_000)
-                    guard !Task.isCancelled else { return }
-                    SwipeLog.note("place restore \(page) to \(top.base) (\(layout))")
-                    var still = Transaction(); still.disablesAnimations = true
-                    withTransaction(still) { proxy.scrollTo(top, anchor: .top) }
+                // Once, without animation, when the rebuilt page's rows have stopped growing (none for 200 ms, at most
+                // 1.5 s in): retries 250, 350 and 600 ms in landed, slid away as rows grew, and were cut back (designer,
+                // regate of 3bcef0e). A rebuild that cancels this leaves it pending for the next list to carry out.
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                let start = Date()
+                while !Task.isCancelled, Date().timeIntervalSince(k.grew) < 0.2, Date().timeIntervalSince(start) < 1.5 {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
                 }
+                guard !Task.isCancelled else { return }
+                SwipeLog.note("place restore \(page) to \(top.base) (\(layout))")
+                var still = Transaction(); still.disablesAnimations = true
+                withTransaction(still) { proxy.scrollTo(top, anchor: .top) }
                 k.pending = false; k.restoring = Date()
             }
     }

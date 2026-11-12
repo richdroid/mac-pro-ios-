@@ -194,7 +194,7 @@ jobs:
           [ -z "$QUICK" ] && { endfilm rest-end-left-open 3 0.25; tabfilm tabback-open 3; }
           # Open flat to open portrait and back, at the top and part way down.
           [ -z "$QUICK" ] && turnfilm turn-flat 3 "" "rotate 1" "rotate 3" "rotate 1" "rotate 3"
-          turnfilm turn-flat-scrolled 3 "scroll" "rotate 1" "rotate 3" "rotate 1" "rotate 3"
+          [ -z "$QUICK" ] && turnfilm turn-flat-scrolled 3 "scroll" "rotate 1" "rotate 3" "rotate 1" "rotate 3"
           $D "$DEVICE" rotate 1 || true; sleep 5
           [ -z "$QUICK" ] && tabfilm tabback-portrait 3
           # Apps, a page that scrolls open (Status fits whole there), dragged part way down in open portrait, then turned
@@ -204,7 +204,7 @@ jobs:
           $D "$DEVICE" pose closed || true; sleep 5
           [ -z "$QUICK" ] && { posture 1 "" 0.45; tabfilm tabback 1; }
           # Unfolded and folded again with Status up, both displays, at the top and part way down.
-          turnfilm fold-inner 3 "" "pose open" "pose closed" "pose open"
+          [ -z "$QUICK" ] && turnfilm fold-inner 3 "" "pose open" "pose closed" "pose open"
           $D "$DEVICE" pose closed || true; sleep 5
           turnfilm fold-inner-scrolled 3 "scroll" "pose open" "pose closed" "pose open"
           $D "$DEVICE" pose closed || true; sleep 5
