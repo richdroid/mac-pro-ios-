@@ -31,6 +31,9 @@ final class TVModel {
     // the launch's first pick aims there at once, the Remote not yet built to say where its picture is (it waited on
     // that, up to a second), and follows the real place as soon as it's known.
     @ObservationIgnored private var landedSlots: [String: [Double]] = UserDefaults.standard.dictionary(forKey: "mirrorSlots") as? [String: [Double]] ?? [:]
+    // Where the last pick landed (the Remote's picture, window points) and the window's size then: for a card thrown
+    // from a shelf to fly straight there before its own pick is made.
+    @ObservationIgnored var lastLanded: (rect: CGRect, window: CGSize)?
     func rememberedSlot(_ key: String) -> CGRect? {
         guard let v = landedSlots[key], v.count == 4, v[2] > 20 else { return nil }
         return CGRect(x: v[0], y: v[1], width: v[2], height: v[3])

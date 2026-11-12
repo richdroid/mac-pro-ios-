@@ -100,11 +100,14 @@ import UIKit
         let inR = v.convert(r, from: w)
         let keep = CAShapeLayer()
         let kp = UIBezierPath(rect: v.bounds); kp.append(UIBezierPath(rect: inR))
-        if let bar { kp.append(UIBezierPath(rect: v.convert(bar, from: w))) }
+        // The bar kept is the bar's own glass, not the strip it floats in: the strip held the page's black under the bar
+        // edge to edge over the Remote's ground for the whole dissolve (the review of 94d0f11, upright).
+        let barPath = bar.map { Self.barShape(in: w, strip: $0, to: v) }
+        if let barPath { kp.append(barPath) }
         keep.path = kp.cgPath; keep.fillRule = .evenOdd; keep.fillColor = UIColor.black.cgColor
         let page = CAShapeLayer()
         let pp = UIBezierPath(rect: inR)
-        if let bar { pp.append(UIBezierPath(rect: v.convert(bar, from: w))) }
+        if let barPath { pp.append(barPath) }
         if let picked, picked.width > 4 { pp.append(UIBezierPath(roundedRect: v.convert(picked, from: w).insetBy(dx: -12, dy: -12), cornerRadius: 22)) }
         page.path = pp.cgPath; page.fillRule = .evenOdd; page.fillColor = UIColor.black.cgColor
         let mask = CALayer(); mask.frame = v.bounds
@@ -125,7 +128,7 @@ import UIKit
     }
     #endif
     // The dissolve laid out by `dissolve(animate: false)`, run now.
-    static func run(_ duration: Double = 0.2) {
+    static func run(_ duration: Double = 0.3) {
         #if os(iOS)
         guard let page = pending else { return }
         pending = nil
@@ -133,6 +136,30 @@ import UIKit
         #endif
     }
     #if os(iOS)
+    // The tab bar's visible glass (its widest rounded subview inside the strip), in `v`'s space; the strip when there's
+    // no such thing to find.
+    private static func barShape(in w: UIWindow, strip: CGRect, to v: UIView) -> UIBezierPath {
+        var best: (CGRect, CGFloat)?
+        func look(_ x: UIView, _ depth: Int) {
+            for c in x.subviews where !c.isHidden && c.alpha > 0.01 {
+                let r = c.convert(c.bounds, to: w)
+                if c.layer.cornerRadius > 8, r.width > 60, r.width < strip.width - 4, r.height > 30, strip.insetBy(dx: -2, dy: -2).contains(r) {
+                    if best == nil || r.width > best!.0.width { best = (r, c.layer.cornerRadius) }
+                }
+                if depth < 3 { look(c, depth + 1) }
+            }
+        }
+        func find(_ vc: UIViewController?) -> UITabBarController? {
+            guard let vc else { return nil }
+            if let t = vc as? UITabBarController { return t }
+            for c in vc.children { if let t = find(c) { return t } }
+            return nil
+        }
+        if let tb = find(w.rootViewController)?.tabBar { look(tb, 0) }
+        guard let found = best else { return UIBezierPath(rect: v.convert(strip, from: w)) }
+        let (r, radius) = found
+        return UIBezierPath(roundedRect: v.convert(r, from: w).insetBy(dx: -1, dy: -1), cornerRadius: radius + 1)
+    }
     private static func bottomBar(in w: UIWindow) -> CGRect? {
         func find(_ vc: UIViewController?) -> UITabBarController? {
             guard let vc else { return nil }
@@ -205,6 +232,13 @@ import UIKit
     #if os(iOS)
     static var views: [UIView] { [ground, card, poster].compactMap { $0 } }
     #endif
+    static var windowSize: CGSize {
+        #if os(iOS)
+        return window?.bounds.size ?? .zero
+        #else
+        return .zero
+        #endif
+    }
     static var flying: Bool {
         #if os(iOS)
         return ground != nil
@@ -271,8 +305,11 @@ import UIKit
         let anim = {
             g.frame = to; g.alpha = 1; g.layer.cornerRadius = TVLook.card
             p.frame = end; p.layer.cornerRadius = wide ? TVLook.card : 8
-            if hasImage { p.alpha = 1 }
-            if let c = card { c.frame = end; c.alpha = hasImage ? 0 : 0.35 }
+            // With no picture yet, the Remote's own stand-in (the app's purple, the title on it there) rather than the
+            // row squeezed into a poster's shape (the review of 94d0f11: a twisted sliver of the row in a grey box).
+            if !hasImage { p.backgroundColor = UIColor(red: 0x35 / 255, green: 0x2B / 255, blue: 0x4E / 255, alpha: 1) }
+            p.alpha = 1
+            if let c = card { c.frame = end; c.alpha = 0 }
         }
         if first {
             // goRemote's own spring (response 0.36, damping 0.86).
@@ -290,9 +327,9 @@ import UIKit
     static func rise(toward slot: CGRect?) {
         #if os(iOS)
         guard let g = ground, let w = window else { return }
-        // Only moved, as it is: on up the way it was thrown, kept whole on the screen; the pick then opens it into the
-        // Remote's picture (aimed at a stand-in place the width of the screen, it ballooned to 2.5 times its size open
-        // flat and changed its look mid-air: the review of 61f18fc).
+        if let slot, slot.width > 20, w.bounds.contains(CGPoint(x: slot.midX, y: slot.midY)) { aim(slot, first: true, flush: true); return }
+        // Not known: only moved, as it is, on up the way it was thrown and kept whole on the screen (aimed at a stand-in
+        // place the width of the screen, it ballooned to 2.5 times its size open flat: 61f18fc).
         let from = g.frame
         let top = w.safeAreaInsets.top + 16
         let dy = max(top, from.minY - 120) - from.minY
@@ -2041,7 +2078,7 @@ struct FlickScreen: View {
             // fully under it, so nothing is drawn twice and nothing fades in sight.
             FlickClock.current.remoteLanded()
             SwipeLog.note("flick landed")
-            if let live = model.mirrorSlot, live.width > 20 { model.rememberSlot(live, slotKey) }
+            if let live = model.mirrorSlot, live.width > 20 { model.rememberSlot(live, slotKey); model.lastLanded = (live, RenderFlight.windowSize) }
             // The pages he picked from may show again (this screen is about to go), and the Remote stays drawn.
             var landed = Transaction(); landed.disablesAnimations = true
             // Choosing over in the same step as the hand-off: a frame later, the Remote's own page was briefly "covered"
@@ -2908,9 +2945,10 @@ struct ShelfFlick: ViewModifier {
                                 tint: ImageStore.shared.cachedBand(u), wide: item.isYouTube)
             ShelfHand.shared.item = nil
             ScreenVeil.cover(underFlight: true, for: 3)
-            // Set going in the next turn, once this one's commit (the page it opens, laid out unseen) is over.
-            let slot = model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil }
-            Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { RenderFlight.rise(toward: slot) } }
+            // Set going now, before the page it opens is asked for, and sent to the render server at once: the long commit
+            // that builds that page then can't hold it (94d0f11: parked a second where it was let go). Straight into the
+            // Remote's picture when its place is known.
+            RenderFlight.rise(toward: model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil } ?? model.lastLanded.flatMap { $0.window == RenderFlight.windowSize ? $0.rect : nil })
         }
         var t: FlickTarget
         if item.isYouTube {

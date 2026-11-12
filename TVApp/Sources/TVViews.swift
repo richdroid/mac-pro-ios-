@@ -1767,8 +1767,13 @@ private struct StartingPicture: View {
     let start: TVModel.Starting
     var body: some View {
         ZStack {
-            // Opaque from its first frame, whatever is or isn't loaded yet: nothing under it ever reads through (r26).
-            Color.black
+            // Opaque from its first frame, whatever is or isn't loaded yet: nothing under it ever reads through (r26). Before
+            // its picture comes, the app's purple with the title on it, never an empty box (the review of 94d0f11).
+            LinearGradient(colors: [Color(hex: 0x352B4E), Color(hex: 0x16121F)], startPoint: .top, endPoint: .bottom)
+            if start.art.isEmpty {
+                Text(start.title).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+                    .multilineTextAlignment(.center).lineLimit(2).padding(.horizontal, 24)
+            }
             // Failed: dimmed to half by black over it, not by fading it, which let the picture under it show through (r19).
             PosterOnBlur(url: URL(string: start.art))
                 .overlay { Color.black.opacity(start.failed ? 0.5 : 0) }
