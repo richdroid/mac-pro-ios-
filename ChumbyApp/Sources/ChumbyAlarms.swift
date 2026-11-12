@@ -584,13 +584,14 @@ struct AlarmsTab: View {
         paneSwap?.cancel(); paneSwap = nil
         guard p != pane else { if paneFaded { withAnimation(.easeOut(duration: 0.2)) { paneFaded = false } }; return }
         paneSwap = Task { @MainActor in
-            withAnimation(.easeOut(duration: 0.12)) { paneFaded = true }
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            // Out in 0.1 s and straight back in over 0.18 s: the pane is never seen empty (gate B3: 0.3–0.4 s blank).
+            withAnimation(.easeIn(duration: 0.1)) { paneFaded = true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
             guard !Task.isCancelled else { return }
             pane = p
-            try? await Task.sleep(nanoseconds: 30_000_000)
+            await Task.yield()
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.2)) { paneFaded = false }
+            withAnimation(.easeOut(duration: 0.18)) { paneFaded = false }
             paneSwap = nil
         }
     }
@@ -668,7 +669,9 @@ struct AlarmsTab: View {
         // Back on this tab with the rows behind the Chumby (a change that came while it was away): put right at once.
         .onAppear { if napSwap == nil, napRowShown != (model.napDue != nil) { napRows = model.napDue != nil; napFaded = false } }
         .environment(\.openTemplate, wide ? { paneBack = pane; show(.template) } : nil)
-        .navigationDestination(isPresented: Binding(get: { model.alarmsPage && !wide }, set: { model.alarmsPage = $0 })) {
+        // Pushed and put away by a turn without the slide (onChange(of: wide), in a still transaction): sliding, the page
+        // showed the navigation's blank page behind it, and over the split as it went (gate B3).
+        .navigationDestination(isPresented: $model.alarmsPage) {
             Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
         }
         // Edge to edge (fillCover), with the zoom from its row.
@@ -690,12 +693,14 @@ struct AlarmsTab: View {
                 if model.alarmsPage { withTransaction(still) { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false } }
                 else { pane = .schedule }
             } else {
-                switch pane {
-                case .settings: dayPage = nil; model.alarmsPage = true
-                case .day(let k): dayPage = k; model.alarmsPage = true
-                default: break
+                withTransaction(still) {
+                    switch pane {
+                    case .settings: dayPage = nil; model.alarmsPage = true
+                    case .day(let k): dayPage = k; model.alarmsPage = true
+                    default: break
+                    }
+                    pane = .schedule
                 }
-                pane = .schedule
             }
         }
         .onAppear {
@@ -1239,34 +1244,65 @@ struct SoundRows: View {
     @Binding var alarm: Alarm
     // Laid under the last row, for a sheet that measures where its rows end (a calendar day's).
     var tail: AnyView? = nil
-    // What "Plays" was while its menu closes on a new pick (MenuClose): the rows under it follow `kind`, which changes
-    // only once the menu has gone, so the close is never cut short.
-    @State private var closing: String?
-    var kind: String { closing ?? choice.kind }
+    // Silent has no length row. While the menu closes on a pick to or from Silent, whether it was silent is held, and the
+    // row comes or goes once the menu has gone (MenuClose), in one fade: the only pick that adds or removes a row.
+    @State private var wasSilent: Bool?
+    var kind: String { choice.kind }
     var stations: [NamedID] { model.pandoraStations }
+    // One menu for the sound, in sections (Tones, Radio, Pandora, Silent), as the Sounds tab has it: a pick fills this one
+    // row, and no row comes or goes under the menu as it closes (Richard, 11-12: "the animation for the sound selection
+    // window … is gross": Plays, then Tone or Station, swapped rows 0.35 s after the menu went, printed over each other).
+    var tag: Binding<String> {
+        Binding(get: {
+            switch choice.kind {
+            case "beep": return "beep:" + choice.tone
+            case "stream": return "stream:\(choice.streamIndex)"
+            case "pandora": return "pandora:" + choice.pandoraID
+            case "none": return "none"
+            default: return "keep"
+            }
+        }, set: { t in
+            var c = choice
+            if t.hasPrefix("beep:") { c.kind = "beep"; c.tone = String(t.dropFirst(5)) }
+            else if t.hasPrefix("stream:") { c.kind = "stream"; c.streamIndex = Int(t.dropFirst(7)) ?? 0 }
+            else if t.hasPrefix("pandora:") { c.kind = "pandora"; c.pandoraID = String(t.dropFirst(8)) }
+            else if t == "none" { c.kind = "none" }
+            else { return }
+            guard c != choice else { return }
+            let silent = choice.kind == "none"
+            choice = c
+            if silent != (c.kind == "none") {
+                wasSilent = silent
+                MenuClose.then { wasSilent = nil }
+            }
+        })
+    }
     var body: some View {
-        Picker("Plays", selection: $choice.kind.afterMenu($closing)) {
-            Text("Tone").tag("beep"); Text("Radio").tag("stream"); Text("Pandora").tag("pandora"); Text("Silent").tag("none")
-            if kind == "keep" { Text("Current").tag("keep") }
-        }
-        if kind == "beep" {
-            Picker("Tone", selection: $choice.tone) { ForEach(model.state.tones, id: \.self) { Text($0).tag($0) } }
+        HStack(spacing: 10) {
+            Picker("Plays", selection: tag) {
+                Section("Tones") { ForEach(model.state.tones, id: \.self) { Text($0).tag("beep:" + $0) } }
+                if !model.state.streams.isEmpty {
+                    Section("Radio") { ForEach(model.state.streams.indices, id: \.self) { i in Text(model.state.streams[i].name.isEmpty ? model.state.streams[i].url : model.state.streams[i].name).tag("stream:\(i)") } }
+                }
+                if !stations.isEmpty { Section("Pandora") { ForEach(stations) { Text($0.name).tag("pandora:" + $0.id) } } }
+                Text("Silent").tag("none")
+                if kind == "keep" { Text(alarm.soundText).tag("keep") }
+            }
+            // A tone is tried on the Chumby from its own row, so trying one never adds or removes a row. Its place is kept
+            // for every sound, so the menu's value (the menu's anchor) never moves as it closes.
             Button {
                 Task { do { try await model.api?.post("test", extra: "&tone=" + ChumbyAPI.enc(choice.tone)) } catch { model.fail("test", "Couldn’t play it. \(AlarmWriter.explain(error))") } }
-            } label: { Label("Play on the Chumby", systemImage: "play.fill") }
+            } label: { Image(systemName: "play.circle.fill").font(.title2).symbolRenderingMode(.hierarchical) }
+            .buttonStyle(.borderless)
             .foregroundStyle(.tint)
-            if let f = model.failed("test") { FailNote(text: f) }
+            .accessibilityLabel("Play on the Chumby")
+            .opacity(kind == "beep" ? 1 : 0)
+            .disabled(kind != "beep")
         }
-        if kind == "stream" {
-            if model.state.streams.isEmpty { Text("Add a radio stream on the Sounds tab first.").foregroundStyle(.secondary) }
-            else { Picker("Station", selection: $choice.streamIndex) { ForEach(model.state.streams.indices, id: \.self) { i in Text(model.state.streams[i].name.isEmpty ? model.state.streams[i].url : model.state.streams[i].name).tag(i) } } }
-        }
-        if kind == "pandora" {
-            if stations.isEmpty { Text("No Pandora stations on the Chumby yet.").foregroundStyle(.secondary) }
-            else { Picker("Station", selection: $choice.pandoraID) { ForEach(stations) { Text($0.name).tag($0.id) } } }
-        }
-        if kind == "keep" { LabeledContent("Plays", value: alarm.soundText) }
-        if kind != "none" {
+        if let f = model.failed("test") { FailNote(text: f) }
+        if kind == "stream" && model.state.streams.isEmpty { Text("Add a radio stream on the Sounds tab first.").foregroundStyle(.secondary) }
+        if kind == "pandora" && stations.isEmpty { Text("No Pandora stations on the Chumby yet.").foregroundStyle(.secondary) }
+        if !(wasSilent ?? (kind == "none")) {
             let music = choice.isMusic || kind == "keep"
             Picker("Plays for", selection: playsFor) {
                 ForEach(SoundRows.lengths(including: alarm.duration), id: \.0) { Text($0.1).tag($0.0) }

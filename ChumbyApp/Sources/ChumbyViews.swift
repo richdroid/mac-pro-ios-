@@ -645,11 +645,13 @@ struct KeepsPlace: ViewModifier {
     let key: String?
     @State private var tracker = PlaceTracker()
     @Environment(\.topHolder) private var top
+    // One shape with a key or without (a pane's list gains its key when it takes a page): a branch on the key made the
+    // list a new view as Calendar settings came into the pane, which drew it before its fade (gate B3, panes-open 10.2 s).
     func body(content: Content) -> some View {
-        if let key {
             content
                 .environment(tracker)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { b in
+                    guard let key else { tracker.box = b; return }
                     let resized = b.size != tracker.box.size && tracker.box != .zero
                     tracker.box = b
                     // The same list resized by a turn (the editor, drawn over the page upright and in its pane open flat):
@@ -657,12 +659,14 @@ struct KeepsPlace: ViewModifier {
                     if resized, PagePlace.turning, tracker.restored, PagePlace.anchor[key] != nil { putBack(key) }
                 }
                 .onAppear {
+                    guard let key else { return }
                     // Opened afresh (no turn just now): at its top, and the old place forgotten.
                     if !PagePlace.turning { PagePlace.anchor[key] = nil; tracker.restored = true; return }
                     guard PagePlace.anchor[key] != nil else { tracker.restored = true; return }
                     putBack(key)
                 }
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, o in
+                    guard let key else { return }
                     // Only his own scrolling at a steady size: never while the turn resizes the list, never while it's
                     // being put back.
                     guard tracker.restored, !tracker.restoring, !PagePlace.turning, tracker.box.size == tracker.steadySize else { tracker.steadySize = tracker.box.size; return }
@@ -673,9 +677,6 @@ struct KeepsPlace: ViewModifier {
                     PagePlace.offset[key] = o
                     #endif
                 }
-        } else {
-            content
-        }
     }
     // Put back, and checked: the row's own position read from the scroll view, the offset set to it, until it holds through
     // the rest of the turn (the turn may lay the list out again after it first lands); then logged where it landed, in the
@@ -691,9 +692,10 @@ struct KeepsPlace: ViewModifier {
             var tries = 0
             var landed = false
             var missed = 0
-            while tries < 40 {
+            while tries < 60 {
                 tries += 1
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                // The first try at once (the page's first drawn frames are at its place, not its top), then every 60 ms.
+                if tries > 1 { try? await Task.sleep(nanoseconds: 60_000_000) } else { await Task.yield() }
                 guard let sv = tracker.scroll else { continue }
                 if sv.isTracking || sv.isDecelerating { SwipeLog.note("place left to the finger \(key)"); break }
                 let lo = -sv.adjustedContentInset.top
@@ -702,7 +704,7 @@ struct KeepsPlace: ViewModifier {
                     let target = min(max(sv.contentOffset.y + into - now, lo), hi)
                     if abs(target - sv.contentOffset.y) > 0.5 { sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: target), animated: false); held = 0 }
                     else { held += 1 }
-                    if held >= 3, !PagePlace.turning { landed = true; break }
+                    if held >= 5, !PagePlace.turning { landed = true; break }
                 } else {
                     // The row isn't laid out yet: the list is taken to about where its top was (first), then on down a
                     // screen at a time from its top, and the row measured on the next try.
@@ -727,13 +729,22 @@ struct KeepsPlace: ViewModifier {
 final class TopHolder {
     var atTop = true
     weak var scroll: UIScrollViewRef?
+    // The first row's own view (PageTitle's probe), and the list's top inset as SwiftUI gives it.
+    weak var title: PlatformView?
+    var inset: CGFloat = 0
+    var settle: Task<Void, Never>?
 }
+// How far below its list's top (the scroll view's top edge plus the inset SwiftUI gives it) a page's title row rests:
+// learned from any list at its top at rest, the smallest seen.
+@MainActor enum TitleRest { static var gap: CGFloat? }
 private struct TopHolderKey: EnvironmentKey { static let defaultValue: TopHolder? = nil }
 extension EnvironmentValues { var topHolder: TopHolder? { get { self[TopHolderKey.self] } set { self[TopHolderKey.self] = newValue } } }
 // A list at its top stays at its top through a turn (a turn hands it the upright layout's 82 pt inset for a moment, or
 // offsets of its own as it's resized, and the list kept them: its title sat 31–35 pt low beside the other pane's, to the
 // end — gate B, B2). Whether it was at its top is read only from his own scrolling: a change that comes with a new size
-// or inset, or any change during a turn, is the layout's, and puts it back instead.
+// or inset, or any change during a turn, is the layout's, and puts it back instead. And "at its top" is checked where
+// the title row is drawn, not only by the offset: after a page pushed upright went, the left pane read offset 0 at its
+// top with its title 35 pt low (gate B3), so the title row is brought to where a title rests.
 struct StaysAtTop: ViewModifier {
     @State private var holder = TopHolder()
     struct Reading: Equatable { var y: CGFloat; var inset: CGFloat; var size: CGSize }
@@ -742,15 +753,50 @@ struct StaysAtTop: ViewModifier {
             content
                 .environment(\.topHolder, holder)
                 .onScrollGeometryChange(for: Reading.self) { Reading(y: $0.contentOffset.y + $0.contentInsets.top, inset: $0.contentInsets.top, size: $0.containerSize) } action: { old, new in
+                    holder.inset = new.inset
                     let layout = old.inset != new.inset || old.size != new.size
                     if old.inset != new.inset { SwipeLog.note("list inset \(Int(old.inset))→\(Int(new.inset)) offset \(Int(new.y)) wasTop \(holder.atTop)") }
                     if layout || PagePlace.turning {
-                        if holder.atTop, abs(new.y) > 0.5 { DispatchQueue.main.async { putBack(proxy) } }
+                        if holder.atTop { settle(proxy) }
                     } else {
-                        holder.atTop = abs(new.y) < 1
+                        holder.atTop = abs(new.y) < 1 || levelled()
+                        if holder.atTop { learn() }
                     }
                 }
+                .onAppear { if PagePlace.turning, holder.atTop { settle(proxy) } }
         }
+    }
+    // Checked as the turn's layout lands and again as it settles.
+    func settle(_ proxy: ScrollViewProxy) {
+        holder.settle?.cancel()
+        holder.settle = Task { @MainActor in
+            for wait in [0.0, 0.12, 0.4, 0.9, 1.6, 2.7] {
+                if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1e9)) } else { await Task.yield() }
+                guard !Task.isCancelled, holder.atTop else { return }
+                putBack(proxy)
+            }
+        }
+    }
+    #if canImport(UIKit)
+    // Where the title row is drawn, as distance below the list's top (its scroll view's top edge and SwiftUI's inset).
+    func titleGap() -> CGFloat? {
+        guard let sv = holder.scroll, sv.window != nil, let t = holder.title, t.window != nil, t.isDescendant(of: sv) else { return nil }
+        let top = sv.convert(CGPoint(x: 0, y: sv.bounds.minY), to: nil).y
+        return t.convert(CGPoint.zero, to: nil).y - top - holder.inset
+    }
+    #endif
+    // At a title's rest though the offset isn't 0: a list levelled after a turn.
+    func levelled() -> Bool {
+        #if canImport(UIKit)
+        if let rest = TitleRest.gap, let g = titleGap() { return abs(g - rest) < 1 }
+        #endif
+        return false
+    }
+    func learn() {
+        #if canImport(UIKit)
+        guard !PagePlace.turning, let sv = holder.scroll, !sv.isTracking, !sv.isDecelerating, let g = titleGap(), g >= 0, g <= 20 else { return }
+        if TitleRest.gap.map({ g < $0 - 0.25 }) ?? true { TitleRest.gap = g; SwipeLog.note("title rest \(String(format: "%.1f", g))") }
+        #endif
     }
     func putBack(_ proxy: ScrollViewProxy) {
         guard holder.atTop else { return }
@@ -759,6 +805,14 @@ struct StaysAtTop: ViewModifier {
             guard !sv.isTracking, !sv.isDecelerating else { return }
             let top = -sv.adjustedContentInset.top
             if abs(sv.contentOffset.y - top) > 0.5 { sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: top), animated: false); SwipeLog.note("list kept at top") }
+            // Then level: the title row where a title rests, whatever inset the list was left with.
+            if let rest = TitleRest.gap, let g = titleGap() {
+                let d = g - rest
+                if d > 0.5 && d < 120 {
+                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: sv.contentOffset.y + d), animated: false)
+                    SwipeLog.note("list levelled \(String(format: "%.1f", d)) inset ui \(Int(sv.adjustedContentInset.top)) swiftui \(Int(holder.inset))")
+                }
+            }
             return
         }
         #endif
@@ -782,7 +836,7 @@ struct TopProbe: View {
     @Environment(\.topHolder) private var holder
     var body: some View {
         #if canImport(UIKit)
-        if let holder { ScrollProbe { sv, _ in holder.scroll = sv }.frame(width: 0, height: 0) }
+        if let holder { ScrollProbe { sv, v in holder.scroll = sv; holder.title = v }.frame(width: 0, height: 0) }
         #endif
     }
 }
