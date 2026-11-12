@@ -225,10 +225,12 @@ struct MacSongPicker: View {
     // Set when the page is in the right pane open flat: how it closes there.
     @ObservedObject var draft: MacSongDraft
     var pane: (() -> Void)?
-    // As a cover: whether it's now open flat. Sounds, under a cover, doesn't hear the turn itself (11-12 film: turned
-    // back flat with the keyboard down, the cover stayed across the fold), so the cover says.
-    var wideChanged: ((Bool) -> Void)?
+    // As a cover turned open flat: hands the picker to Sounds' pane. Sounds, under a cover, isn't redrawn and doesn't see
+    // the turn (11-12 films: turned back flat, the cover stayed across the fold), so the cover notices, and once it has
+    // held for 0.8 s with the keyboard down it says so and closes itself; Sounds then shows it in the pane, as it was.
+    var toPane: (() -> Void)?
     @Environment(\.horizontalSizeClass) private var size
+    @State private var coverFlat = false
     @State private var searching = false
     @State private var problem: String?
     // "Still trying" is a live status, not a note to put away: it goes by itself when the Mac answers.
@@ -325,7 +327,13 @@ struct MacSongPicker: View {
                 }
                 .horizontalBars()
                 .tint(ChumbyPalette.acc(scheme == .dark))
-                .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { wideChanged?($0 && size == .regular) } }
+                .background { Color.clear.ignoresSafeArea().onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { coverFlat = $0 && size == .regular } }
+                .task(id: "\(coverFlat) \(fieldOn)") {
+                    guard let toPane, coverFlat, !fieldOn else { return }
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    if Task.isCancelled { return }
+                    toPane(); dismiss()
+                }
             }
         }
         .animation(.snappy, value: draft.songs)

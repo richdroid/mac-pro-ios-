@@ -2038,14 +2038,13 @@ struct SoundsTab: View {
     // (11-12 branch film). A real turn or fold with the keyboard down moves it.
     @State private var pickPane = false
     @State private var keyboardUp = false
-    @State private var coverWide = false
     @StateObject private var draft = MacSongDraft()
     // Open flat, the pane's pages change as Alarms' do: out in 0.12 s, swapped unseen, in over 0.2 s (11-12 gate: a
     // pick closed the picker with its rows drawn through Sounds' own).
     @State private var paneFaded = false
     // What he typed is kept while the picker moves by a turn or fold, and starts afresh at each opening (not cleared as
     // it closes, which would empty the list as it leaves).
-    func openPicker() { draft.clear(); pickPane = wide; coverWide = wide; pickSong = true }
+    func openPicker() { draft.clear(); pickPane = wide; pickSong = true }
     func closePane() {
         withAnimation(.easeIn(duration: 0.12)) { paneFaded = true }
         Task { @MainActor in
@@ -2242,15 +2241,14 @@ struct SoundsTab: View {
         .seaList()
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
-        .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 && !pickPane { pickSong = false } })) { MacSongPicker(draft: draft, wideChanged: { coverWide = $0 }).environmentObject(model) }
+        .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 && !pickPane { pickSong = false } })) { MacSongPicker(draft: draft, toPane: { pickPane = true }).environmentObject(model) }
         // The keyboard's flip comes before the keyboard says it's showing, so a change is only taken once it has held
         // for a moment with the keyboard down.
         // Checked again when the keyboard goes down, for a turn made while it was up. (The cover closing for the pane
         // reports itself closed: that must not close the picker, so the cover's setter ignores it once it's the pane's.)
-        .task(id: "\(wide) \(coverWide) \(keyboardUp)") {
+        .task(id: "\(wide) \(keyboardUp)") {
             try? await Task.sleep(nanoseconds: 800_000_000)
-            let now = pickPane ? wide : coverWide
-            if !Task.isCancelled, pickSong, !keyboardUp, pickPane != now { pickPane = now }
+            if !Task.isCancelled, pickSong, !keyboardUp, pickPane != wide { pickPane = wide }
         }
 
         #if os(iOS)
