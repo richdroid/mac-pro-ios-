@@ -28,7 +28,7 @@ final class ChumbyModel: ObservableObject {
     @Published var offline = false
     @Published var needsAddress = false
     @Published var tab = UserDefaults.standard.integer(forKey: "tab")
-    @Published var address: String { didSet { SavedAddress.save(address); api = Self.makeAPI(address); usingFallback = false; failures = 0 } }
+    @Published var address: String { didSet { SavedAddress.save(address); api = Self.makeAPI(address); usingFallback = false; troubleSince = nil; triedRoutes = [] } }
     @Published var failure: Failure?
     @Published var marks: [String: AlarmMark] = [:]
     @Published var dead = false        // the Mac answers, but the Chumby itself has gone quiet
@@ -60,6 +60,15 @@ final class ChumbyModel: ObservableObject {
     var editingAlarm = false { didSet { if editingAlarm { releaseHeld() } else if let s = heldAdopt { heldAdopt = nil; adopt(s) } } }
     private var heldAdopt: ChumbyState?
     var unreachable: Bool { offline || dead }
+    // One fact, said one way everywhere (2026-11-11 gate). "The Mac" only when the Mac is in the path.
+    // (Not switched by route: while failing, the app alternates routes every few seconds, and the words must hold still.)
+    var reachWords: String { dead ? "Not answering" : "Can’t reach the Mac" }
+    var reachInline: String { dead ? "the Chumby isn’t answering" : "can’t reach the Mac" }
+    // A reading failed and nothing has come through since: nothing is said yet, but kept values (the channel's name)
+    // show rather than waiting on a confirmation that may be a while.
+    @Published private(set) var struggling = false
+    // Heard from within the last 15 minutes, so what was kept is near enough to show without waiting.
+    var keptRecent: Bool { lastHeard.map { Date().timeIntervalSince($0) < 900 } ?? false }
     var seenAt: Date? { dead ? (lastSeen ?? lastHeard) : lastHeard }
     // It restarts itself within a few minutes of hanging (chwd on the device), so only then is it worth getting up.
     var deadText: String {
@@ -68,7 +77,16 @@ final class ChumbyModel: ObservableObject {
     }
     private var fallback: String { Bundle.main.object(forInfoDictionaryKey: "ChumbyFallback") as? String ?? "" }
     private var usingFallback = false
-    private var failures = 0
+    // Since when no reading has come through by any route, and which routes have been tried since. Nothing is said
+    // about it until it has lasted `patience` and every route has failed: opening the app on cellular, Tailscale takes a
+    // few seconds to wake, and the first request or two failing is normal. Richard, 2026-11-11: "i hate opening the app
+    // and getting an its offline message JANKYYY". A blip that recovers leaves nothing on screen.
+    private var troubleSince: Date?
+    private var triedRoutes: Set<Bool> = []
+    private var downSince: Date?
+    static let patience: TimeInterval = 25
+    // Retried every two seconds while in trouble, on whichever route is next, rather than at the route's usual pace.
+    var retrying: Bool { troubleSince != nil || downSince != nil }
     private var sysBytes = Data(), stateBytes = Data(), channelBytes = Data(), shotBytes = Data()
     private var sysHold = Date.distantPast, stateHold = Date.distantPast
     // The Chumby's own list as last read or saved, with nothing of ours laid over it.
@@ -142,12 +160,22 @@ final class ChumbyModel: ObservableObject {
     func adoptFresh(_ s: ChumbyState) { stateConfirmed = true; adopt(s) }
 
     func start() {
+        let left = stoppedAt
         stop()
         running = true
         stateConfirmed = false      // it may have been hours; the list could have changed from elsewhere
+        // Opening starts afresh: what was kept is shown at once, and only a failure that lasts from here is mentioned.
+        // Back within five minutes of leaving with a verdict already said, it stands (a frozen Chumby must not look alive
+        // for half a minute each time the app is opened, from its own notification say) until a reading clears it.
+        let recentlyLeft = Date().timeIntervalSince(left) < 300
+        triedRoutes = []
+        troubleSince = recentlyLeft && offline ? .distantPast : nil
+        downSince = recentlyLeft && dead ? .distantPast : nil
+        if !recentlyLeft { staleReadings = 0; set(\.offline, false); set(\.dead, false) }
+        set(\.struggling, recentlyLeft && unreachable)
         loops = [
             // Through the Mac's cache these are cheap. Straight to the 64 MB Chumby they are not, so go far slower there.
-            Task { [weak self] in while !Task.isCancelled { await self?.loadSys(); try? await Task.sleep(nanoseconds: self?.direct == true ? 30_000_000_000 : 4_000_000_000) } },
+            Task { [weak self] in while !Task.isCancelled { await self?.loadSys(); try? await Task.sleep(nanoseconds: self?.retrying == true ? 2_000_000_000 : self?.direct == true ? 30_000_000_000 : 4_000_000_000) } },
             // On opening, the Mac's copy of the list is as old as the last visit; asking is what makes it read a new one,
             // which is there about two seconds later (measured 2026-11-10: 2.1 s). So an old answer is asked for again
             // in 0.7 s, a few times, and not at the next six-second turn: the list is confirmed in about 2.5 s after
@@ -163,7 +191,9 @@ final class ChumbyModel: ObservableObject {
             Task { [weak self] in await self?.loadChannels() },
         ]
     }
-    func stop() { running = false; loops.forEach { $0.cancel() }; loops = [] }
+    func stop() { running = false; loops.forEach { $0.cancel() }; loops = []; stoppedAt = Date() }
+    private var stoppedAt = Date.distantPast
+    private var lastChannelTry = Date.distantPast
     private(set) var running = false
     var direct: Bool { usingFallback }
     private let gate = OneAtATime()
@@ -178,7 +208,7 @@ final class ChumbyModel: ObservableObject {
     private func tryMacRoute() async {
         guard usingFallback, Date().timeIntervalSince(lastMacTry) > 60, let mac = Self.makeAPI(address) else { return }
         lastMacTry = Date()
-        if (try? await mac.raw("sys")) != nil, usingFallback { usingFallback = false; api = mac; failures = 0 }
+        if (try? await mac.raw("sys")) != nil, usingFallback { usingFallback = false; api = mac }
     }
     private var lastMacTry = Date.distantPast
     private var staleReadings = 0
@@ -186,12 +216,18 @@ final class ChumbyModel: ObservableObject {
     func loadSys() async {
         guard let api else { needsAddress = true; return }
         await tryMacRoute()
+        // Trouble is timed from when the first failing request was sent, not from its timeout 8 s later.
+        let began = Date()
         do {
             let r = try await fetch("sys", from: api)
-            // The cache stops refreshing when nobody is looking, so one old answer on opening means nothing.
+            // The cache stops refreshing when nobody is looking, so an old answer on opening means nothing; six in a row
+            // (about 25 s) does.
             staleReadings = r.age > 60 ? staleReadings + 1 : 0
             // Each set only when it changes: an unchanged value still republishes and redraws every tab.
-            failures = 0; set(\.offline, false); set(\.dead, staleReadings >= 3)
+            // The channel list is asked once per opening; one lost to the failure, or never kept, is asked for again now.
+            if struggling || (channelData == nil && Date().timeIntervalSince(lastChannelTry) > 30) { lastChannelTry = Date(); Task { await loadChannels() } }
+            troubleSince = nil; triedRoutes = []; downSince = nil
+            set(\.struggling, false); set(\.offline, false); set(\.dead, staleReadings >= 6)
             if r.age <= 60 { heard() }
             // A frozen Chumby mostly shows up here, as an old copy from the Mac, rather than as an error.
             set(\.lastSeen, dead ? (await api.lastSeen() ?? lastSeen) : nil)
@@ -207,12 +243,22 @@ final class ChumbyModel: ObservableObject {
             applySys(s, data: r.data, fresh: fresh)
         } catch is CancellationError {
         } catch ChumbyError.deviceDown {
-            failures = 0; set(\.offline, false); set(\.dead, true); staleReadings = 3
-            set(\.lastSeen, await api.lastSeen())
+            // The Mac answered and says the Chumby doesn't. Said only once that has lasted too: the Mac's own try can
+            // fail once while the Chumby is fine (a busy moment on the Mac, a dropped Wi-Fi packet).
+            troubleSince = nil; triedRoutes = []
+            let now = Date()
+            if downSince == nil { downSince = began }
+            set(\.struggling, true); set(\.offline, false)
+            if now.timeIntervalSince(downSince ?? now) >= Self.patience { set(\.dead, true); staleReadings = 6; set(\.lastSeen, await api.lastSeen()) }
         } catch {
             if Task.isCancelled { return }
-            failures += 1
-            if failures >= 2 { set(\.offline, true); switchRoute() }
+            // No answer on this route: the other one at once, quietly. Only after `patience`, with both tried, is it said.
+            let now = Date()
+            if troubleSince == nil { troubleSince = began }
+            set(\.struggling, true)
+            triedRoutes.insert(usingFallback)
+            switchRoute()
+            if now.timeIntervalSince(troubleSince ?? now) >= Self.patience, fallback.isEmpty || triedRoutes.count == 2 { set(\.offline, true) }
         }
     }
     private func applySys(_ s: Sys, data: Data, fresh: Bool) {
@@ -241,7 +287,7 @@ final class ChumbyModel: ObservableObject {
     // Tailscale off at home: go straight to the Chumby. Back the other way when that stops working.
     private func switchRoute() {
         guard !fallback.isEmpty, let next = Self.makeAPI(usingFallback ? address : fallback) else { return }
-        usingFallback.toggle(); api = next; failures = 0
+        usingFallback.toggle(); api = next
     }
     // False when the answer was an old copy (the Mac is reading a new one), so the caller may ask again soon.
     @discardableResult

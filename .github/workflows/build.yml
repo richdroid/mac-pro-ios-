@@ -284,7 +284,7 @@ jobs:
                      "homeplaying 0 playing" "homenight 0 night" "caldayedit 2 - -pose caldayedit" "justonce 0 - -pose justonce" \
                      "caldayown 2 - -pose caldayown" "reskip 2 skipped -pose reskip" "orphan 0 orphan" "orphan-alarms 2 orphan" \
                      "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce" \
-                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "napset-home 0 nap"; do
+                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "napset-home 0 nap" "missed 2 missed"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
@@ -411,7 +411,7 @@ jobs:
             for V in "calday 2 - -pose calday" "caldayedit 2 - -pose caldayedit" "caldayown 2 - -pose caldayown" "justonce 0 - -pose justonce" \
                      "skipped 0 skipped" "alarmsmine 2 - -pose alarmsmine" "calsettings 2 - -pose calsettings" \
                      "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce" \
-                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "editornew 2 - -pose editornew" "napset-home 0 nap"; do
+                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "editornew 2 - -pose editornew" "napset-home 0 nap" "missed 2 missed"; do
               set -- $V
               ADDR=http://127.0.0.1:9000; [ "$3" != "-" ] && ADDR=$ADDR/$3
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $2 "${@:4}"

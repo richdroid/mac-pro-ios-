@@ -185,7 +185,7 @@ struct RingingCard: View {
             // An old reading: what it was doing when last heard from, and no buttons that can't reach it.
             VStack(spacing: 3) {
                 Text("Was \(s.ring.snoozed ? "snoozing" : "ringing")\(s.seen.map { " at " + seenText($0) } ?? "")").font(.custom("Trebuchet MS", size: 22).weight(.bold))
-                Text([name(s.ring), "the Chumby isn’t answering"].filter { !$0.isEmpty }.joined(separator: " · ")).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Text([name(s.ring), model.reachInline].filter { !$0.isEmpty }.joined(separator: " · ")).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(16).frame(maxWidth: .infinity)
         } else if let s = shown {
@@ -549,6 +549,14 @@ struct AlarmsTab: View {
     @Namespace private var editNS
 
     var dismissed: Set<String> { Set(dismissedRaw.split(separator: "\n").map(String.init)) }
+    // Why, for what's listed: a ring with no sound wasn't the Chumby being frozen or off (designer, 11-12).
+    var missedWhy: String {
+        let silent = missed.contains { $0.silent == true }, other = missed.contains { $0.silent != true }
+        let these = missed.count == 1 ? "it" : "these"
+        if silent && other { return "The Chumby was frozen or off when some came due, and \(missed.filter { $0.silent == true }.count == 1 ? "one" : "some") rang with no sound." }
+        if silent { return "The Chumby rang, but no sound came from \(missed.count == 1 ? "it" : "them")." }
+        return "The Chumby was frozen or off when \(these) came due."
+    }
     var missed: [ChumbyState.Missed] { model.state.missed.filter { Date().timeIntervalSince1970 - $0.at < 86400 && !dismissed.contains($0.id) }.suffix(3).reversed().map { $0 } }
     // A "just this once" standing in for one of these is told on that alarm's row, never listed as an alarm of its own.
     var folded: String? { model.state.justOnce().flatMap { $0.original != nil ? $0.alarm.key : nil } }
@@ -640,7 +648,7 @@ struct AlarmsTab: View {
                             RowRemove(label: "Dismiss", icon: "xmark.circle.fill") { withAnimation(.snappy) { dismissedRaw = (dismissed.union([m.id])).joined(separator: "\n") } }
                         }
                     }
-                } footer: { SectionFoot("The Chumby was frozen or off when these came due.") }
+                } footer: { SectionFoot(missedWhy) }
             }
             yours
         } right: {
@@ -826,7 +834,7 @@ struct AlarmsTab: View {
                             Group { if skipping { ProgressView() } else { Text("Back to \(u.formatted(date: .omitted, time: .shortened))") } }
                                 .font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize().frame(minHeight: 30).padding(.horizontal, 4)
                         }
-                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
                         .accessibilityLabel("Back to the usual \(u.formatted(date: .omitted, time: .shortened)) alarm")
                     } else if n.alarm.name == "Nap", model.sys.ringing == nil {
                         // A nap isn't skipped, it's called off: the same as the nap row's switch and its editor (Richard,
@@ -838,7 +846,7 @@ struct AlarmsTab: View {
                             Group { if skipping { ProgressView() } else { Label("Cancel nap", systemImage: "xmark") } }
                                 .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
                         }
-                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
                         .accessibilityLabel("Cancel the nap")
                     } else if model.state.skipKnown && !skippedNow && model.sys.ringing == nil {
                         // The one thing he'd reach for here: let it pass. Only on a Chumby that can skip, and not twice.
@@ -849,7 +857,7 @@ struct AlarmsTab: View {
                             Group { if skipping { ProgressView() } else { Label("Skip", systemImage: "forward.end.fill") } }
                                 .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
                         }
-                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
                         .accessibilityLabel("Skip the \(clockParts(n.at).0) \(clockParts(n.at).1) alarm")
                     }
                 }

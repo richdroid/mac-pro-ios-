@@ -47,6 +47,7 @@ function saveProblem(f) {
   return null;
 }
 http.createServer((q, s) => {
+  if (macMusic(q, s)) return;      // a stand-in Mac's Music, for Sounds' "Play a song from the Mac"
   if (chumbyScene(q, s)) return;   // the Chumby app's poses; see the block at the end
   const a = new URL(q.url, 'http://x').searchParams.get('a');
   if (a === 'save' && q.method === 'POST') {
@@ -103,7 +104,7 @@ const macProcs = JSON.stringify({
 // His apps' own icons for the Apps tab, from the repo's icon sets.
 const appIcon = (q, s) => { const f = { 'MacPro.ipa': 'Assets.xcassets', 'Chumby.ipa': 'ChumbyApp/Assets.xcassets', 'TV.ipa': 'TVApp/Assets.xcassets' }[decodeURIComponent(q.url.slice('/ios/icon/'.length))]; try { const png = require('fs').readFileSync(require('path').join(__dirname, '..', f, 'AppIcon.appiconset/icon.png')); s.setHeader('content-type', 'image/png'); s.end(png); } catch { s.statusCode = 404; s.end(); } };
 // The Mac's routes, for the still Mac (9001) and the one whose figures move (9021).
-const macRoutes = (q, s, status, live) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); if (new URL(q.url, 'http://x').searchParams.get('m') === 'disk') { /* The disk in bytes, filling slowly through a day as a real one does, with a cleanup at 4 AM-ish. */ return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 2.1e11 + (1440 - i) * 9e6 - (i > 900 ? 0 : 6e9) + 4e8 * Math.sin(i / 37); return { t: now - (1440 - i) * 60000, v, peak: v }; }) })); } const m = new URL(q.url, 'http://x').searchParams.get('m'); /* Speeds in bytes a second, ending at the figure the Status tile shows, so the two screens agree. */ const scale = m === 'rx' ? 1500 : m === 'tx' ? 260 : 1, end = m === 'rx' ? 52000 : m === 'tx' ? 9000 : null; return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); const pv = i === 1439 && end ? end : Math.max(1, v) * scale; return { t: now - (1440 - i) * 60000, v: pv, peak: scale === 1 ? Math.min(100, v + 12) : Math.max(pv, (v + 12) * scale) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/ios-history')) { const file = new URL(q.url, 'http://x').searchParams.get('file'), now = Date.now(), told = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', 'whats-new.json'), 'utf8'))[file] || {}; return s.end(JSON.stringify({ builds: Object.keys(told).sort((x, y) => y - x).map((b, i) => ({ build: b, at: now - (i < 3 ? (2 + 3 * i) : 26 + 20 * i) * 3600000, notes: told[b] })) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); if (q.url.startsWith('/api/files/recent')) { const now = Date.now(); return s.end(JSON.stringify({ folder: '~/Downloads/From iPhone', files: [['IMG_4126.HEIC', 2.9e6, 4], ['Boarding pass.pdf', 310e3, 52], ['apple.com.webloc', 240, 190], ['Shopping list.txt', 1.2e3, 1500], ['Trip.mov', 48e6, 4000], ['IMG_4101.HEIC', 3.1e6, 9000]].map(([name, size, min]) => ({ name, size, at: now - min * 60000, dir: false })) })); } if (q.url.startsWith('/api/mac/health')) { const p = [['tailscale', 'Running'], ['serve', 'https → bridge'], ['bridge', 'Answering'], ['sessions', '6 of 6 running'], ['tv', 'Connected'], ['letterboxd', 'Sign-in relay running'], ['chumby', 'Answering'], ['oclp', 'HEALTHY: macOS 26.7.2, OCLP 3.0.0'], ['stuck', 'Nothing stuck']]; return s.end(JSON.stringify({ ok: true, at: Date.now(), parts: p.map(([part, say]) => ({ part, state: 'ok', say })) })); } if (q.url.startsWith('/api/mac/prerestart')) { const p = [['oclp', 'Patches healthy'], ['updates', 'No macOS update will install'], ['filevault', 'Off; no password at boot'], ['autologin', 'Logs in by itself'], ['tailscale', 'Starts at login'], ['work', 'Nothing long-running'], ['keep', 'Scripts from /tmp kept in ~/.local/share/keep-after-reboot']]; return s.end(JSON.stringify({ ok: true, at: Date.now(), parts: p.map(([part, say]) => ({ part, state: 'ok', say })) })); } if (q.url === '/api/live' && live) return s.end(live()); s.end(q.url === '/api/status' ? status() : q.url === '/api/procs' ? macProcs : '{}'); };
+const macRoutes = (q, s, status, live) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); if (q.url.startsWith('/api/trend')) { const now = Date.now(); if (new URL(q.url, 'http://x').searchParams.get('m') === 'disk') { /* The disk in bytes, filling slowly through a day as a real one does, with a cleanup at 4 AM-ish. */ return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 2.1e11 + (1440 - i) * 9e6 - (i > 900 ? 0 : 6e9) + 4e8 * Math.sin(i / 37); return { t: now - (1440 - i) * 60000, v, peak: v }; }) })); } const m = new URL(q.url, 'http://x').searchParams.get('m'); if (m && m.startsWith('temp:')) { const c = (JSON.parse(macStatus).temps.find(t => 'temp:' + t.name === m) || { c: 45 }).c; return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = i === 1439 ? c : c - 4 + 3 * Math.sin(i / 90) + 1.5 * Math.sin(i / 11); return { t: now - (1440 - i) * 60000, v, peak: v + 1 }; }) })); } /* Speeds in bytes a second, ending at the figure the Status tile shows, so the two screens agree. */ const scale = m === 'rx' ? 1500 : m === 'tx' ? 260 : 1, end = m === 'rx' ? 52000 : m === 'tx' ? 9000 : null; return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); const pv = i === 1439 && end ? end : Math.max(1, v) * scale; return { t: now - (1440 - i) * 60000, v: pv, peak: scale === 1 ? Math.min(100, v + 12) : Math.max(pv, (v + 12) * scale) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/ios-history')) { const file = new URL(q.url, 'http://x').searchParams.get('file'), now = Date.now(), told = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', 'whats-new.json'), 'utf8'))[file] || {}; return s.end(JSON.stringify({ builds: Object.keys(told).sort((x, y) => y - x).map((b, i) => ({ build: b, at: now - (i < 3 ? (2 + 3 * i) : 26 + 20 * i) * 3600000, notes: told[b] })) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); if (q.url.startsWith('/api/files/recent')) { const now = Date.now(); return s.end(JSON.stringify({ folder: '~/Downloads/From iPhone', files: [['IMG_4126.HEIC', 2.9e6, 4], ['Boarding pass.pdf', 310e3, 52], ['apple.com.webloc', 240, 190], ['Shopping list.txt', 1.2e3, 1500], ['Trip.mov', 48e6, 4000], ['IMG_4101.HEIC', 3.1e6, 9000]].map(([name, size, min]) => ({ name, size, at: now - min * 60000, dir: false })) })); } if (q.url.startsWith('/api/mac/health')) { const p = [['tailscale', 'Running'], ['serve', 'https → bridge'], ['bridge', 'Answering'], ['sessions', '6 of 6 running'], ['tv', 'Connected'], ['letterboxd', 'Sign-in relay running'], ['chumby', 'Answering'], ['oclp', 'HEALTHY: macOS 26.7.2, OCLP 3.0.0'], ['stuck', 'Nothing stuck']]; return s.end(JSON.stringify({ ok: true, at: Date.now(), parts: p.map(([part, say]) => ({ part, state: 'ok', say })) })); } if (q.url.startsWith('/api/mac/prerestart')) { const p = [['oclp', 'Patches healthy'], ['updates', 'No macOS update will install'], ['filevault', 'Off; no password at boot'], ['autologin', 'Logs in by itself'], ['tailscale', 'Starts at login'], ['work', 'Nothing long-running'], ['keep', 'Scripts from /tmp kept in ~/.local/share/keep-after-reboot']]; return s.end(JSON.stringify({ ok: true, at: Date.now(), parts: p.map(([part, say]) => ({ part, state: 'ok', say })) })); } if (q.url === '/api/live' && live) return s.end(live()); s.end(q.url === '/api/status' ? status() : q.url === '/api/procs' ? macProcs : '{}'); };
 http.createServer((q, s) => macRoutes(q, s, () => macStatus)).listen(9001, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac with its readings changing every second, as the real one's do, for the films of a page pulled past
 // its end and let go while readings land (Richard, 2026-11-08: "it doesnt bounce back naturally its like a sudden move
@@ -132,6 +133,54 @@ http.createServer((q, s) => {
   if (++slowReads % 7 === 0) return q.socket.destroy();
   setTimeout(() => macRoutes(q, s, liveMacStatus, liveMacLive), 2000 + (slowReads * 733) % 3000);
 }).listen(9031, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// The Mac as his really reads (9041), for the films of Status at rest and pulled (Richard, 2026-11-11: "that same
+// resizing issue in the mac pro app is still happening"): the shape of the bridge's own answers on a busy night (made-up
+// values, nothing of his). Eight top processes whose names and order change with each reading, some long; network rates
+// from a few KB/s to tens of MB/s, so a figure's width changes; 120-point histories; the uptime counting on; the health
+// counted (healthBad 0); every reading 0.1 to 0.9 s late, as over Tailscale with the Mac loaded. Asked for at the phone's
+// own pace (live every second, everything every 10 s), never faster.
+const realBoot = Date.now() / 1000 - 49000;
+const realNames = ['Claude Code', 'node', 'WindowServer', 'Google Chrome Helper (Renderer)', 'awk', 'sysmond', 'otool-classic', 'fileproviderd', 'mds_stores', 'Code Helper (Plugin)', 'kernel_task', 'swift-frontend'];
+const realMac = () => {
+  const now = Date.now() / 1000, n = Math.floor(now), m = JSON.parse(macStatus);
+  m.uptime = Math.floor(now - realBoot);
+  m.healthBad = 0;
+  m.cpu.total = 80 + (n * 7) % 19; m.cpu.per = m.cpu.per.map((v, i) => 70 + ((n * 13 + i * 5) % 30));
+  m.mem.used = 1.45e10 + ((n * 11) % 23) * 3e7; m.mem.total = 34359738368;
+  m.load = [29 + (n % 9), 33.4, 28.3];
+  const rx = [3477, 21907, 48427151, 159693, 6879, 628813, 12716515, 42351], tx = [2971, 746060, 17843, 311321, 4296, 819439, 9610, 148404];
+  m.net.rxRate = rx[n % rx.length] * (0.9 + (n % 3) / 10); m.net.txRate = tx[(n * 3) % tx.length];
+  for (const k of Object.keys(m.hist)) { const h = Array.from({ length: 120 }, (_, i) => { const j = n - 120 + i; return k === 'cpu' ? 80 + (j * 7) % 19 : k === 'mem' ? 43 + (j % 3) : (rx[(j * 5) % rx.length] / (k === 'tx' ? 9 : 1)); }); m.hist[k] = h; }
+  m.temps = [['CPU', 81.7], ['GPU A', 62.9], ['GPU B', 63.1], ['Memory', 59.2], ['Chipset', 59], ['Drive', 52.1], ['Power supply', 63.8], ['Intake air', 30.6]].map(([name, c], i) => ({ name, c: Math.round((c + ((n * (i + 3)) % 5) * 0.4 - 0.8) * 10) / 10 }));
+  m.procs = Array.from({ length: 8 }, (_, i) => { const name = realNames[(n * 5 + i * 7) % realNames.length]; return { pid: 1000 + ((n + i * 3) % 12), cpu: Math.round((24.8 - i * 2.6 + (n % 4)) * 10) / 10, mem: Math.round(((n + i) % 7) * 6) / 10, name }; });
+  m.disk.used = 185245831168 + (n % 50) * 4e5; m.disk.free = 65544605696 - (n % 50) * 4e5; m.disk.total = 250790436864;
+  m.at = n * 1000;
+  return m;
+};
+const realLive = () => { const m = realMac(); return JSON.stringify({ uptime: m.uptime, load: m.load, cpu: m.cpu, mem: m.mem, net: m.net, hist: m.hist, temps: m.temps, displayOn: m.displayOn }); };
+let realReads = 0;
+http.createServer((q, s) => {
+  if (!/^\/api\/(live|status)/.test(q.url)) return macRoutes(q, s, () => JSON.stringify(realMac()), realLive);
+  setTimeout(() => macRoutes(q, s, () => JSON.stringify(realMac()), realLive), 100 + (++realReads * 373) % 800);
+}).listen(9041, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// The same Mac on 9042, where an alert (and an eighth app) arrives 20 s after the app first asks: for the film that leaves
+// Status for Apps while it comes, then goes back (resize regate: a tab coming back must not change in one frame).
+let alertFrom = 0, alertAsked = 0;
+const alertMac = () => { const m = realMac(); if (Date.now() - alertFrom > 20000) { m.alerts = [{ id: 'temp:CPU', level: 'warning', kind: 'temp', metric: 'CPU', title: 'CPU is hot', detail: '192°F', since: alertFrom + 20000, c: 89 }]; m.healthBad = 1; } return m; };
+http.createServer((q, s) => { if (!alertFrom || Date.now() - alertAsked > 25000) alertFrom = Date.now(); alertAsked = Date.now(); macRoutes(q, s, () => JSON.stringify(alertMac()), realLive); }).listen(9042, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// A cold open over a slow link (9051): every reading takes 4 s to come, so the app opens on last time's figures and must
+// look fully live, never dimmed, while the first answer comes (Richard, 2026-11-12: "it was slightly darkened").
+http.createServer((q, s) => {
+  if (!/^\/api\/(live|status)/.test(q.url)) return macRoutes(q, s, liveMacStatus, liveMacLive);
+  setTimeout(() => macRoutes(q, s, liveMacStatus, liveMacLive), 4000);
+}).listen(9051, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// A Mac that doesn't answer for 40 s from GET /arm (9052), then answers again: nothing may be said before ~25 s.
+let deadUntil = 0;
+http.createServer((q, s) => {
+  if (q.url === '/arm') { deadUntil = Date.now() + 40000; return s.end('armed'); }
+  if (Date.now() < deadUntil && /^\/api\//.test(q.url)) return;   // never answered: the request hangs until the app gives up
+  macRoutes(q, s, liveMacStatus, liveMacLive);
+}).listen(9052, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
 // The same Mac opened while its display is asleep or waking, as Screen Sharing really answers then (2026-11-10): a 2 x 2
@@ -381,12 +430,27 @@ function kept(state, f) {
   });
   return out.filter((a, i) => !out.some((b, j) => j !== i && key(b) === key(a) && (b.enabled === '1' && a.enabled !== '1' || (j > i && (b.enabled === '1') === (a.enabled === '1')))));
 }
+const reachClock = {};
 function chumbyScene(q, s) {
   const a = new URL(q.url, 'http://x').searchParams.get('a');
   // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
   const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
+  // The route failing, not the Chumby (2026-11-11, "i hate opening the app and getting an its offline message"):
+  // blip: for the first 7 s after the app opens nothing answers (each request hangs past the app's 8 s timeout and is
+  //       dropped), then everything answers as usual. Nothing about it may reach the screen.
+  // gone: nothing ever answers. Only after about 25 s, with every route tried, may a calm line say so.
+  // back: nothing answers for the first 40 s, long enough for the line to come, then everything does; the line must
+  //       leave in one spring with nothing left behind.
+  // A request after a quiet minute is a new launch, which starts the clock again.
+  const reach = (q.url.match(/^\/(blip|gone|back)\//) || [])[1];
+  if (reach) {
+    const now = Date.now(), r = reachClock[reach];
+    if (!r || now - r.last > 60000) reachClock[reach] = { start: now, last: now }; else r.last = now;
+    if (reach === 'gone' || now - reachClock[reach].start < (reach === 'back' ? 40000 : 7000)) { setTimeout(() => s.destroy(), 9000); return true; }
+    return false;
+  }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap|missed)\//);
   if (!m) return false;
   const scene = m[1];
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
@@ -489,6 +553,12 @@ function chumbyScene(q, s) {
   // A nap set 20 minutes from now, as the app's chips or Control Center leave it: the one "Nap" one-off, a short Beep.
   if (scene === 'nap' && a === 'state') {
     return json({ ...stateNow(data.state), alarms: [...data.state.alarms, alarm({ name: 'Nap', when: 'once', time: String(Math.floor(Date.now() / 60000) + 20), duration: '5' })] });
+  }
+  // Three alarms from the last day that went wrong, one of each kind the Missed card names: missed outright, rang late,
+  // and rang with no sound heard.
+  if (scene === 'missed' && a === 'state') {
+    const now = Date.now() / 1000;
+    return json({ ...stateNow(data.state), missed: [{ at: now - 9 * 3600, rang: false, name: 'Weekend' }, { at: now - 5 * 3600, rang: true, name: 'Work' }, { at: now - 40 * 60, rang: true, silent: true, name: 'Nap' }] });
   }
   // Pandora playing a song it started a minute and a half ago, for Sounds' Now.
   if (scene === 'playing' && a === 'state') return json({ ...stateNow(data.state), music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
@@ -1040,4 +1110,58 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
       if (op === 2 || op === 0) fromApp(data);
     }
   });
+}
+
+// ---- A stand-in Mac's Music (mac-dash music.js) -----------------------------------------------------------------------
+// The app is launched with -mac http://127.0.0.1:9000/mac<name>, so each film has its own Mac: /api/music/search answers
+// from a list of jazz records (one with the long names a real library has) after 9 s and at most 25, as his library
+// answers (measured 11-12: 8 to 12 s, capped at 25 by the Mac), play answers after about 17 s as the real one does (Music, AirPlay to the Chumby,
+// then its 4 s check), now names the song for a minute after, and stop clears it. A name starting "macfail" has the play
+// turned down after 6 s with the real Mac's words for the Chumby dropping the song.
+const macSongs = [
+  ['00000000000000A1', 'Blue in Green', 'Miles Davis', 'Kind of Blue', 337], ['00000000000000A2', 'So What', 'Miles Davis', 'Kind of Blue', 562],
+  ['00000000000000A8', 'All Blues (Live at the Plugged Nickel, Chicago, December 1965) [Remastered]', 'The Miles Davis Quintet', 'The Complete Live at the Plugged Nickel 1965 (Legacy Edition)', 1103],
+  ['00000000000000A3', 'Blue Train', 'John Coltrane', 'Blue Train', 643], ['00000000000000A4', 'Freddie Freeloader', 'Miles Davis', 'Kind of Blue', 589],
+  ['00000000000000A5', 'Blue Monk', 'Thelonious Monk', 'Thelonious Alone in San Francisco', 248], ['00000000000000A6', 'Take Five', 'The Dave Brubeck Quartet', 'Time Out', 324],
+  ['00000000000000A7', 'Blue Rondo à la Turk', 'The Dave Brubeck Quartet', 'Time Out', 404],
+  ['00000000000000B0', 'Blue Bossa', 'The Standards Trio', 'Blue Standards', 180],
+  ['00000000000000B1', 'Bluesette', 'The Standards Trio', 'Blue Standards', 187],
+  ['00000000000000B2', 'Blue Skies', 'The Standards Trio', 'Blue Standards', 194],
+  ['00000000000000B3', 'Blue Moon', 'The Standards Trio', 'Blue Standards', 201],
+  ['00000000000000B4', 'Blues for Alice', 'The Standards Trio', 'Blue Standards', 208],
+  ['00000000000000B5', 'Blue Seven', 'The Standards Trio', 'Blue Standards', 215],
+  ['00000000000000B6', 'Blues March', 'The Standards Trio', 'Blue Standards', 222],
+  ['00000000000000B7', 'Blue Light Blues', 'The Standards Trio', 'Blue Standards', 229],
+  ['00000000000000B8', 'Blue Haze', 'The Standards Trio', 'Blue Standards', 236],
+  ['00000000000000B9', 'Blue Room', 'The Standards Trio', 'Blue Standards', 243],
+  ['00000000000000BA', 'Blue Lou', 'The Standards Trio', 'Blue Standards', 250],
+  ['00000000000000BB', 'Blue and Sentimental', 'The Standards Trio', 'Blue Standards', 257],
+  ['00000000000000BC', 'Blue Minor', 'The Standards Trio', 'Blue Standards', 264],
+  ['00000000000000BD', 'Blue Prelude', 'The Standards Trio', 'Blue Standards', 271],
+  ['00000000000000BE', 'Blue Turning Grey Over You', 'The Standards Trio', 'Blue Standards', 278],
+  ['00000000000000BF', 'Blue Daniel', 'The Standards Trio', 'Blue Standards', 285],
+  ['00000000000000C0', 'Blue Gardenia', 'The Standards Trio', 'Blue Standards', 292],
+  ['00000000000000C1', 'Blue Champagne', 'The Standards Trio', 'Blue Standards', 299],
+].map(([id, name, artist, album, secs]) => ({ id, name, artist, album, secs }));
+const macNow = {};
+function macMusic(q, s) {
+  const m = q.url.match(/^\/(mac[\w-]*)\/api\/music\/(\w+)/);
+  if (!m) return false;
+  const [, mac, op] = m, qs = new URL(q.url, 'http://x').searchParams;
+  const json = (v, wait = 0) => setTimeout(() => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); }, wait);
+  if (op === 'search') {
+    const t = (qs.get('q') || '').toLowerCase();
+    json({ ok: true, songs: macSongs.filter(x => [x.name, x.artist, x.album].some(f => f.toLowerCase().includes(t))).slice(0, 25) }, 9000);
+  } else if (op === 'now') {
+    const n = macNow[mac], on = n && Date.now() - n.at < 60000;
+    json(on ? { ok: true, state: 'playing', onChumby: true, playing: true, song: { name: n.song.name, artist: n.song.artist, album: n.song.album } } : { ok: true, state: 'stopped', onChumby: false, playing: false });
+  } else if (op === 'play' && q.method === 'POST') {
+    const song = macSongs.find(x => x.id === qs.get('id'));
+    if (!song) json({ ok: false, error: 'That song is no longer in the Mac’s library.' }, 1500);
+    else if (mac.startsWith('macfail')) json({ ok: false, error: 'The Chumby didn’t take the song. Try again in a moment.' }, 6000);
+    else setTimeout(() => { macNow[mac] = { song, at: Date.now() }; json({ ok: true }); }, 17000);
+  } else if (op === 'stop' && q.method === 'POST') {
+    delete macNow[mac]; json({ ok: true }, 800);
+  } else { s.statusCode = 404; s.end(); }
+  return true;
 }
