@@ -418,14 +418,11 @@ struct Page<C: View>: View {
     @State private var scrolled = PageScrollY()
     // With the bar shown (Status' gear), the room it takes above the heading where iOS puts its items in the side strip
     // (folded, open flat): taken back, so the heading sits where every other tab's does (gate of 96f5f42: 15 pt lower).
-    // The reference is where the other tabs' headings rest in the same window (TabTop): measured insets missed by 9 pt to
-    // 82 pt by posture (gates of b01454f and 0809bb8).
-    @State private var titleY: CGFloat = 0
-    @State private var sizeKey = ""
-    var barRoom: CGFloat {
-        guard showsBar, titleY > 0, let rest = TabTop.shared.tops[sizeKey] else { return 0 }
-        return max(0, titleY - CGFloat(rest))
-    }
+    // Open upright the bar is the top bar the clock already keeps clear, and costs nothing. Measured on the gate's shots:
+    // 43 px at 3x (Status' words at 114 px against 71 px). Every attempt to measure it live (insets, an empty stack, the
+    // heading's own frame) missed by 9 pt or more by posture, or chased its own move (gates of b01454f to bc5d7cd).
+    @Environment(\.horizontalSizeClass) private var hSize
+    var barRoom: CGFloat { showsBar && !(hSize == .regular && !panes) ? 43.0 / 3 : 0 }
     var body: some View {
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
@@ -442,16 +439,7 @@ struct Page<C: View>: View {
                 // own layouts (two panes, overlays) hid it.
                 .safeAreaInset(edge: .top, spacing: 0) {
                     if !alwaysInline {
-                        // Where the heading's words rest at the top of the page: the other tabs keep theirs for Status,
-                        // which sets its own against it (where it would rest before the bar's room is taken back).
-                        MovingTitle(title: title, scrolled: scrolled, room: barRoom) { y in
-                            guard !sizeKey.isEmpty else { return }
-                            if showsBar { if abs(y - titleY) > 0.5 { titleY = y } }
-                            else { TabTop.shared.set(sizeKey, y) }
-                            #if os(iOS)
-                            HitchLog.shared.note("heading \(title) \(sizeKey) at \(Int(y)) ref \(TabTop.shared.tops[sizeKey].map { Int($0) } ?? -1) room \(Int(barRoom))")
-                            #endif
-                        }
+                        MovingTitle(title: title, scrolled: scrolled)
                     }
                 }
                 // Status' page, heading and all, moved up by the bar's room as one: a move, not a new layout, so nothing
@@ -471,12 +459,6 @@ struct Page<C: View>: View {
         }
         .topShade()
         .background { Ambience() }
-        // The tab's whole room, which keys where its heading rests (TabTop): the same for every tab in one posture.
-        .background {
-            if !alwaysInline {
-                Color.clear.onGeometryChange(for: String.self) { "\(Int($0.size.width.rounded()))x\(Int($0.size.height.rounded()))" } action: { k in if k != sizeKey { sizeKey = k } }
-            }
-        }
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
         // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
         .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
@@ -494,17 +476,6 @@ struct Page<C: View>: View {
     }
 }
 
-// Where a tab's heading rests on a page whose bar is hidden, by window size, kept between launches: Status' page, which
-// shows the bar for its gear, takes back whatever lower it sits, so its heading is at the other tabs' height.
-@Observable final class TabTop {
-    static let shared = TabTop()
-    private(set) var tops: [String: Double] = (UserDefaults.standard.dictionary(forKey: "tabTops") as? [String: Double]) ?? [:]
-    func set(_ key: String, _ top: CGFloat) {
-        guard abs((tops[key] ?? -1) - Double(top)) > 0.5 else { return }
-        tops[key] = Double(top)
-        UserDefaults.standard.set(tops, forKey: "tabTops")
-    }
-}
 // How far a tab's page has scrolled, from whichever of its scroll views moved last.
 @Observable final class PageScrollY { var y: CGFloat = 0 }
 // For a page that isn't a Page (Settings' lists): its scrolling read into the title's measure, as BackToTop does.
@@ -523,10 +494,6 @@ extension EnvironmentValues { var pageScroll: PageScrollY? { get { self[PageScro
 private struct MovingTitle: View {
     let title: String
     let scrolled: PageScrollY
-    // How far the page is moved up (Status' bar room): added back, so the measure is where the words would rest unmoved.
-    var room: CGFloat = 0
-    // Where the words rest on screen, unmoved, while the page is at its top.
-    var rests: (CGFloat) -> Void = { _ in }
     // What the display already keeps clear above the page: the clock's row open upright; nothing folded or open flat,
     // where the clock is on the side and the name sat 13 pt from the glass (Richard, 2026-11-09, Playing folded: "too
     // close to top edge"). It takes the same air from the top as from the side then, 22 pt to its cap, every tab alike.
@@ -534,8 +501,6 @@ private struct MovingTitle: View {
     var body: some View {
         let y = max(0, scrolled.y)
         PageHeading(title)
-            // The move this frame was laid out with goes with the reading, never a later one, so the two can't chase.
-            .onGeometryChange(for: CGFloat.self) { [room] in $0.frame(in: .global).minY + room } action: { y in if scrolled.y <= 0.5 { rests(y) } }
             .padding(.horizontal, 20).padding(.top, max(4, 13 - above)).padding(.bottom, 8)
             .background { Color.clear.ignoresSafeArea(edges: .top).onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { above = $0 } }
             .offset(y: -y)
