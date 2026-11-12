@@ -181,9 +181,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.ips' '*.mp4' || zip -q ../shots.zip /dev/null)
+          # In three parts, each under the 2 GiB a release file may be: stills and logs, the pinned-title and turn films,
+          # and the rest of the films (in one, the sound films' run lost the whole upload).
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.ips' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr ../films-a.zip . -i '*pinned*.mp4' '*turn*.mp4' || zip -q ../films-a.zip /dev/null)
+          (cd dist && zip -qr ../films-b.zip . -i '*.mp4' -x '*pinned*.mp4' '*turn*.mp4' || zip -q ../films-b.zip /dev/null)
+          ls -la shots.zip films-a.zip films-b.zip
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view chumby-polish2-shots >/dev/null 2>&1 || gh release create chumby-polish2-shots --target chumby-polish2 --prerelease --title "Chumby polish (branch)" --notes "Branch-only shots."
-          for f in shots.zip status.txt; do
+          for f in shots.zip films-a.zip films-b.zip status.txt; do
             for i in 1 2 3 4; do gh release upload chumby-polish2-shots "$f" --clobber && break; echo "upload of $f failed, try $i"; sleep 20; done
           done
