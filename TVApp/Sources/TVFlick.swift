@@ -161,6 +161,35 @@ import UIKit
     }
 }
 
+// A row put back, carried home by Core Animation: a picture of it as it is in the hand, moved from there to its place on
+// a spring that starts in the next turn (so the commit that follows the put-back can't spend it), then gone as the row
+// itself shows again under it. False when there's no window to do it in.
+@MainActor enum RenderHome {
+    static func carry(from: CGRect, to: CGRect, done: @escaping () -> Void) -> Bool {
+        #if os(iOS)
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let w = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.keyWindow,
+              let v = w.resizableSnapshotView(from: from, afterScreenUpdates: false, withCapInsets: .zero) else { return false }
+        v.frame = from; v.isUserInteractionEnabled = false
+        w.addSubview(v)
+        Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                UIView.animate(springDuration: 0.38, bounce: 0.22, initialSpringVelocity: 0, delay: 0, options: [.allowUserInteraction]) {
+                    v.frame = to
+                } completion: { _ in
+                    done()
+                    UIView.animate(withDuration: 0.12, delay: 0.03, options: [.curveEaseOut]) { v.alpha = 0 } completion: { _ in v.removeFromSuperview() }
+                }
+                CATransaction.flush()
+            }
+        }
+        return true
+        #else
+        return false
+        #endif
+    }
+}
+
 // The pick's picture on its way into the Remote, moved by Core Animation in the render server: it leaves the row (or the
 // card) the moment he lets go and travels on its own spring however long the main thread is busy bringing the Remote up
 // under it (CI: a 440-670 ms turn at the pick; the SwiftUI move it replaces held the row still that long, then ran at 11
@@ -605,6 +634,8 @@ struct FlickScreen: View {
     @State private var thrownID: String?
     // The row going back to its place after a put-back.
     @State private var settling: String?
+    // The row put back, while its picture travels home in the render server: hidden in its place until it's there.
+    @State private var homing: String?
     // The list under a row in the hand holds still: its pan turned off in UIKit, never by redrawing the page (setting
     // scrollDisabled as a row lifted rebuilt the scroll view under the finger, and iOS took the touch away the moment it
     // moved: every real throw went back, CI 180efb2).
@@ -1437,7 +1468,7 @@ struct FlickScreen: View {
         // started twice the drag away, near the top of the page).
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map[s.id] = $0 }
         // Thrown: it's the picture on its way to the Remote now, never also a row springing back into the list.
-        .opacity(thrownID == s.id ? 0 : 1)
+        .opacity(thrownID == s.id || homing == s.id ? 0 : 1)
         .zIndex(up ? 1 : 0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: up)
         // Held a moment, it's in the hand: from then the finger moves it, and the list under it holds still. The row's
@@ -1510,6 +1541,7 @@ struct FlickScreen: View {
         for e in events {
             switch e {
             case .lifted:
+                homing = nil
                 lift.drag = .zero; lift.lean = 0; lift.armed = false; liftedID = id
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = scale }
             case .armed(let on):
@@ -1550,6 +1582,20 @@ struct FlickScreen: View {
     func settle(quiet: Bool = false) {
         settledAt = Date()
         let id = liftedID
+        // A row goes home as a picture moved by the render server, so the main thread's turn after the put-back (the
+        // page answering the hand coming free) can't make it jump there in one frame (the review of 61f18fc).
+        if let id, id != "card", !quiet, let rest = rects.map[id], rest.width > 4 {
+            let grow = liftScale + 0.03 * min(1, max(0, -lift.drag.height) / 260)
+            let home = rest.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y)
+            let from = CGRect(x: home.midX - home.width * grow / 2 + lift.drag.width, y: home.midY - home.height * grow / 2 + lift.drag.height,
+                              width: home.width * grow, height: home.height * grow)
+            if RenderHome.carry(from: from, to: home, done: { if homing == id { homing = nil } }) {
+                FlickHaptic.settle()
+                var quiet = Transaction(); quiet.disablesAnimations = true
+                withTransaction(quiet) { homing = id; liftedID = nil; lift.drag = .zero; lift.lean = 0; lift.armed = false; liftScale = 1 }
+                return
+            }
+        }
         settling = id
         Task { try? await Task.sleep(nanoseconds: 420_000_000); if settling == id { withAnimation(.easeOut(duration: 0.2)) { settling = nil } } }
         if !quiet { FlickHaptic.settle() }
