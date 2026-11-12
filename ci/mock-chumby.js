@@ -362,12 +362,14 @@ function chumbyScene(q, s) {
   // blip: for the first 7 s after the app opens nothing answers (each request hangs past the app's 8 s timeout and is
   //       dropped), then everything answers as usual. Nothing about it may reach the screen.
   // gone: nothing ever answers. Only after about 25 s, with every route tried, may a calm line say so.
+  // back: nothing answers for the first 40 s, long enough for the line to come, then everything does; the line must
+  //       leave in one spring with nothing left behind.
   // A request after a quiet minute is a new launch, which starts the clock again.
-  const reach = (q.url.match(/^\/(blip|gone)\//) || [])[1];
+  const reach = (q.url.match(/^\/(blip|gone|back)\//) || [])[1];
   if (reach) {
     const now = Date.now(), r = reachClock[reach];
     if (!r || now - r.last > 60000) reachClock[reach] = { start: now, last: now }; else r.last = now;
-    if (reach === 'gone' || now - reachClock[reach].start < 7000) { setTimeout(() => s.destroy(), 9000); return true; }
+    if (reach === 'gone' || now - reachClock[reach].start < (reach === 'back' ? 40000 : 7000)) { setTimeout(() => s.destroy(), 9000); return true; }
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();

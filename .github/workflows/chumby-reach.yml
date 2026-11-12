@@ -14,7 +14,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 75
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,7 +33,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 55
+        timeout-minutes: 90
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -49,7 +49,8 @@ jobs:
           xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           film() { # display, file name, seconds, launch suffix, launch args... ; a still at the end too
             local d=$1 name=$2 secs=$3 sfx=$4; shift 4
-            sleep 61                # the mock starts a scene's clock afresh after a quiet minute
+            # The mock starts blip's and back's clocks afresh after a quiet minute; gone and dead have none.
+            case $sfx in blip|back) sleep 61;; *) sleep 3;; esac
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/$sfx "$@"
@@ -58,13 +59,25 @@ jobs:
             kill -INT $REC; wait $REC; echo "film $name exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
+          still() { # display, file name, seconds, launch suffix, launch args...
+            local d=$1 name=$2 secs=$3 sfx=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000/$sfx "$@"
+            sleep $secs
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
           set_() { # display, suffix
             local d=$1 x=$2
+            # A throwaway first recording: the first one of a run came out stretched, with no launch in it.
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force /tmp/warm.mp4 > /dev/null 2>&1 & REC=$!; sleep 3; kill -INT $REC; wait $REC
             film $d open-blip-home$x 22 blip -tab 0
             film $d open-blip-alarms$x 22 blip -tab 2
-            film $d open-gone-home$x 40 gone -tab 0
-            film $d open-gone-alarms$x 40 gone -tab 2
-            film $d open-dead-home$x 40 dead -tab 0
+            film $d open-gone-home$x 60 gone -tab 0
+            film $d open-gone-alarms$x 60 gone -tab 2
+            film $d open-back-home$x 60 back -tab 0
+            film $d open-dead-home$x 60 dead -tab 0
+            film $d open-dead-alarms$x 60 dead -tab 2
+            for T in 1 3 4; do still $d gone-$T$x 45 gone -tab $T; still $d dead-$T$x 45 dead -tab $T; done
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl

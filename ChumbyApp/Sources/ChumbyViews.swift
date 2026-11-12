@@ -445,11 +445,12 @@ struct ReachRow: View {
         Button { withAnimation(.snappy) { open.toggle() } } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
-                    Circle().fill(.red).frame(width: 8, height: 8)
-                    Text((model.dead ? "Not answering" : "Can’t reach the Mac") + seen).font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1)
+                    // Amber for the route (the alarm isn't known to be at risk), red only for the Chumby itself.
+                    Circle().fill(model.dead ? Color.red : ChumbyPalette.hex(0xe59a2e)).frame(width: 8, height: 8)
+                    Text(model.reachWords + seen).font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1)
                 }
                 if open {
-                    Text(model.dead ? model.deadText : "This phone can’t reach the Mac, so this is what the Chumby last said. The Chumby itself may be fine. Check Tailscale on this phone.")
+                    Text(model.dead ? model.deadText : "Showing what the Chumby last said. It may be fine. Check Tailscale on this phone.")
                         .font(.custom("Trebuchet MS", size: 15)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 300, alignment: .leading)
                 }
             }
@@ -710,11 +711,13 @@ struct HomeTab: View {
             .task(id: ringing) {
                 while ringing && !Task.isCancelled { puff(2); try? await Task.sleep(nanoseconds: 450_000_000) }
             }
-            .onChange(of: model.unreachable) { _, gone in goneAt = gone ? Date() : nil }
+            // The picture goes to static, then black, only when the Chumby itself has gone quiet; a route this phone
+            // can't use keeps the last picture (2026-11-11 gate: a black screen read as "so it's off?").
+            .onChange(of: model.dead) { _, gone in goneAt = gone ? Date() : nil }
             // Going quiet mid-snooze moves him too, in the same spring a ring change would.
             .animation(ChumbyModel.ringChange(to: model.sys.ringing), value: snoozing)
             .onAppear {
-                if model.unreachable && goneAt == nil { goneAt = Date().addingTimeInterval(-5) }
+                if model.dead && goneAt == nil { goneAt = Date().addingTimeInterval(-5) }
                 if let p = model.homePoke, Date().timeIntervalSince(p) < 1.5 { poke() }
                 // For the build's film: News chosen on Home's channel capsule (as its menu does it), then over to
                 // Channels, whose editor has followed the choice.
@@ -742,7 +745,8 @@ struct HomeTab: View {
             if let b = model.busy, b.until > ctx.date {
                 Text(b.text)
             } else if model.unreachable {
-                Text(model.seenAt.map { "last seen " + seenText($0) } ?? (model.dead ? "isn’t answering" : "can’t reach it"))
+                // The same words as the row on the other tabs, so a route failure never reads as the Chumby being off.
+                Text(model.reachWords + (model.seenAt.map { " · last seen " + seenText($0) } ?? ""))
             }
         }
         .font(.custom("Trebuchet MS", size: 16).weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark))
@@ -892,7 +896,9 @@ struct HomeTab: View {
     }
     // Named only from a recent reading, or his own tap: the kept copy can be from last night, when the Chumby's own
     // schedule had another channel up, and a name that then changes in front of him reads as the switcher failing.
-    var channelSettled: Bool { model.stateConfirmed || model.chosenChannel != nil }
+    // Since 2026-11-11 (the reach ruling, newer than the note above): while the route is struggling, or when the kept
+    // copy is from the last few minutes, the kept name shows at once rather than an empty control for the whole wait.
+    var channelSettled: Bool { model.stateConfirmed || model.chosenChannel != nil || model.struggling || model.unreachable || model.keptRecent }
     func channelLabel(icon: Bool) -> some View {
         HStack(spacing: 10) {
             if icon { Image(systemName: "tv").font(.system(size: 20, weight: .semibold)).foregroundStyle(ChumbyPalette.acc(dark)).frame(width: 28) }
@@ -2119,8 +2125,8 @@ struct TinkerTab: View {
                     if let f = model.failed("connect") { FailNote(text: f) }
                 } label: {
                     HStack(spacing: 10) {
-                        Circle().fill(model.unreachable ? Color.red : ChumbyPalette.on).frame(width: 9, height: 9)
-                        Text(model.unreachable ? "Can’t reach it" : "Connected")
+                        Circle().fill(model.dead ? Color.red : model.offline ? ChumbyPalette.hex(0xe59a2e) : ChumbyPalette.on).frame(width: 9, height: 9)
+                        Text(model.unreachable ? model.reachWords : "Connected")
                         Spacer(minLength: 8)
                         Text(host).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     }
@@ -2421,7 +2427,8 @@ struct SkipCard: View {
         .accessibilityLabel("Back to the usual \(usual.map(time) ?? "") alarm")
     }
     var body: some View {
-        if model.stateKnown && model.state.skipKnown && !model.unreachable && model.sys.ringing == nil,
+        // Kept on a route failure, showing the kept next alarm with nothing to press; gone only when the Chumby is.
+        if model.stateKnown && model.state.skipKnown && !model.dead && model.sys.ringing == nil,
            let next = movedOne.flatMap({ j in j.original.map { (j.at, $0.name) } }) ?? skipped.map({ ($0.date, $0.name) }) ?? model.nextRing().map({ ($0.at, $0.alarm.name) }) {
             // Moved for one ring, the card stays awake: it isn't a skip.
             let asleep = (shown ?? (skipped != nil)) && moved == nil
@@ -2444,7 +2451,7 @@ struct SkipCard: View {
                             Spacer(minLength: 8)
                             Image(systemName: napNext ? "xmark" : "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
                                 .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
-                                .opacity(asleep || moved != nil ? 0 : 1)
+                                .opacity(asleep || moved != nil ? 0 : model.offline ? 0.4 : 1)
                                 // Room for Undo, which sits over this end of the slab.
                                 .frame(minWidth: moved != nil ? 0 : asleep ? 92 : 0, alignment: .trailing)
                         }
@@ -2454,8 +2461,8 @@ struct SkipCard: View {
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                 }
-                .buttonStyle(GelPress(enabled: !asleep && moved == nil))
-                .disabled(asleep || moved != nil)
+                .buttonStyle(GelPress(enabled: !asleep && moved == nil && !model.offline))
+                .disabled(asleep || moved != nil || model.offline)
                 .accessibilityLabel(moved != nil ? "Just this once, \(time(next.0)) alarm" : asleep ? "Skipped, \(time(next.0)) alarm" : napNext ? "Cancel the nap" : "Skip the \(time(next.0)) alarm, \(day(next.0))")
                 .overlay(alignment: .trailing) {
                     if asleep && moved == nil {
@@ -2465,6 +2472,7 @@ struct SkipCard: View {
                                 .background(.white, in: Capsule())
                         }
                         .buttonStyle(GelPress())
+                        .disabled(model.offline).opacity(model.offline ? 0.45 : 1)
                         .padding(.trailing, 18)
                         .accessibilityLabel("Undo the skip, so the \(time(next.0)) alarm rings")
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
