@@ -114,10 +114,11 @@ jobs:
           # The editor's sound menus (Richard, 11-12: "the animation for the sound selection window … is gross"): the editor
           # scrolled to its end and back a little so the Sound rows sit mid-page, then Tone's menu opened and closed by a
           # tap beside it, then Plays' menu opened and Radio picked (its rows change after the close), each menu shot open.
+          # On the live scene, whose readings change every few seconds as the real Chumby's do (a redraw under an open menu).
           # display, name, value x, Plays y, Tone y, Radio y, an empty spot x y (fractions, from the editor-end shots).
           soundfilm() {
             local d=$1 name=$2 vx=$3 py=$4 ty=$5 ry=$6 nx=$7 ny=$8 DX=0.5; [ "$d" = 3 ] && [ "$name" = open ] && DX=0.75
-            film $d sound-$name - -tab 2 -pose editor -swipeLog YES
+            film $d sound-$name live -tab 2 -pose editor -swipeLog YES
             $D "$DEVICE" drag $DX 0.85 $DX 0.2 || true; sleep 1; $D "$DEVICE" drag $DX 0.85 $DX 0.2 || true; sleep 2
             $D "$DEVICE" drag $DX 0.4 $DX 0.55 1.0 || true; sleep 2
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-sound-$name-rows.png
