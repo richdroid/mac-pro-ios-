@@ -28,6 +28,7 @@ struct StatusTab: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button { model.tick(); pagePush.push(SettingsRoute.root) } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("Settings")
+                        .shotSpot("gear", pose: "settingsnav")
                 }
             }
             .navigationDestination(for: SettingsRoute.self) { _ in TVSettingsPage() }
@@ -68,12 +69,12 @@ struct TVSettingsPage: View {
             // Unfolded, one list each side of the fold rather than one list across it, the two cards level.
             if panes {
                 FoldSplit {
-                    page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections(level: true) })
+                    page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections(level: true).shotSpot("tvrow", pose: "settingsnav") })
                 } right: {
                     page(Group { PageHeading(" ").padding(.horizontal, 4).hidden(); TVActionSections() })
                 }
             } else {
-                page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections(); TVActionSections() })
+                page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections().shotSpot("tvrow", pose: "settingsnav"); TVActionSections() })
             }
         }
         .summonsBar()
@@ -84,3 +85,28 @@ struct TVSettingsPage: View {
         .barPage()
     }
 }
+
+// For the build's films only: where a control is, as fractions of the screen, told to the stand-in Mac's log
+// (what=NAME&x=&y=) so a real touch through Device Hub can land on it. Nothing happens without the matching pose.
+private struct ShotSpot: ViewModifier {
+    let what: String, pose: String
+    func body(content: Content) -> some View {
+        if !what.isEmpty, UserDefaults.standard.string(forKey: "pose") == pose {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in
+                #if os(iOS)
+                guard let screen = (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?.screen.bounds,
+                      screen.width > 0, r.width > 0 else { return }
+                let x = r.midX / screen.width, y = r.midY / screen.height
+                Task { _ = await TVBridge.data(TVBridge.url(String(format: "/api/tv/applied?what=%@&x=%.3f&y=%.3f", what, x, y)), timeout: 3) }
+                // The system's Back for a page pushed from here: in the side strip, where this item sits; in the top bar
+                // (open upright), at its leading end on this item's line.
+                if what == "gear" {
+                    let bx = r.minY < screen.height * 0.12 && r.midX > screen.width / 2 ? 43 / screen.width : x
+                    Task { _ = await TVBridge.data(TVBridge.url(String(format: "/api/tv/applied?what=back&x=%.3f&y=%.3f", bx, y)), timeout: 3) }
+                }
+                #endif
+            }
+        } else { content }
+    }
+}
+extension View { func shotSpot(_ what: String, pose: String) -> some View { modifier(ShotSpot(what: what, pose: pose)) } }

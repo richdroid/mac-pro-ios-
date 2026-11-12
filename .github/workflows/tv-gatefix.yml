@@ -13,7 +13,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 80
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +30,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 65
+        timeout-minutes: 95
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -40,6 +40,7 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
           xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          rm -f /tmp/tv-hitches.log
           node ci/mock-chumby.js &
           sleep 2
           M=http://127.0.0.1:9002
@@ -60,6 +61,50 @@ jobs:
             shot search$x $d 12 $M -tab 1 -pose search
             curl -s $M/real/reset > /dev/null; shot realseries-end$x $d 14 $M/real -tab 3 -pose realseries
           }
+          spot() { grep -o "what=$1&x=[0-9.]*&y=[0-9.]*" /tmp/tv-home-applied.log 2>/dev/null | tail -1 | sed -E 's/.*x=([0-9.]+)&y=([0-9.]+)/\1 \2/'; }
+          tap() { local p; p=$(spot $1); if [ -n "$p" ]; then echo "tap $1 at $p"; $D "$DEVICE" touch $p 0.08 || echo "touch $1 failed"; else echo "no position for $1"; fi; }
+          # Status' gear tapped, Settings' Back tapped; the gear again, TV settings, then Back twice by taps; real touches.
+          navfilm() {
+            local d=$1 x=$2
+            rm -f /tmp/tv-home-applied.log
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-settingsnav$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 5 -pose settingsnav -swipeLog YES
+            sleep 9
+            tap gear; sleep 4; tap back; sleep 4
+            tap gear; sleep 4; tap tvrow; sleep 5; tap back; sleep 4; tap back; sleep 4
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-settingsnav$x-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            cp /tmp/tv-home-applied.log dist/tv-settingsnav$x-spots.log 2>/dev/null || true
+          }
+          # Stremio's tile on Apps tapped: Watch, at its top.
+          tilefilm() {
+            local d=$1 x=$2
+            rm -f /tmp/tv-home-applied.log
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-stremiotile$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 1 -pose stremiotile
+            sleep 9
+            tap stremio; sleep 5
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-stremiotile$x-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # Every tab in turn, twice, with the slow-frame log.
+          tourfilm() {
+            local d=$1 x=$2
+            local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-tour$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES
+            sleep 25
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            sleep 2
+            tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-tour$x-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-tour$x-hitches.log
+          }
+          films() { navfilm "$@"; tilefilm "$@"; tourfilm "$@"; }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
@@ -67,14 +112,17 @@ jobs:
           $D "$DEVICE" pose open; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
           poses 3 -portrait
+          films 3 -portrait
           # Open flat, two panes.
           $D "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -open
+          films 3 -open
           # Folded, upright on the outer display.
           $D "$DEVICE" rotate 1 || true; sleep 3
           $D "$DEVICE" pose closed || true; sleep 5
           $D "$DEVICE" rotate 1 || true; sleep 3
           poses 1 ""
+          films 1 ""
           ls dist
       - name: Publish
         if: always()
@@ -82,8 +130,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view tv-gatefix-ci >/dev/null 2>&1 || gh release create tv-gatefix-ci --prerelease --title "TV gate fix shots" --notes "Shots from the tv-gate-fix branch."
-          for f in shots.zip status.txt; do
+          for f in shots.zip films.zip status.txt; do
             for i in 1 2 3; do gh release upload tv-gatefix-ci "$f" --clobber && break; sleep 15; done
           done

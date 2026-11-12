@@ -267,9 +267,23 @@ struct FlickScreen: View {
     @State private var rects = RectBox()
     // The row (or the card) held and in the hand: it follows the finger, and let go upward it's the pick.
     @State private var liftedID: String?
-    // Open, the left pane's height: the poster is held small enough that the words and "More" (six lines' room) end above
-    // the big key at the pane's foot, never under it (gate of 9a5c774: "On the TV" over "More").
+    // Open, on a show's episodes, the big key sits at the left pane's foot: the poster is held small enough that the name,
+    // the words' first three lines and "More" end above it (gate of 9a5c774: "On the TV" over "More"). Opened, the words
+    // scroll clear of it. Elsewhere (the streams, a film) there's no key there and the poster is 276's size (gate of 96f5f42).
     @State private var leftPaneH: CGFloat = 0
+    @State private var bigTitlesH: CGFloat = 0
+    var keyAtFoot: Bool { step == .episodes }
+    var posterCap: CGFloat {
+        guard keyAtFoot, leftPaneH > 0, bigTitlesH > 0 else { return 300 }
+        #if os(iOS)
+        let words = UIFont.preferredFont(forTextStyle: .subheadline).lineHeight * 3 + 8 + UIFont.preferredFont(forTextStyle: .footnote).lineHeight + 4
+        #else
+        let words: CGFloat = 84
+        #endif
+        // Top inset, the name, the gaps, the words and More, room clear above the key, and the key with its foot inset.
+        let h = leftPaneH - 36 - bigTitlesH - 16 - 16 - words - 20 - (50 + 16)
+        return max(140, h * 2 / 3)
+    }
     // Where the finger has it and how it leans, in a box only the lifted thing's own look reads (LiftedLook): as state of
     // this screen, every point the finger moved redrew the whole streams page under the row in the hand.
     @State private var lift = LiftBox()
@@ -642,11 +656,12 @@ struct FlickScreen: View {
     var bigHeading: some View {
         VStack(alignment: .leading, spacing: 16) {
             titles(big: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in if abs(h - bigTitlesH) > 0.5 { bigTitlesH = h } }
             poster.aspectRatio(2 / 3, contentMode: .fit)
-                .containerRelativeFrame(.horizontal) { w, _ in min(w * 0.6, 300, leftPaneH > 0 ? max(140, (leftPaneH - 380) * 2 / 3) : 300) }
+                .containerRelativeFrame(.horizontal) { w, _ in min(w * 0.6, 300, posterCap) }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map["poster"] = $0 }
-            blurb(6)
+            blurb(keyAtFoot ? 3 : 6)
             // On the streams, the episode being chosen for: its number, name, length and what happens, so the side
             // under the poster is the episode's page, not half empty (r27).
             if step == .streams, let e = episode {
@@ -809,11 +824,13 @@ struct FlickScreen: View {
                                   currentLabel: target.map(isOn) == true ? "Playing" : resumeTarget?.verb == "Resume" ? "Resume" : "Up next",
                                   progress: target?.id == upNext ? upNextProgress : nil, info: info) { choose($0) }
                     // To where he is, as soon as that's known, and again on coming back from the streams.
+                    // Folded, the show's name, poster and key share the scroll: only as far as brings his episode into view,
+                    // never scrolling the page's head away when it's already in sight (gate of 96f5f42).
                     .onChange(of: target?.id, initial: true) { _, id in
                         guard let id else { return }
-                        Task { try? await Task.sleep(nanoseconds: 60_000_000); withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { proxy.scrollTo(id, anchor: .center) } }
+                        Task { try? await Task.sleep(nanoseconds: 60_000_000); withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) { proxy.scrollTo(id, anchor: panes ? .center : nil) } }
                     }
-                    .onAppear { if let id = episode?.id ?? target?.id { Task { proxy.scrollTo(id, anchor: .center) } } }
+                    .onAppear { if let id = episode?.id ?? target?.id { Task { proxy.scrollTo(id, anchor: panes ? .center : nil) } } }
                 }
             }
         }

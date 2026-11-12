@@ -374,7 +374,8 @@ final class TVModel {
         }
     }
     // Each ask for Settings (tab 9), for Status to push it.
-    var settingsAsked = UserDefaults.standard.integer(forKey: "tab") == 9 ? 1 : 0
+    // A phone coming from a build with a Settings tab: Status is saved in its place, so Settings is pushed this once only.
+    var settingsAsked = { guard UserDefaults.standard.integer(forKey: "tab") == 9 else { return 0 }; UserDefaults.standard.set(5, forKey: "tab"); return 1 }()
     var address: String { didSet { SavedAddress.save(address) } }
     @ObservationIgnored private var loops: [Task<Void, Never>] = []
     @ObservationIgnored private var toastTask: Task<Void, Never>?

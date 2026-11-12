@@ -118,7 +118,7 @@ struct RootView: View {
             return
         }
         // Shown by the views themselves (the episodes over the Remote, a held scrub, the Live Activity), nothing to flick.
-        if ["tour", "type", "episodes", "scrub", "island", "connection", "tvsettings", "tvapps"].contains(pose) { return }
+        if ["tour", "type", "episodes", "scrub", "island", "connection", "tvsettings", "tvapps", "settingsnav", "stremiotile"].contains(pose) { return }
         // The Remote's picture hidden, then shown again, as its held menu does it: filmed, so each change is seen to fade.
         if pose == "mirror" {
             Task {
@@ -416,6 +416,11 @@ struct Page<C: View>: View {
     @State private var path = NavigationPath()
     @State private var top = 0
     @State private var scrolled = PageScrollY()
+    // With the bar shown (Status' gear), the room it takes above the heading where iOS puts its items in the side strip
+    // (folded, open flat): taken back, so the heading sits where every other tab's does (gate of 96f5f42: 15 pt lower).
+    @State private var outerTop: CGFloat = 0
+    @State private var innerTop: CGFloat = 0
+    var barRoom: CGFloat { showsBar ? max(0, innerTop - outerTop) : 0 }
     var body: some View {
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
@@ -430,7 +435,8 @@ struct Page<C: View>: View {
                 // "Watch" printed over "Continue watching" (Richard, 2026-11-07: "look at how the watch header interacts
                 // with the other text"): it can only follow a scroll view it finds at the page's root, and the pages'
                 // own layouts (two panes, overlays) hid it.
-                .safeAreaInset(edge: .top, spacing: 0) { if !alwaysInline { MovingTitle(title: title, scrolled: scrolled) } }
+                .safeAreaInset(edge: .top, spacing: 0) { if !alwaysInline { MovingTitle(title: title, scrolled: scrolled).padding(.top, -barRoom) } }
+                .background { if showsBar { Color.clear.onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { t in if abs(t - innerTop) > 0.5 { innerTop = t } } } }
                 .toolbar(alwaysInline || showsBar ? .automatic : .hidden, for: .navigationBar)
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
                 .environment(\.pagePush, PagePush(push: { path.append($0) }))
@@ -444,6 +450,7 @@ struct Page<C: View>: View {
         }
         .topShade()
         .background { Ambience() }
+        .background { if showsBar { Color.clear.onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { t in if abs(t - outerTop) > 0.5 { outerTop = t } } } }
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
         // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
         .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
@@ -1987,6 +1994,7 @@ struct Banner: View {
             .clipShape(RoundedRectangle(cornerRadius: TVLook.banner, style: .continuous))
             .overlay { FrontRing(pkg: app.pkg) }
             .overlay(alignment: .topTrailing) { OnTVMark(pkg: app.pkg) }
+            .shotSpot(browses && app.pkg == "com.stremio.one" ? "stremio" : "", pose: "stremiotile")
         }
         .buttonStyle(PressCard()).accessibilityLabel(app.name).accessibilityAddTraits(model.frontApp == app.pkg ? .isSelected : [])
         .contextMenu { if browses { Button("Open on TV", systemImage: "tv") { open() } } }
