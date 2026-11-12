@@ -47,6 +47,7 @@ function saveProblem(f) {
   return null;
 }
 http.createServer((q, s) => {
+  if (macMusic(q, s)) return;      // a stand-in Mac's Music, for Sounds' "Play a song from the Mac"
   if (chumbyScene(q, s)) return;   // the Chumby app's poses; see the block at the end
   const a = new URL(q.url, 'http://x').searchParams.get('a');
   if (a === 'save' && q.method === 'POST') {
@@ -382,7 +383,7 @@ function chumbyScene(q, s) {
   // A real 320 x 240 capture from the Chumby on every Chumby shot, so the hero can be judged.
   const shot = () => { s.setHeader('content-type', 'image/jpeg'); s.end(require('fs').readFileSync(__dirname + '/chumby-screen.jpg')); return true; };
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap|missed)\//);
   if (!m) return false;
   const scene = m[1];
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
@@ -485,6 +486,12 @@ function chumbyScene(q, s) {
   // A nap set 20 minutes from now, as the app's chips or Control Center leave it: the one "Nap" one-off, a short Beep.
   if (scene === 'nap' && a === 'state') {
     return json({ ...stateNow(data.state), alarms: [...data.state.alarms, alarm({ name: 'Nap', when: 'once', time: String(Math.floor(Date.now() / 60000) + 20), duration: '5' })] });
+  }
+  // Three alarms from the last day that went wrong, one of each kind the Missed card names: missed outright, rang late,
+  // and rang with no sound heard.
+  if (scene === 'missed' && a === 'state') {
+    const now = Date.now() / 1000;
+    return json({ ...stateNow(data.state), missed: [{ at: now - 9 * 3600, rang: false, name: 'Weekend' }, { at: now - 5 * 3600, rang: true, name: 'Work' }, { at: now - 40 * 60, rang: true, silent: true, name: 'Nap' }] });
   }
   // Pandora playing a song it started a minute and a half ago, for Sounds' Now.
   if (scene === 'playing' && a === 'state') return json({ ...stateNow(data.state), music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
@@ -1014,4 +1021,38 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
       if (op === 2 || op === 0) fromApp(data);
     }
   });
+}
+
+// ---- A stand-in Mac's Music (mac-dash music.js) -----------------------------------------------------------------------
+// The app is launched with -mac http://127.0.0.1:9000/mac<name>, so each film has its own Mac: /api/music/search answers
+// from a short list of jazz records, play answers after about 17 s as the real one does (Music, AirPlay to the Chumby,
+// then its 4 s check), now names the song for a minute after, and stop clears it. A name starting "macfail" has the play
+// turned down after 6 s with the real Mac's words for the Chumby dropping the song.
+const macSongs = [
+  ['00000000000000A1', 'Blue in Green', 'Miles Davis', 'Kind of Blue', 337], ['00000000000000A2', 'So What', 'Miles Davis', 'Kind of Blue', 562],
+  ['00000000000000A3', 'Blue Train', 'John Coltrane', 'Blue Train', 643], ['00000000000000A4', 'Freddie Freeloader', 'Miles Davis', 'Kind of Blue', 589],
+  ['00000000000000A5', 'Blue Monk', 'Thelonious Monk', 'Thelonious Alone in San Francisco', 248], ['00000000000000A6', 'Take Five', 'The Dave Brubeck Quartet', 'Time Out', 324],
+  ['00000000000000A7', 'Blue Rondo à la Turk', 'The Dave Brubeck Quartet', 'Time Out', 404],
+].map(([id, name, artist, album, secs]) => ({ id, name, artist, album, secs }));
+const macNow = {};
+function macMusic(q, s) {
+  const m = q.url.match(/^\/(mac[\w-]*)\/api\/music\/(\w+)/);
+  if (!m) return false;
+  const [, mac, op] = m, qs = new URL(q.url, 'http://x').searchParams;
+  const json = (v, wait = 0) => setTimeout(() => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); }, wait);
+  if (op === 'search') {
+    const t = (qs.get('q') || '').toLowerCase();
+    json({ ok: true, songs: macSongs.filter(x => [x.name, x.artist, x.album].some(f => f.toLowerCase().includes(t))) }, 700);
+  } else if (op === 'now') {
+    const n = macNow[mac], on = n && Date.now() - n.at < 60000;
+    json(on ? { ok: true, state: 'playing', onChumby: true, playing: true, song: { name: n.song.name, artist: n.song.artist, album: n.song.album } } : { ok: true, state: 'stopped', onChumby: false, playing: false });
+  } else if (op === 'play' && q.method === 'POST') {
+    const song = macSongs.find(x => x.id === qs.get('id'));
+    if (!song) json({ ok: false, error: 'That song is no longer in the Mac’s library.' }, 1500);
+    else if (mac.startsWith('macfail')) json({ ok: false, error: 'The Chumby didn’t take the song. Try again in a moment.' }, 6000);
+    else setTimeout(() => { macNow[mac] = { song, at: Date.now() }; json({ ok: true }); }, 17000);
+  } else if (op === 'stop' && q.method === 'POST') {
+    delete macNow[mac]; json({ ok: true }, 800);
+  } else { s.statusCode = 404; s.end(); }
+  return true;
 }

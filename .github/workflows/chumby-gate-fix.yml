@@ -1,0 +1,117 @@
+name: Chumby gate fix (branch)
+# A working branch's own short run: "Play a song from the Mac" filmed before it reaches his phone (the 11-12 gate held
+# 9a5c774 because the build never showed it: the Mac's address is only baked in when signed). A stand-in Mac in
+# ci/mock-chumby.js answers /api/music, given with -mac. Stills of Sounds with the row, light and dark, folded, open flat
+# and open upright; the Missed card with one of each kind; films of the picker opening with its keyboard, a pick
+# starting then playing (Sounds, and Home), a start the Mac turns down, a second pick during a start, and a Mac that
+# never answers. Only for pushes to chumby-gate-fix; published to the chumby-gate-fix-shots release.
+on:
+  push:
+    branches: [chumby-gate-fix]
+permissions:
+  contents: write
+concurrency:
+  group: chumby-gate-fix
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 90
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          # The on-screen keyboard, as his phone has it (the picker opens with it up).
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9000
+          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 3; sleep 12
+          xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          film() { # display, file name, seconds, mac address, launch args... ; a still at the end too
+            local d=$1 name=$2 secs=$3 mac=$4; shift 4
+            sleep 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -mac $mac "$@"
+            sleep $secs
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-$name-end.png
+            kill -INT $REC; wait $REC; echo "film $name exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          still() { # display, file name, seconds, address, launch args...
+            local d=$1 name=$2 secs=$3 addr=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $addr "$@"
+            sleep $secs
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          stills() { # display, suffix
+            for A in light dark; do
+              xcrun simctl ui "$DEVICE" appearance $A
+              still $1 sounds-row-$A$2 8 $M -tab 3 -mac $M/mac
+            done
+            xcrun simctl ui "$DEVICE" appearance light
+            still $1 missed$2 9 $M/missed -tab 2 -mac $M/mac
+          }
+          films() { # display, suffix
+            local d=$1 x=$2
+            # A throwaway first film: the first one of a run came out stretched, with no launch in it (chumby-reach).
+            film $d warm$x 6 $M/mac -tab 3
+            film $d macpick$x 9 $M/mac -tab 3 -pose macpick
+            film $d macplay$x 30 $M/macplay$x -tab 3 -pose macplay
+            film $d machome$x 30 $M/machome$x -tab 3 -pose machome
+            film $d macfail$x 18 $M/macfail$x -tab 3 -pose macfail
+            film $d macsecond$x 42 $M/macsecond$x -tab 3 -pose macsecond
+            # Nothing answers at the Mac's address: "Starting" for the patience, then the calm note.
+            film $d macgone$x 45 http://127.0.0.1:9009 -tab 3 -pose macgone
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          stills 1 ""
+          films 1 ""
+          $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
+          stills 3 -open
+          $D "$DEVICE" rotate 1; sleep 5
+          stills 3 -portrait
+          films 3 -portrait
+      - name: Collect crash reports
+        if: always()
+        run: |
+          mkdir -p dist/crashes
+          cp ~/Library/Logs/DiagnosticReports/*.ips dist/crashes/ 2>/dev/null || true
+      - name: Publish the result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.ips' '*.mp4' || zip -q ../shots.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-gate-fix-shots >/dev/null 2>&1 || gh release create chumby-gate-fix-shots --target chumby-gate-fix --prerelease --title "Chumby gate fix (branch)" --notes "Branch-only shots."
+          for f in shots.zip status.txt; do
+            for i in 1 2 3 4; do gh release upload chumby-gate-fix-shots "$f" --clobber && break; echo "upload of $f failed, try $i"; sleep 20; done
+          done

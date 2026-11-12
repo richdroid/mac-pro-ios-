@@ -1481,7 +1481,8 @@ struct NightButton: View {
 // MARK: - Channels
 struct EditorRow: Identifiable, Equatable { let id: String; var name: String; var on: Bool; var secs: Int; var own: Int }
 let widgetTimes = [10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600]
-func timeText(_ t: Int) -> String { t < 60 ? "\(t) sec" : "\(t / 60) min" }
+// 90 reads "1 min 30 sec": cut to whole minutes it said "1 min" twice in the menu (designer, 11-12).
+func timeText(_ t: Int) -> String { t < 60 ? "\(t) sec" : t % 60 == 0 ? "\(t / 60) min" : "\(t / 60) min \(t % 60) sec" }
 
 struct ChannelsTab: View {
     @EnvironmentObject var model: ChumbyModel
@@ -2095,6 +2096,7 @@ struct SoundsTab: View {
                             .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
                     }
                     .foregroundStyle(.tint).disabled(model.unreachable)
+                    .task { await MacMusicPose.sounds(model) { pickSong = true } }
                 }
             } header: { SectionHead(icon: "speaker.wave.2.fill", text: "Now") }
             WokeUpTo()
