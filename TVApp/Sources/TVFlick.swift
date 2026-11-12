@@ -27,21 +27,19 @@ import UIKit.UIGestureRecognizerSubclass
         return false
         #endif
     }
-    // The screen as it is now, over everything, until lift. Never more than one. `hole`: a place (window points) left
-    // out of it, for a thing that's already in the air from there (a card thrown from its shelf).
-    static func cover(hole: CGRect? = nil, for seconds: Double = 1.5) {
+    // The screen as it is now, over everything, until lift. Never more than one. `underFlight`: the screen as it is once
+    // this turn's changes are drawn (the card he threw gone from its shelf), under the picture already in the air.
+    static func cover(underFlight: Bool = false, for seconds: Double = 1.5) {
         #if os(iOS)
-        guard veil == nil, let w = window, let v = w.snapshotView(afterScreenUpdates: false) else { return }
+        guard veil == nil, let w = window else { return }
+        let flying = underFlight ? RenderFlight.views : []
+        flying.forEach { $0.isHidden = true }
+        let snap = w.snapshotView(afterScreenUpdates: underFlight)
+        flying.forEach { $0.isHidden = false }
+        guard let v = snap else { return }
         v.frame = w.bounds
         v.isUserInteractionEnabled = false
-        if let hole, hole.width > 4 {
-            let m = CAShapeLayer()
-            let p = UIBezierPath(rect: v.bounds)
-            p.append(UIBezierPath(roundedRect: hole.insetBy(dx: -8, dy: -8), cornerRadius: 16))
-            m.path = p.cgPath; m.fillRule = .evenOdd
-            v.layer.mask = m
-        }
-        w.addSubview(v)
+        if let lowest = flying.first { w.insertSubview(v, belowSubview: lowest) } else { w.addSubview(v) }
         veil = v
         raised += 1
         let n = raised
@@ -67,7 +65,7 @@ import UIKit.UIGestureRecognizerSubclass
     // the Remote's own backdrop (the poster's colour on black, as AmbienceView draws it) while the picture flies over it,
     // so the row he let go of doesn't sit on a frozen page beside its own picture through the turn that brings the Remote
     // up (CI 7bbaf47: 0.4 s of the lifted row left behind). The Remote's keys then come up through it at lift.
-    static func dissolve(_ rect: CGRect, hole picked: CGRect? = nil, soft: TVImage?, tint: Color?, duration: Double = 0.2) {
+    static func dissolve(_ rect: CGRect, hole picked: CGRect? = nil, soft: TVImage?, tint: Color?, duration: Double = 0.2, flush: Bool = true) {
         #if os(iOS)
         guard let v = veil, let w = v.superview as? UIWindow, rect.width > 20, rect.height > 20 else { return }
         // The page's whole height, its own bar at the top included (left on the still, it was a black band over the
@@ -118,7 +116,7 @@ import UIKit.UIGestureRecognizerSubclass
         hole.path = path.cgPath; hole.fillRule = .evenOdd
         v.layer.mask = hole
         UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { still.alpha = 0 }
-        CATransaction.flush()
+        if flush { CATransaction.flush() }
         #endif
     }
     #if os(iOS)
@@ -161,6 +159,9 @@ import UIKit.UIGestureRecognizerSubclass
     private static var card: UIView?
     private static var wide = false
     private static var hasImage = false
+    #endif
+    #if os(iOS)
+    static var views: [UIView] { [ground, card, poster].compactMap { $0 } }
     #endif
     static var flying: Bool {
         #if os(iOS)
@@ -221,7 +222,7 @@ import UIKit.UIGestureRecognizerSubclass
         #endif
     }
     // Toward the Remote's picture, `to` in window points; again later, from wherever it is, if that place moves.
-    static func aim(_ to: CGRect, first: Bool) {
+    static func aim(_ to: CGRect, first: Bool, flush: Bool = true) {
         #if os(iOS)
         guard let g = ground, let p = poster, to.width > 20 else { return }
         let end = inner(to)
@@ -238,7 +239,7 @@ import UIKit.UIGestureRecognizerSubclass
             UIView.animate(springDuration: 0.3, bounce: 0.1, initialSpringVelocity: 0, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState], animations: anim)
         }
         // Sent to the render server now, not at the end of this turn: the turn that brings the Remote up is the long one.
-        CATransaction.flush()
+        if flush { CATransaction.flush() }
         #endif
     }
     // The picture, arrived after it left (not in memory at the pick: a link's page picture, YouTube's banner): it comes up
@@ -1487,7 +1488,7 @@ struct FlickScreen: View {
         }
     }
     func finish(_ outcome: FlickHand.Outcome, id: String, translation: CGSize, send: () -> Void) {
-        HandTrace.note(String(format: "end %@ dy=%.0f vy=%.0f", "\(outcome)", translation.height, hands.hand.velocity.dy))
+        HandTrace.note(String(format: "end %@ dy=%.0f vy=%.0f ", "\(outcome)", translation.height, hands.hand.velocity.dy) + hands.hand.realNote)
         hands.id = nil
         switch outcome {
         case .thrown:
@@ -1756,48 +1757,72 @@ struct FlickScreen: View {
         SwipeLog.note("send begin")
         FlickClock.begin()
         releasedAt = Date()
+        // Worked out first and handed to the render server before any of this page's state changes: each flush of the
+        // screen with this page's state changed laid the whole page out again (CI ef52168: two flushes in the pick, 0.36
+        // and 0.66 s, before the Remote's tab was even asked for).
+        let fromRect = flies ? from ?? rects.map["poster"] ?? CGRect(x: flickFrame.width / 2 - 60, y: flickFrame.height * 0.6, width: 120, height: 60) : .zero
+        // The picture the Remote will show is the one to carry: a link with no page picture carries YouTube's banner.
+        let carried = screenURL ?? URL(string: item.art) ?? URL(string: startingArt)
+        var image = heldImage, soft = softImage
+        if target.image == nil, let u = carried {
+            image = ImageStore.shared.cached(u) ?? (URL(string: startingArt).flatMap { ImageStore.shared.cached($0) })
+            soft = soft ?? ImageStore.shared.small(u, 16)
+        }
+        // The picture leaves his finger now, in the render server, over a still of this page that dissolves into the
+        // Remote's ground; the Remote comes up under it in the next turn, the long one, and the still fades off it once
+        // that turn is over (goRemote).
+        var aimed = false
+        let rendered = flies && fromRect.width > 4
+        if rendered {
+            ScreenVeil.cover()
+            // A card thrown from its shelf has been in the air since he let go: the same flight goes on to the Remote.
+            if !RenderFlight.flying { RenderFlight.launch(from: fromRect.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), image: image, soft: soft, tint: tint,
+                                wide: image.map(PosterOnBlur.isWide) ?? (shown.kind == "youtube" || isLink)) }
+            if let aim = model.mirrorSlot.flatMap({ $0.width > 20 ? $0 : nil }) ?? model.rememberedSlot(slotKey) ?? model.rememberedSlot("warm" + slotKey) {
+                RenderFlight.aim(aim, first: true, flush: false); aimed = true
+            } else if flickFrame.width > 0 {
+                // Nowhere known yet (the first pick ever on a screen this size): up toward the top, where the picture is,
+                // and on to the real place the moment the Remote says it.
+                let w = flickFrame.width * 0.8
+                RenderFlight.aim(CGRect(x: flickFrame.midX - w / 2, y: flickFrame.minY + 70, width: w, height: w * 9 / 16), first: true, flush: false); aimed = true
+            }
+            ScreenVeil.dissolve(flickFrame, hole: fromRect.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), soft: soft, tint: tint, flush: false)
+            #if os(iOS)
+            CATransaction.flush()
+            #endif
+            SwipeLog.note("send flown")
+        }
         flown = true
         FlickReceipt.thrown(receiptID)
         liftedID = nil
         answered = false; written = false
-        flyFrom = flies ? from ?? rects.map["poster"] ?? CGRect(x: flickFrame.width / 2 - 60, y: flickFrame.height * 0.6, width: 120, height: 60) : .zero
-        // The picture the Remote will show is the one to carry: a link with no page picture carries YouTube's banner.
-        let carried = screenURL ?? URL(string: item.art) ?? URL(string: startingArt)
-        if target.image == nil, let u = carried {
-            heldImage = ImageStore.shared.cached(u) ?? (URL(string: startingArt).flatMap { ImageStore.shared.cached($0) })
-            softImage = softImage ?? ImageStore.shared.small(u, 16)
-            if softImage == nil, let h = heldImage { Task { softImage = await ImageStore.shrunk(h, 16) } }
-        }
+        flyFrom = fromRect
+        if target.image == nil { heldImage = image; softImage = soft }
+        if softImage == nil, let h = heldImage { Task { softImage = await ImageStore.shrunk(h, 16) } }
         // Held where it is first: the tab changing under it lays the space around it out again.
         if flickFrame.width > 0 { held = flickFrame }
-        // The picture leaves his finger now, in the render server, over a still of this page; the Remote comes up under
-        // the still in the long turn that follows, and the still fades off it once that turn is over (goRemote).
-        if flies, flyFrom.width > 4 {
-            ScreenVeil.cover()
-            // A card thrown from its shelf has been in the air since he let go: the same flight goes on to the Remote.
-            if !RenderFlight.flying { RenderFlight.launch(from: flyFrom.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), image: heldImage, soft: softImage, tint: tint,
-                                wide: heldImage.map(PosterOnBlur.isWide) ?? (shown.kind == "youtube" || isLink)) }
+        if rendered {
             // Not in memory: fetched now and put on the flight wherever it has got to.
-            if heldImage == nil, target.image == nil, let u = URL(string: startingArt) ?? carried {
+            if image == nil, target.image == nil, let u = URL(string: startingArt) ?? carried {
                 Task {
                     guard let i = await ImageStore.shared.load(u) else { return }
                     heldImage = i
                     RenderFlight.picture(i)
                 }
             }
-            if let aim = model.mirrorSlot.flatMap({ $0.width > 20 ? $0 : nil }) ?? model.rememberedSlot(slotKey) ?? model.rememberedSlot("warm" + slotKey) {
-                RenderFlight.aim(aim, first: true); renderAimed = true
-            } else if flickFrame.width > 0 {
-                // Nowhere known yet (the first pick ever on a screen this size): up toward the top, where the picture is,
-                // and on to the real place the moment the Remote says it.
-                let w = flickFrame.width * 0.8
-                RenderFlight.aim(CGRect(x: flickFrame.midX - w / 2, y: flickFrame.minY + 70, width: w, height: w * 9 / 16), first: true); renderAimed = true
-            }
+            if aimed { renderAimed = true }
             renderFlown = true
-            ScreenVeil.dissolve(flickFrame, hole: flyFrom.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), soft: softImage, tint: tint)
             var under = Transaction(); under.disablesAnimations = true
             withTransaction(under) { fadingOut = true }
         }
+        // The Remote's tab is the long turn: it comes in the next one, after this one has been drawn and the flight and
+        // the dissolve are running in the render server, so nothing he sees waits on it. (A timer, not a task: a task
+        // queued on the main queue runs before the screen is drawn.)
+        let hand = { @MainActor in self.handOver() }
+        if rendered { Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { hand() } } } else { hand() }
+    }
+    func handOver() {
+        SwipeLog.note("send hand-over")
         // The start is the model's from the pick: the Remote lays out under this screen with its poster, its bar's place
         // and its line already there, so nothing comes in late once it's in sight.
         if !alreadyOn, video || target.image != nil || flies {
@@ -1811,7 +1836,6 @@ struct FlickScreen: View {
             var quiet = Transaction(); quiet.disablesAnimations = true
             SwipeLog.note("send tab")
             withTransaction(quiet) { model.remoteArrival = Date(); model.flickHandoff = true; model.tab = 0; model.keepMood(until: item.art); model.mood = tint }
-            SwipeLog.note("send settle")
             RailMark.settle()
             SwipeLog.note("send settled")
         }
@@ -2767,10 +2791,10 @@ struct ShelfFlick: ViewModifier {
         // (d5d94f4: the flick page flashed up black between, with three copies of the card).
         if from.width > 4 {
             let u = URL(string: item.art)
-            ScreenVeil.cover(hole: from, for: 3)
             RenderFlight.launch(from: from, image: u.flatMap { ImageStore.shared.cached($0) }, soft: u.flatMap { ImageStore.shared.small($0, 16) },
                                 tint: ImageStore.shared.cachedBand(u), wide: item.isYouTube)
             ShelfHand.shared.item = nil
+            ScreenVeil.cover(underFlight: true, for: 3)
         }
         var t: FlickTarget
         if item.isYouTube {

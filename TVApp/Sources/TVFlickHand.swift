@@ -107,6 +107,13 @@ struct FlickHand {
         if let r = real { let v = Self.speed(r); if v.dy < velocity.dy { return v } }
         return velocity
     }
+    // For the build's logs: what the finger's own clock said.
+    var realNote: String {
+        guard let r = real, let f = r.first, let l = r.last else { return "real none" }
+        let moved = r.first { hypot($0.p.x - f.p.x, $0.p.y - f.p.y) > rules.still }?.t ?? -1
+        let v = Self.speed(r)
+        return String(format: "real n=%d moved=%.2f up=%.2f rise=%.0f rv=%.0f rushed=%d", r.count, moved, l.t, f.p.y - l.p.y, v.dy, isRushed ? 1 : 0)
+    }
     private var isRushed: Bool { real.map { Self.rushed($0, rules) } ?? false }
 
     // Where the finger has it, from where it was lifted.
