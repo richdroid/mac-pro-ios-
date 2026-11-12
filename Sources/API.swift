@@ -98,7 +98,7 @@ struct Status: Decodable {
     }
 
     let model: String; let macos: String; let build: String; var uptime: Double; var load: [Double]; let cpuModel: String
-    var cpu: CPU; var mem: Memory; let disk: Disk; var net: Network; var hist: History
+    var cpu: CPU; var mem: Memory; var disk: Disk; var net: Network; var hist: History
     let apps: [App]; let installed: [String]; let procs: [Process]; let tailscale: Tailscale
     let claude: Claude; let usage: Usage; var upgrade: Upgrade; let oclp: OCLP; let sharing: Sharing
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
@@ -197,6 +197,16 @@ struct API {
         let (d, resp) = try await session.data(for: r)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
         return try JSONDecoder().decode(Clip.self, from: d).text
+    }
+    // The Mac's clipboard and its change count, which rises on every copy, the same text or not. Nil from a bridge that
+    // doesn't send it yet.
+    func clipboardState() async throws -> (text: String, count: Int?) {
+        struct Clip: Decodable { let text: String; let count: Int? }
+        var r = request("/api/clipboard"); r.timeoutInterval = 8
+        let (d, resp) = try await session.data(for: r)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        let c = try JSONDecoder().decode(Clip.self, from: d)
+        return (c.text, c.count)
     }
     func setClipboard(_ text: String) async throws {
         var r = request("/api/clipboard", method: "POST")

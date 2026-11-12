@@ -81,6 +81,13 @@ final class AppModel: ObservableObject {
     let notice = NoticeStore()
     let screen = RemoteScreen()
     @Published var screenOpen = false { didSet { screen.paused = !screenOpen } }
+    // The Screen opens in place, with no slide up from the foot: its parts appear where they belong as the slide was
+    // ending, so the open flat dock rose the last 49 pt into place (the designer's fourth review), and Status went
+    // under it piece by piece. Closing still slides away.
+    func openScreen() {
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { screenOpen = true }
+    }
     @Published var signingIn = false
     var status: Status? {
         get { statusStore.status }
@@ -414,6 +421,8 @@ final class AppModel: ObservableObject {
             s.alerts = Status.Alert.samples
             // The CPU as hot as its alert says, so the tile under the banner agrees with it (designer, 2026-11-11).
             s.temps = (s.temps ?? []).map { $0.name == "CPU" ? Status.Temp(name: "CPU", c: 96) : $0 }
+            // And the disk as full as its alert says: 21 GB free, the tile's bar red.
+            s.disk = Status.Disk(total: s.disk.total, used: s.disk.total - 21 * 1_073_741_824, free: 21 * 1_073_741_824)
         // Two parts of the Mac needing a look, as its bridge will count them: Status's chip says so and opens Health.
         case "needslook": s.healthBad = 2
         // Before the Mac has said anything about itself: the chip is grey "Checking".

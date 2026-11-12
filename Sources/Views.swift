@@ -53,7 +53,7 @@ struct MacProApp: App {
         if id.hasPrefix("session:") { model.openSession(key: String(id.dropFirst(8))) } else if id.hasPrefix("usage:") { model.show(tab: 3) } else if id == "ios:waiting" { model.tab = 1 } else { model.tab = 0 }
     }
     private func openScreenIfAsked() {
-        if ScreenRequest.wanted || UserDefaults.standard.bool(forKey: "openScreen") { ScreenRequest.wanted = false; model.screenOpen = true }
+        if ScreenRequest.wanted || UserDefaults.standard.bool(forKey: "openScreen") { ScreenRequest.wanted = false; model.openScreen() }
     }
 }
 
@@ -74,7 +74,7 @@ enum TransitionTour {
         let steps: [(Double, () -> Void)] = [
             (3.0, { model.history = .cpu }), (5.0, { model.processes = .cpu }), (7.0, { model.processes = nil }), (8.5, { model.history = nil }),
             (10.0, { model.tab = 2 }), (11.0, { model.openSession(key: "chumby") }), (13.0, { model.sessionScreen = nil }),
-            (14.5, { model.tab = 0 }), (15.5, { model.screenOpen = true }), (18.5, { model.screenOpen = false }),
+            (14.5, { model.tab = 0 }), (15.5, { model.openScreen() }), (18.5, { model.screenOpen = false }),
         ]
         Task { @MainActor in
             var at = 0.0
@@ -141,12 +141,16 @@ struct TopEdge: ViewModifier {
 // a turn as it happens. Read statically in each body (TopEdge.statusBar), it kept the old posture's value until the next
 // reading redrew the page, and the whole page dropped 14 pt seconds after the turn, untouched (designer, resize regate).
 private struct StatusBarTopKey: EnvironmentKey { static let defaultValue: CGFloat = 59 }
+private struct CompactWindowKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var compactWindow: Bool { get { self[CompactWindowKey.self] } set { self[CompactWindowKey.self] = newValue } } }
 extension EnvironmentValues { var statusBarTop: CGFloat { get { self[StatusBarTopKey.self] } set { self[StatusBarTopKey.self] = newValue } } }
 struct StatusBarTopReader: ViewModifier {
     @State private var top = TopEdge.statusBar
+    @State private var compact = false
     func body(content: Content) -> some View {
         content
             .environment(\.statusBarTop, top)
+            .environment(\.compactWindow, compact)
             // The window's new size arrives as a turn starts; its new top inset only as it ends (CI 7169d6b: 0.45 s later),
             // so the title moved after the page had settled. On the Duo the status bar is along the top only open upright
             // (wide enough for two columns, taller than wide), so the new posture's value is taken from the size at once;
@@ -154,6 +158,9 @@ struct StatusBarTopReader: ViewModifier {
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
                 guard size.width > 0 else { return }
                 let upright = size.width > 600 && size.height > size.width
+                // The outer display: narrow and short (the list there is under 520 by 760).
+                let small = size.width < 520 && size.height < 760
+                if small != compact { compact = small }
                 let predicted: CGFloat = upright ? max(top, 20) : min(top, 19)
                 if (predicted < 20) != (top < 20) { top = predicted }
             }
@@ -580,6 +587,10 @@ struct Screen<Content: View>: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.statusBarTop) private var statusBarTop
     @Environment(\.paneLayout) private var panes
+    // The outer display (narrow and short): Status draws its Mac and tiles smaller. Read from the window's size as a fold
+    // starts (StatusBarTopReader), not from the list's own size after layout, which drew the folded page once at full
+    // size and then again smaller (resize branch).
+    @Environment(\.compactWindow) private var compactWindow
     let tab: Int
     let title: String
     let listed: Bool
@@ -620,6 +631,8 @@ struct Screen<Content: View>: View {
             // One gap between the blocks on Status, where they sit on the page's own background.
             .listSectionSpacing(tab == 0 ? .custom(28) : .default)
             .scrollsUnder(side == .right ? 1 : 0)
+            // One column on the outer display: Status draws its Mac and tiles a little smaller (StatusTab).
+            .environment(\.statusCompact, side == .all && compactWindow)
             .keepsPlace("tab\(tab)", proxy)
             // No pull to refresh: every figure follows the Mac by itself (each second on Status, every 10 seconds
             // otherwise, and at once on opening a tab), so pulling only ever showed what was already there (Richard,
@@ -779,7 +792,13 @@ struct StateRow: View {
 }
 
 // The web dashboard's tile: a label, a big number and a line you can drag along to read the past.
+// Folded, Status's Mac and tiles are drawn a little smaller, so the Disk tile shows in the first screenful without a
+// scroll (designer, 2026-11-11). Only the outer display, read from the page's own size as laid out (one column, narrow
+// and short), so opening or folding mid-view follows; never the screen's fixed bounds, which said "folded" open too.
+private struct StatusCompactKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues { var statusCompact: Bool { get { self[StatusCompactKey.self] } set { self[StatusCompactKey.self] = newValue } } }
 struct WebTile: View {
+    @Environment(\.statusCompact) private var compact
     let title: String, value: String, detail: String
     var spark: [Double] = []
     var top: Double?
@@ -806,18 +825,19 @@ struct WebTile: View {
                 // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
                 // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
                 // as its width did ("48.4 MB/s" one second, "3 KB/s" the next).
-                figure.lineLimit(1).contentTransition(.numericText())
+                figure.lineLimit(1).fixedSize(horizontal: false, vertical: true).contentTransition(.numericText())
                     // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                     // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                     // Nor as he arrives on the tab: the first readings after coming back are simply there (resize gate).
                     .animation(NavTransit.shared.active || AppModel.justArrived ? nil : .easeOut(duration: 0.2), value: value)
                 Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
                 if let fill {
-                    ProgressView(value: min(max(fill, 0), 1)).tint(fill > 0.9 ? .red : macBlue).padding(.top, 10)
+                    // Orange from 80 %, red from 90 % (designer, 2026-11-11).
+                    ProgressView(value: min(max(fill, 0), 1)).tint(fill > 0.9 ? .red : fill > 0.8 ? .orange : macBlue).padding(.top, 10)
                 } else if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                     SparkLine(values: spark, top: top)
-                        .frame(height: 42).padding(.top, 8)
+                        .frame(height: compact ? 30 : 42).padding(.top, compact ? 6 : 8)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -946,14 +966,15 @@ struct EvenGrid: Layout {
 struct Hero: View {
     @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
+    @Environment(\.statusCompact) private var compact
     let s: Status
     var body: some View {
         let _ = SwipeLog.mark("hero body")
         VStack(spacing: 2) {
-            Image("MacPro").resizable().scaledToFit().frame(height: 148)
+            Image("MacPro").resizable().scaledToFit().frame(height: compact ? 84 : 148)
                 // The glow fades to nothing inside the portrait's own height: a round one reached past the row's top and was
                 // cut there in a straight line.
-                .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: 148))
+                .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: compact ? 84 : 148))
                 .accessibilityLabel("Mac Pro, Late 2013")
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
@@ -1080,7 +1101,7 @@ struct QuickActions: View {
         HStack(alignment: .top, spacing: 4) {
             // The Mac's screen has its own connection: it stays live while the status can't be read (Richard's ruling,
             // 2026-11-11), and waits only when the Mac can't be reached or wants its code.
-            button("screen", "macwindow", "Screen", waits: model.problem != nil || model.needsSignIn) { model.screenOpen = true }
+            button("screen", "macwindow", "Screen", waits: model.problem != nil || model.needsSignIn) { model.openScreen() }
             // Dims itself, in its own colours, to match the other three.
             DisplayHoldButton(statusOn: displayOn, statusOff: displayOff).disabled(model.stale)
             button("copy", "doc.on.doc", "Copy from Mac") {

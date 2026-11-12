@@ -169,6 +169,11 @@ const alertMac = () => { const m = realMac(); if (Date.now() - alertFrom > 20000
 http.createServer((q, s) => { if (!alertFrom || Date.now() - alertAsked > 25000) alertFrom = Date.now(); alertAsked = Date.now(); macRoutes(q, s, () => JSON.stringify(alertMac()), realLive); }).listen(9042, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
+// The same Mac opened while its display is asleep or waking, as Screen Sharing really answers then (2026-11-10): a 2 x 2
+// rectangle for the first whole-screen request, then only what changes, and the whole screen only when asked again.
+http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9012, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, true));
+// And that Mac sitting idle: after the 2 x 2 answer nothing on it changes, so it sends nothing until asked again.
+http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9013, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, false, 'idle'));
 // A Mac that wants its access code, for the Mac Pro app's shot of the sign-in row.
 http.createServer((q, s) => { s.statusCode = 401; s.setHeader('content-type', 'application/json'); s.end('{"error":"Sign in to the Mac Pro."}'); }).listen(9003, '127.0.0.1');
 // And a sample TV for the TV app, with drawn pictures so banner crops, posters and the wall can be judged.
@@ -253,8 +258,13 @@ http.createServer((q, s) => {
     return;
   }
   if (tvPose(q, s)) return;
-  const scene = (q.url.match(/^\/(stremio|youtube|ending)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(stremio|youtube|ending|longabout)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
+  // A film whose description runs well past four lines, for the words opened in place (the TV search branch's films).
+  if (scene === 'longabout' && q.url.startsWith('/api/tv/stremio-meta')) {
+    s.setHeader('content-type', 'application/json');
+    return s.end(JSON.stringify({ about: 'A made-up crew of careful thieves plans one last job in a city that never seems to sleep, while a detective who has given everything to the work closes in on them. Both men are the best at what they do, and both know it. Over one long week the two circle each other through the streets, the docks and the diners at four in the morning, until a single meeting over coffee changes what either of them thought the job was for. Written for the screenshot, and long enough to be cut at four lines.', episodes: [] }));
+  }
   if (scene && q.url === '/api/tv/status') { s.setHeader('content-type', 'application/json'); return s.end(tvScene(scene)); }
   // Skips take the real player a few seconds, so the shot catches them still on their way.
   if (scene && q.method === 'POST' && q.url === '/api/tv/player-seek') { s.setHeader('content-type', 'application/json'); return setTimeout(() => s.end(JSON.stringify({ ok: true, position: 7630000, duration: 8000000 })), 6000); }
@@ -278,6 +288,8 @@ http.createServer((q, s) => {
     const hits = JSON.parse(tvStremio).rows.flatMap(r => r.items).filter(i => (i.kind === 'series') === series && i.kind !== 'youtube' && i.title.toLowerCase().includes(term) && !seen.has(i.title) && seen.add(i.title));
     return s.end(JSON.stringify({ rows: hits.length ? [{ title: 'Results', items: hits }] : [] }));
   }
+  // The TV's settings and its apps, for Settings' pages (TV settings, Apps on the TV).
+  if (q.url === '/api/tv/manage') { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ settings: { sleep_after: 3600000, screensaver_after: 600000, animations: 0.5, cec_auto_off: 1 }, volume: 8, volumeMax: 15, canArrange: true, apps: tvApps.filter(a => a[0] !== 'com.google.android.play.games').map((a, i) => ({ pkg: a[0], name: a[1], hasIcon: true, wide: true, removable: !['com.codex.musicwebtv', 'com.android.tv.settings', 'flar2.homebutton'].includes(a[0]), row: 'APPS' })) })); }
   if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' }))) })); }
   // Mint's own screen for the song on: its words, timed, and what plays after it (the Playing tab mirrors both).
   if (q.url.startsWith('/api/tv/music-detail')) {
@@ -533,9 +545,10 @@ function chumbyScene(q, s) {
 //                 the status goes from the home screen to Stremio open, its player paused, then playing.
 //   /blankbanner  YouTube Music's banner as it once came from the Mac, white on white, to show the app's drawn one.
 //   /cold         Status as the real box first answers after a quiet spell: no CPU reading, nothing moving, no history.
-//   /rasleep /roffline /ryoutube /rmint /ridle /repisode
+//   /rasleep /roffline /ryoutube /rmint /rmintplain /ridle /repisode
 //                 The Remote's states: the TV asleep, the TV not answering, a YouTube video playing, Mint's music only,
-//                 nothing on (the home screen), and a Stremio episode part way through.
+//                 nothing on (the home screen), and a Stremio episode part way through. rmintplain is rmint with a song
+//                 whose words have no times (Mint's untimed lyrics), for the Playing tab's plain words and Show all.
 //   /rfilm /rjoin /rstall
 //                 The live picture's own states: a Stremio film playing with its poster (the stream stops for it); joining
 //                 a recording under way, as the bridge does it (headers at once, then after 1.2 s everything since the last
@@ -559,7 +572,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; return tvReal(q, s, path, query, json); }
@@ -586,6 +599,14 @@ function tvPose(q, s) {
   if (/^\/art[0-2]\.png$/.test(path)) {
     const tones = [[[200, 60, 40], [40, 20, 90]], [[30, 150, 110], [10, 40, 60]], [[230, 190, 60], [120, 30, 120]]][+path[4]];
     s.setHeader('content-type', 'image/png'); s.end(png(300, 300, tones[0], tones[1])); return true;
+  }
+  // Mint's screen for a song whose words have no times: only the words, more than the dozen the Playing tab shows at first.
+  if (scene === 'rmintplain' && path === '/api/tv/music-detail') {
+    const verse = ['Words that come with no times at all', 'Set down plainly, one after another', 'A line about a long drive home', 'And another about the rain', ''];
+    const words = [...verse, ...verse, ...verse, 'And the last line, on its own'];
+    return json({ ok: true, title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', playing: true, position_ms: 40000, duration_ms: 180000, airplay: false, asked_at: Date.now(),
+      lyrics: { status: '', synced: false, lines: words.map(w => [0, 0, w]) },
+      queue: { remaining: 7, items: ['Next Song', 'Another Song', 'Third Song'].map(title => ({ title, artist: 'Sample Artist', album: 'Sample Album', duration_ms: 200000, art: tvBase + '/art.png' })) } });
   }
   // No picture to be had: the stream answers and stays silent, and no still comes either.
   if (scene === 'rstall' && path === '/api/tv/screen-live') { s.writeHead(200, { 'content-type': 'video/h264', 'cache-control': 'no-store' }); s.flushHeaders(); return true; }
@@ -614,7 +635,7 @@ function tvPose(q, s) {
     q.on('close', () => { clearTimeout(wait); clearInterval(timer); });
     return true;
   }
-  if (/^r(tvoff|tvawayfilm|tvaway|cecoff|asleep|offline|youtube|youtubebare|mint|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
+  if (/^r(tvoff|tvawayfilm|tvaway|cecoff|asleep|offline|youtube|youtubebare|mint|mintplain|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
     const v = JSON.parse(tvStatus), now = Date.now();
     // Which scene's status the app really asked for, so a shot showing the sample's song can be told apart from one that
     // never reached its scene (review of dfd490e: ryoutubebare showed Mint's Sample Song).
@@ -632,7 +653,9 @@ function tvPose(q, s) {
     // minute or miss; r35: the Playing tab showed an empty box).
     if (scene === 'ryoutubebare') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Lil B - Gotham City [ Music Video ] [ Official ]', 'Lil B'], position: 83000, sampledAt: now, canSeek: false }; }
     if (scene === 'ryoutube') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Sample Video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 610000, canSeek: false, art: tvBase + '/api/tv/shot' }; }
-    if (scene === 'rmint') { v.app = 'com.codex.musicwebtv'; delete v.session; }
+    // The song mid-play as the shot is taken: the sample's own reading is stamped when the mock started, so by the shot
+    // the song had run out (3:00 / -0:00, gate dd1a).
+    if (scene === 'rmint' || scene === 'rmintplain') { v.app = 'com.codex.musicwebtv'; delete v.session; v.music.sampledAt = now; }
     if (scene === 'ridle') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'rjoin' || scene === 'rstall') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
     if (scene === 'rfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; }
@@ -838,7 +861,14 @@ function tvReal(q, s, path, query, json) {
 // A stand-in for the Mac's Screen Sharing. The app's pixel format is honoured (32-bit BGRX or 16-bit 5-6-5). With
 // `slow`, it behaves as the real Mac does over his link (2026-11-07): the whole screen as one ZRLE rectangle, a busy
 // wallpaper so it's about as big as the Mac's, and everything sent at 358 KB/s, the speed his sessions showed.
-function mockScreen(req, sock, slow = false) {
+// With `sleepy`, the first whole-screen request gets a 2 x 2 rectangle, as from a Mac whose display was asleep.
+function mockScreen(req, sock, slow = false, sleepy = false) {
+  // When each step happens, against the film's own launch time in the log, to tell the phone's wait from the stand-in's.
+  const opened = Date.now();
+  const stamp = what => console.log(`mock screen ${slow ? 'slow' : sleepy || 'plain'} ${what} at ${Date.now()} (+${Date.now() - opened} ms)`);
+  stamp('upgrade');
+  const busy = slow || sleepy;
+  let dozing = sleepy;
   const key = req.headers['sec-websocket-key'];
   if (!key || !req.url.startsWith('/novnc/ws/vnc')) return sock.destroy();
   const accept = require('crypto').createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
@@ -861,11 +891,15 @@ function mockScreen(req, sock, slow = false) {
       else { frame(b.subarray(0, budget)); outbox[0] = b.subarray(budget); budget = 0; }
     }
   }, 20) : null;
-  const later = data => setTimeout(() => (slow ? outbox.push(data) : frame(data)), LAG);
+  // Sleepy: in pieces of 32 KB, as the real bridge passes on what Screen Sharing writes. One 4 MB message took the
+  // app's WebSocket seconds to hand over (15 s and more in the build's simulator), and held up everything behind it.
+  const pieces = data => { for (let at = 0; at < data.length; at += 32768) frame(data.subarray(at, at + 32768)); };
+  const later = data => setTimeout(() => (slow ? outbox.push(data) : sleepy ? pieces(data) : frame(data)), LAG);
   // Colours as 0xRRGGBB, put in the app's pixel format when sent.
   let bpp = 32;
   const bg = 0x1c162c, bright = 0xebebf5, dim = 0x786e96, side = 0x121216;
-  const band = { x: 240, y: 120, w: 800, h: 560 };
+  // Sleepy: a small part of the screen changes a few times a second, as a quiet desktop does.
+  const band = sleepy ? { x: 440, y: 260, w: 400, h: 280 } : { x: 240, y: 120, w: 800, h: 560 };
   // The wallpaper of the slow stand-in: noise in 2 × 2 blocks over a gradient, which deflates about as well as a
   // real desktop does.
   const wall = (X, Y) => {
@@ -874,16 +908,30 @@ function mockScreen(req, sock, slow = false) {
     const r = 205 + (t * 30 | 0) + (n & 15), g = 120 + (t * 40 | 0) + ((n >> 4) & 31), b = 175 + ((n >> 9) & 31);
     return (Math.min(r, 255) << 16) | (Math.min(g, 255) << 8) | Math.min(b, 255);
   };
+  // Sleepy: the wallpaper is worked out once, when the first such session opens (it takes this script seconds), so the
+  // whole picture is ready as fast as the real Mac's when it's asked for.
+  if (sleepy && !mockScreen.wallpaper) {
+    const all = new Uint32Array(W * H);
+    for (let Y = 0; Y < H; Y++) for (let X = 0; X < W; X++) all[Y * W + X] = wall(X, Y);
+    mockScreen.wallpaper = all;
+  }
   const paint = (x0, y0, w, h, scroll) => {
     const out = new Uint32Array(w * h);
+    if (sleepy && w === W && h === H) {
+      // The saved wallpaper with the band's page on top.
+      out.set(mockScreen.wallpaper);
+      const inner = paint(band.x, band.y, band.w, band.h, scroll);
+      for (let y = 0; y < band.h; y++) out.set(inner.subarray(y * band.w, (y + 1) * band.w), (band.y + y) * W + band.x);
+      return out;
+    }
     for (let y = 0; y < h; y++) {
       const Y = y0 + y, row = y * w;
       if (Y < band.y || Y >= band.y + band.h) {
-        if (slow) for (let x = 0; x < w; x++) out[row + x] = wall(x0 + x, Y); else out.fill(side, row, row + w);
+        if (busy) for (let x = 0; x < w; x++) out[row + x] = wall(x0 + x, Y); else out.fill(side, row, row + w);
         continue;
       }
       out.fill(bg, row, row + w);
-      if (slow) for (let x = 0; x < w; x++) { const X = x0 + x; if (X < band.x || X >= band.x + band.w) out[row + x] = wall(X, Y); }
+      if (busy) for (let x = 0; x < w; x++) { const X = x0 + x; if (X < band.x || X >= band.x + band.w) out[row + x] = wall(X, Y); }
       // A line every 56 px, 22 px tall and of varying length; the one in the middle bright, the rest dim.
       const v = Y - band.y + scroll, k = Math.floor(v / 56);
       if (v % 56 >= 22) continue;
@@ -944,7 +992,8 @@ function mockScreen(req, sock, slow = false) {
   // Like a real server: an answer goes out when there's a request waiting and the page has moved since the last one.
   // Slow, the page holds still: a moving page there would only queue behind the first picture, as on the real link.
   const answer = () => { if (pending > 0 && sent !== scroll) { pending--; sent = scroll; count++; update(band.x, band.y, band.w, band.h, scroll); } };
-  const tick = setInterval(() => { if (!slow) scroll += 3; answer(); }, 16);
+  let ticks = 0;
+  const tick = setInterval(() => { if (!slow && sleepy !== 'idle' && (!sleepy || ++ticks % 12 === 0)) scroll += 3; answer(); }, 16);
   const report = setInterval(() => { if (count) console.log(`mock screen: ${Math.round(count / 2)} pictures a second`); count = 0; }, 2000);
   const stop = () => { clearInterval(tick); clearInterval(report); if (pump) clearInterval(pump); sock.destroy(); };
   sock.on('close', stop); sock.on('error', stop);
@@ -961,18 +1010,22 @@ function mockScreen(req, sock, slow = false) {
         init.writeUInt16BE(W, 0); init.writeUInt16BE(H, 2);
         Buffer.from([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]).copy(init, 4);
         init.writeUInt32BE(4, 20); init.write('Mock', 24);
-        later(init);
+        later(init); stamp('server init');
         continue;
       }
       if (!msgs.length) return;
       const t = msgs[0];
       const need = t === 0 ? 20 : t === 2 ? (msgs.length >= 4 ? 4 + 4 * msgs.readUInt16BE(2) : 4) : t === 3 ? 10 : t === 4 ? 8 : t === 5 ? 6
-        : t === 6 ? (msgs.length >= 8 ? 8 + msgs.readUInt32BE(4) : 8) : 1;
+        // 250 and 251 are the app's own messages to the bridge (a smooth scroll, and its hello). Read as one byte each,
+        // the hello's three zero bytes began a 20-byte message that swallowed every request after it, three bytes out
+        // of step for good: the stand-in sent the first four pictures and then nothing, in every film since 2026-11-05.
+        : t === 6 ? (msgs.length >= 8 ? 8 + msgs.readUInt32BE(4) : 8) : t === 250 ? 8 : t === 251 ? 4 : 1;
       if (msgs.length < need) return;
       const m = msgs.subarray(0, need); msgs = msgs.subarray(need);
       if (t === 0) bpp = m[4] === 16 ? 16 : 32;
       if (t === 3) {
-        if (m[1] === 0) { count++; sent = scroll; update(0, 0, W, H, scroll); }
+        if (m[1] === 0 && dozing) { dozing = false; if (sleepy === 'idle') sent = scroll; update(0, 0, 2, 2, scroll); }
+        else if (m[1] === 0) { count++; sent = scroll; stamp('whole asked'); update(0, 0, W, H, scroll); }
         else { pending++; answer(); }
       }
     }
@@ -989,6 +1042,10 @@ function mockScreen(req, sock, slow = false) {
       for (let i = 0; i < n; i++) data[i] ^= mask[i & 3];
       buf = buf.subarray(at + 4 + n);
       if (op === 8) return stop();
+      // A ping is answered, as the real bridge's WebSocket does. Unanswered, the app's check on coming to the front
+      // (2 s, no answer) dropped every film's first connection and opened a second, which looked like a 2 to 3 s
+      // sign-in on the open display (the designer's fourth review).
+      if (op === 9) { if (!sock.destroyed && n < 126) { sock.write(Buffer.from([0x8a, n])); sock.write(data); } stamp('ping answered'); continue; }
       if (op === 2 || op === 0) fromApp(data);
     }
   });

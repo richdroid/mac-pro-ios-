@@ -373,7 +373,7 @@ final class ChumbyModel: ObservableObject {
     // Notes about whether tonight's alarm is as he left it (a skip or an undo the Chumby didn't confirm), and one that
     // arrives up to a minute after the tap (a station looked up), stay until he puts them away or the Chumby agrees:
     // one that cleared itself after six seconds was gone before a locked phone was looked at again.
-    static let keptNotes: Set<String> = ["skip", "pandora"]
+    static let keptNotes: Set<String> = ["skip", "pandora", "macmusic"]
     @Published private(set) var kept: [String: String] = [:]
     func letGo(_ id: String) {
         if kept[id] != nil { withAnimation(.snappy) { kept[id] = nil } }
@@ -809,6 +809,11 @@ final class ChumbyModel: ObservableObject {
     // A Pandora station added from its share link (a=pstation, chumby 9d3c1a1): the Chumby reads the station's number
     // from the link and its name from Pandora's own page, and adds it to the stations an alarm can play. Nothing of his
     // account is used. The Chumby answers at once and the result arrives in its state a few seconds later.
+    // A song the Mac's Music is playing on the Chumby (ChumbyMusic.swift), for the Now card.
+    @Published var macPlaying: MacPlaying?
+    // A song just chosen, until the Mac says the Chumby has it (about a quarter of a minute): the Now card shows it as
+    // starting, with no Stop yet.
+    @Published var macStarting: MacPlaying?
     @Published var addingStation = false
     @Published var stationAdded: String?
     func addPandora(_ link: String) async {

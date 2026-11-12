@@ -18,7 +18,7 @@ struct ChumbyApp: App {
                 .font(.custom("Trebuchet MS", size: 16))
                 .toggleStyle(SwitchToggleStyle(tint: ChumbyPalette.on))
                 .onChange(of: phase) { _, p in
-                    if p == .active { model.start(); CalendarWake.shared.syncIfDue(); ChumbyNotify.shared.share(); if model.tab == 2 { ChumbyNotify.shared.clearDelivered() }; Task { await model.loadSongs(force: true) } } else { model.stop() }
+                    if p == .active { model.start(); CalendarWake.shared.syncIfDue(); ChumbyNotify.shared.share(); if model.tab == 2 { ChumbyNotify.shared.clearDelivered() }; Task { await model.loadSongs(force: true); await model.loadMacPlaying() } } else { model.stop() }
                     #if os(iOS)
                     if p == .background { CalendarWake.shared.scheduleRefresh() }
                     #endif
@@ -259,8 +259,82 @@ enum ScrollHold {
 }
 struct GlassRow: View {
     @Environment(\.colorScheme) private var scheme
+    static func fill(_ dark: Bool) -> Color { dark ? Color(red: 0.09, green: 0.19, blue: 0.38).opacity(0.62) : Color.white.opacity(0.46) }
     var body: some View {
-        Rectangle().fill(scheme == .dark ? Color(red: 0.09, green: 0.19, blue: 0.38).opacity(0.62) : Color.white.opacity(0.46))
+        Rectangle().fill(Self.fill(scheme == .dark))
+    }
+}
+// A section's only row, drawn as a card like the sections around it (designer, 11-11). The list rounds every section by
+// about 25 pt, so a one-line row alone in its section (about 52 pt) came out a capsule beside rounded-rectangle cards: two
+// edges on one page. The cure is a second line, as "How they ring" has: what the row does, said under it in the row itself
+// (the note that was the section's footer), so the card stands about 68 pt at its natural height and shows a straight side.
+// The row draws the cards' own glass in their own 25 pt corner and their 20 pt insets, so it can never come out a capsule
+// whatever the list does with one-row sections. Never padded taller than its words: a toggle row made tall is a fake.
+// `on: false` while the section holds other rows too (a failure note under it), so the list draws it as one card again.
+// Better still, where a row belongs with a card beside it, it joins that card (Accept AirPlay in Now).
+struct SoloCard: ViewModifier {
+    static let radius: CGFloat = 25, inset: CGFloat = 20
+    var note: String?
+    var on = true
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        let row = VStack(alignment: .leading, spacing: 3) {
+            content
+            if let note { Text(note).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+        }
+        if on {
+            row
+                .padding(.horizontal, Self.inset).padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GlassRow.fill(scheme == .dark), in: RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
+                .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+        } else {
+            row.padding(.vertical, 2)
+        }
+    }
+}
+extension View {
+    func soloCard(note: String? = nil, on: Bool = true) -> some View { modifier(SoloCard(note: note, on: on)) }
+}
+// A control's label in two lines: what it is, and what it does under it. For a switch or a menu, the note goes here, inside
+// the control's own label, never under the control (`soloCard(note:)` is for rows with nothing at their trailing end): so
+// the switch centres on both lines and the note stays left of it (designer, 11-11).
+struct TwoLine: View {
+    let title: String, note: String
+    init(_ title: String, _ note: String) { self.title = title; self.note = note }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+            Text(note).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+// A menu row with a note: the title and the menu's value on the first line, the note under both across the row's full
+// width. Never the system's picker row, which stacked the value under a long label, and never the note squeezed into a
+// column beside a long value (the template's Afterwards, 11-11).
+struct MenuRow<V: Hashable, Options: View>: View {
+    let title: String, note: String
+    @Binding var selection: V
+    @ViewBuilder let options: () -> Options
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 12) {
+                Text(title)
+                Spacer(minLength: 8)
+                Picker(title, selection: $selection, content: options).labelsHidden().pickerStyle(.menu).layoutPriority(1)
+            }
+            Text(note).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 2)
+    }
+}
+// A section's footer: a note under the card, smaller and quieter than the rows, never read as content. The app's font and
+// ink are set for everything at its root, footers included, which drew them at body size in the rows' own colour.
+struct SectionFoot: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text).font(.custom("Trebuchet MS", size: 13, relativeTo: .footnote)).foregroundStyle(.secondary)
     }
 }
 // A menu's own close takes about a third of a second, and a pick in it runs at once. Rows that change under the menu in
@@ -288,7 +362,9 @@ extension Binding where Value: Equatable {
 struct PageTitle<Trailing: View>: View {
     let title: String
     let trailing: Trailing
-    init(_ title: String, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) { self.title = title; self.trailing = trailing() }
+    // The row a pinned title (pinsTitle) takes over from: it reports where it is.
+    var pins = false
+    init(_ title: String, pins: Bool = false, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) { self.title = title; self.pins = pins; self.trailing = trailing() }
     var body: some View {
         HStack {
             Text(title).font(.custom("Trebuchet MS", size: 30).weight(.bold))
@@ -296,6 +372,7 @@ struct PageTitle<Trailing: View>: View {
             trailing
         }
         .frame(minHeight: 44)
+        .modifier(PinnedRowIf(on: pins))
         .pageLog("title \(title)")
         .listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 4, leading: 6, bottom: 0, trailing: 6))
     }
@@ -313,17 +390,28 @@ struct TwoPane<L: View, R: View>: View {
     var rightTrailing: AnyView?
     // False for the moment the right pane changes pages (Alarms' show), so one page fades out before the next fades in.
     var rightShown = true
-    init(rightTitle: String? = " ", rightTrailing: AnyView? = nil, rightShown: Bool = true, @ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) {
-        self.rightTitle = rightTitle; self.rightTrailing = rightTrailing; self.rightShown = rightShown; self.left = left(); self.right = right()
+    // A page that brings its own list and title (the alarm editor, a calendar day), shown in place of `right`'s list, so
+    // it can pin its own title row with its buttons.
+    var rightPage: AnyView?
+    init(rightTitle: String? = " ", rightTrailing: AnyView? = nil, rightShown: Bool = true, rightPage: AnyView? = nil, @ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) {
+        self.rightTitle = rightTitle; self.rightTrailing = rightTrailing; self.rightShown = rightShown; self.rightPage = rightPage; self.left = left(); self.right = right()
     }
     var body: some View {
         if panes {
             FoldSplit {
                 List { Group { left }.listRowBackground(GlassRow()) }
             } right: {
-                // A title row, blank unless the pane holds a page, so both panes start level.
-                List { if let rightTitle { PageTitle(rightTitle) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
-                    .opacity(rightShown ? 1 : 0)
+                Group {
+                    if let rightPage { rightPage }
+                    else {
+                        // A title row, blank unless the pane holds a page, so both panes start level. A real title (Calendar
+                        // settings, with Done) stays pinned once the pane is scrolled.
+                        let pinned = rightTitle.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
+                        List { if let rightTitle { PageTitle(rightTitle, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
+                            .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
+                    }
+                }
+                .opacity(rightShown ? 1 : 0)
             }
             .seaList()
             .animation(.snappy, value: model.unreachable)
@@ -338,6 +426,86 @@ struct TwoPane<L: View, R: View>: View {
     }
 }
 
+// A pane's title row with its buttons (Cancel and Save, Done), pinned once the pane is scrolled: open flat, a page's title
+// row was a list row and scrolled away, so a change at the foot meant scrolling back up to save (designer, 11-11).
+// The hand-over is exact (gate 5): the row reports where it rests (PageTitle pins: true), and the instant it starts to leave, the
+// same title is drawn at that very frame, above the list, while the list's rows (the row itself among them) are masked out
+// from that frame's foot up and fade in over the 18 pt under it. So the title never moves, never leaves, never shifts aside.
+@Observable final class PinnedRowFrame {
+    var frame: CGRect = .zero
+    // Where the row rests, as its distance from the list's top: kept relative, so a fold or a turn mid-scroll moves it
+    // with the list rather than leaving it where the old layout had it.
+    var restY: CGFloat?
+    var box: CGRect = .zero
+    // The list's scroll, from its top: the rest is taken only at exactly 0 (never mid-move, never in a bounce), and the
+    // pinned title shows the moment it is past 0 (gate 7: latched while "near the top", the rest followed the row through
+    // its first half point and the title stepped 1–2 px at the hand-over).
+    var offset: CGFloat = 0
+    var atRest: Bool { abs(offset) < 0.01 }
+    // The list's frame when the rest was last taken: a fold or turn at rest moves the row by layout, not by scroll, and
+    // the rest is taken again then (gate 8).
+    var latchedBox: CGRect = .zero
+}
+struct PinnedTitle<Bar: View>: ViewModifier {
+    let on: Bool
+    let bar: Bar
+    @State private var row = PinnedRowFrame()
+    @State private var topInset: CGFloat = 0
+    func body(content: Content) -> some View {
+        let box = row.box
+        let restY = row.restY
+        let shown = on && restY != nil && row.offset > 0.01
+        content
+            .environment(row)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, o in
+                row.offset = o
+                if row.atRest, row.frame != .zero { row.restY = row.frame.minY - row.box.minY; row.latchedBox = row.box }
+            }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { row.box = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
+            // Over the whole display, safe areas included: laid out inside them it clipped the rows flat above the
+            // bottom edge, even at rest ("A mask on a scroll view covers the safe area, or it clips").
+            .mask {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: shown ? max(0, topInset + (restY ?? 0) + row.frame.height) : 0)
+                    LinearGradient(colors: [.black.opacity(shown ? 0 : 1), .black], startPoint: .top, endPoint: .bottom).frame(height: TabBarFade.fade)
+                    Color.black
+                }
+                .ignoresSafeArea()
+            }
+            .overlay(alignment: .topLeading) {
+                if shown, let restY {
+                    bar.frame(width: row.frame.width, height: row.frame.height)
+                        .offset(x: row.frame.minX - box.minX, y: restY)
+                }
+            }
+    }
+}
+struct PinnedRowIf: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View { if on { content.modifier(PinnedRow()) } else { content } }
+}
+// The title row's own report of where it is, for PinnedTitle; its resting place is taken while the list is at its top.
+// Applied inside PageTitle (pins: true), under its row traits, so the list still sees those (clear, no separator, its
+// insets): wrapped from outside, the row lost them and drew a glass slab behind every title (gate 6).
+struct PinnedRow: ViewModifier {
+    @Environment(PinnedRowFrame.self) private var row: PinnedRowFrame?
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
+            guard let row else { return }
+            row.frame = f
+            // Only the first report: after that the rest is taken by the scroll reading at exactly 0, so a fling's first
+            // frame (the row already moved, the scroll not yet read) can never be taken for the rest.
+            if row.atRest, row.restY == nil || row.latchedBox.size != row.box.size {
+                row.restY = f.minY - row.box.minY; row.latchedBox = row.box
+            }
+        }
+    }
+}
+extension View {
+    func pinsTitle<B: View>(_ on: Bool = true, @ViewBuilder _ bar: () -> B) -> some View { modifier(PinnedTitle(on: on, bar: bar())) }
+}
+
 // The page fades out just above the tab bar, so nothing reads through its glass ("Chumby Classic" did, on Home, under the
 // tabs: Richard's phone, 2026-11-05). A mask on the page, not a band of colour over it: the sea behind stays whole, and
 // only the page's own cards and words dissolve as they reach the bar. The bar's own space is the page's bottom safe area,
@@ -347,16 +515,25 @@ struct TwoPane<L: View, R: View>: View {
 // 0 pt tall and the words read through the bar anyway (r24/r25).
 struct TabBarFade: ViewModifier {
     static let fade: CGFloat = 18
+    // A pushed page open in portrait: its rows also fade out under the top bar (Back and the clock), never scrolling sharp
+    // against Back so a heading read as Back's label (designer, 11-11: "< Awake before it starts").
+    var top = false
     @State private var inset: CGFloat = 0
+    @State private var topInset: CGFloat = 0
     func body(content: Content) -> some View {
         content
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { inset = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
             .mask {
             GeometryReader { _ in
                 // Fades over the 18 pt above the bar's top edge, and nothing at all from that edge down, so no word reads
                 // through the bar. Only where a tab bar runs across the foot (an inset that tall); elsewhere, no mask.
                 let bar = inset > 40
                 VStack(spacing: 0) {
+                    if top && topInset > 0 {
+                        Color.clear.frame(height: max(0, topInset - Self.fade))
+                        LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)
+                    }
                     Color.black
                     if bar {
                         LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)
@@ -474,7 +651,7 @@ struct ConnectionView: View {
             Form {
                 Section {
                     TextField("http://chumby.local", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                } header: { Text("Chumby address") }
+                } header: { SectionHead(icon: "network", text: "Chumby address") }
             }
             .scrollIndicators(.hidden)
             .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
@@ -795,13 +972,7 @@ struct HomeTab: View {
             }
             .accessibilityLabel("The Chumby’s screen, live. Tap to touch it.")
         }
-        .task(id: model.tab) {
-            guard model.tab == 0 else { return }
-            while !Task.isCancelled {
-                let ok = model.running && !model.unreachable ? await model.refreshShot() : true
-                try? await Task.sleep(nanoseconds: model.direct ? 10_000_000_000 : ok ? 1_000_000_000 : 3_000_000_000)
-            }
-        }
+        .pollsScreen(on: 0)
     }
     func spec(_ k: String, _ v: String) -> some View {
         GridRow {
@@ -949,7 +1120,7 @@ struct HomeTab: View {
     @ViewBuilder var playing: some View {
         // Only from a recent reading: the kept copy can say music was playing when the app was last open, and a Playing
         // card that shows for a beat and then goes reads as the app settling in front of him (build 185's film).
-        if model.state.musicPlaying && !model.unreachable && model.stateConfirmed {
+        if (model.state.musicPlaying || model.macPlaying != nil || model.macStarting != nil) && !model.unreachable && model.stateConfirmed {
             NowPlaying(tab: 0, failID: "homeVolume")
                 .padding(.horizontal, 18).padding(.vertical, 10)
                 .card()
@@ -1037,7 +1208,7 @@ struct HomeTab: View {
         }
         .animation(ChumbyModel.ringChange(to: model.sys.ringing), value: model.sys.ringing)
         // Music starting or stopping brings the Playing card in or out, and what's under it moves with it.
-        .animation(.spring(duration: 0.4, bounce: 0.15), value: model.state.musicPlaying)
+        .animation(.spring(duration: 0.4, bounce: 0.15), value: model.state.musicPlaying || model.macPlaying != nil || model.macStarting != nil)
     }
 }
 
@@ -1334,6 +1505,7 @@ struct ChannelsTab: View {
     @State private var adding = false
     @State private var offered: [MoreItem] = []
     @State private var lastAdded: String?
+    @Environment(\.horizontalSizeClass) private var size
     @Environment(\.paneLayout) private var wide
     @Environment(\.colorScheme) private var scheme
 
@@ -1510,11 +1682,12 @@ struct ChannelsTab: View {
             if isIn { remove(w.id) } else { add(id: w.id, name: w.name, own: w.own) }
         } label: {
             HStack(spacing: 14) {
-                Text(w.name).lineLimit(1)
+                Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 12)
-                Image(systemName: isIn ? "checkmark.circle.fill" : "plus.circle.fill").font(.system(size: 24))
-                    .foregroundStyle(isIn ? ChumbyPalette.on : ChumbyPalette.acc(scheme == .dark))
-                    .contentTransition(.symbolEffect(.replace))
+                // Drawn as the remove mark is (RowRemove): a 21 pt disc, its right edge on the content margin.
+                Circle().fill(isIn ? ChumbyPalette.on : ChumbyPalette.acc(scheme == .dark)).frame(width: 21, height: 21)
+                    .overlay { Image(systemName: isIn ? "checkmark" : "plus").font(.system(size: 10, weight: .heavy)).foregroundStyle(.white).contentTransition(.symbolEffect(.replace)) }
+                    .animation(.snappy, value: isIn)
             }
             .frame(minHeight: 34)
             .contentShape(Rectangle())
@@ -1535,9 +1708,9 @@ struct ChannelsTab: View {
         Section {
             if offered.isEmpty { Text("Every widget on your Chumby is in this channel.").foregroundStyle(.secondary) }
             ForEach(offered, id: \.id) { pickRow($0) }
-        } header: { Text("On your Chumby").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil) }
+        } header: { SectionHead(icon: "square.grid.2x2.fill", text: "On your Chumby") }
         Section {
-            Picker("Category", selection: $category) {
+            MenuRow(title: "Category", note: "Pick one to see its widgets.", selection: $category) {
                 Text("Choose one").tag("")
                 ForEach(categories, id: \.0) { Text($0.1).tag($0.0) }
             }
@@ -1546,14 +1719,15 @@ struct ChannelsTab: View {
             if busy { ProgressView().frame(maxWidth: .infinity) }
             if !category.isEmpty && more && !busy { Button("Load more") { page += 1; Task { await loadCatalog() } }.foregroundStyle(.tint) }
             if let f = model.failed("catalog") { FailNote(text: f) }
-        } header: { Text("From the catalog").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil) }
+        } header: { SectionHead(icon: "square.grid.3x3.square", text: "From the catalog") }
     }
     // A widget in the channel: its name, its time on screen on the right, well clear of it, and the mark that takes it out
     // of the channel at the row's end (Richard, 2026-11-10: the ⊖, not a Remove in the time's menu too).
     func widgetRow(_ w: EditorRow) -> some View {
         HStack(alignment: .center, spacing: 14) {
-            Text(w.name).lineLimit(1)
-            Spacer(minLength: 16)
+            // A long name wraps to a second line rather than losing its end ("NYT Top Headlin…" folded, 11-11).
+            Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 12)
             Menu {
                 Picker("Time on screen", selection: rowBinding(w.id, \.secs, w.secs)) {
                     Text(w.own > 0 ? "Auto (\(w.own)s)" : "Auto").tag(0)
@@ -1647,20 +1821,22 @@ struct ChannelsTab: View {
             .textCase(nil)
             .frame(minHeight: 32, alignment: .bottom)
         } footer: {
-            if model.state.shuffle == 1 { Text("Shuffle is on, so your order won’t show until you turn it off.") }
+            if model.state.shuffle == 1 { SectionFoot("Shuffle is on, so your order won’t show until you turn it off.") }
         }
     }
     // What the screen is doing right now, apart from which channel: a jump to one widget, and shuffle. Named for the screen,
     // not "Now playing", which on Sounds means music.
     var onScreen: some View {
         Section {
+            // Open flat and open in portrait (the posture he holds, whose page was half bare sea); folded, Home has it.
+            if wide || size == .regular { ScreenRow() }
             Menu("Jump to a widget") {
                 ForEach(model.state.widgetNames.sorted(), id: \.self) { n in Button(n) { model.cmd("widget", n, id: "nowPlaying") } }
             }.foregroundStyle(.tint)
             Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
         } header: {
             // Open, as tall as the channel header across the fold, so the two panes' cards start level.
-            Text("On screen").font(.custom("Trebuchet MS", size: 16).weight(.bold)).textCase(nil)
+            SectionHead(icon: "tv", text: "On screen")
                 .frame(minHeight: wide ? 32 : 0, alignment: .bottomLeading)
         }
     }
@@ -1750,15 +1926,20 @@ struct NowPlaying: View {
         return s
     }
     var body: some View {
-        let song = nowSong
+        // A song the Mac is playing here (chosen from "Play a song from the Mac") leads: the Chumby's own player isn't
+        // what's playing then, and its Stop is the Mac's.
+        let starting = model.macStarting
+        let mac = starting ?? model.macPlaying
+        let song = mac.map { Song(t: 0, title: $0.name, artist: $0.artist, album: $0.album) } ?? nowSong
+        let playing = model.state.musicPlaying || mac != nil
         let f = song.flatMap { art.found[SongArt.key($0)] }
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
                 // The stand-in stays underneath and the cover fades in over it when it arrives, never a swap in one frame.
                 ZStack {
                     ZStack {
-                        ChumbyPalette.hex(0x2c5bae).opacity(model.state.musicPlaying ? 1 : 0.45)
-                        if model.state.musicPlaying { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
+                        ChumbyPalette.hex(0x2c5bae).opacity(playing ? 1 : 0.45)
+                        if playing { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
                         else { OctopusMark(color: .white.opacity(0.85), eyes: ChumbyPalette.hex(0x2c5bae), blink: 0.08).padding(14) }
                     }
                     if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
@@ -1768,15 +1949,20 @@ struct NowPlaying: View {
                 VStack(alignment: .leading, spacing: 3) {
                     if let song {
                         Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
-                        Text(song.artist).foregroundStyle(.secondary).lineLimit(1)
+                        // Chosen a moment ago and not yet sounding: said so, where its artist will be.
+                        Text(starting != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(1)
+                            .contentTransition(.opacity)
                     } else {
-                        Text(model.state.musicPlaying ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
+                        Text(playing ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
                     }
                 }
                 Spacer(minLength: 8)
                 // Stop only while something plays: with nothing to stop, it's a dead button.
-                if model.state.musicPlaying {
-                    Button { model.cmd("stopmusic", id: failID) } label: { Image(systemName: "stop.fill").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44) }
+                if starting != nil {
+                    // No Stop until there's something to stop: the Mac is still getting it to the Chumby.
+                    ProgressView().frame(width: 44, height: 44)
+                } else if playing {
+                    Button { if mac != nil { model.stopMacMusic() } else { model.cmd("stopmusic", id: failID) } } label: { Image(systemName: "stop.fill").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44) }
                         .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Stop")
                 }
             }
@@ -1794,9 +1980,19 @@ struct NowPlaying: View {
                 Text("\(Int(volume))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
             }
             if let f = model.failed(failID) { FailNote(text: f) }
+            // About the Mac's song (it couldn't start, or didn't stop): kept until put away.
+            if let f = model.failed("macmusic") { FailNote(text: f, dismiss: model.dismissal("macmusic")) }
         }
         .padding(.vertical, 6)
-        .animation(.snappy, value: model.state.musicPlaying)
+        .animation(.snappy, value: playing)
+        // While this tab is up, the Mac is asked what it's playing here: often while it is, so the card lets go soon after
+        // the song ends, and now and then otherwise, so a song started earlier (the phone has been away) shows.
+        .task(id: model.tab == tab) {
+            while model.tab == tab && !Task.isCancelled && MacMusic.reachable {
+                await model.loadMacPlaying()
+                try? await Task.sleep(nanoseconds: model.macPlaying != nil ? 8_000_000_000 : 30_000_000_000)
+            }
+        }
         .task(id: model.sys.vol) { if !dragging && model.sys.vol >= 0 { volume = Double(model.sys.vol) } }
         .task(id: model.tab == tab && model.state.musicPlaying) {
             while model.tab == tab && !Task.isCancelled {
@@ -1814,6 +2010,7 @@ struct SoundsTab: View {
     @State private var alarmVolume = 100.0
     @State private var addStream = false
     @State private var addStation = false
+    @State private var pickSong = false
     @State private var stationLink = ""
     @State private var streamURL = ""
     @State private var streamName = ""
@@ -1882,13 +2079,24 @@ struct SoundsTab: View {
         TwoPane {
             PageTitle("Sounds")
             ReachRow()
-            Section { NowPlaying(tab: 3, failID: "sounds") } header: { SectionHead(icon: "speaker.wave.2.fill", text: "Now", color: ChumbyPalette.sub(dark)) }
+            // AirPlay in the Now card, under the volume: it's how music reaches the Chumby, and alone it was a one-row
+            // capsule beside rounded cards (designer, 11-11).
             Section {
+                NowPlaying(tab: 3, failID: "sounds")
                 Toggle(isOn: Binding(get: { model.sys.airplayOn }, set: { on in model.sys.airplayOn = on; model.cmd("airplay", on ? "1" : "0", id: "airplay") })) {
                     Label("Accept AirPlay", systemImage: "airplayaudio")
                 }
                 if let f = model.failed("airplay") { FailNote(text: f) }
-            }
+                // Any song in his Mac's Music library, played here by the Mac: only where the app knows the Mac, and
+                // while the Chumby accepts AirPlay, which is how the Mac reaches it.
+                if MacMusic.reachable && model.sys.airplayOn {
+                    Button { pickSong = true } label: {
+                        Label("Play a song from the Mac", systemImage: "music.note.list")
+                            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
+                    }
+                    .foregroundStyle(.tint).disabled(model.unreachable)
+                }
+            } header: { SectionHead(icon: "speaker.wave.2.fill", text: "Now") }
             WokeUpTo()
         } right: {
             Section {
@@ -1983,11 +2191,12 @@ struct SoundsTab: View {
                 }
                 .foregroundStyle(.tint).disabled(model.addingStation || model.unreachable)
                 if let f = model.failed("pandora") { FailNote(text: f, dismiss: model.dismissal("pandora")) }
-            } header: { SectionHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark)) } footer: { if let scanNote { Text(scanNote) } }
+            } header: { SectionHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark)) } footer: { if let scanNote { SectionFoot(scanNote) } }
         }
         .seaList()
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
+        .fillCover(isPresented: $pickSong) { MacSongPicker().environmentObject(model) }
         .alert("Add a Pandora station", isPresented: $addStation) {
             TextField("Pandora link", text: $stationLink).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
             Button("Add") { let l = stationLink; stationLink = ""; Task { await model.addPandora(l) } }
@@ -2059,7 +2268,6 @@ struct TinkerTab: View {
         guard !h.isEmpty, !model.sys.tw.contains(where: { $0.caseInsensitiveCompare(h) == .orderedSame }) else { return }
         saveAccounts(model.sys.tw + [h])
     }
-    var host: String { URL(string: model.address)?.host ?? model.address }
 
     var body: some View {
         TwoPane {
@@ -2088,7 +2296,7 @@ struct TinkerTab: View {
                 .pickerStyle(.menu)
                 if let f = model.failed("xorder") { FailNote(text: f) }
             } header: { SectionHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X widget", color: ChumbyPalette.sub(dark)) }
-            footer: { Text(Self.orders.first { $0.id == model.sys.xorder }?.says ?? "Oldest first.") }
+            footer: { SectionFoot(Self.orders.first { $0.id == model.sys.xorder }?.says ?? "Oldest first.") }
             } right: {
             Section {
                 Button { confirm = "restart" } label: {
@@ -2107,9 +2315,9 @@ struct TinkerTab: View {
                     Button("Reboot", role: .destructive) { model.restart(true) }
                 }
                 if let f = model.failed("reboot") { FailNote(text: f) }
-            } header: { SectionHead(icon: "wrench.and.screwdriver.fill", text: "The Chumby", color: ChumbyPalette.sub(dark)) }
-            // The connection, folded away while it works: one line saying so. Open by itself when it doesn't.
-            Section {
+                // The connection, folded away while it works: one line saying so, in the Chumby's own card (alone it was a
+                // one-row capsule). Open by itself when it doesn't. No address on the line: that's plumbing while it
+                // works; it's in the field inside (designer, 11-11).
                 DisclosureGroup(isExpanded: $connection) {
                     TextField("http://chumby.local", text: $address).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .submitLabel(.done)
@@ -2117,14 +2325,15 @@ struct TinkerTab: View {
                     Button("Connect") { connect() }.disabled(address.isEmpty || address == model.address)
                     if let f = model.failed("connect") { FailNote(text: f) }
                 } label: {
-                    HStack(spacing: 10) {
-                        Circle().fill(model.unreachable ? Color.red : ChumbyPalette.on).frame(width: 9, height: 9)
-                        Text(model.unreachable ? "Can’t reach it" : "Connected")
-                        Spacer(minLength: 8)
-                        Text(host).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    // A tile like Restart's and Reboot's above it, so its words start in their column.
+                    HStack(spacing: 14) {
+                        Image(systemName: model.unreachable ? "wifi.exclamationmark" : "wifi").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                            .frame(width: 32, height: 32).background(model.unreachable ? ChumbyPalette.remove(dark) : ChumbyPalette.on, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        Text(model.unreachable ? "Can’t reach the Chumby" : "Connected").font(.body.weight(.semibold))
                     }
+                    .padding(.vertical, 2)
                 }
-            } header: { SectionHead(icon: "network", text: "Connection", color: ChumbyPalette.sub(dark)) }
+            } header: { SectionHead(icon: "wrench.and.screwdriver.fill", text: "The Chumby") }
             Text("Black Chumby photo: Edward Yanquen, Wikimedia Commons, CC BY 2.0, cut out and retouched. Octopus and wordmark: Chumby’s own artwork, from this device.").font(.caption2).foregroundStyle(.secondary).listRowBackground(Color.clear)
         }
         .seaList()
@@ -2152,18 +2361,82 @@ struct SettingRow: View {
     }
 }
 
-// Taking a row out, in the row: a control he can see, never a swipe that slides the row off its card.
+// Taking a row out, in the row: a control he can see, never a swipe that slides the row off its card. Drawn at full
+// strength, a white mark on a coloured disc (red to remove, the accent to put a note away): grey on grey read as disabled
+// (Richard, 11-07: "greyed out xs when they r seemingly actionable r confusing"; designer, 11-11). 44 pt to hit.
 struct RowRemove: View {
     let label: String
     var icon = "minus.circle.fill"
     let action: () -> Void
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 21)).symbolRenderingMode(.hierarchical).foregroundStyle(.secondary)
-                .frame(width: 36, height: 36).contentShape(Rectangle())
+            // A drawn disc, so its edge is exactly the frame's (a symbol's side bearing left it 2 pt short of the margin).
+            Circle().fill(icon.hasPrefix("minus") ? ChumbyPalette.remove(scheme == .dark) : ChumbyPalette.acc(scheme == .dark))
+                .frame(width: 21, height: 21)
+                .overlay {
+                    if icon.hasPrefix("minus") { Capsule().fill(.white).frame(width: 10, height: 2.5) }
+                    else { Image(systemName: "xmark").font(.system(size: 9, weight: .heavy)).foregroundStyle(.white) }
+                }
+                // The target: 6 pt in toward the control beside it (never reaching it: rows space them 8 pt or more), 7 pt
+                // out into the card's own margin, 44 pt tall.
+                .padding(.leading, 6).padding(.trailing, 7).frame(height: 44).contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
+        // Laid out as the 21 pt disc alone, 36 pt tall: its right edge on the row's content margin, where switches and
+        // steppers end, and no row taller than before.
+        .padding(.leading, -6).padding(.trailing, -7).padding(.vertical, -4)
         .accessibilityLabel(label)
+    }
+}
+
+// The Chumby's live screen, asked for about once a second while the page showing it is up: Home's device, and Channels'
+// screen open flat. One cadence for both, and only one page at a time (they're on different tabs), so the picture is never
+// asked for twice over (screenshots were blamed for AirPlay stutter, 2026-10-22).
+struct ScreenPolling: ViewModifier {
+    @EnvironmentObject var model: ChumbyModel
+    let tab: Int
+    func body(content: Content) -> some View {
+        content.task(id: model.tab) {
+            guard model.tab == tab else { return }
+            while !Task.isCancelled {
+                let ok = model.running && !model.unreachable ? await model.refreshShot() : true
+                try? await Task.sleep(nanoseconds: model.direct ? 10_000_000_000 : ok ? 1_000_000_000 : 3_000_000_000)
+            }
+        }
+    }
+}
+extension View {
+    func pollsScreen(on tab: Int) -> some View { modifier(ScreenPolling(tab: tab)) }
+}
+// What the Chumby is showing, at the head of Channels' "On screen" card open flat (the pane was two rows over bare sea):
+// the picture Home shows, bare at 4:3, the screen that "Jump to a widget" and Shuffle act on. A tap touches the Chumby
+// there, as on Home. Before the first picture, the octopus on the Chumby's blue, never a blank box.
+struct ScreenRow: View {
+    @EnvironmentObject var model: ChumbyModel
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                if let i = model.shot { Image(platform: i).resizable().interpolation(.medium) }
+                else {
+                    ChumbyPalette.hex(0x2c5bae)
+                    OctopusMark(color: .white.opacity(0.9), eyes: ChumbyPalette.hex(0x2c5bae)).frame(width: geo.size.width * 0.28)
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .opacity(model.unreachable ? 0.5 : 1)
+            .contentShape(Rectangle())
+            .onTapGesture { p in
+                guard !model.unreachable, model.shot != nil else { return }
+                model.cmd("tap", "\(Int(p.x / geo.size.width * 319)),\(Int(p.y / geo.size.height * 239))", id: "screen")
+                Task { try? await Task.sleep(nanoseconds: 350_000_000); _ = await model.refreshShot() }
+            }
+        }
+        .aspectRatio(4.0 / 3.0, contentMode: .fit)
+        .padding(.vertical, 6)
+        .pollsScreen(on: 1)
+        .accessibilityLabel("The Chumby’s screen, live. Tap to touch it.")
     }
 }
 

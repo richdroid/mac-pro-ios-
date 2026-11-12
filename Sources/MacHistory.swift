@@ -126,7 +126,7 @@ struct HistoryView: View {
     // Round steps up past the highest figure shown, for sizes (whole GB) and speeds (whole KB/s or MB/s).
     var ticks: [Double]? {
         guard metric.kind == .bytes || metric.kind == .rate else { return nil }
-        let top = marks.map { max($0.value, $0.peak ?? 0) }.max() ?? 0
+        let top = (marks + nowMark).map { max($0.value, $0.peak ?? 0) }.max() ?? 0
         guard top > 0 else { return nil }
         let unit: Double = metric.kind == .bytes ? 1_073_741_824 : (top < 1024 ? 1 : top < 1_048_576 ? 1024 : 1_048_576)
         let raw = top / unit / 3
@@ -134,6 +134,12 @@ struct HistoryView: View {
         let step = ([1.0, 2, 5, 10].first { $0 * mag >= raw } ?? 10) * mag * unit
         let count = Int(ceil(top / step))
         return (0...max(count, 1)).map { Double($0) * step }
+    }
+    // The latest figure for the chart's "now" mark, read without watching the live readings (HistoryReadout does that).
+    var current: Double? { metric.now(model.liveStore.live) ?? points.last?.v ?? metric.now(model.status) }
+    var nowMark: [Mark] {
+        guard let c = current, let last = marks.last, Date().timeIntervalSince(last.date) < 900 else { return [] }
+        return [Mark(date: Date(), value: c, run: last.run, peak: nil)]
     }
     var pickedMark: Mark? {
         guard let picked else { return nil }
@@ -151,7 +157,8 @@ struct HistoryView: View {
         .pickerStyle(.segmented).labelsHidden()
     }
     var chart: some View {
-        let list = marks, domain = Date().addingTimeInterval(-Double(hours) * 3600)...Date()
+        // The line ends where the header's "Now" is: the live reading, not the last bucket's average (designer, 2026-11-11).
+        let list = marks + nowMark, domain = Date().addingTimeInterval(-Double(hours) * 3600)...Date()
         return Chart {
             ForEach(list) { m in
                 AreaMark(x: .value("Time", m.date), y: .value(metric.title, m.value), series: .value("Run", "\(m.run)"), stacking: .unstacked)
@@ -194,7 +201,8 @@ struct HistoryView: View {
             if let ticks {
                 AxisMarks(position: .trailing, values: ticks) { v in
                     AxisGridLine().foregroundStyle(.white.opacity(0.1))
-                    AxisValueLabel(horizontalSpacing: 10) { if let d = v.as(Double.self) { Text(metric.axisText(d)).font(.caption2).monospacedDigit() } }
+                    // Zero in the axis's own unit: "0 KB/s" under "50 KB/s", not "0 B/s".
+                    AxisValueLabel(horizontalSpacing: 10) { if let d = v.as(Double.self) { Text(d == 0 && ticks.count > 1 ? "0 " + (metric.axisText(ticks[1]).split(separator: " ").last.map(String.init) ?? "") : metric.axisText(d)).font(.caption2).monospacedDigit() } }
                 }
             } else {
                 AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { v in
