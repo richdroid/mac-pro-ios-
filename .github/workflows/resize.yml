@@ -130,7 +130,7 @@ jobs:
             # mid-page (the scroll-to pose never moved the list; designer, resize gate on cbdef0e).
             if [ "$pose" = "scroll" ]; then
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9041 -swipeLog YES -tab ${TFTAB:-0}; sleep 12
-              for sx in 0.25 0.75 0.45; do $D "$DEVICE" drag $sx 0.7 $sx 0.45 0.8 || true; sleep 1.5; done
+              for sx in ${TFDRAGX:-0.25 0.75 0.45}; do $D "$DEVICE" drag $sx 0.7 $sx 0.5 0.8 || true; sleep 1.5; done
               sleep 3
             else
               xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9041 -swipeLog YES -tab 0 $pose; sleep 12
@@ -200,7 +200,7 @@ jobs:
           tabfilm tabback-portrait 3
           # Apps, a page that scrolls open (Status fits whole there), dragged part way down in open portrait, then turned
           # flat, upright and flat: the same row at its top after each move (designer, regate of 32dd2bd).
-          TFTAB=1 turnfilm turn-apps-scrolled 3 "scroll" "rotate 3" "rotate 1" "rotate 3"
+          TFTAB=1 TFDRAGX=0.5 turnfilm turn-apps-scrolled 3 "scroll" "rotate 3" "rotate 1" "rotate 3"
           $D "$DEVICE" rotate 1 || true; sleep 5
           $D "$DEVICE" pose closed || true; sleep 5
           posture 1 "" 0.45
@@ -211,6 +211,9 @@ jobs:
           turnfilm fold-inner-scrolled 3 "scroll" "pose open" "pose closed" "pose open"
           $D "$DEVICE" pose closed || true; sleep 5
           turnfilm fold-outer 1 "" "pose open" "pose closed"
+          # Folded and held upright, then opened and closed again upright: the compact Status from each fold's first frame.
+          $D "$DEVICE" rotate 1 || true; sleep 5
+          turnfilm fold-upright 1 "" "pose open" "pose closed" "pose open" "pose closed"
           # A first launch with nothing kept from before (a fresh install): its first answer builds Status from nothing.
           C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data); rm -f "$C/Library/Caches/status.json"
           restfilm firstlaunch 1

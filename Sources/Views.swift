@@ -158,8 +158,9 @@ struct StatusBarTopReader: ViewModifier {
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
                 guard size.width > 0 else { return }
                 let upright = size.width > 600 && size.height > size.width
-                // The outer display: narrow and short (the list there is under 520 by 760).
-                let small = size.width < 520 && size.height < 760
+                // The outer display, upright or on its side: the window's short side under 520 (designer, regate of
+                // 5b34ffc: on its side, 678 by 466, it drew the full-size Mac with a tile row cut by the edge).
+                let small = min(size.width, size.height) < 520
                 if small != compact { compact = small }
                 let predicted: CGFloat = upright ? max(top, 20) : min(top, 19)
                 if (predicted < 20) != (top < 20) { top = predicted }
@@ -276,7 +277,7 @@ final class PlaceKeeper {
         let p = PlaceKeeper(); pages[name] = p; return p
     }
     var top: AnyHashable?
-    var layout: Bool?
+    var layout: String?  // panes, and the outer display or not: a fold rebuilds the page as much as a turn does
     var restoring = Date.distantPast
     // While the rebuilt page lays out and scrolls back, its rows pass the line and must not count as his place.
     var settling: Bool { Date().timeIntervalSince(restoring) < 1.2 }
@@ -296,6 +297,8 @@ extension EnvironmentValues { var placePage: String? { get { self[PlacePageKey.s
 // changes once per row passing, so scrolling costs a comparison per row and frame and redraws nothing.
 struct MarksPlace: ViewModifier {
     @Environment(\.placePage) private var page
+    @Environment(\.paneLayout) private var panes
+    @Environment(\.compactWindow) private var compactWindow
     let id: AnyHashable
     func body(content: Content) -> some View {
         content.modifier(LogsHeight(id: id)).onGeometryChange(for: Bool.self) { g in
@@ -307,7 +310,10 @@ struct MarksPlace: ViewModifier {
         } action: { on in
             guard on, let page else { return }
             let k = PlaceKeeper.page(page)
-            if !k.settling { k.top = id }
+            // Only from the layout the place was noted in: on a turn the new layout's first rows cross the line before its
+            // restore begins, and noted the top of the page as his place, so the turn put him back at the top (designer,
+            // regate of 5b34ffc: Apps scrolled down, turned flat and back, came back at its top).
+            if !k.settling, k.layout == nil || k.layout == "\(panes)\(compactWindow)" { k.top = id }
         }
     }
 }
@@ -327,6 +333,7 @@ struct LogsHeight: ViewModifier {
 
 struct KeepsPlace: ViewModifier {
     @Environment(\.paneLayout) private var panes
+    @Environment(\.compactWindow) private var compactWindow
     let page: String
     let proxy: ScrollViewProxy
     func body(content: Content) -> some View {
@@ -334,11 +341,11 @@ struct KeepsPlace: ViewModifier {
             .environment(\.placePage, page)
             // The line is just under the bars over the page: the scroll view's top in the window plus its top inset.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top + 8 } action: { PlaceLines.set(page, $0) }
-            .task(id: panes) {
-                let k = PlaceKeeper.page(page)
+            .task(id: "\(panes)\(compactWindow)") {
+                let k = PlaceKeeper.page(page), layout = "\(panes)\(compactWindow)"
                 // Of two panes the first to appear starts the restore; the other, a moment later, scrolls too if it holds it.
-                if let was = k.layout, was != panes, k.top != nil { k.restoring = Date() }
-                k.layout = panes
+                if let was = k.layout, was != layout, k.top != nil { k.restoring = Date() }
+                k.layout = layout
                 guard Date().timeIntervalSince(k.restoring) < 0.5, let top = k.top else { return }
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 guard !Task.isCancelled else { return }
