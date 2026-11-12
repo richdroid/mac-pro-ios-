@@ -418,10 +418,14 @@ struct Page<C: View>: View {
     @State private var scrolled = PageScrollY()
     // With the bar shown (Status' gear), the room it takes above the heading where iOS puts its items in the side strip
     // (folded, open flat): taken back, so the heading sits where every other tab's does (gate of 96f5f42: 15 pt lower).
-    // outerTop is a bar-hidden stack's inset in the same place.
-    @State private var outerTop: CGFloat = 0
+    // The reference is what the other tabs' pages measure in the same window (TabTop): an empty stack's inset or the tab
+    // view's own differ from theirs by 9 pt to 82 pt by posture (gate of b01454f: Status 9 pt high).
     @State private var innerTop: CGFloat = 0
-    var barRoom: CGFloat { showsBar ? max(0, innerTop - outerTop) : 0 }
+    @State private var sizeKey = ""
+    var barRoom: CGFloat {
+        guard showsBar, let hidden = TabTop.shared.tops[sizeKey] else { return 0 }
+        return max(0, innerTop - CGFloat(hidden))
+    }
     var body: some View {
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
@@ -437,7 +441,17 @@ struct Page<C: View>: View {
                 // with the other text"): it can only follow a scroll view it finds at the page's root, and the pages'
                 // own layouts (two panes, overlays) hid it.
                 .safeAreaInset(edge: .top, spacing: 0) { if !alwaysInline { MovingTitle(title: title, scrolled: scrolled).padding(.top, -barRoom) } }
-                .background { if showsBar { Color.clear.onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { t in if abs(t - innerTop) > 0.5 { innerTop = t } } } }
+                // The page's top inset in this window: kept for the other tabs' reference, or, with the bar, set beside it.
+                .background {
+                    if !alwaysInline {
+                        Color.clear.onGeometryChange(for: TabTop.Reading.self) { TabTop.Reading(top: $0.safeAreaInsets.top, key: "\(Int($0.size.width))x\(Int($0.size.height))") } action: { r in
+                            if showsBar {
+                                if abs(r.top - innerTop) > 0.5 { innerTop = r.top }
+                                if r.key != sizeKey { sizeKey = r.key }
+                            } else { TabTop.shared.set(r.key, r.top) }
+                        }
+                    }
+                }
                 .toolbar(alwaysInline || showsBar ? .automatic : .hidden, for: .navigationBar)
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
                 .environment(\.pagePush, PagePush(push: { path.append($0) }))
@@ -451,18 +465,6 @@ struct Page<C: View>: View {
         }
         .topShade()
         .background { Ambience() }
-        // The top inset a tab without the bar has here, read from an empty stack with its bar hidden, as every other
-        // tab's is: the tab view's own inset alone is about 9 pt less, and taking that back put Status' heading 9 pt high
-        // (gate of b01454f).
-        .background {
-            if showsBar {
-                NavigationStack {
-                    Color.clear.toolbar(.hidden, for: .navigationBar)
-                        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { t in if abs(t - outerTop) > 0.5 { outerTop = t } }
-                }
-                .hidden().allowsHitTesting(false).accessibilityHidden(true)
-            }
-        }
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
         // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
         .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
@@ -480,6 +482,18 @@ struct Page<C: View>: View {
     }
 }
 
+// The top inset of a tab's page whose bar is hidden, by window size, kept between launches: Status' page, which shows the
+// bar for its gear, takes back whatever more it's given, so its heading sits at the other tabs' height.
+@Observable final class TabTop {
+    static let shared = TabTop()
+    struct Reading: Equatable { let top: CGFloat; let key: String }
+    private(set) var tops: [String: Double] = (UserDefaults.standard.dictionary(forKey: "tabTops") as? [String: Double]) ?? [:]
+    func set(_ key: String, _ top: CGFloat) {
+        guard abs((tops[key] ?? -1) - Double(top)) > 0.5 else { return }
+        tops[key] = Double(top)
+        UserDefaults.standard.set(tops, forKey: "tabTops")
+    }
+}
 // How far a tab's page has scrolled, from whichever of its scroll views moved last.
 @Observable final class PageScrollY { var y: CGFloat = 0 }
 // For a page that isn't a Page (Settings' lists): its scrolling read into the title's measure, as BackToTop does.
