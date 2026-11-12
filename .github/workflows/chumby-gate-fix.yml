@@ -4,7 +4,7 @@ name: Chumby gate fix (branch)
 # ci/mock-chumby.js answers /api/music, given with -mac. Stills of Sounds with the row, light and dark, folded, open flat
 # and open upright; the Missed card with one of each kind; films of the picker opening with its keyboard, a pick
 # starting then playing (Sounds, and Home), a start the Mac turns down, a second pick during a start, and a Mac that
-# never answers. Only for pushes to chumby-gate-fix; published to the chumby-gate-fix-shots release.
+# never answers (and the picker against it), in dark too. Only for pushes to chumby-gate-fix; published to the chumby-gate-fix-shots release.
 on:
   push:
     branches: [chumby-gate-fix]
@@ -45,6 +45,10 @@ jobs:
           xcrun simctl list devices available | grep -m1 "$DEVICE"
           xcrun simctl boot "$DEVICE"
           xcrun simctl bootstatus "$DEVICE" -b
+          # No first-use "slide to type" card over the keyboard (it covered the picker in the first run).
+          for K in DidShowContinuousPathIntroduction KeyboardDidShowProductivityTutorial DidShowGestureKeyboardIntroduction; do
+            xcrun simctl spawn "$DEVICE" defaults write com.apple.keyboard.preferences $K -bool true
+          done
           xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
           node ci/mock-chumby.js &
           sleep 2
@@ -88,17 +92,35 @@ jobs:
             film $d macsecond$x 42 $M/macsecond$x -tab 3 -pose macsecond
             # Nothing answers at the Mac's address: "Starting" for the patience, then the calm note.
             film $d macgone$x 45 http://127.0.0.1:9009 -tab 3 -pose macgone
+            # The picker against that dead address: quiet, then "Still trying." with no ✕, for 40 s.
+            film $d macpickgone$x 42 http://127.0.0.1:9009 -tab 3 -pose macpickgone
+          }
+          # Open flat: the picker across the fold, and a pick to playing.
+          films_open() {
+            film 3 warm-open 6 $M/mac -tab 3
+            film 3 macpick-open 10 $M/mac -tab 3 -pose macpick
+            film 3 macplay-open 32 $M/macplay-open -tab 3 -pose macplay
+          }
+          # Dark: the picker, a pick to playing, and a start turned down.
+          films_dark() { # display, suffix
+            xcrun simctl ui "$DEVICE" appearance dark
+            film $1 macplay-dark$2 32 $M/macplay-dark$2 -tab 3 -pose macplay
+            film $1 macfail-dark$2 20 $M/macfail-dark$2 -tab 3 -pose macfail
+            xcrun simctl ui "$DEVICE" appearance light
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
           stills 1 ""
           films 1 ""
+          films_dark 1 ""
           $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
           stills 3 -open
+          films_open
           $D "$DEVICE" rotate 1; sleep 5
           stills 3 -portrait
           films 3 -portrait
+          films_dark 3 -portrait
       - name: Collect crash reports
         if: always()
         run: |

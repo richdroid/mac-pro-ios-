@@ -138,21 +138,26 @@ extension ChumbyModel {
     }
 }
 
-// The build's poses of all this (ci/branch films), driven from here so the views carry one line each. Never on his phone:
+// The build's poses of all this (ci branch films), driven from here so the views carry one line each. Never on his phone:
 // only with a -pose at launch.
 @MainActor enum MacMusicPose {
     static var pose: String { ChumbyModel.pose }
     static var active: Bool { pose.hasPrefix("mac") }
     // A song the stand-in Mac has, for the poses that start one without the picker.
     static let song = MacSong(id: "00000000000000A1", name: "Blue in Green", artist: "Miles Davis", album: "Kind of Blue", secs: 337)
+    // Once per launch each: Sounds' row appears again when the picker closes (and twice in two panes), and must not
+    // open it again; each opening of the picker types once and picks once.
+    static var posed = false
     static var opens = 0
+    static var picks = 0
     // Sounds: when the picker opens, and when it opens again for a second pick during a start.
     static func sounds(_ model: ChumbyModel, open: @escaping () -> Void) async {
-        guard active else { return }
+        guard active, !posed else { return }
+        posed = true
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         switch pose {
         case "macgone": model.playOnChumby(song)
-        case "macpick", "macplay", "machome", "macfail", "macsecond":
+        case "macpick", "macpickgone", "macplay", "machome", "macfail", "macsecond":
             open()
             guard pose == "macsecond" else { return }
             try? await Task.sleep(nanoseconds: 11_000_000_000)
@@ -160,17 +165,18 @@ extension ChumbyModel {
         default: break
         }
     }
-    // In the picker: the words typed as he would, and for the flows a pick of the first song once the list is there.
-    static func picker(type: @escaping (String) -> Void, songs: @escaping () -> [MacSong], pick: @escaping (MacSong) -> Void) async {
-        guard active else { return }
+    // In the picker: the words typed as he would, a moment after it opens. Returns them, or nil for no pose.
+    static func typing() async -> String? {
+        guard active, opens < 2 else { return nil }
         opens += 1
-        let second = opens > 1
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
-        type(second ? "so what" : "blue")
-        guard pose != "macpick" else { return }
-        for _ in 0..<40 where songs().isEmpty { try? await Task.sleep(nanoseconds: 250_000_000) }
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-        if let s = songs().first { pick(s) }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        return opens > 1 ? "so what" : "blue"
+    }
+    // With the list there, whether to pick its first song (the flows), once per opening.
+    static func shouldPick() -> Bool {
+        guard active, !["macpick", "macpickgone"].contains(pose), picks < opens else { return false }
+        picks += 1
+        return true
     }
     // Home: the pick made on Sounds, then Home, where the Playing card carries it on.
     static func afterPick(_ model: ChumbyModel) {
@@ -180,8 +186,10 @@ extension ChumbyModel {
 }
 
 // Choosing the song: a search of the Mac's Music library, edge to edge, with Close in a bar across the top (a modal with
-// one button, as Add widgets is). A tap closes the page at once, and Sounds' Now card shows the song starting: the wait
-// for the Mac (about a quarter of a minute) is never spent looking at a spinner in a list.
+// one button, as Add widgets is). The field is the page's own, under the title, with the keyboard up as the page opens
+// (11-12 gate: the system search bar arrived in three beats, hid the title and Close behind a second ✕, and floated over
+// the results). A tap closes the page at once, and Sounds' Now card shows the song starting: the wait for the Mac
+// (about a quarter of a minute) is never spent looking at a spinner in a list.
 struct MacSongPicker: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
@@ -191,14 +199,27 @@ struct MacSongPicker: View {
     @State private var searched = ""
     @State private var searching = false
     @State private var problem: String?
-    // The field has the keyboard as the page opens: there's nothing else to do here first.
-    @State private var searchOn = true
+    // "Still trying" is a live status, not a note to put away: it goes by itself when the Mac answers.
+    @State private var stillTrying = false
+    @FocusState private var fieldOn: Bool
     func length(_ secs: Int) -> String { String(format: "%d:%02d", secs / 60, secs % 60) }
     func choose(_ s: MacSong) { model.playOnChumby(s); dismiss(); MacMusicPose.afterPick(model) }
+    var field: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Song, artist or album", text: $text)
+                .focused($fieldOn).submitLabel(.search)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+        }
+        .padding(.horizontal, 14).frame(minHeight: 44)
+        .glassEffect(.regular, in: Capsule())
+        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+    }
     var body: some View {
         NavigationStack {
             List {
-                if let problem { Section { FailNote(text: problem, dismiss: { withAnimation(.snappy) { self.problem = nil } }) }.listRowBackground(GlassRow()) }
+                if stillTrying { Section { FailNote(text: "Can’t reach the Mac. Still trying.") }.listRowBackground(GlassRow()) }
+                else if let problem { Section { FailNote(text: problem, dismiss: { withAnimation(.snappy) { self.problem = nil } }) }.listRowBackground(GlassRow()) }
                 Section {
                     ForEach(songs) { s in
                         Button { choose(s) } label: {
@@ -219,51 +240,61 @@ struct MacSongPicker: View {
                     }
                     if songs.isEmpty {
                         if searching { HStack(spacing: 10) { ProgressView(); Text("Looking in the Mac’s library…").foregroundStyle(.secondary) } }
-                        else if searched == text.trimmingCharacters(in: .whitespaces) && problem == nil { Text("No songs like that in the Mac’s library.").foregroundStyle(.secondary) }
+                        else if !searched.isEmpty && searched == text.trimmingCharacters(in: .whitespaces) && problem == nil { Text("No songs like that in the Mac’s library.").foregroundStyle(.secondary) }
                     }
                 }
                 .listRowBackground(GlassRow())
             }
             .seaList().background { SeaBackground().ignoresSafeArea() }
+            .scrollDismissesKeyboard(.immediately)
+            // The field in the page's own layout, under the bar: the list starts below it and never runs under it.
+            .safeAreaInset(edge: .top, spacing: 0) { field }
             .animation(.snappy, value: songs)
-            .searchable(text: $text, isPresented: $searchOn, prompt: "Song, artist or album")
             .navigationTitle("Play on the Chumby").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Close, not Done: nothing here is confirmed by it (a pick closes the page itself).
                 ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Close", systemImage: "xmark") } }
             }
-            .task { await MacMusicPose.picker(type: { text = $0 }, songs: { songs }, pick: { choose($0) }) }
+            // The keyboard comes up with the page, not after it.
+            .defaultFocus($fieldOn, true)
+            .onAppear { fieldOn = true }
+            .task { if let words = await MacMusicPose.typing() { text = words } }
+            .onChange(of: songs) {
+                guard !searching, let first = songs.first, MacMusicPose.shouldPick() else { return }
+                Task { try? await Task.sleep(nanoseconds: 1_500_000_000); choose(first) }
+            }
             // Asked a moment after he stops typing, and only the newest question's answer is shown.
             .task(id: text) {
                 let q = text.trimmingCharacters(in: .whitespaces)
-                guard q.count >= 2 else { songs = []; searching = false; return }
+                guard q.count >= 2 else { songs = []; searching = false; stillTrying = false; return }
                 try? await Task.sleep(nanoseconds: 450_000_000)
                 if Task.isCancelled { return }
                 searching = true
                 // Nothing answering is asked again quietly; only after `patience` is it said, calmly, and asked on until
-                // the Mac answers, when the note goes. What the Mac does say is shown as it is.
+                // the Mac answers, when it goes by itself. What the Mac does say is shown as it is.
                 let began = Date()
                 while !Task.isCancelled {
                     do {
                         let found = try await MacMusic.search(q)
                         if Task.isCancelled { return }
+                        searching = false
                         songs = found; searched = q
-                        if problem != nil { withAnimation(.snappy) { problem = nil } }
-                        break
+                        withAnimation(.snappy) { problem = nil; stillTrying = false }
+                        return
                     } catch MacMusic.Trouble.noAnswer {
                         if Task.isCancelled { return }
-                        if Date().timeIntervalSince(began) >= MacMusic.patience, problem == nil {
-                            withAnimation(.snappy) { problem = "Can’t reach the Mac. Still trying." }
+                        if Date().timeIntervalSince(began) >= MacMusic.patience, !stillTrying {
+                            withAnimation(.snappy) { stillTrying = true }
                         }
                         try? await Task.sleep(nanoseconds: 3_000_000_000)
                     } catch {
                         if Task.isCancelled { return }
+                        searching = false
                         songs = []; searched = q
-                        withAnimation(.snappy) { problem = error.localizedDescription }
-                        break
+                        withAnimation(.snappy) { stillTrying = false; problem = error.localizedDescription }
+                        return
                     }
                 }
-                searching = false
             }
         }
         .horizontalBars()

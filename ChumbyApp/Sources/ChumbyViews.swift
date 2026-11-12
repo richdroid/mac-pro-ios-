@@ -1124,6 +1124,7 @@ struct HomeTab: View {
             NowPlaying(tab: 0, failID: "homeVolume")
                 .padding(.horizontal, 18).padding(.vertical, 10)
                 .card()
+                .id("homeplaying")
                 .padding(.top, Self.sectionGap)
                 .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
         }
@@ -1202,6 +1203,12 @@ struct HomeTab: View {
                     guard ChumbyModel.pose == "homebar" else { return }
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
                     scroll.scrollTo("homebar", anchor: .bottom)
+                }
+                // For the branch film of a song chosen on Sounds: Home brought to its Playing card while it starts.
+                .task(id: model.macStarting != nil) {
+                    guard ChumbyModel.pose == "machome", model.macStarting != nil else { return }
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    withAnimation(.snappy) { scroll.scrollTo("homeplaying", anchor: .bottom) }
                 }
                 }
             }
@@ -1934,29 +1941,40 @@ struct NowPlaying: View {
         let song = mac.map { Song(t: 0, title: $0.name, artist: $0.artist, album: $0.album) } ?? nowSong
         let playing = model.state.musicPlaying || mac != nil
         let f = song.flatMap { art.found[SongArt.key($0)] }
+        // What's named, as one thing: cover and words change together in one fade (11-12 gate: a failed start blanked the
+        // cover, then printed "Nothing playing" over the song, then the note came, in three beats).
+        let identity = song.map(SongArt.key) ?? (playing ? "playing" : "none")
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
-                // The stand-in stays underneath and the cover fades in over it when it arrives, never a swap in one frame.
-                ZStack {
-                    ZStack {
-                        ChumbyPalette.hex(0x2c5bae).opacity(playing ? 1 : 0.45)
-                        if playing { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
-                        else { OctopusMark(color: .white.opacity(0.85), eyes: ChumbyPalette.hex(0x2c5bae), blink: 0.08).padding(14) }
+                ZStack(alignment: .leading) {
+                    HStack(spacing: 14) {
+                        // The stand-in stays underneath and the cover fades in over it when it arrives, never a swap in one frame.
+                        ZStack {
+                            ZStack {
+                                ChumbyPalette.hex(0x2c5bae).opacity(playing ? 1 : 0.45)
+                                if playing { Image(systemName: "music.note").font(.system(size: 30, weight: .semibold)).foregroundStyle(.white) }
+                                else { OctopusMark(color: .white.opacity(0.85), eyes: ChumbyPalette.hex(0x2c5bae), blink: 0.08).padding(14) }
+                            }
+                            if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
+                        }
+                        .animation(.easeInOut(duration: 0.35), value: f?.image != nil)
+                        .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        VStack(alignment: .leading, spacing: 3) {
+                            if let song {
+                                Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
+                                // Chosen a moment ago and not yet sounding: said so, where its artist will be.
+                                // Two lines while starting, so the one status of the wait is never cut short beside the spinner.
+                                Text(starting != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(starting != nil ? 2 : 1)
+                                    .contentTransition(.opacity)
+                            } else {
+                                Text(playing ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
+                            }
+                        }
                     }
-                    if let i = f?.image { Image(platform: i).resizable().scaledToFill().transition(.opacity) }
+                    .id(identity).transition(.opacity)
                 }
-                .animation(.easeInOut(duration: 0.35), value: f?.image != nil)
-                .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
-                    if let song {
-                        Text(song.title).font(.custom("Trebuchet MS", size: 19).weight(.bold)).lineLimit(1)
-                        // Chosen a moment ago and not yet sounding: said so, where its artist will be.
-                        Text(starting != nil ? "Starting on the Chumby…" : song.artist).foregroundStyle(.secondary).lineLimit(1)
-                            .contentTransition(.opacity)
-                    } else {
-                        Text(playing ? "Playing" : "Nothing playing").font(.custom("Trebuchet MS", size: 19).weight(.bold))
-                    }
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(.easeInOut(duration: 0.3), value: identity)
                 Spacer(minLength: 8)
                 // Stop only while something plays: with nothing to stop, it's a dead button.
                 if starting != nil {

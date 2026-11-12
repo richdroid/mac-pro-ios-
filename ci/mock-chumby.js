@@ -1025,11 +1025,12 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
 
 // ---- A stand-in Mac's Music (mac-dash music.js) -----------------------------------------------------------------------
 // The app is launched with -mac http://127.0.0.1:9000/mac<name>, so each film has its own Mac: /api/music/search answers
-// from a short list of jazz records, play answers after about 17 s as the real one does (Music, AirPlay to the Chumby,
+// from a short list of jazz records (one with the long names a real library has) after 2 s, play answers after about 17 s as the real one does (Music, AirPlay to the Chumby,
 // then its 4 s check), now names the song for a minute after, and stop clears it. A name starting "macfail" has the play
 // turned down after 6 s with the real Mac's words for the Chumby dropping the song.
 const macSongs = [
   ['00000000000000A1', 'Blue in Green', 'Miles Davis', 'Kind of Blue', 337], ['00000000000000A2', 'So What', 'Miles Davis', 'Kind of Blue', 562],
+  ['00000000000000A8', 'All Blues (Live at the Plugged Nickel, Chicago, December 1965) [Remastered]', 'The Miles Davis Quintet', 'The Complete Live at the Plugged Nickel 1965 (Legacy Edition)', 1103],
   ['00000000000000A3', 'Blue Train', 'John Coltrane', 'Blue Train', 643], ['00000000000000A4', 'Freddie Freeloader', 'Miles Davis', 'Kind of Blue', 589],
   ['00000000000000A5', 'Blue Monk', 'Thelonious Monk', 'Thelonious Alone in San Francisco', 248], ['00000000000000A6', 'Take Five', 'The Dave Brubeck Quartet', 'Time Out', 324],
   ['00000000000000A7', 'Blue Rondo à la Turk', 'The Dave Brubeck Quartet', 'Time Out', 404],
@@ -1042,7 +1043,7 @@ function macMusic(q, s) {
   const json = (v, wait = 0) => setTimeout(() => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); }, wait);
   if (op === 'search') {
     const t = (qs.get('q') || '').toLowerCase();
-    json({ ok: true, songs: macSongs.filter(x => [x.name, x.artist, x.album].some(f => f.toLowerCase().includes(t))) }, 700);
+    json({ ok: true, songs: macSongs.filter(x => [x.name, x.artist, x.album].some(f => f.toLowerCase().includes(t))) }, 2000);
   } else if (op === 'now') {
     const n = macNow[mac], on = n && Date.now() - n.at < 60000;
     json(on ? { ok: true, state: 'playing', onChumby: true, playing: true, song: { name: n.song.name, artist: n.song.artist, album: n.song.album } } : { ok: true, state: 'stopped', onChumby: false, playing: false });
