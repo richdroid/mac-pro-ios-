@@ -121,37 +121,23 @@ jobs:
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
-          # Open upright, the posture he holds.
+          # This pass: only what the last gate still needed, folded (open upright and open flat passed on 37416ae).
           $D "$DEVICE" pose open; sleep 5
-          $D "$DEVICE" rotate 1; sleep 5
-          poses 3 -portrait
-          navfilm 3 -portrait
-          tourfilm tour-portrait 3 ""
-          tourfilm tourwp-portrait 3 0,3,2,3,2
-          # Open flat, two panes: the push and pop twice over, to tell a one-off from a stall.
-          $D "$DEVICE" rotate 3 || true; sleep 5
-          poses 3 -open
-          navfilm 3 -open
-          navfilm 3 -open2
-          tourfilm tourwp-open 3 0,3,2,3,2
-          # Partly open.
-          $D "$DEVICE" pose partial || true; sleep 5
-          for T in 1 5; do shot tab$T-partial 3 7 $M -tab $T; done
-          for T in 1 5; do shot tab$T-partial1 1 7 $M -tab $T; done
           # Folded, upright on the outer display.
           $D "$DEVICE" rotate 1 || true; sleep 3
           $D "$DEVICE" pose closed || true; sleep 5
           $D "$DEVICE" rotate 1 || true; sleep 3
-          poses 1 ""
+          for T in 3 5 9; do shot tab$T 1 7 $M -tab $T; done
+          shot tab5-scrolled 1 9 $M -tab 5 -scroll 30
           scriptfilm 1 ""
           flingfilm 1 ""
-          tourfilm tourwp 1 0,3,2,3,2
           # Folded and turned sideways.
           $D "$DEVICE" rotate 3 || true; sleep 4
-          for T in 1 5; do shot tab$T-fland 1 7 $M -tab $T; done
+          for T in 3 2 6 1 5; do shot tab$T-fland 1 7 $M -tab $T; done
           $D "$DEVICE" rotate 1 || true; sleep 4
           ls dist
       - name: Baseline Watch and Playing on 9a5c774
+        if: false
         continue-on-error: true
         timeout-minutes: 25
         run: |

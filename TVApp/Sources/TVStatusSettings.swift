@@ -20,6 +20,7 @@ struct StatusTab: View {
     @StateObject private var store = ManageStore()
     // The last ask for Settings acted on, so coming back to the tab doesn't push it again.
     @State private var seen = 0
+    @MainActor static var scripted = false
     var body: some View {
         DeviceTab()
             // The bar carries the gear only: the page draws its own large heading.
@@ -41,15 +42,21 @@ struct StatusTab: View {
             }
             // For the build's film where touches can't reach (the cover display): Settings pushed and popped, then TV
             // settings pushed and popped, at a finger's pace.
-            .task {
-                guard UserDefaults.standard.string(forKey: "pose") == "settingsscript" else { return }
-                func wait(_ s: Double) async { try? await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000)) }
-                await wait(5); pagePush.push(SettingsRoute.root)
-                await wait(3); pagePush.pop()
-                await wait(3); pagePush.push(SettingsRoute.root)
-                await wait(3); pagePush.push(ManagePage.settings)
-                await wait(3); pagePush.pop()
-                await wait(3); pagePush.pop()
+            // Once per launch, and not tied to this view's life: the root steps off screen at each push, which cancelled and
+            // restarted a view task (37416ae: pushes and pops piling up).
+            .onAppear {
+                guard UserDefaults.standard.string(forKey: "pose") == "settingsscript", !Self.scripted else { return }
+                Self.scripted = true
+                let nav = pagePush
+                Task { @MainActor in
+                    func wait(_ s: Double) async { try? await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000)) }
+                    await wait(5); nav.push(SettingsRoute.root)
+                    await wait(3); nav.pop()
+                    await wait(3); nav.push(SettingsRoute.root)
+                    await wait(3); nav.push(ManagePage.settings)
+                    await wait(3); nav.pop()
+                    await wait(3); nav.pop()
+                }
             }
             .onChange(of: model.settingsAsked, initial: true) { _, n in
                 guard n > seen else { return }
