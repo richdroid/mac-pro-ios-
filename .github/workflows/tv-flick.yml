@@ -181,7 +181,7 @@ jobs:
           tail -c 20000 dist/sim.log > dist/sim-tail.txt 2>/dev/null
           [ $(stat -f %z dist/sim.log 2>/dev/null || echo 0) -gt 20000000 ] && : > dist/sim.log
           # In three parts: one zip of every film was over 500 MB and its upload failed.
-          (cd dist && zip -q ../flick.zip *.png *.log *.txt 2>/dev/null; zip -q ../flick-pose.mp4.zip tv-flick*.mp4 2>/dev/null; zip -q ../flick-finger.mp4.zip tv-finger*.mp4 2>/dev/null; true)
+          (cd dist && zip -q ../flick.zip *.png *.log *.txt 2>/dev/null; zip -q ../flick-pose.mp4.zip tv-flick*.mp4 2>/dev/null; zip -q ../flick-finger.mp4.zip tv-finger*.mp4 tv-shelf*.mp4 2>/dev/null; true)
           ls -la *.zip
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view tv-flick >/dev/null 2>&1 || gh release create tv-flick --prerelease --title "TV flick checks" --notes "Work in progress on the flick: hands, shots and films from the tv-flick-everywhere branch."

@@ -50,6 +50,39 @@ import UIKit
     }
 }
 
+// The side bar's mark, moved by the flick without a slide: the tab changes under a still (the pick, the warm build, a
+// put-back), and the system's own slide of the selection then ran on past the still, the Remote up with Apps still lit
+// for 0.2 s beside it (CI ba7cee1, open flat). After SwiftUI has handed the change to the tab bar, every animation
+// outside the page itself is cut to its end, twice (the selection can land a frame late).
+@MainActor enum RailMark {
+    static func settle() {
+        #if os(iOS)
+        let once = {
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            guard let root = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.keyWindow?.rootViewController,
+                  let tbc = find(root) else { return }
+            strip(tbc.view, sparing: tbc.selectedViewController?.view)
+        }
+        DispatchQueue.main.async { once(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.034) { once() } }
+        #endif
+    }
+    #if os(iOS)
+    private static func find(_ vc: UIViewController) -> UITabBarController? {
+        if let t = vc as? UITabBarController { return t }
+        for c in vc.children { if let t = find(c) { return t } }
+        return nil
+    }
+    private static func strip(_ v: UIView, sparing content: UIView?) {
+        if let c = content {
+            if v === c { return }
+            if c.isDescendant(of: v) { v.subviews.forEach { strip($0, sparing: c) }; return }
+        }
+        func layers(_ l: CALayer) { l.removeAllAnimations(); l.sublayers?.forEach(layers) }
+        layers(v.layer)
+    }
+    #endif
+}
+
 // The pick's picture on its way into the Remote, moved by Core Animation in the render server: it leaves the row (or the
 // card) the moment he lets go and travels on its own spring however long the main thread is busy bringing the Remote up
 // under it (CI: a 440-670 ms turn at the pick; the SwiftUI move it replaces held the row still that long, then ran at 11
@@ -126,7 +159,7 @@ import UIKit
         let anim = {
             g.frame = to; g.alpha = 1; g.layer.cornerRadius = TVLook.card
             p.frame = end; p.layer.cornerRadius = wide ? TVLook.card : 8
-            if let c = card { c.frame = end; if p.alpha == 0 { c.alpha = 0 } }
+            if let c = card { c.frame = end; if p.alpha == 0 { c.alpha = 0.35 } }
         }
         if first {
             // goRemote's own spring (response 0.36, damping 0.86).
@@ -135,6 +168,18 @@ import UIKit
             UIView.animate(springDuration: 0.3, bounce: 0.1, initialSpringVelocity: 0, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState], animations: anim)
         }
         // Sent to the render server now, not at the end of this turn: the turn that brings the Remote up is the long one.
+        CATransaction.flush()
+        #endif
+    }
+    // The picture, arrived after it left (not in memory at the pick: a link's page picture, YouTube's banner): it comes up
+    // over the still of the card wherever the flight has got to, so it never lands as an empty ground (item 5, 11-12).
+    static func picture(_ image: TVImage) {
+        #if os(iOS)
+        guard let p = poster, p.alpha == 0 else { return }
+        p.image = image
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+            p.alpha = 1; card?.alpha = 0
+        }
         CATransaction.flush()
         #endif
     }
@@ -1553,6 +1598,7 @@ struct FlickScreen: View {
         restoredTab = b
         var quiet = Transaction(); quiet.disablesAnimations = true
         withTransaction(quiet) { model.flickHandoff = false; model.tab = b; model.moodArt = nil; if let prior = priorMood { model.mood = prior } }
+        RailMark.settle()
         tabBefore = nil
     }
     // Everything fades back to the page underneath. From here on nothing started by this screen changes the app behind.
@@ -1583,12 +1629,13 @@ struct FlickScreen: View {
         model.remoteWarming = true
         var q = Transaction(); q.disablesAnimations = true
         withTransaction(q) { model.tab = 0 }
+        RailMark.settle()
         // The turn that put it up built it; the next one takes it down again.
         try? await Task.sleep(nanoseconds: 20_000_000)
         // Where its picture is, for the first pick's flight to aim at from the start.
         if let s = model.mirrorSlot, s.width > 20 { model.rememberSlot(s, "warm" + slotKey) }
         // Picked in the meantime: the Remote is where it's going, so it stays.
-        if !flown { withTransaction(q) { model.tab = back } }
+        if !flown { withTransaction(q) { model.tab = back }; RailMark.settle() }
         await Self.settleFrames()
         model.remoteWarming = false
         SwipeLog.note("remote warmed")
@@ -1607,8 +1654,10 @@ struct FlickScreen: View {
         liftedID = nil
         answered = false; written = false
         flyFrom = flies ? from ?? rects.map["poster"] ?? CGRect(x: flickFrame.width / 2 - 60, y: flickFrame.height * 0.6, width: 120, height: 60) : .zero
-        if target.image == nil, let u = screenURL ?? URL(string: item.art) {
-            heldImage = ImageStore.shared.cached(u)
+        // The picture the Remote will show is the one to carry: a link with no page picture carries YouTube's banner.
+        let carried = screenURL ?? URL(string: item.art) ?? URL(string: startingArt)
+        if target.image == nil, let u = carried {
+            heldImage = ImageStore.shared.cached(u) ?? (URL(string: startingArt).flatMap { ImageStore.shared.cached($0) })
             softImage = softImage ?? ImageStore.shared.small(u, 16)
             if softImage == nil, let h = heldImage { Task { softImage = await ImageStore.shrunk(h, 16) } }
         }
@@ -1619,7 +1668,15 @@ struct FlickScreen: View {
         if flies, flyFrom.width > 4 {
             ScreenVeil.cover()
             RenderFlight.launch(from: flyFrom.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), image: heldImage, soft: softImage, tint: tint,
-                                wide: heldImage.map(PosterOnBlur.isWide) ?? (shown.kind == "youtube"))
+                                wide: heldImage.map(PosterOnBlur.isWide) ?? (shown.kind == "youtube" || isLink))
+            // Not in memory: fetched now and put on the flight wherever it has got to.
+            if heldImage == nil, target.image == nil, let u = URL(string: startingArt) ?? carried {
+                Task {
+                    guard let i = await ImageStore.shared.load(u) else { return }
+                    heldImage = i
+                    RenderFlight.picture(i)
+                }
+            }
             if let aim = model.mirrorSlot.flatMap({ $0.width > 20 ? $0 : nil }) ?? model.rememberedSlot(slotKey) ?? model.rememberedSlot("warm" + slotKey) {
                 RenderFlight.aim(aim, first: true); renderAimed = true
             } else if flickFrame.width > 0 {
@@ -1644,6 +1701,7 @@ struct FlickScreen: View {
             tabBefore = tabBefore ?? (model.remoteWarming ? warmBack : nil) ?? model.tab
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { model.remoteArrival = Date(); model.flickHandoff = true; model.tab = 0; model.keepMood(until: item.art); model.mood = tint }
+            RailMark.settle()
         }
         phase = nil
         flight = Task { await start() }
