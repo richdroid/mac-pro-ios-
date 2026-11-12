@@ -64,7 +64,48 @@ struct FlickHand {
     private var movedAt: Double?
     private var samples: [(t: Double, p: CGPoint)] = []
     private(set) var armed = false
+    // The finger as the screen itself timed it (each touch's own timestamp, in seconds from the touch-down), when there
+    // is such a reading. The callbacks above come when the main thread gets to them: a lift that holds it for 0.4 s makes
+    // a swipe that began the instant the row lifted look like a carry begun later (CI c1a69a9: tv-finger-latescroll sent
+    // in all three postures), and bunches a quick flick's moves so it reads slow. The finger's own clock settles both:
+    // moving already as the row lifted is a scroll come late, never a throw; and its own speed as it left is the fling.
+    var real: [(t: Double, p: CGPoint)]?
     init(_ rules: Rules) { self.rules = rules }
+    // Already on its way within a beat of the lift, by the finger's own clock: it began as a scroll. Where the finger was
+    // at `hold + beat` (between the samples either side), against where it came down.
+    static func rushed(_ real: [(t: Double, p: CGPoint)], _ rules: Rules) -> Bool {
+        guard rules.hold > 0, let first = real.first else { return false }
+        let at = rules.hold + rules.beat
+        var p = real.last!.p
+        if let j = real.firstIndex(where: { $0.t > at }) {
+            if j == 0 { p = first.p } else {
+                let a = real[j - 1], b = real[j]
+                let f = CGFloat((at - a.t) / max(0.001, b.t - a.t))
+                p = CGPoint(x: a.p.x + (b.p.x - a.p.x) * f, y: a.p.y + (b.p.y - a.p.y) * f)
+            }
+        }
+        return hypot(p.x - first.p.x, p.y - first.p.y) > rules.still * 2
+    }
+    // The fastest upward stretch of at least 30 ms ending in the last 150 ms, in points a second (negative is up).
+    static func speed(_ samples: [(t: Double, p: CGPoint)]) -> CGVector {
+        guard let last = samples.last else { return .zero }
+        var best = CGVector.zero
+        for i in samples.indices.reversed() {
+            let end = samples[i]
+            if last.t - end.t > 0.15 { break }
+            guard let j = samples[..<i].lastIndex(where: { end.t - $0.t >= 0.03 }) else { continue }
+            let dt = end.t - samples[j].t
+            let v = CGVector(dx: (end.p.x - samples[j].p.x) / dt, dy: (end.p.y - samples[j].p.y) / dt)
+            if v.dy < best.dy { best = v }
+        }
+        return best
+    }
+    // How it left, for the flight: the finger's own speed when that's the faster reading.
+    var leaving: CGVector {
+        if let r = real { let v = Self.speed(r); if v.dy < velocity.dy { return v } }
+        return velocity
+    }
+    private var isRushed: Bool { real.map { Self.rushed($0, rules) } ?? false }
 
     // Where the finger has it, from where it was lifted.
     var offset: CGSize {
@@ -132,6 +173,7 @@ struct FlickHand {
             phase = .done
             if wouldThrow(at: t) { return .thrown }
             if let f = fling, flung(f, rise: -offset.height), meant(at: t), steepEnough { return .thrown }
+            if let r = real, flung(Self.speed(r), rise: -offset.height), meant(at: t), steepEnough { return .thrown }
             let o = offset
             if abs(o.width) < rules.still && abs(o.height) < rules.still && movedAt == nil { return .longTap }
             return .putBack
@@ -167,6 +209,8 @@ struct FlickHand {
     private var steepEnough: Bool { let o = offset; return -o.height > 0 && -o.height >= rules.steep * abs(o.width) }
     private func meant(at t: Double) -> Bool {
         if rules.hold <= 0 { return true }
+        // The finger's own clock, when there is one, is the only word on it.
+        if real != nil { return !isRushed }
         guard let movedAt else { return false }
         return movedAt - liftedAt >= rules.beat || t - liftedAt >= rules.carried
     }
@@ -177,7 +221,22 @@ struct FlickHand {
 // failure the build reports; ci/flick-hands/main.swift runs the same scripts on the Mac.
 extension FlickHand {
     enum Step { case down(CGFloat, CGFloat), move(CGFloat, CGFloat), held, up(CGFloat, CGFloat), upFling(CGFloat, CGFloat, CGFloat), cancel }
-    struct Script { let name: String; let rules: Rules; let steps: [(Double, Step)]; let want: Outcome; let what: String; var events: [Event]? = nil }
+    struct Script { let name: String; let rules: Rules; let steps: [(Double, Step)]; let want: Outcome; let what: String; var events: [Event]? = nil
+        // The screen's own timing of the same finger, when the callbacks came late (see `real`).
+        var real: [(t: Double, p: CGPoint)]? = nil }
+    // A real finger's samples: down at (x, y), still until `from`, then by (dx, dy) over `ms` in 30 ms steps (as the
+    // build's injected fingers move), eased out if asked, and resting `rest` seconds before it lifts.
+    static func feel(_ x: CGFloat, _ y: CGFloat, from: Double, by dx: CGFloat, _ dy: CGFloat, ms: Double, ease: Bool = false, rest: Double = 0) -> [(t: Double, p: CGPoint)] {
+        var r: [(t: Double, p: CGPoint)] = [(0, CGPoint(x: x, y: y)), (from, CGPoint(x: x, y: y))]
+        let n = max(1, Int(ms / 30))
+        for i in 1...n {
+            var f = CGFloat(i) / CGFloat(n)
+            if ease { f = 1 - (1 - f) * (1 - f) }
+            r.append((from + Double(i) * ms / 1000 / Double(n), CGPoint(x: x + dx * f, y: y + dy * f)))
+        }
+        if rest > 0, let l = r.last { r.append((l.t + rest, l.p)) }
+        return r
+    }
     // A straight stroke from (x0, y0) by (dx, dy) over `ms`, at 120 samples a second.
     static func stroke(from t0: Double, _ x0: CGFloat, _ y0: CGFloat, by dx: CGFloat, _ dy: CGFloat, ms: Double, ease: Bool = false) -> [(Double, Step)] {
         let n = max(1, Int(ms / 8.33))
@@ -228,6 +287,33 @@ extension FlickHand {
         s.append(Script(name: "system-fling-sideways", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 120, -30, ms: 150) + [(0.62, .upFling(320, 370, -900))],
                         want: .putBack, what: "flung, but carried sideways: back, nothing sent"))
+        // The callbacks came late (a 0.4 s busy frame as the row lifted): by them, every move came well after the lift.
+        // By the finger's own clock, one swipe began as the row lifted (a scroll: never sent) and one flick came after a
+        // rest (sent, at its own speed, not the bunched callbacks').
+        s.append(Script(name: "late-scroll-busy-frame", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held), (0.72, .move(200, 300)), (0.73, .move(200, 250)), (0.74, .up(200, 240))],
+                        want: .putBack, what: "a swipe the instant the row lifted, its moves handled 0.4 s late: by the finger's clock a scroll, never sent",
+                        real: feel(200, 400, from: 0.31, by: 0, -160, ms: 120)))
+        s.append(Script(name: "late-scroll-carried-far", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held), (0.72, .move(200, 200)), (1.1, .up(200, 100))],
+                        want: .putBack, what: "a long scroll begun as the row lifted, carried 300 pt: still a scroll, never sent",
+                        real: feel(200, 400, from: 0.32, by: 0, -300, ms: 400)))
+        s.append(Script(name: "short-flick-busy-frame", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held), (0.80, .move(200, 380)), (0.81, .move(200, 356)), (0.82, .up(200, 355))],
+                        want: .thrown, what: "held, then a 45 pt flick in 90 ms, its moves bunched by a busy frame: sent at the finger's own speed",
+                        real: feel(200, 400, from: 0.45, by: 0, -45, ms: 90)))
+        s.append(Script(name: "ease-flick-busy-frame", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held), (0.85, .move(200, 345)), (0.86, .up(200, 336))],
+                        want: .thrown, what: "held, then a flick easing to a stop, handled late: sent",
+                        real: feel(200, 400, from: 0.45, by: 0, -64, ms: 150, ease: true, rest: 0.03)))
+        s.append(Script(name: "carry-busy-frame", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held), (0.8, .move(200, 300)), (1.0, .move(200, 160)), (1.5, .up(200, 160))],
+                        want: .thrown, what: "held, carried 240 pt up and rested: sent",
+                        real: feel(200, 400, from: 0.45, by: 0, -240, ms: 600, rest: 0.3)))
+        s.append(Script(name: "back-down-busy-frame", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held), (0.8, .move(200, 160)), (1.6, .up(200, 395))],
+                        want: .putBack, what: "carried up then all the way back down: not sent",
+                        real: feel(200, 400, from: 0.45, by: 0, -240, ms: 400) + feel(200, 160, from: 0, by: 0, 235, ms: 400).dropFirst(2).map { (t: $0.t + 0.85, p: $0.p) }))
         // Put back.
         s.append(Script(name: "hold-then-drag-down", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 0, 90, ms: 250) + [(0.72, .up(200, 490))],
@@ -267,13 +353,14 @@ extension FlickHand {
         for script in scripts {
             var h = FlickHand(script.rules)
             var events: [Event] = []
+            var real = false
             var outcome = Outcome.none
             for (t, step) in script.steps {
                 switch step {
                 case .down(let x, let y): events += h.down(CGPoint(x: x, y: y), at: t)
                 case .move(let x, let y): events += h.move(CGPoint(x: x, y: y), at: t)
                 case .held: events += h.held(at: t)
-                case .up(let x, let y): outcome = h.up(CGPoint(x: x, y: y), at: t)
+                case .up(let x, let y): if !real, let r = script.real { h.real = r; real = true }; outcome = h.up(CGPoint(x: x, y: y), at: t)
                 case .upFling(let x, let y, let vy): outcome = h.up(CGPoint(x: x, y: y), at: t, fling: CGVector(dx: 0, dy: vy))
                 case .cancel: outcome = h.cancel()
                 }

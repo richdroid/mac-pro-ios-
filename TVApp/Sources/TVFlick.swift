@@ -2,6 +2,9 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
+#if os(iOS)
+import UIKit.UIGestureRecognizerSubclass
+#endif
 
 // The flick page's arrival and its close, faded by Core Animation in the render server: the screen as it was, a still
 // laid over the window, fades off what is already built under it. A long main-thread turn while it fades (the page's own
@@ -716,7 +719,7 @@ struct FlickScreen: View {
             // Quick, and in the very frame the screen goes up (a task starts a frame or two later, and the page under it
             // had already begun to go: 2-3 frames of black): the page is what he tapped for, there as the tap lands.
             .onAppear {
-                FlickHaptic.warm()
+                FlickHaptic.warm(); TouchLedger.install()
                 // The ground's soft picture and colour from memory, so the page arrives in its colour, not on black.
                 if softImage == nil, let u = screenURL ?? URL(string: item.art) { softImage = ImageStore.shared.small(u, 16) }
                 if tint == nil { tint = ImageStore.shared.cachedBand(URL(string: item.art)) }
@@ -1422,6 +1425,7 @@ struct FlickScreen: View {
                 // the lift: every throw read as a scroll come late (CI 638f7f6: carried 271 pt up, put back).
                 let t = Date().timeIntervalSince(hands.base)
                 let at = d.map { CGPoint(x: $0.translation.width, y: $0.translation.height) } ?? .zero
+                hands.hand.real = TouchLedger.feel()
                 finish(hands.hand.up(at, at: t, fling: d.map { CGVector(dx: $0.velocity.width, dy: $0.velocity.height) }), id: id, translation: d?.translation ?? .zero, send: send)
             }
     }
@@ -1448,6 +1452,7 @@ struct FlickScreen: View {
     func follow(_ d: DragGesture.Value, id: String) {
         guard liftedID == id else { HandTrace.note("move-unlifted"); return }
         if lift.drag == .zero, d.translation != .zero { HandTrace.note("first-move") }
+        if id != "card" { hands.hand.real = TouchLedger.feel() }
         handle(hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: Date().timeIntervalSince(hands.base)), id: id)
         lift.drag = d.translation
         let card = id == "card"
@@ -1475,7 +1480,7 @@ struct FlickScreen: View {
         case .thrown:
             // The pick, from where the thing is now, leaving the way the finger did.
             rects.map[id] = (rects.map[id] ?? .zero).offsetBy(dx: translation.width, dy: translation.height)
-            let v = hands.hand.velocity
+            let v = hands.hand.leaving
             throwV = CGSize(width: v.dx, height: v.dy)
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { thrownID = id }
@@ -2195,6 +2200,63 @@ final class HandBox {
     var id: String?
     var base = Date()
 }
+// The finger by the screen's own clock: every touch's timestamp and place (each coalesced sample too), from its
+// touch-down, read by a recognizer on the window that never recognizes, never delays a touch and never takes one. The
+// gestures' callbacks come when the main thread gets to them; these say when the finger really moved (FlickHand.real).
+#if os(iOS)
+final class TouchLedger: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    @MainActor private static var samples: [(t: Double, p: CGPoint)] = []
+    @MainActor private static var downAt = 0.0
+    private weak var tracked: UITouch?
+    @MainActor static func install() {
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for w in scene.windows where !(w.gestureRecognizers ?? []).contains(where: { $0 is TouchLedger }) {
+                let g = TouchLedger(target: nil, action: nil)
+                g.cancelsTouchesInView = false; g.delaysTouchesBegan = false; g.delaysTouchesEnded = false
+                g.delegate = g
+                w.addGestureRecognizer(g)
+            }
+        }
+    }
+    // The current (or last) touch, seconds from its touch-down; nil when there's none.
+    @MainActor static func feel() -> [(t: Double, p: CGPoint)]? { samples.count > 0 ? samples : nil }
+    private func note(_ t: UITouch, _ event: UIEvent) {
+        for c in event.coalescedTouches(for: t) ?? [t] {
+            Self.samples.append((c.timestamp - Self.downAt, c.location(in: nil)))
+        }
+        if Self.samples.count > 240 { Self.samples.removeSubrange(1..<(Self.samples.count - 200)) }
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        for t in touches where t !== tracked { if tracked != nil { ignore(t, for: event) } }
+        guard tracked == nil, let t = touches.first else { return }
+        tracked = t
+        Self.downAt = t.timestamp
+        Self.samples = [(0, t.location(in: nil))]
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let t = tracked, touches.contains(t) else { return }
+        note(t, event)
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let t = tracked, touches.contains(t) else { return }
+        Self.samples.append((t.timestamp - Self.downAt, t.location(in: nil)))
+        tracked = nil; state = .failed
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let t = tracked, touches.contains(t) else { return }
+        tracked = nil; state = .failed
+    }
+    override func reset() { tracked = nil }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool { false }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool { false }
+}
+#else
+enum TouchLedger {
+    @MainActor static func install() {}
+    @MainActor static func feel() -> [(t: Double, p: CGPoint)]? { nil }
+}
+#endif
 // A row or the card in the hand: its shadow, the light round its edge as it rises, its swell, its lean and its place
 // under the finger. At rest it reads nothing from the box.
 struct LiftedLook: ViewModifier {
@@ -2522,7 +2584,7 @@ struct ShelfFlick: ViewModifier {
                 Task { @MainActor in if up, hands.hand.phase == .lifted { _ = hands.hand.cancel(); end(.cancelled, translation: .zero) } }
             }
             .accessibilityAction(named: "Flick to the TV") { hands.hand = FlickHand(.list); throwIt(velocity: CGSize(width: 0, height: -800), translation: .zero) }
-            .task { await reportPlace() }
+            .task { TouchLedger.install(); await reportPlace() }
     }
     // The build's shelf films: the first card fully on screen says where it is, for a real finger to land on it.
     @MainActor static var reported = false
@@ -2553,6 +2615,7 @@ struct ShelfFlick: ViewModifier {
                     lifted()
                 }
                 guard let d else { return }
+                hands.hand.real = TouchLedger.feel()
                 for e in hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: Date().timeIntervalSince(hands.base)) {
                     if case .armed(let on) = e { ShelfHand.shared.armed = on; if on { FlickHaptic.detent() } }
                 }
@@ -2565,6 +2628,7 @@ struct ShelfFlick: ViewModifier {
                 if case .second(true, let dv) = v { d = dv }
                 let t = Date().timeIntervalSince(hands.base)
                 let at = d.map { CGPoint(x: $0.translation.width, y: $0.translation.height) } ?? .zero
+                hands.hand.real = TouchLedger.feel()
                 end(hands.hand.up(at, at: t, fling: d.map { CGVector(dx: $0.velocity.width, dy: $0.velocity.height) }), translation: d?.translation ?? .zero)
             }
     }
@@ -2597,7 +2661,7 @@ struct ShelfFlick: ViewModifier {
         ScrollLock.set(lock, false)
         switch outcome {
         case .thrown:
-            let v = hands.hand.velocity
+            let v = hands.hand.leaving
             throwIt(velocity: CGSize(width: v.dx, height: v.dy), translation: translation)
         case .longTap:
             // Held and let go where it was: a tap, its page, as on any button.
