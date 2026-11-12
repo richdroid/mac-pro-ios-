@@ -7,6 +7,10 @@ import UIKit
 // so lists read better as one column, the same as on the outer display.
 private struct PaneLayoutKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues { var paneLayout: Bool { get { self[PaneLayoutKey.self] } set { self[PaneLayoutKey.self] = newValue } } }
+// How far FoldSplit has already moved its left pane in from the display's outer edge, so a page drawn by hand (not a
+// List, whose cards land at the same place either way) can take it off its own inset and line up with the lists.
+private struct PaneOuterKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues { var paneOuter: CGFloat { get { self[PaneOuterKey.self] } set { self[PaneOuterKey.self] = newValue } } }
 struct PaneReader<C: View>: View {
     @Environment(\.horizontalSizeClass) private var size
     @State private var landscape = true
@@ -359,16 +363,21 @@ struct FoldSplit<L: View, R: View>: View {
                 // With nothing seen yet (the first launch open flat after an install), the hinge is taken to be the display's
                 // centre, where the Duo's is, so the panes don't start split down the page's middle and move across when the
                 // crease is first read (designer, resize gate: the first open-flat launch reflowed).
-                let centre: Split? = blind ? {
+                // Where the Duo's hinge is: the middle of the window. With nothing seen yet, the panes split there; and a crease
+                // read anywhere else is a reading taken mid-turn (0.35 with a 40 pt crease, 0.50), never one to lay out by
+                // (designer, resize gate on cbdef0e: a turn adopted 0.350 and the panes moved twice).
+                let centreRatio: CGFloat? = open ? {
                     let f = g.frame(in: .global)
                     let w = (UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.bounds.width) ?? (f.maxX + f.minX)
-                    return Split(ratio: min(max((w / 2 - f.minX) / max(g.size.width, 1), 0.3), 0.7), gutter: 24, outer: 14)
+                    return (min(max((w / 2 - f.minX) / max(g.size.width, 1), 0.3), 0.7) * 100).rounded() / 100
                 }() : nil
+                let centre: Split? = blind ? Split(ratio: centreRatio, gutter: 24, outer: 14) : nil
+                let plausible = !open || (read.ratio != nil && centreRatio != nil && abs(read.ratio! - centreRatio!) <= 0.03)
                 let use = (held?.key == key ? held?.split : nil) ?? (open ? FoldSeen.bySize[key] ?? FoldSeen.last ?? centre : nil) ?? read
                 // A reading at rest with the crease in sight (or where there's none to see: folded, upright) is the one to
                 // lay out by and to remember.
                 let take: () -> Void = {
-                    guard !blind, !NavTransit.shared.moving() else { return }
+                    guard !blind, plausible, !NavTransit.shared.moving() else { return }
                     // Turned into a posture this page has a split for already: that split stands until a different reading
                     // has held for 0.4 s. Mid-turn the crease reads half-way (0.50) for a frame or two, and the panes moved
                     // to it and back (designer, resize regate: 0.548, 0.500, 0.548 in one turn).
@@ -393,7 +402,7 @@ struct FoldSplit<L: View, R: View>: View {
                     if held?.key != key || held?.split != read { held = (key, read) }
                 }
                 ArrangementView {
-                    left.padding(.leading, use.outer).padding(.trailing, use.gutter).splitArrangementLayoutRatio(use.ratio)
+                    left.environment(\.paneOuter, use.outer).padding(.leading, use.outer).padding(.trailing, use.gutter).splitArrangementLayoutRatio(use.ratio)
                 } secondary: {
                     right.padding(.leading, use.gutter)
                 }

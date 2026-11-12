@@ -27,6 +27,11 @@ struct HistoryMetric: Identifiable, Hashable {
         case .temperature: return "\(Heat.shown(v))°"
         }
     }
+    // An axis figure: whole sizes without a decimal ("0 GB", "100 GB").
+    func axisText(_ v: Double) -> String {
+        if kind == .bytes { let g = v / 1_073_741_824; return abs(g - g.rounded()) < 0.05 ? "\(Int(g.rounded())) GB" : String(format: "%.1f GB", g) }
+        return text(v)
+    }
     func now(_ live: LiveStatus?) -> Double? {
         guard let live else { return nil }
         switch key {
@@ -118,6 +123,18 @@ struct HistoryView: View {
         }
         return out
     }
+    // Round steps up past the highest figure shown, for sizes (whole GB) and speeds (whole KB/s or MB/s).
+    var ticks: [Double]? {
+        guard metric.kind == .bytes || metric.kind == .rate else { return nil }
+        let top = marks.map { max($0.value, $0.peak ?? 0) }.max() ?? 0
+        guard top > 0 else { return nil }
+        let unit: Double = metric.kind == .bytes ? 1_073_741_824 : (top < 1024 ? 1 : top < 1_048_576 ? 1024 : 1_048_576)
+        let raw = top / unit / 3
+        let mag = pow(10, floor(log10(max(raw, 1e-9))))
+        let step = ([1.0, 2, 5, 10].first { $0 * mag >= raw } ?? 10) * mag * unit
+        let count = Int(ceil(top / step))
+        return (0...max(count, 1)).map { Double($0) * step }
+    }
     var pickedMark: Mark? {
         guard let picked else { return nil }
         return marks.min { abs($0.date.timeIntervalSince(picked)) < abs($1.date.timeIntervalSince(picked)) }
@@ -153,7 +170,7 @@ struct HistoryView: View {
             }
         }
         .chartXScale(domain: domain)
-        .chartYScale(domain: .automatic(includesZero: metric.kind != .temperature))
+        .modifier(YScale(top: ticks?.last, zero: metric.kind != .temperature))
         // Not the system's chart selection, which takes every touch and stops the page scrolling.
         .chartOverlay { proxy in
             GeometryReader { g in
@@ -171,15 +188,28 @@ struct HistoryView: View {
             }
         }
         .chartYAxis {
-            AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { v in
-                AxisGridLine().foregroundStyle(.white.opacity(0.1))
-                AxisValueLabel { if let d = v.as(Double.self) { Text(metric.text(d)).font(.caption2).monospacedDigit() } }
+            // 10 pt between the plot and its figures, so the "now" dot never touches one (designer, 2026-11-11).
+            // Round steps for sizes and speeds ("0, 100, 200, 300 GB"), not the chart's own (279, 186, 93) (designer,
+            // 2026-11-11).
+            if let ticks {
+                AxisMarks(position: .trailing, values: ticks) { v in
+                    AxisGridLine().foregroundStyle(.white.opacity(0.1))
+                    AxisValueLabel(horizontalSpacing: 10) { if let d = v.as(Double.self) { Text(metric.axisText(d)).font(.caption2).monospacedDigit() } }
+                }
+            } else {
+                AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { v in
+                    AxisGridLine().foregroundStyle(.white.opacity(0.1))
+                    AxisValueLabel(horizontalSpacing: 10) { if let d = v.as(Double.self) { Text(metric.text(d)).font(.caption2).monospacedDigit() } }
+                }
             }
         }
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+            AxisMarks(values: .automatic(desiredCount: 4)) { v in
                 AxisGridLine().foregroundStyle(.white.opacity(0.06))
-                AxisValueLabel(format: hours == 1 ? Date.FormatStyle.dateTime.hour().minute() : Date.FormatStyle.dateTime.hour())
+                // None in the last tenth of the period, where a time sat on the value axis's bottom figure.
+                if let d = v.as(Date.self), d < domain.upperBound.addingTimeInterval(-Double(hours) * 360) {
+                    AxisValueLabel(format: hours == 1 ? Date.FormatStyle.dateTime.hour().minute() : Date.FormatStyle.dateTime.hour())
+                }
             }
         }
         .overlay {
@@ -325,7 +355,7 @@ struct DisplayHoldButton: View {
         VStack(spacing: 6) {
             Image(systemName: isOn ? "sun.max.fill" : "moon")
                 .font(.system(size: 20))
-                .foregroundStyle(lit ? Color.black : Color.white.opacity(dim))
+                .foregroundStyle(lit ? Color.black : macBlue.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 52, height: 52)
                 .background(lit ? Color.white : Color(white: 0.16).opacity(dim), in: Circle())
@@ -346,7 +376,7 @@ struct DisplayHoldButton: View {
                         LinearKeyframe(0, duration: 0.06)
                     }
                 }
-            Text(hint ? "Hold" : "Display").font(.caption2).foregroundStyle(hint ? AnyShapeStyle(macBlue) : AnyShapeStyle(.secondary.opacity(dim))).lineLimit(1).minimumScaleFactor(0.8)
+            Text(hint ? "Hold" : "Display").font(.footnote).foregroundStyle(hint ? AnyShapeStyle(macBlue) : AnyShapeStyle(.primary.opacity(dim))).lineLimit(1).minimumScaleFactor(0.8)
                 .contentTransition(.opacity)
             if let failure {
                 Text(failure).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal: false, vertical: true)
@@ -444,5 +474,14 @@ struct HistoryReadout: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(stale ? staleDim : 1)
+    }
+}
+
+// A history chart's value scale: from nothing up to its top round step when it has one, else the chart's own.
+private struct YScale: ViewModifier {
+    let top: Double?
+    let zero: Bool
+    func body(content: Content) -> some View {
+        if let top { content.chartYScale(domain: 0...top) } else { content.chartYScale(domain: .automatic(includesZero: zero)) }
     }
 }

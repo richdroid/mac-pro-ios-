@@ -130,7 +130,10 @@ final class AppModel: ObservableObject {
     private var pendingSession: String?
     private var lastData: Data?
     // The tab chosen to open on in Settings, or else the one last used.
-    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab { didSet { if tab != oldValue { tabSince = Date() } } }
+    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab { didSet { if tab != oldValue { tabSince = Date(); Self.arrivedAt = Date() } } }
+    // When a tab last came to the front: figures don't roll for the moment after (they're simply there as he arrives).
+    static var arrivedAt = Date.distantPast
+    static var justArrived: Bool { Date().timeIntervalSince(arrivedAt) < 1.5 }
     // Counts each ask for the usage, which lives on the Claude tab: the Claude tab scrolls to it.
     @Published var usageAsked = AppModel.firstTab == 3 ? 1 : 0
     var usageShown = 0
@@ -407,7 +410,10 @@ final class AppModel: ObservableObject {
     // States the build's screenshots need that the sample Mac doesn't have. Only with a pose; never on the phone.
     static func applyPose(_ pose: String, to s: inout Status) {
         switch pose {
-        case "alerts", "alertsdismiss": s.alerts = Status.Alert.samples
+        case "alerts", "alertsdismiss":
+            s.alerts = Status.Alert.samples
+            // The CPU as hot as its alert says, so the tile under the banner agrees with it (designer, 2026-11-11).
+            s.temps = (s.temps ?? []).map { $0.name == "CPU" ? Status.Temp(name: "CPU", c: 96) : $0 }
         // Two parts of the Mac needing a look, as its bridge will count them: Status's chip says so and opens Health.
         case "needslook": s.healthBad = 2
         // Before the Mac has said anything about itself: the chip is grey "Checking".
@@ -417,6 +423,8 @@ final class AppModel: ObservableObject {
         case "api-live", "api-sheet": s.apiUsage = .sample
         case "api-estimate": s.apiUsage = .estimateSample
         case "longlog": s.upgrade = Status.Upgrade.longSample
+        // The macOS tab's log while a check runs, and when the last step failed: the log shows in both (designer, 2026-11-11).
+        case "upgradefail": s.upgrade = Status.Upgrade.longSample(ending: "[03:41:12] Root patch step failed: the KDK didn’t match this build.", status: "FAILED: root patch")
         // Away from home with two of his apps rebuilt and signed for this iPhone: both install over the air, with the card
         // to install them together ("otaoffer" also has the offer sheet up, as the app opens).
         // Every one of his apps already at the Mac's build: the Updates section says so.
