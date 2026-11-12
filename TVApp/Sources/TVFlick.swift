@@ -67,12 +67,14 @@ import UIKit
     static func dissolve(_ rect: CGRect, hole picked: CGRect? = nil, soft: TVImage?, tint: Color?, duration: Double = 0.2, flush: Bool = true, animate: Bool = true) {
         #if os(iOS)
         guard let v = veil, let w = v.superview as? UIWindow, rect.width > 20, rect.height > 20 else { return }
-        // The page's whole height, its own bar at the top included (left on the still, it was a black band over the
-        // ground: d5d94f4). With the tab bar showing (upright) the whole screen, the bar itself kept on its own still;
-        // beside a side bar, the page's columns only.
+        // The ground goes under the page's whole height (its own bar at the top included: d5d94f4), down to the tab bar
+        // upright, the page's columns beside a side bar. The still fades everywhere: where there's no ground (the tab
+        // bar's strip, the side bar's column) it fades onto the live bar itself, already on the Remote. Kept on the still,
+        // the bar's strip held the page's black edge to edge, and the rail its black column with Apps still lit (the
+        // reviews of 94d0f11 and ddc30e8).
         let bar = Self.bottomBar(in: w).flatMap { w.bounds.intersects($0) ? $0 : nil }
         var r = rect.intersection(w.bounds)
-        r = bar != nil ? w.bounds : CGRect(x: r.minX, y: 0, width: r.width, height: w.bounds.height)
+        r = bar.map { CGRect(x: 0, y: 0, width: w.bounds.width, height: $0.minY) } ?? CGRect(x: r.minX, y: 0, width: r.width, height: w.bounds.height)
         guard r.height > 20 else { return }
         let ground = UIView(frame: w.bounds)
         ground.backgroundColor = .black
@@ -93,25 +95,15 @@ import UIKit
         clip.addSubview(ground)
         w.insertSubview(clip, belowSubview: v)
         extras.append(clip)
-        // The still itself dissolves, through a mask, in the page's part: no second picture of the screen is taken (it
-        // cost a turn at the pick, and it pictured whatever was in the air as a second copy: the review of 61f18fc).
-        // Outside the page (and the tab bar, upright) it stays whole; the picked row's own place is empty from the
-        // first frame, as what's in the air is the only copy of it.
-        let inR = v.convert(r, from: w)
-        let keep = CAShapeLayer()
-        let kp = UIBezierPath(rect: v.bounds); kp.append(UIBezierPath(rect: inR))
-        // The bar kept is the bar's own glass, not the strip it floats in: the strip held the page's black under the bar
-        // edge to edge over the Remote's ground for the whole dissolve (the review of 94d0f11, upright).
-        let barPath = bar.map { Self.barShape(in: w, strip: $0, to: v) }
-        if let barPath { kp.append(barPath) }
-        keep.path = kp.cgPath; keep.fillRule = .evenOdd; keep.fillColor = UIColor.black.cgColor
+        // The still itself dissolves, through a mask: no second picture of the screen is taken (it cost a turn at the
+        // pick, and it pictured whatever was in the air as a second copy: 61f18fc). The picked row's own place is empty
+        // from the first frame, as what's in the air is the only copy of it.
         let page = CAShapeLayer()
-        let pp = UIBezierPath(rect: inR)
-        if let barPath { pp.append(barPath) }
+        let pp = UIBezierPath(rect: v.bounds)
         if let picked, picked.width > 4 { pp.append(UIBezierPath(roundedRect: v.convert(picked, from: w).insetBy(dx: -12, dy: -12), cornerRadius: 22)) }
         page.path = pp.cgPath; page.fillRule = .evenOdd; page.fillColor = UIColor.black.cgColor
         let mask = CALayer(); mask.frame = v.bounds
-        mask.addSublayer(keep); mask.addSublayer(page)
+        mask.addSublayer(page)
         v.layer.mask = mask
         if animate { fade(page, duration) } else { pending = page }
         if flush { CATransaction.flush() }
@@ -136,30 +128,6 @@ import UIKit
         #endif
     }
     #if os(iOS)
-    // The tab bar's visible glass (its widest rounded subview inside the strip), in `v`'s space; the strip when there's
-    // no such thing to find.
-    private static func barShape(in w: UIWindow, strip: CGRect, to v: UIView) -> UIBezierPath {
-        var best: (CGRect, CGFloat)?
-        func look(_ x: UIView, _ depth: Int) {
-            for c in x.subviews where !c.isHidden && c.alpha > 0.01 {
-                let r = c.convert(c.bounds, to: w)
-                if c.layer.cornerRadius > 8, r.width > 60, r.width < strip.width - 4, r.height > 30, strip.insetBy(dx: -2, dy: -2).contains(r) {
-                    if best == nil || r.width > best!.0.width { best = (r, c.layer.cornerRadius) }
-                }
-                if depth < 3 { look(c, depth + 1) }
-            }
-        }
-        func find(_ vc: UIViewController?) -> UITabBarController? {
-            guard let vc else { return nil }
-            if let t = vc as? UITabBarController { return t }
-            for c in vc.children { if let t = find(c) { return t } }
-            return nil
-        }
-        if let tb = find(w.rootViewController)?.tabBar { look(tb, 0) }
-        guard let found = best else { return UIBezierPath(rect: v.convert(strip, from: w)) }
-        let (r, radius) = found
-        return UIBezierPath(roundedRect: v.convert(r, from: w).insetBy(dx: -1, dy: -1), cornerRadius: radius + 1)
-    }
     private static func bottomBar(in w: UIWindow) -> CGRect? {
         func find(_ vc: UIViewController?) -> UITabBarController? {
             guard let vc else { return nil }
