@@ -1025,7 +1025,8 @@ function mockScreen(req, sock, slow = false, sleepy = false) {
 
 // ---- A stand-in Mac's Music (mac-dash music.js) -----------------------------------------------------------------------
 // The app is launched with -mac http://127.0.0.1:9000/mac<name>, so each film has its own Mac: /api/music/search answers
-// from a short list of jazz records (one with the long names a real library has) after 2 s, play answers after about 17 s as the real one does (Music, AirPlay to the Chumby,
+// from a list of jazz records (one with the long names a real library has) after 9 s and at most 25, as his library
+// answers (measured 11-12: 8 to 12 s, capped at 25 by the Mac), play answers after about 17 s as the real one does (Music, AirPlay to the Chumby,
 // then its 4 s check), now names the song for a minute after, and stop clears it. A name starting "macfail" has the play
 // turned down after 6 s with the real Mac's words for the Chumby dropping the song.
 const macSongs = [
@@ -1034,6 +1035,24 @@ const macSongs = [
   ['00000000000000A3', 'Blue Train', 'John Coltrane', 'Blue Train', 643], ['00000000000000A4', 'Freddie Freeloader', 'Miles Davis', 'Kind of Blue', 589],
   ['00000000000000A5', 'Blue Monk', 'Thelonious Monk', 'Thelonious Alone in San Francisco', 248], ['00000000000000A6', 'Take Five', 'The Dave Brubeck Quartet', 'Time Out', 324],
   ['00000000000000A7', 'Blue Rondo à la Turk', 'The Dave Brubeck Quartet', 'Time Out', 404],
+  ['00000000000000B0', 'Blue Bossa', 'The Standards Trio', 'Blue Standards', 180],
+  ['00000000000000B1', 'Bluesette', 'The Standards Trio', 'Blue Standards', 187],
+  ['00000000000000B2', 'Blue Skies', 'The Standards Trio', 'Blue Standards', 194],
+  ['00000000000000B3', 'Blue Moon', 'The Standards Trio', 'Blue Standards', 201],
+  ['00000000000000B4', 'Blues for Alice', 'The Standards Trio', 'Blue Standards', 208],
+  ['00000000000000B5', 'Blue Seven', 'The Standards Trio', 'Blue Standards', 215],
+  ['00000000000000B6', 'Blues March', 'The Standards Trio', 'Blue Standards', 222],
+  ['00000000000000B7', 'Blue Light Blues', 'The Standards Trio', 'Blue Standards', 229],
+  ['00000000000000B8', 'Blue Haze', 'The Standards Trio', 'Blue Standards', 236],
+  ['00000000000000B9', 'Blue Room', 'The Standards Trio', 'Blue Standards', 243],
+  ['00000000000000BA', 'Blue Lou', 'The Standards Trio', 'Blue Standards', 250],
+  ['00000000000000BB', 'Blue and Sentimental', 'The Standards Trio', 'Blue Standards', 257],
+  ['00000000000000BC', 'Blue Minor', 'The Standards Trio', 'Blue Standards', 264],
+  ['00000000000000BD', 'Blue Prelude', 'The Standards Trio', 'Blue Standards', 271],
+  ['00000000000000BE', 'Blue Turning Grey Over You', 'The Standards Trio', 'Blue Standards', 278],
+  ['00000000000000BF', 'Blue Daniel', 'The Standards Trio', 'Blue Standards', 285],
+  ['00000000000000C0', 'Blue Gardenia', 'The Standards Trio', 'Blue Standards', 292],
+  ['00000000000000C1', 'Blue Champagne', 'The Standards Trio', 'Blue Standards', 299],
 ].map(([id, name, artist, album, secs]) => ({ id, name, artist, album, secs }));
 const macNow = {};
 function macMusic(q, s) {
@@ -1043,7 +1062,7 @@ function macMusic(q, s) {
   const json = (v, wait = 0) => setTimeout(() => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); }, wait);
   if (op === 'search') {
     const t = (qs.get('q') || '').toLowerCase();
-    json({ ok: true, songs: macSongs.filter(x => [x.name, x.artist, x.album].some(f => f.toLowerCase().includes(t))) }, 2000);
+    json({ ok: true, songs: macSongs.filter(x => [x.name, x.artist, x.album].some(f => f.toLowerCase().includes(t))).slice(0, 25) }, 9000);
   } else if (op === 'now') {
     const n = macNow[mac], on = n && Date.now() - n.at < 60000;
     json(on ? { ok: true, state: 'playing', onChumby: true, playing: true, song: { name: n.song.name, artist: n.song.artist, album: n.song.album } } : { ok: true, state: 'stopped', onChumby: false, playing: false });

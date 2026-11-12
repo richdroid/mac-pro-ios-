@@ -154,15 +154,19 @@ extension ChumbyModel {
     static func sounds(_ model: ChumbyModel, open: @escaping () -> Void) async {
         guard active, !posed else { return }
         posed = true
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
-        switch pose {
-        case "macgone": model.playOnChumby(song)
-        case "macpick", "macpickgone", "macplay", "machome", "macfail", "macsecond":
-            open()
-            guard pose == "macsecond" else { return }
-            try? await Task.sleep(nanoseconds: 11_000_000_000)
-            open()
-        default: break
+        // Its own task, not the row's: the row can be redrawn as a new cell mid-pose (open upright), which would end it.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            switch pose {
+            case "macgone": model.playOnChumby(song)
+            case "macpick", "macpickgone", "macplay", "machome", "macfail", "macsecond", "macdrag":
+                open()
+                guard pose == "macsecond" else { return }
+                // The second pick lands while the first is still starting (searches take 9 s, as his library's do).
+                try? await Task.sleep(nanoseconds: 14_000_000_000)
+                open()
+            default: break
+            }
         }
     }
     // In the picker: the words typed as he would, a moment after it opens. Returns them, or nil for no pose.
@@ -174,7 +178,7 @@ extension ChumbyModel {
     }
     // With the list there, whether to pick its first song (the flows), once per opening.
     static func shouldPick() -> Bool {
-        guard active, !["macpick", "macpickgone"].contains(pose), picks < opens else { return false }
+        guard active, !["macpick", "macpickgone", "macdrag"].contains(pose), picks < opens else { return false }
         picks += 1
         return true
     }
@@ -185,15 +189,19 @@ extension ChumbyModel {
     }
 }
 
-// Choosing the song: a search of the Mac's Music library, edge to edge, with Close in a bar across the top (a modal with
-// one button, as Add widgets is). The field is the page's own, under the title, with the keyboard up as the page opens
-// (11-12 gate: the system search bar arrived in three beats, hid the title and Close behind a second ✕, and floated over
-// the results). A tap closes the page at once, and Sounds' Now card shows the song starting: the wait for the Mac
-// (about a quarter of a minute) is never spent looking at a spinner in a list.
+// Choosing the song: a search of the Mac's Music library. Folded and open upright, edge to edge with Close in a bar
+// across the top (a modal with one button, as Add widgets is); open flat, in the right pane beside Sounds, as Add widgets
+// and the editors are, so nothing runs across the fold (11-12 gate). The field is the page's own, under the title, with
+// the keyboard up as the page opens (the system search bar arrived in three beats, hid the title and Close behind a
+// second ✕, and floated over the results). A tap closes the page at once, and Sounds' Now card shows the song starting:
+// the wait for the Mac (about a quarter of a minute) is never spent looking at a spinner in a list. The Mac's own search
+// takes 8 to 12 s on his library (measured 11-12) and answers at most 25 songs.
 struct MacSongPicker: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
+    // Set when the page is in the right pane open flat: how it closes there.
+    var pane: (() -> Void)?
     @State private var text = ""
     @State private var songs: [MacSong] = []
     @State private var searched = ""
@@ -202,8 +210,10 @@ struct MacSongPicker: View {
     // "Still trying" is a live status, not a note to put away: it goes by itself when the Mac answers.
     @State private var stillTrying = false
     @FocusState private var fieldOn: Bool
+    static let title = "Play on the Chumby"
     func length(_ secs: Int) -> String { String(format: "%d:%02d", secs / 60, secs % 60) }
-    func choose(_ s: MacSong) { model.playOnChumby(s); dismiss(); MacMusicPose.afterPick(model) }
+    func close() { if let pane { pane() } else { dismiss() } }
+    func choose(_ s: MacSong) { model.playOnChumby(s); close(); MacMusicPose.afterPick(model) }
     var field: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -213,91 +223,118 @@ struct MacSongPicker: View {
         }
         .padding(.horizontal, 14).frame(minHeight: 44)
         .glassEffect(.regular, in: Capsule())
-        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+    }
+    @ViewBuilder var sections: some View {
+        if let problem { Section { FailNote(text: problem, dismiss: { withAnimation(.snappy) { self.problem = nil } }) }.listRowBackground(GlassRow()) }
+        Section {
+            // One calm line for the wait, whatever it is: the library being looked through, or the Mac not answering yet
+            // (never a red note as well: 11-12 gate).
+            if searching && (songs.isEmpty || stillTrying) {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text(stillTrying ? "Can’t reach the Mac. Still trying…" : "Looking in the Mac’s library…").foregroundStyle(.secondary)
+                        .contentTransition(.opacity)
+                }
+            }
+            ForEach(songs) { s in
+                Button { choose(s) } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(s.name).lineLimit(1)
+                            Text([s.artist, s.album].filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        if s.secs > 0 { Text(length(s.secs)).font(.subheadline).monospacedDigit().foregroundStyle(.secondary) }
+                    }
+                    .frame(minHeight: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                // Results of the question before this one, while the new one is asked: dimmed, so it shows.
+                .opacity(searching ? 0.45 : 1)
+                .accessibilityHint("Plays it on the Chumby")
+            }
+            if songs.isEmpty && !searching && !searched.isEmpty && searched == text.trimmingCharacters(in: .whitespaces) && problem == nil {
+                Text("No songs like that in the Mac’s library.").foregroundStyle(.secondary)
+            }
+        }
+        .listRowBackground(GlassRow())
+    }
+    // Nothing reads through the keyboard's glass: the list fades out over its last 18 pt, above the keyboard when it's
+    // up (the list ends there) as the tabs do over the bar (11-05).
+    var foot: some View {
+        VStack(spacing: 0) { Rectangle(); LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 18) }
     }
     var body: some View {
-        NavigationStack {
-            List {
-                if stillTrying { Section { FailNote(text: "Can’t reach the Mac. Still trying.") }.listRowBackground(GlassRow()) }
-                else if let problem { Section { FailNote(text: problem, dismiss: { withAnimation(.snappy) { self.problem = nil } }) }.listRowBackground(GlassRow()) }
-                Section {
-                    ForEach(songs) { s in
-                        Button { choose(s) } label: {
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(s.name).lineLimit(1)
-                                    Text([s.artist, s.album].filter { !$0.isEmpty }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                                Spacer(minLength: 8)
-                                if s.secs > 0 { Text(length(s.secs)).font(.subheadline).monospacedDigit().foregroundStyle(.secondary) }
-                            }
-                            .frame(minHeight: 44).contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        // Results of the question before this one, while the new one is asked: dimmed, so it shows.
-                        .opacity(searching ? 0.45 : 1)
-                        .accessibilityHint("Plays it on the Chumby")
-                    }
-                    if songs.isEmpty {
-                        if searching { HStack(spacing: 10) { ProgressView(); Text("Looking in the Mac’s library…").foregroundStyle(.secondary) } }
-                        else if !searched.isEmpty && searched == text.trimmingCharacters(in: .whitespaces) && problem == nil { Text("No songs like that in the Mac’s library.").foregroundStyle(.secondary) }
-                    }
+        Group {
+            if pane != nil {
+                let close = Button("Close") { self.close() }.foregroundStyle(.tint)
+                List {
+                    PageTitle(Self.title, pins: true) { close }
+                    field.listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
+                    sections
                 }
-                .listRowBackground(GlassRow())
-            }
-            .seaList().background { SeaBackground().ignoresSafeArea() }
-            .scrollDismissesKeyboard(.immediately)
-            // The field in the page's own layout, under the bar: the list starts below it and never runs under it.
-            .safeAreaInset(edge: .top, spacing: 0) { field }
-            .animation(.snappy, value: songs)
-            .navigationTitle("Play on the Chumby").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                // Close, not Done: nothing here is confirmed by it (a pick closes the page itself).
-                ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Close", systemImage: "xmark") } }
-            }
-            // The keyboard comes up with the page, not after it.
-            .defaultFocus($fieldOn, true)
-            .onAppear { fieldOn = true }
-            .task { if let words = await MacMusicPose.typing() { text = words } }
-            .onChange(of: songs) {
-                guard !searching, let first = songs.first, MacMusicPose.shouldPick() else { return }
-                Task { try? await Task.sleep(nanoseconds: 1_500_000_000); choose(first) }
-            }
-            // Asked a moment after he stops typing, and only the newest question's answer is shown.
-            .task(id: text) {
-                let q = text.trimmingCharacters(in: .whitespaces)
-                guard q.count >= 2 else { songs = []; searching = false; stillTrying = false; return }
-                try? await Task.sleep(nanoseconds: 450_000_000)
-                if Task.isCancelled { return }
-                searching = true
-                // Nothing answering is asked again quietly; only after `patience` is it said, calmly, and asked on until
-                // the Mac answers, when it goes by itself. What the Mac does say is shown as it is.
-                let began = Date()
-                while !Task.isCancelled {
-                    do {
-                        let found = try await MacMusic.search(q)
-                        if Task.isCancelled { return }
-                        searching = false
-                        songs = found; searched = q
-                        withAnimation(.snappy) { problem = nil; stillTrying = false }
-                        return
-                    } catch MacMusic.Trouble.noAnswer {
-                        if Task.isCancelled { return }
-                        if Date().timeIntervalSince(began) >= MacMusic.patience, !stillTrying {
-                            withAnimation(.snappy) { stillTrying = true }
+                .pinsTitle { PageTitle(Self.title) { close } }
+                .scrollDismissesKeyboard(.immediately)
+                .mask(foot)
+            } else {
+                NavigationStack {
+                    List { sections }
+                        .seaList()
+                        .scrollDismissesKeyboard(.immediately)
+                        // The field in the page's own layout, under the bar: the list starts below it and never runs under it.
+                        .safeAreaInset(edge: .top, spacing: 0) { field.padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8) }
+                        .mask(foot)
+                        .background { SeaBackground().ignoresSafeArea() }
+                        .navigationTitle(Self.title).navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            // Close, not Done: nothing here is confirmed by it (a pick closes the page itself).
+                            ToolbarItem(placement: .cancellationAction) { Button { close() } label: { Label("Close", systemImage: "xmark") } }
                         }
-                        try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    } catch {
-                        if Task.isCancelled { return }
-                        searching = false
-                        songs = []; searched = q
-                        withAnimation(.snappy) { stillTrying = false; problem = error.localizedDescription }
-                        return
-                    }
+                }
+                .horizontalBars()
+                .tint(ChumbyPalette.acc(scheme == .dark))
+            }
+        }
+        .animation(.snappy, value: songs)
+        .animation(.snappy, value: stillTrying)
+        // The keyboard comes up with the page, not after it.
+        .defaultFocus($fieldOn, true)
+        .onAppear { fieldOn = true }
+        .task { if let words = await MacMusicPose.typing() { text = words } }
+        .onChange(of: songs) {
+            guard !searching, let first = songs.first, MacMusicPose.shouldPick() else { return }
+            Task { try? await Task.sleep(nanoseconds: 1_500_000_000); choose(first) }
+        }
+        // Asked a moment after he stops typing, and only the newest question's answer is shown.
+        .task(id: text) {
+            let q = text.trimmingCharacters(in: .whitespaces)
+            guard q.count >= 2 else { songs = []; searching = false; stillTrying = false; return }
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            if Task.isCancelled { return }
+            searching = true
+            // Nothing answering is asked again quietly; only after `patience` is it said, calmly, and asked on until the
+            // Mac answers, when it goes by itself. What the Mac does say is shown as it is.
+            let began = Date()
+            while !Task.isCancelled {
+                do {
+                    let found = try await MacMusic.search(q)
+                    if Task.isCancelled { return }
+                    searching = false
+                    songs = found; searched = q
+                    withAnimation(.snappy) { problem = nil; stillTrying = false }
+                    return
+                } catch MacMusic.Trouble.noAnswer {
+                    if Task.isCancelled { return }
+                    if Date().timeIntervalSince(began) >= MacMusic.patience, !stillTrying { stillTrying = true }
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                } catch {
+                    if Task.isCancelled { return }
+                    searching = false
+                    songs = []; searched = q
+                    withAnimation(.snappy) { stillTrying = false; problem = error.localizedDescription }
+                    return
                 }
             }
         }
-        .horizontalBars()
-        .tint(ChumbyPalette.acc(scheme == .dark))
     }
 }

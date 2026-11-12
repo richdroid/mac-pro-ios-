@@ -85,27 +85,45 @@ jobs:
             local d=$1 x=$2
             # A throwaway first film: the first one of a run came out stretched, with no launch in it (chumby-reach).
             film $d warm$x 6 $M/mac -tab 3
-            film $d macpick$x 9 $M/mac -tab 3 -pose macpick
-            film $d macplay$x 30 $M/macplay$x -tab 3 -pose macplay
-            film $d machome$x 30 $M/machome$x -tab 3 -pose machome
-            film $d macfail$x 18 $M/macfail$x -tab 3 -pose macfail
-            film $d macsecond$x 42 $M/macsecond$x -tab 3 -pose macsecond
+            film $d macpick$x 16 $M/mac -tab 3 -pose macpick
+            film $d macplay$x 40 $M/macplay$x -tab 3 -pose macplay
+            film $d machome$x 40 $M/machome$x -tab 3 -pose machome
+            film $d macfail$x 26 $M/macfail$x -tab 3 -pose macfail
+            film $d macsecond$x 56 $M/macsecond$x -tab 3 -pose macsecond
             # Nothing answers at the Mac's address: "Starting" for the patience, then the calm note.
             film $d macgone$x 45 http://127.0.0.1:9009 -tab 3 -pose macgone
             # The picker against that dead address: quiet, then "Still trying." with no ✕, for 40 s.
             film $d macpickgone$x 42 http://127.0.0.1:9009 -tab 3 -pose macpickgone
           }
+          # The results with the keyboard up, dragged by a real finger: a slow drag (the keyboard must drop in step and the
+          # list follow with no jump), flings to the end (the last row reachable) and back to the top.
+          dragfilm() { # display, suffix
+            local d=$1 x=$2
+            sleep 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-macdrag$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -mac $M/mac -tab 3 -pose macdrag
+            sleep 16
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-macdrag$x-rest.png
+            $D "$DEVICE" drag 0.5 0.42 0.5 0.18 1.2 || echo "drag failed"; sleep 2
+            for i in 1 2 3; do $D "$DEVICE" drag 0.5 0.8 0.5 0.25 0.12 || echo "fling failed"; sleep 1.4; done
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-macdrag$x-end.png
+            for i in 1 2 3; do $D "$DEVICE" drag 0.5 0.25 0.5 0.8 0.12 || true; sleep 1.4; done
+            sleep 2
+            kill -INT $REC; wait $REC; echo "film macdrag$x exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
           # Open flat: the picker across the fold, and a pick to playing.
           films_open() {
             film 3 warm-open 6 $M/mac -tab 3
-            film 3 macpick-open 10 $M/mac -tab 3 -pose macpick
-            film 3 macplay-open 32 $M/macplay-open -tab 3 -pose macplay
+            film 3 macpick-open 16 $M/mac -tab 3 -pose macpick
+            film 3 macplay-open 40 $M/macplay-open -tab 3 -pose macplay
           }
           # Dark: the picker, a pick to playing, and a start turned down.
           films_dark() { # display, suffix
             xcrun simctl ui "$DEVICE" appearance dark
-            film $1 macplay-dark$2 32 $M/macplay-dark$2 -tab 3 -pose macplay
-            film $1 macfail-dark$2 20 $M/macfail-dark$2 -tab 3 -pose macfail
+            film $1 macplay-dark$2 40 $M/macplay-dark$2 -tab 3 -pose macplay
+            film $1 macfail-dark$2 26 $M/macfail-dark$2 -tab 3 -pose macfail
             xcrun simctl ui "$DEVICE" appearance light
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
@@ -114,6 +132,7 @@ jobs:
           stills 1 ""
           films 1 ""
           films_dark 1 ""
+          dragfilm 1 ""
           $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
           stills 3 -open
           films_open
@@ -121,6 +140,7 @@ jobs:
           stills 3 -portrait
           films 3 -portrait
           films_dark 3 -portrait
+          dragfilm 3 -portrait
       - name: Collect crash reports
         if: always()
         run: |

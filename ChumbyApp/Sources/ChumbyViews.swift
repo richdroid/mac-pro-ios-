@@ -1971,7 +1971,9 @@ struct NowPlaying: View {
                             }
                         }
                     }
-                    .id(identity).transition(.opacity)
+                    // Old out, then new in, never both drawn (11-12 gate: a crossfade printed one song over the other).
+                    .id(identity).transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.16).delay(0.12)),
+                                                         removal: .opacity.animation(.easeIn(duration: 0.12))))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .animation(.easeInOut(duration: 0.3), value: identity)
@@ -2030,6 +2032,7 @@ struct SoundsTab: View {
     @State private var addStream = false
     @State private var addStation = false
     @State private var pickSong = false
+    @Environment(\.paneLayout) private var wide
     @State private var stationLink = ""
     @State private var streamURL = ""
     @State private var streamName = ""
@@ -2095,7 +2098,9 @@ struct SoundsTab: View {
     }
 
     var body: some View {
-        TwoPane {
+        // Open flat, the song picker takes the right pane (its own title row and list), with the Now card live beside it.
+        TwoPane(rightTitle: pickSong && wide ? nil : " ",
+                rightPage: pickSong && wide ? AnyView(MacSongPicker(pane: { withAnimation(.snappy) { pickSong = false } }).environmentObject(model)) : nil) {
             PageTitle("Sounds")
             ReachRow()
             // AirPlay in the Now card, under the volume: it's how music reaches the Chumby, and alone it was a one-row
@@ -2216,7 +2221,7 @@ struct SoundsTab: View {
         .seaList()
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
-        .fillCover(isPresented: $pickSong) { MacSongPicker().environmentObject(model) }
+        .fillCover(isPresented: Binding(get: { pickSong && !wide }, set: { pickSong = $0 })) { MacSongPicker().environmentObject(model) }
         .alert("Add a Pandora station", isPresented: $addStation) {
             TextField("Pandora link", text: $stationLink).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
             Button("Add") { let l = stationLink; stationLink = ""; Task { await model.addPandora(l) } }
