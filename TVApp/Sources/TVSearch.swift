@@ -956,7 +956,9 @@ struct ExpandingText<Extra: View>: View {
     @State private var closing = false
     @State private var full: CGFloat = 0
     @State private var short: CGFloat = 0
-    var cut: Bool { more || full > short + 1 }
+    // The words themselves run past the lines shown (only then do they fade); "More" is also offered for extras.
+    var clipsWords: Bool { full > short + 1 }
+    var cut: Bool { more || clipsWords }
     var body: some View {
         // The room a page reserves (the lines and the More line) is held by an unseen copy under the words, so "More"
         // sits right under the last line and any spare room is below it, never between (the review of 2f4e35b: open
@@ -1012,7 +1014,7 @@ struct ExpandingText<Extra: View>: View {
                 .mask {
                     VStack(spacing: 0) {
                         Color.black
-                        LinearGradient(colors: [.black, .black.opacity(cut && !open ? 0 : 1)], startPoint: .top, endPoint: .bottom).frame(height: 18)
+                        LinearGradient(colors: [.black, .black.opacity(clipsWords && !open ? 0 : 1)], startPoint: .top, endPoint: .bottom).frame(height: 18)
                     }
                 }
                 // The text swaps in as one: a later, longer description never crossfades over the first.
