@@ -296,6 +296,7 @@ final class PlaceKeeper {
     // When the page's content last changed height: the one restore waits for it to stop (a restore while rows were still
     // growing slid the page away and a second one cut it back; designer, regate of 3bcef0e).
     var grew = Date.distantPast
+    var y: CGFloat = 0  // the page's offset now, whatever is moving it
 }
 // Where the top of each page is on screen (its scroll view's top plus the bars over it), in the window's points. Read in
 // geometry transforms, which SwiftUI runs off the main actor, so it is behind a lock rather than on PlaceKeeper.
@@ -354,19 +355,23 @@ struct KeepsPlace: ViewModifier {
     @Environment(\.compactWindow) private var compactWindow
     let page: String
     let proxy: ScrollViewProxy
-    private struct Reading: Equatable { var scrolled: Bool; var height: CGFloat }
+    private struct Reading: Equatable { var y: CGFloat; var end: CGFloat }
     func body(content: Content) -> some View {
         content
             .environment(\.placePage, page)
             // The line is just under the bars over the page: the scroll view's top in the window plus its top inset.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY + $0.safeAreaInsets.top + 8 } action: { PlaceLines.set(page, $0) }
             .onScrollGeometryChange(for: Reading.self) { g in
-                Reading(scrolled: g.contentOffset.y + g.contentInsets.top > 8, height: (g.contentSize.height).rounded())
+                // Its end, not just its content: open flat the bars' insets settled after the content had, and the end
+                // moved 47 to 27 under a restore made at 47 (CI 8505660).
+                Reading(y: (g.contentOffset.y + g.contentInsets.top).rounded(),
+                        end: (g.contentSize.height + g.contentInsets.top + g.contentInsets.bottom - g.containerSize.height).rounded())
             } action: { old, new in
                 let k = PlaceKeeper.page(page)
-                if old.height != new.height { k.grew = Date() }
+                if old.end != new.end { k.grew = Date() }
+                k.y = new.y
                 // Only his own scrolling, in the layout the place belongs to: never the new layout settling, nor the restore.
-                if !k.settling, k.layout == "\(panes)\(compactWindow)" { k.scrolled = new.scrolled }
+                if !k.settling, k.layout == "\(panes)\(compactWindow)" { k.scrolled = new.y > 8 }
             }
             .task(id: "\(panes)\(compactWindow)") {
                 let k = PlaceKeeper.page(page), layout = "\(panes)\(compactWindow)"
@@ -388,6 +393,13 @@ struct KeepsPlace: ViewModifier {
                 SwipeLog.note("place restore \(page) to \(top.base) (\(layout))")
                 var still = Transaction(); still.disablesAnimations = true
                 withTransaction(still) { proxy.scrollTo(top, anchor: .top) }
+                // Once more only if that one didn't move the page at all (folded, CI 8505660: a restore to the Mac row
+                // left Status at its top). Never a second scroll on a page the first one moved.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if !Task.isCancelled, k.y <= 8 {
+                    SwipeLog.note("place restore again \(page) to \(top.base) (\(layout))")
+                    withTransaction(still) { proxy.scrollTo(top, anchor: .top) }
+                }
                 k.pending = false; k.restoring = Date()
             }
     }
