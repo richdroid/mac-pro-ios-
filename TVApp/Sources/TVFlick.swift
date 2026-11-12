@@ -594,6 +594,9 @@ struct FlickScreen: View {
         var b: [String: Any] = ["type": ref.type, "imdb": ref.imdb]
         if let v = video ?? episode?.id ?? ref.video { b["video"] = v }
         if video == nil, let t = stream?.token { b["token"] = t }
+        // The poster the TV's card will carry, so the launcher fetches it before the throw (the bridge takes https only,
+        // else falls back to Stremio's catalogue poster).
+        if shown.art.hasPrefix("https://"), shown.art.count < 600 { b["art"] = shown.art }
         return b
     }
     // A Stremio stream or title: the kind of send the TV can be made ready for.
