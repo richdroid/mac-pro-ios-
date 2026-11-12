@@ -790,7 +790,7 @@ struct AlarmsTab: View {
                             Group { if skipping { ProgressView() } else { Text("Back to \(u.formatted(date: .omitted, time: .shortened))") } }
                                 .font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize().frame(minHeight: 30).padding(.horizontal, 4)
                         }
-                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
                         .accessibilityLabel("Back to the usual \(u.formatted(date: .omitted, time: .shortened)) alarm")
                     } else if n.alarm.name == "Nap", model.sys.ringing == nil {
                         // A nap isn't skipped, it's called off: the same as the nap row's switch and its editor (Richard,
@@ -802,7 +802,7 @@ struct AlarmsTab: View {
                             Group { if skipping { ProgressView() } else { Label("Cancel nap", systemImage: "xmark") } }
                                 .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
                         }
-                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
                         .accessibilityLabel("Cancel the nap")
                     } else if model.state.skipKnown && !skippedNow && model.sys.ringing == nil {
                         // The one thing he'd reach for here: let it pass. Only on a Chumby that can skip, and not twice.
@@ -813,7 +813,7 @@ struct AlarmsTab: View {
                             Group { if skipping { ProgressView() } else { Label("Skip", systemImage: "forward.end.fill") } }
                                 .font(.subheadline.weight(.semibold)).frame(minWidth: 64, minHeight: 30)
                         }
-                        .buttonStyle(.glass).disabled(skipping || model.unreachable)
+                        .buttonStyle(.glass).disabled(skipping || model.unreachable).opacity(model.unreachable ? 0.45 : 1)
                         .accessibilityLabel("Skip the \(clockParts(n.at).0) \(clockParts(n.at).1) alarm")
                     }
                 }

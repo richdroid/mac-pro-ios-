@@ -446,7 +446,7 @@ struct ReachRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
                     // Amber for the route (the alarm isn't known to be at risk), red only for the Chumby itself.
-                    Circle().fill(model.dead ? Color.red : ChumbyPalette.hex(0xe59a2e)).frame(width: 8, height: 8)
+                    Circle().fill(model.dead ? Color.red : ChumbyPalette.away).frame(width: 8, height: 8)
                     Text(model.reachWords + seen).font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1)
                 }
                 if open {
@@ -746,7 +746,7 @@ struct HomeTab: View {
                 Text(b.text)
             } else if model.unreachable {
                 // The same words as the row on the other tabs, so a route failure never reads as the Chumby being off.
-                Text(model.reachWords + (model.seenAt.map { " · last seen " + seenText($0) } ?? ""))
+                Text(model.reachWords + (model.seenAt.map { " · last seen " + seenText($0) } ?? "")).transition(.opacity)
             }
         }
         .font(.custom("Trebuchet MS", size: 16).weight(.bold)).foregroundStyle(ChumbyPalette.sub(dark))
@@ -1005,7 +1005,8 @@ struct HomeTab: View {
                 // Each side scrolls on its own, so the octopus stays put while you use the controls.
                 FoldSplit {
                     // The wordmark is part of the stage, so it is spaced off the octopus the same way in both layouts.
-                    ScrollView { VStack(spacing: 0) { stage; status; about.padding(.top, Self.sectionGap) }.padding(.horizontal, 12) }.roomyIndicators()
+                    // The reach line arriving or going moves what's under it in one spring, never in one frame.
+                    ScrollView { VStack(spacing: 0) { stage; status; about.padding(.top, Self.sectionGap) }.padding(.horizontal, 12).animation(.snappy, value: model.unreachable) }.roomyIndicators()
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
@@ -1016,6 +1017,7 @@ struct HomeTab: View {
                             controls
                             more.padding(.top, Self.sectionGap)
                         }.padding(.horizontal, 12)
+                        .animation(.snappy, value: model.unreachable)
                     }.roomyIndicators()
                 }
             } else {
@@ -1031,6 +1033,7 @@ struct HomeTab: View {
                         about.padding(.top, Self.sectionGap)
                         if moreInfo { more.frame(maxWidth: Self.column) }
                     }.padding(.horizontal, 16)
+                    .animation(.snappy, value: model.unreachable)
                 }.roomyIndicators()
                 // For the build's shot: Home scrolled so the device's caption sits right at the tab bar, where Richard saw
                 // "Chumby Classic" through it.
@@ -1638,7 +1641,7 @@ struct ChannelsTab: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Text(channels.first { $0.id == picked }.map(title) ?? "Choose a channel").font(.custom("Trebuchet MS", size: 22).weight(.bold)).lineLimit(1)
+                        Text(channels.first { $0.id == picked }.map(title) ?? (showing.isEmpty ? "Choose a channel" : showing)).font(.custom("Trebuchet MS", size: 22).weight(.bold)).lineLimit(1)
                         Image(systemName: "chevron.up.chevron.down").font(.footnote.weight(.semibold))
                     }
                     .foregroundStyle(.primary)
@@ -2125,7 +2128,7 @@ struct TinkerTab: View {
                     if let f = model.failed("connect") { FailNote(text: f) }
                 } label: {
                     HStack(spacing: 10) {
-                        Circle().fill(model.dead ? Color.red : model.offline ? ChumbyPalette.hex(0xe59a2e) : ChumbyPalette.on).frame(width: 9, height: 9)
+                        Circle().fill(model.dead ? Color.red : model.offline ? ChumbyPalette.away : ChumbyPalette.on).frame(width: 9, height: 9)
                         Text(model.unreachable ? model.reachWords : "Connected")
                         Spacer(minLength: 8)
                         Text(host).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
@@ -2480,7 +2483,7 @@ struct SkipCard: View {
                 }
                 if let f = model.failed("skip") { FailNote(text: f, dismiss: model.dismissal("skip")) }
                 // Later or another sound for that one ring, under the slab it belongs to.
-                JustOnceMenu().padding(.leading, 18)
+                JustOnceMenu().padding(.leading, 18).transition(.opacity)
             }
             .animation(.easeOut(duration: 0.12), value: pending)
             .onChange(of: skipped != nil) { _, now in withAnimation(.easeInOut(duration: 0.35)) { shown = now } }

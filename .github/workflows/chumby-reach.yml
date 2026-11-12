@@ -45,7 +45,7 @@ jobs:
           node ci/mock-chumby.js &
           sleep 2
           # A first launch that reads everything, so later launches open with kept readings as his phone does.
-          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 0; sleep 10
+          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 1; sleep 12
           xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           film() { # display, file name, seconds, launch suffix, launch args... ; a still at the end too
             local d=$1 name=$2 secs=$3 sfx=$4; shift 4
@@ -71,14 +71,10 @@ jobs:
             # A throwaway first film: the first one of a run came out stretched, with no launch in it. (A bare 3 s
             # recording here hung the step: interrupted before it had started, it never ended.)
             film $d warm$x 8 gone -tab 0
-            film $d open-blip-home$x 22 blip -tab 0
-            film $d open-blip-alarms$x 22 blip -tab 2
-            film $d open-gone-home$x 60 gone -tab 0
-            film $d open-gone-alarms$x 60 gone -tab 2
             film $d open-back-home$x 60 back -tab 0
-            film $d open-dead-home$x 60 dead -tab 0
-            film $d open-dead-alarms$x 60 dead -tab 2
-            for T in 1 3 4; do still $d gone-$T$x 45 gone -tab $T; still $d dead-$T$x 45 dead -tab $T; done
+            film $d open-blip-channels$x 22 blip -tab 1
+            film $d open-gone-channels$x 45 gone -tab 1
+            film $d open-gone-alarms$x 45 gone -tab 2
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl

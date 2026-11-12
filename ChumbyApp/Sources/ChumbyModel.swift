@@ -193,6 +193,7 @@ final class ChumbyModel: ObservableObject {
     }
     func stop() { running = false; loops.forEach { $0.cancel() }; loops = []; stoppedAt = Date() }
     private var stoppedAt = Date.distantPast
+    private var lastChannelTry = Date.distantPast
     private(set) var running = false
     var direct: Bool { usingFallback }
     private let gate = OneAtATime()
@@ -223,6 +224,8 @@ final class ChumbyModel: ObservableObject {
             // (about 25 s) does.
             staleReadings = r.age > 60 ? staleReadings + 1 : 0
             // Each set only when it changes: an unchanged value still republishes and redraws every tab.
+            // The channel list is asked once per opening; one lost to the failure, or never kept, is asked for again now.
+            if struggling || (channelData == nil && Date().timeIntervalSince(lastChannelTry) > 30) { lastChannelTry = Date(); Task { await loadChannels() } }
             troubleSince = nil; triedRoutes = []; downSince = nil
             set(\.struggling, false); set(\.offline, false); set(\.dead, staleReadings >= 6)
             if r.age <= 60 { heard() }
