@@ -1481,31 +1481,33 @@ struct FlickScreen: View {
     func holdAndThrow(_ id: String, failed: Bool = false, send: @escaping () -> Void) -> some Gesture {
         let rules = FlickHand.Rules.list
         return LongPressGesture(minimumDuration: rules.hold, maximumDistance: rules.slop)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("flick")))
-            .updating($touching) { _, s, _ in s = id }
-            .onChanged { v in
-                guard !failed, !flown, case .second(true, let d) = v else { return }
-                if hands.id != id {
-                    // Lifted now: the hold's clock ran out with the finger still within the slop.
-                    hands.id = id; hands.base = Date().addingTimeInterval(-rules.hold); hands.hand = FlickHand(rules)
-                    _ = hands.hand.down(.zero, at: 0)
-                    hands.hand.realLift = TouchLedger.sinceDown()
-                    handle(hands.hand.held(at: rules.hold), id: id, scale: 1.04)
+            .onEnded { _ in
+                // Lifted now: the hold's clock ran out with the finger still within the slop. From here the finger is
+                // followed off the window's own events (TouchLedger.follow), not by a gesture.
+                guard !failed, !flown, hands.id == nil else { return }
+                hands.id = id; hands.base = Date().addingTimeInterval(-rules.hold); hands.hand = FlickHand(rules)
+                _ = hands.hand.down(.zero, at: 0)
+                hands.hand.realLift = TouchLedger.sinceDown()
+                handle(hands.hand.held(at: rules.hold), id: id, scale: 1.04)
+                let following = TouchLedger.follow { phase, d in
+                    guard hands.id == id else { return }
+                    switch phase {
+                    case .moved: follow(d, vx: TouchLedger.feel().map { FlickHand.speed($0).dx } ?? 0, id: id)
+                    case .ended: release(id, at: d, send: send)
+                    case .cancelled:
+                        HandTrace.note("cancelled-by-system dy=\(Int(lift.drag.height))")
+                        _ = hands.hand.cancel(); hands.id = nil
+                        if liftedID == id { settle(quiet: true) }
+                    }
                 }
-                if let d { follow(d, id: id) }
+                if !following { release(id, at: .zero, send: send) }
             }
-            .onEnded { v in
-                guard hands.id == id else { return }
-                var d: DragGesture.Value?
-                if case .second(true, let dv) = v { d = dv }
-                // One clock for the lift, every move and the release: this callback's own. The touch's timestamps run
-                // behind it whenever the lift's redraw holds the main thread, and mixed with it they put the moves before
-                // the lift: every throw read as a scroll come late (CI 638f7f6: carried 271 pt up, put back).
-                let t = Date().timeIntervalSince(hands.base)
-                let at = d.map { CGPoint(x: $0.translation.width, y: $0.translation.height) } ?? .zero
-                hands.hand.real = TouchLedger.feel()
-                finish(hands.hand.up(at, at: t, fling: d.map { CGVector(dx: $0.velocity.width, dy: $0.velocity.height) }), id: id, translation: d?.translation ?? .zero, send: send)
-            }
+    }
+    // Let go: the hand says what it was, by the finger's own clock too.
+    func release(_ id: String, at d: CGSize, send: () -> Void) {
+        let t = Date().timeIntervalSince(hands.base)
+        hands.hand.real = TouchLedger.feel()
+        finish(hands.hand.up(CGPoint(x: d.width, y: d.height), at: t), id: id, translation: d, send: send)
     }
     // The card: nothing under it scrolls, so it's in the hand from the first touch; the throw, the put-back and the tap
     // are the list's own.
@@ -1518,7 +1520,7 @@ struct FlickScreen: View {
                     hands.id = "card"; hands.base = Date(); hands.hand = FlickHand(.card)
                     handle(hands.hand.down(.zero, at: 0), id: "card", scale: 1.05)
                 }
-                follow(d, id: "card")
+                follow(d.translation, vx: d.velocity.width, id: "card")
             }
             .onEnded { d in
                 guard !flown, hands.id == "card" else { return }
@@ -1527,14 +1529,14 @@ struct FlickScreen: View {
             }
     }
     // The finger moved: the thing follows it exactly, leaning the way it goes, and says when letting go would send it.
-    func follow(_ d: DragGesture.Value, id: String) {
+    func follow(_ t: CGSize, vx: CGFloat, id: String) {
         guard liftedID == id else { HandTrace.note("move-unlifted"); return }
-        if lift.drag == .zero, d.translation != .zero { HandTrace.note("first-move") }
+        if lift.drag == .zero, t != .zero { HandTrace.note("first-move") }
         if id != "card" { hands.hand.real = TouchLedger.feel() }
-        handle(hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: Date().timeIntervalSince(hands.base)), id: id)
-        lift.drag = d.translation
+        handle(hands.hand.move(CGPoint(x: t.width, y: t.height), at: Date().timeIntervalSince(hands.base)), id: id)
+        lift.drag = t
         let card = id == "card"
-        lift.lean = max(card ? -8 : -3, min(card ? 8 : 3, Double(d.velocity.width) / (card ? 180 : 400) + Double(d.translation.width) / (card ? 50 : 120)))
+        lift.lean = max(card ? -8 : -3, min(card ? 8 : 3, Double(vx) / (card ? 180 : 400) + Double(t.width) / (card ? 50 : 120)))
     }
     func handle(_ events: [FlickHand.Event], id: String, scale: CGFloat = 1.04) {
         for e in events { HandTrace.note("\(e) \(id.prefix(6))") }
@@ -2360,6 +2362,7 @@ final class HandBox {
 // touch-down, read off the window's own event delivery before any gesture sees it. Nothing is added to the gesture
 // system: a recognizer on the window (ef52168) may have kept the lists from scrolling under a swipe in the films. The
 // gestures' callbacks come when the main thread gets to them; these say when the finger really moved (FlickHand.real).
+enum HandPhase { case moved, ended, cancelled }
 #if os(iOS)
 extension UIWindow {
     @objc dynamic func tvLedger_sendEvent(_ event: UIEvent) {
@@ -2368,6 +2371,19 @@ extension UIWindow {
     }
 }
 @MainActor enum TouchLedger {
+    private static var follower: ((HandPhase, CGSize) -> Void)?
+    private static var followFrom = CGPoint.zero
+    // From now until it's lifted, the finger's every move (as its distance from where it is now), its lift and its
+    // loss, straight from the window's events: what a thing in the hand follows once its hold is done. No gesture
+    // follows it, so a list under it scrolls as freely as anywhere (a drag gesture after the hold, on every row, kept
+    // the stream lists from scrolling under a swipe begun on a row: CI 2a45a88). False if the finger is already up.
+    @discardableResult static func follow(_ f: @escaping (HandPhase, CGSize) -> Void) -> Bool {
+        guard tracked != nil, let last = samples.last else { return false }
+        followFrom = last.p
+        follower = f
+        return true
+    }
+    private static func offset(_ p: CGPoint) -> CGSize { CGSize(width: p.x - followFrom.x, height: p.y - followFrom.y) }
     private static var samples: [(t: Double, p: CGPoint)] = []
     private static var downAt = 0.0
     private static weak var tracked: UITouch?
@@ -2385,9 +2401,12 @@ extension UIWindow {
             case .moved:
                 for c in event.coalescedTouches(for: t) ?? [t] { samples.append((c.timestamp - downAt, c.location(in: nil))) }
                 if samples.count > 240 { samples.removeSubrange(1..<(samples.count - 200)) }
+                follower?(.moved, offset(t.location(in: nil)))
             case .ended, .cancelled:
                 samples.append((t.timestamp - downAt, t.location(in: nil)))
                 tracked = nil
+                let f = follower; follower = nil
+                f?(t.phase == .ended ? .ended : .cancelled, offset(t.location(in: nil)))
             default: break
             }
             return
@@ -2396,6 +2415,7 @@ extension UIWindow {
         guard tracked == nil || tracked?.phase == .ended || tracked?.phase == .cancelled,
               let t = all.first(where: { $0.phase == .began }) else { return }
         tracked = t
+        follower = nil
         downAt = t.timestamp
         samples = [(0, t.location(in: nil))]
     }
@@ -2406,6 +2426,7 @@ extension UIWindow {
 }
 #else
 enum TouchLedger {
+    @MainActor @discardableResult static func follow(_ f: @escaping (HandPhase, CGSize) -> Void) -> Bool { false }
     @MainActor static func install() {}
     @MainActor static func feel() -> [(t: Double, p: CGPoint)]? { nil }
     @MainActor static func sinceDown() -> Double? { nil }
@@ -2769,18 +2790,11 @@ struct ShelfFlick: ViewModifier {
     @State private var lock = ScrollLockBox()
     @State private var up = false
     @State private var receipt = ""
-    @GestureState private var touching = false
     func body(content: Content) -> some View {
         content
             .opacity(up ? 0 : 1)
             .background(ScrollLock(box: lock).allowsHitTesting(false))
             .simultaneousGesture(gesture)
-            .onChange(of: touching) { _, t in
-                guard !t else { return }
-                // Only a touch taken away mid-lift: one that ended normally has already been read (CI 083bfe0: every
-                // throw and put-back was followed by a second, "cancelled" end, a stray flick-cancel and a settle tap).
-                Task { @MainActor in if up, hands.hand.phase == .lifted { _ = hands.hand.cancel(); end(.cancelled, translation: .zero) } }
-            }
             .accessibilityAction(named: "Flick to the TV") { hands.hand = FlickHand(.list); throwIt(velocity: CGSize(width: 0, height: -800), translation: .zero) }
             .task { TouchLedger.install(); await reportPlace() }
     }
@@ -2802,33 +2816,33 @@ struct ShelfFlick: ViewModifier {
     var gesture: some Gesture {
         let rules = FlickHand.Rules.list
         return LongPressGesture(minimumDuration: rules.hold, maximumDistance: rules.slop)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
-            .updating($touching) { _, s, _ in s = true }
-            .onChanged { v in
-                guard case .second(true, let d) = v, model.flicking == nil || model.flickRetired else { return }
-                if !up {
-                    hands.base = Date().addingTimeInterval(-rules.hold); hands.hand = FlickHand(rules)
-                    _ = hands.hand.down(.zero, at: 0)
-                    hands.hand.realLift = TouchLedger.sinceDown()
-                    _ = hands.hand.held(at: rules.hold)
-                    lifted()
+            .onEnded { _ in
+                // In the hand: from here the finger is followed off the window's own events, as a stream row's is, so
+                // the shelf and the page under it scroll freely under any swipe that isn't a hold.
+                guard !up, model.flicking == nil || model.flickRetired else { return }
+                hands.base = Date().addingTimeInterval(-rules.hold); hands.hand = FlickHand(rules)
+                _ = hands.hand.down(.zero, at: 0)
+                hands.hand.realLift = TouchLedger.sinceDown()
+                _ = hands.hand.held(at: rules.hold)
+                lifted()
+                let following = TouchLedger.follow { phase, d in
+                    guard up else { return }
+                    hands.hand.real = TouchLedger.feel()
+                    switch phase {
+                    case .moved:
+                        for e in hands.hand.move(CGPoint(x: d.width, y: d.height), at: Date().timeIntervalSince(hands.base)) {
+                            if case .armed(let on) = e { ShelfHand.shared.armed = on; if on { FlickHaptic.detent() } }
+                        }
+                        ShelfHand.shared.drag = d
+                        let vx = TouchLedger.feel().map { FlickHand.speed($0).dx } ?? 0
+                        ShelfHand.shared.lean = max(-4, min(4, Double(vx) / 300 + Double(d.width) / 90))
+                    case .ended:
+                        end(hands.hand.up(CGPoint(x: d.width, y: d.height), at: Date().timeIntervalSince(hands.base)), translation: d)
+                    case .cancelled:
+                        if hands.hand.phase == .lifted { _ = hands.hand.cancel(); end(.cancelled, translation: .zero) }
+                    }
                 }
-                guard let d else { return }
-                hands.hand.real = TouchLedger.feel()
-                for e in hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: Date().timeIntervalSince(hands.base)) {
-                    if case .armed(let on) = e { ShelfHand.shared.armed = on; if on { FlickHaptic.detent() } }
-                }
-                ShelfHand.shared.drag = d.translation
-                ShelfHand.shared.lean = max(-6, min(6, Double(d.velocity.width) / 200 + Double(d.translation.width) / 60))
-            }
-            .onEnded { v in
-                guard up else { return }
-                var d: DragGesture.Value?
-                if case .second(true, let dv) = v { d = dv }
-                let t = Date().timeIntervalSince(hands.base)
-                let at = d.map { CGPoint(x: $0.translation.width, y: $0.translation.height) } ?? .zero
-                hands.hand.real = TouchLedger.feel()
-                end(hands.hand.up(at, at: t, fling: d.map { CGVector(dx: $0.velocity.width, dy: $0.velocity.height) }), translation: d?.translation ?? .zero)
+                if !following { end(hands.hand.up(.zero, at: Date().timeIntervalSince(hands.base)), translation: .zero) }
             }
     }
     // In the hand: felt, drawn over everything, the shelf held still, and the TV told what's coming.
