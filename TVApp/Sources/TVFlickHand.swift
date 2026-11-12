@@ -34,7 +34,7 @@ struct FlickHand {
         var beat: Double = 0.08
         // By the finger's own clock: the least time after the lift for a move to be an answer to it (seeing or feeling
         // the row come up and then moving takes a person longer than this).
-        var react: Double = 0.15
+        var react: Double = 0.2
         var carried: Double = 0.25
         static let list = Rules(hold: 0.3)
         static let card = Rules(hold: 0, beat: 0, carried: 0)
@@ -271,7 +271,7 @@ extension FlickHand {
         var s: [Script] = []
         // Lists: the hold, then the throw.
         s.append(Script(name: "hold-then-carry-up", rules: L,
-                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 6, -140, ms: 300) + [(0.76, .up(206, 260))],
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.52, 200, 400, by: 6, -140, ms: 300) + [(0.76, .up(206, 260))],
                         want: .thrown, what: "held, then carried 140 pt up: sent", events: [.lifted, .armed(true)]))
         s.append(Script(name: "hold-then-short-fast-flick", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.42, 200, 400, by: 4, -45, ms: 80) + [(0.51, .up(204, 355))],
@@ -283,7 +283,7 @@ extension FlickHand {
                         steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.4, 200, 400, by: 0, -120, ms: 300) + [(1.2, .up(200, 280))],
                         want: .thrown, what: "carried well up, held there, then let go: sent"))
         s.append(Script(name: "diagonal-throw", rules: L,
-                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 90, -120, ms: 200) + [(0.66, .up(290, 280))],
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.52, 200, 400, by: 90, -120, ms: 200) + [(0.66, .up(290, 280))],
                         want: .thrown, what: "thrown up and to the side (37° off upright): sent"))
         // Lists: never steal a scroll.
         s.append(Script(name: "plain-swipe-up", rules: L,
@@ -304,7 +304,7 @@ extension FlickHand {
                         steps: [(0, .down(200, 400)), (0.3, .held), (0.55, .move(200, 395)), (0.56, .move(200, 380)), (0.57, .move(200, 362)), (0.75, .upFling(200, 355, -900))],
                         want: .thrown, what: "a flick whose moves arrived bunched: the system's own speed at the release counts, sent"))
         s.append(Script(name: "system-fling-sideways", rules: L,
-                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 120, -30, ms: 150) + [(0.62, .upFling(320, 370, -900))],
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.52, 200, 400, by: 120, -30, ms: 150) + [(0.62, .upFling(320, 370, -900))],
                         want: .putBack, what: "flung, but carried sideways: back, nothing sent"))
         // The callbacks came late (a 0.4 s busy frame as the row lifted): by them, every move came well after the lift.
         // By the finger's own clock, one swipe began as the row lifted (a scroll: never sent) and one flick came after a
@@ -320,37 +320,37 @@ extension FlickHand {
         s.append(Script(name: "short-flick-busy-frame", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held), (0.80, .move(200, 380)), (0.81, .move(200, 356)), (0.82, .up(200, 355))],
                         want: .thrown, what: "held, then a 45 pt flick in 90 ms, its moves bunched by a busy frame: sent at the finger's own speed",
-                        real: feel(200, 400, from: 0.45, by: 0, -45, ms: 90)))
+                        real: feel(200, 400, from: 0.52, by: 0, -45, ms: 90)))
         s.append(Script(name: "ease-flick-busy-frame", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held), (0.85, .move(200, 345)), (0.86, .up(200, 336))],
                         want: .thrown, what: "held, then a flick easing to a stop, handled late: sent",
-                        real: feel(200, 400, from: 0.45, by: 0, -64, ms: 150, ease: true, rest: 0.03)))
+                        real: feel(200, 400, from: 0.52, by: 0, -64, ms: 150, ease: true, rest: 0.03)))
         s.append(Script(name: "rest-then-flick-no-samples-at-rest", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held), (0.8, .move(200, 370)), (0.81, .move(200, 330)), (0.82, .up(200, 309))],
-                        want: .thrown, what: "still for 0.45 s with no moves reported, then a 91 pt flick: sent (a rest is never read as a slow move)",
-                        real: [(0, CGPoint(x: 200, y: 400)), (0.48, CGPoint(x: 200, y: 370)), (0.51, CGPoint(x: 200, y: 330)), (0.54, CGPoint(x: 200, y: 309))]))
+                        want: .thrown, what: "still for 0.5 s with no moves reported, then a 91 pt flick: sent (a rest is never read as a slow move)",
+                        real: [(0, CGPoint(x: 200, y: 400)), (0.53, CGPoint(x: 200, y: 370)), (0.56, CGPoint(x: 200, y: 330)), (0.59, CGPoint(x: 200, y: 309))]))
         s.append(Script(name: "carry-busy-frame", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held), (0.8, .move(200, 300)), (1.0, .move(200, 160)), (1.5, .up(200, 160))],
                         want: .thrown, what: "held, carried 240 pt up and rested: sent",
-                        real: feel(200, 400, from: 0.45, by: 0, -240, ms: 600, rest: 0.3)))
+                        real: feel(200, 400, from: 0.52, by: 0, -240, ms: 600, rest: 0.3)))
         s.append(Script(name: "back-down-busy-frame", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held), (0.8, .move(200, 160)), (1.6, .up(200, 395))],
                         want: .putBack, what: "carried up then all the way back down: not sent",
-                        real: feel(200, 400, from: 0.45, by: 0, -240, ms: 400) + feel(200, 160, from: 0, by: 0, 235, ms: 400).dropFirst(2).map { (t: $0.t + 0.85, p: $0.p) }))
+                        real: feel(200, 400, from: 0.52, by: 0, -240, ms: 400) + feel(200, 160, from: 0, by: 0, 235, ms: 400).dropFirst(2).map { (t: $0.t + 0.85, p: $0.p) }))
         // Put back.
         s.append(Script(name: "hold-then-drag-down", rules: L,
-                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 0, 90, ms: 250) + [(0.72, .up(200, 490))],
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.52, 200, 400, by: 0, 90, ms: 250) + [(0.72, .up(200, 490))],
                         want: .putBack, what: "lifted and pulled down: back where it was, nothing sent"))
         s.append(Script(name: "hold-then-sideways", rules: L,
-                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 140, -30, ms: 250) + [(0.72, .up(340, 370))],
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.52, 200, 400, by: 140, -30, ms: 250) + [(0.72, .up(340, 370))],
                         want: .putBack, what: "lifted and carried sideways: back, nothing sent"))
         s.append(Script(name: "up-then-back-down", rules: L,
-                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 0, -120, ms: 200)
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.52, 200, 400, by: 0, -120, ms: 200)
                             + stroke(from: 0.65, 200, 280, by: 0, 115, ms: 250) + [(0.95, .up(200, 395))],
                         want: .putBack, what: "carried up past the line, then brought back down: changed his mind, not sent",
                         events: [.lifted, .armed(true), .armed(false)]))
         s.append(Script(name: "resting-on-the-line", rules: L,
-                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.45, 200, 400, by: 0, -86, ms: 400)
+                        steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.52, 200, 400, by: 0, -86, ms: 400)
                             + stroke(from: 0.85, 200, 314, by: 0, 20, ms: 300) + [(1.4, .up(200, 334))],
                         want: .thrown, what: "carried just past the line, then sagging 20 pt under it: the edge stays lit, and it goes",
                         events: [.lifted, .armed(true)]))
