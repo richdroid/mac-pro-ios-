@@ -96,18 +96,19 @@ jobs:
             local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-tour$x.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            urltour
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES
+            sleep 25
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             sleep 2
             tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-tour$x-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-tour$x-hitches.log
-          }
-          # The new order, each tab twice, by the app's own tab links, so this build and 9a5c774 take the same route.
-          urltour() {
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -swipeLog YES
-            sleep 4
-            for t in 3 2 6 1 5 0 3 2 6 1 5 0; do xcrun simctl openurl "$DEVICE" "tvremoteapp://tab/$t"; sleep 1.6; done
+            # The same route as 9a5c774's tour (its old tab order), for the hitch logs to be set side by side.
+            from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -tourTabs 0,1,2,3,5,9 -swipeLog YES
+            sleep 25
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             sleep 2
+            tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-touroldroute$x-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-touroldroute$x-hitches.log
           }
           films() { navfilm "$@"; tilefilm "$@"; tourfilm "$@"; }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
@@ -146,17 +147,11 @@ jobs:
           xcrun simctl install "$DEVICE" /tmp/base-sim/Build/Products/Debug-iphonesimulator/TV.app
           M=http://127.0.0.1:9002
           curl -s $M/ > /dev/null || { node ci/mock-chumby.js & sleep 2; }
-          # The new order, each tab twice, by the app's own tab links, so this build and 9a5c774 take the same route.
-          urltour() {
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -swipeLog YES
-            sleep 4
-            for t in 3 2 6 1 5 0 3 2 6 1 5 0; do xcrun simctl openurl "$DEVICE" "tvremoteapp://tab/$t"; sleep 1.6; done
-            sleep 2
-          }
           base() {
             local d=$1 x=$2
             local from; from=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
-            urltour
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/live -tab 0 -pose tour -swipeLog YES
+            sleep 25
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             sleep 2
             tail -n +$((from + 1)) /tmp/tv-hitches.log > dist/tv-tourbase$x-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-tourbase$x-hitches.log

@@ -285,7 +285,7 @@ struct RootView: View {
         .background { StatusFollower(playingSymbol: $playingSymbol) }
         .overlay(alignment: .top) { ProblemBanner() }
         .overlay(alignment: .bottom) { ToastBubble() }
-        .onAppear { followRequest(); poseForShots(); TabTour.run([0, 3, 2, 6, 1, 5]) { model.tab = $0 } }
+        .onAppear { followRequest(); poseForShots(); TabTour.run(UserDefaults.standard.string(forKey: "tourTabs").map { $0.split(separator: ",").compactMap { Int($0) } } ?? [0, 3, 2, 6, 1, 5]) { model.tab = $0 } }
         // Stremio's home, where Continue watching comes from, is asked for at launch, so every page shows the same row.
         .task { await BrowseStore.shared(.stremio).loadHome() }
         .onReceive(NotificationCenter.default.publisher(for: FlickRequest.airPlay)) { _ in followRequest() }
@@ -418,13 +418,13 @@ struct Page<C: View>: View {
     @State private var scrolled = PageScrollY()
     // With the bar shown (Status' gear), the room it takes above the heading where iOS puts its items in the side strip
     // (folded, open flat): taken back, so the heading sits where every other tab's does (gate of 96f5f42: 15 pt lower).
-    // The reference is what the other tabs' pages measure in the same window (TabTop): an empty stack's inset or the tab
-    // view's own differ from theirs by 9 pt to 82 pt by posture (gate of b01454f: Status 9 pt high).
-    @State private var innerTop: CGFloat = 0
+    // The reference is where the other tabs' headings rest in the same window (TabTop): measured insets missed by 9 pt to
+    // 82 pt by posture (gates of b01454f and 0809bb8).
+    @State private var titleY: CGFloat = 0
     @State private var sizeKey = ""
     var barRoom: CGFloat {
-        guard showsBar, let hidden = TabTop.shared.tops[sizeKey] else { return 0 }
-        return max(0, innerTop - CGFloat(hidden))
+        guard showsBar, titleY > 0, let rest = TabTop.shared.tops[sizeKey] else { return 0 }
+        return max(0, titleY - CGFloat(rest))
     }
     var body: some View {
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
@@ -440,16 +440,26 @@ struct Page<C: View>: View {
                 // "Watch" printed over "Continue watching" (Richard, 2026-11-07: "look at how the watch header interacts
                 // with the other text"): it can only follow a scroll view it finds at the page's root, and the pages'
                 // own layouts (two panes, overlays) hid it.
-                .safeAreaInset(edge: .top, spacing: 0) { if !alwaysInline { MovingTitle(title: title, scrolled: scrolled).padding(.top, -barRoom) } }
-                // The page's top inset in this window: kept for the other tabs' reference, or, with the bar, set beside it.
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if !alwaysInline {
+                        MovingTitle(title: title, scrolled: scrolled)
+                            // Where the heading rests, at the top of the page: the other tabs keep theirs for Status, which
+                            // sets its own against it (its height before the bar's room is taken back).
+                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { y in
+                                guard scrolled.y <= 0.5, !sizeKey.isEmpty else { return }
+                                if showsBar { let rest = y + barRoom; if abs(rest - titleY) > 0.5 { titleY = rest } }
+                                else { TabTop.shared.set(sizeKey, y) }
+                                #if os(iOS)
+                                HitchLog.shared.note("heading \(title) \(sizeKey) at \(Int(y)) ref \(TabTop.shared.tops[sizeKey].map { Int($0) } ?? -1) room \(Int(barRoom))")
+                                #endif
+                            }
+                            .padding(.top, -barRoom)
+                    }
+                }
+                // The window's size, which keys the heading's height (TabTop).
                 .background {
                     if !alwaysInline {
-                        Color.clear.onGeometryChange(for: TabTop.Reading.self) { TabTop.Reading(top: $0.safeAreaInsets.top, key: "\(Int($0.size.width))x\(Int($0.size.height))") } action: { r in
-                            if showsBar {
-                                if abs(r.top - innerTop) > 0.5 { innerTop = r.top }
-                                if r.key != sizeKey { sizeKey = r.key }
-                            } else { TabTop.shared.set(r.key, r.top) }
-                        }
+                        Color.clear.onGeometryChange(for: String.self) { "\(Int($0.size.width))x\(Int($0.size.height))" } action: { k in if k != sizeKey { sizeKey = k } }
                     }
                 }
                 .toolbar(alwaysInline || showsBar ? .automatic : .hidden, for: .navigationBar)
@@ -482,11 +492,10 @@ struct Page<C: View>: View {
     }
 }
 
-// The top inset of a tab's page whose bar is hidden, by window size, kept between launches: Status' page, which shows the
-// bar for its gear, takes back whatever more it's given, so its heading sits at the other tabs' height.
+// Where a tab's heading rests on a page whose bar is hidden, by window size, kept between launches: Status' page, which
+// shows the bar for its gear, takes back whatever lower it sits, so its heading is at the other tabs' height.
 @Observable final class TabTop {
     static let shared = TabTop()
-    struct Reading: Equatable { let top: CGFloat; let key: String }
     private(set) var tops: [String: Double] = (UserDefaults.standard.dictionary(forKey: "tabTops") as? [String: Double]) ?? [:]
     func set(_ key: String, _ top: CGFloat) {
         guard abs((tops[key] ?? -1) - Double(top)) > 0.5 else { return }
