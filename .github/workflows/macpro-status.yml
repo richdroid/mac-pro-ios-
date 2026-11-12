@@ -69,9 +69,12 @@ jobs:
             sleep 2
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/$TREE-$name-foot.png
             # Open flat the right pane scrolls on its own: its foot too (the Disk card on Status).
-            for i in 1 2 3; do $D "$DEVICE" drag 0.72 0.85 0.72 0.1 || true; sleep 1; done
-            sleep 2
-            xcrun simctl io "$DEVICE" screenshot --display=$display dist/$TREE-$name-rightfoot.png
+            # Status only: on Settings this drag lands on its switches.
+            if [ "${name#tab0}" != "$name" ]; then
+              for i in 1 2 3; do $D "$DEVICE" drag 0.72 0.85 0.72 0.1 || true; sleep 1; done
+              sleep 2
+              xcrun simctl io "$DEVICE" screenshot --display=$display dist/$TREE-$name-rightfoot.png
+            fi
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
           # A cold open filmed: first against the still Mac so last time's figures are kept, then against port $3.

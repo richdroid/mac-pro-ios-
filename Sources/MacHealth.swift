@@ -374,7 +374,18 @@ struct MacHealthView: View {
                 // Open flat with the Mac away there's nothing to fix, so the parts take the right pane and the banner has the
                 // left: the whole page sat in the left pane, cut off, beside an empty one (designer, 2026-11-10).
                 if side == .all || (side == .left && !down) || (side == .right && down) { partsSection(heading: true) }
-                if side == .right, !down { verdictSection; fixSection }
+                if side == .right, !down {
+                    verdictSection; fixSection
+                    // The way out when a part needs a restart, beside the verdict, so open flat the pane isn't one card over
+                    // nothing (designer, 2026-11-12).
+                    if !awaited {
+                        Section {
+                            Button(role: .destructive) { model.macPage = .restart } label: {
+                                HStack { Text("Restart the Mac…"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                            }
+                        } footer: { Text("Checks first that the Mac will come back by itself.") }
+                    }
+                }
             }
             .contentMargins(.top, 4, for: .scrollContent)
             .scrollsUnder(side == .right ? 1 : 0)

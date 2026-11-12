@@ -1030,11 +1030,9 @@ struct TempsHeader: View {
         let top = temps.max(by: { $0.c < $1.c })
         let word = (top?.c ?? 0) >= 90 ? "Hot" : (top?.c ?? 0) >= 75 ? "Warm" : "Normal"
         let summary = top.map { Text("\(word) · hottest \(appleCased($0.name)) \(Heat.shown($0.c))°").foregroundStyle($0.c >= 75 ? Heat.color($0.c) : .secondary).monospacedDigit() }
-        // Beside the heading where it fits whole, else on its own line under it: never cut (designer, 2026-11-12).
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline) { Text("Temperatures"); Spacer(minLength: 8); summary.lineLimit(1) }
-            VStack(alignment: .leading, spacing: 2) { Text("Temperatures"); summary.lineLimit(1).font(.subheadline) }
-        }
+        // Always on its own line under the heading, in one size: chosen by what fit, it sat beside the heading at one reading
+        // and under it at another, and the dials moved (designer, 2026-11-12).
+        VStack(alignment: .leading, spacing: 2) { Text("Temperatures"); summary.lineLimit(1).minimumScaleFactor(0.8).font(.subheadline) }
     }
 }
 
@@ -1908,16 +1906,18 @@ struct UpgradeTab: View {
             // A header of its own, like the details' beside it, so both panes' first cards start on one line.
             VStack(alignment: .leading, spacing: 8) {
                 header("This Mac")
-                ScrollView { VStack(spacing: 12) { summary; agent } }
+                // The summary with its facts under it, as in build 276, so the left pane is never one card over nothing
+                // (Richard, 2026-11-12: "unfolded now the tabs and such feel barren").
+                ScrollView { VStack(alignment: .leading, spacing: 12) { summary; facts; agent } }
                     .scrollBounceBehavior(.basedOnSize)
                     .scrollEdgeEffectHidden(true, for: .top)
             }
         case .right:
             // The rows beside the summary, and the log under them when it has something to say: with the log hidden the
             // right pane was empty (designer, 2026-11-11: option 2, nothing across the fold).
+            // The log beside them, the pane's full height, as in build 276.
             VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
-                if logShown { log }
+                if logShown { log } else { VStack(alignment: .leading, spacing: 8) { header("Details"); facts } }
             }
             .padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
