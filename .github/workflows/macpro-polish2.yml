@@ -60,7 +60,7 @@ jobs:
           }
           # Status dragged and flung, then Disk free opened and left with a real touch on Back (bx, by: Back's place).
           statusfilm() {
-            local name=$1 display=$2 bx=$3 by=$4
+            local name=$1 display=$2 bx=$3 by=$4 dx=$5 dy=$6
             local D=/tmp/dh/.build/release/devicehubctl
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
@@ -68,10 +68,11 @@ jobs:
             sleep 9
             $D "$DEVICE" drag 0.45 0.8 0.45 0.35 || true; sleep 2
             $D "$DEVICE" drag 0.45 0.35 0.45 0.85 || true; sleep 2
-            $D "$DEVICE" drag 0.45 0.85 0.45 0.1 || true; sleep 3
-            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
-            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0 -openHistory disk
-            sleep 10
+            $D "$DEVICE" drag 0.45 0.85 0.45 0.1 || true; sleep 2
+            $D "$DEVICE" drag 0.45 0.2 0.45 0.9 || true; sleep 3
+            # The Disk tile tapped with a finger (dx, dy), the chart's first frames filmed, then Back.
+            $D "$DEVICE" touch $dx $dy 0.08 || echo "tap failed"; sleep 4
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-disk.png
             $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 3
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-back.png
             kill -INT $REC; wait $REC
@@ -100,13 +101,13 @@ jobs:
           $D "$DEVICE" pose open; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
           poses 3 -portrait
-          statusfilm statusfilm-portrait 3 0.065 0.049
+          statusfilm statusfilm-portrait 3 0.065 0.049 0.5 0.84
           $D "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -open
-          statusfilm statusfilm-open 3 0.948 0.222
+          statusfilm statusfilm-open 3 0.948 0.222 0.72 0.66
           $D "$DEVICE" pose closed || true; sleep 5
           poses 1 ""
-          statusfilm statusfilm 1 0.895 0.292
+          statusfilm statusfilm 1 0.895 0.292 0.4 0.92
           ls dist
       - name: Publish
         if: always()
