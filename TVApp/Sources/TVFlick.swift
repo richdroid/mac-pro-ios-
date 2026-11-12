@@ -42,12 +42,65 @@ import UIKit
         #if os(iOS)
         guard let v = veil else { return }
         veil = nil
+        let more = extras; extras = []
         SwipeLog.note("veil lift")
         UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]) {
-            v.alpha = 0
-        } completion: { _ in v.removeFromSuperview() }
+            v.alpha = 0; more.forEach { $0.alpha = 0 }
+        } completion: { _ in v.removeFromSuperview(); more.forEach { $0.removeFromSuperview() } }
         #endif
     }
+    #if os(iOS)
+    private static var extras: [UIView] = []
+    #endif
+    // At the pick: the page under the still (`rect`, window points; the side bar outside it stays as it is) dissolves into
+    // the Remote's own backdrop (the poster's colour on black, as AmbienceView draws it) while the picture flies over it,
+    // so the row he let go of doesn't sit on a frozen page beside its own picture through the turn that brings the Remote
+    // up (CI 7bbaf47: 0.4 s of the lifted row left behind). The Remote's keys then come up through it at lift.
+    static func dissolve(_ rect: CGRect, soft: TVImage?, tint: Color?, duration: Double = 0.2) {
+        #if os(iOS)
+        guard let v = veil, let w = v.superview, rect.width > 20, rect.height > 20 else { return }
+        var r = rect.intersection(w.bounds)
+        // A bar along the foot (upright, folded small) stays: the page stops above it.
+        if let bar = Self.bottomBar(in: w), bar.minY > w.bounds.midY, bar.minY < r.maxY { r.size.height = max(0, bar.minY - r.minY) }
+        guard r.height > 20, let still = w.resizableSnapshotView(from: r, afterScreenUpdates: false, withCapInsets: .zero) else { return }
+        let ground = UIView(frame: w.bounds)
+        ground.backgroundColor = .black
+        ground.isUserInteractionEnabled = false
+        if let soft {
+            let i = UIImageView(image: soft); i.frame = ground.bounds; i.contentMode = .scaleAspectFill; i.alpha = 0.55; i.clipsToBounds = true
+            ground.addSubview(i)
+        }
+        let c = UIColor(tint ?? Color(hex: 0x4A1A5C))
+        let g = CAGradientLayer()
+        g.frame = ground.bounds
+        g.colors = [c.withAlphaComponent(0.8).cgColor, c.withAlphaComponent(0.45).cgColor, UIColor.black.withAlphaComponent(0.75).cgColor]
+        g.startPoint = CGPoint(x: 0, y: 0); g.endPoint = CGPoint(x: 0.5, y: 1)
+        ground.layer.addSublayer(g)
+        // Only the page's part of it shows: the rest of the screen is still the still.
+        let clip = UIView(frame: r); clip.clipsToBounds = true; clip.isUserInteractionEnabled = false
+        ground.frame = w.bounds.offsetBy(dx: -r.minX, dy: -r.minY)
+        clip.addSubview(ground)
+        still.frame = r; still.isUserInteractionEnabled = false
+        w.insertSubview(clip, aboveSubview: v)
+        w.insertSubview(still, aboveSubview: clip)
+        extras += [clip, still]
+        UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { still.alpha = 0 }
+        CATransaction.flush()
+        #endif
+    }
+    #if os(iOS)
+    private static func bottomBar(in w: UIWindow) -> CGRect? {
+        func find(_ vc: UIViewController?) -> UITabBarController? {
+            guard let vc else { return nil }
+            if let t = vc as? UITabBarController { return t }
+            for c in vc.children { if let t = find(c) { return t } }
+            return nil
+        }
+        guard let tb = find(w.rootViewController)?.tabBar, tb.window != nil, !tb.isHidden, tb.alpha > 0.01 else { return nil }
+        let r = tb.convert(tb.bounds, to: w)
+        return r.width > 0 && r.height > 0 ? r : nil
+    }
+    #endif
 }
 
 // The side bar's mark, moved by the flick without a slide: the tab changes under a still (the pick, the warm build, a
@@ -419,6 +472,7 @@ struct FlickScreen: View {
     // The picture going into the Remote, decoded, taken at the pick so it never waits on a fetch; and its 16 px version,
     // the Remote's own soft ground under it.
     @State private var heldImage: TVImage?
+    @State private var slowList = false
     @State private var softImage: TVImage?
     @State private var flight: Task<Void, Never>?
     @State private var cancelled = false
@@ -664,6 +718,7 @@ struct FlickScreen: View {
                 // now, in the same frame the page is first drawn: the render server runs the fade, so the main thread's
                 // turns after it (the page's tasks, its pictures) can't hold it half way.
                 SwipeLog.note("flick open")
+                Task { try? await Task.sleep(nanoseconds: 900_000_000); withAnimation(.easeOut(duration: 0.25)) { slowList = true } }
                 // A list on its way that's nearly here (asked for at the press) is waited for, briefly, so the page fades up
                 // whole rather than with its placeholder rows then a pop (CI ba7cee1: the list landed 260 ms after the fade).
                 if step == .streams && video && streams.isEmpty && !noStreams {
@@ -884,16 +939,23 @@ struct FlickScreen: View {
     // the system's Back, Back is the one control, a step back while there is one and otherwise out of the page; never a ✕
     // as well. Open upright, where there's no Back to dismiss the page, the system's own Close (cancellationAction), white
     // whatever the bar would make it. Never a hand-made circle over the poster or title.
+    static var closeGlyph: Image {
+        #if os(iOS)
+        if let u = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)) {
+            return Image(uiImage: u.withTintColor(.white, renderingMode: .alwaysOriginal))
+        }
+        #endif
+        return Image(systemName: "xmark")
+    }
     @ToolbarContentBuilder var bar: some ToolbarContent {
         if !flown {
             if let previous {
                 ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
             } else if footFade {
                 ToolbarItem(placement: .cancellationAction) {
-                    // The glyph itself is white: given as a label with a role, the bar drew it grey (CI ba7cee1).
-                    Button { if !flown { leave() } } label: {
-                        Image(systemName: "xmark").foregroundStyle(Color.white).accessibilityLabel("Close")
-                    }
+                    // The glyph itself is white, drawn as it is: given as a label with a role (CI ba7cee1), and as a
+                    // template image styled white (CI 7bbaf47), the bar drew it grey.
+                    Button { if !flown { leave() } } label: { Self.closeGlyph.accessibilityLabel("Close") }
                     .tint(.white)
                 }
             } else {
@@ -1187,7 +1249,9 @@ struct FlickScreen: View {
             if hasResume && !choseOnTV {
                 Chips(options: [(false, resumeLabel), (true, "Start over")], selected: Binding(get: { startOver }, set: { startOverChoice = $0 })).padding(.top, 6)
             }
-            if findingStreams && streams.isEmpty {
+            // Placeholders only for a list that's really slow: one that lands just after the page's arrival comes in by
+            // its own rows' fade, not as skeletons swapped for rows mid-fade (CI 7bbaf47, the real list at 453 ms).
+            if findingStreams && streams.isEmpty && slowList {
                 Text("Asking your addons…").font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
                 ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) }
             } else if noStreams {
@@ -1687,6 +1751,7 @@ struct FlickScreen: View {
                 RenderFlight.aim(CGRect(x: flickFrame.midX - w / 2, y: flickFrame.minY + 70, width: w, height: w * 9 / 16), first: true); renderAimed = true
             }
             renderFlown = true
+            ScreenVeil.dissolve(flickFrame, soft: softImage, tint: tint)
             var under = Transaction(); under.disablesAnimations = true
             withTransaction(under) { fadingOut = true }
         }
