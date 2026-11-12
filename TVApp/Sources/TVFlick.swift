@@ -2046,8 +2046,21 @@ struct PlaceholderRow: View {
         .foregroundStyle(.white.opacity(0.12))
         .padding(.horizontal, 12).frame(height: thumb ? 66 : 64)
         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .phaseAnimator([0.45, 1.0]) { c, o in c.opacity(o) } animation: { _ in .easeInOut(duration: 0.9).delay(delay) }
+        // Its breathing is its opacity alone: as a phase animator, the 0.9 s ease also carried the row's own layout as the
+        // page arrived, and the rows trailed in skewed past the left margin.
+        // Read off the clock, with no animation in any transaction, so nothing else about the row can be carried by it.
+        .modifier(Breathing(delay: delay))
         .accessibilityHidden(true)
+    }
+}
+private struct Breathing: ViewModifier {
+    let delay: Double
+    @State private var from = Date()
+    func body(content: Content) -> some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
+            let t = max(0, ctx.date.timeIntervalSince(from) - delay)
+            content.opacity(0.725 - 0.275 * cos(t / 0.9 * .pi))
+        }
     }
 }
 

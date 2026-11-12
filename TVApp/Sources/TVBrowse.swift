@@ -514,10 +514,14 @@ final class FrameBox { var rect: CGRect? }
 // glass side bar.
 private struct RowEdge: ViewModifier {
     @State private var scrolled = false
+    // Something still past the trailing edge: only then does that edge fade (a row of chips that fits, the streams' "720p"
+    // open flat, was cut by a fade with nothing beyond it).
+    @State private var more = true
     func body(content: Content) -> some View {
         content
             .scrollTargetBehavior(FreeScroll())
             .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 4 } action: { _, s in scrolled = s }
+            .onScrollGeometryChange(for: Bool.self) { $0.contentSize.width - $0.contentOffset.x - $0.containerSize.width > 4 } action: { _, m in more = m }
             // The row's own frame already ends where the page's content does (level with the search field), so the fade
             // ends at that edge and nothing of the row is drawn past it. No reader here: measuring the safe area took it
             // off twice, and laid the page out a frame late on first visit.
@@ -525,10 +529,11 @@ private struct RowEdge: ViewModifier {
                 HStack(spacing: 0) {
                     LinearGradient(colors: [.black.opacity(scrolled ? 0 : 1), .black], startPoint: .leading, endPoint: .trailing).frame(width: 28)
                     Color.black
-                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
+                    LinearGradient(colors: [.black, .black.opacity(more ? 0 : 1)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
                 }
                 // Only the fade eases, so nothing in the row animates with it.
                 .animation(.easeOut(duration: 0.2), value: scrolled)
+                .animation(.easeOut(duration: 0.2), value: more)
             }
     }
 }

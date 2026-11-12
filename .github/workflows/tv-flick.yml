@@ -57,11 +57,11 @@ jobs:
           open -a DeviceHub; sleep 10
           # A pose filmed from launch: the app's own scripted hand on the streams page or the card.
           posefilm() {
-            local name=$1 display=$2 pose=$3 tab=$4
-            curl -s $M/fnormal/reset > /dev/null
+            local name=$1 display=$2 pose=$3 tab=$4 scene=${5:-fnormal}
+            curl -s $M/$scene/reset > /dev/null
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 4
-            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab $tab -pose $pose -swipeLog YES
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/$scene -tab $tab -pose $pose -swipeLog YES
             sleep 16
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
             kill -INT $REC; wait $REC
@@ -147,6 +147,8 @@ jobs:
             posefilm flicktap$x $d flick-tap 1
             posefilm flicklink$x $d flick-link 0
             posefilm flicklinkart$x $d flick-link-art 0
+            # The same flow on the list as the bridge really hands it over (freal): a dozen rows, long names, dubbed files.
+            posefilm flickreal$x $d flick-starting 1 freal
             # A quick pass (ci/flick-quick in the tree): the poses alone, for iterating on the page's own motion.
             [ -f ci/flick-quick ] && return
             fingerfilm finger-tap$x $d tap
