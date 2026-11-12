@@ -12,7 +12,7 @@ struct MacProApp: App {
     // Only for the notification token iOS hands to an app delegate.
     @UIApplicationDelegateAdaptor(PushDelegate.self) private var pushDelegate
     #endif
-    init() { AlertWatch.shared.install(); GaugeDrawing.offMain = true }
+    init() { AlertWatch.shared.install() }
     var body: some Scene {
         WindowGroup {
             RootView(seeds: model.seedStore).modifier(StatusBarTopReader()).environmentObject(model).environmentObject(model.notice).environmentObject(model.liveStore).environmentObject(model.liveStore.display)

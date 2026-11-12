@@ -129,7 +129,7 @@ jobs:
             # "scroll": launched plainly, then scrolled part way down with slow real drags (no fling), so the turn is made
             # mid-page (the scroll-to pose never moved the list; designer, resize gate on cbdef0e).
             if [ "$pose" = "scroll" ]; then
-              xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9041 -swipeLog YES -tab 0; sleep 12
+              xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9041 -swipeLog YES -tab ${TFTAB:-0}; sleep 12
               for sx in 0.25 0.75 0.45; do $D "$DEVICE" drag $sx 0.7 $sx 0.45 0.8 || true; sleep 1.5; done
               sleep 3
             else
@@ -198,6 +198,10 @@ jobs:
           turnfilm turn-flat-scrolled 3 "scroll" "rotate 1" "rotate 3" "rotate 1" "rotate 3"
           $D "$DEVICE" rotate 1 || true; sleep 5
           tabfilm tabback-portrait 3
+          # Apps, a page that scrolls open (Status fits whole there), dragged part way down in open portrait, then turned
+          # flat, upright and flat: the same row at its top after each move (designer, regate of 32dd2bd).
+          TFTAB=1 turnfilm turn-apps-scrolled 3 "scroll" "rotate 3" "rotate 1" "rotate 3"
+          $D "$DEVICE" rotate 1 || true; sleep 5
           $D "$DEVICE" pose closed || true; sleep 5
           posture 1 "" 0.45
           tabfilm tabback 1

@@ -61,9 +61,6 @@ enum MacPrefs {
     static var widgetCelsius: Bool { shared?.bool(forKey: "celsius") ?? false }
 }
 
-// The app draws its dials and spark lines off the main thread; a widget, drawn once into a snapshot, keeps the default.
-enum GaugeDrawing { nonisolated(unsafe) static var offMain = false }
-
 struct ArcGauge<Center: View>: View {
     let value: Double
     var tint: Color = macBlue
@@ -76,23 +73,26 @@ struct ArcGauge<Center: View>: View {
     init(_ value: Double, tint: Color = macBlue, heat: Bool = false, ticks: Int = 40, length: CGFloat = 8, width: CGFloat = 2.6, sweep: Double = 270, @ViewBuilder center: () -> Center) {
         self.value = value; self.tint = tint; self.heat = heat; self.ticks = ticks; self.length = length; self.width = width; self.sweep = sweep; self.center = center()
     }
+    // The ticks by colour: unlit, lit in the tint, or lit by heat in bands.
+    private func groups(lit: Int) -> [(color: Color, indices: [Int])] {
+        var order: [String] = [], byKey: [String: (Color, [Int])] = [:]
+        for i in 0..<ticks {
+            let t = Double(i) / Double(ticks - 1)
+            let (key, color): (String, Color) = i > lit ? ("off", Color.primary.opacity(0.16)) : heat ? ("h\(t > 0.875 ? 3 : t > 0.69 ? 2 : t > 0.5 ? 1 : 0)", Heat.tick(t)) : ("on", tint)
+            if byKey[key] == nil { order.append(key); byKey[key] = (color, []) }
+            byKey[key]!.1.append(i)
+        }
+        return order.map { (byKey[$0]!.0, byKey[$0]!.1) }
+    }
     var body: some View {
         ZStack {
-            // Drawn off the main thread: twelve of these and the four spark lines redraw with every live reading, and the
-            // build's sample on CI found their drawing on the main thread during a turn (resize regate).
-            Canvas(rendersAsynchronously: GaugeDrawing.offMain) { ctx, size in
-                let r = min(size.width, size.height) / 2 - 1, c = CGPoint(x: size.width / 2, y: size.height / 2)
-                let lit = Int((min(max(value, 0), 1) * Double(ticks - 1)).rounded())
-                let start = 90 + (360 - sweep) / 2
-                for i in 0..<ticks {
-                    let t = Double(i) / Double(ticks - 1)
-                    let a = (start + t * sweep) * .pi / 180
-                    var p = Path()
-                    p.move(to: CGPoint(x: c.x + cos(a) * (r - length), y: c.y + sin(a) * (r - length)))
-                    p.addLine(to: CGPoint(x: c.x + cos(a) * r, y: c.y + sin(a) * r))
-                    let color: Color = i > lit ? Color.primary.opacity(0.16) : heat ? Heat.tick(t) : tint
-                    ctx.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round))
-                }
+            // Drawn as shapes, one per colour of tick, not a Canvas: a Canvas's drawing went blank for the frames before a
+            // turn (the system's snapshot for the rotation) and stayed blank while the main thread was busy (designer,
+            // resize regate on 32dd2bd: "a chart keeps its last drawing until the next is ready").
+            let lit = Int((min(max(value, 0), 1) * Double(ticks - 1)).rounded())
+            ForEach(Array(groups(lit: lit).enumerated()), id: \.offset) { _, g in
+                Ticks(indices: g.indices, ticks: ticks, length: length, sweep: sweep)
+                    .stroke(g.color, style: StrokeStyle(lineWidth: width, lineCap: .round))
             }
             center
         }
@@ -104,20 +104,47 @@ struct SparkLine: View {
     let values: [Double]
     var top: Double?
     var color: Color = macBlue
+    // Shapes, not a Canvas, for the same reason as the dials' ticks: never a blank chart for a frame.
     var body: some View {
-        Canvas(rendersAsynchronously: GaugeDrawing.offMain) { ctx, size in
-            guard values.count > 1 else { return }
+        if values.count > 1 {
             let hi = max(top ?? values.max() ?? 1, 0.0001)
-            let step = size.width / CGFloat(values.count - 1)
-            var line = Path()
-            for (i, v) in values.enumerated() {
-                let p = CGPoint(x: CGFloat(i) * step, y: size.height * (1 - CGFloat(min(v / hi, 1))) * 0.92 + 1.5)
-                if i == 0 { line.move(to: p) } else { line.addLine(to: p) }
+            ZStack {
+                SparkPath(values: values, hi: hi, closed: true).fill(color.opacity(0.18))
+                SparkPath(values: values, hi: hi, closed: false).stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
             }
-            var fill = line
-            fill.addLine(to: CGPoint(x: size.width, y: size.height)); fill.addLine(to: CGPoint(x: 0, y: size.height)); fill.closeSubpath()
-            ctx.fill(fill, with: .color(color.opacity(0.18)))
-            ctx.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
         }
+    }
+}
+struct SparkPath: Shape {
+    let values: [Double]
+    let hi: Double
+    let closed: Bool
+    func path(in rect: CGRect) -> Path {
+        var line = Path()
+        let step = rect.width / CGFloat(values.count - 1)
+        for (i, v) in values.enumerated() {
+            let p = CGPoint(x: rect.minX + CGFloat(i) * step, y: rect.minY + rect.height * (1 - CGFloat(min(v / hi, 1))) * 0.92 + 1.5)
+            if i == 0 { line.move(to: p) } else { line.addLine(to: p) }
+        }
+        if closed { line.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY)); line.addLine(to: CGPoint(x: rect.minX, y: rect.maxY)); line.closeSubpath() }
+        return line
+    }
+}
+// Some of a dial's ticks, as one path: the ones at `indices` of `ticks` around a `sweep`-degree arc.
+struct Ticks: Shape {
+    let indices: [Int]
+    let ticks: Int
+    let length: CGFloat
+    let sweep: Double
+    func path(in rect: CGRect) -> Path {
+        let r = min(rect.width, rect.height) / 2 - 1, c = CGPoint(x: rect.midX, y: rect.midY)
+        let start = 90 + (360 - sweep) / 2
+        var p = Path()
+        for i in indices {
+            let a = (start + Double(i) / Double(ticks - 1) * sweep) * .pi / 180
+            p.move(to: CGPoint(x: c.x + cos(a) * (r - length), y: c.y + sin(a) * (r - length)))
+            p.addLine(to: CGPoint(x: c.x + cos(a) * r, y: c.y + sin(a) * r))
+        }
+        return p
     }
 }
