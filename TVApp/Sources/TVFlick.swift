@@ -1086,7 +1086,9 @@ struct FlickScreen: View {
     @ViewBuilder var poster: some View {
         Group {
             if let held = ImageStore.shared.cached(URL(string: item.art)) { Image(tv: held).resizable().scaledToFill() }
-            else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) } }
+            // Not in memory (a slow picture): the app's own purple waiting, as every cover does, never a dark empty box
+            // (the review of ddc30e8: 1-1.6 s of black box on open).
+            else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait() } }
         }
         .shadow(color: .black.opacity(0.4), radius: 10, y: 5)
     }
@@ -1593,6 +1595,7 @@ struct FlickScreen: View {
         case .thrown:
             // The pick, from where the thing is now, leaving the way the finger did.
             rects.map[id] = (rects.map[id] ?? .zero).offsetBy(dx: translation.width, dy: translation.height)
+            if id == "card", let full = rects.map["cardFull"] { rects.map["cardFull"] = full.offsetBy(dx: translation.width, dy: translation.height) }
             let v = hands.hand.leaving
             throwV = CGSize(width: v.dx, height: v.dy)
             var quiet = Transaction(); quiet.disablesAnimations = true
@@ -1732,6 +1735,7 @@ struct FlickScreen: View {
                         .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.08, corner: LinkCard.corner, rest: (0.45, 18, 10), raised: (0.55, 30, 22)))
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { r in
                             rects.map["card"] = CGRect(x: r.minX, y: r.minY, width: r.width, height: (r.width * 9 / 16).rounded())
+                            rects.map["cardFull"] = r
                         }
                 } else {
                     MediaCard(item: shown, source: source, width: width, image: target.image)
@@ -1796,6 +1800,7 @@ struct FlickScreen: View {
                 try? await Task.sleep(nanoseconds: 16_000_000)
             }
             rects.map["card"] = (rects.map["card"] ?? .zero).offsetBy(dx: lift.drag.width, dy: lift.drag.height)
+            if let full = rects.map["cardFull"] { rects.map["cardFull"] = full.offsetBy(dx: lift.drag.width, dy: lift.drag.height) }
             thrownID = "card"
             FlickHaptic.caught(); send(from: rects.map["card"])
             return
@@ -1921,7 +1926,14 @@ struct FlickScreen: View {
             }
             // Laid out now, over the page as it is; set going at the start of the next turn (handOver), once this turn's
             // commit, which lays the page out again, is over.
-            ScreenVeil.dissolve(flickFrame, hole: fromRect.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), soft: soft, tint: tint, flush: false, animate: false)
+            // A link's whole slab leaves its place, its name band too, not only the picture that flies (the review of
+            // ddc30e8: the card drawn twice at release).
+            var hole = fromRect
+            if isLink, let full = rects.map["cardFull"], full.width > 4 {
+                let grow = liftScale + 0.08 * min(1, max(0, -lift.drag.height) / 260) - 1
+                hole = full.insetBy(dx: -full.width * grow / 2, dy: -full.height * grow / 2).union(fromRect)
+            }
+            ScreenVeil.dissolve(flickFrame, hole: hole.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), soft: soft, tint: tint, flush: false, animate: false)
             SwipeLog.note("send flown")
         }
         flown = true
