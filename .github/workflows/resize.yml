@@ -110,8 +110,9 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro > /dev/null 2>&1; sleep 1
             xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9042 -swipeLog YES -tab 0 -pose tabback
             sleep 47
-            # On the CI runner (never on the Mac at home): where the app's main thread spends its time at rest after coming back.
-            P=$(pgrep -f 'MacPro.app/MacPro' | head -1); [ -n "$P" ] && sample $P 4 -mayDie -file dist/macpro-$name-rest-sample.log > /dev/null 2>&1
+            # On the CI runner (never on the Mac at home), with SAMPLE set: where the app's main thread spends its time at rest
+          # after coming back. Off by default: sample stops the app's threads to read them, which the log counts as stalls.
+            P=$(pgrep -f 'MacPro.app/MacPro' | head -1); [ -n "$P" ] && [ -n "$SAMPLE" ] && sample $P 4 -mayDie -file dist/macpro-$name-rest-sample.log > /dev/null 2>&1
             sleep 3
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
             kill -INT $REC; wait $REC
@@ -130,7 +131,7 @@ jobs:
             for m in "$@"; do
               k=$((k + 1)); echo "$name move $m at $(date +%s.%N | cut -c1-14)"
               # Where the main thread is during the turn (CI runner only): sampled from just before the move for 3 s.
-              P=$(pgrep -f 'MacPro.app/MacPro' | head -1); [ -n "$P" ] && { sample $P 3 -mayDie -file dist/macpro-$name-move$k-sample.log > /dev/null 2>&1 & }
+              P=$(pgrep -f 'MacPro.app/MacPro' | head -1); [ -n "$P" ] && [ -n "$SAMPLE" ] && { sample $P 3 -mayDie -file dist/macpro-$name-move$k-sample.log > /dev/null 2>&1 & }
               $D "$DEVICE" $m || true; sleep 10
             done
             kill -INT $REC; wait $REC
