@@ -542,7 +542,7 @@ struct AlarmsTab: View {
     @State private var removing: String?
     @State private var posed = false
     @AppStorage("missedDismissed") private var dismissedRaw = ""
-    struct EditTarget: Identifiable { let alarm: Alarm?; var nap = false; var fromPane = false; var id: String { (nap ? "nap-" : "") + (alarm?.key ?? "new") } }
+    struct EditTarget: Identifiable { let alarm: Alarm?; var nap = false; var id: String { (nap ? "nap-" : "") + (alarm?.key ?? "new") } }
     // Each editor grows out of the row that opened it and shrinks back into it, the iOS zoom, rather than a sheet rising
     // from the foot with no tie to what was tapped (Richard, 2026-11-07: "the animation to edit like the calendar alarm
     // sucks").
@@ -557,12 +557,14 @@ struct AlarmsTab: View {
     var mine: [Alarm] { model.state.alarms.filter { !$0.isPlaceholder && $0.name != "Catch-up" && !$0.isCalendar && $0.name != "Nap" && $0.key != folded && !ChumbyState.isExpired($0, chumby: model.state.chumbyNow) }.sorted { $0.localMinutes < $1.localMinutes } }
     var paneShown: Pane { wide ? pane : .schedule }
     // Pages that bring their own list and title row (editor, day), shown in the right pane in place of its list.
+    // An editor opened in the pane stays the same view through a turn: drawn over the whole page upright (TwoPane), and
+    // back in its pane open flat, with what's typed and where it was. Never a cover made for it by the turn.
     var rightPage: AnyView? {
-        switch paneShown {
+        switch pane {
         case .editor(let a): return AnyView(AlarmEditor(original: a, close: { show(.schedule) }).id(a?.key ?? "new"))
         case .napEditor(let a): return AnyView(AlarmEditor(original: a, nap: true, close: { show(.schedule) }).id("nap-" + (a?.key ?? "new")))
-        case .day(let k): return AnyView(CalendarDaySheet(key: k, close: { show(.schedule) }).id(k))
-        case .template: return AnyView(AlarmEditor(calendarTemplate: true, close: { show(paneBack) }))
+        case .day(let k): return wide ? AnyView(CalendarDaySheet(key: k, close: { show(.schedule) }).id(k)) : nil
+        case .template: return AnyView(AlarmEditor(calendarTemplate: true, close: { closeTemplate() }))
         default: return nil
         }
     }
@@ -591,6 +593,11 @@ struct AlarmsTab: View {
             withAnimation(.easeOut(duration: 0.2)) { paneFaded = false }
             paneSwap = nil
         }
+    }
+    // The template's editor closed: back to where it was opened from (Calendar settings, pushed when upright).
+    func closeTemplate() {
+        if wide || paneBack != .settings { show(wide ? paneBack : .schedule); return }
+        show(.schedule); dayPage = nil; model.alarmsPage = true
     }
     func edit(_ a: Alarm?) { if wide { show(.editor(a)) } else { editing = EditTarget(alarm: a) } }
     // The nap's editor: the nap set, or a new one.
@@ -621,7 +628,7 @@ struct AlarmsTab: View {
     // and say when they repeat (Richard, 2026-11-05: "theres little to no distinction between daily alarms and calendar
     // alarms its just super unintuitive"). Night times moved to Tinker, and "Woke up to" to Sounds.
     var page: some View {
-        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !(wide && paneFaded), rightPage: rightPage) {
+        TwoPane(rightTitle: rightTitle, rightTrailing: paneShown == .settings ? AnyView(Button("Done") { show(.schedule) }.fontWeight(.semibold).foregroundStyle(.tint)) : nil, rightShown: !paneFaded, rightPage: rightPage) {
             // Add alarm is never a loose circle: it's the last row of My alarms (below).
             PageTitle("Alarms")
             ReachRow()
@@ -665,12 +672,7 @@ struct AlarmsTab: View {
             Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
         }
         // Edge to edge (fillCover), with the zoom from its row.
-        // One moved from the pane by a turn comes and goes without the zoom (there's no row to grow from), and is hidden the
-        // instant the panes come back, so it never lies across the fold while it closes.
-        .fillCover(item: $editing) { t in
-            if t.fromPane { AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).hiddenOnceSplit() }
-            else { AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
-        }
+        .fillCover(item: $editing) { t in AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
         // Pulled down, the calendar is read again too, so "Pull down to try again" under Calendar is true.
         .refreshable { await model.loadState(); if wake.rules.enabled, wake.note != nil { await wake.sync() } }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
@@ -681,21 +683,17 @@ struct AlarmsTab: View {
         .onChange(of: wide) { _, w in
             paneSwap?.cancel(); paneSwap = nil; paneFaded = false
             var still = Transaction(); still.disablesAnimations = true
+            // An editor opened in the pane (or the template's) is left where it is: the same view, over the whole page upright
+            // and back in its pane open flat (the lead's ruling, 11-11). One opened folded stays a cover.
+            switch pane { case .editor, .napEditor, .template: return; default: break }
             if w {
-                // An editor that was in the pane before the turn goes back into it (its draft and place carried), never
-                // left as a cover across the fold (the lead's ruling, 11-11). One opened folded stays a cover.
-                if let e = editing, e.fromPane {
-                    withTransaction(still) { editing = nil; pane = e.nap ? .napEditor(e.alarm) : .editor(e.alarm) }
-                }
-                else if model.alarmsPage { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false }
+                if model.alarmsPage { withTransaction(still) { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false } }
                 else { pane = .schedule }
             } else {
                 switch pane {
                 case .settings: dayPage = nil; model.alarmsPage = true
                 case .day(let k): dayPage = k; model.alarmsPage = true
-                case .editor(let a): withTransaction(still) { editing = EditTarget(alarm: a, fromPane: true) }
-                case .napEditor(let a): withTransaction(still) { editing = EditTarget(alarm: a, nap: true, fromPane: true) }
-                case .template, .schedule: break
+                default: break
                 }
                 pane = .schedule
             }

@@ -375,6 +375,7 @@ struct PageTitle<Trailing: View>: View {
         }
         .frame(minHeight: 44)
         .modifier(PinnedRowIf(on: pins))
+        .background { TopProbe() }
         .id(PageTitle<EmptyView>.rowID)
         .pageLog("title \(title)")
         .listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 4, leading: 6, bottom: 0, trailing: 6))
@@ -396,39 +397,75 @@ struct TwoPane<L: View, R: View>: View {
     // A page that brings its own list and title (the alarm editor, a calendar day), shown in place of `right`'s list, so
     // it can pin its own title row with its buttons.
     var rightPage: AnyView?
+    @State private var measured: CGRect?
     init(rightTitle: String? = " ", rightTrailing: AnyView? = nil, rightShown: Bool = true, rightPage: AnyView? = nil, @ViewBuilder _ left: () -> L, @ViewBuilder right: () -> R) {
         self.rightTitle = rightTitle; self.rightTrailing = rightTrailing; self.rightShown = rightShown; self.rightPage = rightPage; self.left = left(); self.right = right()
     }
     var body: some View {
-        if panes {
-            FoldSplit {
-                List { Group { left }.listRowBackground(GlassRow()) }.staysAtTop()
-            } right: {
-                Group {
-                    if let rightPage { rightPage }
-                    else {
-                        // A title row, blank unless the pane holds a page, so both panes start level. A real title (Calendar
-                        // settings, with Done) stays pinned once the pane is scrolled.
-                        let pinned = rightTitle.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
-                        List { if let rightTitle { PageTitle(rightTitle, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
-                            .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
-                            .keepsPlace(pinned.map { "page:" + $0 })
-                            .staysAtTop()
+        // A page that brings its own list (the alarm editor, a day) is drawn here, over the panes, at one place in the tree
+        // whatever the posture: in the right pane's frame open flat, over the whole page upright or folded. So a turn
+        // never makes a second copy of it: what's typed, where it's scrolled and its pinned title are the same view's
+        // through the turn, and nothing waits on a cover or a push to arrive or leave (Fable gate B2, 11-11).
+        let pageUp = rightPage != nil && !panes
+        ZStack(alignment: .topLeading) {
+            if panes {
+                FoldSplit {
+                    List { Group { left }.listRowBackground(GlassRow()) }.staysAtTop()
+                } right: {
+                    Group {
+                        if rightPage != nil {
+                            Color.clear.anchorPreference(key: RightSlot.self, value: .bounds) { $0 }
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("twoPane")) } action: { measured = $0 }
+                        }
+                        else {
+                            // A title row, blank unless the pane holds a page, so both panes start level. A real title (Calendar
+                            // settings, with Done) stays pinned once the pane is scrolled.
+                            let pinned = rightTitle.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
+                            List { if let rightTitle { PageTitle(rightTitle, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
+                                .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
+                                .keepsPlace(pinned.map { "page:" + $0 })
+                                .staysAtTop()
+                        }
                     }
+                    .opacity(rightShown ? 1 : 0)
                 }
-                .opacity(rightShown ? 1 : 0)
-            }
-            .seaList()
-            .animation(.snappy, value: model.unreachable)
-        } else {
-            // Open in portrait the status bar has the top to itself, so the list's own top margin is left off there.
-            List { Group { left; right }.listRowBackground(GlassRow()) }
-                .contentMargins(.top, size == .regular ? 0 : nil, for: .scrollContent)
-                // "Offline" (ReachRow) arriving or going moves the rows under it in one spring, never in one frame; the
-                // readings that decide it are left alone.
+                .seaList()
                 .animation(.snappy, value: model.unreachable)
+            } else {
+                // Open in portrait the status bar has the top to itself, so the list's own top margin is left off there.
+                List { Group { left; right }.listRowBackground(GlassRow()) }
+                    .contentMargins(.top, size == .regular ? 0 : nil, for: .scrollContent)
+                    // "Offline" (ReachRow) arriving or going moves the rows under it in one spring, never in one frame; the
+                    // readings that decide it are left alone.
+                    .animation(.snappy, value: model.unreachable)
+                    // Under a page drawn over it: not drawn, so nothing reads through the page.
+                    .opacity(pageUp && rightShown ? 0 : 1)
+                    .allowsHitTesting(!pageUp)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .coordinateSpace(.named("twoPane"))
+        .overlayPreferenceValue(RightSlot.self) { slot in
+            GeometryReader { g in
+                if let rightPage {
+                    // The pane's frame as the layout gives it, in the same pass; as last measured only if that can't be had.
+                    let r = panes ? (slot.map { g[$0] } ?? measured) : CGRect(origin: .zero, size: g.size)
+                    rightPage
+                        .seaList()
+                        .contentMargins(.top, !panes && size == .regular ? 0 : nil, for: .scrollContent)
+                        .frame(width: r?.width ?? 0, height: r?.height ?? 0)
+                        .padding(.leading, r?.minX ?? 0).padding(.top, r?.minY ?? 0)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .opacity(r == nil || !rightShown ? 0 : 1)
+                }
+            }
         }
     }
+}
+// Where the right pane is, for the page drawn over it (TwoPane).
+private struct RightSlot: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
 }
 
 // A pane's title row with its buttons (Cancel and Save, Done), pinned once the pane is scrolled: open flat, a page's title
@@ -450,6 +487,9 @@ struct TwoPane<L: View, R: View>: View {
     // The list's frame when the rest was last taken: a fold or turn at rest moves the row by layout, not by scroll, and
     // the rest is taken again then (gate 8).
     var latchedBox: CGRect = .zero
+    // A title row rests a few points under its list's top in every posture (6 pt). A reading far from that is a frame
+    // laid out mid-turn, never taken for the rest (gate B2: a rest of 434 pt pinned the editor's title mid-pane).
+    static func sane(_ y: CGFloat) -> Bool { y > -2 && y < 60 }
 }
 struct PinnedTitle<Bar: View>: ViewModifier {
     let on: Bool
@@ -464,7 +504,7 @@ struct PinnedTitle<Bar: View>: ViewModifier {
             .environment(row)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, o in
                 row.offset = o
-                if row.atRest, row.frame != .zero { row.restY = row.frame.minY - row.box.minY; row.latchedBox = row.box }
+                if row.atRest, row.frame != .zero, PinnedRowFrame.sane(row.frame.minY - row.box.minY) { row.restY = row.frame.minY - row.box.minY; row.latchedBox = row.box }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { row.box = $0 }
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topInset = $0 }
@@ -501,7 +541,7 @@ struct PinnedRow: ViewModifier {
             row.frame = f
             // Only the first report: after that the rest is taken by the scroll reading at exactly 0, so a fling's first
             // frame (the row already moved, the scroll not yet read) can never be taken for the rest.
-            if row.atRest, row.restY == nil || row.latchedBox.size != row.box.size {
+            if row.atRest, row.restY == nil || row.latchedBox.size != row.box.size, PinnedRowFrame.sane(f.minY - row.box.minY) {
                 row.restY = f.minY - row.box.minY; row.latchedBox = row.box
             }
         }
@@ -543,14 +583,59 @@ struct ChumbyPaneReader<C: View>: View {
     var box: CGRect = .zero
     var steadySize: CGSize = .zero
     var restored = false
+    // The list's own scroll view and each mark's row, found by a probe in the row (ScrollProbe): a place is put back by
+    // setting the scroll view's offset to the row's own position, then checked against it, never by asking SwiftUI to
+    // scroll to an id (gate B2: scrollTo on these lists moved nothing, every time).
+    @ObservationIgnored weak var scroll: UIScrollViewRef?
+    @ObservationIgnored var rows: [String: WeakView] = [:]
+    @ObservationIgnored var restoring = false
     // The mark the list's top is in: the lowest one at or above the top (with a little give), or none at the top.
     func anchor(offset: CGFloat) -> String? {
         guard offset > 1 else { return nil }
         return marks.filter { $0.value <= box.minY + 24 }.max { $0.value < $1.value }?.key
     }
+    #if canImport(UIKit)
+    // How far the list's top is past the top of row `id`, in points, while that row is laid out.
+    func into(_ id: String) -> CGFloat? {
+        guard let sv = scroll, let v = rows[id]?.view, v.window != nil, v.isDescendant(of: sv) else { return nil }
+        return sv.contentOffset.y + sv.adjustedContentInset.top - v.convert(CGPoint.zero, to: sv).y
+    }
+    #endif
 }
+#if canImport(UIKit)
+typealias UIScrollViewRef = UIScrollView
+#else
+typealias UIScrollViewRef = NSObject
+#endif
+final class WeakView { weak var view: PlatformView?; init(_ v: PlatformView) { view = v } }
+#if canImport(UIKit)
+typealias PlatformView = UIView
+// A view of no size in a row that finds the list it sits in.
+final class ScrollProbeView: UIView {
+    var found: ((UIScrollView, UIView) -> Void)?
+    override func didMoveToWindow() { super.didMoveToWindow(); look() }
+    override func layoutSubviews() { super.layoutSubviews(); look() }
+    func look() {
+        guard window != nil else { return }
+        var v = superview
+        // A list's own (a collection view): a copy of a row drawn over the list (the pinned title) has none above it.
+        while let s = v { if let sc = s as? UICollectionView { found?(sc, self); return }; v = s.superview }
+    }
+}
+struct ScrollProbe: UIViewRepresentable {
+    let found: (UIScrollView, UIView) -> Void
+    func makeUIView(context: Context) -> ScrollProbeView { let v = ScrollProbeView(); v.isUserInteractionEnabled = false; v.found = found; return v }
+    func updateUIView(_ v: ScrollProbeView, context: Context) { v.found = found }
+}
+#else
+typealias PlatformView = NSObject
+#endif
 @MainActor enum PagePlace {
     static var anchor: [String: String] = [:]
+    // How far past its row the list's top was (PlaceTracker.into), so the row is put back at the same height, not just on top.
+    static var into: [String: CGFloat] = [:]
+    // And how far from its top the list was, to bring the row near when it isn't laid out yet.
+    static var offset: [String: CGFloat] = [:]
     // Stamped by the turn itself (ChumbyPaneReader), never by a view leaving: a list's onDisappear can come after its twin's
     // onAppear, so a stamp from it was late or missing (gate B).
     static var turnedAt = Date.distantPast
@@ -559,72 +644,157 @@ struct ChumbyPaneReader<C: View>: View {
 struct KeepsPlace: ViewModifier {
     let key: String?
     @State private var tracker = PlaceTracker()
+    @Environment(\.topHolder) private var top
     func body(content: Content) -> some View {
         if let key {
-            ScrollViewReader { proxy in
-                content
-                    .environment(tracker)
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { tracker.box = $0 }
-                    .onAppear {
-                        // Opened afresh (no turn just now): at its top, and the old place forgotten.
-                        if !PagePlace.turning { PagePlace.anchor[key] = nil; tracker.restored = true; return }
-                        guard let a = PagePlace.anchor[key] else { tracker.restored = true; return }
-                        // Put back, and checked: tried until the row is at the top (the list may still be sliding in or
-                        // filling), then logged where it landed, not where it was asked to go.
-                        Task { @MainActor in
-                            for i in 0..<12 {
-                                try? await Task.sleep(nanoseconds: 150_000_000)
-                                var t = Transaction(); t.disablesAnimations = true
-                                withTransaction(t) { proxy.scrollTo(a, anchor: .top) }
-                                try? await Task.sleep(nanoseconds: 60_000_000)
-                                if let y = tracker.marks[a], abs(y - tracker.box.minY) < 40 {
-                                    SwipeLog.note("place landed \(key) \(a) try \(i) y \(Int(y - tracker.box.minY))"); break
-                                }
-                                if i == 11 { SwipeLog.note("place missed \(key) \(a)") }
-                            }
-                            tracker.restored = true
-                        }
-                    }
-                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, o in
-                        // Only his own scrolling at a steady size: never while the turn resizes the list, never while it's
-                        // being put back.
-                        guard tracker.restored, !PagePlace.turning, tracker.box.size == tracker.steadySize else { tracker.steadySize = tracker.box.size; return }
-                        let a = tracker.anchor(offset: o)
-                        if PagePlace.anchor[key] != a { PagePlace.anchor[key] = a; SwipeLog.note("place write \(key) \(a ?? "top")") }
-                    }
-            }
+            content
+                .environment(tracker)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { b in
+                    let resized = b.size != tracker.box.size && tracker.box != .zero
+                    tracker.box = b
+                    // The same list resized by a turn (the editor, drawn over the page upright and in its pane open flat):
+                    // its rows reflow, so its place is put back by row, as a new one's is.
+                    if resized, PagePlace.turning, tracker.restored, PagePlace.anchor[key] != nil { putBack(key) }
+                }
+                .onAppear {
+                    // Opened afresh (no turn just now): at its top, and the old place forgotten.
+                    if !PagePlace.turning { PagePlace.anchor[key] = nil; tracker.restored = true; return }
+                    guard PagePlace.anchor[key] != nil else { tracker.restored = true; return }
+                    putBack(key)
+                }
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, o in
+                    // Only his own scrolling at a steady size: never while the turn resizes the list, never while it's
+                    // being put back.
+                    guard tracker.restored, !tracker.restoring, !PagePlace.turning, tracker.box.size == tracker.steadySize else { tracker.steadySize = tracker.box.size; return }
+                    let a = tracker.anchor(offset: o)
+                    if PagePlace.anchor[key] != a { PagePlace.anchor[key] = a; SwipeLog.note("place write \(key) \(a ?? "top")") }
+                    #if canImport(UIKit)
+                    if let a, let d = tracker.into(a) { PagePlace.into[key] = d }
+                    PagePlace.offset[key] = o
+                    #endif
+                }
         } else {
             content
         }
     }
-}
-// A list at its top stays at its top when its top inset changes (a turn hands it the upright layout's 82 pt for a moment,
-// and the list kept its offset from then: its title sat 35 pt low beside the other pane's, to the end — gate B).
-struct StaysAtTop: ViewModifier {
-    @State private var atTop = true
-    func body(content: Content) -> some View {
-        ScrollViewReader { proxy in
-            content.onScrollGeometryChange(for: [CGFloat].self) { [$0.contentOffset.y + $0.contentInsets.top, $0.contentInsets.top] } action: { old, new in
-                if old[1] != new[1] {
-                    SwipeLog.note("list inset \(Int(old[1]))→\(Int(new[1])) offset \(Int(new[0])) wasTop \(atTop)")
-                    if atTop { DispatchQueue.main.async { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { proxy.scrollTo(PageTitle<EmptyView>.rowID, anchor: .top) } } }
+    // Put back, and checked: the row's own position read from the scroll view, the offset set to it, until it holds through
+    // the rest of the turn (the turn may lay the list out again after it first lands); then logged where it landed, in the
+    // list's terms, not where it was asked to go. A finger on the list ends it at once.
+    func putBack(_ key: String) {
+        #if canImport(UIKit)
+        guard !tracker.restoring, let a = PagePlace.anchor[key] else { return }
+        tracker.restoring = true
+        top?.atTop = false
+        let into = PagePlace.into[key] ?? 0
+        Task { @MainActor in
+            var held = 0
+            var tries = 0
+            var landed = false
+            var missed = 0
+            while tries < 40 {
+                tries += 1
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard let sv = tracker.scroll else { continue }
+                if sv.isTracking || sv.isDecelerating { SwipeLog.note("place left to the finger \(key)"); break }
+                let lo = -sv.adjustedContentInset.top
+                let hi = max(lo, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
+                if let now = tracker.into(a) {
+                    let target = min(max(sv.contentOffset.y + into - now, lo), hi)
+                    if abs(target - sv.contentOffset.y) > 0.5 { sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: target), animated: false); held = 0 }
+                    else { held += 1 }
+                    if held >= 3, !PagePlace.turning { landed = true; break }
                 } else {
-                    atTop = abs(new[0]) < 1
+                    // The row isn't laid out yet: the list is taken to about where its top was (first), then on down a
+                    // screen at a time from its top, and the row measured on the next try.
+                    held = 0
+                    let y = missed == 0 ? (PagePlace.offset[key] ?? 0) + lo : (sv.contentOffset.y >= hi - 0.5 ? lo : sv.contentOffset.y + sv.bounds.height * 0.8)
+                    missed += 1
+                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: min(max(y, lo), hi)), animated: false)
                 }
             }
+            if landed, let now = tracker.into(a) { SwipeLog.note("place landed \(key) \(a) try \(tries) into \(Int(now)) asked \(Int(into))") }
+            else { SwipeLog.note("place missed \(key) \(a) try \(tries)") }
+            tracker.restoring = false
+            tracker.restored = true
         }
+        #else
+        tracker.restored = true
+        #endif
     }
 }
-// A page pushed upright, hidden the instant the panes come back, so it never shows sliding off over the split.
+// Whether a list was at its top, and its scroll view, shared by StaysAtTop with the rows inside it (PageTitle finds the
+// scroll view; KeepsPlace says when it's putting a place back, so the list isn't also pulled to its top).
+final class TopHolder {
+    var atTop = true
+    weak var scroll: UIScrollViewRef?
+}
+private struct TopHolderKey: EnvironmentKey { static let defaultValue: TopHolder? = nil }
+extension EnvironmentValues { var topHolder: TopHolder? { get { self[TopHolderKey.self] } set { self[TopHolderKey.self] = newValue } } }
+// A list at its top stays at its top through a turn (a turn hands it the upright layout's 82 pt inset for a moment, or
+// offsets of its own as it's resized, and the list kept them: its title sat 31–35 pt low beside the other pane's, to the
+// end — gate B, B2). Whether it was at its top is read only from his own scrolling: a change that comes with a new size
+// or inset, or any change during a turn, is the layout's, and puts it back instead.
+struct StaysAtTop: ViewModifier {
+    @State private var holder = TopHolder()
+    struct Reading: Equatable { var y: CGFloat; var inset: CGFloat; var size: CGSize }
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content
+                .environment(\.topHolder, holder)
+                .onScrollGeometryChange(for: Reading.self) { Reading(y: $0.contentOffset.y + $0.contentInsets.top, inset: $0.contentInsets.top, size: $0.containerSize) } action: { old, new in
+                    let layout = old.inset != new.inset || old.size != new.size
+                    if old.inset != new.inset { SwipeLog.note("list inset \(Int(old.inset))→\(Int(new.inset)) offset \(Int(new.y)) wasTop \(holder.atTop)") }
+                    if layout || PagePlace.turning {
+                        if holder.atTop, abs(new.y) > 0.5 { DispatchQueue.main.async { putBack(proxy) } }
+                    } else {
+                        holder.atTop = abs(new.y) < 1
+                    }
+                }
+        }
+    }
+    func putBack(_ proxy: ScrollViewProxy) {
+        guard holder.atTop else { return }
+        #if canImport(UIKit)
+        if let sv = holder.scroll, sv.window != nil {
+            guard !sv.isTracking, !sv.isDecelerating else { return }
+            let top = -sv.adjustedContentInset.top
+            if abs(sv.contentOffset.y - top) > 0.5 { sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: top), animated: false); SwipeLog.note("list kept at top") }
+            return
+        }
+        #endif
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { proxy.scrollTo(PageTitle<EmptyView>.rowID, anchor: .top) }
+    }
+}
+// A page pushed upright, hidden the instant the panes come back, so it never shows sliding off over the split; its
+// navigation container is clear, so no blank page slides off in its place either (gate B2: a white slab over the pane).
 struct HiddenOnceSplit: ViewModifier {
     @Environment(\.paneLayout) private var panes
-    func body(content: Content) -> some View { content.opacity(panes ? 0 : 1) }
+    func body(content: Content) -> some View {
+        content.opacity(panes ? 0 : 1)
+            #if os(iOS)
+            .containerBackground(.clear, for: .navigation)
+            #endif
+    }
+}
+// The first row's report of its list's scroll view, for StaysAtTop.
+struct TopProbe: View {
+    @Environment(\.topHolder) private var holder
+    var body: some View {
+        #if canImport(UIKit)
+        if let holder { ScrollProbe { sv, _ in holder.scroll = sv }.frame(width: 0, height: 0) }
+        #endif
+    }
 }
 struct PlaceMark: ViewModifier {
     let id: String
     @Environment(PlaceTracker.self) private var tracker: PlaceTracker?
     func body(content: Content) -> some View {
-        content.id(id).onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { tracker?.marks[id] = $0 }
+        content.id(id)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { tracker?.marks[id] = $0 }
+            #if canImport(UIKit)
+            .background { if let tracker { ScrollProbe { sv, v in tracker.scroll = sv; tracker.rows[id] = WeakView(v) }.frame(width: 0, height: 0).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading) } }
+            #endif
     }
 }
 extension View {
