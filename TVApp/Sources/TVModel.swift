@@ -509,14 +509,11 @@ final class TVModel {
         #endif
     }
     // The Remote's picture of the TV coming on and off the screen.
-    // Where the Remote's picture last was: shown again without moving (a tab already built), it reports no new place.
-    @ObservationIgnored var mirrorLastSlot: CGRect?
     func mirrorShown(_ on: Bool) {
         mirrorViewers = max(0, mirrorViewers + (on ? 1 : -1))
         if on {
-            if mirrorSlot == nil { mirrorSlot = mirrorLastSlot }
             warmMirror()
-            if mirrorLive && !liveShowing && !flickHandoff && !warmingUp { Task { await loadMirror() } }
+            if mirrorLive && !liveShowing && !flickHandoff { Task { await loadMirror() } }
         } else if mirrorViewers == 0 {
             mirrorSlot = nil
             #if os(iOS)
