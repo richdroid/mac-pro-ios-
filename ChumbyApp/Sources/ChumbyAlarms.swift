@@ -1298,8 +1298,10 @@ struct SoundRows: View {
             Button {
                 Task { do { try await model.api?.post("test", extra: "&tone=" + ChumbyAPI.enc(choice.tone)) } catch { model.fail("test", "Couldn’t play it. \(AlarmWriter.explain(error))") } }
             } label: {
+                // Laid out no taller than the row's words, so the row is as tall as Plays for and Snooze (gate B5: 6.3 pt
+                // taller); it is still a 44 pt target.
                 Image(systemName: "play.circle.fill").font(.title3)
-                    .frame(width: 44, height: 30).contentShape(Rectangle().inset(by: -7))
+                    .frame(width: 44, height: 20).contentShape(Rectangle().inset(by: -12))
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.tint)
@@ -1337,6 +1339,7 @@ struct SoundRows: View {
             }
         }
         .disabled(shownKind == "none")
+        .animation(.easeInOut(duration: 0.2), value: shownKind == "none")
         Picker("Snooze", selection: $alarm.snooze) {
             ForEach(SoundRows.snoozes(including: alarm.snooze), id: \.self) { Text("\($0) min").tag($0) }
         }

@@ -597,9 +597,12 @@ struct CalendarDaySheet: View {
     }
     @ViewBuilder func soundSection(_ item: PlannedWake) -> some View {
         Section {
+            // Its rows and the page under them move in one spring, never in one frame (gate B5: the page dropped 34 pt at once).
             Picker("Sound", selection: Binding(get: { edit.own != nil }, set: { on in
-                if on { var a = Alarm(); a.takeSettings(from: shared); setEdit { $0.own = a } } else { setEdit { $0.own = nil } }
-                loadOwn()
+                withAnimation(.snappy) {
+                    if on { var a = Alarm(); a.takeSettings(from: shared); setEdit { $0.own = a } } else { setEdit { $0.own = nil } }
+                    loadOwn()
+                }
             })) {
                 Text("Same as the others").tag(false); Text("Different").tag(true)
             }

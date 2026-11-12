@@ -2436,30 +2436,23 @@ struct SoundsTab: View {
                 Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 12)
-            Menu {
-                // The capsule is the menu's anchor, and its words change its width: so the pick lands once the menu has
-                // gone (MenuClose), never while it closes, which cut the close short.
-                Picker("Plays", selection: Binding(get: { a.soundTag(streams: model.state.streams) }, set: { t in
-                    guard t != a.soundTag(streams: model.state.streams) else { return }
-                    var b = a; b.setSound(t, streams: model.state.streams, stations: model.pandoraStations)
-                    MenuClose.then { choose(b) }
-                })) {
-                    Section("Tones") { ForEach(model.state.tones, id: \.self) { Text($0).tag("beep:" + $0) } }
-                    if !model.state.streams.isEmpty { Section("Radio") { ForEach(model.state.streams, id: \.key) { Text($0.name.isEmpty ? $0.url : $0.name).tag("stream:" + $0.key) } } }
-                    if !model.pandoraStations.isEmpty { Section("Pandora") { ForEach(model.pandoraStations) { Text($0.name).tag("pandora:" + $0.id) } } }
-                    Text("Silent").tag("none")
-                    if a.soundTag(streams: model.state.streams).isEmpty { Text(a.soundText).tag("") }
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Text(a.soundText).lineLimit(1).contentTransition(.opacity)
-                    Image(systemName: "chevron.up.chevron.down").imageScale(.small)
-                }
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(.white.opacity(0.12), in: Capsule())
-                .animation(.snappy, value: a.soundText)
+            // The system's own menu picker, as the editor's Plays is: the pick lands as the menu folds into its value, in one
+            // beat. A Menu with words of its own changed them once the menu had gone and crossfaded them in place, the
+            // capsule widening under both (gate B5: "JazBeepdio"). The same sections as the editor's menu.
+            Picker("Plays", selection: Binding(get: { a.soundTag(streams: model.state.streams) }, set: { t in
+                guard t != a.soundTag(streams: model.state.streams) else { return }
+                var b = a; b.setSound(t, streams: model.state.streams, stations: model.pandoraStations)
+                choose(b)
+            })) {
+                Section("Tones") { ForEach(model.state.tones, id: \.self) { Text($0).tag("beep:" + $0) } }
+                if !model.state.streams.isEmpty { Section("Radio") { ForEach(model.state.streams, id: \.key) { Text($0.name.isEmpty ? $0.url : $0.name).tag("stream:" + $0.key) } } }
+                if !model.pandoraStations.isEmpty { Section("Pandora") { ForEach(model.pandoraStations) { Text($0.name).tag("pandora:" + $0.id) } } }
+                Text("Silent").tag("none")
+                if a.soundTag(streams: model.state.streams).isEmpty { Text(a.soundText).tag("") }
             }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
             .accessibilityLabel("What \(title) plays")
             .overlay(alignment: .top) { if let mark { LandBubble(mark: mark) } }
         }
