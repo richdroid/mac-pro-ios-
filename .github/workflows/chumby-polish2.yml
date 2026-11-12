@@ -13,7 +13,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 110
+    timeout-minutes: 170
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,7 +32,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 90
+        timeout-minutes: 150
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -168,7 +168,7 @@ jobs:
             # The day's Same as the others / Different (its own rows go and come back, by design).
             tapt $d "Same as the others" 0; sleep 3; tapt $d "Different" 0; sleep 3
             endfilm daysound-$name
-            film $d capsule-$name live -tab 3 -swipeLog YES
+            film $d capsule-$name live -tab 3 -swipeLog YES; sleep 3
             pick $d "Beep" "Jazz Radio" capsule-$name-radio
             pick $d "Jazz Radio" "Beep" capsule-$name-beep
             endfilm capsule-$name
