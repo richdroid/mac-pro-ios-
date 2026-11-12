@@ -210,7 +210,7 @@ struct FlickScreen: View {
     // The page's own layers: on from the start, so everything is drawn while the screen is still unseen; the move into
     // the Remote dissolves them.
     @State private var arrived = true
-    // The screen's arrival: drawn from the first frame at a thousandth (never 0, which skips the drawing), faded up only
+    // The screen's arrival: drawn from the first frame at 2 % (0, or a thousandth, skips the drawing), faded up only
     // once the main thread has finished drawing it. Faded up at once, its first frame was followed by a 450-650 ms turn
     // on the main thread (CI f980195's main log): a held half-blend, then a cut.
     @State private var onScreen = false
@@ -419,7 +419,7 @@ struct FlickScreen: View {
 
     var body: some View {
         screen
-            .opacity(fadingOut ? 0 : onScreen ? 1 : 0.001)
+            .opacity(fadingOut ? 0 : onScreen ? 1 : 0.02)
             // The TV made ready, with what's coming, at each point he shows he means it: the show's page with its Resume,
             // and the streams opening. Nothing is prepared for what's already on the TV (r18).
             .onChange(of: step) { _, now in if now == .streams && video && !onTV { Prepare.arm(prepareBody) } }
@@ -463,7 +463,9 @@ struct FlickScreen: View {
                     // darkens with the fade rather than after it.
                     withAnimation(.easeOut(duration: 0.18)) { onScreen = true }
                     upAt = Date().addingTimeInterval(0.2)
-                    if !leaving { model.flickArrived = true }
+                    // The pages under it go once it's fully up: covering them mid-fade put their redraw inside the fade.
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    if !leaving { SwipeLog.note("flick covers"); model.flickArrived = true }
                 }
             }
     }
