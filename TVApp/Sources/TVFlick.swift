@@ -2260,31 +2260,19 @@ struct ShelfFlick: ViewModifier {
     }
 }
 
-
-// The Remote's tab built once at launch, under a veil of the launch screen's own colour, so the first pick never pays for
-// its first drawing as the picture moves (CI: 430-900 ms turns at the move's start). The tab view builds a tab only once
-// it has been shown, so it is shown for the frames that takes, behind the veil, then the tab he was on comes back. No
-// stream starts for it (model.warmingUp), nothing is felt, and it happens once a launch.
-struct LaunchRemote: ViewModifier {
+// The Remote, drawn once off screen soon after launch, so the first pick doesn't pay for its first drawing as the
+// picture moves (CI: a 600-900 ms turn at the move's start when the Remote had never been shown). Invisible, untouchable,
+// and gone after a second; never when the Remote is already the tab in front.
+struct RemoteWarmup: View {
     @Environment(TVModel.self) var model
-    @MainActor static var done = false
-    @State private var veil = !LaunchRemote.done
-    func body(content: Content) -> some View {
-        content
-            .overlay { if veil { Color("LaunchColor").ignoresSafeArea().allowsHitTesting(true).transition(.opacity) } }
-            .task {
-                guard !Self.done else { veil = false; return }
-                Self.done = true
-                let saved = model.tab
-                var quiet = Transaction(); quiet.disablesAnimations = true
-                if saved != 0 {
-                    withTransaction(quiet) { model.warmingUp = true; model.tab = 0 }
-                    await FlickScreen.settleFrames()
-                    withTransaction(quiet) { model.tab = saved }
-                    await FlickScreen.settleFrames()
-                    model.warmingUp = false
-                }
-                withAnimation(.easeOut(duration: 0.15)) { veil = false }
-            }
+    @State private var done = false
+    var body: some View {
+        if !done && model.tab != 0 {
+            Page(title: "Remote", alwaysInline: true) { RemoteTab() }
+                .opacity(0.001)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .task { try? await Task.sleep(nanoseconds: 1_200_000_000); done = true }
+        }
     }
 }

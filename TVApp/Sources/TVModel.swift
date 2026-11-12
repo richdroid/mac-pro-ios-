@@ -500,11 +500,8 @@ final class TVModel {
         #endif
     }
     // The live stream started early, as the Remote comes up, so its first picture is there by the time it's looked at.
-    // The Remote built once at launch, unseen (LaunchRemote): no stream starts for it.
-    var warmingUp = false
     func warmMirror() {
         #if os(iOS)
-        if warmingUp { return }
         if mirrorLive && !filmOnScreen && !flickHandoff { live.start(url("/api/tv/screen-live")) }
         #endif
     }
