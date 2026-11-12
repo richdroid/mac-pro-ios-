@@ -227,7 +227,8 @@ struct FlickHand {
     private func meant(at t: Double) -> Bool {
         if rules.hold <= 0 { return true }
         // The finger's own clock, when there is one, is the only word on it.
-        if real != nil { return !isRushed }
+        // Until it reads past the beat, it can't yet say: not meant (never lit early by a scroll's first moves).
+        if let r = real { return (r.last?.t ?? 0) >= rules.hold + rules.beat && !isRushed }
         guard let movedAt else { return false }
         return movedAt - liftedAt >= rules.beat || t - liftedAt >= rules.carried
     }

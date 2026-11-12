@@ -97,7 +97,7 @@ import UIKit.UIGestureRecognizerSubclass
         if let picked, picked.width > 4 {
             let m = CAShapeLayer()
             let pp = UIBezierPath(rect: still.bounds)
-            pp.append(UIBezierPath(roundedRect: picked.offsetBy(dx: -r.minX, dy: -r.minY).insetBy(dx: -6, dy: -6), cornerRadius: 18))
+            pp.append(UIBezierPath(roundedRect: picked.offsetBy(dx: -r.minX, dy: -r.minY).insetBy(dx: -12, dy: -12), cornerRadius: 22))
             m.path = pp.cgPath; m.fillRule = .evenOdd
             still.layer.mask = m
         }
@@ -737,7 +737,7 @@ struct FlickScreen: View {
                 // now, in the same frame the page is first drawn: the render server runs the fade, so the main thread's
                 // turns after it (the page's tasks, its pictures) can't hold it half way.
                 SwipeLog.note("flick open")
-                Task { try? await Task.sleep(nanoseconds: 900_000_000); withAnimation(.easeOut(duration: 0.25)) { slowList = true } }
+                Task { try? await Task.sleep(nanoseconds: 300_000_000); withAnimation(.easeOut(duration: 0.2)) { slowList = true } }
                 // Thrown from its shelf and already in the air: this page is never seen. The shelf's still stays up (its
                 // card's place empty) until the pick goes, and the Remote comes up through it as for any pick.
                 let unseen = target.thrown != nil && RenderFlight.flying && step != .episodes
@@ -1264,7 +1264,7 @@ struct FlickScreen: View {
                 Image(systemName: "tv").font(.system(size: 17, weight: .semibold)).foregroundStyle(TVLook.accent).frame(width: 28)
                 Text("Choose on the TV").font(.subheadline.weight(.semibold))
             }
-            .modifier(LiftedLook(lift: lift, up: liftedID == "tv", scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16), solid: true, home: settling == "tv"))
+            .modifier(LiftedLook(lift: lift, up: liftedID == "tv", scale: liftScale, swell: 0.03, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16), solid: true, home: settling == "tv"))
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map["tv"] = $0 }
             .opacity(thrownID == "tv" ? 0 : 1)
             .zIndex(liftedID == "tv" ? 1 : 0)
@@ -1279,7 +1279,7 @@ struct FlickScreen: View {
             // Placeholders only for a list that's really slow: one that lands just after the page's arrival comes in by
             // its own rows' fade, not as skeletons swapped for rows mid-fade (CI 7bbaf47, the real list at 453 ms).
             if findingStreams && streams.isEmpty && slowList {
-                Text("Asking your addons…").font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
+                Text("Finding streams…").font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
                 ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) }
             } else if noStreams {
                 Button("No streams found. Try again") { Task { await findStreams(again: true) } }
@@ -1400,7 +1400,7 @@ struct FlickScreen: View {
         .opacity(failed ? 0.45 : 1)
         // Lifted: up off the list on a bigger, lower shadow, on its own solid ground (nothing under it reads through),
         // lit round its edge more and more as it rises.
-        .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.1, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16), solid: true, home: settling == s.id))
+        .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.03, corner: 14, rest: (0, 0, 0), raised: (0.5, 24, 16), solid: true, home: settling == s.id))
         // Where it rests, measured outside everything that moves it (inside the drag's offset, the throw's picture
         // started twice the drag away, near the top of the page).
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map[s.id] = $0 }
@@ -1470,7 +1470,7 @@ struct FlickScreen: View {
         handle(hands.hand.move(CGPoint(x: d.translation.width, y: d.translation.height), at: Date().timeIntervalSince(hands.base)), id: id)
         lift.drag = d.translation
         let card = id == "card"
-        lift.lean = max(card ? -8 : -6, min(card ? 8 : 6, Double(d.velocity.width) / (card ? 180 : 200) + Double(d.translation.width) / (card ? 50 : 60)))
+        lift.lean = max(card ? -8 : -3, min(card ? 8 : 3, Double(d.velocity.width) / (card ? 180 : 400) + Double(d.translation.width) / (card ? 50 : 120)))
     }
     func handle(_ events: [FlickHand.Event], id: String, scale: CGFloat = 1.04) {
         for e in events { HandTrace.note("\(e) \(id.prefix(6))") }
@@ -1757,10 +1757,19 @@ struct FlickScreen: View {
         SwipeLog.note("send begin")
         FlickClock.begin()
         releasedAt = Date()
+        // The request leaves now, in the first moment the main thread is free, never after the Remote's long turn (the
+        // review of ef52168: release to request about a second).
+        flight = Task { await start() }
         // Worked out first and handed to the render server before any of this page's state changes: each flush of the
         // screen with this page's state changed laid the whole page out again (CI ef52168: two flushes in the pick, 0.36
         // and 0.66 s, before the Remote's tab was even asked for).
-        let fromRect = flies ? from ?? rects.map["poster"] ?? CGRect(x: flickFrame.width / 2 - 60, y: flickFrame.height * 0.6, width: 120, height: 60) : .zero
+        var fromRect = flies ? from ?? rects.map["poster"] ?? CGRect(x: flickFrame.width / 2 - 60, y: flickFrame.height * 0.6, width: 120, height: 60) : .zero
+        // As it is drawn in the hand (swelled as it rises), so the flight's first frame is exactly the thing under his
+        // finger and the place it leaves is empty to its lit edge (ef52168: an empty lit capsule left behind).
+        if liftedID != nil, fromRect.width > 4 {
+            let grow = liftScale + 0.03 * min(1, max(0, -lift.drag.height) / 260) - 1
+            fromRect = fromRect.insetBy(dx: -fromRect.width * grow / 2, dy: -fromRect.height * grow / 2)
+        }
         // The picture the Remote will show is the one to carry: a link with no page picture carries YouTube's banner.
         let carried = screenURL ?? URL(string: item.art) ?? URL(string: startingArt)
         var image = heldImage, soft = softImage
@@ -1840,7 +1849,6 @@ struct FlickScreen: View {
             SwipeLog.note("send settled")
         }
         phase = nil
-        flight = Task { await start() }
         goRemote()
         SwipeLog.note("send end")
     }
