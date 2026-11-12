@@ -407,7 +407,9 @@ struct CalendarWakeSettings: View {
     var body: some View {
         List { PageTitle("Calendar settings"); CalendarSettingsSections().listRowBackground(GlassRow()) }
             .keepsPlace("page:Calendar settings")
+            .staysAtTop()
             .pushedPage("settings")
+            .hiddenOnceSplit()
     }
 }
 // A calendar day pushed over Alarms (folded, and open in portrait): the day's own settings, with the system's Back.
@@ -417,6 +419,7 @@ struct CalendarDayPage: View {
     var body: some View {
         CalendarDaySheet(key: key, close: { model.alarmsPage = false }, done: false)
             .pushedPage("day")
+            .hiddenOnceSplit()
     }
 }
 extension View {
@@ -526,6 +529,7 @@ struct CalendarDaySheet: View {
                     Text("Before it starts").tag(false); Text("At a set time").tag(true)
                 }
                 .pickerStyle(.segmented)
+                .placeMark("day-wake")
                 if item.exact {
                     DatePicker(selection: Binding(get: { item.wake }, set: { setExact($0, for: item) }), displayedComponents: .hourAndMinute) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -588,6 +592,7 @@ struct CalendarDaySheet: View {
                 Text("Same as the others").tag(false); Text("Different").tag(true)
             }
             .pickerStyle(.segmented)
+            .placeMark("day-sound")
             if edit.own != nil {
                 SoundRows(choice: $ownSound, alarm: $ownAlarm, tail: AnyView(foot))
             } else {
@@ -649,6 +654,7 @@ struct CalendarDaySheet: View {
             // Pinned only with its Done: a pushed page's way out is the system's Back.
             .pinsTitle(done) { PageTitle(title) { doneButton } }
             .keepsPlace("page:day:" + key)
+            .staysAtTop()
             .onAppear { labelText = edit.label ?? ""; loadOwn() }
             .onDisappear { commitLabel() }
         } else {

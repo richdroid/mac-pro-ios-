@@ -360,6 +360,8 @@ extension Binding where Value: Equatable {
     }
 }
 struct PageTitle<Trailing: View>: View {
+    // Every page's first row, so a list can be put back at its top by it (StaysAtTop).
+    static var rowID: String { "pageTop" }
     let title: String
     let trailing: Trailing
     // The row a pinned title (pinsTitle) takes over from: it reports where it is.
@@ -373,6 +375,7 @@ struct PageTitle<Trailing: View>: View {
         }
         .frame(minHeight: 44)
         .modifier(PinnedRowIf(on: pins))
+        .id(PageTitle<EmptyView>.rowID)
         .pageLog("title \(title)")
         .listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 4, leading: 6, bottom: 0, trailing: 6))
     }
@@ -399,7 +402,7 @@ struct TwoPane<L: View, R: View>: View {
     var body: some View {
         if panes {
             FoldSplit {
-                List { Group { left }.listRowBackground(GlassRow()) }
+                List { Group { left }.listRowBackground(GlassRow()) }.staysAtTop()
             } right: {
                 Group {
                     if let rightPage { rightPage }
@@ -410,6 +413,7 @@ struct TwoPane<L: View, R: View>: View {
                         List { if let rightTitle { PageTitle(rightTitle, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
                             .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
                             .keepsPlace(pinned.map { "page:" + $0 })
+                            .staysAtTop()
                     }
                 }
                 .opacity(rightShown ? 1 : 0)
@@ -522,6 +526,7 @@ struct ChumbyPaneReader<C: View>: View {
                 .frame(width: g.size.width, height: g.size.height)
                 .environment(\.paneLayout, panes)
                 .transaction(value: panes) { $0.disablesAnimations = true; $0.animation = nil }
+                .onChange(of: panes) { _, p in PagePlace.turnedAt = Date(); SwipeLog.note("panes \(p)") }
         }
         .ignoresSafeArea(.keyboard)
     }
@@ -546,12 +551,10 @@ struct ChumbyPaneReader<C: View>: View {
 }
 @MainActor enum PagePlace {
     static var anchor: [String: String] = [:]
-    static var left: [String: Date] = [:]
-    static func take(_ key: String) -> String? {
-        defer { left[key] = nil }
-        guard let at = left[key], Date().timeIntervalSince(at) < 1.5 else { anchor[key] = nil; return nil }
-        return anchor[key]
-    }
+    // Stamped by the turn itself (ChumbyPaneReader), never by a view leaving: a list's onDisappear can come after its twin's
+    // onAppear, so a stamp from it was late or missing (gate B).
+    static var turnedAt = Date.distantPast
+    static var turning: Bool { Date().timeIntervalSince(turnedAt) < 2.5 }
 }
 struct KeepsPlace: ViewModifier {
     let key: String?
@@ -562,29 +565,60 @@ struct KeepsPlace: ViewModifier {
                 content
                     .environment(tracker)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { tracker.box = $0 }
-                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, h in
-                        guard !tracker.restored, h > 0 else { return }
-                        tracker.restored = true
-                        if let a = PagePlace.take(key) {
-                            SwipeLog.note("place restore \(key) \(a)")
-                            DispatchQueue.main.async {
+                    .onAppear {
+                        // Opened afresh (no turn just now): at its top, and the old place forgotten.
+                        if !PagePlace.turning { PagePlace.anchor[key] = nil; tracker.restored = true; return }
+                        guard let a = PagePlace.anchor[key] else { tracker.restored = true; return }
+                        // Put back, and checked: tried until the row is at the top (the list may still be sliding in or
+                        // filling), then logged where it landed, not where it was asked to go.
+                        Task { @MainActor in
+                            for i in 0..<12 {
+                                try? await Task.sleep(nanoseconds: 150_000_000)
                                 var t = Transaction(); t.disablesAnimations = true
                                 withTransaction(t) { proxy.scrollTo(a, anchor: .top) }
+                                try? await Task.sleep(nanoseconds: 60_000_000)
+                                if let y = tracker.marks[a], abs(y - tracker.box.minY) < 40 {
+                                    SwipeLog.note("place landed \(key) \(a) try \(i) y \(Int(y - tracker.box.minY))"); break
+                                }
+                                if i == 11 { SwipeLog.note("place missed \(key) \(a)") }
                             }
+                            tracker.restored = true
                         }
                     }
                     .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, o in
-                        // Only from a steady layout: a reading while the turn resizes the list is the turn's, not his.
-                        guard tracker.restored, tracker.box.size == tracker.steadySize else { tracker.steadySize = tracker.box.size; return }
+                        // Only his own scrolling at a steady size: never while the turn resizes the list, never while it's
+                        // being put back.
+                        guard tracker.restored, !PagePlace.turning, tracker.box.size == tracker.steadySize else { tracker.steadySize = tracker.box.size; return }
                         let a = tracker.anchor(offset: o)
                         if PagePlace.anchor[key] != a { PagePlace.anchor[key] = a; SwipeLog.note("place write \(key) \(a ?? "top")") }
                     }
-                    .onDisappear { PagePlace.left[key] = Date() }
             }
         } else {
             content
         }
     }
+}
+// A list at its top stays at its top when its top inset changes (a turn hands it the upright layout's 82 pt for a moment,
+// and the list kept its offset from then: its title sat 35 pt low beside the other pane's, to the end — gate B).
+struct StaysAtTop: ViewModifier {
+    @State private var atTop = true
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content.onScrollGeometryChange(for: [CGFloat].self) { [$0.contentOffset.y + $0.contentInsets.top, $0.contentInsets.top] } action: { old, new in
+                if old[1] != new[1] {
+                    SwipeLog.note("list inset \(Int(old[1]))→\(Int(new[1])) offset \(Int(new[0])) wasTop \(atTop)")
+                    if atTop { DispatchQueue.main.async { var t = Transaction(); t.disablesAnimations = true; withTransaction(t) { proxy.scrollTo(PageTitle<EmptyView>.rowID, anchor: .top) } } }
+                } else {
+                    atTop = abs(new[0]) < 1
+                }
+            }
+        }
+    }
+}
+// A page pushed upright, hidden the instant the panes come back, so it never shows sliding off over the split.
+struct HiddenOnceSplit: ViewModifier {
+    @Environment(\.paneLayout) private var panes
+    func body(content: Content) -> some View { content.opacity(panes ? 0 : 1) }
 }
 struct PlaceMark: ViewModifier {
     let id: String
@@ -594,6 +628,8 @@ struct PlaceMark: ViewModifier {
     }
 }
 extension View {
+    func staysAtTop() -> some View { modifier(StaysAtTop()) }
+    func hiddenOnceSplit() -> some View { modifier(HiddenOnceSplit()) }
     func keepsPlace(_ key: String?) -> some View { modifier(KeepsPlace(key: key)) }
     func placeMark(_ id: String) -> some View { modifier(PlaceMark(id: id)) }
 }

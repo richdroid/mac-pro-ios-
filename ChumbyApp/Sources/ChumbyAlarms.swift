@@ -665,7 +665,12 @@ struct AlarmsTab: View {
             Group { if let k = dayPage { CalendarDayPage(key: k) } else { CalendarWakeSettings() } }
         }
         // Edge to edge (fillCover), with the zoom from its row.
-        .fillCover(item: $editing) { t in AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
+        // One moved from the pane by a turn comes and goes without the zoom (there's no row to grow from), and is hidden the
+        // instant the panes come back, so it never lies across the fold while it closes.
+        .fillCover(item: $editing) { t in
+            if t.fromPane { AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).hiddenOnceSplit() }
+            else { AlarmEditor(original: t.alarm, nap: t.nap).environmentObject(model).zoomed(from: t.id, in: editNS) }
+        }
         // Pulled down, the calendar is read again too, so "Pull down to try again" under Calendar is true.
         .refreshable { await model.loadState(); if wake.rules.enabled, wake.note != nil { await wake.sync() } }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
@@ -675,12 +680,12 @@ struct AlarmsTab: View {
         // sheet already up stays a sheet. Never a page lost to a fold.
         .onChange(of: wide) { _, w in
             paneSwap?.cancel(); paneSwap = nil; paneFaded = false
+            var still = Transaction(); still.disablesAnimations = true
             if w {
                 // An editor that was in the pane before the turn goes back into it (its draft and place carried), never
                 // left as a cover across the fold (the lead's ruling, 11-11). One opened folded stays a cover.
                 if let e = editing, e.fromPane {
-                    var t = Transaction(); t.disablesAnimations = true
-                    withTransaction(t) { editing = nil; pane = e.nap ? .napEditor(e.alarm) : .editor(e.alarm) }
+                    withTransaction(still) { editing = nil; pane = e.nap ? .napEditor(e.alarm) : .editor(e.alarm) }
                 }
                 else if model.alarmsPage { pane = dayPage.map { .day($0) } ?? .settings; model.alarmsPage = false }
                 else { pane = .schedule }
@@ -688,8 +693,8 @@ struct AlarmsTab: View {
                 switch pane {
                 case .settings: dayPage = nil; model.alarmsPage = true
                 case .day(let k): dayPage = k; model.alarmsPage = true
-                case .editor(let a): editing = EditTarget(alarm: a, fromPane: true)
-                case .napEditor(let a): editing = EditTarget(alarm: a, nap: true, fromPane: true)
+                case .editor(let a): withTransaction(still) { editing = EditTarget(alarm: a, fromPane: true) }
+                case .napEditor(let a): withTransaction(still) { editing = EditTarget(alarm: a, nap: true, fromPane: true) }
                 case .template, .schedule: break
                 }
                 pane = .schedule
@@ -1307,14 +1312,12 @@ struct SoundRows: View {
 // MARK: - The alarm editor
 // An editor's unsaved draft, kept for the moment a turn moves the editor between the right pane and its cover (Richard's
 // 11-08 rule, as the lead ruled 11-11: he never loses what he typed). Taken only within a few seconds of being left.
-struct EditorDraft { var alarm: Alarm; var time: Date; var date: Date; var repeatMode: String; var day: Int; var sound: SoundChoice; var after: String }
+// Written on every change, outside the view, and cleared only by Save, Cancel or the editor finishing: the twin that
+// appears after a turn reads it whatever order the two views come and go in (gate B: written on disappear, it arrived
+// a turn late and the label he'd typed was lost on the way back).
+struct EditorDraft: Equatable { var alarm: Alarm; var time: Date; var date: Date; var repeatMode: String; var day: Int; var sound: SoundChoice; var after: String }
 @MainActor enum EditorDrafts {
-    static var byKey: [String: (EditorDraft, Date)] = [:]
-    static func take(_ key: String) -> EditorDraft? {
-        defer { byKey[key] = nil }
-        guard let (d, at) = byKey[key], Date().timeIntervalSince(at) < 3 else { return nil }
-        return d
-    }
+    static var byKey: [String: EditorDraft] = [:]
 }
 struct AlarmEditor: View {
     @EnvironmentObject var model: ChumbyModel
@@ -1348,6 +1351,7 @@ struct AlarmEditor: View {
     @State private var loaded = false
     @State private var justOnce = false
     @State private var ended = false
+    @State private var drafting = false
 
     var stations: [NamedID] { model.pandoraStations }
     var afterOptions: [(String, String)] {
@@ -1404,7 +1408,7 @@ struct AlarmEditor: View {
             // In the right pane: its own list, its title row with Cancel and Save, then the same sections, clear of the
             // fold. The title row stays pinned once the page is scrolled, so Save is always in reach.
             let buttons = HStack(spacing: 16) {
-                Button("Cancel") { ended = true; stopTest(); close() }.disabled(saving)
+                Button("Cancel") { ended = true; EditorDrafts.byKey[placeKey] = nil; stopTest(); close() }.disabled(saving)
                 if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
             }
             .foregroundStyle(.tint)
@@ -1414,10 +1418,12 @@ struct AlarmEditor: View {
             }
             .pinsTitle { PageTitle(title) { buttons } }
             .keepsPlace(placeKey)
+            .staysAtTop()
             // On the list, never on a row: a lazy row scrolled off would end the edit (held readings landing) or present
             // nothing. (Build 204's "presents from none" was a sheet bound from many rows of the pane's shared list.)
             .onAppear { if !loaded { begin(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
-            .onDisappear { model.editingAlarm = false; keepDraft() }
+            .onDisappear { model.editingAlarm = false }
+            .onChange(of: typed) { _, _ in keepDraft() }
             .fillCover(isPresented: $justOnce) { justOnceSheet }
         } else {
             // Presented edge to edge (fillCover, from Alarms and the calendar's sound row), with Cancel and Save as the
@@ -1432,7 +1438,7 @@ struct AlarmEditor: View {
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button { ended = true; stopTest(); dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving)
+                        Button { ended = true; EditorDrafts.byKey[placeKey] = nil; stopTest(); dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold) }
@@ -1440,7 +1446,8 @@ struct AlarmEditor: View {
                 }
                 .interactiveDismissDisabled(saving)
                 .onAppear { if !loaded { begin(); loaded = true }; model.editingAlarm = true; posedJustOnce() }
-                .onDisappear { model.editingAlarm = false; keepDraft() }
+                .onDisappear { model.editingAlarm = false }
+                .onChange(of: typed) { _, _ in keepDraft() }
                 .fillCover(isPresented: $justOnce) { justOnceSheet }
             }
         }
@@ -1461,19 +1468,22 @@ struct AlarmEditor: View {
         guard ChumbyModel.pose == "reskip", original != nil else { return }
         Task { try? await Task.sleep(nanoseconds: 1_200_000_000); justOnce = true }
     }
-    func finish() { ended = true; EditorDrafts.byKey[placeKey] = nil; stopTest(); if let close { close() } else { dismiss() } }
+    func finish() { ended = true; EditorDrafts.byKey[placeKey] = nil;  stopTest(); if let close { close() } else { dismiss() } }
     // The same editor in the pane and in its cover: what's typed, and where it's scrolled, carry across a turn.
     var placeKey: String { "page:editor:" + (calendarTemplate ? "template" : original?.key ?? (nap ? "nap" : "new")) }
     // Opened: a draft left by its twin a moment ago (the turn that moved it between pane and cover), or the alarm as it is.
     func begin() {
-        if let d = EditorDrafts.take(placeKey) {
+        // Its twin's draft only while a turn is moving it between pane and cover; opened afresh, the alarm as it is.
+        if PagePlace.turning, let d = EditorDrafts.byKey[placeKey] {
             alarm = d.alarm; time = d.time; date = d.date; repeatMode = d.repeatMode; day = d.day; sound = d.sound; after = d.after
-        } else { load() }
+            SwipeLog.note("draft taken \(placeKey)")
+        } else { EditorDrafts.byKey[placeKey] = nil; load() }
+        drafting = true
     }
-    // Leaving without Save or Cancel (the turn): what's typed is kept for its twin.
+    var typed: EditorDraft { EditorDraft(alarm: alarm, time: time, date: date, repeatMode: repeatMode, day: day, sound: sound, after: after) }
     func keepDraft() {
-        guard !ended else { return }
-        EditorDrafts.byKey[placeKey] = (EditorDraft(alarm: alarm, time: time, date: date, repeatMode: repeatMode, day: day, sound: sound, after: after), Date())
+        guard drafting, !ended else { return }
+        EditorDrafts.byKey[placeKey] = typed
     }
 
     var sections: some View {
