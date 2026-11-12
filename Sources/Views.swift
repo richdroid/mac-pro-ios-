@@ -259,7 +259,11 @@ extension View {
     func scrollsUnder(_ id: Int = 0) -> some View { modifier(ScrollsUnder(id: id)) }
     // A row that can be his place on its page: given an id to scroll to, and noted as the place while it's the row at the
     // top of the page.
-    func place<ID: Hashable>(_ id: ID) -> some View { self.id(id).modifier(MarksPlace(id: AnyHashable(id))) }
+    // The id goes on last, outside everything else on the row: a List finds a row to scroll to only by the id on its
+    // outermost view, and with the place's own modifiers wrapped around it every scroll to a row did nothing (CI 90476df:
+    // a turn restored Apps to its place nine times and the page never left its top; the build's scroll to the dials
+    // never moved Status either).
+    func place<ID: Hashable>(_ id: ID) -> some View { self.modifier(MarksPlace(id: AnyHashable(id))).id(id) }
     // On a page's scroll view, under a ScrollViewReader: puts the page back at his place when a change of posture rebuilt it.
     func keepsPlace(_ page: String, _ proxy: ScrollViewProxy) -> some View { modifier(KeepsPlace(page: page, proxy: proxy)) }
 }
