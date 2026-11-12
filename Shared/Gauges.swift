@@ -61,6 +61,9 @@ enum MacPrefs {
     static var widgetCelsius: Bool { shared?.bool(forKey: "celsius") ?? false }
 }
 
+// The app draws its dials and spark lines off the main thread; a widget, drawn once into a snapshot, keeps the default.
+enum GaugeDrawing { nonisolated(unsafe) static var offMain = false }
+
 struct ArcGauge<Center: View>: View {
     let value: Double
     var tint: Color = macBlue
@@ -75,7 +78,9 @@ struct ArcGauge<Center: View>: View {
     }
     var body: some View {
         ZStack {
-            Canvas { ctx, size in
+            // Drawn off the main thread: twelve of these and the four spark lines redraw with every live reading, and the
+            // build's sample on CI found their drawing on the main thread during a turn (resize regate).
+            Canvas(rendersAsynchronously: GaugeDrawing.offMain) { ctx, size in
                 let r = min(size.width, size.height) / 2 - 1, c = CGPoint(x: size.width / 2, y: size.height / 2)
                 let lit = Int((min(max(value, 0), 1) * Double(ticks - 1)).rounded())
                 let start = 90 + (360 - sweep) / 2
@@ -100,7 +105,7 @@ struct SparkLine: View {
     var top: Double?
     var color: Color = macBlue
     var body: some View {
-        Canvas { ctx, size in
+        Canvas(rendersAsynchronously: GaugeDrawing.offMain) { ctx, size in
             guard values.count > 1 else { return }
             let hi = max(top ?? values.max() ?? 1, 0.0001)
             let step = size.width / CGFloat(values.count - 1)
