@@ -132,6 +132,19 @@ http.createServer((q, s) => {
   if (++slowReads % 7 === 0) return q.socket.destroy();
   setTimeout(() => macRoutes(q, s, liveMacStatus, liveMacLive), 2000 + (slowReads * 733) % 3000);
 }).listen(9031, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// A cold open over a slow link (9041): every reading takes 4 s to come, so the app opens on last time's figures and must
+// look fully live, never dimmed, while the first answer comes (Richard, 2026-11-12: "it was slightly darkened").
+http.createServer((q, s) => {
+  if (!/^\/api\/(live|status)/.test(q.url)) return macRoutes(q, s, liveMacStatus, liveMacLive);
+  setTimeout(() => macRoutes(q, s, liveMacStatus, liveMacLive), 4000);
+}).listen(9041, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
+// A Mac that doesn't answer for 40 s from GET /arm (9042), then answers again: nothing may be said before ~25 s.
+let deadUntil = 0;
+http.createServer((q, s) => {
+  if (q.url === '/arm') { deadUntil = Date.now() + 40000; return s.end('armed'); }
+  if (Date.now() < deadUntil && /^\/api\//.test(q.url)) return;   // never answered: the request hangs until the app gives up
+  macRoutes(q, s, liveMacStatus, liveMacLive);
+}).listen(9042, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac behind his link's speed, for the Screen's first picture as he waits for it (2026-11-07).
 http.createServer((q, s) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); s.end(q.url === '/api/status' ? macStatus : '{}'); }).listen(9011, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k, true));
 // The same Mac opened while its display is asleep or waking, as Screen Sharing really answers then (2026-11-10): a 2 x 2

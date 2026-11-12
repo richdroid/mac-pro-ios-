@@ -490,7 +490,7 @@ struct Notice: View {
         } else if let p = model.problem, !model.problemPutAway {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 8) {
-                    Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading)
+                    Label(p, systemImage: "wifi.exclamationmark").foregroundStyle(.orange).frame(maxWidth: .infinity, alignment: .leading)
                     // One ✕, full strength, a 44 pt target: put away, the card comes back with the next run of misses.
                     Button { withAnimation(Motion.quick) { model.problemPutAway = true } } label: {
                         Image(systemName: "xmark").font(.footnote.weight(.bold)).foregroundStyle(.primary).frame(width: 44, height: 30).contentShape(Rectangle())
@@ -518,7 +518,6 @@ struct Notice: View {
 struct Screen<Content: View>: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.paneLayout) private var panes
-    @State private var compact = false
     let tab: Int
     let title: String
     let listed: Bool
@@ -544,9 +543,6 @@ struct Screen<Content: View>: View {
             // One gap between the blocks on Status, where they sit on the page's own background.
             .listSectionSpacing(tab == 0 ? .custom(28) : .default)
             .scrollsUnder(side == .right ? 1 : 0)
-            // One column on the outer display: Status draws its Mac and tiles a little smaller (StatusTab).
-            .onGeometryChange(for: Bool.self) { side == .all && $0.size.width < 520 && $0.size.height < 760 } action: { compact = $0 }
-            .environment(\.statusCompact, compact)
             .keepsPlace("tab\(tab)", proxy)
             // No pull to refresh: every figure follows the Mac by itself (each second on Status, every 10 seconds
             // otherwise, and at once on opening a tab), so pulling only ever showed what was already there (Richard,
@@ -692,19 +688,11 @@ struct StateRow: View {
 }
 
 // The web dashboard's tile: a label, a big number and a line you can drag along to read the past.
-// Folded, Status's Mac and tiles are drawn a little smaller, so the Disk tile shows in the first screenful without a
-// scroll (designer, 2026-11-11). Only the outer display, read from the page's own size as laid out (one column, narrow
-// and short), so opening or folding mid-view follows; never the screen's fixed bounds, which said "folded" open too.
-private struct StatusCompactKey: EnvironmentKey { static let defaultValue = false }
-extension EnvironmentValues { var statusCompact: Bool { get { self[StatusCompactKey.self] } set { self[StatusCompactKey.self] = newValue } } }
 struct WebTile: View {
-    @Environment(\.statusCompact) private var compact
     let title: String, value: String, detail: String
     var spark: [Double] = []
     var top: Double?
     var read: (Double) -> String = { _ in "" }
-    // A share of a whole (the disk), drawn as a bar where the others have their line.
-    var fill: Double?
     var open: () -> Void = {}
     var body: some View {
         Button(action: open) {
@@ -715,19 +703,15 @@ struct WebTile: View {
                     Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
                 // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
-                // Never squeezed by the tile's height, only by its width: one figure size across the five tiles (designer, 2026-11-11).
-                Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).fixedSize(horizontal: false, vertical: true).contentTransition(.numericText())
+                Text(value).font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
                     // Not while a page slides on or off: Status comes back from a page with the readings it missed, and
                     // rolled them in mid-slide and after it (Richard's recording, 2026-11-10). They're simply there.
                     .animation(NavTransit.shared.active ? nil : .easeOut(duration: 0.2), value: value)
                 Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                if let fill {
-                    // Orange from 80 %, red from 90 % (designer, 2026-11-11).
-                    ProgressView(value: min(max(fill, 0), 1)).tint(fill > 0.9 ? .red : fill > 0.8 ? .orange : macBlue).padding(.top, 10)
-                } else if spark.count > 1 {
+                if spark.count > 1 {
                     // Only a picture here: a touch on it belongs to the page's scrolling or opens the full history.
                     SparkLine(values: spark, top: top)
-                        .frame(height: compact ? 30 : 42).padding(.top, compact ? 6 : 8)
+                        .frame(height: 42).padding(.top, 8)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -749,19 +733,13 @@ struct LiveTiles: View {
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net, h = store.live?.hist ?? s.hist, load = store.live?.load ?? s.load
         VStack(spacing: 12) {
             HStack(spacing: 12) {
-                // The CPU's heat on its tile, the one temperature he glances at now the dials are off Status by default
-                // (designer, 2026-11-11).
-                WebTile(title: "CPU", value: "\(cpu.total)%", detail: String(format: "Load %.2f", load.first ?? 0) + (s.temps?.first(where: { $0.name == "CPU" }).map { " · \(Heat.shown($0.c))°\(MacPrefs.celsius ? "C" : "F")" } ?? ""), spark: h.cpu, top: 100, read: { "\(Int($0))%" }, open: { model.history = .cpu })
+                WebTile(title: "CPU", value: "\(cpu.total)%", detail: String(format: "Load %.2f", load.first ?? 0), spark: h.cpu, top: 100, read: { "\(Int($0))%" }, open: { model.history = .cpu })
                 WebTile(title: "Memory", value: Format.bytes(mem.used), detail: "of \(Format.bytes(mem.total))", spark: h.mem, top: 100, read: { "\(Int($0))%" }, open: { model.history = .memory })
             }
             HStack(spacing: 12) {
                 WebTile(title: "Download", value: Format.rate(net.rxRate), detail: net.kind, spark: h.rx, read: Format.rate, open: { model.history = .download })
-                WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.kind, spark: h.tx, read: Format.rate, open: { model.history = .upload })
+                WebTile(title: "Upload", value: Format.rate(net.txRate), detail: net.ip, spark: h.tx, read: Format.rate, open: { model.history = .upload })
             }
-            // The disk across the foot of the grid, its free space at a glance, opening its history (Richard, 2026-11-11:
-            // "disk should have history and such").
-            WebTile(title: "Disk", value: "\(Format.bytes(s.disk.free)) free", detail: "\(Int((s.disk.used / max(s.disk.total, 1) * 100).rounded()))% used of \(Format.bytes(s.disk.total))", fill: s.disk.used / max(s.disk.total, 1), open: { model.history = .disk })
-                .place("disk")
         }
     }
 }
@@ -803,19 +781,18 @@ struct TempDials: View {
 
 struct Hero: View {
     @EnvironmentObject var model: AppModel
-    @Environment(\.statusCompact) private var compact
     let s: Status
     var body: some View {
         VStack(spacing: 2) {
-            Image("MacPro").resizable().scaledToFit().frame(height: compact ? 84 : 148)
+            Image("MacPro").resizable().scaledToFit().frame(height: 148)
                 // The glow fades to nothing inside the portrait's own height: a round one reached past the row's top and was
                 // cut there in a straight line.
-                .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: compact ? 84 : 148))
+                .background(EllipticalGradient(colors: [.white.opacity(0.18), .clear], center: .center, startRadiusFraction: 0.02, endRadiusFraction: 0.5).frame(width: 190, height: 148))
                 .accessibilityLabel("Mac Pro, Late 2013")
             Text("Mac Pro").font(.system(size: 28, weight: .bold)).padding(.top, 6)
             Text("Late 2013 · macOS \(s.macos) · up \(Format.span(s.uptime))").font(.subheadline).foregroundStyle(.secondary)
             // Claude's usage running out isn't the Mac being unwell: it has its banner row, and stays out of this.
-            HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale || !model.gotFresh, route: model.route, pulse: model.pulse) {
+            HeroChips(alerts: s.alerts?.filter { $0.id != OTAInstaller.alertID && $0.kind != "usage" }, healthBad: s.healthBad, offline: model.stale, fresh: model.gotFresh, route: model.route, pulse: model.pulse) {
                 model.tab = 5; model.macPage = .health
             }
             .padding(.top, 9)
@@ -833,6 +810,8 @@ struct HeroChips: View {
     // The parts that need a look: from the status when the Mac's bridge says, else what the app last read itself.
     var healthBad: Int?
     let offline: Bool
+    // The Mac has answered since launch. Until then the second chip says how old the kept figures are, not "Live".
+    var fresh = true
     let route: String
     @ObservedObject var pulse: Pulse
     @AppStorage(AlertDismissals.key) private var dismissedRaw = ""
@@ -844,10 +823,6 @@ struct HeroChips: View {
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).background(Color(white: 0.16), in: Capsule())
     }
     var parts: Int? { healthBad ?? summary.bad }
-    var bannerUp: Bool {
-        let put = AlertDismissals.set(dismissedRaw)
-        return (alerts ?? []).contains { $0.id != OTAInstaller.alertID && !put.contains($0.dismissKey) }
-    }
     var health: (Color, String) {
         func look(_ n: Int) -> String { "\(n) need\(n == 1 ? "s" : "") a look" }
         if let n = parts, n > 0 { return (.orange, look(n)) }
@@ -872,21 +847,27 @@ struct HeroChips: View {
             }
         } else {
             HStack(spacing: 8) {
-                // Not while the alerts banner is up just above: "3 need a look" said it again (designer, 2026-11-11).
-                if bannerUp {} else if (parts ?? 0) > 0 {
+                if (parts ?? 0) > 0 {
                     Button(action: openHealth) { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1, opens: true) }
                         .buttonStyle(FlatStyle()).accessibilityHint("Opens Everything on the Mac")
                 } else { chip({ Circle().fill(health.0).frame(width: 9, height: 9) }, health.1) }
-                // The dot beats each time the Mac answers.
-                chip({
-                    Circle().fill(Color.green).frame(width: 9, height: 9)
-                        .keyframeAnimator(initialValue: 1.0, trigger: pulse.beats) { dot, k in dot.scaleEffect(k).opacity(2 - k) } keyframes: { _ in
-                            KeyframeTrack {
-                                CubicKeyframe(1.45, duration: 0.15)
-                                CubicKeyframe(1.0, duration: 0.34)
+                if !fresh {
+                    // Last time's figures while the first answer comes: their age, quietly, never a dimmed page.
+                    TimelineView(.periodic(from: .now, by: 5)) { c in
+                        chip({ Circle().fill(Color.gray).frame(width: 9, height: 9) }, pulse.lastFresh.map { "Updated \(StaleLine.ago($0, now: c.date))" } ?? "Connecting")
+                    }
+                } else {
+                    // The dot beats each time the Mac answers.
+                    chip({
+                        Circle().fill(Color.green).frame(width: 9, height: 9)
+                            .keyframeAnimator(initialValue: 1.0, trigger: pulse.beats) { dot, k in dot.scaleEffect(k).opacity(2 - k) } keyframes: { _ in
+                                KeyframeTrack {
+                                    CubicKeyframe(1.45, duration: 0.15)
+                                    CubicKeyframe(1.0, duration: 0.34)
+                                }
                             }
-                        }
-                }, "Live · \(route)")
+                    }, "Live · \(route)")
+                }
             }
         }
     }
@@ -914,13 +895,10 @@ struct QuickActions: View {
     func face(_ id: String, _ icon: String, _ title: String, waits: Bool) -> some View {
         let dim = waits ? offlineDim : 1
         return VStack(spacing: 6) {
-            // In the accent at full strength, labels in the text's colour: grey on grey read as disabled (11-07 ruling;
-            // designer, 2026-11-11).
-            Image(systemName: done.contains(id) ? "checkmark" : icon).font(.system(size: 20)).foregroundStyle(macBlue.opacity(dim))
+            Image(systemName: done.contains(id) ? "checkmark" : icon).font(.system(size: 20)).foregroundStyle(.white.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 52, height: 52).background(Color(white: 0.16).opacity(dim), in: Circle())
-            // Two lines rather than shrunk: folded, "Copy from Mac" squeezed small against its neighbour.
-            Text(title).font(.footnote).foregroundStyle(.primary.opacity(dim)).multilineTextAlignment(.center).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Text(title).font(.caption2).foregroundStyle(.secondary.opacity(dim)).lineLimit(1).minimumScaleFactor(0.8)
             if let f = fails[id] {
                 Text(f).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                     .transition(.opacity)
@@ -977,14 +955,15 @@ struct QuickActions: View {
     }
 }
 
-// What Richard glances at, and nothing else (Richard, 2026-11-11: "status screen has too much on mac pro app now and
-// the notify setting should be in settings simplify"): anything wrong, the Mac and how it's doing, and its live figures.
-// The quick actions are Control's, the alerts switch is in Settings, and the disk, remote access, this Mac and top
-// processes cards are gone: what's wrong with any of them comes as an alert, and the rest has its own tab or page.
-// Temperatures show only when he turns them on in Settings.
 struct StatusTab: View {
     @EnvironmentObject var model: AppModel
-    @AppStorage("statusTemps") private var showTemps = false
+    // What the page shows, chosen in Settings.
+    @AppStorage("showQuick") private var showQuick = true
+    @AppStorage("showTemps") private var showTemps = true
+    @AppStorage("showDisk") private var showDisk = true
+    @AppStorage("showAccess") private var showAccess = true
+    @AppStorage("showThisMac") private var showThisMac = true
+    @AppStorage("showProcesses") private var showProcesses = true
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -992,22 +971,84 @@ struct StatusTab: View {
     let bare = EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)
     // The figures, dimmed while they're only the last ones the Mac sent.
     @ViewBuilder var graphics: some View {
-        // Also until the Mac has answered since launch: the cached figures are last time's, never shown as live (gate 3).
-        let dim = model.stale || !model.gotFresh ? 0.5 : 1
+        // Only once the Mac has been away a while (Reach): at launch last time's figures look as they are, never a dimmed
+        // page while the first answer comes over a slow link (Richard, 2026-11-12: "it was slightly darkened"). The chip
+        // says how old they are until then.
+        let dim = model.stale ? staleDim : 1
         Section { LiveTiles(s: s).opacity(dim).place("tiles") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         if showTemps, let temps = s.temps, !temps.isEmpty {
             Section("Temperatures") { TempDials(s: s).opacity(dim).place("temps") }
         }
+        if showDisk {
+            Section("Disk") {
+                Button { model.history = .disk } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("\(Format.bytes(s.disk.free)) free").font(.system(size: 26, weight: .semibold)).monospacedDigit()
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                        }
+                        Text("\(Format.bytes(s.disk.used)) used of \(Format.bytes(s.disk.total))").font(.footnote).foregroundStyle(.secondary)
+                        ProgressView(value: s.disk.used, total: s.disk.total).tint(s.disk.used / max(s.disk.total, 1) > 0.9 ? .red : macBlue).padding(.top, 8)
+                    }
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+                    .opacity(dim)
+                }
+                .buttonStyle(PressStyle())
+                .place("disk")
+            }
+        }
     }
-    // Folded, one column. Open, the Mac on the left and its figures on the right, all in view at once.
+    // The alerts switch is in Settings' Behaviour card (Richard, 2026-11-11: "the notify setting should be in settings").
+    @ViewBuilder var text: some View {
+        if showAccess {
+            Section("Remote access") {
+                StateRow(label: "Claude remote sessions", good: s.claude.remoteControl, value: s.claude.remoteControl ? "Running" : "Stopped").place("access-Remote control")
+                StateRow(label: "Desktop app", good: s.claude.desktop, value: s.claude.desktop ? "Running" : "Stopped").place("access-Desktop app")
+                StateRow(label: "Tailscale", good: s.tailscale.state == "Running", value: s.tailscale.state == "Running" ? "Connected" : "Off").place("access-Tailscale")
+                StateRow(label: "Public link", good: s.publicLinkActive, value: s.publicLinkActive ? "Active" : s.publicUrl.isEmpty ? "Off" : "Down").place("access-Public link")
+                StateRow(label: "Screen Sharing", good: s.sharing.vnc, value: s.sharing.vnc ? "On" : "Off").place("access-Screen Sharing")
+                StateRow(label: "SSH", good: s.sharing.ssh, value: s.sharing.ssh ? "On" : "Off").place("access-SSH")
+            }
+        }
+        if showThisMac {
+            Section("This Mac") {
+                LabeledContent("Model", value: s.model).place("mac-model")
+                LabeledContent("Processor", value: s.cpuModel.replacingOccurrences(of: "(R)", with: "").replacingOccurrences(of: "CPU ", with: "")).place("mac-cpu")
+                LabeledContent("Tailnet", value: s.tailscale.name ?? "Not signed in").place("mac-tailnet")
+                Button("Change connection") { model.signInSheet = true }.place("mac-change")
+            }
+        }
+        if showProcesses {
+            Section("Top processes") {
+                // Eight rows by place, not by process: the Mac's top eight change order and members with every reading, and
+                // rows keyed by process were taken out, put in and moved each time, a relayout of the list's very end
+                // (where a pull past the end rests) once a second. By place, a reading changes a row's words and nothing
+                // else; one line each, so no name can change a row's height either.
+                ForEach(Array(s.procs.prefix(8).enumerated()), id: \.offset) { i, p in
+                    LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)).lineLimit(1).place("proc-\(i)")
+                }
+                Button { model.processes = .cpu } label: {
+                    HStack { Text("All processes").foregroundStyle(.primary); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                        .contentShape(Rectangle())
+                }
+                .place("procs-all")
+            }
+        }
+    }
+    // Folded, one column in the approved order. Open, the machine and its actions on the left with the settings under
+    // them, and the figures on the right, where they're all in view at once.
     var body: some View {
         let _ = SwipeLog.mark("status tab body")
         if side != .right {
             // Updates waiting are the number on the Apps tab, not a problem with the Mac.
             if let alerts = s.alerts?.filter({ $0.id != OTAInstaller.alertID }), !alerts.isEmpty { AlertBanner(alerts: alerts) }
             Section { Hero(s: s).place("top") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden)
+            if showQuick { Section { QuickActions().place("quick") }.listRowBackground(Color.clear).listRowInsets(bare).listRowSeparator(.hidden) }
         }
         if side != .left { graphics }
+        if side != .right { text }
     }
 }
 
@@ -1128,7 +1169,7 @@ struct ClaudeTab: View {
     var body: some View {
         if side != .right {
             LimitsSection(s: s)
-            Section("Sessions (\(s.claude.sessions.count))") {
+            Section("Sessions on this Mac (\(s.claude.sessions.count))") {
                 if s.claude.sessions.isEmpty { Text("None running").foregroundStyle(.secondary) }
                 ForEach(s.claude.sessions) { x in
                     let row = SessionRow(session: x, working: restarting != nil && restarting == x.key, restart: { Task { await doRestart(x) } })
@@ -1330,7 +1371,7 @@ struct UsageDetail: View {
         Section("Tokens per hour, last 24 hours") {
             VStack(alignment: .leading) {
                 Text(Format.count(u.day.tokens)).font(.title2.weight(.semibold)).monospacedDigit()
-                Text("\(u.day.messages.formatted()) replies").font(.footnote).foregroundStyle(.secondary)
+                Text("\(u.day.messages.formatted()) replies on this Mac").font(.footnote).foregroundStyle(.secondary)
                 Chart(u.hours) { h in
                     BarMark(x: .value("Hour", Date(timeIntervalSince1970: h.t / 1000), unit: .hour), y: .value("Tokens", h.tokens), width: .ratio(0.7))
                         .foregroundStyle(macBlue).clipShape(RoundedRectangle(cornerRadius: 2))
@@ -1568,14 +1609,11 @@ struct UpgradeTab: View {
     }
     // The log only when it has something to read. "Update check finished. Nothing to do." on its own was success chatter
     // (designer, 2026-11-11). It's back while a check runs, and always when its last line is a failure.
+    // Always, as in build 276: the last check's lines are information even when they say nothing was needed (Richard,
+    // 2026-11-12: "there should be plenty of info and such everywhere").
     var logShown: Bool {
-        let last = s.upgrade.log.split(separator: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }).map(String.init) ?? ""
-        if last.isEmpty { return false }
-        if UpdateLog.matches(UpdateLog.bad, last) { return true }
-        if seal.0 == "arrow.triangle.2.circlepath" { return true }
-        return !UpdateLog.matches(Self.noop, last)
+        !s.upgrade.log.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-    static let noop = try? NSRegularExpression(pattern: #"nothing to do|up to date|no updates?\b"#, options: .caseInsensitive)
     var log: some View { VStack(alignment: .leading, spacing: 8) { header("Log"); UpdateLog(log: s.upgrade.log) } }
     // The Apps tab's section headings ("Updates", "On this iPhone"): bold, secondary, under the title rather than as loud
     // as it, in line with the text in the cards below. "Log" was white and semibold at the cards' very edge.
@@ -1768,10 +1806,6 @@ struct ControlTab: View {
 
     var body: some View {
         if side != .right {
-            // The quick actions, moved here from Status (Richard, 2026-11-11: "simplify"): the Screen's one door, the
-            // display, and the clipboard both ways.
-            Section { QuickActions().place("quick") }
-                .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden)
             Section {
                 if s.macLogin {
                     HStack(spacing: 8) {
@@ -1801,11 +1835,13 @@ struct ControlTab: View {
                     failLine("login")
                 }
             } header: { Text(s.macLogin ? "Mac login" : "Log in to this Mac") } footer: {
-                // Logged in, nothing: "It stays logged in after restarts." was reassurance (Never #32, designer 2026-11-11).
-                if !s.macLogin { Text("Used once to log in, then saved in the Mac’s keychain. Forget password removes it.") }
+                // As in build 276 (Richard, 2026-11-12: "there should be plenty of info and such everywhere and functions").
+                Text(s.macLogin ? "It stays logged in after restarts." : "Used once to log in, then saved in the Mac’s keychain. Forget password removes it.")
             }
-            // No Screen section: Status's Screen quick action is the one door, and the Screen teaches its own gestures
-            // (designer, 2026-11-11: keep one door).
+            // The Screen from Control too, with how it's worked, as in build 276 (Richard, 2026-11-12).
+            Section {
+                Button("Open Screen") { model.openScreen() }
+            } header: { Text("Screen") } footer: { Text("Tap to click · drag to move things · two fingers to scroll · pinch to zoom") }
             SendSection(route: model.route)
             Section {
                 Button { model.signingIn = true } label: { Label("Fill a saved login", systemImage: "key.fill") }
@@ -1874,7 +1910,7 @@ struct ControlTab: View {
             Section {
                 if s.tailscale.peers.isEmpty { Text("No other devices yet").foregroundStyle(.secondary) }
                 // The device's name as a word and whether it's there; its OS was chatter (designer, 2026-11-11).
-                ForEach(s.tailscale.peers) { p in StateRow(label: appleCased(p.name), good: p.online, value: p.online ? "Connected" : "Offline") }
+                ForEach(s.tailscale.peers) { p in StateRow(label: appleCased(p.name), good: p.online, value: p.os.isEmpty ? (p.online ? "Connected" : "Offline") : "\(p.os) · \(p.online ? "Connected" : "Offline")") }
                 if !s.publicUrl.isEmpty, let u = URL(string: s.publicUrl) { Link("Open public link", destination: u) }
             } header: { Text("Remote access") } footer: {
                 if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }

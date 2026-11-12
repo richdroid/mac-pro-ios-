@@ -250,7 +250,8 @@ final class AppModel: ObservableObject {
             Task { [weak self] in
                 while !Task.isCancelled {
                     if self?.screenOpen != true { await self?.refresh() }
-                    let wait = self?.problem != nil ? min(MacPrefs.fullEvery, 3) : MacPrefs.fullEvery
+                    // Asked again every 2 s while it isn't answering, said or not (as the Chumby's app does, 2026-11-12).
+                    let wait = self?.problem != nil || Reach.shared.failing ? min(MacPrefs.fullEvery, 2) : MacPrefs.fullEvery
                     try? await Task.sleep(nanoseconds: UInt64(wait * 1e9))
                 }
             },
@@ -258,13 +259,13 @@ final class AppModel: ObservableObject {
         ]
     }
     func stop() { loops.forEach { $0.cancel() }; loops = [] }
-    // One missed answer from the Mac: unreachable once they've run 8 s with nothing between.
-    private func missed() {
-        guard Reach.shared.miss(), problem == nil else { return }
+    // One missed answer from the Mac: unreachable once they've run 25 s with nothing between (Reach). The last readings
+    // stay on screen through it and after: blanked, the tiles fell back to the older full status (Richard, 2026-11-12).
+    private func missed(since started: Date) {
+        guard Reach.shared.miss(started: started), problem == nil else { return }
         problem = Phrase.macAway
         // A new run of misses says it again, whatever was put away before.
         problemPutAway = false
-        liveStore.live = nil
     }
 
     func refreshLive() async {
@@ -274,6 +275,7 @@ final class AppModel: ObservableObject {
         // rather than holding an old number over newer ones.
         // Missed once, the last reading stays: it's dropped only when the Mac counts as unreachable (missed).
         let l: LiveStatus
+        let asked = Date()
         do { l = try await api.live() }
         catch {
             // An answer this build can't read is the Mac there, as it is for the full status. It counted as a miss, once
@@ -281,7 +283,7 @@ final class AppModel: ObservableObject {
             // and back again at the next, for as long as that lasted (CI 1b744be against a stand-in Mac with no live
             // figures: the red card on and off every 10 s; the brief's "cause unproven" flash).
             if Task.isCancelled { return }
-            if error is DecodingError { Reach.shared.hit(); SwipeLog.note("live unread") } else { SwipeLog.note("live missed: \(error)"); missed() }
+            if error is DecodingError { Reach.shared.hit(); SwipeLog.note("live unread") } else { SwipeLog.note("live missed: \(error)"); missed(since: asked) }
             return
         }
         Reach.shared.hit()
@@ -292,6 +294,7 @@ final class AppModel: ObservableObject {
 
     func refresh() async {
         if address.isEmpty { if !needsSignIn { needsSignIn = true }; return }
+        let asked = Date()
         do {
             let data = try await api.statusData()
             // It answered: reachable, whatever it said. Fresh only once what it said has been read (below).
@@ -346,7 +349,7 @@ final class AppModel: ObservableObject {
         } catch {
             lastData = nil
             SwipeLog.note("status missed: \(error)")
-            missed()
+            missed(since: asked)
         }
     }
 
@@ -472,22 +475,26 @@ final class Drafts: ObservableObject {
 }
 
 // Whether the Mac counts as unreachable yet, for the model and for each page that reads from the Mac on its own: a run
-// of failures 8 s long, with nothing answered between, and not in the first 6 s after the app came back to the front.
+// of failures 25 s long from the first failing request's start, with nothing answered between. Over Tailscale on
+// cellular the first answers after opening can take many seconds; 8 s said "Can't reach the Mac" at a Mac that was there
+// (Richard, 2026-11-12; the Chumby app's rule, 2026-11-11). Until then nothing is said and nothing dims.
 @MainActor final class Reach {
     static let shared = Reach()
+    static let after: TimeInterval = 25
     private var since: Date?
     private var count = 0
     private(set) var foregroundAt = Date()
+    // Something has gone unanswered since the last answer: asked again sooner, said nothing yet.
+    var failing: Bool { since != nil }
     func cameForward() { foregroundAt = Date(); since = nil; count = 0 }
     func hit() { since = nil; count = 0 }
-    // A miss; true once they add up to unreachable: three unanswered in a row as well as 8 s. Time alone let two misses
-    // ten seconds apart say it, and a phone too busy to run for a while say it with one (the build's films, 2026-11-10:
-    // "can't reach" flashing against a Mac that was answering).
-    func miss() -> Bool {
+    // A miss; true once they add up to unreachable: two unanswered in a row as well as 25 s, and never inside the first
+    // 25 s back in front.
+    func miss(started: Date = Date()) -> Bool {
         let now = Date()
-        if since == nil { since = now }
+        if since == nil { since = max(started, foregroundAt) }
         count += 1
-        return count >= 3 && now.timeIntervalSince(since!) >= 8 && now.timeIntervalSince(foregroundAt) >= 6
+        return count >= 2 && now.timeIntervalSince(since!) >= Self.after && now.timeIntervalSince(foregroundAt) >= Self.after
     }
 }
 // The same rule for a page's own reading (a history, the processes, a session's screen): its misses, counted from its
@@ -500,6 +507,6 @@ struct MissClock {
         let now = Date()
         if since == nil { since = now }
         count += 1
-        return count >= 3 && now.timeIntervalSince(since!) >= 8 && now.timeIntervalSince(Reach.shared.foregroundAt) >= 6
+        return count >= 2 && now.timeIntervalSince(since!) >= Reach.after && now.timeIntervalSince(Reach.shared.foregroundAt) >= Reach.after
     }
 }
