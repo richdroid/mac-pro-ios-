@@ -73,20 +73,14 @@ struct FlickHand {
     // moving already as the row lifted is a scroll come late, never a throw; and its own speed as it left is the fling.
     var real: [(t: Double, p: CGPoint)]?
     init(_ rules: Rules) { self.rules = rules }
-    // Already on its way within a beat of the lift, by the finger's own clock: it began as a scroll. Where the finger was
-    // at `hold + beat` (between the samples either side), against where it came down.
+    // Already on its way within a beat of the lift, by the finger's own clock: it began as a scroll. Any sample up to
+    // `hold + beat` (and the 40 ms after, as the screen reports moves no more often than that) more than twice `still`
+    // from where it came down. Never interpolated: a finger that reports no moves is resting (interpolating across a
+    // rest read a flick begun at 0.45 s as moving at 0.38 s, and put it back: CI ff4b315, easeflick open upright).
     static func rushed(_ real: [(t: Double, p: CGPoint)], _ rules: Rules) -> Bool {
         guard rules.hold > 0, let first = real.first else { return false }
-        let at = rules.hold + rules.beat
-        var p = real.last!.p
-        if let j = real.firstIndex(where: { $0.t > at }) {
-            if j == 0 { p = first.p } else {
-                let a = real[j - 1], b = real[j]
-                let f = CGFloat((at - a.t) / max(0.001, b.t - a.t))
-                p = CGPoint(x: a.p.x + (b.p.x - a.p.x) * f, y: a.p.y + (b.p.y - a.p.y) * f)
-            }
-        }
-        return hypot(p.x - first.p.x, p.y - first.p.y) > rules.still * 2
+        let at = rules.hold + rules.beat + 0.04
+        return real.contains { $0.t <= at && hypot($0.p.x - first.p.x, $0.p.y - first.p.y) > rules.still * 2 }
     }
     // The fastest upward stretch of at least 30 ms ending in the last 150 ms, in points a second (negative is up).
     static func speed(_ samples: [(t: Double, p: CGPoint)]) -> CGVector {
@@ -324,6 +318,10 @@ extension FlickHand {
                         steps: [(0, .down(200, 400)), (0.3, .held), (0.85, .move(200, 345)), (0.86, .up(200, 336))],
                         want: .thrown, what: "held, then a flick easing to a stop, handled late: sent",
                         real: feel(200, 400, from: 0.45, by: 0, -64, ms: 150, ease: true, rest: 0.03)))
+        s.append(Script(name: "rest-then-flick-no-samples-at-rest", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held), (0.8, .move(200, 370)), (0.81, .move(200, 330)), (0.82, .up(200, 309))],
+                        want: .thrown, what: "still for 0.45 s with no moves reported, then a 91 pt flick: sent (a rest is never read as a slow move)",
+                        real: [(0, CGPoint(x: 200, y: 400)), (0.48, CGPoint(x: 200, y: 370)), (0.51, CGPoint(x: 200, y: 330)), (0.54, CGPoint(x: 200, y: 309))]))
         s.append(Script(name: "carry-busy-frame", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held), (0.8, .move(200, 300)), (1.0, .move(200, 160)), (1.5, .up(200, 160))],
                         want: .thrown, what: "held, carried 240 pt up and rested: sent",
