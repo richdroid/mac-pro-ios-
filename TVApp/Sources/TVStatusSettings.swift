@@ -10,7 +10,7 @@ enum SettingsRoute: Hashable { case root }
 
 // A tab's page pushing onto its own stack when asked from outside a link (Settings asked for as tab 9). An existential, so
 // NavigationPath.append opens it to the concrete type its destination is registered for (never AnyHashable).
-struct PagePush { var push: (any Hashable) -> Void = { _ in } }
+struct PagePush { var push: (any Hashable) -> Void = { _ in }; var pop: () -> Void = {} }
 private struct PagePushKey: EnvironmentKey { static let defaultValue = PagePush() }
 extension EnvironmentValues { var pagePush: PagePush { get { self[PagePushKey.self] } set { self[PagePushKey.self] = newValue } } }
 
@@ -38,6 +38,18 @@ struct StatusTab: View {
                 case .settings: ManageSettingsView(store: store)
                 case .connection: ConnectionView()
                 }
+            }
+            // For the build's film where touches can't reach (the cover display): Settings pushed and popped, then TV
+            // settings pushed and popped, at a finger's pace.
+            .task {
+                guard UserDefaults.standard.string(forKey: "pose") == "settingsscript" else { return }
+                func wait(_ s: Double) async { try? await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000)) }
+                await wait(5); pagePush.push(SettingsRoute.root)
+                await wait(3); pagePush.pop()
+                await wait(3); pagePush.push(SettingsRoute.root)
+                await wait(3); pagePush.push(ManagePage.settings)
+                await wait(3); pagePush.pop()
+                await wait(3); pagePush.pop()
             }
             .onChange(of: model.settingsAsked, initial: true) { _, n in
                 guard n > seen else { return }
