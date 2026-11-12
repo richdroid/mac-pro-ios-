@@ -70,8 +70,11 @@ jobs:
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 5 -pose settingsnav -swipeLog YES
             sleep 9
-            tap gear; sleep 4; tap back; sleep 4
-            tap gear; sleep 4; tap tvrow; sleep 5; tap back; sleep 4; tap back; sleep 4
+            # The gear and Back read once, with Status at rest: the gear's item reports again as the bar changes.
+            local G B; G=$(spot gear); B=$(spot back); echo "gear $G back $B"
+            at() { if [ -n "$2" ]; then echo "tap $1 at $2"; $D "$DEVICE" touch $2 0.08 || echo "touch $1 failed"; else echo "no position for $1"; fi; }
+            at gear "$G"; sleep 4; at back "$B"; sleep 4
+            at gear "$G"; sleep 4; tap tvrow; sleep 5; at back "$B"; sleep 4; at back "$B"; sleep 4
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-settingsnav$x-end.png
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true

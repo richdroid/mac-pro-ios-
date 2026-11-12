@@ -444,7 +444,7 @@ struct Page<C: View>: View {
                     if !alwaysInline {
                         // Where the heading's words rest at the top of the page: the other tabs keep theirs for Status,
                         // which sets its own against it (where it would rest before the bar's room is taken back).
-                        MovingTitle(title: title, scrolled: scrolled) { y in
+                        MovingTitle(title: title, scrolled: scrolled, room: barRoom) { y in
                             guard !sizeKey.isEmpty else { return }
                             if showsBar { if abs(y - titleY) > 0.5 { titleY = y } }
                             else { TabTop.shared.set(sizeKey, y) }
@@ -454,9 +454,6 @@ struct Page<C: View>: View {
                         }
                     }
                 }
-                // Where the heading's words are measured from: the page's own root, the same room on every tab, and
-                // inside the move below, so the move never feeds back into the measure.
-                .coordinateSpace(name: "pageRoot")
                 // Status' page, heading and all, moved up by the bar's room as one: a move, not a new layout, so nothing
                 // under it measures itself again; its foot reaches down as far.
                 .padding(.bottom, -barRoom)
@@ -526,7 +523,9 @@ extension EnvironmentValues { var pageScroll: PageScrollY? { get { self[PageScro
 private struct MovingTitle: View {
     let title: String
     let scrolled: PageScrollY
-    // Where the words rest (their top, in the page root's space) while the page is at its top.
+    // How far the page is moved up (Status' bar room): added back, so the measure is where the words would rest unmoved.
+    var room: CGFloat = 0
+    // Where the words rest on screen, unmoved, while the page is at its top.
     var rests: (CGFloat) -> Void = { _ in }
     // What the display already keeps clear above the page: the clock's row open upright; nothing folded or open flat,
     // where the clock is on the side and the name sat 13 pt from the glass (Richard, 2026-11-09, Playing folded: "too
@@ -535,7 +534,8 @@ private struct MovingTitle: View {
     var body: some View {
         let y = max(0, scrolled.y)
         PageHeading(title)
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("pageRoot")).minY } action: { y in if scrolled.y <= 0.5 { rests(y) } }
+            // The move this frame was laid out with goes with the reading, never a later one, so the two can't chase.
+            .onGeometryChange(for: CGFloat.self) { [room] in $0.frame(in: .global).minY + room } action: { y in if scrolled.y <= 0.5 { rests(y) } }
             .padding(.horizontal, 20).padding(.top, max(4, 13 - above)).padding(.bottom, 8)
             .background { Color.clear.ignoresSafeArea(edges: .top).onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { above = $0 } }
             .offset(y: -y)
