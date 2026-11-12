@@ -11,15 +11,22 @@ guard a.count >= 3, let img = NSImage(contentsOfFile: a[1]), let cg = img.cgImag
 let want = a[2].lowercased()
 let nth = a.count > 3 ? Int(a[3]) ?? 1 : 1
 let minX = a.count > 4 ? Double(a[4]) ?? 0 : 0
-let req = VNRecognizeTextRequest()
-req.recognitionLevel = .accurate
-req.usesLanguageCorrection = false
-// A runner has no GPU to spare: on the CPU, and any failure said.
-req.usesCPUOnly = true
-do { try VNImageRequestHandler(cgImage: cg).perform([req]) } catch { FileHandle.standardError.write("vision: \(error)\n".data(using: .utf8)!) }
-FileHandle.standardError.write("lines: \((req.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " | "))\n".data(using: .utf8)!)
+// Accurate first, then fast, then the first revision: a runner's Vision has failed the newer models ("nilError").
+func read(_ level: VNRequestTextRecognitionLevel, revision: Int?) -> [VNRecognizedTextObservation] {
+    let req = VNRecognizeTextRequest()
+    req.recognitionLevel = level
+    req.usesLanguageCorrection = false
+    if let revision { req.revision = revision }
+    do { try VNImageRequestHandler(cgImage: cg).perform([req]) } catch { FileHandle.standardError.write("vision \(level.rawValue) \(revision ?? 0): \(error)\n".data(using: .utf8)!) }
+    return req.results ?? []
+}
+var found = read(.accurate, revision: nil)
+if found.isEmpty { found = read(.fast, revision: nil) }
+if found.isEmpty { found = read(.fast, revision: VNRecognizeTextRequestRevision1) }
+if found.isEmpty { found = read(.accurate, revision: VNRecognizeTextRequestRevision1) }
+FileHandle.standardError.write("lines: \(found.compactMap { $0.topCandidates(1).first?.string }.joined(separator: " | "))\n".data(using: .utf8)!)
 var hits: [(Double, Double)] = []
-for o in req.results ?? [] {
+for o in found {
     guard let t = o.topCandidates(1).first?.string else { continue }
     let s = t.lowercased().trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "✓◇⌃⌄"))
         .trimmingCharacters(in: .whitespaces)

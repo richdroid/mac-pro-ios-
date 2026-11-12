@@ -759,8 +759,11 @@ struct StaysAtTop: ViewModifier {
                     holder.inset = new.inset
                     let layout = old.inset != new.inset || old.size != new.size
                     if old.inset != new.inset { SwipeLog.note("list inset \(Int(old.inset))→\(Int(new.inset)) offset \(Int(new.y)) wasTop \(holder.atTop)") }
-                    if layout || PagePlace.turning {
+                    // Only a turn's layout (or a new inset) is put right: outside a turn, a page that resizes while he
+                    // scrolls is his, never pulled back to its top (b1b7ad8 pulled a scrolled day back once).
+                    if PagePlace.turning || old.inset != new.inset {
                         if holder.atTop { settle(proxy) }
+                    } else if layout {
                     } else {
                         holder.atTop = abs(new.y) < 1 || levelled()
                         if holder.atTop { learn() }
@@ -780,6 +783,10 @@ struct StaysAtTop: ViewModifier {
             for wait in [0.0, 0.12, 0.4, 0.9, 1.6, 2.7] {
                 if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1e9)) } else { await Task.yield() }
                 guard !Task.isCancelled, holder.atTop else { return }
+                #if canImport(UIKit)
+                // His finger on the list ends it: from then on where it is, is his.
+                if let sv = holder.scroll, sv.isTracking || sv.isDragging || sv.isDecelerating { holder.atTop = false; return }
+                #endif
                 putBack(proxy)
             }
             learn()
@@ -804,7 +811,8 @@ struct StaysAtTop: ViewModifier {
         #if canImport(UIKit)
         guard !PagePlace.turning, let sv = holder.scroll, !sv.isTracking, !sv.isDecelerating, let g = titleGap() else { return }
         SwipeLog.note("title gap \(String(format: "%.1f", g)) rest \(TitleRest.gap.map { String(format: "%.1f", $0) } ?? "-") inset ui \(Int(sv.adjustedContentInset.top)) swiftui \(Int(holder.inset)) offset \(Int(sv.contentOffset.y))")
-        guard g >= 0, g <= 20 else { return }
+        // The probe sits mid-row: a title at rest reads 28 pt; one left 35 pt low after a turn read 63 (gate B3).
+        guard g >= 0, g <= 40 else { return }
         if TitleRest.gap.map({ g < $0 - 0.25 }) ?? true { TitleRest.gap = g; SwipeLog.note("title rest \(String(format: "%.1f", g))") }
         #endif
     }

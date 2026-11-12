@@ -1299,6 +1299,8 @@ struct SoundRows: View {
             .opacity(kind == "beep" ? 1 : 0)
             .disabled(kind != "beep")
         }
+        // Where the row is, for the build's films (their taps open its menu by this when words can't be read).
+        .pageLog("soundrow")
         if let f = model.failed("test") { FailNote(text: f) }
         if kind == "stream" && model.state.streams.isEmpty { Text("Add a radio stream on the Sounds tab first.").foregroundStyle(.secondary) }
         if kind == "pandora" && stations.isEmpty { Text("No Pandora stations on the Chumby yet.").foregroundStyle(.secondary) }

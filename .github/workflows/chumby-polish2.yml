@@ -121,10 +121,24 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$1 /tmp/ft.png > /dev/null 2>&1
             local P; P=$(/tmp/findtext /tmp/ft.png "$2" ${4:-1} ${3:-0} 2>> dist/findtext.log) && { echo "tap '$2' at $P"; $D "$DEVICE" touch $P; } || echo "no '$2' on screen ($?)" | tee -a dist/findtext.log
           }
+          # When words can't be read: the sound row's place from the app's own log (soundrow, and the tab's frame and insets
+          # for the screen's size), and a menu item's place from the row, the checked item sitting on the row and the
+          # others 42 pt apart with a 28 pt section heading between kinds (Tones: Beep 0, Bells, Chime; Jazz Radio 154;
+          # Morning Mix 224; Silent 274).
+          menupos() { case "$1" in Beep) echo 0;; Bells) echo 42;; Chime) echo 84;; "Jazz Radio") echo 154;; "Morning Mix") echo 224;; Silent) echo 274;; *) echo 0;; esac; }
+          rowtap() { # value fraction across the row, item offset in pt below the row's middle
+            local C; C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) || { echo "no container"; return; }
+            local P; P=$(awk -v fx=$1 -v dy=$2 '/ soundrow x /{r=$0} / tab [0-9] x /{t=$0} END{ if (r=="" || t=="") exit 1
+              split(r,a," "); split(a[8],rs,"x"); split(t,b," "); split(b[9],ts,"x")
+              sw=b[5]+ts[1]+substr(b[14],2); sh=b[7]+ts[2]+substr(b[13],2)
+              printf "%.4f %.4f", (a[4]+rs[1]*fx)/sw, (a[6]+rs[2]/2+dy)/sh }' "$C/Library/Caches/swipe-log.txt") && { echo "row tap at $P"; $D "$DEVICE" touch $P; } || echo "no sound row in the log"
+          }
           pick() { # display, current value, item, still name
-            tapt $1 "$2" 0.5; sleep 2
+            tapt $1 "$2" 0.5; grep -q "no '$2'" dist/findtext.log 2>/dev/null && [ "$(tail -1 dist/findtext.log)" = "no '$2' on screen (1)" ] && rowtap 0.8 0
+            sleep 2
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$4-menu.png
-            tapt $1 "$3" 0.25; sleep 3
+            tapt $1 "$3" 0.25; [ "$(tail -1 dist/findtext.log 2>/dev/null)" = "no '$3' on screen (1)" ] && rowtap 0.75 $(( $(menupos "$3") - $(menupos "$2") + 10 ))
+            sleep 3
             xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$4.png
           }
           soundfilm() { # display, name
