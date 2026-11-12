@@ -68,8 +68,9 @@ jobs:
           }
           set_() { # display, suffix
             local d=$1 x=$2
-            # A throwaway first recording: the first one of a run came out stretched, with no launch in it.
-            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force /tmp/warm.mp4 > /dev/null 2>&1 & REC=$!; sleep 3; kill -INT $REC; wait $REC
+            # A throwaway first film: the first one of a run came out stretched, with no launch in it. (A bare 3 s
+            # recording here hung the step: interrupted before it had started, it never ended.)
+            film $d warm$x 8 gone -tab 0
             film $d open-blip-home$x 22 blip -tab 0
             film $d open-blip-alarms$x 22 blip -tab 2
             film $d open-gone-home$x 60 gone -tab 0
