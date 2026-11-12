@@ -78,7 +78,7 @@ jobs:
           sleep 2; node ci/tv-checks.js || true
           shots() { # display, file suffix
             for T in 0 1 2 3 4; do
-              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T -mac http://127.0.0.1:9000/mac
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
               sleep 7
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$T$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || echo "Chumby tab $T was not running"
@@ -302,7 +302,7 @@ jobs:
             done
             xcrun simctl ui "$DEVICE" appearance dark
             for T in 0 1 2 3 4; do
-              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T -mac http://127.0.0.1:9000/mac
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
               sleep 7
               xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$T-dark$2.png
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
@@ -395,7 +395,7 @@ jobs:
             for M in light dark; do
               xcrun simctl ui "$DEVICE" appearance $M
               for T in 0 1 2 3 4; do
-                xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T -mac http://127.0.0.1:9000/mac
+                xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab $T
                 sleep 7
                 xcrun simctl io "$DEVICE" screenshot --display=3 dist/chumby-$T-$M-portrait.png
                 xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
