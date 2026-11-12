@@ -356,6 +356,9 @@ struct KeepsPlace: ViewModifier {
     let page: String
     let proxy: ScrollViewProxy
     private struct Reading: Equatable { var y: CGFloat; var end: CGFloat }
+    // This list's own end (of two panes, each has its own), kept off SwiftUI's state so reading it redraws nothing.
+    private final class Own { var end: CGFloat = 0 }
+    @State private var own = Own()
     func body(content: Content) -> some View {
         content
             .environment(\.placePage, page)
@@ -369,6 +372,7 @@ struct KeepsPlace: ViewModifier {
             } action: { old, new in
                 let k = PlaceKeeper.page(page)
                 if old.end != new.end { k.grew = Date() }
+                own.end = new.end
                 k.y = new.y
                 // Only his own scrolling, in the layout the place belongs to: never the new layout settling, nor the restore.
                 if !k.settling, k.layout == "\(panes)\(compactWindow)" { k.scrolled = new.y > 8 }
@@ -390,6 +394,13 @@ struct KeepsPlace: ViewModifier {
                     try? await Task.sleep(nanoseconds: 50_000_000)
                 }
                 guard !Task.isCancelled else { return }
+                // A list that all but fits has no place to keep: open flat, Apps' left pane scrolls 27 pt, its rows all in
+                // sight. Restored to his row it went to its end, then sprang back 20 pt as a row below settled (CI 871244b).
+                // It stays at its top; his place stays noted for the next posture.
+                if own.end < 80 {
+                    SwipeLog.note("place kept, not restored \(page): end \(Int(own.end)) (\(layout))")
+                    k.pending = false; k.restoring = Date(); return
+                }
                 SwipeLog.note("place restore \(page) to \(top.base) (\(layout))")
                 var still = Transaction(); still.disablesAnimations = true
                 withTransaction(still) { proxy.scrollTo(top, anchor: .top) }

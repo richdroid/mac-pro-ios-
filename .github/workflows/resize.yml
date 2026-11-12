@@ -186,7 +186,7 @@ jobs:
           xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           # The first launch open flat after an install: nothing about the fold kept yet (the warm-up was open portrait).
           # QUICK: only the turn and fold films (the rest unchanged since CI 90476df, which filmed them all).
-          QUICK=1
+          QUICK=
           [ -z "$QUICK" ] && { posture 3 -portrait 0.5; popfilm pop-portrait 3 0.065 0.049; }
           $D "$DEVICE" rotate 3 || true; sleep 5
           [ -z "$QUICK" ] && { posture 3 -open 0.75; popfilm pop-open 3 0.948 0.222; }
