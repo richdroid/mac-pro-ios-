@@ -50,6 +50,110 @@ import UIKit
     }
 }
 
+// The pick's picture on its way into the Remote, moved by Core Animation in the render server: it leaves the row (or the
+// card) the moment he lets go and travels on its own spring however long the main thread is busy bringing the Remote up
+// under it (CI: a 440-670 ms turn at the pick; the SwiftUI move it replaces held the row still that long, then ran at 11
+// frames a second). It lands as the Remote's own stand-in looks (the poster framed on its soft ground) and gives way to it.
+@MainActor enum RenderFlight {
+    #if os(iOS)
+    private static var ground: UIView?
+    private static var poster: UIView?
+    private static var card: UIView?
+    private static var wide = false
+    #endif
+    static var flying: Bool {
+        #if os(iOS)
+        return ground != nil
+        #else
+        return false
+        #endif
+    }
+    #if os(iOS)
+    private static var window: UIWindow? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        return scene?.keyWindow ?? scene?.windows.first
+    }
+    // Where the framed poster sits in the Remote's picture: its height less 14 pt each side, 2:3, centred.
+    private static func inner(_ to: CGRect) -> CGRect {
+        if wide { return to }
+        let h = max(0, to.height - 28), w = (h * 2 / 3).rounded()
+        return CGRect(x: to.midX - w / 2, y: to.minY + 14, width: w, height: h)
+    }
+    #endif
+    // Up at `from` (window points): the thing in his hand as it looks there (a still of it), the poster over it.
+    static func launch(from: CGRect, image: TVImage?, soft: TVImage?, tint: Color?, wide isWide: Bool) {
+        #if os(iOS)
+        cancel()
+        guard let w = window, from.width > 4, from.height > 4 else { return }
+        wide = isWide
+        let g = UIView(frame: from)
+        g.backgroundColor = .black
+        g.layer.cornerRadius = 14; g.layer.cornerCurve = .continuous; g.clipsToBounds = true
+        g.alpha = 0
+        g.isUserInteractionEnabled = false
+        if let soft {
+            let v = UIImageView(image: soft)
+            v.contentMode = .scaleAspectFill; v.alpha = 0.7
+            v.frame = g.bounds; v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            g.addSubview(v)
+        } else {
+            g.backgroundColor = UIColor(tint ?? Color(white: 0.15)).withAlphaComponent(0.7)
+        }
+        // The row or card itself, as it is on screen, so the very first frame of the flight is what was under the finger.
+        let c = w.resizableSnapshotView(from: from, afterScreenUpdates: false, withCapInsets: .zero)
+        c?.frame = from
+        c?.isUserInteractionEnabled = false
+        let p = UIImageView(image: image)
+        p.contentMode = .scaleAspectFill
+        p.frame = from
+        p.layer.cornerRadius = 14; p.layer.cornerCurve = .continuous; p.clipsToBounds = true
+        p.alpha = image == nil ? 0 : 1
+        p.isUserInteractionEnabled = false
+        w.addSubview(g)
+        if let c { w.addSubview(c) }
+        w.addSubview(p)
+        ground = g; poster = p; card = c
+        // The still of the row gives way to the poster as it leaves.
+        if image != nil, let c { c.alpha = 1; UIView.animate(withDuration: 0.12, delay: 0, options: [.curveEaseOut]) { c.alpha = 0 } }
+        #endif
+    }
+    // Toward the Remote's picture, `to` in window points; again later, from wherever it is, if that place moves.
+    static func aim(_ to: CGRect, first: Bool) {
+        #if os(iOS)
+        guard let g = ground, let p = poster, to.width > 20 else { return }
+        let end = inner(to)
+        let anim = {
+            g.frame = to; g.alpha = 1; g.layer.cornerRadius = TVLook.card
+            p.frame = end; p.layer.cornerRadius = wide ? TVLook.card : 8
+            if let c = card { c.frame = end; if p.alpha == 0 { c.alpha = 0 } }
+        }
+        if first {
+            // goRemote's own spring (response 0.36, damping 0.86).
+            UIView.animate(springDuration: 0.36, bounce: 0.14, initialSpringVelocity: 0, delay: 0, options: [.allowUserInteraction], animations: anim)
+        } else {
+            UIView.animate(springDuration: 0.3, bounce: 0.1, initialSpringVelocity: 0, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState], animations: anim)
+        }
+        // Sent to the render server now, not at the end of this turn: the turn that brings the Remote up is the long one.
+        CATransaction.flush()
+        #endif
+    }
+    // Landed: the Remote's own picture is coming up under it; it goes as that one arrives.
+    static func land(after delay: Double = 0.1) {
+        #if os(iOS)
+        let views = [ground, poster, card].compactMap { $0 }
+        ground = nil; poster = nil; card = nil
+        UIView.animate(withDuration: 0.15, delay: delay, options: [.curveEaseOut]) { views.forEach { $0.alpha = 0 } } completion: { _ in views.forEach { $0.removeFromSuperview() } }
+        #endif
+    }
+    static func cancel() {
+        #if os(iOS)
+        [ground, poster, card].compactMap { $0 }.forEach { $0.removeFromSuperview() }
+        ground = nil; poster = nil; card = nil
+        #endif
+    }
+}
+
 // One way to send anything to the TV: the thing's own page, its choices on it (an episode, then a stream), and the choice
 // he makes is the flick. Picking a stream, by a tap or by holding it and flicking it up, is the send: the request leaves
 // at once, and its picture goes straight into the Remote's own picture of the TV in one short move, the Remote coming up
@@ -318,6 +422,15 @@ struct FlickScreen: View {
     @State private var tabBefore: Int?
     @State private var restoredTab: Int?
     @State private var warmBack: Int?
+    // The pick's picture is flying in the render server (RenderFlight), over a still of this page (ScreenVeil): the
+    // SwiftUI flyer and this page's own dissolve stand down.
+    @State private var renderFlown = false
+    @State private var renderAimed = false
+    // Where the Remote's picture landed last on a screen this size, by kind of pick.
+    var slotKey: String {
+        let size = (held ?? flickFrame).size
+        return "\(Int(size.width))x\(Int(size.height))\(video ? "v" : "")"
+    }
     // Where this screen sits on the display, to place things measured elsewhere.
     @State private var flickFrame = CGRect.zero
     // Held where it was as the Remote's tab comes up under it, so the tab changing can't lay it out again mid-move.
@@ -505,12 +618,23 @@ struct FlickScreen: View {
                 // now, in the same frame the page is first drawn: the render server runs the fade, so the main thread's
                 // turns after it (the page's tasks, its pictures) can't hold it half way.
                 SwipeLog.note("flick open")
-                ScreenVeil.lift()
+                // A list on its way that's nearly here (asked for at the press) is waited for, briefly, so the page fades up
+                // whole rather than with its placeholder rows then a pop (CI ba7cee1: the list landed 260 ms after the fade).
+                if step == .streams && video && streams.isEmpty && !noStreams {
+                    Task {
+                        let until = Date().addingTimeInterval(0.35)
+                        while streams.isEmpty && !noStreams && Date() < until { try? await Task.sleep(nanoseconds: 16_000_000) }
+                        if !streams.isEmpty { SwipeLog.note("flick list in"); await Self.settleFrames() }
+                        ScreenVeil.lift(0.28)
+                    }
+                } else { ScreenVeil.lift(0.28) }
                 onScreen = true
                 upAt = Date().addingTimeInterval(0.24)
                 if !model.flickArrived { var q = Transaction(); q.disablesAnimations = true; withTransaction(q) { model.flickArrived = true } }
                 // The Remote built once, unseen, ahead of the first pick, so the pick's move never waits on it.
                 Task {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    for _ in 0..<60 where ScreenVeil.up { try? await Task.sleep(nanoseconds: 25_000_000) }
                     try? await Task.sleep(nanoseconds: 300_000_000)
                     await warmRemote()
                 }
@@ -536,7 +660,7 @@ struct FlickScreen: View {
                     // In and out with the backdrop: it opens over the app, not as a sheet sliding up.
                     .opacity(arrived ? 1 : 0)
                     // The picked thing's picture on its way into the Remote, over the page as it dissolves.
-                    if flown && !screenOut { flyer }
+                    if flown && !screenOut && !renderFlown { flyer }
                 }
                 .frame(width: box.width, height: box.height)
                 .coordinateSpace(name: "flick")
@@ -720,8 +844,11 @@ struct FlickScreen: View {
                 ToolbarItem(placement: .navigation) { Button { go(previous) } label: { Label("Back", systemImage: "chevron.left") } }
             } else if footFade {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(role: .cancel) { if !flown { leave() } } label: { Label("Close", systemImage: "xmark") }
-                        .tint(.white).foregroundStyle(.white)
+                    // The glyph itself is white: given as a label with a role, the bar drew it grey (CI ba7cee1).
+                    Button { if !flown { leave() } } label: {
+                        Image(systemName: "xmark").foregroundStyle(Color.white).accessibilityLabel("Close")
+                    }
+                    .tint(.white)
                 }
             } else {
                 ToolbarItem(placement: .navigation) { Button { if !flown { leave() } } label: { Label("Back", systemImage: "chevron.left") } }
@@ -1432,6 +1559,7 @@ struct FlickScreen: View {
     func leave(restoreMood: Bool = true) {
         if !toRemote { backToThrownFrom() }
         leaving = true; closing = true
+        if RenderFlight.flying { RenderFlight.land(after: 0) }
         if restoreMood, let prior = priorMood { model.mood = prior }
         // The whole screen, bar included, goes as one under a still of it that fades off what's under it (ScreenVeil), in
         // the render server, so the pages coming back can't hold the fade.
@@ -1457,6 +1585,8 @@ struct FlickScreen: View {
         withTransaction(q) { model.tab = 0 }
         // The turn that put it up built it; the next one takes it down again.
         try? await Task.sleep(nanoseconds: 20_000_000)
+        // Where its picture is, for the first pick's flight to aim at from the start.
+        if let s = model.mirrorSlot, s.width > 20 { model.rememberSlot(s, "warm" + slotKey) }
         // Picked in the meantime: the Remote is where it's going, so it stays.
         if !flown { withTransaction(q) { model.tab = back } }
         await Self.settleFrames()
@@ -1484,6 +1614,24 @@ struct FlickScreen: View {
         }
         // Held where it is first: the tab changing under it lays the space around it out again.
         if flickFrame.width > 0 { held = flickFrame }
+        // The picture leaves his finger now, in the render server, over a still of this page; the Remote comes up under
+        // the still in the long turn that follows, and the still fades off it once that turn is over (goRemote).
+        if flies, flyFrom.width > 4 {
+            ScreenVeil.cover()
+            RenderFlight.launch(from: flyFrom.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), image: heldImage, soft: softImage, tint: tint,
+                                wide: heldImage.map(PosterOnBlur.isWide) ?? (shown.kind == "youtube"))
+            if let aim = model.mirrorSlot.flatMap({ $0.width > 20 ? $0 : nil }) ?? model.rememberedSlot(slotKey) ?? model.rememberedSlot("warm" + slotKey) {
+                RenderFlight.aim(aim, first: true); renderAimed = true
+            } else if flickFrame.width > 0 {
+                // Nowhere known yet (the first pick ever on a screen this size): up toward the top, where the picture is,
+                // and on to the real place the moment the Remote says it.
+                let w = flickFrame.width * 0.8
+                RenderFlight.aim(CGRect(x: flickFrame.midX - w / 2, y: flickFrame.minY + 70, width: w, height: w * 9 / 16), first: true); renderAimed = true
+            }
+            renderFlown = true
+            var under = Transaction(); under.disablesAnimations = true
+            withTransaction(under) { fadingOut = true }
+        }
         // The start is the model's from the pick: the Remote lays out under this screen with its poster, its bar's place
         // and its line already there, so nothing comes in late once it's in sight.
         if !alreadyOn, video || target.image != nil || flies {
@@ -1525,14 +1673,18 @@ struct FlickScreen: View {
         // launcher capture shows behind a starting film (r24).
         if model.starting == nil, !model.mirrorLive { model.setMirror(true) }
         Task {
+            // The long turn that put the Remote up under the still is over: the still fades off it, in the render server.
+            if renderFlown {
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                SwipeLog.note("flick under")
+                ScreenVeil.lift(0.22)
+            }
             // The same place on two reads in a row, so the move aims at where the picture settles, not at its first layout.
             // Known already from the last visit to the Remote, the move starts at once; the loop below follows any late change.
             var slot: CGRect? = model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil }, seen: CGRect?
             // The launch's first pick, the Remote not built yet: where a pick like this one last landed on this screen,
             // so the move starts as soon as any other, and follows the real place below once the Remote gives it. Only
             // with neither (the first pick ever in this posture) is the Remote waited for.
-            let size = (held ?? flickFrame).size
-            let slotKey = "\(Int(size.width))x\(Int(size.height))\(video ? "v" : "")"
             var remembered = false
             if slot == nil, let m = model.rememberedSlot(slotKey) { slot = m; remembered = true }
             for _ in 0..<(slot == nil ? 40 : 0) {
@@ -1544,6 +1696,7 @@ struct FlickScreen: View {
             }
             if slot == nil { slot = seen }
             guard let s = slot else {
+                RenderFlight.cancel(); ScreenVeil.lift(0.2)
                 model.flickHandoff = false; model.keepMood(until: item.art); model.mood = tint; handOverArt()
                 leave(restoreMood: false); Task { await model.load() }; return
             }
@@ -1564,6 +1717,7 @@ struct FlickScreen: View {
             // The bar stays (a tap on it does nothing once flown) and goes with the whole screen, disc and glyph together.
             withAnimation(.easeOut(duration: 0.2)) { arrived = false }
             withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { toRemote = true; moveT = 1 }
+            if renderFlown { RenderFlight.aim(remoteSlot.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), first: !renderAimed); renderAimed = true }
             // The Remote's picture can still settle as its page lays out, so the move keeps aiming at where it is now,
             // place and size, until the spring has run its course and the picture has stopped moving. Every change of aim
             // is animated, never a jump mid-spring.
@@ -1580,6 +1734,7 @@ struct FlickScreen: View {
                     if moved {
                         still = 0; aimedAt = Date()
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { remoteSlot = next }
+                        if renderFlown { RenderFlight.aim(s, first: false) }
                     } else { still += 1 }
                 }
                 if Date().timeIntervalSince(start) > 0.36 && still >= 3 && Date().timeIntervalSince(aimedAt) >= 0.3 { break }
@@ -1596,6 +1751,7 @@ struct FlickScreen: View {
             // and dimmed just after landing (open flat, +0.15 s).
             withTransaction(landed) { landedOnRemote = true; model.flickChoosing = false }
             withAnimation(.easeOut(duration: 0.15)) { model.flickHandoff = false }
+            if renderFlown { RenderFlight.land() }
             try? await Task.sleep(nanoseconds: 150_000_000)
             var swap = Transaction(); swap.disablesAnimations = true
             withTransaction(swap) { screenOut = true }
