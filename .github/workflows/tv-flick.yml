@@ -176,9 +176,13 @@ jobs:
         run: |
           # In three parts: one zip of every film was over 500 MB and its upload failed.
           (cd dist && zip -q ../flick.zip *.png *.log *.txt 2>/dev/null; zip -q ../flick-pose.mp4.zip tv-flick*.mp4 2>/dev/null; zip -q ../flick-finger.mp4.zip tv-finger*.mp4 2>/dev/null; true)
+          set +e
           ls -la *.zip
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view tv-flick >/dev/null 2>&1 || gh release create tv-flick --prerelease --title "TV flick checks" --notes "Work in progress on the flick: hands, shots and films from the tv-flick-everywhere branch."
+          # Whatever was made goes up, the status last so a reader never finds it before the films.
           for f in flick.zip flick-pose.mp4.zip flick-finger.mp4.zip status.txt; do
-            for i in 1 2 3; do gh release upload tv-flick "$f" --clobber && break; sleep 15; done
+            [ -f "$f" ] || { echo "no $f"; continue; }
+            for i in 1 2 3; do gh release upload tv-flick "$f" --clobber && break; echo "upload of $f failed ($i)"; sleep 15; done
           done
+          true
