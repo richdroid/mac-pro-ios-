@@ -456,12 +456,6 @@ struct Page<C: View>: View {
                             .padding(.top, -barRoom)
                     }
                 }
-                // The window's size, which keys the heading's height (TabTop).
-                .background {
-                    if !alwaysInline {
-                        Color.clear.onGeometryChange(for: String.self) { "\(Int($0.size.width))x\(Int($0.size.height))" } action: { k in if k != sizeKey { sizeKey = k } }
-                    }
-                }
                 .toolbar(alwaysInline || showsBar ? .automatic : .hidden, for: .navigationBar)
                 // Lets the page push a page of its own when asked from elsewhere (Settings, from a link or tab 9).
                 .environment(\.pagePush, PagePush(push: { path.append($0) }))
@@ -475,6 +469,12 @@ struct Page<C: View>: View {
         }
         .topShade()
         .background { Ambience() }
+        // The tab's whole room, which keys where its heading rests (TabTop): the same for every tab in one posture.
+        .background {
+            if !alwaysInline {
+                Color.clear.onGeometryChange(for: String.self) { "\(Int($0.size.width.rounded()))x\(Int($0.size.height.rounded()))" } action: { k in if k != sizeKey { sizeKey = k } }
+            }
+        }
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
         // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
         .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
