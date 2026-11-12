@@ -86,8 +86,11 @@ enum ChumbyPalette {
     // Calendar alarms' own colour, a coral from the sea, so they never look like his own alarms in the accent blue.
     static func cal(_ dark: Bool) -> Color { dark ? hex(0xff9a76) : hex(0xc4472a) }
     static func oct(_ dark: Bool) -> Color { dark ? hex(0x79bbff) : hex(0x2c5bae) }
-    // The website's blue; in the dark only as much lighter as it needs to read against the deep sea (3.8:1).
-    static func word(_ dark: Bool) -> Color { dark ? hex(0x3b78c3) : hex(0x0a57b4) }
+    // Taking something out (a row's minus): the system's red, a touch softer on the dark cards.
+    static func remove(_ dark: Bool) -> Color { dark ? hex(0xff6961) : hex(0xe5332a) }
+    // The website's blue; in the dark the octopus's own light blue, as clear as he is on the deep sea (the mid blue it was,
+    // 3.8:1, sank into it: designer, 11-11).
+    static func word(_ dark: Bool) -> Color { dark ? hex(0x79bbff) : hex(0x0a57b4) }
 }
 
 // A still version of the web app's sea: soft colour blobs.

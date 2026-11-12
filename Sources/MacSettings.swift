@@ -11,12 +11,7 @@ struct MacSettings: View {
     @AppStorage("fullEvery") private var fullEvery = 10.0
     @AppStorage("apiBudget") private var apiBudget = 200.0
     @AppStorage("startTab") private var startTab = -1
-    @AppStorage("showQuick") private var showQuick = true
-    @AppStorage("showTemps") private var showTemps = true
-    @AppStorage("showDisk") private var showDisk = true
-    @AppStorage("showAccess") private var showAccess = true
-    @AppStorage("showThisMac") private var showThisMac = true
-    @AppStorage("showProcesses") private var showProcesses = true
+    @AppStorage("statusTemps") private var statusTemps = false
     @State private var connecting = false
     @State private var customBudget = false
     @State private var budgetDraft = 200.0
@@ -26,79 +21,94 @@ struct MacSettings: View {
         let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
         return "\(v) (\(b))"
     }
+    @Environment(\.paneLayout) private var panes
+    // The page's name as its first line, going up with the page, as on every other tab; held blank over the right pane so
+    // both panes' first cards start level.
+    func heading(_ shown: Bool) -> some View {
+        Section { PaneHeading(title: "Settings", shown: shown) }
+            .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+    }
+    // How the app looks and what it shows: on the left open flat.
+    @ViewBuilder var looks: some View {
+        // All seven in view, spread evenly across the row, never scrolled or cut off.
+        Section("Colour") {
+            HStack(spacing: 0) {
+                ForEach(MacAccent.allCases) { a in
+                    Button { withAnimation(.snappy) { accent = a.rawValue } } label: {
+                        Circle().fill(a.color).frame(width: 32, height: 32)
+                            .overlay { if accent == a.rawValue { Image(systemName: "checkmark").font(.footnote.weight(.bold)).foregroundStyle(.black.opacity(0.7)) } }
+                            .overlay { Circle().strokeBorder(.white.opacity(accent == a.rawValue ? 0.9 : 0), lineWidth: 2).padding(-4) }
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(a.name).accessibilityAddTraits(accent == a.rawValue ? .isSelected : [])
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        // Units, how often figures refresh, and the API budget the Claude tab's dial fills against: everything about how the
+        // figures read, in one card. The budget was a section of one row, drawn by the system as a capsule beside the
+        // rounded cards (designer, 2026-11-11: merge lone rows into the section they belong with).
+        Section("Figures") {
+            // Status shows the Mac and its live figures; its temperatures only when asked for here (Richard, 2026-11-11:
+            // "simplify"). The page's other switches went with the cards they hid.
+            Toggle("Temperatures on Status", isOn: $statusTemps)
+            Picker("Temperature unit", selection: $celsius) { Text("Fahrenheit").tag(false); Text("Celsius").tag(true) }
+            Picker("Live figures", selection: $liveEvery) { Text("Every second").tag(1.0); Text("Every 2 seconds").tag(2.0); Text("Every 5 seconds").tag(5.0) }
+            Picker("Everything else", selection: $fullEvery) { Text("Every 10 seconds").tag(10.0); Text("Every 30 seconds").tag(30.0); Text("Every minute").tag(60.0) }
+            // The API dial on the Claude tab fills against this. Picked, not typed, so there's no keyboard to get stuck with.
+            Picker("Monthly API budget", selection: Binding(get: { apiBudget }, set: { v in
+                if v < 0 { budgetDraft = apiBudget; customBudget = true } else { apiBudget = v }
+            })) {
+                ForEach(Self.budgets, id: \.self) { Text(LimitsSection.money($0)).tag($0) }
+                if !Self.budgets.contains(apiBudget) { Text(LimitsSection.money(apiBudget)).tag(apiBudget) }
+                Text("Custom…").tag(-1.0)
+            }
+            .alert("Monthly API budget", isPresented: $customBudget) {
+                TextField("Dollars", value: $budgetDraft, format: .number).keyboardType(.decimalPad)
+                Button("Save") { if budgetDraft > 0 { apiBudget = budgetDraft } }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("In dollars, for the API dial on the Claude tab.") }
+            .id("claude")
+        }
+    }
+    // How it behaves and where it connects: on the right open flat.
+    @ViewBuilder var behaves: some View {
+        Section {
+            Picker("Open on", selection: $startTab) {
+                Text("The last tab used").tag(-1)
+                Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("macOS").tag(4); Text("Control").tag(5)
+            }
+            Toggle("Haptics", isOn: $haptics)
+            Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
+            AlertSettings()
+        } header: { Text("Behaviour") } footer: { Text(AlertSettings.note) }
+        Section {
+            LabeledContent("Address", value: URL(string: model.address)?.host ?? "Not set")
+            Button("Change connection") { connecting = true }
+        } header: { Text("Connection") } footer: {
+            // A note under the last card, not a card of one row of its own.
+            Text("Mac Pro \(version)").monospacedDigit()
+        }
+    }
+    // Open flat, a pane each side of the hinge like the other tabs: one column ran every card, the colour swatches too,
+    // across the fold (designer, 2026-11-11).
+    func list(_ side: Side) -> some View {
+        List {
+            heading(side != .right)
+            if side != .right { looks }
+            if side != .left { behaves }
+        }
+        .scrollsUnder(side == .right ? 1 : 0)
+    }
     var body: some View {
         NavigationStack {
             ScrollViewReader { proxy in
-            List {
-                // The page's name as its first line, going up with the page, as on every other tab.
-                Section {
-                    Text("Settings").font(.largeTitle.weight(.bold)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, TopEdge.statusBar < 20 ? 14 : 0)
-                        .accessibilityAddTraits(.isHeader)
-                }
-                .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
-                // All seven in view, spread evenly across the row, never scrolled or cut off.
-                Section("Colour") {
-                    HStack(spacing: 0) {
-                        ForEach(MacAccent.allCases) { a in
-                            Button { withAnimation(.snappy) { accent = a.rawValue } } label: {
-                                Circle().fill(a.color).frame(width: 32, height: 32)
-                                    .overlay { if accent == a.rawValue { Image(systemName: "checkmark").font(.footnote.weight(.bold)).foregroundStyle(.black.opacity(0.7)) } }
-                                    .overlay { Circle().strokeBorder(.white.opacity(accent == a.rawValue ? 0.9 : 0), lineWidth: 2).padding(-4) }
-                                    .frame(maxWidth: .infinity, minHeight: 44)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(a.name).accessibilityAddTraits(accent == a.rawValue ? .isSelected : [])
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                Section {
-                    Toggle("Quick actions", isOn: $showQuick)
-                    Toggle("Temperatures", isOn: $showTemps)
-                    Toggle("Disk", isOn: $showDisk)
-                    Toggle("Remote access", isOn: $showAccess)
-                    Toggle("This Mac", isOn: $showThisMac)
-                    Toggle("Top processes", isOn: $showProcesses)
-                } header: { Text("Status page") } footer: { Text("The Mac Pro, its live figures and any alerts always show.") }
-                Section("Units and updates") {
-                    Picker("Temperatures", selection: $celsius) { Text("Fahrenheit").tag(false); Text("Celsius").tag(true) }
-                    Picker("Live figures", selection: $liveEvery) { Text("Every second").tag(1.0); Text("Every 2 seconds").tag(2.0); Text("Every 5 seconds").tag(5.0) }
-                    Picker("Everything else", selection: $fullEvery) { Text("Every 10 seconds").tag(10.0); Text("Every 30 seconds").tag(30.0); Text("Every minute").tag(60.0) }
-                }
-                // The API dial on the Claude tab fills against this. Picked, not typed, so there's no keyboard to get stuck with.
-                Section("Claude") {
-                    Picker("Monthly API budget", selection: Binding(get: { apiBudget }, set: { v in
-                        if v < 0 { budgetDraft = apiBudget; customBudget = true } else { apiBudget = v }
-                    })) {
-                        ForEach(Self.budgets, id: \.self) { Text(LimitsSection.money($0)).tag($0) }
-                        if !Self.budgets.contains(apiBudget) { Text(LimitsSection.money(apiBudget)).tag(apiBudget) }
-                        Text("Custom…").tag(-1.0)
-                    }
-                    .alert("Monthly API budget", isPresented: $customBudget) {
-                        TextField("Dollars", value: $budgetDraft, format: .number).keyboardType(.decimalPad)
-                        Button("Save") { if budgetDraft > 0 { apiBudget = budgetDraft } }
-                        Button("Cancel", role: .cancel) {}
-                    } message: { Text("In dollars, for the API dial on the Claude tab.") }
-                    .id("claude")
-                }
-                OTASettings()
-                Section {
-                    Picker("Open on", selection: $startTab) {
-                        Text("The last tab used").tag(-1)
-                        Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("macOS").tag(4); Text("Control").tag(5)
-                    }
-                    Toggle("Haptics", isOn: $haptics)
-                    Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
-                } header: { Text("Behaviour") }
-                Section {
-                    LabeledContent("Address", value: URL(string: model.address)?.host ?? "Not set")
-                    Button("Change connection") { connecting = true }
-                } header: { Text("Connection") }
-                Section { LabeledContent("Version", value: version) }
+            Group {
+                if panes { FoldSplit { list(.left) } right: { list(.right) } }
+                else { list(.all) }
             }
-            .scrollsUnder()
             .task {
                 // The build's shots of the lower half, with the budget picker, and of its Custom alert.
                 let pose = UserDefaults.standard.string(forKey: "pose") ?? ""
@@ -113,7 +123,7 @@ struct MacSettings: View {
             .topEdge()
             .navigationTitle("Settings")
             .toolbarVisibility(.hidden, for: .navigationBar)
-            .sheet(isPresented: $connecting) { SignInView().environmentObject(model) }
+            .screenCover(isPresented: $connecting) { SignInView().environmentObject(model) }
             // New intervals take hold straight away rather than after the current wait.
             .onChange(of: liveEvery) { _, _ in model.start() }
             .onChange(of: fullEvery) { _, _ in model.start() }

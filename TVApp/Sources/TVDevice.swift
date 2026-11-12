@@ -26,15 +26,27 @@ private struct Spark: View {
                 Path { p in p.move(to: CGPoint(x: 0, y: g.size.height - 1)); p.addLine(to: CGPoint(x: g.size.width, y: g.size.height - 1)) }
                     .stroke(.white.opacity(0.14), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [2, 5]))
             } else {
-            Path { p in
+            // Stood on the tile's foot: the line with its area filled down to the foot, so a low reading (CPU) and a high
+            // one (memory) read as levels on one floor, never as two lines floating at different heights (gate 276).
+            let line = Path { p in
                 guard values.count > 1 else { return }
                 p.move(to: point(0))
                 for i in 1..<values.count { p.addLine(to: point(i)) }
             }
-            .stroke(TVLook.accent, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+            let area = line.foot(g.size)
+            area.fill(LinearGradient(colors: [TVLook.accent.opacity(0.28), TVLook.accent.opacity(0.04)], startPoint: .top, endPoint: .bottom))
+            line.stroke(TVLook.accent, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
             }
         }
         .frame(height: 38)
+    }
+}
+private extension Path {
+    // The line closed down to the foot of a box this size, for the area under it.
+    func foot(_ size: CGSize) -> Path {
+        var p = self
+        p.addLine(to: CGPoint(x: size.width, y: size.height)); p.addLine(to: CGPoint(x: 0, y: size.height)); p.closeSubpath()
+        return p
     }
 }
 private struct Tile: View {
@@ -50,10 +62,12 @@ private struct Tile: View {
             Text(settled ? value : "—").font(.system(size: 26, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7).contentTransition(.numericText())
                 .opacity(settled ? 1 : breathe ? 0.75 : 0.35)
                 .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { breathe = true } }
-            Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-            Spark(values: spark, top: top).padding(.top, 8)
+            if !detail.isEmpty { Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
+            // Each tile's spark on its foot, whatever the lines above it hold, so sibling tiles' sparks share one line.
+            Spacer(minLength: 8)
+            Spark(values: spark, top: top)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(14)
         .tvCard(16)
     }
@@ -135,8 +149,9 @@ struct DeviceTab: View {
                 Tile(title: "Memory", value: bytes(i.memUsed), detail: "of \(bytes(i.memTotal))", spark: i.hist.mem, top: 100)
             }
             GridRow {
-                Tile(title: "Download", value: rate(i.rxRate), detail: i.wifi.isEmpty ? "Wi-Fi" : i.wifi, spark: i.hist.rx)
-                Tile(title: "Upload", value: rate(i.txRate), detail: i.ip, spark: i.hist.tx)
+                Tile(title: "Download", value: rate(i.rxRate), detail: "", spark: i.hist.rx)
+                // No subtitle on either: the box's IP address was plumbing, and the home network isn't news (gate 276).
+                Tile(title: "Upload", value: rate(i.txRate), detail: "", spark: i.hist.tx)
             }
         }
         // Out of touch, the last numbers stay but step back, so they aren't read as live.
@@ -154,7 +169,7 @@ struct DeviceTab: View {
             Divider()
             HStack { Text("Temperature"); Spacer(); Text("\(Int((i.tempC * 9 / 5 + 32).rounded()))°F").foregroundStyle(.secondary).monospacedDigit() }.padding(14)
             Divider()
-            HStack { Text("Resolution"); Spacer(); Text(i.resolution).foregroundStyle(.secondary) }.padding(14)
+            HStack { Text("Resolution"); Spacer(); Text(i.resolution.replacingOccurrences(of: "x", with: " × ")).foregroundStyle(.secondary) }.padding(14)
             Divider()
             // The television behind the box, as HDMI-CEC tells it: a row and its rule, or nothing while that isn't known.
             TelevisionRow(status: model.status)

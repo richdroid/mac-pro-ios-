@@ -479,6 +479,23 @@ struct ProgressPlaceholder: View {
 }
 
 // A round glass button that does something here, rather than press a key on the TV.
+// The transport's and the pad's keys: glass tinted with the page's own wall colour, one value for every key on the page,
+// so a row reads as one set over any art and belongs to the page (purple glass on Mint, the poster's tone on a film).
+// Clear glass took whatever lay under each key, so over a film ⏮ looked red and ⏭ purple; a neutral charcoal made them
+// dead holes on Mint's purple (gate 276, item 10, the designer's ruling).
+struct KeyGlass: ViewModifier {
+    @Environment(TVModel.self) var model
+    @ObservedObject private var store = AmbienceStore.shared
+    func body(content: Content) -> some View {
+        let wall = model.mood ?? store.band ?? Color(hex: 0x4A1A5C)
+        // 80 %: at half, a wall of several colours still came through each key (third pass, the YouTube wall).
+        // And a solid disc of that colour under the key's face, so no wall, however busy, reaches through (fourth pass).
+        let tone = wall.mix(with: .black, by: 0.45)
+        content.background(Circle().fill(tone))
+            .glassEffect(.regular.tint(tone.opacity(0.8)).interactive(), in: Circle())
+    }
+}
+extension View { func keyGlass() -> some View { modifier(KeyGlass()) } }
 struct GlassButton: View {
     @Environment(TVModel.self) var model
     let icon: String, label: String
@@ -488,7 +505,7 @@ struct GlassButton: View {
         Button { model.tick(); action() } label: {
             Image(systemName: icon).font(.system(size: size * 0.36, weight: .medium)).frame(width: size, height: size).contentShape(Circle())
         }
-        .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Circle()).accessibilityLabel(label)
+        .buttonStyle(.plain).keyGlass().accessibilityLabel(label)
     }
 }
 
@@ -683,8 +700,12 @@ struct EpisodePicker: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
-                    // Whole names: up to three lines, never cut to "Fi…" (r26).
-                    Text(e.title).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
+                    // Which one, always in the same place over its name, as the Apple TV app sets them; the name whole,
+                    // up to three lines, never cut to "Fi…" (r26), or nothing when it has none of its own (gate 276).
+                    // With no name of its own, the number is its title (third pass: a caption alone read as a missing title).
+                    let number = e.season == 0 ? "Special \(e.episode)" : "Episode \(e.episode)"
+                    if e.ownName != nil { Text(number).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                    Text(e.ownName ?? number).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                     // What it's about, in one line, so the row says more than its number.
                     if let about, !about.isEmpty { Text(about).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
@@ -989,11 +1010,28 @@ struct PlayingVideo: View {
     let ended: Bool
     @State private var still: String?
     @State private var about: String?
+    // The episode's own name from the show's list, when the TV's line has none ("S1 E2" alone) or a placeholder.
+    @State private var ownName: (season: Int, episode: Int, name: String)?
     @State private var pictureCap: CGFloat = 300
     var series: NextUp.Series? { session.pkg == "com.stremio.one" ? nextUp.series : nil }
     var body: some View {
         let name = session.showName
-        let episode = session.episodeLine
+        // An episode: which one in the small line over the title ("Sample Series · S1 E2"), and the episode's own name as
+        // the title, whole (up to three lines, never cut: r26), as its row names it. With no name of its own, the show's
+        // name is the title and "S1 E2" the line over it (gate 276: the hero said "Episode 2", its row "Episode 2: The
+        // One…"; then, joined into one title, the name was cut to "…Long We…").
+        let se = session.seasonEpisode
+        let own: String? = {
+            guard session.episodeLine != nil, let se else { return nil }
+            // Only the name of this very episode: a moment after a change, the list may still be the last one's.
+            if let o = ownName, o.season == se.season, o.episode == se.episode { return o.name }
+            // Else whatever the TV's own line names it, after its "S1 E2 · ".
+            guard let line = session.episodeLine, let r = line.range(of: " · ") else { return nil }
+            return Wording.episodeName(String(line[r.upperBound...]), number: se.episode)
+        }()
+        let which = se.map { "S\($0.season) E\($0.episode)" }
+        let over: String? = session.episodeLine == nil ? nil : own != nil ? [name, which ?? ""].filter { !$0.isEmpty }.joined(separator: " · ") : name.isEmpty ? nil : which
+        let title = session.episodeLine == nil ? name : own ?? (name.isEmpty ? which ?? "" : name)
         VStack(alignment: .leading, spacing: 14) {
             // One 16:9 picture, never taller than about 38 % of the page, so the title, the bar and the keys are all on the
             // first screen (r19: a portrait poster filled the page and pushed everything under the fold). The episode's
@@ -1031,10 +1069,11 @@ struct PlayingVideo: View {
             VStack(alignment: .leading, spacing: 3) {
                 // The show above, the episode as the title; a film is its own title. A video is its own title too, its
                 // channel under it (r35: the channel was the title and the video's name the small line over it).
-                if let episode, !name.isEmpty { Text(name).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1) }
-                Text(episode ?? name).font(.title2.weight(.bold)).lineLimit(2)
+                if let over { Text(over).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1) }
+                Text(title).font(.title2.weight(.bold)).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 if let channel = session.channel { Text(channel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
-                if let about { Text(about).font(.footnote).foregroundStyle(.secondary).lineLimit(panes ? 4 : 3).padding(.top, 4) }
+                // A tap opens the rest of the words in place, and closes them again.
+                if let about { ExpandingText(text: about, lines: panes ? 4 : 3, font: .footnote).padding(.top, 4) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentTransition(.opacity)
@@ -1042,8 +1081,8 @@ struct PlayingVideo: View {
             Transport(ended: ended).padding(.top, 2)
         }
         .task(id: series) {
-            guard let s = series, let m = await NextUp.meta(s.imdb), let e = m.episodes.first(where: { $0.id == s.current }) else { still = nil; about = nil; return }
-            withAnimation(.easeOut(duration: 0.25)) { still = e.thumb }
+            guard let s = series, let m = await NextUp.meta(s.imdb), let e = m.episodes.first(where: { $0.id == s.current }) else { still = nil; about = nil; ownName = nil; return }
+            withAnimation(.easeOut(duration: 0.25)) { still = e.thumb; ownName = e.ownName.map { (e.season, e.episode, $0) } }
             let info = await SeriesInfo.load(s.imdb)
             withAnimation(.easeOut(duration: 0.25)) { about = info?.about[e.id] }
         }

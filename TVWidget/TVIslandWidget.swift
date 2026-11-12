@@ -261,15 +261,26 @@ struct IslandLockCard: View {
         .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, stale ? 14 : 8)
     }
 }
+// The small island's cover (compact and minimal): dimmed while paused, which is how the small island says so. No glyph
+// for it: a pause mark there read as a key, and nothing there can be pressed (Richard, 2026-11-10).
+struct IslandSmallCover: View {
+    let state: TVIslandAttributes.ContentState
+    let stale: Bool
+    var height: CGFloat
+    var body: some View {
+        IslandCover(state: state, height: height, square: true)
+            .opacity(!stale && !state.playing ? 0.4 : 1)
+            .accessibilityValue(!stale && !state.playing ? "Paused" : "")
+    }
+}
 // The small island, either side of the camera: the cover, and what it's doing. Playing, the time left, counting down
-// by itself; paused, the pause mark. Never a key's glyph: nothing here can be pressed, and "⏸" while it played read as
-// paused. Out of date, the cover alone.
+// by itself; paused, nothing (the cover beside it is dimmed). Never a key's glyph: nothing here can be pressed, and "⏸"
+// read as a key. Out of date, the cover alone.
 struct IslandCompactTrailing: View {
     let state: TVIslandAttributes.ContentState
     let stale: Bool
     var body: some View {
-        if stale { EmptyView() }
-        else if !state.playing { Image(systemName: "pause.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white.opacity(0.7)).accessibilityLabel("Paused") }
+        if stale || !state.playing { EmptyView() }
         else if let a = state.start, let b = state.end, b > a {
             Text(timerInterval: a...b, countsDown: true).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(TVLook.accent)
                 .multilineTextAlignment(.trailing).lineLimit(1).frame(width: (state.length ?? 0) >= 3600 ? 56 : 40, alignment: .trailing)
@@ -294,11 +305,11 @@ struct TVIslandWidget: Widget {
                 DynamicIslandExpandedRegion(.trailing) { IslandOpenTrailing(state: context.state, stale: context.isStale) }
                 DynamicIslandExpandedRegion(.bottom) { IslandOpenBottom(state: context.state, stale: context.isStale) }
             } compactLeading: {
-                IslandCover(state: context.state, height: 24, square: true)
+                IslandSmallCover(state: context.state, stale: context.isStale, height: 24)
             } compactTrailing: {
                 IslandCompactTrailing(state: context.state, stale: context.isStale)
             } minimal: {
-                IslandCover(state: context.state, height: 22, square: true)
+                IslandSmallCover(state: context.state, stale: context.isStale, height: 22)
             }
             .widgetURL(Self.opens)
         }
@@ -331,7 +342,7 @@ struct TVIslandGallery: View {
     }
     func compact(_ st: TVIslandAttributes.ContentState, _ stale: Bool) -> some View {
         HStack(spacing: 0) {
-            IslandCover(state: st, height: 24, square: true)
+            IslandSmallCover(state: st, stale: stale, height: 24)
             Spacer(minLength: 0)
             IslandCompactTrailing(state: st, stale: stale)
         }
@@ -351,7 +362,7 @@ struct TVIslandGallery: View {
                         opened(s.state, s.stale)
                         HStack(spacing: 14) {
                             compact(s.state, s.stale)
-                            IslandCover(state: s.state, height: 22, square: true).frame(width: 37, height: 37).background(.black, in: Circle())
+                            IslandSmallCover(state: s.state, stale: s.stale, height: 22).frame(width: 37, height: 37).background(.black, in: Circle())
                         }
                     }
                 }
