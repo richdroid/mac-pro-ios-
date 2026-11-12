@@ -98,7 +98,7 @@ struct Status: Decodable {
     }
 
     let model: String; let macos: String; let build: String; var uptime: Double; var load: [Double]; let cpuModel: String
-    var cpu: CPU; var mem: Memory; let disk: Disk; var net: Network; var hist: History
+    var cpu: CPU; var mem: Memory; var disk: Disk; var net: Network; var hist: History
     let apps: [App]; let installed: [String]; let procs: [Process]; let tailscale: Tailscale
     let claude: Claude; let usage: Usage; var upgrade: Upgrade; let oclp: OCLP; let sharing: Sharing
     let publicUrl: String; let typing: String; let iphone: Bool; let iloader: Bool
