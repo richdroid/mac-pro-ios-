@@ -75,6 +75,16 @@ enum AlarmChange {
         default: return "Not on the Chumby yet"
         }
     }
+    // Why it failed, matched to what was tried: "full" only ever explains a change that adds an alarm, so a switch, a
+    // delete or a volume the Chumby turned down for its count says it was turned down, not "delete one".
+    func explain(_ e: Error) -> String {
+        let why = AlarmWriter.explain(e)
+        guard why == AlarmWriter.fullText else { return why }
+        switch self {
+        case .add, .replace, .nap, .setNap: return why
+        default: return "The Chumby turned that down. Nothing was changed."
+        }
+    }
     // Where its mark shows: the alarm's row, or the control it came from.
     var mark: String {
         switch self {

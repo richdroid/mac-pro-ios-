@@ -34,31 +34,62 @@ struct FailNote: View {
 }
 // A change that hasn't reached the Chumby, under the row it belongs to, with a way to send it again.
 // The control beside it shows what the Chumby really holds; this says what couldn't be changed, and why.
+// The title never gives up its width: when it, "· Retry" and the ✕ fit on one line they share it; when they don't
+// (folded, beside a switch), the title has the whole row and Retry and the ✕ take their own line under the reason, so the
+// title breaks only between words (11-12: "Could / n't / turn" when the ✕ took its width).
 struct MarkNote: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.colorScheme) private var scheme
     let mark: String
     var body: some View {
         if case .failed(let head, let why) = model.marks[mark] {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(ChumbyPalette.warn(scheme == .dark))
-                    Text(head).fontWeight(.semibold).foregroundStyle(ChumbyPalette.warn(scheme == .dark))
-                    Text("·").foregroundStyle(.secondary)
-                    Button("Retry") { model.retry(mark) }.buttonStyle(.borderless).fontWeight(.semibold).foregroundStyle(.tint)
-                    Spacer(minLength: 8)
-                    // Or let it go: the control beside it already shows what the Chumby holds.
-                    Button { model.dismiss(mark) } label: {
-                        Image(systemName: "xmark.circle.fill").font(.body).symbolRenderingMode(.palette).foregroundStyle(.white, ChumbyPalette.acc(scheme == .dark))
-                            .frame(minWidth: 44, minHeight: 32, alignment: .trailing).contentShape(Rectangle())
+            ViewThatFits(in: .horizontal) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        title(head).fixedSize()
+                        Text("·").foregroundStyle(.secondary)
+                        retry
+                        Spacer(minLength: 8)
+                        close
                     }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Dismiss")
+                    reason(why)
                 }
-                Text(why).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    title(head).fixedSize(horizontal: false, vertical: true)
+                    reason(why)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        retry
+                        Spacer(minLength: 8)
+                        close
+                    }
+                }
             }
             .font(.subheadline)
         }
+    }
+    private func title(_ head: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.circle.fill")
+            Text(head).fontWeight(.semibold)
+        }
+        .foregroundStyle(ChumbyPalette.warn(scheme == .dark))
+    }
+    private func reason(_ why: String) -> some View {
+        // No width of its own to ask for: ViewThatFits measures the title's line, and the reason wraps under either.
+        Text(why).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+            .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+    }
+    private var retry: some View {
+        Button("Retry") { model.retry(mark) }.buttonStyle(.borderless).fontWeight(.semibold).foregroundStyle(.tint)
+    }
+    // Or let it go: the control beside it already shows what the Chumby holds.
+    private var close: some View {
+        Button { model.dismiss(mark) } label: {
+            Image(systemName: "xmark.circle.fill").font(.body).symbolRenderingMode(.palette).foregroundStyle(.white, ChumbyPalette.acc(scheme == .dark))
+                .frame(minWidth: 44, minHeight: 32, alignment: .trailing).contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Dismiss")
     }
 }
 // Instead of a message: once the Chumby has the change, a small bubble rises off the control and pops.

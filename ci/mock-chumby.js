@@ -566,8 +566,9 @@ function chumbyScene(q, s) {
     if (a === 'health') return json({ up: false, lastSeen: Date.now() / 1000 - 25 * 60 });
     if (a === 'sys' || a === 'state' || a === 'chlist') { s.statusCode = 502; s.end(); return true; }
   }
-  // Every save turned down, the way a full Chumby turns one down.
-  if (scene === 'fail' && q.method === 'POST') return json({ ok: false, error: 'bad count' });
+  // Every save turned down, the way a Chumby that can't write its alarm file turns one down (any change can meet this;
+  // "bad count" only ever meets an added alarm, so a failed switch-off must not show it).
+  if (scene === 'fail' && q.method === 'POST') return json({ ok: false, error: "can't write" });
   return false;
 }
 

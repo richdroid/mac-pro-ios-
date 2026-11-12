@@ -284,7 +284,7 @@ jobs:
                      "homeplaying 0 playing" "homenight 0 night" "caldayedit 2 - -pose caldayedit" "justonce 0 - -pose justonce" \
                      "caldayown 2 - -pose caldayown" "reskip 2 skipped -pose reskip" "orphan 0 orphan" "orphan-alarms 2 orphan" \
                      "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce" \
-                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "napset-home 0 nap" "missed 2 missed"; do
+                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "napset-home 0 nap" "missed 2 missed" "homecard 0 playing -pose homecard"; do
               set -- "$1" "$2" $V
               ADDR=http://127.0.0.1:9000; [ "$5" != "-" ] && ADDR=$ADDR/$5
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
@@ -411,7 +411,8 @@ jobs:
             for V in "calday 2 - -pose calday" "caldayedit 2 - -pose caldayedit" "caldayown 2 - -pose caldayown" "justonce 0 - -pose justonce" \
                      "skipped 0 skipped" "alarmsmine 2 - -pose alarmsmine" "calsettings 2 - -pose calsettings" \
                      "moved 0 moved" "moved-alarms 2 moved" "calonce 2 - -pose calonce" \
-                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "editornew 2 - -pose editornew" "napset-home 0 nap" "missed 2 missed"; do
+                     "napset 2 nap -pose napset" "napeditor 2 nap -pose napeditor" "editornew 2 - -pose editornew" "napset-home 0 nap" "missed 2 missed" \
+                     "failure 2 fail -pose failure" "homecard 0 playing -pose homecard"; do
               set -- $V
               ADDR=http://127.0.0.1:9000; [ "$3" != "-" ] && ADDR=$ADDR/$3
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $2 "${@:4}"
@@ -454,6 +455,36 @@ jobs:
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
               C=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Chumby data 2>/dev/null) && [ -f "$C/Library/Caches/swipe-log.txt" ] && mv "$C/Library/Caches/swipe-log.txt" dist/chumby-$1-portrait-swipe.log || true
             done
+          }
+          # Stills that need a finger, in each posture (folded, open flat, open upright): Tinker's Connection tile amber ("Can't
+          # reach the Mac": nothing answers at the address) and red ("Not answering": the dead scene), its list flung to the
+          # end; and a widget's time menu open on Channels, where 90 s reads "1 min 30 sec" (11-12).
+          chumby_taps() {
+            local D=/tmp/dh/.build/release/devicehubctl
+            for P in closed open openup; do
+              case $P in
+                closed) $D "$DEVICE" pose closed || true; local d=1 x="" ;;
+                open) $D "$DEVICE" pose open || true; local d=3 x="-open" ;;
+                openup) $D "$DEVICE" rotate 1 || true; local d=3 x="-portrait" ;;
+              esac
+              sleep 5
+              for V in "connection-amber http://127.0.0.1:9009" "connection-red http://127.0.0.1:9000/dead"; do
+                set -- $V
+                xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $2 -tab 4
+                sleep 12
+                for i in 1 2 3 4; do $D "$DEVICE" drag 0.75 0.8 0.75 0.25 0.12 || echo "fling failed"; sleep 1.2; done
+                sleep 2
+                xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pose-$1$x.png
+                xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+              done
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 1
+              sleep 9
+              $D "$DEVICE" tap "Time on screen" || echo "time menu tap failed"
+              sleep 3
+              xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pose-timemenu$x.png
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
+            $D "$DEVICE" rotate 3 || true; sleep 4
           }
           # ---- end Chumby app poses ----
           # The TV and Mac Pro apps in the posture he holds too (Duo open in portrait, the tabs a bar along the foot), every
@@ -831,6 +862,7 @@ jobs:
           tv_flick 3 "-partial" || echo "TV flick partial incomplete"
           # Last, since each moves the hinge: the Chumby app filmed through folds and turns with pages and sheets up.
           chumby_posturefilms || echo "Chumby posture films incomplete"
+          chumby_taps || echo "Chumby taps incomplete"
           # Back tapped on a page pushed over Alarms (Richard, 2026-11-10: "weird resizing issues at times when going back
           # on a screen from another", with the Back button, not the edge swipe), folded and then open in portrait, the
           # posture he holds, on the live scene whose readings change every poll. Calendar settings at rest, then a

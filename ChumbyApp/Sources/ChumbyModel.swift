@@ -572,8 +572,9 @@ final class ChumbyModel: ObservableObject {
             landed(r, mark: p.change.mark)
         } catch {
             guard let i = pending.firstIndex(where: { $0.id == id }) else { return }
-            pending[i].failed = AlarmWriter.explain(error)
-            marks[p.change.mark] = .failed(head: p.change.failHead, why: AlarmWriter.explain(error))
+            let why = p.change.explain(error)
+            pending[i].failed = why
+            marks[p.change.mark] = .failed(head: p.change.failHead, why: why)
             relay()
             #if canImport(UIKit)
             Haptics.note.notificationOccurred(.error)

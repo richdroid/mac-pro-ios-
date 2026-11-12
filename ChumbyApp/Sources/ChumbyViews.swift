@@ -1208,11 +1208,14 @@ struct HomeTab: View {
                     .animation(.snappy, value: model.unreachable)
                 }.roomyIndicators()
                 // For the build's shot: Home scrolled so the device's caption sits right at the tab bar, where Richard saw
-                // "Chumby Classic" through it.
+                // "Chumby Classic" through it. homecard: Home scrolled to its Playing card (the playing scene), folded.
                 .task {
-                    guard ChumbyModel.pose == "homebar" else { return }
+                    guard ["homebar", "homecard"].contains(ChumbyModel.pose) else { return }
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
-                    scroll.scrollTo("homebar", anchor: .bottom)
+                    // The card only shows once a fresh reading says music is playing.
+                    for _ in 0..<40 where ChumbyModel.pose == "homecard" && !(model.state.musicPlaying && model.stateConfirmed) { try? await Task.sleep(nanoseconds: 100_000_000) }
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    withAnimation(.snappy) { scroll.scrollTo(ChumbyModel.pose == "homebar" ? "homebar" : "homeplaying", anchor: .bottom) }
                 }
                 // For the branch film of a song chosen on Sounds: Home brought to its Playing card while it starts.
                 .task(id: model.macStarting != nil) {
