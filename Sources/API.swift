@@ -241,6 +241,15 @@ struct API {
         return try JSONDecoder().decode(Answer.self, from: data).builds
     }
 
+    // An app he added: what its package says, and any history the Mac found in public. An older Mac doesn't know the
+    // request and answers 404 (badResponse), and the page keeps what the Apps tab already knows.
+    func ipaInfo(_ file: String) async throws -> IPAAnswer {
+        let term = file.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? file
+        let (data, response) = try await session.data(for: request("/api/ios-info?file=\(term)"))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw APIError.badResponse }
+        return try JSONDecoder().decode(IPAAnswer.self, from: data)
+    }
+
     func statusData() async throws -> Data {
         let (data, response) = try await session.data(for: request("/api/status"))
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0

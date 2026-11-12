@@ -395,6 +395,14 @@ final class AppModel: ObservableObject {
                 let file = pose == "versionsupdate" ? "Chumby.ipa" : "TV.ipa"
                 whenDrawn { self.appHistory = file }
             }
+            // An app he added himself, its page opened as from the Apps tab: one the Mac found no history for in public
+            // ("ipainfo"), one whose GitHub releases it found ("ipahistory"), and one from an older Mac that knows
+            // nothing of the page's details ("ipaold", the stand-in answers 404).
+            if ["ipainfo", "ipahistory", "ipaold"].contains(pose), !posedHistory, !Self.reopen {
+                posedHistory = true; tab = 1
+                let file = pose == "ipahistory" ? "Pebble.ipa" : pose == "ipaold" ? "Kite.ipa" : "Lantern.ipa"
+                whenDrawn { self.appHistory = file }
+            }
             if parks { SwipeLog.note("status held"); heldStatus = fresh; return }
             SwipeLog.note("status landed")
             let t0 = CFAbsoluteTimeGetCurrent()
@@ -464,6 +472,16 @@ final class AppModel: ObservableObject {
             s.iosApps = Status.SeedStatus(reachable: false, via: "", checkedAt: 1, seeding: "", fetch: nil,
                                           apps: [tf("MacPro.ipa", "Mac Pro", "\(mine)", "\(mine + 1)", "6740000001"), tf("TV.ipa", "TV Remote", "204", "204", "6740000002"), tf("Chumby.ipa", "Chumby", "12", "12", "6740000003"), added])
             if pose == "testflighttip" { UserDefaults.standard.removeObject(forKey: "tfAutoTipDone") } else { UserDefaults.standard.set(true, forKey: "tfAutoTipDone") }
+        // Apps he added himself, served by the Mac beside his own: the Apps tab lists them, each opens its details.
+        case "ipainfo", "ipahistory", "ipaold", "ipaapps":
+            let now = Date().timeIntervalSince1970 * 1000
+            func added(_ file: String, _ name: String, _ v: String, _ b: String, _ days: Double) -> Status.SeedApp {
+                Status.SeedApp(file: file, name: name, version: v, build: b, phoneBuild: b, installedAt: now - 2 * 86_400_000, expires: now + days * 86_400_000, state: "current", message: "", own: true, ota: nil, icon: "/ios/icon/\(file)")
+            }
+            if let seed = s.iosApps {
+                s.iosApps = Status.SeedStatus(reachable: seed.reachable, via: seed.via, checkedAt: seed.checkedAt, seeding: "", fetch: seed.fetch,
+                                              apps: seed.apps + [added("Lantern.ipa", "Lantern", "2.1.0", "24", 361), added("Pebble.ipa", "Pebble", "1.6", "160", 340), added("Kite.ipa", "Kite", "3.2", "3.2", 22)])
+            }
         case "otaready", "otaoffer", "otasent", "otahome", "versionsupdate":
             let mine = Int(OTAInstaller.thisBuild) ?? 12
             func link(_ n: String) -> String { "itms-services://?action=download-manifest&url=https%3A%2F%2Fmac-pro.example.ts.net%2Fota%2F\(n).plist" }

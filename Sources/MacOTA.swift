@@ -274,7 +274,7 @@ struct UpdatesSection: View {
         // system's button style in the list, so the press is the row's own highlight inside the card's corners.
         // Color.primary, the label colour itself: .primary resolved to the style's tint and turned every line blue.
         Button { model.appHistory = a.file } label: { rowBody(a).foregroundStyle(Color.primary) }
-            .accessibilityHint("Opens its version history")
+            .accessibilityHint(a.isOurs ? "Opens its version history" : "Opens its details")
             .place("update-\(a.id)")
     }
     func rowBody(_ a: Status.SeedApp) -> some View {
@@ -378,10 +378,16 @@ struct NoteLines: View {
     let notes: [String]
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(notes.enumerated()), id: \.offset) { _, n in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("•").foregroundStyle(.secondary)
-                    Text(n).fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(notes.enumerated()), id: \.offset) { i, n in
+                // "# " starts a heading over the lines under it, as an App Store or GitHub release groups its notes.
+                if n.hasPrefix("# ") {
+                    Text(n.dropFirst(2)).fontWeight(.semibold).fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, i == 0 ? 0 : 6)
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("•").foregroundStyle(.secondary)
+                        Text(n).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
         }
