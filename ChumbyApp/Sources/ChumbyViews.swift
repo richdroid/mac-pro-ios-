@@ -2033,6 +2033,12 @@ struct SoundsTab: View {
     @State private var addStation = false
     @State private var pickSong = false
     @Environment(\.paneLayout) private var wide
+    // Where the song picker opened (the right pane open flat, a cover otherwise), kept while the keyboard is up: open
+    // upright the keyboard shortens the page until it reads as sideways, which closed the cover for a pane and back
+    // (11-12 branch film). A real turn or fold with the keyboard down moves it.
+    @State private var pickPane = false
+    @State private var keyboardUp = false
+    func openPicker() { pickPane = wide; pickSong = true }
     @State private var stationLink = ""
     @State private var streamURL = ""
     @State private var streamName = ""
@@ -2099,8 +2105,8 @@ struct SoundsTab: View {
 
     var body: some View {
         // Open flat, the song picker takes the right pane (its own title row and list), with the Now card live beside it.
-        TwoPane(rightTitle: pickSong && wide ? nil : " ",
-                rightPage: pickSong && wide ? AnyView(MacSongPicker(pane: { withAnimation(.snappy) { pickSong = false } }).environmentObject(model)) : nil) {
+        TwoPane(rightTitle: pickSong && pickPane ? nil : " ",
+                rightPage: pickSong && pickPane ? AnyView(MacSongPicker(pane: { withAnimation(.snappy) { pickSong = false } }).environmentObject(model)) : nil) {
             PageTitle("Sounds")
             ReachRow()
             // AirPlay in the Now card, under the volume: it's how music reaches the Chumby, and alone it was a one-row
@@ -2114,12 +2120,12 @@ struct SoundsTab: View {
                 // Any song in his Mac's Music library, played here by the Mac: only where the app knows the Mac, and
                 // while the Chumby accepts AirPlay, which is how the Mac reaches it.
                 if MacMusic.reachable && model.sys.airplayOn {
-                    Button { pickSong = true } label: {
+                    Button { openPicker() } label: {
                         Label("Play a song from the Mac", systemImage: "music.note.list")
                             .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
                     }
                     .foregroundStyle(.tint).disabled(model.unreachable)
-                    .task { await MacMusicPose.sounds(model) { pickSong = true } }
+                    .task { await MacMusicPose.sounds(model) { openPicker() } }
                 }
             } header: { SectionHead(icon: "speaker.wave.2.fill", text: "Now") }
             WokeUpTo()
@@ -2221,7 +2227,12 @@ struct SoundsTab: View {
         .seaList()
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
-        .fillCover(isPresented: Binding(get: { pickSong && !wide }, set: { pickSong = $0 })) { MacSongPicker().environmentObject(model) }
+        .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 { pickSong = false } })) { MacSongPicker().environmentObject(model) }
+        .onChange(of: wide) { _, w in if pickSong && !keyboardUp { pickPane = w } }
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in keyboardUp = false }
+        #endif
         .alert("Add a Pandora station", isPresented: $addStation) {
             TextField("Pandora link", text: $stationLink).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
             Button("Add") { let l = stationLink; stationLink = ""; Task { await model.addPandora(l) } }

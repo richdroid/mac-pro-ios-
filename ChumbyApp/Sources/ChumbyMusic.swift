@@ -262,7 +262,11 @@ struct MacSongPicker: View {
     // Nothing reads through the keyboard's glass: the list fades out over its last 18 pt, above the keyboard when it's
     // up (the list ends there) as the tabs do over the bar (11-05).
     var foot: some View {
-        VStack(spacing: 0) { Rectangle(); LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 18) }
+        VStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: pane == nil ? 10 : 0)
+            Rectangle()
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 18)
+        }
     }
     var body: some View {
         Group {
@@ -278,12 +282,15 @@ struct MacSongPicker: View {
                 .mask(foot)
             } else {
                 NavigationStack {
-                    List { sections }
-                        .seaList()
-                        .scrollDismissesKeyboard(.immediately)
-                        // The field in the page's own layout, under the bar: the list starts below it and never runs under it.
-                        .safeAreaInset(edge: .top, spacing: 0) { field.padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8) }
-                        .mask(foot)
+                    // The field in the page's own layout, under the bar; the list starts below it, so no row reads
+                    // through the field's glass, and its rows fade in under it as they do above the keyboard.
+                    VStack(spacing: 0) {
+                        field.padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 4)
+                        List { sections }
+                            .seaList()
+                            .scrollDismissesKeyboard(.immediately)
+                            .mask(foot)
+                    }
                         .background { SeaBackground().ignoresSafeArea() }
                         .navigationTitle(Self.title).navigationBarTitleDisplayMode(.inline)
                         .toolbar {
