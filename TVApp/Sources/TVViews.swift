@@ -966,7 +966,7 @@ struct MirrorView: View {
             if !Task.isCancelled { drawn = .some(next) }
         }
         // Where it is, for a flick's screen to move onto it. Nothing moves this view, so the measure moves nothing.
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.mirrorSlot = $0 }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.mirrorSlot = $0; model.mirrorLastSlot = $0 }
         .onAppear { model.mirrorShown(true) }
         .onDisappear { model.mirrorShown(false) }
     }
