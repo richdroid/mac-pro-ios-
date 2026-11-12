@@ -2228,7 +2228,12 @@ struct SoundsTab: View {
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
         .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 { pickSong = false } })) { MacSongPicker().environmentObject(model) }
-        .onChange(of: wide) { _, w in if pickSong && !keyboardUp { pickPane = w } }
+        // The keyboard's flip comes before the keyboard says it's showing, so a change is only taken once it has held
+        // for a moment with the keyboard down.
+        .task(id: wide) {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            if !Task.isCancelled, pickSong, !keyboardUp, pickPane != wide { withAnimation(.snappy) { pickPane = wide } }
+        }
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in keyboardUp = false }
