@@ -242,6 +242,17 @@ import UIKit.UIGestureRecognizerSubclass
         if flush { CATransaction.flush() }
         #endif
     }
+    // On its way at once, toward where the Remote's picture is (or, not known yet, the top of the screen), for a thing
+    // thrown before its pick is made (a card from its shelf): it never sits still where it was let go while the pick is
+    // worked out (the review of ef52168: 1.5 s frozen half off the top edge). The pick re-aims it from wherever it is.
+    static func rise(toward slot: CGRect?) {
+        #if os(iOS)
+        guard ground != nil, let w = window else { return }
+        let W = w.bounds.width
+        let to = slot ?? CGRect(x: w.bounds.midX - W * 0.4, y: w.safeAreaInsets.top + 40, width: W * 0.8, height: W * 0.45)
+        aim(to, first: true, flush: false)
+        #endif
+    }
     // The picture, arrived after it left (not in memory at the pick: a link's page picture, YouTube's banner): it comes up
     // over the still of the card wherever the flight has got to, so it never lands as an empty ground (item 5, 11-12).
     static func picture(_ image: TVImage) {
@@ -2803,6 +2814,7 @@ struct ShelfFlick: ViewModifier {
                                 tint: ImageStore.shared.cachedBand(u), wide: item.isYouTube)
             ShelfHand.shared.item = nil
             ScreenVeil.cover(underFlight: true, for: 3)
+            RenderFlight.rise(toward: model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil })
         }
         var t: FlickTarget
         if item.isYouTube {
