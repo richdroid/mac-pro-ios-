@@ -73,7 +73,7 @@ import UIKit
         let bar = Self.bottomBar(in: w).flatMap { w.bounds.intersects($0) ? $0 : nil }
         var r = rect.intersection(w.bounds)
         r = bar != nil ? w.bounds : CGRect(x: r.minX, y: 0, width: r.width, height: w.bounds.height)
-        guard r.height > 20, let still = w.resizableSnapshotView(from: r, afterScreenUpdates: false, withCapInsets: .zero) else { return }
+        guard r.height > 20 else { return }
         let ground = UIView(frame: w.bounds)
         ground.backgroundColor = .black
         ground.isUserInteractionEnabled = false
@@ -87,48 +87,49 @@ import UIKit
         g.colors = [c.withAlphaComponent(0.8).cgColor, c.withAlphaComponent(0.45).cgColor, UIColor.black.withAlphaComponent(0.75).cgColor]
         g.startPoint = CGPoint(x: 0, y: 0); g.endPoint = CGPoint(x: 0.5, y: 1)
         ground.layer.addSublayer(g)
-        // Only the page's part of it shows: the rest of the screen is still the still.
+        // The ground under the still, in the page's part of the screen only.
         let clip = UIView(frame: r); clip.clipsToBounds = true; clip.isUserInteractionEnabled = false
         ground.frame = w.bounds.offsetBy(dx: -r.minX, dy: -r.minY)
         clip.addSubview(ground)
-        still.frame = r; still.isUserInteractionEnabled = false
-        // The picked row's own place is empty from the first frame: what's in the air is the only copy of it.
-        if let picked, picked.width > 4 {
-            let m = CAShapeLayer()
-            let pp = UIBezierPath(rect: still.bounds)
-            pp.append(UIBezierPath(roundedRect: picked.offsetBy(dx: -r.minX, dy: -r.minY).insetBy(dx: -12, dy: -12), cornerRadius: 22))
-            m.path = pp.cgPath; m.fillRule = .evenOdd
-            still.layer.mask = m
-        }
-        w.insertSubview(clip, aboveSubview: v)
-        w.insertSubview(still, aboveSubview: clip)
-        extras += [clip, still]
-        if let bar, let kept = w.resizableSnapshotView(from: bar, afterScreenUpdates: false, withCapInsets: .zero) {
-            kept.frame = bar; kept.isUserInteractionEnabled = false
-            w.insertSubview(kept, aboveSubview: still)
-            extras.append(kept)
-        }
-        // The still of the page goes from under the ground, so the two fading together at the lift never show the page
-        // again through it (d5d94f4: the list came back faintly as the Remote came up).
-        let hole = CAShapeLayer()
-        let path = UIBezierPath(rect: v.bounds); path.append(UIBezierPath(rect: v.convert(r, from: w)))
-        hole.path = path.cgPath; hole.fillRule = .evenOdd
-        v.layer.mask = hole
-        if animate {
-            UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { still.alpha = 0 }
-        } else { pending = still }
+        w.insertSubview(clip, belowSubview: v)
+        extras.append(clip)
+        // The still itself dissolves, through a mask, in the page's part: no second picture of the screen is taken (it
+        // cost a turn at the pick, and it pictured whatever was in the air as a second copy: the review of 61f18fc).
+        // Outside the page (and the tab bar, upright) it stays whole; the picked row's own place is empty from the
+        // first frame, as what's in the air is the only copy of it.
+        let inR = v.convert(r, from: w)
+        let keep = CAShapeLayer()
+        let kp = UIBezierPath(rect: v.bounds); kp.append(UIBezierPath(rect: inR))
+        if let bar { kp.append(UIBezierPath(rect: v.convert(bar, from: w))) }
+        keep.path = kp.cgPath; keep.fillRule = .evenOdd; keep.fillColor = UIColor.black.cgColor
+        let page = CAShapeLayer()
+        let pp = UIBezierPath(rect: inR)
+        if let bar { pp.append(UIBezierPath(rect: v.convert(bar, from: w))) }
+        if let picked, picked.width > 4 { pp.append(UIBezierPath(roundedRect: v.convert(picked, from: w).insetBy(dx: -12, dy: -12), cornerRadius: 22)) }
+        page.path = pp.cgPath; page.fillRule = .evenOdd; page.fillColor = UIColor.black.cgColor
+        let mask = CALayer(); mask.frame = v.bounds
+        mask.addSublayer(keep); mask.addSublayer(page)
+        v.layer.mask = mask
+        if animate { fade(page, duration) } else { pending = page }
         if flush { CATransaction.flush() }
         #endif
     }
     #if os(iOS)
-    private static weak var pending: UIView?
+    private static weak var pending: CALayer?
+    private static func fade(_ l: CALayer, _ duration: Double) {
+        let a = CABasicAnimation(keyPath: "opacity")
+        a.fromValue = 1; a.toValue = 0; a.duration = duration
+        a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        l.opacity = 0
+        l.add(a, forKey: "dissolve")
+    }
     #endif
     // The dissolve laid out by `dissolve(animate: false)`, run now.
     static func run(_ duration: Double = 0.2) {
         #if os(iOS)
-        guard let still = pending else { return }
+        guard let page = pending else { return }
         pending = nil
-        UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { still.alpha = 0 }
+        fade(page, duration)
         #endif
     }
     #if os(iOS)
@@ -259,10 +260,18 @@ import UIKit
     // worked out (the review of ef52168: 1.5 s frozen half off the top edge). The pick re-aims it from wherever it is.
     static func rise(toward slot: CGRect?) {
         #if os(iOS)
-        guard ground != nil, let w = window else { return }
-        let W = w.bounds.width
-        let to = slot ?? CGRect(x: w.bounds.midX - W * 0.4, y: w.safeAreaInsets.top + 40, width: W * 0.8, height: W * 0.45)
-        aim(to, first: true, flush: true)
+        guard let g = ground, let w = window else { return }
+        // Only moved, as it is: on up the way it was thrown, kept whole on the screen; the pick then opens it into the
+        // Remote's picture (aimed at a stand-in place the width of the screen, it ballooned to 2.5 times its size open
+        // flat and changed its look mid-air: the review of 61f18fc).
+        let from = g.frame
+        let top = w.safeAreaInsets.top + 16
+        let dy = max(top, from.minY - 120) - from.minY
+        guard abs(dy) > 1 else { return }
+        UIView.animate(springDuration: 0.36, bounce: 0.1, initialSpringVelocity: 0, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+            views.forEach { $0.frame = $0.frame.offsetBy(dx: 0, dy: dy) }
+        }
+        CATransaction.flush()
         #endif
     }
     // The picture, arrived after it left (not in memory at the pick: a link's page picture, YouTube's banner): it comes up
@@ -1633,8 +1642,13 @@ struct FlickScreen: View {
             Group {
                 if isLink {
                     // A link: its page's picture (or its site's mark) at the TV's own shape, its name once under it.
-                    LinkCard(title: linkTitle, link: item.id, art: linkArt, width: min(wide ? 300 : g.size.width - 72, 340)) { rects.map["card"] = $0 }
+                    // Its picture's place measured outside the lift (inside it, the drag was counted twice and the flight
+                    // left 60 pt above the card: the review of 61f18fc): the slab's top, at 16:9.
+                    LinkCard(title: linkTitle, link: item.id, art: linkArt, width: min(wide ? 300 : g.size.width - 72, 340)) { _ in }
                         .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.08, corner: LinkCard.corner, rest: (0.45, 18, 10), raised: (0.55, 30, 22)))
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { r in
+                            rects.map["card"] = CGRect(x: r.minX, y: r.minY, width: r.width, height: (r.width * 9 / 16).rounded())
+                        }
                 } else {
                     MediaCard(item: shown, source: source, width: width, image: target.image)
                         .modifier(LiftedLook(lift: lift, up: up, scale: liftScale, swell: 0.12, corner: 6, rest: (0.45, 18, 10), raised: (0.55, 30, 22)))
@@ -1808,9 +1822,11 @@ struct FlickScreen: View {
         let rendered = flies && fromRect.width > 4
         if rendered {
             ScreenVeil.cover()
+            SwipeLog.note("send covered")
             // A card thrown from its shelf has been in the air since he let go: the same flight goes on to the Remote.
             if !RenderFlight.flying { RenderFlight.launch(from: fromRect.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), image: image, soft: soft, tint: tint,
                                 wide: image.map(PosterOnBlur.isWide) ?? (shown.kind == "youtube" || isLink)) }
+            SwipeLog.note("send launched")
             if let aim = model.mirrorSlot.flatMap({ $0.width > 20 ? $0 : nil }) ?? model.rememberedSlot(slotKey) ?? model.rememberedSlot("warm" + slotKey) {
                 aimTo = aim
             } else if flickFrame.width > 0 {
