@@ -11,8 +11,18 @@ struct MacSettings: View {
     @AppStorage("fullEvery") private var fullEvery = 10.0
     @AppStorage("apiBudget") private var apiBudget = 200.0
     @AppStorage("startTab") private var startTab = -1
-    @AppStorage("statusTemps") private var statusTemps = false
+    @AppStorage("showQuick") private var showQuick = true
+    @AppStorage("showTemps") private var showTemps = true
+    @AppStorage("showDisk") private var showDisk = true
+    @AppStorage("showAccess") private var showAccess = true
+    @AppStorage("showThisMac") private var showThisMac = true
+    @AppStorage("showProcesses") private var showProcesses = true
     @State private var connecting = false
+    // A log of how smoothly the app runs (every reading, row height and late frame), for sending to the Mac, off unless he
+    // turns it on for a check (resize regate, 2026-11-11).
+    @AppStorage("smoothLog") private var smoothLog = false
+    @State private var logSending = false
+    @State private var logSent: String?
     @State private var customBudget = false
     @State private var budgetDraft = 200.0
     static let budgets: [Double] = [50, 100, 200, 500]
@@ -47,13 +57,19 @@ struct MacSettings: View {
             }
             .padding(.vertical, 4)
         }
+        // What Status shows, as in build 276 (Richard, 2026-11-12: "u went too far on simplicity in status page").
+        Section {
+            Toggle("Quick actions", isOn: $showQuick)
+            Toggle("Temperatures", isOn: $showTemps)
+            Toggle("Disk", isOn: $showDisk)
+            Toggle("Remote access", isOn: $showAccess)
+            Toggle("This Mac", isOn: $showThisMac)
+            Toggle("Top processes", isOn: $showProcesses)
+        } header: { Text("Status page") } footer: { Text("The Mac Pro, its live figures and any alerts always show.") }
         // Units, how often figures refresh, and the API budget the Claude tab's dial fills against: everything about how the
         // figures read, in one card. The budget was a section of one row, drawn by the system as a capsule beside the
         // rounded cards (designer, 2026-11-11: merge lone rows into the section they belong with).
         Section("Figures") {
-            // Status shows the Mac and its live figures; its temperatures only when asked for here (Richard, 2026-11-11:
-            // "simplify"). The page's other switches went with the cards they hid.
-            Toggle("Temperatures on Status", isOn: $statusTemps)
             Picker("Temperature unit", selection: $celsius) { Text("Fahrenheit").tag(false); Text("Celsius").tag(true) }
             Picker("Live figures", selection: $liveEvery) { Text("Every second").tag(1.0); Text("Every 2 seconds").tag(2.0); Text("Every 5 seconds").tag(5.0) }
             Picker("Everything else", selection: $fullEvery) { Text("Every 10 seconds").tag(10.0); Text("Every 30 seconds").tag(30.0); Text("Every minute").tag(60.0) }
@@ -83,6 +99,29 @@ struct MacSettings: View {
             Toggle("Haptics", isOn: $haptics)
             Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
             AlertSettings()
+            // A log of how smoothly the app runs (every reading, row height and late frame), for sending to the Mac; off
+            // unless he turns it on for a check (resize regate, 2026-11-11).
+            Toggle("Record smoothness log", isOn: $smoothLog)
+                .onChange(of: smoothLog) { _, on in
+                    if on { SwipeLog.restart() }
+                    SwipeLog.on = on || UserDefaults.standard.bool(forKey: "swipeLog")
+                    if on { SwipeLog.frames() }
+                    logSent = nil
+                }
+            if smoothLog {
+                Button {
+                    Task {
+                        guard let f = SwipeLog.file, FileManager.default.fileExists(atPath: f.path) else { logSent = "Nothing recorded yet"; return }
+                        logSending = true; defer { logSending = false }
+                        let stamp = Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false)).replacingOccurrences(of: ":", with: ".")
+                        do { _ = try await MacFiles.send(f, as: "Mac Pro smoothness \(stamp).txt", size: MacFiles.size(f), to: model.api.base) { _ in }; logSent = "Sent to the Mac" }
+                        catch { logSent = AppModel.say(error) }
+                    }
+                } label: {
+                    HStack { Text("Send the log to the Mac"); Spacer(); if logSending { ProgressView() } else if let logSent { Text(logSent).foregroundStyle(.secondary) } }
+                }
+                .disabled(logSending)
+            }
         } header: { Text("Behaviour") } footer: { Text(AlertSettings.note) }
         Section {
             LabeledContent("Address", value: URL(string: model.address)?.host ?? "Not set")

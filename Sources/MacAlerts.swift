@@ -53,6 +53,7 @@ enum AlertDismissals {
 }
 
 struct AlertBanner: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
     let alerts: [Status.Alert]
     @AppStorage(AlertDismissals.key) private var dismissedRaw = ""
@@ -123,13 +124,14 @@ struct AlertBanner: View {
     }
     // Arriving, or the last one put away: the page makes room in one move, never in one frame.
     var body: some View {
+        let _ = SwipeLog.mark("banner body \(shown.count)")
         Group { banner }.animation(.snappy, value: shown.map(\.dismissKey))
     }
     @ViewBuilder var banner: some View {
         if !shown.isEmpty {
             Section {
                 ForEach(shown) { a in
-                    row(a).listRowBackground(a.tint.opacity(0.22))
+                    row(a).listRowBackground(a.tint.opacity(0.22)).modifier(LogsHeight(id: AnyHashable("alert-" + a.id)))
                 }
             }
             // For the build's film of a dismissal: all three shown, then the first put away. Only with the pose.

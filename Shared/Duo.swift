@@ -178,16 +178,35 @@ extension View {
 // For the build's films of a page swiped off (-swipeLog YES, never on the phone): every reading a page takes and when the
 // move began and ended, to Caches/swipe-log.txt, so a page that changes as it slides is caught in numbers, not only seen.
 enum SwipeLog {
-    static let on = UserDefaults.standard.bool(forKey: "swipeLog")
+    // The build's films turn it on with -swipeLog YES; on the phone, Settings' "Record smoothness log" (smoothLog) does, so
+    // the same log can be taken from his own hands and sent to the Mac (resize regate, 2026-11-11).
+    nonisolated(unsafe) static var on = UserDefaults.standard.bool(forKey: "swipeLog") || UserDefaults.standard.bool(forKey: "smoothLog")
+    static var file: URL? { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("swipe-log.txt") }
     static let start = Date()
+    nonisolated(unsafe) private static var landedWatch: CFAbsoluteTime = 0
     // A view's body being worked out, for the build's logs: which pages a move or a reading made the app redraw.
     static func mark(_ s: String) { if on { note(s) } }
     static func note(_ s: String) {
         guard on, let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        if s.hasSuffix("landed") { landedWatch = CFAbsoluteTimeGetCurrent() + 0.5 }
         let line = String(format: "%.3f ", Date().timeIntervalSince(start)) + s + "\n"
         let url = dir.appendingPathComponent("swipe-log.txt")
-        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
-        else { try? Data(line.utf8).write(to: url) }
+        // One handle kept open: opening and closing the file for every line cost the main thread on each frame of a scroll,
+        // which matters now the log runs on the phone.
+        writeLock.lock(); defer { writeLock.unlock() }
+        if handle == nil {
+            if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+            handle = try? FileHandle(forWritingTo: url); handle?.seekToEndOfFile()
+        }
+        handle?.write(Data(line.utf8))
+    }
+    private static let writeLock = NSLock()
+    nonisolated(unsafe) private static var handle: FileHandle?
+    // Starts the log afresh (the file removed): the next line opens a new one.
+    static func restart() {
+        writeLock.lock(); defer { writeLock.unlock() }
+        try? handle?.close(); handle = nil
+        if let file { try? FileManager.default.removeItem(at: file) }
     }
     // Every frame the main thread was late for (over 1.5 display periods), noted beside the readings, so a page that
     // stalls as a move begins is caught in the same log as the move.
@@ -203,6 +222,9 @@ enum SwipeLog {
                 let now = CFAbsoluteTimeGetCurrent()
                 if a == .afterWaiting { woke = now }
                 else if woke > 0, now - woke > 0.05 { note(String(format: "main busy %.0f ms", (now - woke) * 1000)); woke = 0 }
+                // Within half a second of a reading landing, every turn over 8 ms: what the landing cost the main thread,
+                // apart from what the simulator's drawing costs after it.
+                else if woke > 0, now < landedWatch, now - woke > 0.008 { note(String(format: "turn %.0f ms", (now - woke) * 1000)); woke = 0 }
             }
         }
         CFRunLoopAddObserver(CFRunLoopGetMain(), o, .commonModes)
@@ -281,9 +303,21 @@ final class ScrollWatch {
 // and that was what it held as it came back: a tab returned to with Back was split down its middle, off the crease,
 // for the length of the pop, then snapped across to the crease as the pop ended (Richard's recording, 2026-11-10,
 // and CI 8b7b68e frame by frame). A page that can't see the crease lays out by what was last seen instead.
+// Kept across launches too: on a cold launch open flat nothing had been seen yet, so both panes were laid out split down
+// the middle and moved across to the crease when it was first read, a second or two in, every row reflowing as they went
+// (Mac Pro CI a6bba65, open flat: the dials' row 234 to 213 pt, the right pane's content 828 to 807, at 2.7 s).
 @MainActor private enum FoldSeen {
-    static var bySize: [String: FoldSeenSplit] = [:]
-    static var last: FoldSeenSplit?
+    private static let key = "foldSeenSplits"
+    static var bySize: [String: FoldSeenSplit] = load() { didSet { save() } }
+    static var last: FoldSeenSplit? = bySize["last"]
+    private static func load() -> [String: FoldSeenSplit] {
+        guard let raw = UserDefaults.standard.dictionary(forKey: key) as? [String: [Double]] else { return [:] }
+        return raw.compactMapValues { v in v.count == 3 ? FoldSeenSplit(ratio: v[0] < 0 ? nil : CGFloat(v[0]), gutter: CGFloat(v[1]), outer: CGFloat(v[2])) : nil }
+    }
+    private static func save() {
+        var all = bySize; if let last { all["last"] = last }
+        UserDefaults.standard.set(all.mapValues { [Double($0.ratio ?? -1), Double($0.gutter), Double($0.outer)] }, forKey: key)
+    }
 }
 struct FoldSeenSplit: Equatable { var ratio: CGFloat?; var gutter: CGFloat; var outer: CGFloat }
 // Two panes, in Apple's container: side by side when wide, stacked when tall, and clear of the fold when partly closed.
@@ -300,6 +334,8 @@ struct FoldSplit<L: View, R: View>: View {
     // worked out again as every push and pop began and again as it ended, both panes of it, on the main thread at the
     // moment the move should start (CI f7a119a: Status's two panes three times over in one pop).
     @State private var held: (key: String, split: Split)?
+    @MainActor final class Pending { var read: FoldSeenSplit?; var task: Task<Void, Never>? }
+    @State private var pending = Pending()
     var body: some View {
         #if os(iOS)
         if #available(iOS 27.1, *) {
@@ -308,7 +344,8 @@ struct FoldSplit<L: View, R: View>: View {
                 let folded = !g.reservedRegions(kind: .division).isEmpty
                 let crease = g.reservedRegions(kind: .division, options: .includeInactive).first?.frame
                 let hinge = crease?.midX
-                let ratio: CGFloat? = wide && !folded ? hinge.map { min(max($0 / g.size.width, 0.3), 0.7) } : nil
+                // To the hundredth: a crease read a few thousandths apart (0.548, then 0.551) was a second reflow of every row.
+                let ratio: CGFloat? = wide && !folded ? hinge.map { (min(max($0 / g.size.width, 0.3), 0.7) * 100).rounded() / 100 } : nil
                 // Each pane stops short of the crease, which is about 40 pt wide: half of it plus a little air, and never
                 // less than 24, so no card sits on the fold.
                 let gutter: CGFloat = wide && !folded ? min(max(24, (crease?.width ?? 0) / 2 + 4), 40) : 0
@@ -323,12 +360,45 @@ struct FoldSplit<L: View, R: View>: View {
                 let key = "\(Int(g.size.width))x\(Int(g.size.height))\(open ? " open" : "")"
                 // Its own last reading at rest; else what a page this size last read (a tab first shown under a page);
                 // else what any page last read open flat; else, with nothing to go by yet, what it reads now.
-                let use = (held?.key == key ? held?.split : nil) ?? (open ? FoldSeen.bySize[key] ?? FoldSeen.last : nil) ?? read
+                // With nothing seen yet (the first launch open flat after an install), the hinge is taken to be the display's
+                // centre, where the Duo's is, so the panes don't start split down the page's middle and move across when the
+                // crease is first read (designer, resize gate: the first open-flat launch reflowed).
+                // Where the Duo's hinge is: the middle of the window. With nothing seen yet, the panes split there; and a crease
+                // read anywhere else is a reading taken mid-turn (0.35 with a 40 pt crease, 0.50), never one to lay out by
+                // (designer, resize gate on cbdef0e: a turn adopted 0.350 and the panes moved twice).
+                let centreRatio: CGFloat? = open ? {
+                    let f = g.frame(in: .global)
+                    let w = (UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.bounds.width) ?? (f.maxX + f.minX)
+                    return (min(max((w / 2 - f.minX) / max(g.size.width, 1), 0.3), 0.7) * 100).rounded() / 100
+                }() : nil
+                let centre: Split? = blind ? Split(ratio: centreRatio, gutter: 24, outer: 14) : nil
+                let plausible = !open || (read.ratio != nil && centreRatio != nil && abs(read.ratio! - centreRatio!) <= 0.03)
+                let use = (held?.key == key ? held?.split : nil) ?? (open ? FoldSeen.bySize[key] ?? FoldSeen.last ?? centre : nil) ?? read
                 // A reading at rest with the crease in sight (or where there's none to see: folded, upright) is the one to
                 // lay out by and to remember.
                 let take: () -> Void = {
-                    guard !blind, !NavTransit.shared.moving() else { return }
-                    if open { FoldSeen.bySize[key] = read; FoldSeen.last = read }
+                    guard !blind, plausible, !NavTransit.shared.moving() else { return }
+                    // Turned into a posture this page has a split for already: that split stands until a different reading
+                    // has held for 0.4 s. Mid-turn the crease reads half-way (0.50) for a frame or two, and the panes moved
+                    // to it and back (designer, resize regate: 0.548, 0.500, 0.548 in one turn).
+                    // A size of page not seen before counts too (mid-turn the page passes through sizes of its own, and one
+                    // read half-way there was taken as that size's split, bd75948): whatever the panes are using stays
+                    // until the new reading has lasted.
+                    let current = (held?.key == key ? held?.split : nil) ?? FoldSeen.bySize[key] ?? FoldSeen.last
+                    if open, let saved = current, saved != read {
+                        pending.read = read
+                        pending.task?.cancel()
+                        pending.task = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 400_000_000)
+                            guard !Task.isCancelled, pending.read == read else { return }
+                            FoldSeen.last = read; FoldSeen.bySize[key] = read
+                            held = (key, read)
+                        }
+                        if held?.key != key { held = (key, saved) }
+                        return
+                    }
+                    pending.task?.cancel(); pending.read = nil
+                    if open, FoldSeen.bySize[key] != read || FoldSeen.last != read { FoldSeen.last = read; FoldSeen.bySize[key] = read }
                     if held?.key != key || held?.split != read { held = (key, read) }
                 }
                 ArrangementView {

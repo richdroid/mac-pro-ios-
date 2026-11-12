@@ -79,8 +79,8 @@ enum TrendCache {
 }
 
 struct HistoryView: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
-    @EnvironmentObject var store: LiveStore
     @Environment(\.paneLayout) private var panes
     let metric: HistoryMetric
     @State private var points: [TrendPoint]
@@ -135,6 +135,10 @@ struct HistoryView: View {
         let count = Int(ceil(top / step))
         return (0...max(count, 1)).map { Double($0) * step }
     }
+    // The latest figure for the chart's "now" mark, read without watching the live readings (HistoryReadout does that).
+    // The reading the tile or dial shows, never the last bucket's average when the status has a newer one: a dial at
+    // 111° opened a history saying 44° (designer, 2026-11-12).
+    var current: Double? { metric.now(model.liveStore.live) ?? metric.now(model.status) ?? points.last?.v }
     var nowMark: [Mark] {
         guard let c = current, let last = marks.last, Date().timeIntervalSince(last.date) < 900 else { return [] }
         return [Mark(date: Date(), value: c, run: last.run, peak: nil)]
@@ -143,17 +147,10 @@ struct HistoryView: View {
         guard let picked else { return nil }
         return marks.min { abs($0.date.timeIntervalSince(picked)) < abs($1.date.timeIntervalSince(picked)) }
     }
-    // Never a dash while a figure is known: the live reading, the day's last point, or what Status last showed.
-    var current: Double? { metric.now(store.live) ?? points.last?.v ?? metric.now(model.status) }
-
+    // The figure under the name is its own view, the only part of the page that watches the live readings: the whole page
+    // (its chart included) was worked out again with every reading, a 100 to 200 ms frame each second (gate 3).
     var readout: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(pickedMark.map { metric.text($0.value) } ?? current.map(metric.text) ?? "–")
-                .font(.system(size: 34, weight: .semibold)).monospacedDigit().contentTransition(.numericText())
-            Text(pickedMark.map { $0.date.formatted(date: .omitted, time: .shortened) } ?? (stale ? "Last reading" : "Now")).font(.footnote).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .opacity(stale ? staleDim : 1)
+        HistoryReadout(metric: metric, picked: pickedMark.map { ($0.value, $0.date) }, last: points.last?.v, stale: stale)
     }
     var range: some View {
         Picker("Period", selection: $hours) {
@@ -343,8 +340,9 @@ struct NowDot: View {
 // Held down like the lock screen's flashlight: a ring fills around it under the finger, it clicks and switches. The
 // glyph and its fill say which way it is; a tap on its own only wiggles it and says "Hold" in place.
 struct DisplayHoldButton: View {
+    @EnvironmentObject private var noticeState: NoticeStore  // redrawn when the Mac's reachability changes (not through the model)
     @EnvironmentObject var model: AppModel
-    @EnvironmentObject var store: LiveStore
+    @EnvironmentObject var display: DisplayState
     @State private var pressing = false
     @State private var fill: CGFloat = 0
     @State private var wanted: Bool?    // what was asked for, until the Mac agrees
@@ -353,8 +351,11 @@ struct DisplayHoldButton: View {
     @State private var wiggles = 0
     @State private var failure: String?
     // What was just asked for, briefly; otherwise the Mac's own state, read every second, then every 10 seconds.
-    var reported: Bool? { store.live?.displayOn ?? model.status?.displayOn }
-    var isOn: Bool { wanted ?? reported ?? (model.status?.screen != "display off") }
+    // From the page that holds it: the status isn't watched through the model (StatusStore).
+    var statusOn: Bool?
+    var statusOff = false
+    var reported: Bool? { display.on ?? statusOn }
+    var isOn: Bool { wanted ?? reported ?? !statusOff }
     static let hold = 0.4, settle = 0.12
     var body: some View {
         // Dimmed in its own colours while the Mac can't be reached: an opacity laid over it from outside didn't reach
@@ -364,7 +365,7 @@ struct DisplayHoldButton: View {
         VStack(spacing: 6) {
             Image(systemName: isOn ? "sun.max.fill" : "moon")
                 .font(.system(size: 20))
-                .foregroundStyle(lit ? Color.black : macBlue.opacity(dim))
+                .foregroundStyle(lit ? Color.black : Color.white.opacity(dim))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 52, height: 52)
                 .background(lit ? Color.white : Color(white: 0.16).opacity(dim), in: Circle())
@@ -385,7 +386,7 @@ struct DisplayHoldButton: View {
                         LinearKeyframe(0, duration: 0.06)
                     }
                 }
-            Text(hint ? "Hold" : "Display").font(.footnote).foregroundStyle(hint ? AnyShapeStyle(macBlue) : AnyShapeStyle(.primary.opacity(dim))).lineLimit(1).minimumScaleFactor(0.8)
+            Text(hint ? "Hold" : "Display").font(.caption2).foregroundStyle(hint ? AnyShapeStyle(macBlue) : AnyShapeStyle(.secondary.opacity(dim))).lineLimit(1).minimumScaleFactor(0.8)
                 .contentTransition(.opacity)
             if let failure {
                 Text(failure).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center).lineLimit(3).fixedSize(horizontal: false, vertical: true)
@@ -462,6 +463,27 @@ struct DisplayHoldButton: View {
             for _ in 0..<12 where reported != next { try? await Task.sleep(nanoseconds: 500_000_000) }
             wanted = nil
         }
+    }
+}
+
+// A history's figure: the picked point's, or else the live reading, the day's last point, or what Status last showed; never a
+// dash while a figure is known.
+struct HistoryReadout: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var store: LiveStore
+    let metric: HistoryMetric
+    let picked: (value: Double, date: Date)?
+    let last: Double?
+    let stale: Bool
+    var current: Double? { metric.now(store.live) ?? metric.now(model.status) ?? last }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(picked.map { metric.text($0.value) } ?? current.map(metric.text) ?? "–")
+                .font(.system(size: 34, weight: .semibold)).monospacedDigit().contentTransition(.numericText())
+            Text(picked.map { $0.date.formatted(date: .omitted, time: .shortened) } ?? (stale ? "Last reading" : "Now")).font(.footnote).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(stale ? staleDim : 1)
     }
 }
 
