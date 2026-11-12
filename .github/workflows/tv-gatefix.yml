@@ -13,7 +13,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 50
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +30,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 35
+        timeout-minutes: 65
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -52,11 +52,11 @@ jobs:
           }
           poses() {
             local d=$1 x=$2
+            date
             for T in 0 3 2 6 1 5 9; do shot tab$T$x $d 7 $M -tab $T; done
             shot remote-repisode$x $d 8 $M/repisode -tab 0
             shot tvsettings$x $d 10 $M -tab 9 -pose tvsettings
             shot streams$x $d 9 $M -tab 1 -pose streams
-            shot search$x $d 12 $M -tab 1 -pose search
             shot search$x $d 12 $M -tab 1 -pose search
             curl -s $M/real/reset > /dev/null; shot realseries-end$x $d 14 $M/real -tab 3 -pose realseries
           }
