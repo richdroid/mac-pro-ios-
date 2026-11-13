@@ -194,6 +194,8 @@ struct MacPartRow: View {
     var pending: String?
     // Red, but only because the Mac is still coming up after a restart: amber, with a spinner, not a failure yet.
     var starting = false
+    // The first in its card: no separator above (OwnSeparator).
+    var first = true
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: MacParts.symbol(id)).font(.body).foregroundStyle(.secondary).frame(width: 26).padding(.top, 1)
@@ -216,8 +218,8 @@ struct MacPartRow: View {
             sign.frame(width: 24)
         }
         .padding(.vertical, 2)
-        .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] + 38 }
         .accessibilityElement(children: .combine)
+        .modifier(OwnSeparator(first: first))
     }
     @ViewBuilder var sign: some View {
         if pending != nil, part == nil || pending == "Fixing…" { ProgressView().controlSize(.small) }
@@ -356,8 +358,9 @@ struct MacHealthView: View {
     func partsSection(heading: Bool) -> some View {
         Section {
             // Anything that needs a look first, so it's never below the fold under a heading that counts it.
-            ForEach(ids.filter { id in bad.contains { $0.part == id } } + ids.filter { id in !bad.contains { $0.part == id } }, id: \.self) { id in
-                MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id), starting: startingWindow).place(id)
+            let order = ids.filter { id in bad.contains { $0.part == id } } + ids.filter { id in !bad.contains { $0.part == id } }
+            ForEach(order, id: \.self) { id in
+                MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id), starting: startingWindow, first: id == order.first).place(id)
             }
         } header: {
             // While the Mac is away nothing is known of its parts: no heading then (each row says it's waiting), never
@@ -526,7 +529,7 @@ struct MacRestartView: View {
                 if side != .right {
                     Section {
                         ForEach(MacParts.checks, id: \.self) { id in
-                            MacPartRow(id: id, part: checks?.parts.first { $0.part == id }, check: true, pending: checking || (checks == nil && failure == nil) ? "Checking…" : checks == nil ? "Not checked yet" : nil).place(id)
+                            MacPartRow(id: id, part: checks?.parts.first { $0.part == id }, check: true, pending: checking || (checks == nil && failure == nil) ? "Checking…" : checks == nil ? "Not checked yet" : nil, first: id == MacParts.checks.first).place(id)
                         }
                     } header: { Text("Before it restarts") } footer: {
                         Text("It has to come back by itself, with no one at the Mac.")

@@ -387,6 +387,8 @@ struct LinkRow: View {
     let link: MacLink
     let busy: Bool
     let outcome: MacActionResult?
+    // Not the first in its card: drawn with its own separator above (see body).
+    var first = true
     let act: (String) -> Void
     var color: Color { link.up ? .green : link.down ? .red : ["starting", "look"].contains(link.state) ? .orange : .secondary }
     var stateWord: String {
@@ -418,12 +420,12 @@ struct LinkRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
                     // The separator starts under the name, on every row (CI d9c229c: Chumby proxy's ran full width).
-                    Text(link.name).alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
+                    Text(link.name)
                     Spacer(minLength: 8)
                     HStack(spacing: 6) { Circle().fill(color).frame(width: 8, height: 8); Text(stateWord) }.font(.footnote).foregroundStyle(.secondary)
                 }
                 if let d = link.detail { Text(d).font(.footnote).foregroundStyle(link.down ? Color.red : Color.secondary).fixedSize(horizontal: false, vertical: true) }
-                if !facts.isEmpty { Text(facts.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).monospacedDigit().fixedSize(horizontal: false, vertical: true).textSelection(.enabled) }
+                if !facts.isEmpty { Text(facts.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
                 if let e = link.lastError {
                     Text("Last error\(e.t.map { " " + Format.ago(ms: $0) } ?? ""): \(e.text)").font(.footnote).foregroundStyle(.secondary).lineLimit(3)
                 }
@@ -444,6 +446,7 @@ struct LinkRow: View {
             }
         }
         .padding(.vertical, 3)
+        .modifier(OwnSeparator(first: first))
     }
 }
 
@@ -451,6 +454,12 @@ struct LinkRow: View {
 // Caches/tap.txt for the workflow to read. Only with that pose; never on the phone.
 struct FilmTarget: ViewModifier {
     let on: Bool
+    // What the film saw happen, in Caches/film.txt beside tap.txt, for the build's log.
+    static func note(_ line: String) {
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("film.txt")
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        try? (text + "\(Date().timeIntervalSince1970) \(line)\n").write(to: url, atomically: true, encoding: .utf8)
+    }
     func body(content: Content) -> some View {
         if on {
             content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in
@@ -458,6 +467,7 @@ struct FilmTarget: ViewModifier {
                 guard let w = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first?.windows.first?.bounds, w.width > 0, w.height > 0 else { return }
                 let line = String(format: "%.4f %.4f\n", r.midX / w.width, r.midY / w.height)
                 try? line.write(to: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("tap.txt"), atomically: true, encoding: .utf8)
+                FilmTarget.note("restart at \(line.trimmingCharacters(in: .newlines)) in \(Int(w.width))x\(Int(w.height))")
                 #endif
             }
         } else {
@@ -486,7 +496,8 @@ struct LinksView: View {
     func section(_ title: String, _ list: [MacLink]) -> some View {
         Section(title) {
             ForEach(list) { l in
-                LinkRow(link: l, busy: busy.contains(l.id), outcome: outcomes[l.id]) { a in
+                LinkRow(link: l, busy: busy.contains(l.id), outcome: outcomes[l.id], first: l.id == list.first?.id) { a in
+                    if film { FilmTarget.note("tapped \(l.id) \(a)") }
                     // Fix runs the Mac's own bring-up, which only starts what's down: no question. Anything that restarts asks.
                     if a == "bringup" { run(l, a) } else { asking = (l, a) }
                 }
@@ -572,7 +583,7 @@ struct LinksView: View {
             Task {
                 try? await Task.sleep(nanoseconds: 14_000_000_000)
                 if asking == nil, !busy.contains("public"), outcomes["public"] == nil, let l = feed.value?.links.first(where: { $0.id == "public" }), l.uptime ?? 0 > 60 {
-                    print("film: the tap missed; asking without it"); asking = (l, "restart")
+                    FilmTarget.note("the tap missed; asking without it"); asking = (l, "restart")
                 }
             }
             await feed.loop(model, every: 2); return
@@ -704,7 +715,10 @@ struct FanChart: View {
         Chart(points, id: \.t) { p in
             LineMark(x: .value("Time", p.date), y: .value("rpm", p.v)).foregroundStyle(macBlue).interpolationMethod(.monotone)
         }
-        .chartYScale(domain: max(0, fan.min - 100)...max(fan.max, points.map(\.v).max() ?? fan.max))
+        // From the lowest of the day, not the fan's slowest now: with the slowest speed raised, the day's earlier speeds
+        // under it were drawn below the plot, over the hour labels (CI 43030e3).
+        .chartYScale(domain: max(0, min(fan.min, points.map(\.v).min() ?? fan.min) - 100)...max(fan.max, points.map(\.v).max() ?? fan.max))
+        .chartPlotStyle { $0.clipped() }
         .chartXAxis { AxisMarks(values: .stride(by: .hour, count: 6)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.hour()) } }
         .chartYAxis { AxisMarks(position: .trailing) { v in AxisGridLine(); AxisValueLabel { if let d = v.as(Double.self) { Text("\(Int(d))") } } } }
         .frame(height: 160)
@@ -752,10 +766,10 @@ struct FansView: View {
         if let c, c.ready {
             Section {
                 Button { setFloor(nil) } label: { floorRow("Automatic", detail: "The Mac sets the speed", on: c.mode != "floor", spinning: pending == 0) }
-                    .disabled(busy || away)
+                    .buttonStyle(.plain).disabled(busy || away)
                 ForEach(c.presets ?? []) { p in
                     Button { pick(p, c) } label: { floorRow(p.name, detail: "Never slower than \(p.rpm.formatted()) rpm", on: c.mode == "floor" && c.floor == p.rpm, spinning: pending == p.rpm) }
-                        .disabled(busy || away)
+                        .buttonStyle(.plain).disabled(busy || away)
                 }
                 if c.mode == "floor", let fl = c.floor, !(c.presets ?? []).contains(where: { $0.rpm == fl }) {
                     floorRow("Raised", detail: "Never slower than \(fl.formatted()) rpm", on: true, spinning: false)

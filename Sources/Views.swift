@@ -607,6 +607,23 @@ struct PaneHeading: View {
     }
 }
 
+// A row's own separator, under its name (`inset` from the row's leading edge), on the cell's top edge. The system's ran
+// the card's full width under one row or another wherever it fell on the screen (CI d9c229c and 43030e3: under Chumby
+// proxy on Connections, under Chumby on Health, in every posture). The row takes the list's usual 20 pt sides and its
+// usual 11 pt ends itself (`ends`), so it sits where it did. The first row of a card has none.
+struct OwnSeparator: ViewModifier {
+    let first: Bool
+    var inset: CGFloat = 38
+    var ends: CGFloat = 11
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, ends)
+            .overlay(alignment: .top) { if !first { Divider().padding(.leading, inset) } }
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+    }
+}
+
 // The chevron at the end of a row that opens a page, as the Control tab draws it: footnote, semibold, tertiary label grey,
 // never the row’s tint, so the tertiary grey is drawn as a colour (designer, CI d9c229c: blue chevrons on Actions and Updates beside grey ones on Control).
 struct RowChevron: View {
@@ -733,6 +750,10 @@ struct Screen<Content: View>: View {
                 model.usageShown = model.usageAsked
                 withAnimation(Motion.quick) { proxy.scrollTo("usage", anchor: .top) }
             }
+            // The This Mac card's readings (MacConsole.swift, ConsoleSummary), from the Control tab's list itself: hung off a
+            // card down the page, a List never drew it until scrolled to, so the card came in late and the shots scrolled
+            // to nothing (CI 43030e3).
+            .task(id: tab) { if tab == 5, side != .left { await ConsoleSummary.shared.loop(model) } }
             .task {
                 // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
@@ -752,6 +773,13 @@ struct Screen<Content: View>: View {
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     proxy.scrollTo(to, anchor: .top)
+                    return
+                }
+                // The build's shot of the heat heading over the dials (the bridge's verdict), the heading in view.
+                if model.pose == "heat", tab == 0, side != .right {
+                    for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    proxy.scrollTo("temps", anchor: UnitPoint(x: 0.5, y: 0.35))
                     return
                 }
                 // The build's shot of Status scrolled down to the dials and the disk.
@@ -2224,8 +2252,6 @@ struct ControlTab: View {
             MacConsoleSections()
             // Health and Restart the Mac, last and apart from the everyday buttons, each its own page.
             MacPowerSections()
-                // The This Mac card's readings: here, on a card that's always drawn (MacConsole.swift, ConsoleSummary).
-                .task { await ConsoleSummary.shared.loop(model) }
                 .onReceive(model.nav.$macPage.dropFirst()) { p in if p == nil { Task { await ConsoleSummary.shared.readAll(model.api) } } }
         }
     }
