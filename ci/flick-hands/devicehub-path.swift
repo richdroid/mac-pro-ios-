@@ -14,20 +14,20 @@ if args[1] == "path" {
     var i = 3
     while i + 3 < n.count {
       let to = touchPoint((n[i], n[i + 1]), device.udid, on: d), seconds = n[i + 2], ease = n[i + 3] > 0
-      // Each injected move takes Device Hub some 25–40 ms, so the steps are coarse: their count, not their pace, is asked.
-      // Each step is due at its share of the segment's time from its start, so the time the injection itself takes is
-      // inside the segment, not added to it (sleeping a whole step each time made a 0.09 s flick take 0.18 s: half its
-      // speed, slower than a real flick, ef52168).
-      let steps = max(1, Int(seconds / 0.03))
+      // Driven by the clock, not by a count of steps: each move is sent at the place the finger is at the moment it's
+      // sent, about every 10 ms (or as fast as Device Hub takes them, 25–40 ms each), and the last one exactly at the
+      // segment's end. A count of coarse steps made a 0.09 s flick three moves, which read as no speed at all folded.
       let from = at
       let began = Date()
-      for k in 1...steps {
-        let due = seconds * Double(k) / Double(steps) - Date().timeIntervalSince(began)
-        if due > 0 { usleep(useconds_t(due * 1_000_000)) }
-        var t = Double(k) / Double(steps)
+      while true {
+        let e = Date().timeIntervalSince(began)
+        var t = seconds > 0 ? min(1, e / seconds) : 1
         if ease { t = 1 - (1 - t) * (1 - t) }
         at = (from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t)
         send(.move, at)
+        if e >= seconds { break }
+        let wait = min(0.01, seconds - Date().timeIntervalSince(began))
+        if wait > 0 { usleep(useconds_t(wait * 1_000_000)) }
       }
       i += 4
     }

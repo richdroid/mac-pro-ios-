@@ -2776,6 +2776,9 @@ struct AppBrowse: View {
     var drag = CGSize.zero
     var lean = 0.0
     var armed = false
+    // Held over the TV long enough to choose: let go, it opens its page at the streams instead of sending Best.
+    var choosing = false
+    @ObservationIgnored var armedAt = Date.distantPast
     // A tap iOS reports with the release of a held card is that release, not a second action.
     @ObservationIgnored var handledAt = Date.distantPast
 }
@@ -2793,6 +2796,17 @@ struct ShelfLiftOverlay: View {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .strokeBorder(TVLook.accent.opacity(hand.armed ? 1 : 0.45 * min(1, rise / 80)), lineWidth: hand.armed ? 2 : 1.5)
                             .frame(width: hand.width, height: hand.rect.height > 0 ? min(hand.rect.height, hand.width * 1.5) : hand.width * 1.5)
+                    }
+                    .overlay(alignment: .top) {
+                        if hand.choosing {
+                            Text("Let go to choose")
+                                .font(.footnote.weight(.semibold)).foregroundStyle(.white)
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(TVLook.accent, in: Capsule())
+                                .fixedSize()
+                                .offset(y: -30)
+                                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                        }
                     }
                     .scaleEffect(1.06 + 0.06 * min(1, rise / 240), anchor: .center)
                     .rotationEffect(.degrees(hand.lean))
@@ -2879,7 +2893,10 @@ struct ShelfFlick: ViewModifier {
                     switch phase {
                     case .moved:
                         for e in hands.hand.move(CGPoint(x: d.width, y: d.height), at: Date().timeIntervalSince(hands.base)) {
-                            if case .armed(let on) = e { ShelfHand.shared.armed = on; if on { FlickHaptic.detent() } }
+                            if case .armed(let on) = e {
+                                ShelfHand.shared.armed = on
+                                if on { FlickHaptic.detent(); dwell() } else if ShelfHand.shared.choosing { withAnimation(.easeOut(duration: 0.15)) { ShelfHand.shared.choosing = false } }
+                            }
                         }
                         ShelfHand.shared.drag = d
                         let vx = TouchLedger.feel().map { FlickHand.speed($0).dx } ?? 0
@@ -2893,6 +2910,19 @@ struct ShelfFlick: ViewModifier {
                 if !following { end(hands.hand.up(.zero, at: Date().timeIntervalSince(hands.base)), translation: .zero) }
             }
     }
+    // Held over the TV, still armed a second later: he wants to choose. Felt, and said on the card.
+    func dwell() {
+        guard ShelfSend.ref(item, source) != nil else { return }
+        let mark = Date()
+        ShelfHand.shared.armedAt = mark
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard up, ShelfHand.shared.armed, ShelfHand.shared.armedAt == mark else { return }
+            HandTrace.note("shelf-choosing")
+            withAnimation(.easeOut(duration: 0.18)) { ShelfHand.shared.choosing = true }
+            FlickHaptic.charged()
+        }
+    }
     // In the hand: felt, drawn over everything, the shelf held still, and the TV told what's coming.
     func lifted() {
         HandTrace.note("shelf-lifted")
@@ -2900,7 +2930,7 @@ struct ShelfFlick: ViewModifier {
         FlickHaptic.lift(); FlickClock.touched()
         ScrollLock.set(lock, true)
         let h = ShelfHand.shared
-        h.item = item; h.source = source; h.width = width; h.rect = rect(); h.drag = .zero; h.lean = 0; h.armed = false
+        h.item = item; h.source = source; h.width = width; h.rect = rect(); h.drag = .zero; h.lean = 0; h.armed = false; h.choosing = false
         if source == .stremio, !item.isYouTube { StreamCache.shared.prefetch(item) }
         guard !model.isOnTV(item, source) else { receipt = ""; return }
         receipt = UUID().uuidString
@@ -2920,7 +2950,14 @@ struct ShelfFlick: ViewModifier {
         HandTrace.note(String(format: "shelf-end %@ dy=%.0f", "\(outcome)", translation.height))
         ShelfHand.shared.handledAt = Date()
         ScrollLock.set(lock, false)
+        let choosing = ShelfHand.shared.choosing
+        ShelfHand.shared.choosing = false
         switch outcome {
+        case .thrown where choosing:
+            // Held over the TV until it said "Let go to choose": its page, at the streams, nothing sent.
+            put(back: false)
+            if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
+            FlickCardButton.tap(model, item, source, origin: rect(), held: true)
         case .thrown:
             let v = hands.hand.leaving
             throwIt(velocity: CGSize(width: v.dx, height: v.dy), translation: translation)
@@ -2928,7 +2965,7 @@ struct ShelfFlick: ViewModifier {
             // Held and let go where it was: a tap, its page, as on any button.
             put(back: false)
             if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
-            FlickCardButton.tap(model, item, source, origin: rect())
+            FlickCardButton.tap(model, item, source, origin: rect(), held: true)
         default:
             FlickHaptic.settle()
             if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
@@ -2961,6 +2998,49 @@ struct ShelfFlick: ViewModifier {
             // Remote's picture when its place is known.
             RenderFlight.rise(toward: model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil } ?? model.lastLanded.flatMap { $0.window == RenderFlight.windowSize ? $0.rect : nil })
         }
+        // A film or an episode: sent from here, no page, with the list in hand; a moment for a list on its way, the card
+        // in the air meanwhile; the page only when there's nothing to send without it.
+        if let r = ShelfSend.ref(item, source), !startUnderWay {
+            if let list = ShelfSend.list(item, source), sendNow(list, velocity: velocity) { return }
+            HandTrace.note("shelf-waiting")
+            Task { @MainActor in
+                let until = Date().addingTimeInterval(0.8)
+                while Date() < until {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    if let list = StreamCache.shared.inHand(type: r.type, imdb: r.imdb, video: r.video), !list.isEmpty {
+                        if sendNow(list, velocity: velocity) { return }
+                        break
+                    }
+                }
+                viaPage(velocity: velocity, from: from)
+            }
+            return
+        }
+        viaPage(velocity: velocity, from: from)
+    }
+    // The same title's start already under way (the card thrown again while the TV brings it up): model.flick takes it
+    // straight to the Remote, nothing sent twice.
+    var startUnderWay: Bool {
+        guard let r = item.stremioRef, let st = model.starting, !st.failed, !st.played, let t = model.startingTarget else { return false }
+        return t.item.stremioRef?.imdb == r.imdb && t.item.stremioRef?.video == r.video
+    }
+    // Best out of the list in hand, sent now; the Remote's tab in the next turn, the flight landing on its picture.
+    func sendNow(_ list: [StremioStream], velocity: CGSize) -> Bool {
+        guard let best = ShelfSend.best(list) else { return false }
+        HandTrace.note("shelf-direct " + best.token)
+        FlickClock.begin()
+        let r: [String: Any]? = receipt.isEmpty ? nil : Self.receipt(item, source, id: receipt)
+        if !receipt.isEmpty { FlickReceipt.thrown(receipt) }
+        model.startStream(item: item, stream: best, list: list, receipt: r, velocity: velocity)
+        let art = item.art, title = item.title, m = model
+        let tint = ImageStore.shared.cachedBand(URL(string: art))
+        // A timer, not a task: the tab's long turn comes after this one has been drawn, the flight running meanwhile.
+        Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { m.remoteFromThrow(art: art, title: title, tint: tint) } }
+        Task { @MainActor in try? await Task.sleep(nanoseconds: 60_000_000); ShelfHand.shared.item = nil; up = false }
+        return true
+    }
+    // The flick page, for a choice: it takes the card in the air on into the Remote once the pick is made.
+    func viaPage(velocity: CGSize, from: CGRect) {
         var t: FlickTarget
         if item.isYouTube {
             let at = item.resume ?? 0
@@ -2977,3 +3057,177 @@ struct ShelfFlick: ViewModifier {
     }
 }
 
+
+// MARK: - A throw that needs no page
+// A Stremio film or episode thrown from its shelf goes straight to the TV: the stream he'd most likely pick (Best, as the
+// page's throwPick has it) out of the list already in hand from the card's press, sent with its two nearest stand-ins and
+// the lift's receipt, the card flying on into the Remote's picture. The flick page is built only when there's a choice to
+// make: the list not in hand, nothing in it to send, or the card held over the TV until it says "Choose" (Richard,
+// 2026-11-12: "flicking is everything"; one continuous motion, no page flashing up between).
+@MainActor enum ShelfSend {
+    // Best: the top one that hasn't failed and isn't stalled or a dub; else the top one that hasn't failed.
+    static func best(_ found: [StremioStream], avoid: Set<String> = []) -> StremioStream? {
+        found.first { !avoid.contains($0.token) && $0.stalled != true && $0.dubbed != true } ?? found.first { !avoid.contains($0.token) }
+    }
+    // The film, or the episode the card names: what can be sent without a page. A show not at an episode needs its page.
+    static func ref(_ item: MediaItem, _ source: MediaSource) -> (type: String, imdb: String, video: String)? {
+        guard source == .stremio, !item.isYouTube, let r = item.stremioRef else { return nil }
+        if r.type == "series" { guard let v = r.video else { return nil }; return (r.type, r.imdb, v) }
+        return (r.type, r.imdb, r.imdb)
+    }
+    static func list(_ item: MediaItem, _ source: MediaSource) -> [StremioStream]? {
+        guard let r = ref(item, source), let l = StreamCache.shared.inHand(type: r.type, imdb: r.imdb, video: r.video), !l.isEmpty else { return nil }
+        return l
+    }
+    // "S1 E2", for a card on an episode.
+    static func episodeLine(_ item: MediaItem) -> String? {
+        guard let r = item.stremioRef, r.type == "series", let v = r.video else { return nil }
+        let p = v.split(separator: ":")
+        guard p.count == 3, let s = Int(p[1]), let e = Int(p[2]) else { return nil }
+        return "S\(s) E\(e)"
+    }
+    // Where he is in it: the card's own, else Stremio's Continue watching (as the page's savedProgress).
+    static func progress(_ item: MediaItem) -> Double? {
+        if let p = item.progress { return p }
+        guard let r = item.stremioRef else { return nil }
+        let row = BrowseStore.shared(.stremio).rows.first { $0.title == "Continue watching" }
+        for i in row?.items ?? [] {
+            guard let ir = i.stremioRef, ir.imdb == r.imdb, let p = i.progress else { continue }
+            if r.type != "series" || ir.video == r.video { return p }
+        }
+        return nil
+    }
+    // The page's order for the same pick: token, what it is, where he was, and the two nearest stand-ins.
+    static func body(_ item: MediaItem, _ stream: StremioStream, _ list: [StremioStream], avoid: Set<String>) -> [String: Any] {
+        guard let r = item.stremioRef else { return ["token": stream.token] }
+        var b: [String: Any] = ["token": stream.token, "imdb": r.imdb]
+        if r.type == "series", let v = r.video { b["video"] = v }
+        // Near the end, it starts over (the page's default there); otherwise it carries on where he was.
+        if let p = progress(item) {
+            if p > 0.9, p < 0.99 { b["restart"] = true } else if p > 0.01, p < 0.97 { b["resume"] = (p * 1000).rounded() / 1000 }
+        }
+        let spare = list.filter { $0.token != stream.token && !avoid.contains($0.token) && $0.quality == stream.quality && $0.stalled != true
+            && (stream.dubbed == true || $0.dubbed != true) }.prefix(2).map(\.token)
+        if !spare.isEmpty { b["fallbacks"] = Array(spare) }
+        return b
+    }
+}
+extension TVModel {
+    // The start, the model's from the throw: the Remote shows it (poster, ring, phase) and follows it to playing, or dims
+    // it with "Choose another", which opens the page at its streams. The request goes now.
+    func startStream(item: MediaItem, stream first: StremioStream, list: [StremioStream], receipt: [String: Any]?, velocity: CGSize) {
+        guard let r = item.stremioRef else { return }
+        let target = FlickTarget(item: item, source: .stremio)
+        let lineage = target.lineage
+        beginStart(.init(title: item.title, art: item.art, line: ShelfSend.episodeLine(item), token: first.token), target: target)
+        standIn(item.art)
+        Task { @MainActor in
+            let owns = { self.startingTarget?.lineage == lineage }
+            var stream = first, list = list
+            var avoid: Set<String> = [], resent = false, dropped = 0
+            let heard = HeardBox()
+            FlickClock.current.mark("request")
+            while true {
+                var body = ShelfSend.body(item, stream, list, avoid: avoid)
+                if let receipt { body["receipt"] = FlickReceipt.thrown(receipt, velocity: velocity) }
+                if dropped > 0, heard.yes { body["again"] = true }
+                do {
+                    let answer = try await TVBridge.playStream(body, opened: { _ in heard.yes = true; FlickClock.current.mark("first-byte") }, phase: { p in
+                        FlickClock.current.mark("phase-" + p)
+                        guard owns() else { return }
+                        self.startPhase(p)
+                        if p == "playing" { FlickClock.current.mark("playing"); self.startPlayed() }
+                    })
+                    if let j = try? JSONSerialization.jsonObject(with: answer) as? [String: Any] {
+                        if j["alreadyOn"] as? Bool == true { FlickClock.current.mark("already-on") }
+                        if j["joined"] as? Bool == true { FlickClock.current.mark("joined") }
+                        if let t = j["token"] as? String, t != stream.token, let played = list.first(where: { $0.token == t }) { stream = played }
+                    }
+                    PlayedStream.set(r.imdb + "/" + (r.type == "series" ? r.video ?? "" : ""), stream.description)
+                    RecentFlicks.shared.add(RecentFlick(title: item.title, art: item.art, imdb: r.imdb, type: r.type, video: r.type == "series" ? r.video : nil,
+                                                        episode: ShelfSend.episodeLine(item), at: Date()))
+                    NextUp.shared.forget()
+                    UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "flicksDone") + 1, forKey: "flicksDone")
+                    if owns() || startingTarget == nil { startPlayed() }
+                    FlickClock.current.mark("answer"); FlickClock.current.finished()
+                    return
+                } catch {
+                    if error is CancellationError { if owns() { clearStart() }; FlickClock.current.mark("called-off"); FlickClock.current.finished(); return }
+                    // Gone: the list fetched afresh and the same file (or the next best) sent once more, silently.
+                    if error is TVBridge.Gone, !resent {
+                        resent = true
+                        let video = r.type == "series" ? r.video ?? r.imdb : r.imdb
+                        StreamCache.shared.forget(type: r.type, imdb: r.imdb, video: video)
+                        if let fresh = await StreamCache.shared.streams(type: r.type, imdb: r.imdb, video: video, again: true), !fresh.isEmpty,
+                           let s = fresh.first(where: { $0.description == stream.description && !avoid.contains($0.token) }) ?? ShelfSend.best(fresh, avoid: avoid) {
+                            list = fresh; stream = s; continue
+                        }
+                    }
+                    // The line dropped, not the start: twice more, a moment apart, before that's believed.
+                    if error is URLError, dropped < 2 {
+                        dropped += 1
+                        FlickClock.current.mark("line-lost")
+                        try? await Task.sleep(nanoseconds: UInt64(dropped) * 700_000_000)
+                        continue
+                    }
+                    FlickClock.current.mark("failed"); FlickClock.current.finished()
+                    if error is TVBridge.DidNotStart, let stalled = TriedStreams.last { avoid.formUnion(stalled) } else { avoid.insert(stream.token) }
+                    TriedStreams.last = nil
+                    // On the Remote: the poster dims, with one way on (Choose another: the page, at its streams).
+                    if owns() { startFailed(tokens: Array(avoid)) }
+                    return
+                }
+            }
+        }
+    }
+    // Into the Remote from a throw with no page: its tab up under the still of the shelf in this turn (the long one),
+    // the still fading off it the moment that turn is over, and the flight landing on the Remote's own picture, which
+    // stays hidden until it does (flickHandoff), as the page's goRemote does it.
+    func remoteFromThrow(art: String, title: String, tint: Color?) {
+        var quiet = Transaction(); quiet.disablesAnimations = true
+        SwipeLog.note("shelf send tab")
+        withTransaction(quiet) { remoteArrival = Date(); flickHandoff = true; tab = 0; keepMood(until: art); mood = tint }
+        RailMark.settle()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 16_000_000)
+            SwipeLog.note("shelf send under")
+            ScreenVeil.lift(0.22)
+            var slot: CGRect? = mirrorSlot.flatMap { $0.width > 20 ? $0 : nil }, seen: CGRect?
+            for _ in 0..<(slot == nil ? 40 : 0) {
+                if let s = mirrorSlot, s.width > 20 {
+                    if let p = seen, abs(p.minX - s.minX) + abs(p.minY - s.minY) + abs(p.width - s.width) < 0.5 { slot = s; break }
+                    seen = s
+                }
+                try? await Task.sleep(nanoseconds: 25_000_000)
+            }
+            guard let first = slot ?? seen else {
+                RenderFlight.land(after: 0)
+                withAnimation(.easeOut(duration: 0.15)) { flickHandoff = false }
+                return
+            }
+            FlickClock.current.mark("move")
+            remoteMoveAt = Date()
+            RenderFlight.aim(first, first: false)
+            // The picture can still settle as the Remote lays out: followed until it's still.
+            var aimed = first, aimedAt = Date(), still = 0
+            let start = Date()
+            while Date().timeIntervalSince(start) < 0.7 {
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                if let s = mirrorSlot, s.width > 20 {
+                    if abs(s.minX - aimed.minX) + abs(s.minY - aimed.minY) + abs(s.width - aimed.width) + abs(s.height - aimed.height) > 0.5 {
+                        aimed = s; aimedAt = Date(); still = 0; RenderFlight.aim(s, first: false)
+                    } else { still += 1 }
+                }
+                if Date().timeIntervalSince(start) > 0.36, still >= 3, Date().timeIntervalSince(aimedAt) >= 0.3 { break }
+            }
+            FlickClock.current.remoteLanded()
+            SwipeLog.note("shelf send landed")
+            lastLanded = (aimed, RenderFlight.windowSize)
+            withAnimation(.easeOut(duration: 0.15)) { flickHandoff = false }
+            RenderFlight.land()
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if !art.isEmpty { lastArt = art; lastArtTitle = title; lastArtPkg = "com.stremio.one" }
+            await load()
+        }
+    }
+}

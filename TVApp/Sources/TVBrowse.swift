@@ -457,9 +457,10 @@ struct FlickCardButton: View {
     // A film or show from Stremio's catalogue has its details a tap away, on the "i" at the picture's corner.
     var hasInfo: Bool { source == .stremio && !item.isYouTube && item.stremioRef != nil }
     // What a tap on a card does; the build's real-data flows tap through here too.
-    @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil) {
+    @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil, held: Bool = false) {
         // The tap iOS reports with the release of a card that was held (thrown, put back, or let go as a tap) is that.
-        if Date().timeIntervalSince(ShelfHand.shared.handledAt) < 0.35 { return }
+        // The held card's own release (`held`) is the one that counts.
+        if !held, Date().timeIntervalSince(ShelfHand.shared.handledAt) < 0.35 { return }
         if model.isOnTV(item, source) { model.showOnRemote(); return }
         if item.isYouTube {
             // A YouTube video from Continue watching: thrown like anything else, and on the TV it opens in YouTube where
