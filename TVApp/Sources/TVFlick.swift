@@ -2858,13 +2858,48 @@ struct ShelfFlick: ViewModifier {
             .background(ScrollLock(box: lock).allowsHitTesting(false))
             .simultaneousGesture(gesture)
             .accessibilityAction(named: "Flick to the TV") { hands.hand = FlickHand(.list); throwIt(velocity: CGSize(width: 0, height: -800), translation: .zero) }
-            .task { TouchLedger.install(); await reportPlace() }
+            .task { TouchLedger.install(); Self.warmRemote(model); await reportPlace() }
+    }
+    // The Remote's first build (a second and more in CI) done once, unseen, while the shelves are at rest, so a card thrown
+    // from them lands on a Remote that's there: built at the throw, the card sat frozen at the top for 1.4 s and the
+    // Remote cut in (CI 52782c5, open flat). Its tab put up under a still of the screen and back in two quiet steps, as
+    // the flick page's warmRemote does it; where its picture is kept for the throw to aim at from the start.
+    @MainActor static var warming = false
+    @MainActor static func warmRemote(_ model: TVModel) {
+        guard !model.remoteBuilt, !warming else { return }
+        warming = true
+        Task { @MainActor in
+            defer { warming = false }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            for _ in 0..<40 {
+                if model.remoteBuilt { return }
+                // Not under a finger, a flick, or another still.
+                if ShelfHand.shared.item == nil, model.flicking == nil, !ScreenVeil.up, !RenderFlight.flying, model.tab != 0 { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard !model.remoteBuilt, model.tab != 0, ShelfHand.shared.item == nil, model.flicking == nil, !ScreenVeil.up else { return }
+            let back = model.tab
+            SwipeLog.note("shelf remote warm")
+            ScreenVeil.cover()
+            model.remoteWarming = true
+            var q = Transaction(); q.disablesAnimations = true
+            withTransaction(q) { model.tab = 0 }
+            RailMark.settle()
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            if let s = model.mirrorSlot, s.width > 20 { model.lastLanded = (s, RenderFlight.windowSize) }
+            if model.tab == 0 { withTransaction(q) { model.tab = back }; RailMark.settle() }
+            await FlickScreen.settleFrames()
+            model.remoteWarming = false
+            SwipeLog.note("shelf remote warmed")
+            ScreenVeil.lift(0.12)
+        }
     }
     // The build's shelf films: the first card fully on screen says where it is, for a real finger to land on it.
     @MainActor static var reported = false
     func reportPlace() async {
         #if canImport(UIKit)
-        guard UserDefaults.standard.string(forKey: "pose") == "shelf", !Self.reported else { return }
+        // A Stremio film's or episode's card, the throw that sends with no page (not a YouTube video's, which has its own).
+        guard UserDefaults.standard.string(forKey: "pose") == "shelf", !Self.reported, ShelfSend.ref(item, source) != nil else { return }
         try? await Task.sleep(nanoseconds: 2_500_000_000)
         guard !Self.reported, let screen = (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?.screen.bounds,
               screen.width > 0 else { return }
@@ -2952,6 +2987,8 @@ struct ShelfFlick: ViewModifier {
         ScrollLock.set(lock, false)
         let choosing = ShelfHand.shared.choosing
         ShelfHand.shared.choosing = false
+        // The dwell is over with the touch, whatever a busy main thread does to its timer.
+        ShelfHand.shared.armedAt = .distantPast
         switch outcome {
         case .thrown where choosing:
             // Held over the TV until it said "Let go to choose": its page, at the streams, nothing sent.
