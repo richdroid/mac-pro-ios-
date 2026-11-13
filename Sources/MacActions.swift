@@ -51,7 +51,6 @@ struct MPAction: Identifiable, Hashable {
     static let check = [
         MPAction(id: "status", title: "Everything at a glance", action: "status", args: [], kind: .read, symbol: "list.bullet.rectangle"),
         MPAction(id: "reboot-safe", title: "Safe to restart?", action: "reboot-safe", args: [], kind: .read, symbol: "checkmark.shield"),
-        MPAction(id: "fix", title: "Fix what’s down", action: "fix", args: [], kind: .tap, symbol: "wrench.adjustable"),
     ]
     static let clean = [
         MPAction(id: "clean-trash", title: "Empty the Trash", action: "clean", args: ["trash"], kind: .confirm, symbol: "trash"),
@@ -165,8 +164,14 @@ struct MacActionsView: View {
     let model: AppModel
     var body: some View {
         ConsolePage(title: "Mac Pro actions", place: "macactions", away: false, lastRead: nil) {
-            Section { ForEach(MPAction.check) { MPActionRow(model: model, item: $0) } } header: { Text("Check and fix") } footer: {
-                Text("Fix what’s down starts only what isn’t running; parts that are up are left alone.")
+            Section {
+                ForEach(MPAction.check) { MPActionRow(model: model, item: $0) }
+                // One Fix in the app, on Connections, where what's down is named.
+                Button { model.macPage = .links } label: {
+                    HStack { Label("Fix what’s down", systemImage: "wrench.adjustable"); Spacer(); Text("on Connections").font(.footnote).foregroundStyle(.secondary); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                }
+            } header: { Text("Check and fix") } footer: {
+                Text("Fix what’s down is on Connections, beside what’s down; it starts only what isn’t running.")
             }
             Section { ForEach(MPAction.clean) { MPActionRow(model: model, item: $0) } } header: { Text("Free up space") } footer: {
                 Text("Each asks first and says exactly what it will remove.")

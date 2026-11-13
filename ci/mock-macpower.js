@@ -2,13 +2,15 @@
 // shots. Made-up names and addresses only (the repository is public). Returns true when it answered.
 const now = () => Date.now();
 const link = (id, name, state, detail, extra = {}) => ({ id, name, state, detail, checkedAt: now(), can: [], ...extra });
+let restartAt = 0;
 const feeds = {
   '/api/mac/links': () => ({ t: now(), healthAt: now(), links: [
     link('tailscale', 'Tailscale', 'up', 'Running · 4 of 6 devices online', { endpoint: '100.64.0.10 · mac-pro.example.ts.net', note: 'Never stopped from here: the phone reaches the Mac through it.' }),
     link('serve', 'Tailscale Serve', 'up', 'https → the bridge, tailnet only', { endpoint: 'https://mac-pro.example.ts.net', note: 'The bridge points it again every minute by itself.' }),
     link('funnel', 'Tailscale Funnel', 'off', 'Off, as it should be'),
     link('bridge', 'Bridge', 'up', 'Answering', { endpoint: '127.0.0.1:8787', pid: 4012, uptime: 51840, can: ['restart'], note: 'Back in a few seconds; the app reconnects by itself.' }),
-    link('public', 'Public link', 'up', 'Cloudflare tunnel up', { endpoint: 'https://example-words.trycloudflare.com', pid: 841, uptime: 188400, can: ['restart'], note: 'A restart gives the public link a new address.' }),
+    (now() - restartAt < 6000 ? link('public', 'Public link', 'starting', 'Tunnel running, no address yet', { endpoint: '', pid: 51234, uptime: Math.round((now() - restartAt) / 1000), can: ['restart'], note: 'A restart gives the public link a new address.' })
+      : link('public', 'Public link', 'up', 'Cloudflare tunnel up', { endpoint: restartAt ? 'https://other-words.trycloudflare.com' : 'https://example-words.trycloudflare.com', pid: restartAt ? 51234 : 841, uptime: restartAt ? Math.round((now() - restartAt) / 1000) : 188400, can: ['restart'], note: 'A restart gives the public link a new address.' })),
     link('novnc', 'Screen link (noVNC)', 'up', 'Screen Sharing answers; Screen relays through the bridge', { endpoint: '/novnc', note: 'Status only. Screen Sharing is a macOS setting.' }),
     link('letterboxd', 'Letterboxd sign-in relay', 'up', 'Running, listening on 8767', { endpoint: '100.64.0.10:8767', pid: 8486, uptime: 187900, can: ['restart'] }),
     link('tv', 'TV link (adb)', 'up', 'Connected'),
@@ -54,6 +56,8 @@ module.exports = (q, s) => {
     });
     return true;
   }
+  // A restart of the public link: starting for 6 s with a new process, then up again (the restart film).
+  if (q.method === 'POST' && u.pathname === '/api/mac/links/action') { restartAt = now(); setTimeout(() => s.end(JSON.stringify({ ok: true, say: 'Public link restarted (now process 51234)' })), 1500); return true; }
   if (q.method === 'POST' && u.pathname.startsWith('/api/mac/') && u.pathname.endsWith('/action')) { s.end(JSON.stringify({ ok: true, say: 'Restarted (now process 51234)' })); return true; }
   const f = feeds[u.pathname];
   if (!f) return false;

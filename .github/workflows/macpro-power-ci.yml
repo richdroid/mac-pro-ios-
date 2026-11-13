@@ -98,13 +98,11 @@ jobs:
           poses 3 -upright
           film links-open-upright 3 14 -tab 5 -pose links
           film fans-open-upright 3 14 -tab 5 -pose fans
-          # A link from the Console (macproapp://control/<section>) lands on its page.
-          xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0; sleep 8
-          xcrun simctl openurl "$DEVICE" "macproapp://control/updates"; sleep 4
-          xcrun simctl io "$DEVICE" screenshot --display=3 dist/power-deeplink-updates-upright.png
-          xcrun simctl openurl "$DEVICE" "macproapp://status/temps/CPU"; sleep 4
-          xcrun simctl io "$DEVICE" screenshot --display=3 dist/power-deeplink-cpu-upright.png
-          xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          # A public-link restart from the question's OK to back up: Restarting, Starting with no address, then Up with a new one.
+          film link-restart-upright 3 22 -tab 5 -pose linkrestartfilm
+          # A link from the Console (macproapp://…) lands on its page.
+          shot deeplink-updates-upright 3 9 -tab 0 -openLink macproapp://control/updates
+          shot deeplink-cpu-upright 3 9 -tab 0 -openLink macproapp://status/temps/CPU
           # Open flat, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -flat

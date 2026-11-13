@@ -181,7 +181,7 @@ extension MacPage {
     // The build's shots of each page, opened on the Control tab.
     static func consolePosed(_ pose: String) -> MacPage? {
         switch pose {
-        case "links", "linksbad", "linkconfirm", "linkdone", "linkstarting": return .links
+        case "links", "linksbad", "linkconfirm", "linkdone", "linkstarting", "linkrestartfilm": return .links
         case "fans": return .fans
         case "updates", "updateswaiting": return .updates
         case "storage": return .storage
@@ -216,7 +216,8 @@ struct MacConsoleSections: View {
     func row(_ title: String, _ symbol: String, _ page: MacPage, summary: String?, good: Bool? = nil) -> some View {
         Button { model.macPage = page } label: {
             HStack(spacing: 10) {
-                Label(title, systemImage: symbol).lineLimit(1)
+                // The row's name is never cut; its summary gives way first (CI 9abf65f: "Fans & tem…").
+                Label(title, systemImage: symbol).lineLimit(1).fixedSize().layoutPriority(1)
                 Spacer(minLength: 8)
                 if let summary, !quiet {
                     HStack(spacing: 6) {
@@ -257,7 +258,7 @@ struct MacConsoleSections: View {
         guard let items = startup.value?.items else { return nil }
         let mine = items.filter(\.mine)
         let stopped = StartupView.stopped(mine).map(\.label)
-        return stopped.isEmpty ? ("\(mine.count) of yours, none stopped", true) : (MacConsole.named(stopped, "stopped"), false)
+        return stopped.isEmpty ? ("None stopped", true) : (MacConsole.named(stopped, "stopped"), false)
     }
 
     var body: some View {
@@ -269,7 +270,7 @@ struct MacConsoleSections: View {
                     if updates.value != nil { row("Updates", "arrow.down.circle", .updates, summary: updateLine?.0, good: updateLine?.1) }
                     if storage.value != nil { row("Storage", "internaldrive", .storage, summary: storageLine) }
                     if startup.value != nil { row("Startup items", "power", .startup, summary: startupLine?.0, good: startupLine?.1) }
-                    if mp { row("Actions", "bolt", .actions, summary: "Fix, clean, ship, tests") }
+                    if mp { row("Actions", "bolt", .actions, summary: "Clean, ship, tests") }
                 } header: { Text("This Mac") } footer: {
                     Text("Proxies and links with a restart for each, the fan and every sensor with its day, updates, disk use, what starts with the Mac, and the Mac Pro’s own actions.")
                 }
@@ -410,7 +411,9 @@ struct LinkRow: View {
                 }
                 if let n = link.note { Text(n).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                 if let outcome { OutcomeLine(result: outcome) }
-                if let can = link.can, !can.isEmpty {
+                // Bring-up is one button for the whole page (Fix what's down, over the links); a row only says it's covered.
+                if link.can?.contains("bringup") == true { Text("Fix what’s down, above, brings this back.").font(.footnote).foregroundStyle(.secondary) }
+                if let can = link.can?.filter({ $0 != "bringup" }), !can.isEmpty {
                     HStack(spacing: 8) {
                         ForEach(can, id: \.self) { a in
                             Button(Self.actionName(a, link)) { act(a) }.buttonStyle(.bordered).controlSize(.small).disabled(busy)
@@ -434,6 +437,8 @@ struct LinksView: View {
     @State private var asking: (link: MacLink, action: String)?
     // The bridge said it's restarting itself: the page waits for it, and says when it's back.
     @State private var bridgeRestartAt: Date?
+    @State private var fixing = false
+    @State private var fixOutcome: MacActionResult?
 
     var groups: [(String, [String])] {
         [("Tailscale", ["tailscale", "serve", "funnel"]), ("The bridge", ["bridge", "public", "novnc"]), ("Relays and devices", ["letterboxd", "tv", "chumby-remote", "chumby", "sessions"])]
@@ -459,6 +464,19 @@ struct LinksView: View {
                 Label(s.good ? "Every link is working" : s.text, systemImage: s.good ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                     .foregroundStyle(s.good ? Color.green : f.links.contains(where: \.down) ? Color.red : Color.orange)
                 if let b = bridgeRestartAt { HStack { ProgressView().controlSize(.small); Text("Waiting for the bridge to come back… \(Int(Date().timeIntervalSince(b)))s").monospacedDigit() } }
+                // The one Fix: the Mac's own bring-up, which starts only what's down and leaves what's up alone (no question).
+                let fixable = f.links.filter { $0.can?.contains("bringup") == true }
+                if !fixable.isEmpty || fixing || fixOutcome != nil {
+                    Button { fixAll() } label: {
+                        HStack {
+                            Label(fixing ? "Fixing… up to two minutes" : fixable.isEmpty ? "Fix what’s down" : "Fix what’s down: " + fixable.map(\.name).joined(separator: ", "), systemImage: "wrench.adjustable")
+                            Spacer(minLength: 8)
+                            if fixing { ProgressView().controlSize(.small) }
+                        }
+                    }
+                    .disabled(fixing || fixable.isEmpty)
+                    if let o = fixOutcome { OutcomeLine(result: o) }
+                }
             } footer: {
                 Text("Read every few seconds. Tailscale is never stopped from here: the app reaches the Mac through it.")
             }
@@ -496,10 +514,33 @@ struct LinksView: View {
         if let posed = Self.posed(MacConsole.pose) {
             feed.set(posed)
             if MacConsole.pose == "linkconfirm", let l = posed.links.first(where: { $0.id == "public" }) { asking = (l, "restart") }
+            if MacConsole.pose == "linkrestartfilm" { return }
             if MacConsole.pose == "linkdone" { outcomes["chumby-remote"] = MacActionResult(ok: true, say: "Chumby proxy restarted (now process 51234)"); outcomes["tv"] = MacActionResult(ok: false, error: "TV link needs a reconnect from the Mac: no adb server is running") }
             return
         }
+        // The build's film of a public-link restart against the stand-in Mac: asked (as after his OK) 4 s in, then watched.
+        if MacConsole.pose == "linkrestartfilm" {
+            Task { try? await Task.sleep(nanoseconds: 4_000_000_000); if let l = feed.value?.links.first(where: { $0.id == "public" }) { run(l, "restart") } }
+            await feed.loop(model, every: 2); return
+        }
         await feed.loop(model, every: 8)
+    }
+    // Bring-up, then what it says each part did: fixed ones by name, and any still down by name with why.
+    func fixAll() {
+        guard !fixing else { return }
+        fixing = true; fixOutcome = nil
+        Task {
+            defer { fixing = false }
+            do {
+                let r = try await model.api.macBringUp()
+                let fixed = r.parts.filter { $0.state == "fixed" }.map { MacParts.name($0.part) }, bad = r.parts.filter(\.bad)
+                fixOutcome = bad.isEmpty ? MacActionResult(ok: true, say: fixed.isEmpty ? "Nothing needed fixing; everything was already running" : "Fixed: " + fixed.joined(separator: ", "))
+                    : MacActionResult(ok: false, error: (fixed.isEmpty ? "" : "Fixed: " + fixed.joined(separator: ", ") + ". ") + "Still down: " + bad.map { MacParts.name($0.part) + " (" + $0.say + ")" }.joined(separator: "; "))
+            } catch {
+                fixOutcome = MacActionResult(ok: false, error: MacFiles.unreachable(error) ? "The Mac stopped answering while fixing, so it’s not known what came back. This page checks again by itself." : error.localizedDescription)
+            }
+            await feed.read(model.api, query: "?fresh")
+        }
     }
     func run(_ l: MacLink, _ a: String) {
         guard !busy.contains(l.id) else { return }

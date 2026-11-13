@@ -27,6 +27,11 @@ struct MacProApp: App {
                 .onAppear {
                     model.start(); openScreenIfAsked(); AlertWatch.shared.askOnce(); TabTour.run([0, 1, 2, 4, 5, 9]) { model.tab = $0 }
                     if let id = AlertWatch.pending { openAlert(id) }
+                    // The build's shots of a link from the Console landing (-openLink macproapp://…), without the system's
+                    // "Open in Mac Pro?" question that simctl openurl leaves over every later shot.
+                    if let l = UserDefaults.standard.string(forKey: "openLink"), let u = URL(string: l) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { _ = MacDeepLink.open(u, model) }
+                    }
                     TransitionTour.run(model)
                     #if DEBUG && canImport(UIKit)
                     FrameLog.shared.start()
