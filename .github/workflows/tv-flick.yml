@@ -92,13 +92,16 @@ jobs:
                 # The same swipe begun above the rows (on the heading), to tell a row that holds the list from a list
                 # that won't move at all.
                 swipehead) $D "$DEVICE" path $x $(echo "$y - 0.2" | bc -l) 0.02 $x 0.1 0.15 0 || echo "path failed" ;;
+                # (Held 0.7 s: the row lifts at 0.3-0.43 s by the screen's clock, and a move begun within 0.2 s of the lift is
+                # a scroll come late by the finger's own clock, rightly put back: held 0.45 s, the short and eased flicks
+                # began 0.02-0.1 s after the lift and were read as scrolls, CI 1fe3641 folded.)
                 # Held, then: a short sharp flick (about 45 pt in 80 ms); a flick easing to a stop before it lifts; a
                 # slow carry well past the line and a rest; carried up then brought back down (must go back); a resting
                 # thumb that swipes as the row lifts (must not send).
-                shortflick) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.13" | bc -l) 0.09 0 || echo "path failed" ;;
-                easeflick) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.15" | bc -l) 0.15 1 $x $(echo "$y - 0.15" | bc -l) 0.03 0 || echo "path failed" ;;
-                carry) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.3" | bc -l) 0.6 0 $x $(echo "$y - 0.3" | bc -l) 0.3 0 || echo "path failed" ;;
-                backdown) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.3" | bc -l) 0.4 0 $x $y 0.4 0 || echo "path failed" ;;
+                shortflick) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.13" | bc -l) 0.09 0 || echo "path failed" ;;
+                easeflick) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.15" | bc -l) 0.15 1 $x $(echo "$y - 0.15" | bc -l) 0.03 0 || echo "path failed" ;;
+                carry) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.3" | bc -l) 0.6 0 $x $(echo "$y - 0.3" | bc -l) 0.3 0 || echo "path failed" ;;
+                backdown) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.3" | bc -l) 0.4 0 $x $y 0.4 0 || echo "path failed" ;;
                 # (Asked for at 0.12 s: the injector's first move reaches the app 0.17-0.3 s after it's asked for, so asked
                 # at 0.31 it came 0.48-0.62 s after the touch, a swipe begun well after the lift, CI 82e1830.)
                 latescroll) $D "$DEVICE" path $x $y 0.12 $x $(echo "$y - 0.3" | bc -l) 0.12 0 || echo "path failed" ;;
@@ -128,8 +131,8 @@ jobs:
             local at; at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
             if [ -n "$at" ]; then x=${at#*x=}; x=${x%%&*}; y=${at##*y=}; else echo "no card position for $name"; fi
             case $how in
-              throw) $D "$DEVICE" path $x $y 0.45 $x $(echo "$y - 0.3" | bc -l) 0.3 0 $x $(echo "$y - 0.3" | bc -l) 0.2 0 || echo "path failed" ;;
-              back) $D "$DEVICE" path $x $y 0.45 $(echo "$x + 0.2" | bc -l) $y 0.4 0 || echo "path failed" ;;
+              throw) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.3" | bc -l) 0.3 0 $x $(echo "$y - 0.3" | bc -l) 0.2 0 || echo "path failed" ;;
+              back) $D "$DEVICE" path $x $y 0.7 $(echo "$x + 0.2" | bc -l) $y 0.4 0 || echo "path failed" ;;
             esac
             sleep 14
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png

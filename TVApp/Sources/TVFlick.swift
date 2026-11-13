@@ -2905,12 +2905,18 @@ struct ShelfFlick: ViewModifier {
         // A Stremio film's or episode's card, the throw that sends with no page (not a YouTube video's, which has its own).
         guard UserDefaults.standard.string(forKey: "pose") == "shelf", !Self.reported, ShelfSend.ref(item, source) != nil else { return }
         // Looked for until one is fully in sight, the Remote's unseen build (its tab up and back) in between included.
+        // And only once it has held still for half a second: read while the shelves above it were still coming in, the
+        // place was the Films/Shows switch's by the time the finger came (CI 1fe3641, upright).
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        var last = CGRect.null
         for _ in 0..<24 {
             try? await Task.sleep(nanoseconds: 500_000_000)
             if Task.isCancelled || Self.reported { return }
             guard model.tab != 0, !ScreenVeil.up, let screen = (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?.screen.bounds,
                   screen.width > 0 else { continue }
             let r = rect()
+            defer { last = r }
+            guard r == last else { continue }
             let x = r.midX / screen.width, y = r.midY / screen.height
             guard r.width > 0, x > 0.05, x < 0.8, y > 0.15, y < 0.8, r.minX >= 0, r.maxX <= screen.width else { continue }
             Self.reported = true
