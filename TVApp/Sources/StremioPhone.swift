@@ -501,12 +501,16 @@ enum PhoneLog { static func note(_ s: String) { FileHandle.standardError.write(D
             if pose == "phoneflick" {
                 // The other way: Play on iPhone from the flick page's own streams.
                 let item = MediaItem(title: "Sample Film", subtitle: "2024", art: "", id: "tt0000001", kind: "movie")
+                // The stand-in Mac's own sample flick (a show) is taken down first: one flick at a time.
+                model.closeFlick()
+                await wait(1)
                 model.flick(FlickTarget(item: item, source: .stremio))
                 // The row itself is tapped by the film (Device Hub, by its label).
                 return
             }
             let id = UserDefaults.standard.string(forKey: "phoneTitle") ?? "tt0000001"
-            PhoneOpen.open(PhoneTitle(type: id.contains(":") ? "series" : "movie", imdb: String(id.split(separator: ":").first ?? ""), video: id,
+            let type = UserDefaults.standard.string(forKey: "phoneType") ?? (id.contains(":") ? "series" : "movie")
+            PhoneOpen.open(PhoneTitle(type: type, imdb: String(id.split(separator: ":").first ?? ""), video: id,
                                       name: "", line: "", poster: "", background: ""), model: model)
         }
     }

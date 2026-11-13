@@ -115,21 +115,24 @@ jobs:
           # 6. Flick to the TV from the player, folded, through the door that logs what's sent: the Remote comes up.
           SHOTS="20 70 80" M=http://127.0.0.1:9085 film flick 1 90 folded -tab 1 -pose phoneplay-flick
           # 7. The flick page's own Play on iPhone row, tapped for real, and the picker it opens; closed, what's left.
-          ( sleep 14; $D "$DEVICE" tap "Play on iPhone" || echo "play-here tap failed" ) &
-          SHOTS="10 20 30" film flickpage 1 35 folded -tab 1 -pose phoneflick
+          ( sleep 16; $D "$DEVICE" tap "Play on iPhone" || echo "play-here tap failed" ) & TAP=$!
+          SHOTS="10 20 30" film flickpage 1 40 folded -tab 1 -pose phoneflick
+          wait $TAP
           # 8. A show end to end: its episode played and closed (its place written for that episode), then the show
           #    opened again with no episode named: Resume for that episode.
           SHOTS="10 30" film series 1 75 folded -tab 1 -pose phoneplay-close -phoneTitle tt0000002:1:2
-          SHOTS="10" film series-again 1 15 folded -tab 1 -pose phonepicker -phoneTitle tt0000002
+          SHOTS="10" film series-again 1 15 folded -tab 1 -pose phonepicker -phoneTitle tt0000002 -phoneType series
           # 9. Playing on through the postures, a panel up part of the way: folded, opened flat, half closed, folded.
-          ( sleep 22; $D "$DEVICE" pose open; sleep 8; xcrun simctl io "$DEVICE" screenshot --display=3 dist/phone-posture-open.png
-            sleep 6; xcrun simctl io "$DEVICE" screenshot --display=3 dist/phone-posture-open-panel.png
-            $D "$DEVICE" pose partial; sleep 8; xcrun simctl io "$DEVICE" screenshot --display=3 dist/phone-posture-partial.png
-            $D "$DEVICE" pose closed; sleep 8; xcrun simctl io "$DEVICE" screenshot --display=1 dist/phone-posture-closed.png ) &
-          SHOTS="15" film posture-move 1 75 folded -tab 1 -pose phoneposture
+          ( sleep 20; $D "$DEVICE" pose open; sleep 6; xcrun simctl io "$DEVICE" screenshot --display=3 dist/phone-posture-open.png
+            sleep 5; xcrun simctl io "$DEVICE" screenshot --display=3 dist/phone-posture-open-panel.png
+            $D "$DEVICE" pose partial; sleep 6; xcrun simctl io "$DEVICE" screenshot --display=3 dist/phone-posture-partial.png
+            $D "$DEVICE" pose closed; sleep 6; xcrun simctl io "$DEVICE" screenshot --display=1 dist/phone-posture-closed.png ) & MOVES=$!
+          SHOTS="15" film posture-move 1 80 folded -tab 1 -pose phoneposture
+          wait $MOVES
           # 10. The widget's and Spotlight's way in, a tvremoteapp://phone link, with the app already up.
-          ( sleep 12; xcrun simctl openurl "$DEVICE" "tvremoteapp://phone?type=movie&id=tt0000001&name=Sample%20Film" ) &
-          SHOTS="10 20" film link 1 25 folded -tab 1
+          ( sleep 12; xcrun simctl openurl "$DEVICE" "tvremoteapp://phone?type=movie&id=tt0000001&name=Sample%20Film"; sleep 3; $D "$DEVICE" tap "Open" || echo "open tap failed" ) & LINK=$!
+          SHOTS="10 25" film link 1 30 folded -tab 1
+          wait $LINK
           date
           # Any crash, as the simulator's own report.
           for f in ~/Library/Logs/DiagnosticReports/TV*.ips ~/Library/Logs/DiagnosticReports/TV*.crash; do [ -f "$f" ] && cp "$f" "dist/crash-$(basename "$f").log"; done
