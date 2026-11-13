@@ -81,18 +81,52 @@ struct PhoneRecent: Codable, Hashable, Identifiable {
         let t = s.title
         Task { try? await Task.sleep(nanoseconds: 500_000_000); open(t, model: s.model) }
     }
+    // The picker and the player live in a window of their own over the app's: presented from the app's own root, SwiftUI
+    // took them down again whenever it changed its own presentations (CI c970990: the player gone seconds after it
+    // came up, still playing). The window shows only while one of them is up.
+    private static var window: UIWindow?
+    private static var watching = false
     static var top: UIViewController? {
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
             ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
-        var vc = scene?.keyWindow?.rootViewController ?? scene?.windows.first?.rootViewController
+        guard let scene else { return nil }
+        if window?.windowScene !== scene {
+            let w = UIWindow(windowScene: scene)
+            w.windowLevel = .normal + 1
+            w.backgroundColor = .clear
+            let root = UIViewController(); root.view.backgroundColor = .clear
+            w.rootViewController = root
+            window = w
+        }
+        guard let w = window else { return nil }
+        if w.isHidden { w.isHidden = false; w.makeKeyAndVisible() }
+        watch()
+        var vc = w.rootViewController
         while let p = vc?.presentedViewController, !p.isBeingDismissed { vc = p }
         return vc
+    }
+    // Hidden again once nothing is up in it (closed, swiped away), so it never sits over the app taking touches.
+    private static func watch() {
+        guard !watching else { return }
+        watching = true
+        Task {
+            while true {
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                guard let w = window else { break }
+                if w.rootViewController?.presentedViewController == nil {
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    if w.rootViewController?.presentedViewController == nil { w.isHidden = true; w.windowScene?.windows.first { $0 !== w && !$0.isHidden }?.makeKey(); break }
+                }
+            }
+            watching = false
+        }
     }
     static func present(_ picker: PhonePicker) {
         // One player at a time: one already open is closed (its place saved) before another title opens.
         if let s = PhoneSession.current { s.close() }
         let host = UIHostingController(rootView: picker)
         host.view.backgroundColor = .clear
+        host.overrideUserInterfaceStyle = .dark
         if let sheet = host.sheetPresentationController {
             sheet.detents = [.large()]
             sheet.prefersGrabberVisible = true
@@ -405,7 +439,7 @@ struct StremioAccountPage: View {
 }
 
 // What the player is doing, on the console (the build's films keep it; nothing about his account is in it).
-enum PhoneLog { static func note(_ s: String) { print("[phone] " + s) } }
+enum PhoneLog { static func note(_ s: String) { FileHandle.standardError.write(Data(("[phone] " + s + "\n").utf8)) } }
 
 // For the build's films only, against the stand-in Stremio ("-stremioAPI http://127.0.0.1:…"), never his account: the
 // stand-in's sample login filled in, a title opened, its best stream played, and every key of the player pressed in

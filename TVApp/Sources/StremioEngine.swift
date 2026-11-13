@@ -244,6 +244,7 @@ final class AVLayerView: UIView {
             attach()
             pip?.delegate = self
             pip?.canStartPictureInPictureAutomaticallyFromInline = true
+            PhoneLog.note("ready; picture in picture \(pip == nil ? "missing" : "there"), possible \(pip?.isPictureInPicturePossible ?? false)")
         }
         if state == .error, error == nil { error = "This stream won’t play on the phone." }
     }

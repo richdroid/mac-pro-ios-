@@ -144,7 +144,8 @@ final class PhoneSession {
         if !isAudio, id == nil { caption = nil }
     }
     func startPiP() {
-        guard let pip = engine?.pip else { flickNote = "Picture in Picture isn’t ready yet."; clearNote(); return }
+        guard let pip = engine?.pip else { flickNote = "Picture in Picture isn’t ready yet."; clearNote(); PhoneLog.note("pip: none"); return }
+        PhoneLog.note("pip: possible \(pip.isPictureInPicturePossible) active \(pip.isPictureInPictureActive)")
         panel = nil
         if pip.isPictureInPictureActive { pip.stopPictureInPicture() } else { pip.startPictureInPicture() }
     }
@@ -253,7 +254,11 @@ struct PhonePlayerView: View {
                     VStack(spacing: 0) {
                         picture.frame(height: max(crease.minY, 0))
                         Color.clear.frame(height: crease.height)
-                        ZStack { Color.black; deck(compact: false).padding(.horizontal, 20) }
+                        ZStack {
+                            Color.black
+                            VStack(spacing: 10) { if !s.locked { topBar }; Spacer(minLength: 0); if s.locked { overlay(g) } else { deck(compact: false) } }
+                                .padding(.horizontal, 20).padding(.vertical, 12)
+                        }
                     }
                     .ignoresSafeArea()
                 } else {
@@ -269,6 +274,8 @@ struct PhonePlayerView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .environment(\.colorScheme, .dark)
+        .foregroundStyle(.white)
         .statusBarHidden(!s.controls)
         .persistentSystemOverlays(s.controls ? .automatic : .hidden)
         .sheet(item: $s.panel) { p in PlayerPanelView(s: s, panel: p).presentationDetents([.medium, .large]).presentationBackground(.ultraThinMaterial) }
@@ -528,6 +535,8 @@ final class PhonePlayerController: UIHostingController<PhonePlayerView> {
         session = s
         super.init(rootView: PhonePlayerView(s: s))
         modalPresentationStyle = .fullScreen
+        // Dark whatever the phone is set to: its words were drawn black on the black player (CI c970990).
+        overrideUserInterfaceStyle = .dark
         view.backgroundColor = .black
     }
     @MainActor required dynamic init?(coder: NSCoder) { fatalError() }
