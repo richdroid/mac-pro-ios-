@@ -356,6 +356,46 @@ struct NapTile: View {
 }
 
 // MARK: - What woke me
+// What this phone saw of each ring for itself, kept: still ringing or snoozing at a moment (and when a snooze rings
+// again), and the moment it saw one end. The Chumby's log keeps only when a ring began, so these are how "Woke up to"
+// knows where a ring it watched ended, and never counts a song he put on after stopping it.
+enum RingSeen {
+    struct Mark: Codable, Equatable { enum Kind: String, Codable { case on, snoozed, ended }; var t: Double; var kind: Kind; var until: Double? }
+    private static let key = "ringSeen"
+    private static let lock = NSLock()
+    private static var kept: [Mark]?
+    static var marks: [Mark] {
+        lock.lock(); defer { lock.unlock() }
+        if kept == nil { kept = UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode([Mark].self, from: $0) } ?? [] }
+        return kept ?? []
+    }
+    private static func save(_ m: [Mark]) {
+        let now = Date().timeIntervalSince1970
+        let m = Array(m.filter { now - $0.t < 21 * 86400 }.suffix(400))
+        lock.lock(); kept = m; lock.unlock()
+        if let d = try? JSONEncoder().encode(m) { UserDefaults.standard.set(d, forKey: key) }
+    }
+    // A fresh reading of a ring or a snooze: one mark per stretch of watching, moved on rather than added to.
+    static func saw(snoozed: Bool, until: Double?, at t: Double = Date().timeIntervalSince1970) {
+        var m = marks
+        let kind: Mark.Kind = snoozed ? .snoozed : .on
+        if let l = m.last, l.kind == kind, t - l.t < 120, l.until == until || until == nil { m[m.count - 1].t = t; m[m.count - 1].until = until ?? l.until }
+        else { m.append(Mark(t: t, kind: kind, until: until)) }
+        save(m)
+    }
+    // A fresh reading with nothing ringing: the ring ended here, but only if this phone was watching just before.
+    static func quiet(at t: Double = Date().timeIntervalSince1970) {
+        var m = marks
+        guard let l = m.last, l.kind != .ended, t - l.t < 90 else { return }
+        m.append(Mark(t: t, kind: .ended, until: nil)); save(m)
+    }
+    // Stopped from the app: the ring ended the moment he tapped.
+    static func stopped(at t: Double) {
+        var m = marks
+        if let l = m.last, l.kind == .ended, abs(l.t - t) < 90 { m[m.count - 1].t = min(l.t, t) } else { m.append(Mark(t: t, kind: .ended, until: nil)) }
+        save(m.sorted { $0.t < $1.t })
+    }
+}
 // Songs Pandora played just after an alarm, each with its cover and a way to it in Apple Music.
 @MainActor
 final class SongArt: ObservableObject {
@@ -371,35 +411,59 @@ final class SongArt: ObservableObject {
     }
     private var links: [String: String] { get { UserDefaults.standard.dictionary(forKey: "songLinks") as? [String: String] ?? [:] } set { UserDefaults.standard.set(newValue, forKey: "songLinks") } }
     static func key(_ s: Song) -> String { s.artist + " – " + s.title }
+    // The title as it's searched for. A title the trim changes is kept under a new name, so the wrong cover found before
+    // the trim (an "'Round Midnight" with another album's art) is never shown again.
+    static func searched(_ s: Song) -> String { s.title.trimmingCharacters(in: CharacterSet(charactersIn: "'‘’\"“” ")) }
+    static func stored(_ s: Song) -> String { searched(s) == s.title ? key(s) : key(s) + " #trimmed" }
     // At launch and on opening Alarms, so the covers are in hand before the row ever scrolls into view.
+    // Every song that may belong to a ring is looked up, as which ones do can turn on a song's length.
     func prefetch(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring] = []) {
-        for w in WokeUpTo.wakings(songs, alarms, rings) { look(w.song) }
+        for s in WokeUpTo.candidates(songs, alarms, rings) { look(s) }
+    }
+    // How long a song runs, from the same lookup as its cover: tells the alarm playing on from a song he put on himself.
+    @Published private(set) var lengths: [String: Double] = UserDefaults.standard.dictionary(forKey: "songLengths") as? [String: Double] ?? [:]
+    func length(_ s: Song) -> Double? { lengths[Self.stored(s)].flatMap { $0 > 0 ? $0 : nil } }
+    private func keepLength(_ k: String, _ ms: Double?) {
+        guard let ms, ms > 0 else { return }
+        lengths[k] = ms / 1000
+        UserDefaults.standard.set(lengths, forKey: "songLengths")
+    }
+    private struct Search: Decodable { struct T: Decodable { let artworkUrl100: String?; let trackViewUrl: String?; let trackTimeMillis: Double? }; let results: [T] }
+    private static func search(_ s: Song) async -> Search? {
+        var c = URLComponents(string: "https://itunes.apple.com/search")!
+        // Quotes trimmed: "'Round Midnight" as written found another album's cover entirely.
+        let title = searched(s)
+        c.queryItems = [.init(name: "term", value: s.artist + " " + title), .init(name: "entity", value: "song"), .init(name: "limit", value: "1")]
+        guard let u = c.url, let d = try? await URLSession.shared.data(from: u).0 else { return nil }
+        return try? JSONDecoder().decode(Search.self, from: d)
     }
     func look(_ s: Song) {
         let k = Self.key(s)
         guard !asked.contains(k) else { return }
         asked.insert(k)
         // Kept from before: shown at once, never fetched again.
-        if let d = try? Data(contentsOf: Self.file(k)), let i = PlatformImage(data: d) {
-            found[k] = Found(image: i, link: links[k].flatMap(URL.init(string:)), tint: Self.tint(d)); return
+        let sk = Self.stored(s)
+        if let d = try? Data(contentsOf: Self.file(sk)), let i = PlatformImage(data: d) {
+            found[k] = Found(image: i, link: links[sk].flatMap(URL.init(string:)), tint: Self.tint(d))
+            // Kept from before lengths were: asked once more, for the length alone.
+            if lengths[sk] == nil { Task { let r = await Self.search(s); if let r { lengths[sk] = 0; keepLength(sk, r.results.first?.trackTimeMillis) } } }
+            return
         }
         Task {
-            var c = URLComponents(string: "https://itunes.apple.com/search")!
-            c.queryItems = [.init(name: "term", value: s.artist + " " + s.title), .init(name: "entity", value: "song"), .init(name: "limit", value: "1")]
-            struct R: Decodable { struct T: Decodable { let artworkUrl100: String?; let trackViewUrl: String? }; let results: [T] }
             // Not reached: asked again next time rather than settling on no cover, but shown meanwhile with the octopus tile,
             // so a song never waits off the strip for a lookup that can't happen.
-            guard let u = c.url, let d = try? await URLSession.shared.data(from: u).0, let r = try? JSONDecoder().decode(R.self, from: d) else {
+            guard let r = await Self.search(s) else {
                 asked.remove(k)
                 if found[k] == nil { withAnimation(.easeOut(duration: 0.2)) { found[k] = Found(image: nil, link: nil, tint: nil) } }
                 return
             }
             var f = Found(image: nil, link: nil, tint: nil)
             if let t = r.results.first {
-                if let link = t.trackViewUrl { links[k] = link }
+                keepLength(sk, t.trackTimeMillis)
+                if let link = t.trackViewUrl { links[sk] = link }
                 f.link = t.trackViewUrl.flatMap(URL.init(string:))
                 if let a = t.artworkUrl100.map({ $0.replacingOccurrences(of: "100x100", with: "300x300") }), let au = URL(string: a), let img = try? await URLSession.shared.data(from: au).0 {
-                    try? img.write(to: Self.file(k), options: .atomic)
+                    try? img.write(to: Self.file(sk), options: .atomic)
                     f.image = PlatformImage(data: img); f.tint = Self.tint(img)
                 }
             }
@@ -421,25 +485,85 @@ struct WokeUpTo: View {
     @ObservedObject private var art = SongArt.shared
     @Environment(\.openURL) private var openURL
     @State private var width: CGFloat = 0
-    // For each time an alarm went off, the first song Pandora played in the 45 minutes after it.
-    // From the Chumby's own log of rings when it has one: each ring's first song within 45 minutes, named as the alarm was.
-    // A once-only calendar alarm leaves the alarm list once it fires, so pairing with the list found nothing for it (Richard,
-    // 2026-11-06: "woke up to doesnt work"). The list is the fallback for a Chumby too old to log rings.
-    static func wakings(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring]) -> [(song: Song, alarm: String)] {
-        guard !rings.isEmpty else { return wakings(songs, alarms) }
-        let byTime = songs.sorted(by: { $0.t < $1.t })
-        var out: [(song: Song, alarm: String)] = []
-        for r in rings.sorted(by: { $0.t > $1.t }) {
-            guard let s = byTime.first(where: { $0.t >= r.t && $0.t - r.t < 45 * 60 }), !out.contains(where: { $0.song == s }) else { continue }
+    // Every song each ring played, from the ring's start until it ended: stopped, played out, or after its snoozes.
+    // Richard, 2026-11-12: "does the woke up to tab account for multiple songs playing over the course of a single
+    // alarm". It showed only each ring's first song. Rings come from the Chumby's own log (a once-only calendar alarm
+    // leaves the alarm list once it fires: 2026-11-06, "woke up to doesnt work"); the list is the fallback for a Chumby
+    // too old to log rings.
+    struct Waking: Identifiable, Equatable { let t: Double; let alarm: String; var songs: [Song]; var id: Double { t } }
+    static func wakings(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring], marks: [RingSeen.Mark]? = nil,
+                        length: (Song) -> Double? = { _ in nil }, now: Double = Date().timeIntervalSince1970) -> [Waking] {
+        let rs = (rings.isEmpty ? listRings(songs, alarms) : rings).sorted { $0.t < $1.t }
+        let marks = marks ?? RingSeen.marks
+        let byTime = songs.sorted { $0.t < $1.t }
+        var out: [Waking] = []
+        for (i, r) in rs.enumerated() {
+            let next = i + 1 < rs.count ? rs[i + 1].t : .infinity
+            let a = alarms.first { $0.name == r.name }
+            let plays = min(Double(a?.duration ?? "").flatMap { $0 > 0 ? $0 : nil } ?? 30, 240) * 60
+            let snooze = (Double(a?.snooze ?? "").flatMap { $0 > 0 ? $0 : nil } ?? 9) * 60
+            let mine = session(byTime, from: r.t, next: min(next, now + 60), plays: plays, snooze: snooze,
+                               marks: marks.filter { $0.t >= r.t - 30 && $0.t < next }, length: length)
+            guard !mine.isEmpty else { continue }
             let name = r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name
-            out.append((s, name.isEmpty ? "your alarm" : name))
-            if out.count == 8 { break }
+            out.append(Waking(t: r.t, alarm: name, songs: mine))
         }
-        return out
+        return Array(out.reversed().prefix(8))
     }
-    static func wakings(_ songs: [Song], _ alarms: [Alarm]) -> [(song: Song, alarm: String)] {
+    // One ring's songs, oldest first. What the app saw for itself (RingSeen) decides first: a ring it watched end ends
+    // there, and one it saw still ringing or snoozing at a moment holds every song up to then. Otherwise the songs tell:
+    // one following the last as it finished (its length known) or within a song's length (not) is the alarm still
+    // playing; a silence about a snooze long is the re-ring; any other break is the alarm stopped and a song he chose
+    // himself, so the ring ends there. Never past the alarm's own length from its last ring, nor into the next ring.
+    static func session(_ byTime: [Song], from t0: Double, next: Double, plays: Double, snooze: Double,
+                        marks: [RingSeen.Mark], length: (Song) -> Double?) -> [Song] {
+        if let end = marks.first(where: { $0.kind == .ended && $0.t > t0 })?.t {
+            return dedupe(byTime.filter { $0.t >= t0 - 5 && $0.t < min(end, next) })
+        }
+        let seen = marks.filter { $0.kind != .ended }.map(\.t).max() ?? 0
+        var cap = max(t0 + plays, seen)
+        for m in marks where m.kind == .snoozed { if let u = m.until { cap = max(cap, u + plays) } }
+        var got: [Song] = []
+        for s in byTime where s.t >= t0 - 5 && s.t < next {
+            if s.t <= seen { got.append(s); continue }
+            guard s.t < cap else { break }
+            guard let p = got.last else {
+                // The first song: Pandora names it about 12 s into the ring (later when it had to be asked again), or
+                // after a snooze pressed before it came. Anything later is music he put on.
+                let d = s.t - t0
+                guard d <= 180 || (d >= snooze - 30 && d <= snooze + 180) else { break }
+                if d > 180 { cap = max(cap, s.t + plays) }
+                got.append(s); continue
+            }
+            let gap = s.t - p.t, l = length(p)
+            let flowing = l.map { gap >= $0 - 45 && gap <= $0 + 75 } ?? (gap <= 450)
+            // A snooze this phone saw says when it rang again; otherwise it's a silence about a snooze long.
+            let reRing = marks.contains { $0.kind == .snoozed && ($0.until.map { s.t >= $0 - 5 && s.t <= $0 + 180 } ?? false) }
+                || (gap >= snooze && gap <= snooze + (l ?? 450) + 75)
+            if flowing { got.append(s) }
+            else if reRing { got.append(s); cap = max(cap, s.t + plays) }
+            else { break }
+        }
+        return dedupe(got)
+    }
+    // The same song twice in a ring (a Pandora repeat, or a history row logged twice) shows once.
+    static func dedupe(_ s: [Song]) -> [Song] {
+        var keys = Set<String>()
+        return s.filter { keys.insert(SongArt.key($0)).inserted }
+    }
+    // Every song that may belong to a ring, for looking up covers and lengths before the ring is shown.
+    static func candidates(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring]) -> [Song] {
+        let rs = (rings.isEmpty ? listRings(songs, alarms) : rings).sorted { $0.t < $1.t }
+        return songs.filter { s in
+            guard let i = rs.lastIndex(where: { $0.t <= s.t + 5 }) else { return false }
+            return s.t - rs[i].t < 4 * 3600
+        }
+    }
+    // An older Chumby without a ring log: the rings worked out from the alarm list, one for each time an audio alarm
+    // came due that a song followed within 45 minutes.
+    static func listRings(_ songs: [Song], _ alarms: [Alarm]) -> [Ring] {
         let cal = Calendar.current
-        var out: [(song: Song, alarm: String, fire: Date)] = []
+        var out: [Ring] = []
         for s in songs.sorted(by: { $0.t < $1.t }) {
             let t = Date(timeIntervalSince1970: s.t)
             var hit: (Date, String)?
@@ -453,32 +577,45 @@ struct WokeUpTo: View {
                         if a.when == "daily" || (a.when == "weekday" && w > 0 && w < 6) || (a.when == "weekend" && (w == 0 || w == 6)) || a.when == Alarm.dayKeys[w] { fires.append(f) }
                     }
                 }
-                for f in fires where t >= f && t.timeIntervalSince(f) < 45 * 60 { hit = (f, alarmLabel(a)) }
+                for f in fires where t >= f && t.timeIntervalSince(f) < 45 * 60 { hit = (f, a.name.isEmpty ? alarmLabel(a) : a.name) }
             }
-            guard let h = hit, !out.contains(where: { abs($0.fire.timeIntervalSince(h.0)) < 60 }) else { continue }
-            out.append((s, h.1, h.0))
+            guard let h = hit, !out.contains(where: { abs($0.t - h.0.timeIntervalSince1970) < 60 }) else { continue }
+            out.append(Ring(t: h.0.timeIntervalSince1970, name: h.1))
         }
-        return out.reversed().prefix(8).map { ($0.song, $0.alarm) }
+        return out
+    }
+    // What's shown: each ring's songs up to the first whose cover hasn't been looked up yet, so a song arrives with its
+    // art, never as a blank tile, and a ring only once its first song has. (A song's length comes with its cover, so
+    // what joins a ring after it is settled by then.)
+    var shown: [Waking] {
+        Self.wakings(model.songs, model.state.alarms, model.rings, length: { art.length($0) }).compactMap { w in
+            var w = w
+            w.songs = Array(w.songs.prefix { art.found[SongArt.key($0)] != nil })
+            return w.songs.isEmpty ? nil : w
+        }
     }
     var body: some View {
-        let all = Self.wakings(model.songs, model.state.alarms, model.rings)
-        // A song joins the strip only once its cover has been looked up, so a new one arrives with its art, never as a
-        // blank tile, and slides the others along in one spring rather than a frame.
-        let list = all.filter { art.found[SongArt.key($0.song)] != nil }
+        let list = shown
         if !list.isEmpty {
-            // The covers fill the card when they all fit (open portrait had three small ones and 40% of the card bare), and
-            // scroll at their smallest when they don't, sliding out under the card's own edge on both sides alike.
-            let n = CGFloat(list.count)
+            // One strip, every song a tile, grouped by ring with its time and alarm over the group (designer, 11-12: the
+            // song he wants later is usually the second or third of the morning, so none is hidden behind a tap). The
+            // covers fill the card when they all fit, and scroll at their smallest when they don't, sliding out under the
+            // card's own edge on both sides alike.
+            let n = CGFloat(list.reduce(0) { $0 + $1.songs.count }), g = CGFloat(list.count)
+            let spacing = (n - g) * Self.gap + (g - 1) * Self.groupGap
             let avail = width - 2 * Self.inset
-            let fits = width > 0 && n * Self.smallest + (n - 1) * Self.gap <= avail
-            let side = fits ? min(Self.largest, ((avail - (n - 1) * Self.gap) / n).rounded(.down)) : Self.smallest
+            let fits = width > 0 && n * Self.smallest + spacing <= avail
+            let side = fits ? min(Self.largest, ((avail - spacing) / n).rounded(.down)) : Self.smallest
             Section {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: Self.gap) {
-                        ForEach(list, id: \.song.id) { w in tile(w.song, side: side).transition(.opacity.combined(with: .scale(scale: 0.92))) }
+                    // Not lazy: the card is as tall as its tallest tile always, not the leading group's (a one-song ring
+                    // arriving shrank it and cut the captions under its edge, gate 11-12). At most 8 rings.
+                    HStack(alignment: .top, spacing: Self.groupGap) {
+                        ForEach(list) { w in group(w, side: side).transition(.opacity.combined(with: .scale(scale: 0.92))) }
                     }
                     .padding(.vertical, 14)
-                    .animation(.snappy, value: list.map(\.song.id))
+                    .animation(.snappy, value: list.map { $0.songs.map(\.id) })
+                    .animation(.snappy, value: side)
                 }
                 .contentMargins(.horizontal, Self.inset, for: .scrollContent)
                 .scrollDisabled(fits)
@@ -488,8 +625,34 @@ struct WokeUpTo: View {
             } header: { SectionHead(icon: "sunrise.fill", text: "Woke up to") }
         }
     }
-    static let gap: CGFloat = 10, inset: CGFloat = 14, smallest: CGFloat = 100, largest: CGFloat = 200
-    func tile(_ s: Song, side: CGFloat) -> some View {
+    static let gap: CGFloat = 10, groupGap: CGFloat = 26, inset: CGFloat = 14, smallest: CGFloat = 100, largest: CGFloat = 200
+    // A ring: when it rang and which alarm, over its songs in the order they played. One cover wide, the alarm's name
+    // gives way so the time is never clipped.
+    func group(_ w: Waking, side: CGFloat) -> some View {
+        // A week or more back, the date too, so two Saturdays never read alike. An unnamed ring is its time alone.
+        // Each shorter in turn, so one cover wide the header still says the day whole: "Sat, Nov 7" (gate 11-12).
+        let at = Date(timeIntervalSince1970: w.t)
+        let dated = Date().timeIntervalSince(at) >= 6 * 86400
+        let day = at.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+        let when = dated ? day + " · " + at.formatted(.dateTime.hour().minute()) : at.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        let wide = CGFloat(w.songs.count) * side + CGFloat(w.songs.count - 1) * Self.gap
+        return VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                if !w.alarm.isEmpty { Text("\(when) · \(w.alarm)").lineLimit(1) }
+                Text(when).lineLimit(1)
+                if dated { Text(day).lineLimit(1) }
+            }
+            .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            .frame(width: wide, alignment: .leading)
+            .accessibilityLabel(w.alarm.isEmpty ? when : "\(w.alarm), \(when)")
+            HStack(alignment: .top, spacing: Self.gap) {
+                ForEach(Array(w.songs.enumerated()), id: \.element.id) { i, s in
+                    tile(s, side: side, time: i > 0).transition(.opacity.combined(with: .scale(scale: 0.92)))
+                }
+            }
+        }
+    }
+    func tile(_ s: Song, side: CGFloat, time: Bool) -> some View {
         let f = art.found[SongArt.key(s)]
         return Button {
             var c = URLComponents(string: "https://music.apple.com/search")!
@@ -517,7 +680,8 @@ struct WokeUpTo: View {
                 // two-line one doesn't, so every caption starts the same distance under its cover (designer, 11-11).
                 Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                 Text(s.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                Text(Date(timeIntervalSince1970: s.t).formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                // The song's own time, after the first: the group's line already says when the ring began.
+                if time { Text(Date(timeIntervalSince1970: s.t).formatted(.dateTime.hour().minute())).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
             }
             .frame(width: side, alignment: .leading)
         }

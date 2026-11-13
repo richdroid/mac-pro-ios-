@@ -270,6 +270,11 @@ final class ChumbyModel: ObservableObject {
             // An alarm just ended: what it woke him to goes into Pandora's history song by song, so "Woke up to" (and its
             // widget) reads it again soon after and a few times more, rather than waiting out the usual five minutes.
             if sys.ringing != nil, s.ringing == nil { songsAfterRing() }
+            // What this phone saw of the ring, for "Woke up to": only fresh readings, never an old copy from the Mac.
+            if fresh {
+                if let r = s.ringing { RingSeen.saw(snoozed: r.snoozed, until: r.snoozed ? state.ringingNow?.until.flatMap { $0 > 0 ? $0 : nil } : nil) }
+                else if sys.ringing != nil || !sys.ring.isEmpty { RingSeen.quiet() }
+            }
             // A ring starting, snoozing or ending on the Chumby moves the page as one, never in a single frame.
             if s.ringing != sys.ringing { withAnimation(Self.ringChange(to: s.ringing)) { sys = s } } else if s != sys { sys = s }
             try? data.write(to: Self.cache("sys"), options: .atomic)
@@ -510,7 +515,8 @@ final class ChumbyModel: ObservableObject {
         let was = sys.ring
         withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
         hold(5)
-        Task { do { try await api?.cmd("ringoff") } catch { withAnimation(Self.ringSpring) { sys.ring = was }; fail("ring", "The Chumby didn’t stop. \(AlarmWriter.explain(error))") } }
+        let tapped = Date().timeIntervalSince1970
+        Task { do { try await api?.cmd("ringoff"); RingSeen.stopped(at: tapped) } catch { withAnimation(Self.ringSpring) { sys.ring = was }; fail("ring", "The Chumby didn’t stop. \(AlarmWriter.explain(error))") } }
     }
     func ringSnooze() {
         tick()
