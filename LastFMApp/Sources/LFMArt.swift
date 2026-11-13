@@ -64,10 +64,12 @@ final class ArtStore: @unchecked Sendable {
 
     func image(_ ref: ArtRef, px: Int) async -> CGImage? {
         if let c = cached(ref, px: px) { return c }
-        guard let data = await bytes(ref) else { return nil }
-        // Kept under the album too, whichever source it came from, for warm() on the next launch.
-        let byKey = file("album:" + ref.key)
-        if !FileManager.default.fileExists(atPath: byKey.path) { try? data.write(to: byKey, options: .atomic) }
+        guard let data = await bytes(ref, px: px) else { return nil }
+        // A hero-sized copy kept under the album too, whichever source it came from, for warm() on the next launch.
+        if px >= 900 {
+            let byKey = file("album:" + ref.key)
+            if !FileManager.default.fileExists(atPath: byKey.path) { try? data.write(to: byKey, options: .atomic) }
+        }
         return decode(ref, data, px: px)
     }
 
@@ -105,20 +107,22 @@ final class ArtStore: @unchecked Sendable {
         return palette(ref)
     }
 
-    // The bytes of a cover: from disk if fetched before, else Last.fm's largest, else Apple's store.
-    private func bytes(_ ref: ArtRef) async -> Data? {
+    // The bytes of a cover at about the size it's drawn (Last.fm's original runs to megabytes; a row needs 300 px): from
+    // disk if fetched before, else Last.fm, else Apple's store.
+    private func bytes(_ ref: ArtRef, px: Int) async -> Data? {
         if let u = ref.url, u.hasPrefix("mock://") {
             let name = String(u.dropFirst(7))
             return Bundle.main.url(forResource: name, withExtension: "jpg", subdirectory: "Mock/art").flatMap { try? Data(contentsOf: $0) }
         }
         var tries: [String] = []
         if let u = ref.url {
-            // The largest Last.fm keeps, then the size it sent.
-            if let r = u.range(of: #"/i/u/[^/]+/"#, options: .regularExpression) { tries.append(u.replacingCharacters(in: r, with: "/i/u/ar0/")) }
+            // The size wanted (300, 770 or the original), then the size it sent.
+            let size = px <= 300 ? "300x300" : px <= 770 ? "770x0" : "ar0"
+            if let r = u.range(of: #"/i/u/[^/]+/"#, options: .regularExpression) { tries.append(u.replacingCharacters(in: r, with: "/i/u/\(size)/")) }
             tries.append(u)
         }
         for u in tries { if let d = await fetch(u) { return d } }
-        if let u = await storeArt(ref) { return await fetch(u) }
+        if let u = await storeArt(ref) { return await fetch(px <= 300 ? u.replacingOccurrences(of: "1000x1000bb", with: "300x300bb") : u) }
         return nil
     }
 
