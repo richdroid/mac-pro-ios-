@@ -424,6 +424,8 @@ final class SearchStore: ObservableObject {
         touched = true
         // No keyboard asked for any more, by anything: it rose over the Remote open upright (the review of 2f4e35b).
         SendDraft.shared.wantsFocus = false
+        // Whatever was picked, the keyboard goes with the pick: it stayed up over the streams page (gate of 0472bce).
+        Keyboard.dismiss()
         remember()
         if h.kind == .app {
             // On the TV now: nothing left behind here, and the Remote to drive it, as every other "on the TV" does.
