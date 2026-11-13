@@ -112,7 +112,7 @@ jobs:
           # 6. Flick to the TV from the player, folded: the Remote comes up with the start.
           SHOTS="20 70 80" film flick 1 90 folded -tab 1 -pose phoneplay-flick
           # 7. The flick page's own Play on iPhone, and the picker it opens (a show: its episode).
-          SHOTS="8 15 25" film flickpage 1 30 folded -tab 1 -pose phoneflick
+          SHOTS="5 10 15 25" film flickpage 1 30 folded -tab 1 -pose phoneflick
           SHOTS="10 18" film series 1 22 folded -tab 1 -pose phonepicker -phoneTitle tt0000002:1:2
           date
           cp /tmp/stremio-puts.log dist/stremio-puts.log 2>/dev/null || echo "no library writes" > dist/stremio-puts.log

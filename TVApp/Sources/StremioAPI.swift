@@ -15,11 +15,22 @@ enum StremioKeychain {
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else {
+            #if targetEnvironment(simulator)
+            // The build's unsigned simulator app has no Keychain (errSecMissingEntitlement): its stand-in key is kept
+            // in its defaults instead. Never on a phone.
+            return UserDefaults.standard.string(forKey: "simKeychain." + account)
+            #else
+            return nil
+            #endif
+        }
         return String(data: d, encoding: .utf8)
     }
     static func set(_ account: String, _ value: String?) {
         SecItemDelete(query(account) as CFDictionary)
+        #if targetEnvironment(simulator)
+        UserDefaults.standard.set(value, forKey: "simKeychain." + account)
+        #endif
         guard let value, !value.isEmpty else { return }
         var add = query(account)
         add[kSecValueData as String] = Data(value.utf8)
@@ -133,10 +144,11 @@ struct PhoneStream: Identifiable, Hashable {
         let bare = cut.replacingOccurrences(of: "\\.(mkv|mp4|avi)\\b", with: "", options: [.regularExpression, .caseInsensitive])
         return String(bare.trimmingCharacters(in: .whitespacesAndNewlines).prefix(110))
     }
-    // Best first, for a phone: one it can play, ready now, the original sound, 1080p, a sensible size (tv.js streamRank,
-    // with the phone's own first rule: a torrent can only go to the TV).
+    // Best first, for this phone: one it can play, ready now, the original sound, then 4K (Richard, 2026-11-13: "i want
+    // 4k for ipad 1080p for tv"; HDR and Dolby Vision count as 4K, the phone shows both), then the best below it, at a
+    // sensible size (tv.js streamRank, with the phone's own first rule: a torrent can only go to the TV).
     func rank(target: Double) -> [Double] {
-        let q: Double = ["1080p": 0, "4K": 1, "720p": 2, "480p": 3][quality] ?? 4
+        let q: Double = ["4K": 0, "1080p": 1, "720p": 2, "480p": 3][quality] ?? 4
         let off = gb > 0 ? abs(log(gb / target)) : 9
         return [service ? 2 : 0, playsHere ? 0 : 1, instant ? 0 : 1, dubbed ? 1 : 0, gb > 25 ? 1 : 0, q, off]
     }
@@ -340,6 +352,7 @@ final class StremioAccount {
         let r = try await StremioAPI.login(email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
         StremioKeychain.set("authKey", r.key)
         StremioKeychain.set("email", r.email)
+        guard StremioKeychain.get("authKey") == r.key else { throw StremioError(message: "Stremio signed in, but this iPhone couldn’t keep the sign-in. Try again.") }
         self.email = r.email
         signedIn = true
         _ = try? await StremioAPI.addons(force: true)

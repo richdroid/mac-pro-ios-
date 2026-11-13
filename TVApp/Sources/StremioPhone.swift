@@ -128,6 +128,7 @@ struct PhonePicker: View {
     @State private var problem: String?
     @State private var startOver = false
     @State private var sending = false
+    @State private var only = "All"
     @Environment(\.dismiss) private var dismiss
 
     init(type: String, imdb: String, video: String?, name: String, poster: String, model: TVModel?) {
@@ -215,7 +216,22 @@ struct PhonePicker: View {
     }
 
     @ViewBuilder var streamList: some View {
-        Text("Streams").font(.title3.weight(.bold)).padding(.top, 4)
+        // Best is 4K here; the quality chips let him pick another (the TV's own list leads with 1080p).
+        let qualities = ["4K", "1080p", "720p", "480p"].filter { q in streams.contains { $0.quality == q } }
+        HStack(spacing: 8) {
+            Text("Streams").font(.title3.weight(.bold))
+            Spacer(minLength: 4)
+            if qualities.count > 1 {
+                ForEach(["All"] + qualities, id: \.self) { q in
+                    Button(q) { withAnimation(.snappy) { only = q } }
+                        .font(.caption.weight(.semibold)).padding(.horizontal, 10).frame(height: 30)
+                        .background(only == q ? TVLook.accent.opacity(0.25) : .white.opacity(0.1), in: Capsule())
+                        .foregroundStyle(only == q ? TVLook.accent : .primary).buttonStyle(.plain)
+                        .accessibilityAddTraits(only == q ? .isSelected : [])
+                }
+            }
+        }
+        .padding(.top, 4)
         if loading && streams.isEmpty {
             Text("Asking your add-ons…").font(.footnote).foregroundStyle(.secondary)
             ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) }
@@ -227,7 +243,7 @@ struct PhonePicker: View {
             .frame(maxWidth: .infinity).padding(.top, 18)
         }
         let best = streams.first { $0.playsHere && !$0.dubbed }
-        ForEach(streams) { s in row(s, best: s == best) }
+        ForEach(streams.filter { only == "All" || $0.quality == only }) { s in row(s, best: s == best) }
     }
 
     func row(_ s: PhoneStream, best: Bool) -> some View {
@@ -236,7 +252,7 @@ struct PhonePicker: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(s.title).font(.subheadline.weight(.bold)).lineLimit(1)
-                        if best { tag("Best", lit: true) }
+                        if best { tag(s.quality.isEmpty ? "Best" : "Best · \(s.quality)", lit: true) }
                         if s.torrent { tag("TV only", lit: false) }
                     }
                     Text(s.details).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)

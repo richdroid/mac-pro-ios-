@@ -24,6 +24,7 @@ const metas = {
     videos: [1, 2, 3].map(e => ({ id: `tt0000002:1:${e}`, season: 1, episode: e, name: `Sample Episode ${e}` })) },
 };
 const streamsFor = id => [
+  { name: 'Sample\n4K ⚡', description: 'Sample.Film.2024.2160p.WEB-DL.x265.mkv\n💾 14.1 GB ⚙️ Sample', url: `${BASE}/media/sample.mkv?4k` },
   { name: 'Sample\n1080p ⚡', description: 'Sample.Film.2024.1080p.WEB-DL.x265.mkv\n💾 3.2 GB ⚙️ Sample', url: `${BASE}/media/sample.mkv` },
   { name: 'Sample\n720p', description: 'Sample.Film.2024.720p.WEB-DL.x264.mp4\n💾 0.9 GB', url: `${BASE}/media/sample.mp4` },
   { name: 'Sample\n4K HDR', description: 'Sample.Film.2024.2160p.HDR.WEB-DL.mkv\n💾 18.4 GB', infoHash: '0123456789abcdef0123456789abcdef01234567', fileIdx: 0 },

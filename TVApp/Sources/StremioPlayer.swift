@@ -193,7 +193,8 @@ final class PhoneSession {
         let at = position
         Task {
             await save()
-            let ok = await PhoneFlick.send(title: title, stream: stream, at: at, model: model)
+            // The TV's own pick (its 1080p rule, tv.js), not the 4K file this phone was playing.
+            let ok = await PhoneFlick.send(title: title, stream: nil, at: at, model: model)
             flicking = false
             if ok { close() } else { flickNote = "The TV couldn’t take it. Check the Mac’s connection."; clearNote() }
         }
