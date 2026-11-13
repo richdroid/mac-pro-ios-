@@ -47,9 +47,9 @@ jobs:
             xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Gallery$G.app || { echo "Gallery$G did not install"; continue; }
             xcrun simctl launch "$DEVICE" local.macpro.Gallery$G -sheets YES
             DATA=$(xcrun simctl get_app_container "$DEVICE" local.macpro.Gallery$G data)
-            # The last sheet each gallery writes is its StandBy one.
+            # The last sheet each gallery writes is its Control Center one.
             LOWER=$(echo $G | tr A-Z a-z)
-            for i in $(seq 1 60); do [ -f "$DATA/Documents/sheets/$LOWER-standby.png" ] && break; sleep 2; done
+            for i in $(seq 1 60); do [ -f "$DATA/Documents/sheets/$LOWER-controls.png" ] && break; sleep 2; done
             sleep 2
             cp "$DATA"/Documents/sheets/*.png dist/ || echo "no sheets from Gallery$G"
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/zz-gallery-$G-screen.png

@@ -155,3 +155,16 @@ struct SheetsDone: View {
         .padding().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
+// A Control Center control as the system draws one: the glyph in a glass circle (lit when on), its name under it. The
+// names and glyphs are each control's own, copied from its Label; a review aid for the glyph choices and wording.
+struct ControlTile: View {
+    let title: String, symbol: String
+    var on = false
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: symbol).font(.system(size: 22, weight: .medium)).foregroundStyle(on ? .black : .white)
+                .frame(width: 62, height: 62).background(on ? AnyShapeStyle(.white) : AnyShapeStyle(.white.opacity(0.18)), in: Circle())
+            Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.white).multilineTextAlignment(.center).lineLimit(2).frame(width: 82)
+        }
+    }
+}

@@ -72,6 +72,7 @@ struct TVSheets: View {
         [
             ("A song playing", entry(TVSample.status(music: TVSample.song(playing: true)), cover: album)),
             ("A song paused", entry(TVSample.status(music: TVSample.song(playing: false)), cover: album)),
+            ("The moment the song ends (before the next reading)", { var e = entry(TVSample.status(music: TVSample.song(playing: true)), cover: album); e.front = got["com.codex.musicwebtv"]; e.date = Date().addingTimeInterval(225); return e }()),
             ("A show playing in Stremio", entry(TVSample.status(app: "com.stremio.one", session: TVSample.show), cover: got["poster"])),
             ("A video in YouTube", entry(TVSample.status(app: "com.google.android.youtube.tv", session: TVSample.video), cover: got["shot"])),
             ("A film paused, long name", entry(TVSample.status(app: "com.stremio.one", session: TVSample.film), cover: got["film"])),
@@ -151,6 +152,14 @@ struct TVSheets: View {
             }
         }
     }
+    var controls: some View {
+        Sheet("TV · Control Center (drawn stand-ins: each control\u{2019}s own name and glyph, not a system capture)", colors: [Color(red: 0.12, green: 0.14, blue: 0.2), Color(red: 0.2, green: 0.16, blue: 0.24)]) {
+            SheetRow("Controls") {
+                ControlTile(title: "Flick to TV", symbol: "airplayaudio"); ControlTile(title: "TV Play or Pause", symbol: "playpause.fill")
+                ControlTile(title: "TV On or Off", symbol: "power"); ControlTile(title: "TV Remote", symbol: "av.remote.fill")
+            }
+        }
+    }
     var body: some View {
         SheetsDone(names: names).task {
             await load()
@@ -161,6 +170,7 @@ struct TVSheets: View {
             }
             writeSheet("tv-lock", scale: 3, lock); names.append("tv-lock")
             writeSheet("tv-standby", standby); names.append("tv-standby")
+            writeSheet("tv-controls", controls); names.append("tv-controls")
             print("sheets done")
         }
     }

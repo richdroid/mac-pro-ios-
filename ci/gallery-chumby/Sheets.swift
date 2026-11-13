@@ -85,6 +85,18 @@ struct ChumbySheets: View {
             }
         }
     }
+    var controls: some View {
+        Sheet("Chumby · Control Center (drawn stand-ins: each control\u{2019}s own name and glyph, not a system capture) (off, on)", colors: [Color(red: 0.12, green: 0.14, blue: 0.2), Color(red: 0.2, green: 0.16, blue: 0.24)]) {
+            SheetRow("Skip: next alarm, skipped, just this once") {
+                ControlTile(title: "Skip 6:45 AM", symbol: "forward.end.fill"); ControlTile(title: "Skipped 6:45 AM", symbol: "moon.zzz.fill", on: true); ControlTile(title: "Just this once 7:30 AM", symbol: "clock.arrow.circlepath", on: true)
+            }
+            SheetRow("Night mode: day, night") { ControlTile(title: "Day", symbol: "sun.max.fill"); ControlTile(title: "Night", symbol: "moon.fill", on: true) }
+            SheetRow("Buttons") {
+                ControlTile(title: "Next Widget", symbol: "forward.fill"); ControlTile(title: "20-Minute Nap", symbol: "zzz")
+                ControlTile(title: "Stop Alarm", symbol: "alarm.waves.left.and.right.fill"); ControlTile(title: "Chumby", symbol: "hand.tap.fill")
+            }
+        }
+    }
     var body: some View {
         SheetsDone(names: names).task {
             for look in Look.allCases {
@@ -93,6 +105,7 @@ struct ChumbySheets: View {
             }
             writeSheet("chumby-lock", scale: 3, lock); names.append("chumby-lock")
             writeSheet("chumby-standby", standby); names.append("chumby-standby")
+            writeSheet("chumby-controls", controls); names.append("chumby-controls")
             print("sheets done")
         }
     }

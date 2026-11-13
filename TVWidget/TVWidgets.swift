@@ -46,6 +46,8 @@ struct TVEntry: TimelineEntry {
     var caption: String {
         if let n = now { return n.subtitle }
         if status == nil { return reachable ? "" : "Waiting for the TV" }
+        // Just ended (the reading still says it plays): claim nothing until the next reading says what's on.
+        if let s = status, TVNowItem(s) != nil { return "" }
         return asleep || !liveStatus ? "" : "Nothing playing"
     }
     // Said small, in place of the progress line, when what's shown is the last known rather than live.
@@ -66,6 +68,7 @@ enum TVPlayWanted {
         guard let until = d.object(forKey: "tvWantedUntil") as? Date else { return nil }
         return (d.bool(forKey: "tvWantedPlaying"), until)
     }
+    static func clear() { UserDefaults.standard.removeObject(forKey: "tvWantedUntil") }
     static func set(_ playing: Bool) {
         UserDefaults.standard.set(playing, forKey: "tvWantedPlaying")
         UserDefaults.standard.set(Date().addingTimeInterval(6), forKey: "tvWantedUntil")
@@ -76,6 +79,8 @@ enum TVPlayWanted {
 struct TVNowItem {
     var title: String, subtitle: String, app: String, playing: Bool
     var progress: Double?, start: Date?, end: Date?
+    // How long it runs, kept while paused (start and end are only set while it plays).
+    var duration: TimeInterval?
     var timed: Bool { start != nil || progress != nil }
     // Sent from this phone: iOS already has its controls for it, so the widget shows it without its own keys.
     var airplay: Bool { app == "AirPlay" }
@@ -85,7 +90,7 @@ struct TVNowItem {
     }
     var length: TimeInterval? {
         if let a = start, let b = end { return b.timeIntervalSince(a) }
-        return nil
+        return duration
     }
     // Held paused or playing from a press: the bar stops where it is, or runs on from there.
     mutating func hold(playing p: Bool, at d: Date) {
@@ -104,6 +109,7 @@ struct TVNowItem {
         #if os(iOS)
         guard let st = TVIsland.state(s) else { return nil }
         self.init(title: st.title, subtitle: st.subtitle, app: st.app, playing: st.playing, progress: st.progress, start: st.start, end: st.end)
+        duration = st.length
         #else
         guard let m = s.music else { return nil }
         self.init(title: m.title, subtitle: m.artist, app: "Mint", playing: m.playing)
@@ -135,7 +141,9 @@ struct TVProvider: TimelineProvider {
                 // And the moment it ends, so a finished song or film doesn't sit there with a full bar.
                 if e.remaining < 600 { var n = e; n.date = e.date.addingTimeInterval(e.remaining + 1); entries.append(n) }
             }
-            completion(Timeline(entries: entries, policy: .after(Date().addingTimeInterval(e.now?.playing == true ? 600 : 1800))))
+            // Read again just after it ends (the next song or episode has usually started), else in ten minutes.
+            let next: TimeInterval = e.now?.playing == true ? (art && e.remaining < 600 && e.now?.end != nil ? e.remaining + 2 : 600) : 1800
+            completion(Timeline(entries: entries, policy: .after(Date().addingTimeInterval(next))))
         }
     }
     // The reload after a press reads what the press left (WidgetFresh) and asks the network for nothing; a timed reload
@@ -158,7 +166,8 @@ struct TVProvider: TimelineProvider {
         // The cover is the same picture for the whole song or film, so it comes from the cache after the first time.
         if art, e.now != nil, let url = Self.coverAddress(e.status), let d = await TVBridge.data(URL(string: url), timeout: 6, cached: true), let i = Self.thumbnail(d, 320) { e.cover = i; e.wall = Self.shrunk(i, to: 16) }
         // Resting with the TV on: the banner of the app in front stands where the cover would.
-        if art, e.now == nil, e.liveStatus, !e.asleep, let pkg = e.status?.app { e.front = await Self.logo(pkg) }
+        // Also while something plays, for the moment it ends; from disk only while the Mac isn't answering.
+        if art, !e.asleep, let pkg = e.status?.app { e.front = await Self.logo(pkg, fetch: e.reachable) }
         // Not answering: the last picture, shown dimmed with when it was.
         if mirror, !e.reachable, let d = try? Data(contentsOf: WidgetFresh.shotFile) { e.mirror = Self.thumbnail(d, 640) }
         if mirror, e.reachable, !e.asleep {
@@ -282,7 +291,8 @@ struct TVPlayPause: AppIntent {
     func perform() async throws -> some IntentResult {
         let pressed = Date()
         TVPlayWanted.set(play)
-        try await TVBridge.post("key", ["key": play ? "resume" : "pause"], timeout: 6)
+        do { try await TVBridge.post("key", ["key": play ? "resume" : "pause"], timeout: 6) }
+        catch { TVPlayWanted.clear(); throw error }
         await WidgetFresh.refresh(after: pressed)
         return .result()
     }
@@ -356,12 +366,14 @@ struct CoverView: View {
     var glyph = "music.note"
     var height: CGFloat
     var maxWidth: CGFloat = .infinity
+    // Up to a banner's or a still's 16:9; when that's wider than the room, the picture keeps its shape and gets shorter.
     var shape: CGFloat {
         guard let image else { return 1 }
-        return min(max(image.size.width / max(image.size.height, 1), 0.66), 1.33)
+        return min(max(image.size.width / max(image.size.height, 1), 0.66), 1.78)
     }
     var body: some View {
         let w = min(height * shape, maxWidth)
+        let height = image == nil ? self.height : min(self.height, w / shape)
         ZStack {
             Color.white.opacity(0.1)
             if let image { Image(tv: image).resizable().widgetAccentedRenderingMode(.fullColor).scaledToFill().frame(width: w, height: height).clipped() }
@@ -419,8 +431,9 @@ struct NowBody: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         default:
-            HStack(spacing: 14) {
-                CoverView(image: picture, glyph: glyph, height: 130, maxWidth: 140).shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+            HStack(alignment: .top, spacing: 14) {
+                // A quiet tile half the size when there's no picture and nothing playing (asleep, never reached).
+                CoverView(image: picture, glyph: glyph, height: picture == nil && entry.now == nil ? 64 : 130, maxWidth: 140).shadow(color: .black.opacity(0.3), radius: 8, y: 4)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(entry.title).font(.headline).lineLimit(2).minimumScaleFactor(0.9).invalidatableContent()
                     if !entry.caption.isEmpty { Text(entry.caption).font(.footnote).foregroundStyle(.white.opacity(0.75)).lineLimit(1).padding(.top, 1) }
@@ -539,10 +552,10 @@ struct RemoteBody: View {
                 HStack(alignment: .bottom) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(screenName).font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
-                        RemoteKeys(key: 40)
+                        RemoteKeys(key: 44)
                     }
                     Spacer(minLength: 0)
-                    Pad(side: 120)
+                    Pad(side: 132)
                 }
             }
             .padding(14)
@@ -574,7 +587,8 @@ struct TVBoxEntry: TimelineEntry {
         return d > 0 ? "\(d)d \(h)h" : h > 0 ? "\(h)h \(m)m" : "\(m)m"
     }
     // Not live, the last figures are shown with when they were read: never an alarm for a reading missed.
-    var state: String { !reachable ? "Last seen " + tvWidgetTime(readAt ?? date) : screen == "asleep" ? "Asleep" : screen == "screensaver" ? "Screensaver" : screen == "on" ? "Awake" : "Online" }
+    // Not live: the time it was last seen, by a grey dot (the full phrase didn't fit beside the photo).
+    var state: String { !reachable ? tvWidgetTime(readAt ?? date) : screen == "asleep" ? "Asleep" : screen == "screensaver" ? "Screensaver" : screen == "on" ? "Awake" : "Online" }
     var dot: Color { !reachable ? .gray : screen == "on" || screen == "screensaver" ? .green : .gray }
     var memory: Double { (info?.memTotal ?? 0) > 0 ? info!.memUsed / info!.memTotal : 0 }
     var storage: Double { (info?.diskTotal ?? 0) > 0 ? info!.diskUsed / info!.diskTotal : 0 }
@@ -769,7 +783,7 @@ struct TVAppsProvider: AppIntentTimelineProvider {
     func timeline(for c: TVAppsConfig, in context: Context) async -> Timeline<TVEntry> {
         let e = await load(c)
         // Soon if it failed, so blank tiles don't stay all day.
-        return Timeline(entries: [e], policy: .after(Date().addingTimeInterval(e.logos.count >= 6 ? 6 * 3600 : 900)))
+        return Timeline(entries: [e], policy: .after(Date().addingTimeInterval(e.reachable || e.logos.count >= 6 ? 6 * 3600 : 900)))
     }
     func load(_ c: TVAppsConfig) async -> TVEntry {
         var e = TVEntry()

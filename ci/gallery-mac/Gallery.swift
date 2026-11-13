@@ -32,13 +32,13 @@ struct GraphiteWall: View {
 enum MacSample {
     static let temps: [(String, Double)] = [("CPU", 54), ("GPU A", 44), ("GPU B", 45), ("Memory", 42), ("Chipset", 52), ("Drive", 38), ("Power supply", 51), ("Intake air", 27)]
     static let hot: [(String, Double)] = [("CPU", 93), ("GPU A", 71), ("GPU B", 68), ("Memory", 58), ("Chipset", 66), ("Drive", 44), ("Power supply", 62), ("Intake air", 31)]
-    static func status(cpu: Int = 14, memUsed: Double = 13.7e9, diskFree: Double = 210e9, five: Double? = 6, week: Double? = 47, temps: [(String, Double)] = temps, uptime: Double = 187200) -> WidgetStatus {
+    static func status(cpu: Int = 14, memUsed: Double = 13.7e9, diskFree: Double = 210e9, five: Double? = 6, week: Double? = 47, temps: [(String, Double)] = temps, uptime: Double = 187200, alert: String? = nil) -> WidgetStatus {
         var plan: [String: Any] = [:]
         if let five { plan["fiveHour"] = five; plan["fiveHourResets"] = Date().addingTimeInterval(2 * 3600).timeIntervalSince1970 * 1000 }
         if let week { plan["sevenDay"] = week; plan["sevenDayResets"] = Date().addingTimeInterval(3 * 86400).timeIntervalSince1970 * 1000 }
         let soon = Date().addingTimeInterval(5 * 86400).timeIntervalSince1970 * 1000
         let j: [String: Any] = [
-            "macos": "26.7.2", "uptime": uptime,
+            "macos": "26.7.2", "uptime": uptime, "alerts": alert.map { [["title": $0, "level": "warning"]] } ?? [],
             "cpu": ["total": cpu], "mem": ["used": memUsed, "total": 34.4e9], "disk": ["free": diskFree, "total": 500e9],
             "usage": ["plan": plan], "claude": ["remoteControl": true],
             "temps": temps.map { ["name": $0.0, "c": $0.1] },
@@ -56,7 +56,7 @@ enum MacSample {
         let now = Date()
         return [
             ("Live", MacEntry(date: now, state: .ok(status()))),
-            ("Busy and hot", MacEntry(date: now, state: .ok(status(cpu: 91, memUsed: 30.9e9, diskFree: 40e9, five: 72, week: 88, temps: hot)))),
+            ("Busy and hot", MacEntry(date: now, state: .ok(status(cpu: 91, memUsed: 30.9e9, diskFree: 40e9, five: 72, week: 88, temps: hot, alert: "CPU is hot")))),
             ("A blip: last reading 6 min ago", MacEntry(date: now, state: .ok(status()), readAt: now.addingTimeInterval(-6 * 60))),
             ("Not heard for 2 h: last reading", MacEntry(date: now, state: .ok(status()), readAt: now.addingTimeInterval(-2 * 3600))),
             ("Mac not answering, nothing kept", MacEntry(date: now, state: .unreachable)),
@@ -130,6 +130,11 @@ struct MacSheets: View {
             }
         }
     }
+    var controls: some View {
+        Sheet("Mac Pro · Control Center (drawn stand-ins: each control\u{2019}s own name and glyph, not a system capture)", colors: [Color(red: 0.12, green: 0.14, blue: 0.2), Color(red: 0.2, green: 0.16, blue: 0.24)]) {
+            SheetRow("Controls") { ControlTile(title: "Mac Screen", symbol: "desktopcomputer"); ControlTile(title: "Mac Display Off", symbol: "display") }
+        }
+    }
     var body: some View {
         SheetsDone(names: names).task {
             // The apps' icons from the build's stand-in Mac.
@@ -141,6 +146,7 @@ struct MacSheets: View {
             }
             writeSheet("mac-lock", scale: 3, lock); names.append("mac-lock")
             writeSheet("mac-standby", standby); names.append("mac-standby")
+            writeSheet("mac-controls", controls); names.append("mac-controls")
             print("sheets done")
         }
     }

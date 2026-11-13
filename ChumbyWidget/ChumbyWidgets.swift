@@ -503,8 +503,13 @@ struct ChumbyStatusBody: View {
     var awake: some View {
         HStack(spacing: 5) {
             Circle().fill(entry.reachable ? Color.green : Color.white.opacity(0.4)).frame(width: 8, height: 8)
-            Text(entry.reachable ? "Up \(entryDuration(sys.up))" : (entry.lastSeen.map { "Last seen " + ChumbyEntry.clock($0) } ?? "Not answering"))
-                .font(.trebuchet(15, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+            // Not answering: the time it was last seen (with its day when not today) by a grey dot; the phrase didn't fit.
+            if entry.reachable {
+                Text("Up \(entryDuration(sys.up))").font(.trebuchet(15, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+            } else {
+                Text(entry.lastSeen.map { Calendar.current.isDateInToday($0) ? ChumbyEntry.clock($0) : $0.formatted(.dateTime.weekday(.abbreviated).hour().minute()) } ?? "Not answering")
+                    .font(.trebuchet(13, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+            }
         }
     }
     var body: some View {

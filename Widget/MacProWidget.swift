@@ -21,8 +21,10 @@ struct WidgetStatus: Decodable {
     struct Temp: Decodable { let name: String; let c: Double }
     struct SeedApp: Decodable { let name: String; let expires: Double?; let state: String?; let own: Bool?; let icon: String?; let build: String? }
     struct Seed: Decodable { let reachable: Bool?; let apps: [SeedApp]? }
+    // What the Mac says needs him, named ("CPU is hot"), after it's lasted (the bridge's own rule).
+    struct Alert: Decodable { let title: String?; let level: String? }
     let uptime: Double?
-    let cpu: CPU?; let mem: Memory?; let disk: Disk?; let usage: Usage?; let temps: [Temp]?; let iosApps: Seed?
+    let cpu: CPU?; let mem: Memory?; let disk: Disk?; let usage: Usage?; let temps: [Temp]?; let iosApps: Seed?; let alerts: [Alert]?
 }
 
 // "3:42 PM" today, "Tue 3:42 PM" before: the one way every widget says when a reading was taken.
@@ -74,6 +76,8 @@ struct MacEntry: TimelineEntry {
 }
 
 struct MacProvider: AppIntentTimelineProvider {
+    // Which widget, so each backs off on its own count (one shared count made the fourth wait half an hour after a blip).
+    var kind = "status"
     var icons = false
     func placeholder(in context: Context) -> MacEntry { MacEntry(date: Date(), state: .sample) }
     func snapshot(for c: WidgetAddress, in context: Context) async -> MacEntry { context.isPreview ? MacEntry(date: Date(), state: .sample) : await load(c) }
@@ -81,9 +85,10 @@ struct MacProvider: AppIntentTimelineProvider {
         let e = await load(c)
         // A fresh reading: a quarter of an hour. Without one, sooner, then backing off (2, 5, 15, 30 minutes), so a Mac away
         // overnight doesn't spend the day's refreshes and every widget keeps refreshing once it's back.
-        let fails = UserDefaults.standard.integer(forKey: "macWidgetFails")
+        let key = "macWidgetFails-" + kind
+        let fails = UserDefaults.standard.integer(forKey: key)
         let fresh: Bool = { if case .ok = e.state, e.readAt == nil { return true }; return e.isSample }()
-        UserDefaults.standard.set(fresh ? 0 : fails + 1, forKey: "macWidgetFails")
+        UserDefaults.standard.set(fresh ? 0 : fails + 1, forKey: key)
         let wait: TimeInterval = fresh ? 15 * 60 : [2, 5, 15, 30][min(fails, 3)] * 60
         return Timeline(entries: [e], policy: .after(Date().addingTimeInterval(wait)))
     }
@@ -121,17 +126,23 @@ struct MacProvider: AppIntentTimelineProvider {
     // The apps' icons, kept on disk by name: fetched once, then read from there (with no base, only read).
     static func icons(_ s: WidgetStatus, _ base: URL?) async -> [String: Data] {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        var out: [String: Data] = [:]
-        for a in (s.iosApps?.apps ?? []).prefix(4) {
-            let file = dir.appendingPathComponent("widget-icon-" + a.name.filter { $0.isLetter || $0.isNumber } + ".png")
-            if let d = try? Data(contentsOf: file) { out[a.name] = d; continue }
-            guard let base, let path = a.icon, let u = URL(string: path, relativeTo: base) else { continue }
-            var r = URLRequest(url: u); r.timeoutInterval = 5
-            if let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200, d.count > 100 {
-                try? d.write(to: file, options: .atomic); out[a.name] = d
+        // All at once: one after the other they could take 20 s on top of the status.
+        return await withTaskGroup(of: (String, Data?).self) { group -> [String: Data] in
+            for a in (s.iosApps?.apps ?? []).prefix(4) {
+                group.addTask {
+                    let file = dir.appendingPathComponent("widget-icon-" + a.name.filter { $0.isLetter || $0.isNumber } + ".png")
+                    if let d = try? Data(contentsOf: file) { return (a.name, d) }
+                    guard let base, let path = a.icon, let u = URL(string: path, relativeTo: base) else { return (a.name, nil) }
+                    var r = URLRequest(url: u); r.timeoutInterval = 5
+                    guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200, d.count > 100 else { return (a.name, nil) }
+                    try? d.write(to: file, options: .atomic)
+                    return (a.name, d)
+                }
             }
+            var out: [String: Data] = [:]
+            for await (n, d) in group { if let d { out[n] = d } }
+            return out
         }
-        return out
     }
 }
 
@@ -163,7 +174,7 @@ let claudeTint = Color(red: 0.85, green: 0.55, blue: 0.4)
 func heatColor(_ c: Double) -> Color { c >= 90 ? .red : c >= 75 ? .orange : c >= 60 ? .yellow : meterTint }
 func heatLine(_ c: Double) -> String { c >= 90 ? "Fans, please!" : c >= 75 ? "Getting toasty" : c >= 60 ? "Warming up" : "Cool as a trash can" }
 // Heat carried by shape as well as colour, so it survives a clear Home Screen where every colour is one.
-func heatGlyph(_ c: Double) -> String { c >= 75 ? "thermometer.high" : c >= 55 ? "thermometer.medium" : "thermometer.low" }
+func heatGlyph(_ c: Double) -> String { c >= 75 ? "thermometer.high" : c >= 60 ? "thermometer.medium" : "thermometer.low" }
 func pct(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
 
 // Thick enough to read at arm's length. No value: an empty track, as the meter waits.
@@ -230,7 +241,14 @@ struct MacPhoto: View {
     @Environment(\.showsWidgetContainerBackground) private var background
     var body: some View {
         Image("MacPro").resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit()
-            .background { if mode != .fullColor || !background { Ellipse().fill(RadialGradient(colors: [.white.opacity(0.28), .clear], center: .center, startRadius: 2, endRadius: 40)).scaleEffect(1.5) } }
+            .background {
+                if mode != .fullColor || !background {
+                    GeometryReader { g in
+                        Ellipse().fill(RadialGradient(colors: [.white.opacity(0.28), .clear], center: .center, startRadius: 2, endRadius: max(g.size.width, g.size.height) * 0.75))
+                            .frame(width: g.size.width * 1.6, height: g.size.height * 1.3).position(x: g.size.width / 2, y: g.size.height / 2)
+                    }
+                }
+            }
     }
 }
 // When the reading was taken, or the calm word while it waits.
@@ -290,17 +308,24 @@ struct StatusView: View {
                 }
             case .systemSmall:
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack(alignment: .top, spacing: 8) {
-                        MacPhoto().frame(width: 40, height: 54)
+                    // The photo with the name and uptime; under them, the full width: when (or the calm word) and the
+                    // hottest temperature, so neither is squeezed beside the photo.
+                    HStack(alignment: .center, spacing: 8) {
+                        MacPhoto().frame(width: 34, height: 46, alignment: .leading)
                         VStack(alignment: .leading, spacing: 1) {
                             Text("Mac Pro").font(.system(size: 16, weight: .semibold)).lineLimit(1)
                             if let up = entry.uptime { Text("Up \(up)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1) }
-                            When(entry: entry)
                         }
                         Spacer(minLength: 0)
                     }
-                    .overlay(alignment: .topTrailing) { hot }
-                    Spacer(minLength: 6)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        When(entry: entry)
+                        Spacer(minLength: 0)
+                        hot
+                    }
+                    .frame(height: 16)
+                    .padding(.top, 2)
+                    Spacer(minLength: 4)
                     VStack(spacing: 10) {
                         Meter(label: "CPU", value: cpu, text: cpu.map(pct) ?? "")
                         Meter(label: "Memory", value: mem, text: mem.map(pct) ?? "", orange: 0.92, red: 0.97)
@@ -308,13 +333,16 @@ struct StatusView: View {
                 }
             default:
                 HStack(spacing: 16) {
-                    VStack(spacing: 5) {
+                    VStack(spacing: 4) {
                         MacPhoto().frame(maxHeight: 88)
-                        if let up = entry.uptime { Text("Up \(up)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1).fixedSize() }
-                        hot
-                        When(entry: entry).fixedSize()
+                        // What needs him takes the uptime's line; the temperature and the time share one.
+                        if let a = entry.status?.alerts?.first(where: { !($0.title ?? "").isEmpty }), entry.readAt == nil {
+                            Label(a.title ?? "", systemImage: "exclamationmark.triangle.fill").font(.system(size: 11, weight: .semibold)).foregroundStyle(.orange)
+                                .lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8).labelStyle(.titleAndIcon)
+                        } else if let up = entry.uptime { Text("Up \(up)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1).fixedSize() }
+                        HStack(spacing: 5) { hot; When(entry: entry) }.fixedSize()
                     }
-                    .frame(minWidth: 76)
+                    .frame(minWidth: 76, maxWidth: 110)
                     // The meters share the height evenly, the space falling between them rather than inside them.
                     VStack(alignment: .leading, spacing: 0) {
                         Meter(label: "CPU", value: cpu, text: cpu.map(pct) ?? "")
@@ -368,7 +396,7 @@ struct TempView: View {
                 Spacer(minLength: 2)
                 Reading(text: "\(shownTemp(t.c))°", color: heatColor(t.c), warn: t.c >= 75, size: label + 1)
             }
-            Bar(value: (t.c - 20) / 80, color: heatColor(t.c), height: label >= 14 ? 6 : 5)
+            Bar(value: (t.c - 20) / 80, color: heatColor(t.c), height: label >= 14 ? 6 : 4)
         }
     }
     var header: some View {
@@ -391,9 +419,9 @@ struct TempView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 5) {
                         Image(systemName: hottest.map { heatGlyph($0.c) } ?? "thermometer.medium").foregroundStyle(mode == .fullColor ? (hottest.map { heatColor($0.c) } ?? .white) : .white)
-                        Text(hottest?.name ?? "Mac Pro").font(.system(size: 13, weight: .semibold)).opacity(0.8)
+                        Text(hottest?.name ?? "Mac Pro").font(.system(size: 13, weight: .semibold)).opacity(0.8).lineLimit(1)
                         Spacer(minLength: 0)
-                        When(entry: entry)
+                        if !entry.quiet && entry.problem == nil { When(entry: entry) }
                     }
                     Spacer(minLength: 0)
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -405,7 +433,8 @@ struct TempView: View {
                     if ranked.count > 2 {
                         Text("\(ranked[1].name) \(shownTemp(ranked[1].c))° · \(ranked[2].name) \(shownTemp(ranked[2].c))°").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1).minimumScaleFactor(0.75)
                     }
-                    Text(hottest.map { heatLine($0.c) } ?? (entry.problem ?? "")).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1).minimumScaleFactor(0.8)
+                    if entry.quiet || entry.problem != nil { When(entry: entry, size: 12) }
+                    else { Text(hottest.map { heatLine($0.c) } ?? "").font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1).minimumScaleFactor(0.8) }
                 }
             case .systemLarge:
                 // The photo and every sensor, one to a line.
@@ -438,13 +467,18 @@ struct TempView: View {
                 // All eight sensors in two columns of four.
                 VStack(alignment: .leading, spacing: 0) {
                     header
-                    Spacer(minLength: 6)
+                    Spacer(minLength: 4)
                     let shown = Array(entry.temps.prefix(8))
                     if shown.isEmpty {
-                        Text(entry.problem ?? "No sensors yet").font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.6))
-                        Spacer(minLength: 0)
+                        // Waiting: the same grid, its meters empty (the calm word is already in the header).
+                        let names = ["CPU", "GPU A", "GPU B", "Memory", "Chipset", "Drive", "Power supply", "Intake air"]
+                        Grid(horizontalSpacing: 16, verticalSpacing: 4) {
+                            ForEach(0..<4, id: \.self) { r in
+                                GridRow { Meter(label: names[r * 2], value: nil, text: "", labelSize: 12); Meter(label: names[r * 2 + 1], value: nil, text: "", labelSize: 12) }
+                            }
+                        }
                     } else {
-                        Grid(horizontalSpacing: 16, verticalSpacing: 5) {
+                        Grid(horizontalSpacing: 16, verticalSpacing: 4) {
                             ForEach(0..<((shown.count + 1) / 2), id: \.self) { r in
                                 GridRow {
                                     row(shown[r * 2], label: 12)
@@ -461,7 +495,7 @@ struct TempView: View {
 }
 struct MacTempWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "MacProTemps", intent: WidgetAddress.self, provider: MacProvider()) { TempView(entry: $0).widgetURL(URL(string: "macproapp://tab/0")) }
+        AppIntentConfiguration(kind: "MacProTemps", intent: WidgetAddress.self, provider: MacProvider(kind: "temps")) { TempView(entry: $0).widgetURL(URL(string: "macproapp://tab/0")) }
             .configurationDisplayName("Mac Pro Temperatures")
             .description("How hot the trash can is running, every sensor.")
             .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryCircular, .accessoryInline])
@@ -499,7 +533,7 @@ struct ClaudeView: View {
             When(entry: entry).padding(.top, 2)
             Spacer(minLength: 4)
             if five != nil || week == nil {
-                VStack(spacing: 6) {
+                VStack(spacing: 4) {
                     meter("5 hours", five, resets(plan?.fiveHourResets))
                     meter("This week", week, resets(plan?.sevenDayResets))
                 }
@@ -515,7 +549,7 @@ struct ClaudeView: View {
 }
 struct MacClaudeWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "MacProClaude", intent: WidgetAddress.self, provider: MacProvider()) { ClaudeView(entry: $0).widgetURL(URL(string: "macproapp://tab/3")) }
+        AppIntentConfiguration(kind: "MacProClaude", intent: WidgetAddress.self, provider: MacProvider(kind: "claude")) { ClaudeView(entry: $0).widgetURL(URL(string: "macproapp://tab/3")) }
             .configurationDisplayName("Claude Usage")
             .description("How much of your Claude limits are left, and when they reset.")
             .supportedFamilies([.systemSmall])
@@ -579,7 +613,7 @@ struct AppsView: View {
 }
 struct MacAppsWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "MacProApps", intent: WidgetAddress.self, provider: MacProvider(icons: true)) { AppsView(entry: $0).widgetURL(URL(string: "macproapp://tab/1")) }
+        AppIntentConfiguration(kind: "MacProApps", intent: WidgetAddress.self, provider: MacProvider(kind: "apps", icons: true)) { AppsView(entry: $0).widgetURL(URL(string: "macproapp://tab/1")) }
             .configurationDisplayName("Apps on this iPhone")
             .description("Your apps from the Mac, their builds, and the days left on any it signed.")
             .supportedFamilies([.systemMedium])
