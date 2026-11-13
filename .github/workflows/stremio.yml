@@ -16,7 +16,7 @@ concurrency:
 jobs:
   phone:
     runs-on: xcode-27
-    timeout-minutes: 75
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,7 +58,7 @@ jobs:
           ls -la $M
       - name: Films
         continue-on-error: true
-        timeout-minutes: 45
+        timeout-minutes: 70
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
