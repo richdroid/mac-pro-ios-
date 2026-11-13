@@ -38,6 +38,7 @@ struct PhoneTrack: Identifiable, Hashable {
     func select(_ id: String?, audio: Bool)
     func subtitle(at seconds: Double) -> String?
     func shutdown()
+    func keepPiPCurrent()
 }
 
 @MainActor enum PhoneEngines {
@@ -146,6 +147,7 @@ final class AVLayerView: UIView {
     // AVPlayer draws its own subtitles.
     func subtitle(at seconds: Double) -> String? { nil }
     func shutdown() { player.pause(); player.replaceCurrentItem(with: nil); watchers = [] }
+    func keepPiPCurrent() {}
     nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ c: AVPictureInPictureController) { Task { @MainActor in self.onPiP?(true) } }
     nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ c: AVPictureInPictureController) { Task { @MainActor in self.onPiP?(false) } }
     nonisolated func pictureInPictureController(_ c: AVPictureInPictureController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler done: @escaping (Bool) -> Void) {
@@ -156,7 +158,7 @@ final class AVLayerView: UIView {
 // MARK: KSPlayer
 
 #if canImport(KSPlayer)
-@MainActor final class KSEngine: NSObject, PhoneEngine, KSPlayerLayerDelegate, AVPictureInPictureControllerDelegate {
+@MainActor final class KSEngine: NSObject, PhoneEngine, KSPlayerLayerDelegate, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate {
     let layer: KSPlayerLayer
     private let host = PlayerHostView()
     var view: UIView { host }
@@ -177,6 +179,8 @@ final class AVLayerView: UIView {
         o.registerRemoteControll = false
         o.canStartPictureInPictureAutomaticallyFromInline = true
         o.userAgent = "Mozilla/5.0"
+        // FFmpeg's player opens the file at the spot; a seek asked for before it was ready landed far off (CI 46dc8de).
+        if !native, start > 0 { o.startPlayTime = start }
         if !headers.isEmpty {
             o.avOptions["AVURLAssetHTTPHeaderFieldsKey"] = headers
             o.formatContextOptions["headers"] = headers.map { "\($0.key): \($0.value)\r\n" }.joined()
@@ -185,7 +189,7 @@ final class AVLayerView: UIView {
         host.backgroundColor = .black
         super.init()
         layer.delegate = self
-        if start > 0 { layer.seek(time: start, autoPlay: true) { _ in } }
+        if native, start > 0 { layer.seek(time: start, autoPlay: true) { _ in } }
         attach()
     }
     private func attach() {
@@ -205,8 +209,41 @@ final class AVLayerView: UIView {
         get { layer.player.contentMode == .scaleAspectFill }
         set { layer.player.contentMode = newValue ? .scaleAspectFill : .scaleAspectFit }
     }
-    // Asked only once the player is ready: FFmpeg's player makes its controller the first time it's asked.
-    var pip: AVPictureInPictureController? { [.initialized, .preparing].contains(state) ? nil : layer.player.pipController }
+    // Asked only once the player is ready. KSPlayer's own controller for AVPlayer's picture; for FFmpeg's, one of this
+    // app's on its sample-buffer layer (KSPlayer's came back nil there, CI 46dc8de).
+    private var ownPiP: AVPictureInPictureController?
+    nonisolated(unsafe) private var shownLength: Double = 0
+    nonisolated(unsafe) private var shownPaused = false
+    var pip: AVPictureInPictureController? {
+        if [.initialized, .preparing].contains(state) { return nil }
+        if let p = layer.player.pipController { return p }
+        if ownPiP == nil, let me = layer.player as? KSMEPlayer, let out = me.videoOutput {
+            let source = AVPictureInPictureController.ContentSource(sampleBufferDisplayLayer: out.displayLayer, playbackDelegate: self)
+            let p = AVPictureInPictureController(contentSource: source)
+            p.delegate = self
+            p.canStartPictureInPictureAutomaticallyFromInline = true
+            ownPiP = p
+            PhoneLog.note("own picture in picture; supported \(AVPictureInPictureController.isPictureInPictureSupported())")
+        }
+        return ownPiP
+    }
+    func keepPiPCurrent() {
+        shownLength = duration
+        let paused = !isPlaying
+        if paused != shownPaused { shownPaused = paused; ownPiP?.invalidatePlaybackState() }
+    }
+    nonisolated func pictureInPictureController(_ c: AVPictureInPictureController, setPlaying playing: Bool) {
+        Task { @MainActor in if playing { self.play() } else { self.pause() } }
+    }
+    nonisolated func pictureInPictureControllerTimeRangeForPlayback(_ c: AVPictureInPictureController) -> CMTimeRange {
+        shownLength > 0 ? CMTimeRange(start: .zero, duration: CMTime(seconds: shownLength, preferredTimescale: 600))
+            : CMTimeRange(start: .negativeInfinity, duration: .positiveInfinity)
+    }
+    nonisolated func pictureInPictureControllerIsPlaybackPaused(_ c: AVPictureInPictureController) -> Bool { shownPaused }
+    nonisolated func pictureInPictureController(_ c: AVPictureInPictureController, didTransitionToRenderSize newRenderSize: CMVideoDimensions) {}
+    nonisolated func pictureInPictureController(_ c: AVPictureInPictureController, skipByInterval skipInterval: CMTime, completion: @escaping () -> Void) {
+        Task { @MainActor in self.seek(to: self.position + skipInterval.seconds); completion() }
+    }
     func play() { ended = false; layer.play() }
     func pause() { layer.pause() }
     func seek(to seconds: Double) {
@@ -242,7 +279,7 @@ final class AVLayerView: UIView {
         PhoneLog.note("ks \(state) \(type(of: layer.player))")
         if state == .readyToPlay {
             attach()
-            pip?.delegate = self
+            if ownPiP == nil { layer.player.pipController?.delegate = self }
             pip?.canStartPictureInPictureAutomaticallyFromInline = true
             PhoneLog.note("ready; picture in picture \(pip == nil ? "missing" : "there"), possible \(pip?.isPictureInPicturePossible ?? false)")
         }

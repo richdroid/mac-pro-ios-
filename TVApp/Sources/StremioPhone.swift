@@ -87,10 +87,13 @@ struct PhoneRecent: Codable, Hashable, Identifiable {
     private static var window: UIWindow?
     private static var watching = false
     static var top: UIViewController? {
-        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
-            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        // The scene the app is showing in now: the one whose own window is key (folded and open are different displays).
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { s in s.windows.contains { $0.isKeyWindow && $0 !== window } }
+            ?? scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
         guard let scene else { return nil }
-        if window?.windowScene !== scene {
+        // Never moved while something is up in it: the player keeps playing where it is.
+        if window?.windowScene !== scene, window?.rootViewController?.presentedViewController == nil {
             let w = UIWindow(windowScene: scene)
             w.windowLevel = .normal + 1
             w.backgroundColor = .clear
@@ -439,7 +442,7 @@ struct StremioAccountPage: View {
 }
 
 // What the player is doing, on the console (the build's films keep it; nothing about his account is in it).
-enum PhoneLog { static func note(_ s: String) { FileHandle.standardError.write(Data(("[phone] " + s + "\n").utf8)) } }
+enum PhoneLog { static func note(_ s: String) { FileHandle.standardError.write(Data(("[phone] \(Int(Date().timeIntervalSince1970) % 1000) " + s + "\n").utf8)) } }
 
 // For the build's films only, against the stand-in Stremio ("-stremioAPI http://127.0.0.1:…"), never his account: the
 // stand-in's sample login filled in, a title opened, its best stream played, and every key of the player pressed in

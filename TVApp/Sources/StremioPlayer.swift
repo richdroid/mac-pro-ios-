@@ -106,6 +106,7 @@ final class PhoneSession {
         if failed == nil, let err = e.error { failed = err; buffering = false; PhoneLog.note("failed: \(err)") }
         if e.ended, !ended { ended = true; Task { await save() } }
         caption = e.subtitle(at: position)
+        e.keepPiPCurrent()
         // Tracks come with the file; asked again now and then, as a second player may take over.
         if ticks % 8 == 1 { audio = e.tracks(audio: true); subs = e.tracks(audio: false) }
         if ticks % 20 == 0 { nowPlaying() }
