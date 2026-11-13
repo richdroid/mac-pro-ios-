@@ -218,7 +218,9 @@ final class PhoneSession {
             await save()
             flicking = false
             var item = title.item
-            if length > 0, at > 30 { item.progress = min(at / length, 0.99) }
+            // Always set: nil let the TV page fall back to an older Continue watching spot; 0 sends no resume, and the
+            // TV uses the place just saved (gate on 1c8b616).
+            item.progress = length > 0 && at > 30 ? min(at / length, 0.99) : 0
             close()
             try? await Task.sleep(nanoseconds: 450_000_000)
             model.closeFlick()

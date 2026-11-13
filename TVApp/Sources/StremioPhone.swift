@@ -242,7 +242,11 @@ struct PhonePicker: View {
         .preferredColorScheme(.dark)
         .presentationBackground(.ultraThinMaterial)
         .task { await load() }
-        .onChange(of: video) { was, _ in if was != nil { Task { await loadStreams(force: true) } } }
+        .onChange(of: video) { was, _ in
+            guard was != nil else { return }
+            // His place still unread: read it with the new episode, never streams alone (gate on 1c8b616).
+            Task { if placeKnown { await loadStreams(force: true) } else { problem = nil; streams = []; await load() } }
+        }
     }
 
     var header: some View {
