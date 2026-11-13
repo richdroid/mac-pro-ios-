@@ -427,7 +427,9 @@ final class SongArt: ObservableObject {
     private struct Search: Decodable { struct T: Decodable { let artworkUrl100: String?; let trackViewUrl: String?; let trackTimeMillis: Double? }; let results: [T] }
     private static func search(_ s: Song) async -> Search? {
         var c = URLComponents(string: "https://itunes.apple.com/search")!
-        c.queryItems = [.init(name: "term", value: s.artist + " " + s.title), .init(name: "entity", value: "song"), .init(name: "limit", value: "1")]
+        // Quotes trimmed: "'Round Midnight" as written found another album's cover entirely.
+        let title = s.title.trimmingCharacters(in: CharacterSet(charactersIn: "'‘’\"“” "))
+        c.queryItems = [.init(name: "term", value: s.artist + " " + title), .init(name: "entity", value: "song"), .init(name: "limit", value: "1")]
         guard let u = c.url, let d = try? await URLSession.shared.data(from: u).0 else { return nil }
         return try? JSONDecoder().decode(Search.self, from: d)
     }

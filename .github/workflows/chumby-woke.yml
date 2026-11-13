@@ -67,8 +67,8 @@ jobs:
             kill -INT $REC; wait $REC; echo "$name exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
-          posture() { # display, suffix, strip's height as a fraction of the screen
-            local d=$1 x=$2 y=$3
+          posture() { # display, suffix, strip's height, its right and left ends, as fractions of the screen
+            local d=$1 x=$2 y=$3 r=$4 l=$5
             for A in light dark; do
               xcrun simctl ui "$DEVICE" appearance $A
               still $d woke-$A$x 12 $M -tab 3
@@ -81,20 +81,20 @@ jobs:
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 3
             sleep 10
-            $D "$DEVICE" drag 0.85 $y 0.35 $y 1.2 || echo "drag failed"; sleep 2
+            $D "$DEVICE" drag $r $y $l $y 1.2 || echo "drag failed"; sleep 2
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-wokefling-dragged$x.png
-            $D "$DEVICE" drag 0.85 $y 0.15 $y 0.12 || echo "fling failed"; sleep 3
+            $D "$DEVICE" drag $r $y $l $y 0.12 || echo "fling failed"; sleep 3
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-wokefling-flung$x.png
-            $D "$DEVICE" drag 0.15 $y 0.85 $y 0.12 || echo "fling back failed"; sleep 3
+            $D "$DEVICE" drag $l $y $r $y 0.12 || echo "fling back failed"; sleep 3
             kill -INT $REC; wait $REC; echo "wokefling$x exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
           $D "$DEVICE" pose closed; sleep 5
-          posture 1 "" ${WOKE_Y:-0.62}
+          posture 1 "" 0.64 0.72 0.1
           $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
-          posture 3 -open ${WOKE_Y_OPEN:-0.62}
+          posture 3 -open 0.67 0.42 0.05
           $D "$DEVICE" rotate 1; sleep 5
-          posture 3 -portrait ${WOKE_Y_PORTRAIT:-0.62}
+          posture 3 -portrait 0.55 0.85 0.08
       - name: Collect crash reports
         if: always()
         run: |
