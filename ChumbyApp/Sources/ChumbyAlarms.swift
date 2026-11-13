@@ -35,61 +35,91 @@ struct FailNote: View {
 // A change that hasn't reached the Chumby, under the row it belongs to, with a way to send it again.
 // The control beside it shows what the Chumby really holds; this says what couldn't be changed, and why.
 // The title never gives up its width: when it, "· Retry" and the ✕ fit on one line they share it; when they don't
-// (folded, beside a switch), the title has the whole row and Retry and the ✕ take their own line under the reason, so the
-// title breaks only between words (11-12: "Could / n't / turn" when the ✕ took its width).
+// (folded), the title has the whole row and Retry and the ✕ take their own line under the reason, so the title breaks
+// only between words (11-12: "Could / n't / turn" when the ✕ took its width).
+// Under an alarm it is a list row of its own (`noteRow`), so it springs in and out as a row does, the row above never
+// moving; sent again, it stays in place saying so ("Trying again…") and only goes once the change lands.
+// `open`: a tap on the note (not on Retry or the ✕) does what a tap on its alarm does.
 struct MarkNote: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.colorScheme) private var scheme
     let mark: String
+    var open: (() -> Void)?
+    var shown: (head: String, why: String, trying: Bool)? {
+        switch model.marks[mark] {
+        case .failed(let h, let w): return (h, w, false)
+        case .retrying(let h, let w): return (h, w, true)
+        default: return nil
+        }
+    }
     var body: some View {
-        if case .failed(let head, let why) = model.marks[mark] {
+        if let n = shown {
             ViewThatFits(in: .horizontal) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        title(head).fixedSize()
+                        title(n.head, n.trying).fixedSize()
                         Text("·").foregroundStyle(.secondary)
-                        retry
+                        retry(n.trying)
                         Spacer(minLength: 8)
                         close
                     }
-                    reason(why)
+                    reason(n.why)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    title(head).fixedSize(horizontal: false, vertical: true)
-                    reason(why)
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        retry
+                    title(n.head, n.trying).fixedSize(horizontal: false, vertical: true)
+                    reason(n.why)
+                    HStack(alignment: .center, spacing: 6) {
+                        retry(n.trying)
                         Spacer(minLength: 8)
                         close
                     }
+                    .padding(.top, 4)
                 }
             }
             .font(.subheadline)
+            .contentShape(Rectangle())
+            .onTapGesture { open?() }
+            .transition(.opacity)
         }
     }
-    private func title(_ head: String) -> some View {
+    // The title holds its width while trying again, so nothing re-wraps: the words are swapped, the line kept.
+    private func title(_ head: String, _ trying: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: "exclamationmark.circle.fill")
-            Text(head).fontWeight(.semibold)
+            Image(systemName: trying ? "arrow.clockwise.circle.fill" : "exclamationmark.circle.fill")
+            Text(trying ? "Trying again…" : head).fontWeight(.semibold)
         }
-        .foregroundStyle(ChumbyPalette.warn(scheme == .dark))
+        .foregroundStyle(trying ? Color.secondary : ChumbyPalette.warn(scheme == .dark))
+        .contentTransition(.opacity)
     }
     private func reason(_ why: String) -> some View {
         // No width of its own to ask for: ViewThatFits measures the title's line, and the reason wraps under either.
         Text(why).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
             .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
     }
-    private var retry: some View {
+    private func retry(_ trying: Bool) -> some View {
         Button("Retry") { model.retry(mark) }.buttonStyle(.borderless).fontWeight(.semibold).foregroundStyle(.tint)
+            .disabled(trying).opacity(trying ? 0.4 : 1)
     }
-    // Or let it go: the control beside it already shows what the Chumby holds.
+    // Or let it go: the control beside it already shows what the Chumby holds. A drawn 21 pt disc on the content's
+    // trailing margin, its target 44 pt square without making the line any taller.
     private var close: some View {
         Button { model.dismiss(mark) } label: {
-            Image(systemName: "xmark.circle.fill").font(.body).symbolRenderingMode(.palette).foregroundStyle(.white, ChumbyPalette.acc(scheme == .dark))
-                .frame(minWidth: 44, minHeight: 32, alignment: .trailing).contentShape(Rectangle())
+            Image(systemName: "xmark.circle.fill").font(.system(size: 21)).symbolRenderingMode(.palette).foregroundStyle(.white, ChumbyPalette.acc(scheme == .dark))
+                .frame(width: 21, height: 21)
+                .frame(width: 44, height: 44, alignment: .trailing).contentShape(Rectangle())
+                .padding(.vertical, -11.5)
         }
         .buttonStyle(.borderless)
         .accessibilityLabel("Dismiss")
+    }
+}
+extension View {
+    // An alarm's MarkNote as its own list row under the alarm's: lined up with the alarm's text column (`lead`: the
+    // tile's 44 pt and its 12 pt gap), close under the row, and the separator between the two hidden while it shows.
+    func noteRow(lead: CGFloat) -> some View {
+        self.padding(.leading, lead)
+            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
+            .listRowSeparator(.hidden, edges: .top)
     }
 }
 // Instead of a message: once the Chumby has the change, a small bubble rises off the control and pops.
@@ -152,25 +182,11 @@ struct AlarmRow<Notes: View>: View {
     let tap: () -> Void
     let toggle: Binding<Bool>
     @ViewBuilder var notes: () -> Notes
-    // Where the text column starts (the tile's width and its gap), so the notes under the row line up with it.
-    @State private var inset: CGFloat = 0
-    // The notes sit under the row's button, not in its label: a note's Retry and ✕ are buttons of their own, which a
-    // button's label would swallow (VoiceOver and a test's tap never found them, 11-12), and they get the row's full
-    // width, past the switch, so a title never has to squeeze beside it.
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            row
-            notes().padding(.leading, inset)
-        }
-    }
-    var row: some View {
         HStack(spacing: 12) {
             Button(action: tap) {
                 HStack(alignment: .top, spacing: 12) {
-                    if let tile {
-                        tile.padding(.top, 6)
-                            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { inset = $0 + 12 }
-                    }
+                    if let tile { tile.padding(.top, 6) }
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(alignment: .firstTextBaseline, spacing: 3) {
                             Text(clock.0).font(.custom("Trebuchet MS", size: 40)).monospacedDigit()
@@ -179,6 +195,7 @@ struct AlarmRow<Notes: View>: View {
                         .opacity(on ? 1 : 0.5)
                         Text(title).font(.body.weight(.semibold)).lineLimit(1).opacity(on ? 1 : 0.6)
                         Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(oneLine ? 1 : 2).minimumScaleFactor(oneLine ? 0.85 : 1).opacity(on ? 1 : 0.7)
+                        notes()
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -973,9 +990,9 @@ struct AlarmsTab: View {
                         if j.pinned { RowNote(icon: "clock.arrow.circlepath", text: "Just this once: \(dayWord(j.at).lowercased()) at \(j.at.formatted(date: .omitted, time: .shortened)), \(j.alarm.soundText)", color: .secondary) }
                         else if j.orphan, let u = j.usual { RowNote(icon: "exclamationmark.circle.fill", text: "Both will ring: \(u.formatted(date: .omitted, time: .shortened)) and the one-off at \(j.at.formatted(date: .omitted, time: .shortened))") }
                     }
-                    MarkNote(mark: a.key)
                 }
                 .zoomSource(a.key, in: editNS)
+                MarkNote(mark: a.key, open: { edit(a) }).noteRow(lead: 56)
             }
             // The end of the card: one row, tapped anywhere, as Channels' Add widgets. Nothing floats over the page, so
             // nothing can cover the Nap chips under it (Richard's Alarms shot, 2026-11-05).

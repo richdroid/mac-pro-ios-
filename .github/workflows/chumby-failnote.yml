@@ -66,17 +66,41 @@ jobs:
             done
             xcrun simctl ui "$DEVICE" appearance light
             still $d pose-homecard$x 10 $M/playing -tab 0 -pose homecard
+            # Rows with notes under them, unchanged in code but re-shot: a moved one-off, a nap set, a calendar day moved.
+            still $d pose-moved-alarms$x 9 $M/moved -tab 2
+            still $d pose-napset$x 9 $M/nap -tab 2 -pose napset
+            still $d pose-calonce$x 9 $M -tab 2 -pose calonce
+            # Sounds: an alarm's sound, the alarm volume and the fade each turned down; at rest, then flung to its notes.
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/fail -tab 3 -pose soundsfail
+            sleep 12
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pose-soundsfail$x.png
+            for i in 1 2; do $D "$DEVICE" drag 0.3 0.75 0.3 0.35 0.3 || echo "drag failed"; sleep 1.5; done
+            sleep 1
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pose-soundsfail-scrolled$x.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
             # The note at work: Retry (the mock still turns it down, so it comes back), then the ✕ puts it away.
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-failfilm$x.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/fail -tab 2 -pose failure
             sleep 9
-            $D "$DEVICE" tap "Retry" || echo "retry tap failed"; sleep 5
+            $D "$DEVICE" tap "Retry" || echo "retry tap failed"; sleep 0.4
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-failfilm-trying$x.png
+            sleep 5
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-failfilm-retried$x.png
             $D "$DEVICE" tap "Dismiss" || echo "dismiss tap failed"; sleep 4
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-failfilm-dismissed$x.png
             kill -INT $REC; wait $REC; echo "failfilm$x exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            # Dark: the note arriving, then put away.
+            xcrun simctl ui "$DEVICE" appearance dark
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-failfilm-dark$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/fail -tab 2 -pose failure
+            sleep 9
+            $D "$DEVICE" tap "Dismiss" || echo "dismiss tap failed"; sleep 3
+            kill -INT $REC; wait $REC; echo "failfilm-dark$x exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            xcrun simctl ui "$DEVICE" appearance light
             for V in "connection-amber http://127.0.0.1:9009" "connection-red $M/dead"; do
               set -- $V
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $2 -tab 4

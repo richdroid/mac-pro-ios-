@@ -2140,6 +2140,16 @@ struct SoundsTab: View {
             // capsule beside rounded cards (designer, 11-11).
             Section {
                 NowPlaying(tab: 3, failID: "sounds")
+                    // For the build (the mock's fail scene): an alarm's sound, the alarm volume and the fade each turned
+                    // down, so their notes are seen under their rows (soundsfail).
+                    .task {
+                        guard ChumbyModel.pose == "soundsfail" else { return }
+                        for _ in 0..<60 where mine.isEmpty || model.state.volume < 0 { try? await Task.sleep(nanoseconds: 100_000_000) }
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        if let a = mine.first { var b = a; b.snooze = a.snooze == "9" ? "10" : "9"; model.change(.replace(a, b)) }
+                        model.change(.volume(model.state.volume >= 95 ? model.state.volume - 5 : model.state.volume + 5))
+                        model.change(.fade(model.state.fade == 30 ? 15 : 30))
+                    }
                 Toggle(isOn: Binding(get: { model.sys.airplayOn }, set: { on in model.sys.airplayOn = on; model.cmd("airplay", on ? "1" : "0", id: "airplay") })) {
                     Label("Accept AirPlay", systemImage: "airplayaudio")
                 }
@@ -2160,12 +2170,11 @@ struct SoundsTab: View {
             Section {
                 // A row arriving with a fresher reading slides into its place rather than reshuffling the list in a frame.
                 ForEach(mine, id: \.key) { a in
-                    VStack(alignment: .leading, spacing: 4) {
-                        soundRow("\(a.clock) \(a.meridiem)", [a.name, a.whenUnlessNamed].filter { !$0.isEmpty }.joined(separator: " · "), a, mark: a.key) { b in
-                            model.change(.replace(a, b))
-                        }
-                        MarkNote(mark: a.key)
+                    soundRow("\(a.clock) \(a.meridiem)", [a.name, a.whenUnlessNamed].filter { !$0.isEmpty }.joined(separator: " · "), a, mark: a.key) { b in
+                        model.change(.replace(a, b))
                     }
+                    // Its own row, so it springs in and out as a row does (MarkNote).
+                    MarkNote(mark: a.key).noteRow(lead: 0)
                 }
                 if let c = calendarSound {
                     soundRow("Calendar alarms", "Every one your calendar sets", c, mark: nil) { b in
@@ -2189,12 +2198,12 @@ struct SoundsTab: View {
                         Text("\(Int(alarmVolume))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
                     }
                 }
-                MarkNote(mark: "alarmVolume")
+                MarkNote(mark: "alarmVolume").noteRow(lead: 0)
                 }
                 Picker("Fade in", selection: Binding(get: { model.state.fade }, set: { model.change(.fade($0)) })) {
                     ForEach([(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")], id: \.0) { Text($0.1).tag($0.0) }
                 }
-                MarkNote(mark: "fade")
+                MarkNote(mark: "fade").noteRow(lead: 0)
             } header: { SectionHead(icon: "alarm", text: "Alarms play", color: ChumbyPalette.sub(dark)) }
             .animation(.snappy, value: mine.map(\.key))
             Section {

@@ -13,7 +13,8 @@ extension Image { init(platform i: NSImage) { self.init(nsImage: i) } }
 
 // A control's own failure, shown at that control and nowhere else.
 struct Failure: Equatable { let id: String; let text: String; let at: Date }
-enum AlarmMark: Equatable { case failed(head: String, why: String), landed(Date) }
+// retrying: a failed change sent again, its note kept in place ("Trying again…") so nothing moves unless it lands.
+enum AlarmMark: Equatable { case failed(head: String, why: String), retrying(head: String, why: String), landed(Date) }
 
 
 @MainActor
@@ -335,7 +336,7 @@ final class ChumbyModel: ObservableObject {
             guard p.failed != nil else { return false }
             var x = s; p.change.apply(&x)
             let done = ChumbyAPI.form(x.alarmForm()) == ChumbyAPI.form(s.alarmForm())
-            if done { marks[p.change.mark] = nil }
+            if done { withAnimation(.snappy) { marks[p.change.mark] = nil } }
             return done
         }
         relay()
@@ -538,7 +539,7 @@ final class ChumbyModel: ObservableObject {
         pending.removeAll { $0.change.mark == c.mark }
         let p = Pending(change: c, failed: nil)
         pending.append(p)
-        marks[c.mark] = nil
+        withAnimation(.snappy) { marks[c.mark] = nil }
         relay()
         Task { await send(p.id) }
     }
@@ -546,7 +547,8 @@ final class ChumbyModel: ObservableObject {
         guard let i = pending.firstIndex(where: { $0.change.mark == mark }) else { return }
         tick()
         pending[i].failed = nil
-        marks[mark] = nil
+        // The note stays where it is while the change goes again: a note that left and came back was two jump cuts.
+        if case .failed(let head, let why) = marks[mark] { marks[mark] = .retrying(head: head, why: why) } else { marks[mark] = nil }
         relay()
         let id = pending[i].id
         Task { await send(id) }
@@ -574,7 +576,8 @@ final class ChumbyModel: ObservableObject {
             guard let i = pending.firstIndex(where: { $0.id == id }) else { return }
             let why = p.change.explain(error)
             pending[i].failed = why
-            marks[p.change.mark] = .failed(head: p.change.failHead, why: why)
+            // The note springs in (or, after a retry, its words change in place).
+            withAnimation(.snappy) { marks[p.change.mark] = .failed(head: p.change.failHead, why: why) }
             relay()
             #if canImport(UIKit)
             Haptics.note.notificationOccurred(.error)
@@ -588,7 +591,9 @@ final class ChumbyModel: ObservableObject {
         stateHold = Date().addingTimeInterval(3)
         if let mark, r.saved {
             let at = Date()
-            marks[mark] = .landed(at); tick()
+            // A retried change landing takes its note away in one spring.
+            if case .retrying = marks[mark] { withAnimation(.snappy) { marks[mark] = .landed(at) } } else { marks[mark] = .landed(at) }
+            tick()
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 1_400_000_000)
                 if self?.marks[mark] == .landed(at) { self?.marks[mark] = nil }
