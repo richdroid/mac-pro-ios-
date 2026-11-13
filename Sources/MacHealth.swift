@@ -335,9 +335,7 @@ struct MacHealthView: View {
     @ViewBuilder var verdictSection: some View {
         if let line = headline, fixing == nil {
             Section {
-                if bad.isEmpty {
-                    Label("Every part is running", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                } else {
+                if !bad.isEmpty {
                     ForEach(bad) { p in
                         HStack(alignment: .top, spacing: 12) {
                             Image(systemName: MacParts.symbol(p.part)).foregroundStyle(.red).frame(width: 26).padding(.top, 1)
@@ -370,7 +368,9 @@ struct MacHealthView: View {
             // Open flat the verdict card beside says it; here only the parts' name.
             // In one column the parts themselves are the verdict's card (what needs a look is first, with what to do), so the
             // heading carries the verdict and nothing names a part twice (designer, 2026-11-12).
-            if heading, !down, !awaited { Text(panes ? "Parts" : headline ?? "Checking") }
+            // Only the parts' name: a verdict over them ("All running") said again what the rows' own ticks say (Richard,
+            // 2026-11-13: no summary lines restating what's beside them). What needs a look is first, in red, with what to do.
+            if heading, !down, !awaited { Text("Parts") }
         }
     }
     func list(_ side: Side) -> some View {

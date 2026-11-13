@@ -1091,19 +1091,9 @@ struct EvenGrid: Layout {
 struct TempsHeader: View {
     @EnvironmentObject var store: LiveStore
     let s: Status
-    var body: some View {
-        let temps = store.live?.temps ?? s.temps ?? []
-        let heat = store.live?.heat ?? s.heat
-        let flatTop = temps.max(by: { $0.c < $1.c })
-        // The hottest's reading is today's, from the dials, so the words never lag the number under them.
-        let top = heat?.hottest.map { h in temps.first { $0.name == h.name } ?? h } ?? flatTop
-        let word = heat?.verdict ?? ((flatTop?.c ?? 0) >= 90 ? "Hot" : (flatTop?.c ?? 0) >= 75 ? "Warm" : "Normal")
-        let tint: Color = word == "Hot" ? .red : word == "Warm" ? .orange : .secondary
-        let summary = top.map { Text("\(word) · hottest \(appleCased($0.name)) \(Heat.shown($0.c))°").foregroundStyle(tint).monospacedDigit() }
-        // Always on its own line under the heading, in one size: chosen by what fit, it sat beside the heading at one reading
-        // and under it at another, and the dials moved (designer, 2026-11-12).
-        VStack(alignment: .leading, spacing: 2) { Text("Temperatures"); summary.lineLimit(1).minimumScaleFactor(0.8).font(.subheadline) }
-    }
+    // Just the heading: the dials' own colour and tinted names say how hot it is, and a real problem is an alert. The
+    // "Warm · hottest CPU 185°" line under it restated them (Richard, 2026-11-13: "ugly and unnecessary").
+    var body: some View { Text("Temperatures") }
 }
 
 struct Hero: View {

@@ -507,7 +507,8 @@ struct LinksView: View {
         }
     }
     @ViewBuilder var verdict: some View {
-        if let f = feed.value {
+        // Only when something isn't up, with Fix: "Every link is working" said again what every row's green dot says.
+        if let f = feed.value, !MacConsole.linkSummary(f).good || fixing || fixOutcome != nil || bridgeRestartAt != nil {
             let s = MacConsole.linkSummary(f)
             Section {
                 Label(s.good ? "Every link is working" : s.text, systemImage: s.good ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
@@ -528,10 +529,8 @@ struct LinksView: View {
                     .disabled(fixing || fixable.isEmpty)
                     if let o = fixOutcome { OutcomeLine(result: o) }
                 }
-            } footer: {
-                Text("Read every few seconds. Tailscale is never stopped from here: the app reaches the Mac through it.")
             }
-        } else if !feed.away {
+        } else if feed.value == nil, !feed.away {
             Section { HStack { ProgressView(); Text("Reading the links…").foregroundStyle(.secondary) } }
         }
     }
@@ -828,7 +827,7 @@ struct FansView: View {
                 }
                 if t.named.isEmpty { Label("The temperatures can’t be read right now", systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
             } header: {
-                Text([t.verdict, t.hottest.map { "hottest \($0.name) \(MacConsole.degrees($0.c))" }].compactMap { $0 }.joined(separator: " · "))
+                Text("Temperatures")
             } footer: { Text("The eight on Status, each with its day there.") }
         }
     }
@@ -927,7 +926,7 @@ struct UpdatesView: View {
                     Button { model.macPage = nil; model.tab = 4 } label: { HStack { Text("Install from the macOS tab"); Spacer(); RowChevron() } }
                 }
             } header: { Text("macOS") } footer: {
-                Text([m.checkedAt.map { "Checked \(Format.ago(ms: $0))." }, m.risk].compactMap { $0 }.joined(separator: " "))
+                Text(m.risk ?? "")
             }
         } else if !feed.away {
             Section { HStack { ProgressView(); Text("Reading what’s installed…").foregroundStyle(.secondary) } }
@@ -1020,7 +1019,7 @@ struct FolderRow: View {
     var body: some View {
         DisclosureGroup(isExpanded: $open) {
             if let e = folder?.error {
-                FailText("Couldn’t open it: \(e.lowercased()).")
+                FailText("Couldn’t read this folder.")
             } else if let c = folder?.children {
                 ForEach(c.prefix(12)) { x in
                     if x.dir == true, x.private != true {
@@ -1096,7 +1095,7 @@ struct StorageView: View {
                     HStack { ProgressView().controlSize(.small); Text("Measuring the home folder; this takes a minute or two the first time").font(.footnote).foregroundStyle(.secondary) }
                 }
             } header: { Text("Biggest folders at home") } footer: {
-                Text("Measured on the Mac at low priority, and kept ten minutes. Folders macOS keeps private (Documents, Mail, Photos and the like) are never opened from here.\(s.homeAt.map { " Measured \(Format.ago(ms: $0))." } ?? "")")
+                Text("Measured on the Mac at low priority, and kept ten minutes. Folders macOS keeps private (Documents, Mail, Photos and the like) are never opened from here.")
             }
         }
     }
