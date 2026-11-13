@@ -487,10 +487,14 @@ struct FlickCardButton: View {
             // rounded corner and no Back, folded). On a page pushed by an item (an app's page) it opens through that
             // page's own route, as its rows do; elsewhere by value on the tab's path.
             .overlay(alignment: .topTrailing) {
-                if hasInfo {
-                    if let openRow { InfoBadge { model.tick(); openRow(.info(item, source)) } }
-                    else { NavigationLink(value: RowRoute.info(item, source)) { InfoBadge.mark }.buttonStyle(.plain).accessibilityLabel("Details").simultaneousGesture(TapGesture().onEnded { model.tick() }) }
+                Group {
+                    if hasInfo {
+                        if let openRow { InfoBadge { model.tick(); openRow(.info(item, source)) } }
+                        else { NavigationLink(value: RowRoute.info(item, source)) { InfoBadge.mark }.buttonStyle(.plain).accessibilityLabel("Details").simultaneousGesture(TapGesture().onEnded { model.tick() }) }
+                    }
                 }
+                // Lifts with the card: never left floating over its empty place while the card is in the hand or in the air.
+                .opacity(ShelfHand.shared.item?.id == item.id ? 0 : 1)
             }
             // A show he's part way through (Continue watching's tiles carry how far): its episodes asked for as the tile
             // comes on screen, so its page opens on them rather than on grey rows.

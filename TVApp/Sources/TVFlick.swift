@@ -26,16 +26,16 @@ import UIKit
     }
     // The screen as it is now, over everything, until lift. Never more than one. `underFlight`: the screen as it is once
     // this turn's changes are drawn (the card he threw gone from its shelf), under the picture already in the air.
-    static func cover(underFlight: Bool = false, for seconds: Double = 1.5) {
+    static func cover(underFlight: Bool = false, fresh: Bool = true, blocks: Bool = false, for seconds: Double = 1.5) {
         #if os(iOS)
         guard veil == nil, let w = window else { return }
         let flying = underFlight ? RenderFlight.views : []
         // Under a flight: the app's own view, not the window, so the flight (the window's own subviews) isn't in it
         // without being hidden for it (hiding it for a drawn snapshot showed the screen without it for a frame, 17522ec).
         let source: UIView = underFlight ? (w.rootViewController?.view ?? w) : w
-        guard let v = source.snapshotView(afterScreenUpdates: underFlight) else { return }
+        guard let v = source.snapshotView(afterScreenUpdates: underFlight && fresh) else { return }
         v.frame = source === w ? w.bounds : source.convert(source.bounds, to: w)
-        v.isUserInteractionEnabled = false
+        v.isUserInteractionEnabled = blocks
         if let lowest = flying.first { w.insertSubview(v, belowSubview: lowest) } else { w.addSubview(v) }
         veil = v
         raised += 1
@@ -2794,17 +2794,19 @@ struct ShelfLiftOverlay: View {
                     .shadow(color: .black.opacity(0.55), radius: 26, y: 18)
                     .overlay(alignment: .top) {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(TVLook.accent.opacity(hand.armed ? 1 : 0.45 * min(1, rise / 80)), lineWidth: hand.armed ? 2 : 1.5)
+                            // Lit only when letting go sends it: not while it says "Let go to choose".
+                            .strokeBorder(TVLook.accent.opacity(hand.armed && !hand.choosing ? 1 : 0.45 * min(1, rise / 80)), lineWidth: hand.armed && !hand.choosing ? 2 : 1.5)
                             .frame(width: hand.width, height: hand.rect.height > 0 ? min(hand.rect.height, hand.width * 1.5) : hand.width * 1.5)
                     }
                     .overlay(alignment: .top) {
                         if hand.choosing {
                             Text("Let go to choose")
-                                .font(.footnote.weight(.semibold)).foregroundStyle(.white)
+                                .font(.footnote.weight(.semibold)).foregroundStyle(.black)
                                 .padding(.horizontal, 10).padding(.vertical, 5)
                                 .background(TVLook.accent, in: Capsule())
                                 .fixedSize()
-                                .offset(y: -30)
+                                // Above the card, or under it when its top is up under the status bar.
+                                .offset(y: hand.rect.minY + hand.drag.height - o.y < 110 ? (hand.rect.height > 0 ? min(hand.rect.height, hand.width * 1.5) : hand.width * 1.5) + 16 : -30)
                                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
                         }
                     }
@@ -2874,13 +2876,15 @@ struct ShelfFlick: ViewModifier {
             for _ in 0..<40 {
                 if model.remoteBuilt { return }
                 // Not under a finger, a flick, or another still.
-                if ShelfHand.shared.item == nil, model.flicking == nil, !ScreenVeil.up, !RenderFlight.flying, model.tab != 0 { break }
+                if ShelfHand.shared.item == nil, model.flicking == nil, !ScreenVeil.up, !RenderFlight.flying, model.tab != 0, model.typingIn == nil { break }
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
-            guard !model.remoteBuilt, model.tab != 0, ShelfHand.shared.item == nil, model.flicking == nil, !ScreenVeil.up else { return }
+            // Never under his typing (taking the tab drops the keyboard) or a pushed page.
+            guard !model.remoteBuilt, model.tab != 0, ShelfHand.shared.item == nil, model.flicking == nil, !ScreenVeil.up, model.typingIn == nil else { return }
             let back = model.tab
             SwipeLog.note("shelf remote warm")
-            ScreenVeil.cover()
+            // The still takes touches meanwhile: a tap on the frozen shelf never lands on the Remote's keys under it.
+            ScreenVeil.cover(blocks: true, for: 4)
             model.remoteWarming = true
             var q = Transaction(); q.disablesAnimations = true
             withTransaction(q) { model.tab = 0 }
@@ -2952,7 +2956,7 @@ struct ShelfFlick: ViewModifier {
     }
     // Held over the TV, still armed a second later: he wants to choose. Felt, and said on the card.
     func dwell() {
-        guard ShelfSend.ref(item, source) != nil else { return }
+        guard ShelfSend.ref(item, source) != nil, !model.isOnTV(item, source) else { return }
         let mark = Date()
         ShelfHand.shared.armedAt = mark
         Task { @MainActor in
@@ -3026,6 +3030,13 @@ struct ShelfFlick: ViewModifier {
         let from = rect().offsetBy(dx: translation.width, dy: translation.height)
         // What's on already: the Remote, nothing sent (as a tap on it does).
         if model.isOnTV(item, source) { ShelfHand.shared.item = nil; up = false; model.showOnRemote(); return }
+        // A film or an episode with its list in hand: the request leaves first, before anything is drawn (the gate on
+        // be9f2bd: 0.75-0.9 s from the release to the send, the card frozen at the top meanwhile).
+        var direct: [StremioStream]?
+        if ShelfSend.ref(item, source) != nil, !startUnderWay, let list = ShelfSend.list(item, source), let best = ShelfSend.best(list) {
+            direct = list
+            startNow(best, list, velocity: velocity)
+        }
         // In the air from the moment he lets go, in the render server: the shelf held as a still with the card's place
         // empty, the card itself flying over it, and the same flight goes on into the Remote once the pick is made
         // (d5d94f4: the flick page flashed up black between, with three copies of the card).
@@ -3034,7 +3045,9 @@ struct ShelfFlick: ViewModifier {
             RenderFlight.launch(from: from, image: u.flatMap { ImageStore.shared.cached($0) }, soft: u.flatMap { ImageStore.shared.small($0, 16) },
                                 tint: ImageStore.shared.cachedBand(u), wide: item.isYouTube)
             ShelfHand.shared.item = nil
-            ScreenVeil.cover(underFlight: true, for: 3)
+            // The still of the shelf under it: for a send under way, taken in the next turn from what's already drawn
+            // (a fresh one forces the whole window to be drawn again first, here and now).
+            if direct == nil { ScreenVeil.cover(underFlight: true, for: 3) }
             // Set going now, before the page it opens is asked for, and sent to the render server at once: the long commit
             // that builds that page then can't hold it (94d0f11: parked a second where it was let go). Straight into the
             // Remote's picture when its place is known.
@@ -3042,8 +3055,9 @@ struct ShelfFlick: ViewModifier {
         }
         // A film or an episode: sent from here, no page, with the list in hand; a moment for a list on its way, the card
         // in the air meanwhile; the page only when there's nothing to send without it.
+        HandTrace.note("shelf-flying")
+        if direct != nil { toRemote(); return }
         if let r = ShelfSend.ref(item, source), !startUnderWay {
-            if let list = ShelfSend.list(item, source), sendNow(list, velocity: velocity) { return }
             HandTrace.note("shelf-waiting")
             Task { @MainActor in
                 let until = Date().addingTimeInterval(0.8)
@@ -3069,17 +3083,26 @@ struct ShelfFlick: ViewModifier {
     // Best out of the list in hand, sent now; the Remote's tab in the next turn, the flight landing on its picture.
     func sendNow(_ list: [StremioStream], velocity: CGSize) -> Bool {
         guard let best = ShelfSend.best(list) else { return false }
+        startNow(best, list, velocity: velocity)
+        toRemote()
+        return true
+    }
+    func startNow(_ best: StremioStream, _ list: [StremioStream], velocity: CGSize) {
         HandTrace.note("shelf-direct " + best.token)
         FlickClock.begin()
         let r: [String: Any]? = receipt.isEmpty ? nil : Self.receipt(item, source, id: receipt)
         if !receipt.isEmpty { FlickReceipt.thrown(receipt) }
         model.startStream(item: item, stream: best, list: list, receipt: r, velocity: velocity)
+    }
+    func toRemote() {
         let art = item.art, title = item.title, m = model
         let tint = ImageStore.shared.cachedBand(URL(string: art))
         // A timer, not a task: the tab's long turn comes after this one has been drawn, the flight running meanwhile.
-        Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { m.remoteFromThrow(art: art, title: title, tint: tint) } }
+        Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated {
+            ScreenVeil.cover(underFlight: true, fresh: false, for: 3)
+            m.remoteFromThrow(art: art, title: title, tint: tint)
+        } }
         Task { @MainActor in try? await Task.sleep(nanoseconds: 60_000_000); ShelfHand.shared.item = nil; up = false }
-        return true
     }
     // The flick page, for a choice: it takes the card in the air on into the Remote once the pick is made.
     func viaPage(velocity: CGSize, from: CGRect) {
