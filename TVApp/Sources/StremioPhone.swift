@@ -83,7 +83,7 @@ final class PassWindow: UIWindow {
     }
     static func open(_ t: PhoneTitle, model: TVModel?) {
         #if os(iOS)
-        present(PhonePicker(type: t.type, imdb: t.imdb, video: t.type == "series" && !t.video.isEmpty ? t.video : nil, name: t.name, poster: t.poster, model: model))
+        present(PhonePicker(type: t.type, imdb: t.imdb, video: t.type == "series" && t.video.contains(":") ? t.video : nil, name: t.name, poster: t.poster, model: model))
         #endif
     }
     // From a link: tvremoteapp://phone?type=movie&id=tt…&video=…
@@ -194,6 +194,8 @@ struct PhonePicker: View {
     @State private var startOver = false
     @State private var sending = false
     @State private var only = "All"
+    // His place is known (the library answered, or said it has none): until then a row would start at 0:00.
+    @State private var placeKnown = false
     @Environment(\.dismiss) private var dismiss
 
     init(type: String, imdb: String, video: String?, name: String, poster: String, model: TVModel?) {
@@ -297,18 +299,18 @@ struct PhonePicker: View {
             }
         }
         .padding(.top, 4)
-        if (loading || (problem == nil && meta == nil)) && streams.isEmpty {
+        if (loading || (problem == nil && meta == nil) || !placeKnown) && (streams.isEmpty || !placeKnown) && problem == nil {
             Text("Asking your add-ons…").font(.footnote).foregroundStyle(.secondary)
             ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) }
         } else if let problem {
             VStack(spacing: 10) {
                 Text(problem).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("Try again") { Task { await loadStreams(force: true) } }.tint(TVLook.accent)
+                Button("Try again") { Task { if placeKnown && !playID.isEmpty { await loadStreams(force: true) } else { problem = nil; await load() } } }.tint(TVLook.accent)
             }
             .frame(maxWidth: .infinity).padding(.top, 18)
         }
         let best = streams.first { $0.playsHere && !$0.dubbed }
-        ForEach(streams.filter { only == "All" || $0.quality == only }) { s in row(s, best: s == best) }
+        if placeKnown { ForEach(streams.filter { only == "All" || $0.quality == only }) { s in row(s, best: s == best) } }
     }
 
     func row(_ s: PhoneStream, best: Bool) -> some View {
@@ -364,14 +366,22 @@ struct PhonePicker: View {
         let early = !playID.isEmpty
         async let first: Void = early ? loadStreams() : ()
         async let m = StremioAPI.meta(type: type, id: imdb)
-        async let l = StremioAPI.libraryItem(imdb)
-        library = await l
+        async let l = StremioAPI.libraryRead(imdb)
+        let read = await l
+        library = read.item
         meta = await m
+        placeKnown = true
+        if !read.ok { problem = "Couldn’t read where you are in it from Stremio. Try again."; loading = false; return }
         if type == "series", video == nil {
             let on = (library?["state"] as? [String: Any])?["video_id"] as? String
             video = meta?.episodes.first { $0.id == on }?.id ?? meta?.episodes.first { $0.season > 0 }?.id ?? meta?.episodes.first?.id
         }
         await first
+        if type == "series", video == nil {
+            loading = false
+            problem = "Couldn’t find this show’s episodes. Try again."
+            return
+        }
         if !early { await loadStreams() }
         if PhonePose.shouldPick() { await PhonePose.wait(3); if let s = streams.first(where: { $0.playsHere }) { pick(s) } }
     }

@@ -127,7 +127,7 @@ jobs:
             sleep 5; xcrun simctl io "$DEVICE" screenshot --display=3 dist/phone-posture-open-panel.png
             $D "$DEVICE" pose partial; sleep 6; xcrun simctl io "$DEVICE" screenshot --display=3 dist/phone-posture-partial.png
             $D "$DEVICE" pose closed; sleep 6; xcrun simctl io "$DEVICE" screenshot --display=1 dist/phone-posture-closed.png ) & MOVES=$!
-          SHOTS="15" film posture-move 1 80 folded -tab 1 -pose phoneposture
+          SHOTS="15" film posture-move 3 80 folded -tab 1 -pose phoneposture
           wait $MOVES
           # 10. The widget's and Spotlight's way in, a tvremoteapp://phone link, with the app already up.
           ( sleep 12; xcrun simctl openurl "$DEVICE" "tvremoteapp://phone?type=movie&id=tt0000001&name=Sample%20Film"; sleep 3; $D "$DEVICE" tap "Open" || echo "open tap failed" ) & LINK=$!

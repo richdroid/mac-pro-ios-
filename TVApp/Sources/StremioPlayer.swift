@@ -68,6 +68,7 @@ final class PhoneSession {
     // 0:00, and writing that would wipe his place everywhere (gate on 916240e, item 1).
     @ObservationIgnored private var askedStart: Double = 0
     @ObservationIgnored private var settled = false
+    @ObservationIgnored private var playingTicks = 0
     var place: Double { settled ? position : askedStart }
     @ObservationIgnored private var commands: [(MPRemoteCommand, Any)] = []
     @ObservationIgnored private var art: UIImage?
@@ -104,7 +105,9 @@ final class PhoneSession {
     private func tick() {
         guard let e = engine else { return }
         ticks += 1
-        if !settled, e.isPlaying, askedStart < 5 || e.position + 5 >= askedStart { settled = true }
+        if !settled, e.isPlaying { playingTicks += 1 }
+        // Got there, or has played 15 s without getting there (a file that can't seek): the player's clock from now on.
+        if !settled, e.isPlaying, askedStart < 5 || e.position + 5 >= askedStart || playingTicks > 60 { settled = true }
         if scrubbing == nil, settled { position = e.position }
         if e.duration > 0 { duration = e.duration }
         let p = e.isPlaying
@@ -169,7 +172,12 @@ final class PhoneSession {
         guard at > 0 || length > 0 else { return }
         let watched = settled ? max(0, at - watchedFrom) : 0
         watchedFrom = at
-        if library == nil { library = await StremioAPI.libraryItem(title.imdb) }
+        if library == nil {
+            let read = await StremioAPI.libraryRead(title.imdb)
+            // Couldn't ask: nothing written this time, rather than a new entry over his real one.
+            guard read.ok else { return }
+            library = read.item
+        }
         let ok = await StremioAPI.putProgress(id: title.imdb, type: title.type, name: title.name, poster: title.poster, video: title.video,
                                               at: at, length: length, watchedFor: watched, existing: library)
         if ok { library = await StremioAPI.libraryItem(title.imdb) ?? library }

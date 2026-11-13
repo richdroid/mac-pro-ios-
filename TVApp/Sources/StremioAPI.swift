@@ -310,10 +310,13 @@ enum StremioAPI {
     }
 
     // His library entry for a title (where he is in it, on any device), or nil.
-    static func libraryItem(_ id: String) async -> [String: Any]? {
+    static func libraryItem(_ id: String) async -> [String: Any]? { await libraryRead(id).item }
+    // The entry, and whether Stremio answered at all: "no entry" and "couldn't ask" are not the same (a write after a
+    // failed read would replace his real entry with a new one).
+    static func libraryRead(_ id: String) async -> (item: [String: Any]?, ok: Bool) {
         guard let key = authKey,
-              let r = try? await call("datastoreGet", ["authKey": key, "collection": "libraryItem", "ids": [id], "all": false], timeout: 8) else { return nil }
-        return (r as? [[String: Any]])?.first { $0["_id"] as? String == id }
+              let r = try? await call("datastoreGet", ["authKey": key, "collection": "libraryItem", "ids": [id], "all": false], timeout: 8) else { return (nil, false) }
+        return ((r as? [[String: Any]])?.first { $0["_id"] as? String == id }, true)
     }
     // Where to start: the spot his library holds for this very film or episode, in seconds, unless it's all but over.
     static func resumeAt(_ item: [String: Any]?, video: String) -> Double? {
