@@ -40,7 +40,7 @@ struct PhoneTrack: Identifiable, Hashable {
     func shutdown()
 }
 
-enum PhoneEngines {
+@MainActor enum PhoneEngines {
     static func make(url: URL, headers: [String: String], start: Double) -> PhoneEngine {
         #if canImport(KSPlayer)
         return KSEngine(url: url, headers: headers, start: start)

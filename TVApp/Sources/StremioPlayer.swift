@@ -367,7 +367,7 @@ struct PhonePlayerView: View {
                 if !s.title.line.isEmpty { Text(s.title.line).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
             }
             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 6)
-            RoutePicker().frame(width: 44, height: 44).accessibilityLabel("AirPlay")
+            PhoneRoutePicker().frame(width: 44, height: 44).accessibilityLabel("AirPlay")
             if s.canPiP { PlayerKey(icon: s.pipActive ? "pip.exit" : "pip.enter", label: "Picture in Picture") { s.startPiP() } }
             if s.model != nil { PlayerKey(icon: "tv", label: "Play on the TV from here") { s.flickToTV() }.disabled(s.flicking) }
             PlayerKey(icon: "lock", label: "Lock the screen") { s.locked = true; s.panel = nil; s.poke() }
@@ -509,7 +509,7 @@ struct VideoSurface: UIViewRepresentable {
         if let e = s.engine, e.view.superview !== v { v.subviews.forEach { $0.removeFromSuperview() }; v.addSubview(e.view) }
     }
 }
-struct RoutePicker: UIViewRepresentable {
+struct PhoneRoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let v = AVRoutePickerView(); v.tintColor = .white; v.activeTintColor = UIColor(TVLook.accent); v.prioritizesVideoDevices = true
         return v
