@@ -411,6 +411,10 @@ final class SongArt: ObservableObject {
     }
     private var links: [String: String] { get { UserDefaults.standard.dictionary(forKey: "songLinks") as? [String: String] ?? [:] } set { UserDefaults.standard.set(newValue, forKey: "songLinks") } }
     static func key(_ s: Song) -> String { s.artist + " – " + s.title }
+    // The title as it's searched for. A title the trim changes is kept under a new name, so the wrong cover found before
+    // the trim (an "'Round Midnight" with another album's art) is never shown again.
+    static func searched(_ s: Song) -> String { s.title.trimmingCharacters(in: CharacterSet(charactersIn: "'‘’\"“” ")) }
+    static func stored(_ s: Song) -> String { searched(s) == s.title ? key(s) : key(s) + " #trimmed" }
     // At launch and on opening Alarms, so the covers are in hand before the row ever scrolls into view.
     // Every song that may belong to a ring is looked up, as which ones do can turn on a song's length.
     func prefetch(_ songs: [Song], _ alarms: [Alarm], _ rings: [Ring] = []) {
@@ -418,7 +422,7 @@ final class SongArt: ObservableObject {
     }
     // How long a song runs, from the same lookup as its cover: tells the alarm playing on from a song he put on himself.
     @Published private(set) var lengths: [String: Double] = UserDefaults.standard.dictionary(forKey: "songLengths") as? [String: Double] ?? [:]
-    func length(_ s: Song) -> Double? { lengths[Self.key(s)].flatMap { $0 > 0 ? $0 : nil } }
+    func length(_ s: Song) -> Double? { lengths[Self.stored(s)].flatMap { $0 > 0 ? $0 : nil } }
     private func keepLength(_ k: String, _ ms: Double?) {
         guard let ms, ms > 0 else { return }
         lengths[k] = ms / 1000
@@ -428,7 +432,7 @@ final class SongArt: ObservableObject {
     private static func search(_ s: Song) async -> Search? {
         var c = URLComponents(string: "https://itunes.apple.com/search")!
         // Quotes trimmed: "'Round Midnight" as written found another album's cover entirely.
-        let title = s.title.trimmingCharacters(in: CharacterSet(charactersIn: "'‘’\"“” "))
+        let title = searched(s)
         c.queryItems = [.init(name: "term", value: s.artist + " " + title), .init(name: "entity", value: "song"), .init(name: "limit", value: "1")]
         guard let u = c.url, let d = try? await URLSession.shared.data(from: u).0 else { return nil }
         return try? JSONDecoder().decode(Search.self, from: d)
@@ -438,10 +442,11 @@ final class SongArt: ObservableObject {
         guard !asked.contains(k) else { return }
         asked.insert(k)
         // Kept from before: shown at once, never fetched again.
-        if let d = try? Data(contentsOf: Self.file(k)), let i = PlatformImage(data: d) {
-            found[k] = Found(image: i, link: links[k].flatMap(URL.init(string:)), tint: Self.tint(d))
+        let sk = Self.stored(s)
+        if let d = try? Data(contentsOf: Self.file(sk)), let i = PlatformImage(data: d) {
+            found[k] = Found(image: i, link: links[sk].flatMap(URL.init(string:)), tint: Self.tint(d))
             // Kept from before lengths were: asked once more, for the length alone.
-            if lengths[k] == nil { Task { let r = await Self.search(s); if let r { lengths[k] = 0; keepLength(k, r.results.first?.trackTimeMillis) } } }
+            if lengths[sk] == nil { Task { let r = await Self.search(s); if let r { lengths[sk] = 0; keepLength(sk, r.results.first?.trackTimeMillis) } } }
             return
         }
         Task {
@@ -454,11 +459,11 @@ final class SongArt: ObservableObject {
             }
             var f = Found(image: nil, link: nil, tint: nil)
             if let t = r.results.first {
-                keepLength(k, t.trackTimeMillis)
-                if let link = t.trackViewUrl { links[k] = link }
+                keepLength(sk, t.trackTimeMillis)
+                if let link = t.trackViewUrl { links[sk] = link }
                 f.link = t.trackViewUrl.flatMap(URL.init(string:))
                 if let a = t.artworkUrl100.map({ $0.replacingOccurrences(of: "100x100", with: "300x300") }), let au = URL(string: a), let img = try? await URLSession.shared.data(from: au).0 {
-                    try? img.write(to: Self.file(k), options: .atomic)
+                    try? img.write(to: Self.file(sk), options: .atomic)
                     f.image = PlatformImage(data: img); f.tint = Self.tint(img)
                 }
             }
@@ -501,7 +506,7 @@ struct WokeUpTo: View {
                                marks: marks.filter { $0.t >= r.t - 30 && $0.t < next }, length: length)
             guard !mine.isEmpty else { continue }
             let name = r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name
-            out.append(Waking(t: r.t, alarm: name.isEmpty ? "your alarm" : name, songs: mine))
+            out.append(Waking(t: r.t, alarm: name, songs: mine))
         }
         return Array(out.reversed().prefix(8))
     }
@@ -603,7 +608,9 @@ struct WokeUpTo: View {
             let side = fits ? min(Self.largest, ((avail - spacing) / n).rounded(.down)) : Self.smallest
             Section {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: Self.groupGap) {
+                    // Not lazy: the card is as tall as its tallest tile always, not the leading group's (a one-song ring
+                    // arriving shrank it and cut the captions under its edge, gate 11-12). At most 8 rings.
+                    HStack(alignment: .top, spacing: Self.groupGap) {
                         ForEach(list) { w in group(w, side: side).transition(.opacity.combined(with: .scale(scale: 0.92))) }
                     }
                     .padding(.vertical, 14)
@@ -622,16 +629,19 @@ struct WokeUpTo: View {
     // A ring: when it rang and which alarm, over its songs in the order they played. One cover wide, the alarm's name
     // gives way so the time is never clipped.
     func group(_ w: Waking, side: CGFloat) -> some View {
-        let when = Date(timeIntervalSince1970: w.t).formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        // A week or more back, the date too, so two Saturdays never read alike. An unnamed ring is its time alone.
+        let at = Date(timeIntervalSince1970: w.t)
+        let when = Date().timeIntervalSince(at) < 6 * 86400 ? at.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+            : at.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()) + " · " + at.formatted(.dateTime.hour().minute())
         let wide = CGFloat(w.songs.count) * side + CGFloat(w.songs.count - 1) * Self.gap
         return VStack(alignment: .leading, spacing: 6) {
             ViewThatFits(in: .horizontal) {
-                Text("\(when) · \(w.alarm)").lineLimit(1)
+                if !w.alarm.isEmpty { Text("\(when) · \(w.alarm)").lineLimit(1) }
                 Text(when).lineLimit(1)
             }
             .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             .frame(width: wide, alignment: .leading)
-            .accessibilityLabel("\(w.alarm), \(when)")
+            .accessibilityLabel(w.alarm.isEmpty ? when : "\(w.alarm), \(when)")
             HStack(alignment: .top, spacing: Self.gap) {
                 ForEach(Array(w.songs.enumerated()), id: \.element.id) { i, s in
                     tile(s, side: side, time: i > 0).transition(.opacity.combined(with: .scale(scale: 0.92)))

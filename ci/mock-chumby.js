@@ -380,6 +380,10 @@ http.createServer((q, s) => {
   play(cal + 12, 'Save Tonight', 'Eagle-Eye Cherry', 'Desireless');               // snoozed at +100, rings again at +640
   play(cal + 652, 'My Funny Valentine', 'Chet Baker', 'Chet Baker Sings');        // 2:19
   play(cal + 794, "'Round Midnight", 'Thelonious Monk', 'Genius of Modern Music, Vol. 1');
+  // A ring with no name (a test ring, or "Ring now" from the web page) three days ago: its header is the time alone.
+  const plain = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 3, 16, 0).getTime() / 1000;
+  rings.push({ t: plain, name: '' });
+  play(plain + 9, 'Summertime', 'The Sundays', 'Static & Silence');
   data.hist = { ok: true, songs: songs.sort((x, y) => y.t - x.t), rings: rings.sort((x, y) => y.t - x.t) };
 }
 // The live scenes keep what's saved and what's ringing, for the films of Snooze, Stop and a nap set and cancelled.
