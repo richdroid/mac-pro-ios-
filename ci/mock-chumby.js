@@ -568,7 +568,8 @@ function chumbyScene(q, s) {
   }
   // Every save turned down, the way a Chumby that can't write its alarm file turns one down (any change can meet this;
   // "bad count" only ever meets an added alarm, so a failed switch-off must not show it).
-  if (scene === 'fail' && q.method === 'POST') return json({ ok: false, error: "can't write" });
+  // Three seconds before saying so, as a slow write would, so "Trying again…" is seen at rest on a retry.
+  if (scene === 'fail' && q.method === 'POST') { setTimeout(() => json({ ok: false, error: "can't write" }), 3000); return true; }
   return false;
 }
 

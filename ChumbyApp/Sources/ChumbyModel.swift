@@ -336,7 +336,7 @@ final class ChumbyModel: ObservableObject {
             guard p.failed != nil else { return false }
             var x = s; p.change.apply(&x)
             let done = ChumbyAPI.form(x.alarmForm()) == ChumbyAPI.form(s.alarmForm())
-            if done { withAnimation(.snappy) { marks[p.change.mark] = nil } }
+            if done { clearNote(p.change.mark) }
             return done
         }
         relay()
@@ -532,6 +532,25 @@ final class ChumbyModel: ObservableObject {
     // MARK: Alarms
     // Toggles and the alarm volume: shown at once, sent through the one careful save, marked if they don't get through.
     struct Pending { let id = UUID(); let change: AlarmChange; var failed: String? }
+    // When each note's retry began: "Trying again…" is held at least a second, so a fast failure never flashes it.
+    private var retryAt: [String: Date] = [:]
+    // Notes fading before their row closes: the words go first, then the rows below move up (no text over text).
+    @Published private(set) var fading: Set<String> = []
+    // A note leaving: fade its words (0.15 s), then close its row in one spring.
+    func clearNote(_ mark: String) {
+        guard marks[mark] != nil, !fading.contains(mark) else { return }
+        if case .landed = marks[mark] { marks[mark] = nil; return }
+        let was = marks[mark]
+        withAnimation(.easeOut(duration: 0.15)) { _ = fading.insert(mark) }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 160_000_000)
+            guard let self, self.fading.contains(mark) else { return }
+            // Something newer arrived meanwhile (a fresh failure, a landing): it stays, its words faded back in.
+            guard self.marks[mark] == was else { withAnimation(.easeIn(duration: 0.15)) { _ = self.fading.remove(mark) }; return }
+            withAnimation(.snappy) { self.marks[mark] = nil }
+            self.fading.remove(mark)
+        }
+    }
     private var pending: [Pending] = []
     func change(_ c: AlarmChange) {
         tick()
@@ -539,7 +558,7 @@ final class ChumbyModel: ObservableObject {
         pending.removeAll { $0.change.mark == c.mark }
         let p = Pending(change: c, failed: nil)
         pending.append(p)
-        withAnimation(.snappy) { marks[c.mark] = nil }
+        clearNote(c.mark)
         relay()
         Task { await send(p.id) }
     }
@@ -548,7 +567,7 @@ final class ChumbyModel: ObservableObject {
         tick()
         pending[i].failed = nil
         // The note stays where it is while the change goes again: a note that left and came back was two jump cuts.
-        if case .failed(let head, let why) = marks[mark] { marks[mark] = .retrying(head: head, why: why) } else { marks[mark] = nil }
+        if case .failed(let head, let why) = marks[mark] { marks[mark] = .retrying(head: head, why: why); retryAt[mark] = Date() } else { marks[mark] = nil }
         relay()
         let id = pending[i].id
         Task { await send(id) }
@@ -558,7 +577,7 @@ final class ChumbyModel: ObservableObject {
     func dismiss(_ mark: String) {
         tick()
         pending.removeAll { $0.change.mark == mark }
-        withAnimation(.snappy) { marks[mark] = nil }
+        clearNote(mark)
         relay()
     }
     private func send(_ id: UUID) async {
@@ -576,6 +595,12 @@ final class ChumbyModel: ObservableObject {
             guard let i = pending.firstIndex(where: { $0.id == id }) else { return }
             let why = p.change.explain(error)
             pending[i].failed = why
+            let mark = p.change.mark
+            if case .retrying = marks[mark], let at = retryAt[mark] {
+                let left = 1.0 - Date().timeIntervalSince(at)
+                if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1e9)) }
+            }
+            retryAt[mark] = nil
             // The note springs in (or, after a retry, its words change in place).
             withAnimation(.snappy) { marks[p.change.mark] = .failed(head: p.change.failHead, why: why) }
             relay()
@@ -591,8 +616,8 @@ final class ChumbyModel: ObservableObject {
         stateHold = Date().addingTimeInterval(3)
         if let mark, r.saved {
             let at = Date()
-            // A retried change landing takes its note away in one spring.
-            if case .retrying = marks[mark] { withAnimation(.snappy) { marks[mark] = .landed(at) } } else { marks[mark] = .landed(at) }
+            // A retried change landing takes its note away: words first, then the row (clearNote), the bubble after.
+            if case .retrying = marks[mark] { retryAt[mark] = nil; clearNote(mark) } else { marks[mark] = .landed(at) }
             tick()
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 1_400_000_000)

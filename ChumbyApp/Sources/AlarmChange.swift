@@ -72,6 +72,13 @@ enum AlarmChange {
         case .toggle(_, let on): return on ? "Couldn’t turn this on" : "Couldn’t turn this off"
         case .volume: return "Couldn’t change the volume"
         case .fade: return "Couldn’t change the fade"
+        // A pick on Sounds changes only what an alarm plays: said as that, not as an alarm missing from the Chumby.
+        case .replace(let old, let new):
+            var x = old; x.type = new.type; x.arg = new.arg; x.param = new.param; x.param_description = new.param_description
+            if x == new { return "Couldn’t change the sound" }
+            var y = old; y.enabled = new.enabled
+            if old.isOn != new.isOn && y == new { return new.isOn ? "Couldn’t turn this on" : "Couldn’t turn this off" }
+            return "Couldn’t save this change"
         default: return "Not on the Chumby yet"
         }
     }

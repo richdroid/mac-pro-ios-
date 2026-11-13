@@ -45,6 +45,9 @@ struct MarkNote: View {
     @Environment(\.colorScheme) private var scheme
     let mark: String
     var open: (() -> Void)?
+    // Its words come in once its row has opened, and go before the row closes (model.fading), so the rows below never
+    // slide over them.
+    @State private var appeared = false
     var shown: (head: String, why: String, trying: Bool)? {
         switch model.marks[mark] {
         case .failed(let h, let w): return (h, w, false)
@@ -56,7 +59,7 @@ struct MarkNote: View {
         if let n = shown {
             ViewThatFits(in: .horizontal) {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .center, spacing: 6) {
                         title(n.head, n.trying).fixedSize()
                         Text("·").foregroundStyle(.secondary)
                         retry(n.trying)
@@ -79,17 +82,24 @@ struct MarkNote: View {
             .font(.subheadline)
             .contentShape(Rectangle())
             .onTapGesture { open?() }
-            .transition(.opacity)
+            .opacity(appeared && !model.fading.contains(mark) ? 1 : 0)
+            .onAppear { withAnimation(.easeIn(duration: 0.18).delay(0.24)) { appeared = true } }
+            .onDisappear { appeared = false }
+            .transition(.identity)
         }
     }
-    // The title holds its width while trying again, so nothing re-wraps: the words are swapped, the line kept.
+    // The title keeps the failed words' size while trying again ("Trying again…" drawn over them, they hidden), so the
+    // layout ViewThatFits chose for the failure holds and nothing re-wraps or moves on Retry.
     private func title(_ head: String, _ trying: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: trying ? "arrow.clockwise.circle.fill" : "exclamationmark.circle.fill")
-            Text(trying ? "Trying again…" : head).fontWeight(.semibold)
+                .foregroundStyle(trying ? Color.secondary : ChumbyPalette.warn(scheme == .dark))
+            ZStack(alignment: .topLeading) {
+                Text(head).fontWeight(.semibold).foregroundStyle(ChumbyPalette.warn(scheme == .dark)).opacity(trying ? 0 : 1)
+                Text("Trying again…").fontWeight(.semibold).foregroundStyle(.secondary).lineLimit(1).opacity(trying ? 1 : 0)
+            }
         }
-        .foregroundStyle(trying ? Color.secondary : ChumbyPalette.warn(scheme == .dark))
-        .contentTransition(.opacity)
+        .animation(.easeInOut(duration: 0.15), value: trying)
     }
     private func reason(_ why: String) -> some View {
         // No width of its own to ask for: ViewThatFits measures the title's line, and the reason wraps under either.
