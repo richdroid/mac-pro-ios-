@@ -18,7 +18,7 @@ struct MPEnvelope: Decodable, Equatable {
 
 extension API {
     // One call to mp through the bridge: its answer, and the nonce a dry run hands out for the real run.
-    func mp(_ action: String, _ args: [String] = [], dryRun: Bool = false, confirm: Bool = false, nonce: String? = nil, protected: Bool = false, timeout: TimeInterval = 210) async throws -> (MPEnvelope, String?) {
+    func mp(_ action: String, _ args: [String] = [], dryRun: Bool = false, confirm: Bool = false, nonce: String? = nil, protected: Bool = false, timeout: TimeInterval = 320) async throws -> (MPEnvelope, String?) {
         var r = URLRequest(url: URL(string: "/api/mp", relativeTo: base)!)
         r.httpMethod = "POST"; r.timeoutInterval = timeout
         r.setValue(MacFiles.origin(base), forHTTPHeaderField: "Origin")

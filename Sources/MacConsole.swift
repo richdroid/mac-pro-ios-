@@ -63,7 +63,7 @@ struct StorageFeed: Decodable, Equatable {
         var id: String { mount }
         enum CodingKeys: String, CodingKey { case name, mount, total, free, kind, isInternal = "internal" }
     }
-    struct Folder: Decodable, Identifiable, Equatable { let path: String; let name: String; var bytes: Double?; var id: String { path } }
+    struct Folder: Decodable, Identifiable, Equatable { let path: String; let name: String; var bytes: Double?; var dir: Bool?; var id: String { path } }
     var t: Double?; let volumes: [Volume]; var home: [Folder]?; var homeAt: Double?
 }
 struct FolderFeed: Decodable, Equatable {
@@ -1019,7 +1019,9 @@ struct FolderRow: View {
     @State private var failed = false
     var body: some View {
         DisclosureGroup(isExpanded: $open) {
-            if let c = folder?.children {
+            if let e = folder?.error {
+                FailText("Couldn’t open it: \(e.lowercased()).")
+            } else if let c = folder?.children {
                 ForEach(c.prefix(12)) { x in
                     if x.dir == true, x.private != true {
                         FolderRow(model: model, path: (path as NSString).appendingPathComponent(x.name), name: x.name, bytes: x.bytes, total: total)
@@ -1085,7 +1087,11 @@ struct StorageView: View {
             Section {
                 if let h = s.home {
                     let total = s.volumes.first?.total ?? 1
-                    ForEach(h) { f in FolderRow(model: model, path: f.path, name: f.name, bytes: f.bytes, total: total) }
+                    // A file among the biggest (~/.claude.json) is a plain row: opened as a folder it measured for ever.
+                    ForEach(h) { f in
+                        if f.dir == false { LabeledContent(f.name, value: f.bytes.map { MacSendSize.bytes($0) } ?? "–").monospacedDigit() }
+                        else { FolderRow(model: model, path: f.path, name: f.name, bytes: f.bytes, total: total) }
+                    }
                 } else {
                     HStack { ProgressView().controlSize(.small); Text("Measuring the home folder; this takes a minute or two the first time").font(.footnote).foregroundStyle(.secondary) }
                 }
