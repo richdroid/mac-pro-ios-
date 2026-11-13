@@ -34,15 +34,16 @@ struct TrackPage: View {
         let info: TrackInfo?
         @Binding var more: Bool
         let music: URL?
-        @Environment(\.horizontalSizeClass) private var size
         @Environment(\.openURL) private var openURL
-        // Read from the page itself: wider than tall is two panes open flat, side by side folded.
-        @State private var sideways = false
-        private var pane: Bool { sideways && size == .regular }
+        // From the size the page is given, at once: wider than tall and roomy is two panes (open flat), wider than tall
+        // and narrower is the cover beside its titles (folded and turned), else one column.
         var body: some View {
-            Group { layout }.onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.15 } action: { sideways = $0 }
+            GeometryReader { g in
+                let wide = g.size.width > g.size.height * 1.15
+                layout(pane: wide && g.size.width > 700, sideways: wide)
+            }
         }
-        @ViewBuilder private var layout: some View {
+        @ViewBuilder private func layout(pane: Bool, sideways: Bool) -> some View {
             if pane {
                 FoldSplit {
                     VStack(alignment: .leading, spacing: 18) { cover; titles }.padding(S.margin).frame(maxHeight: .infinity)
