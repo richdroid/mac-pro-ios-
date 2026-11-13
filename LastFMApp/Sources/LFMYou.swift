@@ -44,10 +44,11 @@ struct YouTab: View {
         if !store.insights.discoveries.isEmpty { WeekHub(title: "new to you", list: store.insights.discoveries) }
     }
     private func page<C: View>(@ViewBuilder _ c: () -> C) -> some View {
-        ScrollViewReader { proxy in
+        let content = c()
+        return ScrollViewReader { proxy in
             ScrollView {
                 Color.clear.frame(height: 0).id("top")
-                c().padding(.bottom, 40)
+                content.padding(.bottom, 40)
             }
             .scrollIndicators(.hidden)
             .onChange(of: top) { _, _ in withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } }
