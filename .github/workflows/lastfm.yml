@@ -1,0 +1,147 @@
+name: Last.fm app
+# The Last.fm app alone, on its own branch (never main): built unsigned for the iPhone, then shot and filmed in the
+# simulator's Duo on the bundled mock (no key in CI), folded, open upright (the posture Richard holds) and open flat.
+# Published to the lastfm-latest release; nothing else is touched.
+on:
+  push:
+    branches: [lastfm]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: lastfm
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build unsigned for iPhone
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Release -sdk iphoneos \
+            -derivedDataPath build CURRENT_PROJECT_VERSION=$GITHUB_RUN_NUMBER CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee dist/build.log | tail -1
+          rm -rf dist/Payload; mkdir -p dist/Payload
+          cp -R build/Build/Products/Release-iphoneos/LastFM.app dist/Payload/
+          (cd dist && zip -qry LastFM.ipa Payload && rm -rf Payload)
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/LastFM.app
+          APP=local.macpro.LastFM
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          $D "$DEVICE" pose closed || true; sleep 4
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          # One shot: name, display, wait, then the app's own arguments.
+          shot() {
+            local name=$1 display=$2 wait=$3; shift 3
+            xcrun simctl launch "$DEVICE" $APP "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name.png
+            xcrun simctl terminate "$DEVICE" $APP || true
+          }
+          # One film: name, display, seconds, then the app's own arguments; steps run while it records (STEPS="cmd:wait ...").
+          film() {
+            local name=$1 display=$2 secs=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/lfm-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" $APP "$@"
+            local step cmd wait t=0
+            for step in $STEPS; do
+              cmd=${step%%:*}; wait=${step##*:}
+              sleep $wait; t=$((t + wait))
+              case $cmd in
+                fling) $D "$DEVICE" drag 0.5 0.8 0.5 0.25 0.12 || echo "drag failed";;
+                flingback) $D "$DEVICE" drag 0.5 0.25 0.5 0.8 0.12 || echo "drag failed";;
+                pull) $D "$DEVICE" drag 0.5 0.3 0.5 0.85 0.9 || echo "drag failed";;
+                slow) $D "$DEVICE" drag 0.5 0.75 0.5 0.35 0.9 || echo "drag failed";;
+                side) $D "$DEVICE" drag 0.8 0.75 0.2 0.75 0.25 || echo "drag failed";;
+                tap) $D "$DEVICE" touch 0.3 0.3 0.05 || echo "tap failed";;
+                open|partial|closed) $D "$DEVICE" pose $cmd || echo "pose failed";;
+                portrait) $D "$DEVICE" rotate 1 || echo "rotate failed";;
+                landscape) $D "$DEVICE" rotate 3 || echo "rotate failed";;
+                shot) xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name-$t.png;;
+              esac
+            done
+            sleep $((secs > t ? secs - t : 1))
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" $APP || true
+            if [ "$(stat -f %z dist/lfm-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
+          }
+          date
+          # Folded, upright. The first launch: the whole history read in, filmed on You, slowed so it can be seen.
+          STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 1 -fresh YES -mockSyncSlow YES
+          # Read in full at normal speed for everything after (the slowed read above may not have finished).
+          shot you-first 1 16 -tab 1
+          shot now 1 8 -tab 0
+          shot you 1 8 -tab 1
+          shot detail 1 9 -tab 0 -pose detail
+          shot lastplayed 1 8 -tab 0 -playing NO
+          shot scrub 1 9 -tab 0 -pose scrub
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2 flingback:2" film scroll-now 1 22 -tab 0
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 side:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-you 1 28 -tab 1
+          STEPS="shot:12 shot:12" film live 1 30 -tab 0 -mockAdvance 11
+          STEPS="pull:5 shot:3" film detailfilm 1 12 -tab 0 -pose detail
+          film tour 1 14 -tab 0 -pose tour
+          date
+          # Folded on Now, then opened flat, turned upright, half closed and closed, on each display in turn.
+          for pass in outer inner; do
+            display=1; [ $pass = inner ] && display=3
+            $D "$DEVICE" pose closed || true; sleep 4; $D "$DEVICE" rotate 1 || true; sleep 2
+            STEPS="landscape:6 open:6 shot:2 portrait:5 shot:2 partial:5 closed:5" film posture-$pass $display 36 -tab 0
+          done
+          # Open upright: the posture he holds.
+          $D "$DEVICE" pose open || true; sleep 5
+          $D "$DEVICE" rotate 1 || true; sleep 5
+          shot now-portrait 3 8 -tab 0
+          shot you-portrait 3 8 -tab 1
+          shot detail-portrait 3 9 -tab 0 -pose detail
+          shot scrub-portrait 3 9 -tab 0 -pose scrub
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2" film scroll-now-portrait 3 20 -tab 0
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-you-portrait 3 24 -tab 1
+          film tour-portrait 3 14 -tab 0 -pose tour
+          # Open flat, two panes.
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          shot now-open 3 8 -tab 0
+          shot you-open 3 8 -tab 1
+          shot detail-open 3 9 -tab 0 -pose detail
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-you-open 3 18 -tab 1
+          film tour-open 3 14 -tab 0 -pose tour
+          date
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../apps.zip . -i '*.ipa' '*.log' || zip -q ../apps.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }} run $GITHUB_RUN_NUMBER" > status.txt
+          gh release view lastfm-latest >/dev/null 2>&1 || gh release create lastfm-latest --prerelease --title "Last.fm app" --notes "The Last.fm app's own build, shots and films (branch lastfm)." --target lastfm
+          for f in shots.zip films.zip apps.zip status.txt; do
+            for i in 1 2 3; do gh release upload lastfm-latest "$f" --clobber && break; sleep 15; done
+          done

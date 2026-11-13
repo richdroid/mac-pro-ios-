@@ -198,6 +198,31 @@ targets:
             NSExtensionActivationRule:
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
               NSExtensionActivationSupportsText: true
+  # Last.fm, his listening as album art and insight (phase 1: Now and You). The API key and his name are baked into the
+  # Info.plist at signing by preset-ipa.sh (LastFM.ipa); without them it runs on the bundled mock (LastFMApp/Mock).
+  LastFM:
+    type: application
+    platform: iOS
+    sources:
+      - LastFMApp/Sources
+      - LastFMApp/Assets.xcassets
+      - path: LastFMApp/Mock
+        type: folder
+      - path: Shared/Duo.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.LastFM
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: LastFMApp/Info.plist
+      properties:
+        # A placeholder until Richard picks the name (lastfm.md).
+        CFBundleDisplayName: Rotation
+        LastFMKey: ""
+        LastFMUser: ""
+        CADisableMinimumFrameDurationOnPhone: true
+        UILaunchScreen: { UIColorName: LaunchColor }
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
   GalleryMac:
     type: application
     platform: iOS

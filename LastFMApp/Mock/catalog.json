@@ -1,0 +1,1577 @@
+{
+ "artists": [
+  {
+   "name": "Glass Harbor",
+   "weight": 5.2,
+   "albums": [
+    {
+     "name": "Winter Letters",
+     "art": "cover-07",
+     "tracks": [
+      "Telephone Wires",
+      "Wanderer",
+      "Polaroid",
+      "Copper",
+      "Mercury",
+      "Paper Crown",
+      "Overpass",
+      "Old Habits",
+      "Paper Planes",
+      "Gravity",
+      "Heatwave"
+     ],
+     "year": 2016
+    },
+    {
+     "name": "Paper Machines",
+     "art": "cover-08",
+     "tracks": [
+      "Carousel",
+      "Echo Park",
+      "Cinnamon",
+      "Second Nature",
+      "Kerosene",
+      "Cold Feet",
+      "Heatwave",
+      "Breathe Out"
+     ],
+     "year": 2021
+    },
+    {
+     "name": "Electric Rivers",
+     "art": "cover-09",
+     "tracks": [
+      "Blue Hour",
+      "Open Water",
+      "Faultlines",
+      "Heavy Light",
+      "Heatwave",
+      "Marble",
+      "Little Victories",
+      "Breathe Out",
+      "Wanderer",
+      "Overpass",
+      "Sundial"
+     ],
+     "year": 2014
+    }
+   ],
+   "listeners": 1231433,
+   "tags": [
+    "electronic",
+    "synthpop",
+    "post-punk"
+   ]
+  },
+  {
+   "name": "Velvet Hours",
+   "weight": 4.6,
+   "albums": [
+    {
+     "name": "Golden Cities",
+     "art": "cover-10",
+     "tracks": [
+      "Heavy Light",
+      "Faultlines",
+      "Wildfire",
+      "Halogen",
+      "Second Nature",
+      "Hourglass",
+      "Copper"
+     ],
+     "year": 2022
+    },
+    {
+     "name": "Hollow Seasons",
+     "art": "cover-11",
+     "tracks": [
+      "Cinnamon",
+      "Marble",
+      "Breathe Out",
+      "Wildfire",
+      "Wishbone",
+      "Riverbed",
+      "Glow"
+     ],
+     "year": 2016
+    },
+    {
+     "name": "Paper Dreams",
+     "art": "cover-12",
+     "tracks": [
+      "Tidal",
+      "Daydream",
+      "Paper Planes",
+      "Polaroid",
+      "Window Seat",
+      "Faultlines",
+      "Weekender",
+      "Sundial",
+      "Blue Hour",
+      "Crystal Clear"
+     ],
+     "year": 2014
+    }
+   ],
+   "listeners": 31263,
+   "tags": [
+    "singer-songwriter",
+    "indie rock",
+    "ambient"
+   ]
+  },
+  {
+   "name": "Nadia Sorel",
+   "weight": 0.9,
+   "albums": [
+    {
+     "name": "Tender Horizons",
+     "art": "cover-13",
+     "tracks": [
+      "Seventeen",
+      "Rooftops",
+      "Marble",
+      "Neon Rain",
+      "Second Nature",
+      "Cold Feet",
+      "Blue Hour",
+      "Little Victories",
+      "Copper",
+      "Undertow"
+     ],
+     "year": 2014
+    },
+    {
+     "name": "Silver Horizons",
+     "art": "cover-14",
+     "tracks": [
+      "Halogen",
+      "Slow Dance",
+      "Marble",
+      "Pale Blue",
+      "Mercury",
+      "Glow",
+      "Saltwater",
+      "Blue Hour"
+     ],
+     "year": 2009
+    }
+   ],
+   "listeners": 1685718,
+   "tags": [
+    "alternative",
+    "post-punk",
+    "shoegaze"
+   ]
+  },
+  {
+   "name": "The Long Afternoons",
+   "weight": 4.1,
+   "albums": [
+    {
+     "name": "Quiet Letters",
+     "art": "cover-15",
+     "tracks": [
+      "Old Habits",
+      "Orbiting",
+      "Avalanche",
+      "Hourglass",
+      "Cinnamon",
+      "Silhouettes",
+      "Crystal Clear",
+      "Afterglow",
+      "Ghost Notes",
+      "Polaroid"
+     ],
+     "year": 2015
+    },
+    {
+     "name": "Little Echoes",
+     "art": "cover-16",
+     "tracks": [
+      "Heavy Light",
+      "Mercury",
+      "Breathe Out",
+      "Canopy",
+      "Pale Blue",
+      "Lemonade",
+      "Undertow",
+      "Copper",
+      "Saltwater"
+     ],
+     "year": 2024
+    },
+    {
+     "name": "Neon Signals",
+     "art": "cover-17",
+     "tracks": [
+      "Wildfire",
+      "Faultlines",
+      "Static Bloom",
+      "Second Nature",
+      "Neon Rain",
+      "Holiday",
+      "Coming Up Roses",
+      "Little Victories",
+      "Seventeen",
+      "Slow Dance"
+     ],
+     "year": 2022
+    }
+   ],
+   "listeners": 2282297,
+   "tags": [
+    "dream pop",
+    "post-punk",
+    "shoegaze"
+   ]
+  },
+  {
+   "name": "Low Tide Choir",
+   "weight": 3.8,
+   "albums": [
+    {
+     "name": "Glass Mornings",
+     "art": "cover-18",
+     "tracks": [
+      "Riverbed",
+      "Moonlit Drive",
+      "Lighthouse",
+      "Heatwave",
+      "Cinnamon",
+      "Northbound",
+      "Old Habits"
+     ],
+     "year": 2026
+    },
+    {
+     "name": "Endless Mornings",
+     "art": "cover-19",
+     "tracks": [
+      "Sugar",
+      "Second Nature",
+      "Sundial",
+      "Hourglass",
+      "Velvet Sky",
+      "Ghost Notes",
+      "Mercury",
+      "Coming Up Roses",
+      "Satellites",
+      "Open Water",
+      "Afterglow"
+     ],
+     "year": 2017
+    },
+    {
+     "name": "Electric Fires",
+     "art": "cover-20",
+     "tracks": [
+      "Gravity",
+      "Wildfire",
+      "Slow Dance",
+      "Halogen",
+      "Mercury",
+      "Breathe Out",
+      "Telephone Wires"
+     ],
+     "year": 2017
+    }
+   ],
+   "listeners": 1256280,
+   "tags": [
+    "electronic",
+    "shoegaze",
+    "art pop"
+   ]
+  },
+  {
+   "name": "Hollow Pines",
+   "weight": 3.5,
+   "albums": [
+    {
+     "name": "Slow Ghosts",
+     "art": "cover-21",
+     "tracks": [
+      "Starling",
+      "Canopy",
+      "Echo Park",
+      "Saltwater",
+      "Faultlines",
+      "Gravity",
+      "Heavy Light",
+      "Second Nature"
+     ],
+     "year": 2012
+    },
+    {
+     "name": "Burning Rooms",
+     "art": "cover-22",
+     "tracks": [
+      "Last Train",
+      "Saltwater",
+      "Cold Feet",
+      "Firefly",
+      "Mercury",
+      "Marble",
+      "Riverbed",
+      "Pale Blue",
+      "Faultlines",
+      "Silhouettes"
+     ],
+     "year": 2015
+    },
+    {
+     "name": "Amber Echoes",
+     "art": "cover-23",
+     "tracks": [
+      "Paper Planes",
+      "Cold Feet",
+      "Driftwood",
+      "Slow Dance",
+      "Canopy",
+      "Sundial",
+      "Tidal",
+      "Sugar",
+      "Pale Blue"
+     ],
+     "year": 2009
+    }
+   ],
+   "listeners": 1674333,
+   "tags": [
+    "singer-songwriter",
+    "folk",
+    "electronic"
+   ]
+  },
+  {
+   "name": "Marigold Avenue",
+   "weight": 3.2,
+   "albums": [
+    {
+     "name": "Mercury",
+     "art": "cover-24",
+     "tracks": [
+      "Firefly",
+      "Riverbed",
+      "Sundial",
+      "Telephone Wires",
+      "Neon Rain",
+      "Old Habits",
+      "Paper Crown",
+      "Marble",
+      "Glow",
+      "Gravity",
+      "Paper Planes"
+     ],
+     "year": 2022
+    },
+    {
+     "name": "Winter Weather",
+     "art": "cover-25",
+     "tracks": [
+      "Daydream",
+      "Telephone Wires",
+      "Hourglass",
+      "Heatwave",
+      "Heavy Light",
+      "Firefly",
+      "Second Nature",
+      "Paper Planes"
+     ],
+     "year": 2016
+    },
+    {
+     "name": "Winter Mirrors",
+     "art": "cover-26",
+     "tracks": [
+      "Moonlit Drive",
+      "Weekender",
+      "Copper",
+      "Gravity",
+      "Neon Rain",
+      "Halogen",
+      "Sugar",
+      "Glow",
+      "Wanderer",
+      "Tidal",
+      "Ribbons"
+     ],
+     "year": 2024
+    }
+   ],
+   "listeners": 1481704,
+   "tags": [
+    "indie",
+    "shoegaze",
+    "dream pop"
+   ]
+  },
+  {
+   "name": "Kite Theory",
+   "weight": 3.0,
+   "albums": [
+    {
+     "name": "Gravity",
+     "art": "cover-27",
+     "tracks": [
+      "Neon Rain",
+      "Afterglow",
+      "Telephone Wires",
+      "Gravity",
+      "Northbound",
+      "Moonlit Drive",
+      "Saltwater",
+      "Hourglass",
+      "Orbiting"
+     ],
+     "year": 2023
+    },
+    {
+     "name": "Golden Lights",
+     "art": "cover-28",
+     "tracks": [
+      "Driftwood",
+      "Marble",
+      "Tidal",
+      "Paper Planes",
+      "Starling",
+      "Halogen",
+      "Holiday",
+      "Lemonade",
+      "Moonlit Drive",
+      "Paper Crown"
+     ],
+     "year": 2015
+    }
+   ],
+   "listeners": 991069,
+   "tags": [
+    "dream pop",
+    "folk",
+    "indie rock"
+   ]
+  },
+  {
+   "name": "June Halverson",
+   "weight": 2.9,
+   "albums": [
+    {
+     "name": "Wild Fires",
+     "art": "cover-29",
+     "tracks": [
+      "Sugar",
+      "Coming Up Roses",
+      "Paper Crown",
+      "Afterglow",
+      "Driftwood",
+      "Second Nature",
+      "Polaroid",
+      "Weekender"
+     ],
+     "year": 2026
+    },
+    {
+     "name": "Slow Static",
+     "art": "cover-30",
+     "tracks": [
+      "Night Swim",
+      "Last Train",
+      "Riverbed",
+      "Open Water",
+      "Gravity",
+      "Polaroid",
+      "Mercury",
+      "Paper Crown"
+     ],
+     "year": 2018
+    }
+   ],
+   "listeners": 1075003,
+   "tags": [
+    "alternative",
+    "synthpop",
+    "ambient"
+   ]
+  },
+  {
+   "name": "Orchard Lights",
+   "weight": 2.7,
+   "albums": [
+    {
+     "name": "Hollow Letters",
+     "art": "cover-31",
+     "tracks": [
+      "Cold Feet",
+      "Velvet Sky",
+      "Firefly",
+      "Gravity",
+      "Coming Up Roses",
+      "Kerosene",
+      "Afterglow"
+     ],
+     "year": 2019
+    },
+    {
+     "name": "Velvet Rooms",
+     "art": "cover-32",
+     "tracks": [
+      "Echo Park",
+      "Sugar",
+      "Hearts in Orbit",
+      "Holiday",
+      "Breathe Out",
+      "Firefly",
+      "Cinnamon",
+      "Last Train",
+      "Driftwood",
+      "Heatwave",
+      "Overpass"
+     ],
+     "year": 2021
+    }
+   ],
+   "listeners": 1396834,
+   "tags": [
+    "art pop",
+    "ambient",
+    "indie"
+   ]
+  },
+  {
+   "name": "Neon Psalms",
+   "weight": 2.6,
+   "albums": [
+    {
+     "name": "Tender Waves",
+     "art": "cover-33",
+     "tracks": [
+      "Saltwater",
+      "Satellites",
+      "Overpass",
+      "Driftwood",
+      "Mercury",
+      "Open Water",
+      "Marble"
+     ],
+     "year": 2017
+    },
+    {
+     "name": "Golden Weather",
+     "art": "cover-34",
+     "tracks": [
+      "Glow",
+      "Tidal",
+      "Slow Dance",
+      "Cinnamon",
+      "Copper",
+      "Firefly",
+      "Ghost Notes",
+      "Neon Rain",
+      "Mercury",
+      "Afterglow",
+      "Faultlines"
+     ],
+     "year": 2020
+    }
+   ],
+   "listeners": 173486,
+   "tags": [
+    "ambient",
+    "art pop",
+    "indie"
+   ]
+  },
+  {
+   "name": "The Quiet Arcade",
+   "weight": 2.4,
+   "albums": [
+    {
+     "name": "Amber Dreams",
+     "art": "cover-35",
+     "tracks": [
+      "Hearts in Orbit",
+      "Paper Crown",
+      "Orbiting",
+      "Driftwood",
+      "Avalanche",
+      "Satellites",
+      "Night Swim"
+     ],
+     "year": 2013
+    },
+    {
+     "name": "Paper Waves",
+     "art": "cover-36",
+     "tracks": [
+      "Night Swim",
+      "Firefly",
+      "Window Seat",
+      "Heatwave",
+      "Glow",
+      "Lighthouse",
+      "Cinnamon",
+      "Static Bloom",
+      "Daydream"
+     ],
+     "year": 2025
+    }
+   ],
+   "listeners": 1194000,
+   "tags": [
+    "ambient",
+    "folk",
+    "post-punk"
+   ]
+  },
+  {
+   "name": "Silver Lakes",
+   "weight": 2.3,
+   "albums": [
+    {
+     "name": "Paper Echoes",
+     "art": "cover-37",
+     "tracks": [
+      "Overpass",
+      "Undertow",
+      "Sundial",
+      "Halogen",
+      "Lemonade",
+      "Polaroid",
+      "Last Train",
+      "Hearts in Orbit"
+     ],
+     "year": 2014
+    },
+    {
+     "name": "Bright Rooms",
+     "art": "cover-38",
+     "tracks": [
+      "Avalanche",
+      "Night Swim",
+      "Crystal Clear",
+      "Rooftops",
+      "Driftwood",
+      "Mercury",
+      "Orbiting",
+      "Heavy Light",
+      "Sugar",
+      "Copper",
+      "Weekender"
+     ],
+     "year": 2014
+    }
+   ],
+   "listeners": 2229231,
+   "tags": [
+    "singer-songwriter",
+    "dream pop",
+    "ambient"
+   ]
+  },
+  {
+   "name": "Amber Radio",
+   "weight": 2.2,
+   "albums": [
+    {
+     "name": "Blue Hour",
+     "art": "cover-39",
+     "tracks": [
+      "Gravity",
+      "Slow Dance",
+      "Heatwave",
+      "Holiday",
+      "Open Water",
+      "Afterglow",
+      "Seventeen",
+      "Wishbone",
+      "Sugar"
+     ],
+     "year": 2025
+    },
+    {
+     "name": "Little Lights",
+     "art": "cover-40",
+     "tracks": [
+      "Crystal Clear",
+      "Second Nature",
+      "Pale Blue",
+      "Telephone Wires",
+      "Little Victories",
+      "Kerosene",
+      "Marble",
+      "Old Habits",
+      "Gravity"
+     ],
+     "year": 2010
+    }
+   ],
+   "listeners": 944992,
+   "tags": [
+    "singer-songwriter",
+    "art pop",
+    "folk"
+   ]
+  },
+  {
+   "name": "Vesper Line",
+   "weight": 2.1,
+   "albums": [
+    {
+     "name": "Bright Fires",
+     "art": "cover-41",
+     "tracks": [
+      "Mercury",
+      "Heatwave",
+      "Ribbons",
+      "Velvet Sky",
+      "Orbiting",
+      "Tidal",
+      "Cold Feet",
+      "Gravity",
+      "Starling"
+     ],
+     "year": 2017
+    },
+    {
+     "name": "Summer Cities",
+     "art": "cover-42",
+     "tracks": [
+      "Riverbed",
+      "Second Nature",
+      "Carousel",
+      "Starling",
+      "Night Swim",
+      "Velvet Sky",
+      "Overpass",
+      "Breathe Out",
+      "Heavy Light",
+      "Copper",
+      "Weekender"
+     ],
+     "year": 2016
+    }
+   ],
+   "listeners": 2006635,
+   "tags": [
+    "dream pop",
+    "alternative",
+    "electronic"
+   ]
+  },
+  {
+   "name": "Tamsin Rowe",
+   "weight": 2.0,
+   "albums": [
+    {
+     "name": "Lunar Signals",
+     "art": "cover-43",
+     "tracks": [
+      "Sundial",
+      "Little Victories",
+      "Wishbone",
+      "Cinnamon",
+      "Glow",
+      "Telephone Wires",
+      "Weekender",
+      "Orbiting"
+     ],
+     "year": 2019
+    },
+    {
+     "name": "Hourglass",
+     "art": "cover-44",
+     "tracks": [
+      "Gravity",
+      "Static Bloom",
+      "Hearts in Orbit",
+      "Ribbons",
+      "Telephone Wires",
+      "Blue Hour",
+      "Neon Rain"
+     ],
+     "year": 2012
+    }
+   ],
+   "listeners": 2080467,
+   "tags": [
+    "indie",
+    "shoegaze",
+    "art pop"
+   ]
+  },
+  {
+   "name": "Midnight Cartography",
+   "weight": 1.9,
+   "albums": [
+    {
+     "name": "Little Letters",
+     "art": "cover-45",
+     "tracks": [
+      "Copper",
+      "Silhouettes",
+      "Hourglass",
+      "Overpass",
+      "Window Seat",
+      "Lemonade",
+      "Wildfire",
+      "Moonlit Drive"
+     ],
+     "year": 2023
+    },
+    {
+     "name": "Sunday Hours",
+     "art": "cover-46",
+     "tracks": [
+      "Echo Park",
+      "Second Nature",
+      "Cold Feet",
+      "Breathe Out",
+      "Silhouettes",
+      "Heavy Light",
+      "Sugar",
+      "Coming Up Roses",
+      "Slow Dance"
+     ],
+     "year": 2021
+    }
+   ],
+   "listeners": 1569605,
+   "tags": [
+    "electronic",
+    "dream pop",
+    "indie"
+   ]
+  },
+  {
+   "name": "Fen & Fable",
+   "weight": 1.8,
+   "albums": [
+    {
+     "name": "Amber Rivers",
+     "art": "cover-47",
+     "tracks": [
+      "Marble",
+      "Silhouettes",
+      "Carousel",
+      "Cold Feet",
+      "Copper",
+      "Sundial",
+      "Satellites"
+     ],
+     "year": 2013
+    },
+    {
+     "name": "Lunar Rivers",
+     "art": "cover-48",
+     "tracks": [
+      "Hourglass",
+      "Paper Planes",
+      "Gravity",
+      "Faultlines",
+      "Sugar",
+      "Slow Dance",
+      "Last Train",
+      "Firefly",
+      "Velvet Sky"
+     ],
+     "year": 2025
+    }
+   ],
+   "listeners": 1131750,
+   "tags": [
+    "singer-songwriter",
+    "indie",
+    "dream pop"
+   ]
+  },
+  {
+   "name": "Bloom Engine",
+   "weight": 1.7,
+   "albums": [
+    {
+     "name": "Bright Fields",
+     "art": "cover-49",
+     "tracks": [
+      "Wildfire",
+      "Coming Up Roses",
+      "Saltwater",
+      "Paper Planes",
+      "Halogen",
+      "Sugar",
+      "Faultlines"
+     ],
+     "year": 2019
+    },
+    {
+     "name": "Northern Weather",
+     "art": "cover-50",
+     "tracks": [
+      "Blue Hour",
+      "Orbiting",
+      "Cold Feet",
+      "Sundial",
+      "Crystal Clear",
+      "Polaroid",
+      "Copper",
+      "Sugar",
+      "Northbound",
+      "Cinnamon",
+      "Mercury"
+     ],
+     "year": 2009
+    }
+   ],
+   "listeners": 79429,
+   "tags": [
+    "post-punk",
+    "singer-songwriter",
+    "folk"
+   ]
+  },
+  {
+   "name": "Cassio Vale",
+   "weight": 1.6,
+   "albums": [
+    {
+     "name": "Endless Stars",
+     "art": "cover-51",
+     "tracks": [
+      "Daydream",
+      "Satellites",
+      "Night Swim",
+      "Saltwater",
+      "Cold Feet",
+      "Neon Rain",
+      "Moonlit Drive",
+      "Lighthouse"
+     ],
+     "year": 2015
+    },
+    {
+     "name": "Electric Dreams",
+     "art": "cover-52",
+     "tracks": [
+      "Last Train",
+      "Satellites",
+      "Carousel",
+      "Hourglass",
+      "Paper Crown",
+      "Wildfire",
+      "Canopy",
+      "Gravity"
+     ],
+     "year": 2025
+    }
+   ],
+   "listeners": 1787772,
+   "tags": [
+    "indie rock",
+    "post-punk",
+    "shoegaze"
+   ]
+  },
+  {
+   "name": "Ivory Shores",
+   "weight": 1.5,
+   "albums": [
+    {
+     "name": "Holiday",
+     "art": "cover-53",
+     "tracks": [
+      "Kerosene",
+      "Holiday",
+      "Riverbed",
+      "Weekender",
+      "Polaroid",
+      "Neon Rain",
+      "Satellites",
+      "Window Seat",
+      "Lemonade",
+      "Wanderer",
+      "Overpass"
+     ],
+     "year": 2012
+    },
+    {
+     "name": "Neon Machines",
+     "art": "cover-54",
+     "tracks": [
+      "Sugar",
+      "Moonlit Drive",
+      "Weekender",
+      "Seventeen",
+      "Polaroid",
+      "Neon Rain",
+      "Faultlines"
+     ],
+     "year": 2024
+    }
+   ],
+   "listeners": 703181,
+   "tags": [
+    "singer-songwriter",
+    "dream pop",
+    "folk"
+   ]
+  },
+  {
+   "name": "Northern Sleep",
+   "weight": 1.4,
+   "albums": [
+    {
+     "name": "Endless Horizons",
+     "art": "cover-55",
+     "tracks": [
+      "Little Victories",
+      "Satellites",
+      "Orbiting",
+      "Afterglow",
+      "Holiday",
+      "Velvet Sky",
+      "Crystal Clear",
+      "Night Swim",
+      "Northbound",
+      "Neon Rain",
+      "Wanderer"
+     ],
+     "year": 2015
+    },
+    {
+     "name": "Kerosene",
+     "art": "cover-56",
+     "tracks": [
+      "Firefly",
+      "Northbound",
+      "Undertow",
+      "Lighthouse",
+      "Crystal Clear",
+      "Hearts in Orbit",
+      "Saltwater",
+      "Blue Hour"
+     ],
+     "year": 2013
+    }
+   ],
+   "listeners": 1075217,
+   "tags": [
+    "post-punk",
+    "dream pop",
+    "indie"
+   ]
+  },
+  {
+   "name": "The Paperweights",
+   "weight": 1.3,
+   "albums": [
+    {
+     "name": "Velvet Stars",
+     "art": "cover-57",
+     "tracks": [
+      "Carousel",
+      "Little Victories",
+      "Moonlit Drive",
+      "Heavy Light",
+      "Heatwave",
+      "Cold Feet",
+      "Tidal",
+      "Polaroid",
+      "Glow",
+      "Saltwater"
+     ],
+     "year": 2012
+    },
+    {
+     "name": "Velvet Mornings",
+     "art": "cover-58",
+     "tracks": [
+      "Starling",
+      "Hearts in Orbit",
+      "Lighthouse",
+      "Satellites",
+      "Static Bloom",
+      "Hourglass",
+      "Cinnamon",
+      "Neon Rain",
+      "Tidal"
+     ],
+     "year": 2014
+    }
+   ],
+   "listeners": 2136193,
+   "tags": [
+    "alternative",
+    "shoegaze",
+    "synthpop"
+   ]
+  },
+  {
+   "name": "Lumen Drive",
+   "weight": 1.25,
+   "albums": [
+    {
+     "name": "Little Static",
+     "art": "cover-59",
+     "tracks": [
+      "Heatwave",
+      "Open Water",
+      "Riverbed",
+      "Starling",
+      "Tidal",
+      "Lighthouse",
+      "Seventeen",
+      "Firefly",
+      "Gravity",
+      "Breathe Out"
+     ],
+     "year": 2026
+    },
+    {
+     "name": "Little Stars",
+     "art": "cover-60",
+     "tracks": [
+      "Mercury",
+      "Cinnamon",
+      "Heavy Light",
+      "Northbound",
+      "Carousel",
+      "Cold Feet",
+      "Paper Planes",
+      "Neon Rain",
+      "Old Habits",
+      "Wanderer"
+     ],
+     "year": 2016
+    }
+   ],
+   "listeners": 212754,
+   "tags": [
+    "indie",
+    "indie rock",
+    "art pop"
+   ]
+  },
+  {
+   "name": "Ada Kestrel",
+   "weight": 1.2,
+   "albums": [
+    {
+     "name": "Paper Crown",
+     "art": "cover-61",
+     "tracks": [
+      "Heatwave",
+      "Hearts in Orbit",
+      "Undertow",
+      "Blue Hour",
+      "Wishbone",
+      "Holiday",
+      "Sugar",
+      "Lighthouse"
+     ],
+     "year": 2017
+    },
+    {
+     "name": "Electric Fires",
+     "art": "cover-62",
+     "tracks": [
+      "Copper",
+      "Marble",
+      "Wishbone",
+      "Slow Dance",
+      "Second Nature",
+      "Wildfire",
+      "Rooftops"
+     ],
+     "year": 2009
+    }
+   ],
+   "listeners": 2047467,
+   "tags": [
+    "folk",
+    "dream pop",
+    "indie"
+   ]
+  },
+  {
+   "name": "Saint Echo",
+   "weight": 1.1,
+   "albums": [
+    {
+     "name": "Slow Echoes",
+     "art": "cover-63",
+     "tracks": [
+      "Wanderer",
+      "Echo Park",
+      "Cinnamon",
+      "Tidal",
+      "Old Habits",
+      "Velvet Sky",
+      "Afterglow",
+      "Mercury"
+     ],
+     "year": 2026
+    },
+    {
+     "name": "Golden Signals",
+     "art": "cover-64",
+     "tracks": [
+      "Driftwood",
+      "Hourglass",
+      "Wishbone",
+      "Silhouettes",
+      "Rooftops",
+      "Seventeen",
+      "Copper"
+     ],
+     "year": 2015
+    }
+   ],
+   "listeners": 1388450,
+   "tags": [
+    "shoegaze",
+    "folk",
+    "alternative"
+   ]
+  },
+  {
+   "name": "Wild Atlas",
+   "weight": 1.0,
+   "albums": [
+    {
+     "name": "Glass Dreams",
+     "art": "cover-65",
+     "tracks": [
+      "Afterglow",
+      "Polaroid",
+      "Night Swim",
+      "Wanderer",
+      "Last Train",
+      "Blue Hour",
+      "Satellites",
+      "Crystal Clear",
+      "Lemonade",
+      "Open Water"
+     ],
+     "year": 2024
+    },
+    {
+     "name": "Bright Static",
+     "art": "cover-66",
+     "tracks": [
+      "Driftwood",
+      "Wishbone",
+      "Cinnamon",
+      "Satellites",
+      "Lighthouse",
+      "Marble",
+      "Undertow",
+      "Lemonade"
+     ],
+     "year": 2018
+    }
+   ],
+   "listeners": 1005113,
+   "tags": [
+    "post-punk",
+    "indie rock",
+    "ambient"
+   ]
+  },
+  {
+   "name": "Honeycomb Hours",
+   "weight": 0.95,
+   "albums": [
+    {
+     "name": "Marble",
+     "art": "cover-67",
+     "tracks": [
+      "Overpass",
+      "Silhouettes",
+      "Mercury",
+      "Tidal",
+      "Night Swim",
+      "Last Train",
+      "Satellites",
+      "Wanderer"
+     ],
+     "year": 2012
+    },
+    {
+     "name": "Endless Shores",
+     "art": "cover-68",
+     "tracks": [
+      "Mercury",
+      "Seventeen",
+      "Holiday",
+      "Sugar",
+      "Firefly",
+      "Last Train",
+      "Little Victories",
+      "Weekender"
+     ],
+     "year": 2019
+    }
+   ],
+   "listeners": 878645,
+   "tags": [
+    "synthpop",
+    "indie rock",
+    "ambient"
+   ]
+  },
+  {
+   "name": "Dove Season",
+   "weight": 0.9,
+   "albums": [
+    {
+     "name": "Salt Shores",
+     "art": "cover-69",
+     "tracks": [
+      "Hourglass",
+      "Saltwater",
+      "Telephone Wires",
+      "Marble",
+      "Wildfire",
+      "Cinnamon",
+      "Ribbons",
+      "Tidal",
+      "Heavy Light"
+     ],
+     "year": 2017
+    },
+    {
+     "name": "Tidal",
+     "art": "cover-70",
+     "tracks": [
+      "Glow",
+      "Blue Hour",
+      "Ribbons",
+      "Paper Crown",
+      "Weekender",
+      "Marble",
+      "Paper Planes",
+      "Saltwater",
+      "Faultlines"
+     ],
+     "year": 2026
+    }
+   ],
+   "listeners": 357571,
+   "tags": [
+    "indie rock",
+    "shoegaze",
+    "dream pop"
+   ]
+  },
+  {
+   "name": "Polar Youth",
+   "weight": 0.85,
+   "albums": [
+    {
+     "name": "Amber Cities",
+     "art": "cover-71",
+     "tracks": [
+      "Ghost Notes",
+      "Satellites",
+      "Cinnamon",
+      "Polaroid",
+      "Breathe Out",
+      "Paper Crown",
+      "Holiday",
+      "Undertow",
+      "Marble",
+      "Night Swim",
+      "Static Bloom"
+     ],
+     "year": 2009
+    },
+    {
+     "name": "Slow Tapes",
+     "art": "cover-72",
+     "tracks": [
+      "Marble",
+      "Sundial",
+      "Second Nature",
+      "Firefly",
+      "Paper Crown",
+      "Open Water",
+      "Undertow",
+      "Slow Dance",
+      "Velvet Sky",
+      "Faultlines"
+     ],
+     "year": 2016
+    }
+   ],
+   "listeners": 335260,
+   "tags": [
+    "art pop",
+    "alternative",
+    "indie"
+   ]
+  },
+  {
+   "name": "Rue Verlaine",
+   "weight": 0.8,
+   "albums": [
+    {
+     "name": "Cold Feet",
+     "art": "cover-73",
+     "tracks": [
+      "Satellites",
+      "Lighthouse",
+      "Wildfire",
+      "Holiday",
+      "Firefly",
+      "Gravity",
+      "Window Seat",
+      "Tidal",
+      "Sugar",
+      "Glow"
+     ],
+     "year": 2023
+    },
+    {
+     "name": "Amber Gardens",
+     "art": "cover-74",
+     "tracks": [
+      "Afterglow",
+      "Pale Blue",
+      "Saltwater",
+      "Cold Feet",
+      "Sundial",
+      "Satellites",
+      "Seventeen",
+      "Cinnamon"
+     ],
+     "year": 2022
+    }
+   ],
+   "listeners": 2038541,
+   "tags": [
+    "ambient",
+    "dream pop",
+    "indie rock"
+   ]
+  },
+  {
+   "name": "Teal Kingdom",
+   "weight": 0.7,
+   "albums": [
+    {
+     "name": "Endless Machines",
+     "art": "cover-75",
+     "tracks": [
+      "Copper",
+      "Wanderer",
+      "Wishbone",
+      "Lemonade",
+      "Hearts in Orbit",
+      "Neon Rain",
+      "Pale Blue",
+      "Telephone Wires",
+      "Holiday",
+      "Afterglow"
+     ],
+     "year": 2018
+    }
+   ],
+   "listeners": 675996,
+   "tags": [
+    "indie rock",
+    "indie",
+    "shoegaze"
+   ]
+  },
+  {
+   "name": "Paper Moons",
+   "weight": 0.6,
+   "albums": [
+    {
+     "name": "Bright Mornings",
+     "art": "cover-76",
+     "tracks": [
+      "Hourglass",
+      "Glow",
+      "Window Seat",
+      "Slow Dance",
+      "Cold Feet",
+      "Canopy",
+      "Afterglow",
+      "Satellites"
+     ],
+     "year": 2025
+    }
+   ],
+   "listeners": 2037472,
+   "tags": [
+    "indie rock",
+    "indie",
+    "ambient"
+   ]
+  },
+  {
+   "name": "Coastline Ghosts",
+   "weight": 0.55,
+   "albums": [
+    {
+     "name": "Wild Fields",
+     "art": "cover-77",
+     "tracks": [
+      "Glow",
+      "Wanderer",
+      "Starling",
+      "Seventeen",
+      "Static Bloom",
+      "Rooftops",
+      "Slow Dance",
+      "Carousel",
+      "Cold Feet"
+     ],
+     "year": 2012
+    }
+   ],
+   "listeners": 371839,
+   "tags": [
+    "synthpop",
+    "singer-songwriter",
+    "dream pop"
+   ]
+  },
+  {
+   "name": "Minor Comets",
+   "weight": 0.0,
+   "albums": [
+    {
+     "name": "Amber Lights",
+     "art": "cover-78",
+     "tracks": [
+      "Heavy Light",
+      "Last Train",
+      "Holiday",
+      "Satellites",
+      "Saltwater",
+      "Silhouettes",
+      "Lighthouse",
+      "Telephone Wires"
+     ],
+     "year": 2026
+    }
+   ],
+   "listeners": 69031,
+   "tags": [
+    "singer-songwriter",
+    "post-punk",
+    "synthpop"
+   ]
+  }
+ ],
+ "profile": {
+  "name": "lowlight",
+  "realname": "Sam",
+  "registered": 1488326400,
+  "avatar": "avatar"
+ },
+ "rising": "Nadia Sorel",
+ "discovery": "Minor Comets"
+}
