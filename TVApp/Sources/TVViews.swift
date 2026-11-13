@@ -328,21 +328,29 @@ private struct StatusFollower: View {
 private struct ProblemBanner: View {
     @Environment(TVModel.self) var model
     var problem: String? {
-        if !model.reachable { return "Can’t reach the Mac. Is Tailscale on?" }
+        if !model.reachable { return "Can’t reach the Mac" }
         if model.status?.online == false { return "The Mac can’t reach the TV" }
         return nil
     }
+    // Calm amber for the Mac out of reach (only ever after a sustained failure); red is kept for the TV itself down.
+    var tint: Color { shown == "Can’t reach the Mac" ? TVLook.away.opacity(0.9) : Color.red.opacity(0.85) }
+    // What's shown, set by an explicit animation as the problem changes: the Remote's own quiet transactions (its keys
+    // arriving without animation) swallowed the implicit one, and the banner left in a single frame (gate of 87d77ca).
+    @State private var shown: String?
     var body: some View {
         ZStack {
-            if let problem {
+            if let problem = shown {
                 // Snug to the top edge, so its foot stays clear of the title under it.
                 Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(Color.red.opacity(0.85), in: Capsule())
+                    .background(tint, in: Capsule())
                     // In from the top edge and back out, never popped on and off over the title.
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.spring(response: 0.4, dampingFraction: 0.9), value: problem)
+        .onChange(of: problem, initial: true) { _, p in
+            guard p != shown else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { shown = p }
+        }
     }
 }
 private struct ToastBubble: View {
