@@ -157,10 +157,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
-          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          # The films at the simulator's full size came to too much for one release asset (run 2's never arrived): each
+          # is re-encoded within 1920x1080, frame rate kept, before zipping.
+          mkdir -p small
+          for f in dist/*.mp4; do avconvert -p Preset1920x1080 -s "$f" -o "small/$(basename "$f")" --replace > /dev/null 2>&1 || cp "$f" small/; done
+          (cd small && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          ls -la films.zip
           (cd dist && zip -qr ../apps.zip . -i '*.ipa' '*.log' || zip -q ../apps.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }} run $GITHUB_RUN_NUMBER" > status.txt
           gh release view lastfm-latest >/dev/null 2>&1 || gh release create lastfm-latest --prerelease --title "Last.fm app" --notes "The Last.fm app's own build, shots and films (branch lastfm)." --target lastfm
           for f in shots.zip films.zip apps.zip status.txt; do
-            for i in 1 2 3; do gh release upload lastfm-latest "$f" --clobber && break; sleep 15; done
+            for i in 1 2 3; do gh release upload lastfm-latest "$f" --clobber && break; echo "upload $f failed ($i)"; sleep 15; done
           done
