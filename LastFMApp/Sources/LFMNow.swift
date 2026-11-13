@@ -73,6 +73,7 @@ struct NowHero: View {
     let layout: Layout
     @Environment(\.openTrack) private var open
     @State private var breathe = false
+    init(layout: Layout) { self.layout = layout; LaunchLog.mark("hero built") }
     private var store: Store { Store.shared }
     var body: some View {
         if let s = store.hero {

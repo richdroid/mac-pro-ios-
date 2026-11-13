@@ -71,6 +71,8 @@ struct Profile: Sendable {
     @ObservationIgnored private var lastInsight = Date.distantPast
 
     init() {
+        LaunchLog.mark("store init")
+        defer { LaunchLog.mark("store ready") }
         // The last thing each screen showed, before anything is asked.
         if let (j, _) = LastFM.shared.kept("user.getinfo") { profile = Profile.parse(j) }
         if let (j, _) = LastFM.shared.kept("user.getrecenttracks", ["limit": "200", "extended": "1"]) { apply(j) }

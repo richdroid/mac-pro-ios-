@@ -44,7 +44,9 @@ struct YouTab: View {
         RisingCard().padding(.horizontal, S.margin)
         WeekHub(title: "on repeat", list: store.insights.week)
         ClockCard().padding(.horizontal, S.margin)
-        if !store.insights.discoveries.isEmpty { WeekHub(title: "new to you", list: store.insights.discoveries) }
+        // A panorama when there are enough to run off the edge; one or two are a card, never a sparse row.
+        if store.insights.discoveries.count >= 3 { WeekHub(title: "new to you", list: store.insights.discoveries) }
+        else if !store.insights.discoveries.isEmpty { NewCard(list: store.insights.discoveries).padding(.horizontal, S.margin) }
     }
     private func page<C: View>(@ViewBuilder _ c: () -> C) -> some View {
         let content = c()
@@ -180,7 +182,7 @@ struct PaceCard: View {
                             .foregroundStyle(hero).symbolSize(110)
                     }
                 }
-                .chartXScale(domain: 0...6)
+                .chartXScale(domain: -0.25...6.25)
                 .chartXAxis {
                     AxisMarks(values: Array(0..<7)) { v in
                         AxisValueLabel { Text(Self.weekday(v.as(Int.self) ?? 0)).font(.caption2.weight(.medium)).foregroundStyle(S.soft) }
@@ -468,6 +470,37 @@ struct ClockCard: View {
                 }
                 .card()
             }
+        }
+    }
+}
+
+// One or two artists first heard this month: each with its cover, when he first played it, and how much since.
+struct NewCard: View {
+    let list: [ArtistCount]
+    static func day(_ uts: Int) -> String {
+        let n = dayName(Date(timeIntervalSince1970: TimeInterval(uts)))
+        return n == "today" || n == "yesterday" ? n : n.capitalizedFirst
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: S.head) {
+            SectionHead(text: "new to you")
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(list) { a in
+                    HStack(spacing: 14) {
+                        ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 260, corner: 10).frame(width: 84)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(a.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                            if let f = a.first {
+                                Text("First played \(Self.day(f))").font(.subheadline).foregroundStyle(S.soft)
+                            }
+                            Text("\(a.plays) \(a.plays == 1 ? "play" : "plays") since").font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .card()
         }
     }
 }

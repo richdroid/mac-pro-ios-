@@ -1,4 +1,5 @@
 import SwiftUI
+import Darwin
 
 // One scale for the whole app. Zune's spirit in Apple's grammar: very big, very thin lowercase titles that run off the
 // edge, bold lowercase section heads, numbers as the graphics, the cover's colours on a near-black ground.
@@ -221,4 +222,24 @@ struct Press: ButtonStyle {
 enum Pose {
     static let name = UserDefaults.standard.string(forKey: "pose") ?? ""
     static var tab: Int { UserDefaults.standard.integer(forKey: "tab") }
+}
+
+// For the build's films (-launchLog YES, never on the phone): how long after the process began each step of a launch
+// came, to Caches/launch-log.txt, so a slow first frame is found in numbers.
+enum LaunchLog {
+    static let on = UserDefaults.standard.bool(forKey: "launchLog")
+    private static let start: Date = {
+        var info = kinfo_proc(), size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return Date() }
+        let t = info.kp_proc.p_un.__p_starttime
+        return Date(timeIntervalSince1970: TimeInterval(t.tv_sec) + TimeInterval(t.tv_usec) / 1_000_000)
+    }()
+    static func mark(_ what: String) {
+        guard on else { return }
+        let line = String(format: "%@ %.3f s %@\n", ProcessInfo.processInfo.processIdentifier.description, Date().timeIntervalSince(start), what)
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("launch-log.txt")
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+        else { try? Data(line.utf8).write(to: url) }
+    }
 }

@@ -46,7 +46,9 @@ final class MockLastFM: @unchecked Sendable {
         profile = (j["profile"].v as? [String: Any]) ?? [:]
         rising = artists.firstIndex { $0.name == j["rising"].text } ?? 0
         discovery = artists.firstIndex { $0.name == j["discovery"].text } ?? 0
+        LaunchLog.mark("mock making")
         if !artists.isEmpty { addTail(); makeHistory() }
+        LaunchLog.mark("mock made")
     }
 
     // SplitMix64: the same history on every run.

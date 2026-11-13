@@ -57,7 +57,7 @@ jobs:
           # 1 and 3 came out the other way round), so the shape is checked rather than assumed.
           orient() {
             local want=$1 display=$2 r w h
-            for r in 1 3 1 3 1; do
+            for r in 1 3 2 4 1 3; do
               xcrun simctl io "$DEVICE" screenshot --display=$display /tmp/o.png > /dev/null 2>&1
               w=$(sips -g pixelWidth /tmp/o.png 2>/dev/null | awk '/pixelWidth/{print $2}'); h=$(sips -g pixelHeight /tmp/o.png 2>/dev/null | awk '/pixelHeight/{print $2}')
               if [ -n "$w" ] && { { [ $want = portrait ] && [ "$w" -lt "$h" ]; } || { [ $want = landscape ] && [ "$w" -gt "$h" ]; }; }; then echo "orient $want $display: ${w}x${h}"; return 0; fi
@@ -70,7 +70,7 @@ jobs:
           # One shot: name, display, wait, then the app's own arguments.
           shot() {
             local name=$1 display=$2 wait=$3; shift 3
-            xcrun simctl launch "$DEVICE" $APP "$@"
+            xcrun simctl launch "$DEVICE" $APP -launchLog YES "$@"
             sleep $wait
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name.png
             xcrun simctl terminate "$DEVICE" $APP || true
@@ -80,7 +80,7 @@ jobs:
             local name=$1 display=$2 secs=$3; shift 3
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/lfm-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch "$DEVICE" $APP "$@"
+            xcrun simctl launch "$DEVICE" $APP -launchLog YES "$@"
             local step cmd wait t=0
             for step in $STEPS; do
               cmd=${step%%:*}; wait=${step##*:}
@@ -114,7 +114,7 @@ jobs:
           shot detail 1 9 -tab 0 -pose detail
           shot lastplayed 1 8 -tab 0 -playing NO
           shot scrub 1 9 -tab 0 -pose scrub
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2 flingback:2" film scroll-now 1 22 -tab 0
+          STEPS="slow:10 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2 flingback:2" film scroll-now 1 26 -tab 0
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 side:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-you 1 28 -tab 1
           STEPS="shot:12 shot:12" film live 1 30 -tab 0 -mockAdvance 11
           STEPS="pull:5 shot:3" film detailfilm 1 12 -tab 0 -pose detail
@@ -152,6 +152,9 @@ jobs:
           X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 side:2 shot:2" film scroll-you-open 3 18 -tab 1
           film tour-open 3 14 -tab 0 -pose tour
           date
+          # How long each launch took to its first frame, step by step (-launchLog).
+          C=$(xcrun simctl get_app_container "$DEVICE" $APP data 2>/dev/null) && cp "$C/Library/Caches/launch-log.txt" dist/launch.log 2>/dev/null
+          cat dist/launch.log 2>/dev/null | head -80
           ls dist
       - name: Publish
         if: always()

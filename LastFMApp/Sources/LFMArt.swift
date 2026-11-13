@@ -80,7 +80,11 @@ final class ArtStore: @unchecked Sendable {
         }
         guard let data else { return }
         _ = decode(ref, data, px: 1000)
-        if let small = decode(ref, data, px: 160) { _ = blurred(ref, small) }
+        // The backdrop as it was blurred last time, from the disk: no Core Image before the first frame.
+        if let d = try? Data(contentsOf: file("backdrop:" + ref.key)), let src = CGImageSourceCreateWithData(d as CFData, nil),
+           let b = CGImageSourceCreateImageAtIndex(src, 0, nil) {
+            images.setObject(CGImageBox(b), forKey: "\(ref.key)@backdrop" as NSString)
+        }
     }
 
     private func decode(_ ref: ArtRef, _ data: Data, px: Int) -> CGImage? {
@@ -185,7 +189,8 @@ final class ArtStore: @unchecked Sendable {
     }
 
     // A softly blurred, slightly richer copy of the cover, small, for the backdrop that fills the screen behind it.
-    private let context = CIContext(options: [.useSoftwareRenderer: false])
+    // Made the first time a cover is blurred (off the main thread), never at launch.
+    private lazy var context: CIContext = CIContext(options: [.useSoftwareRenderer: false])
     func backdrop(_ ref: ArtRef) async -> CGImage? {
         if let b = cachedBackdrop(ref) { return b }
         guard let small = await image(ref, px: 160) else { return nil }
@@ -197,8 +202,14 @@ final class ArtStore: @unchecked Sendable {
         let blurred = ci.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 14])
             .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.35, kCIInputBrightnessKey: -0.04])
             .cropped(to: CIImage(cgImage: small).extent)
-        guard let out = context.createCGImage(blurred, from: blurred.extent) else { return nil }
+        guard let out = lock.withLock({ context.createCGImage(blurred, from: blurred.extent) }) else { return nil }
         images.setObject(CGImageBox(out), forKey: key)
+        // Kept small on disk for warm() on the next launch.
+        let m = NSMutableData()
+        if let dest = CGImageDestinationCreateWithData(m, "public.jpeg" as CFString, 1, nil) {
+            CGImageDestinationAddImage(dest, out, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+            if CGImageDestinationFinalize(dest) { try? (m as Data).write(to: file("backdrop:" + ref.key), options: .atomic) }
+        }
         return out
     }
     func cachedBackdrop(_ ref: ArtRef) -> CGImage? { images.object(forKey: "\(ref.key)@backdrop" as NSString)?.image }

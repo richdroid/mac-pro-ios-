@@ -188,6 +188,7 @@ actor HistoryDB {
     }
 
     private func load() async {
+        LaunchLog.mark("history load")
         let db = HistoryDB.shared
         complete = await db.meta("complete") == "1"
         pin = Int(await db.meta("pin") ?? "") ?? 0
@@ -198,6 +199,7 @@ actor HistoryDB {
         if read > 0 { years = Dictionary(grouping: await db.dayCounts(), by: { Calendar.current.component(.year, from: LocalDay.date($0.key)) }).mapValues { $0.reduce(0) { $0 + $1.value } } }
         if complete { coveredFrom = 0 }
         save()
+        LaunchLog.mark("history loaded")
     }
 
     private func parse(_ j: J) -> [Row] {
@@ -300,7 +302,7 @@ actor HistoryDB {
 
 // MARK: - What it says about him
 
-struct ArtistCount: Identifiable, Hashable, Sendable, Codable { var id: String { name }; let name: String; let plays: Int; var album: String = ""; var image: String? = nil; var isNew = false }
+struct ArtistCount: Identifiable, Hashable, Sendable, Codable { var id: String { name }; let name: String; let plays: Int; var album: String = ""; var image: String? = nil; var isNew = false; var first: Int? = nil }
 
 struct Band: Sendable, Codable { let lo: Int; let mid: Int; let hi: Int }
 struct Pace: Sendable, Codable {
@@ -445,9 +447,9 @@ struct Insights: Sendable, Codable {
                 let found = await db.discoveries(since: now - 30 * 86400, minPlays: 8)
                 let newNames = Set(found.map(\.0))
                 for i in list.indices where newNames.contains(list[i].name) { list[i].isNew = true }
-                for (name, _, n) in found.prefix(6) {
+                for (name, first, n) in found.prefix(6) {
                     let c = await db.cover(of: name)
-                    s.discoveries.append(ArtistCount(name: name, plays: n, album: c?.album ?? "", image: c?.url, isNew: true))
+                    s.discoveries.append(ArtistCount(name: name, plays: n, album: c?.album ?? "", image: c?.url, isNew: true, first: first))
                 }
             }
             if complete, weekTotal > 0 {

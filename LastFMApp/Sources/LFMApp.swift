@@ -4,6 +4,7 @@ import SwiftUI
 struct LastFMApp: App {
     @Environment(\.scenePhase) private var phase
     init() {
+        LaunchLog.mark("app init")
         // The build's mock lives in an evening, so its day is full whatever hour the build runs.
         if LastFM.mockMode { Clock.pinEvening() }
     }
@@ -12,7 +13,7 @@ struct LastFMApp: App {
             RootView()
                 .preferredColorScheme(.dark)
                 .onChange(of: phase) { _, p in if p == .active { Store.shared.start() } else { Store.shared.stop() } }
-                .onAppear { Store.shared.start() }
+                .onAppear { LaunchLog.mark("root appeared"); Store.shared.start() }
         }
     }
 }
