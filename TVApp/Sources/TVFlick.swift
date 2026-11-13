@@ -870,6 +870,7 @@ struct FlickScreen: View {
                     Image(systemName: "iphone").font(.system(size: 17, weight: .semibold)).foregroundStyle(TVLook.accent).frame(width: 28)
                     Text("Play on iPhone").font(.subheadline.weight(.semibold))
                 }
+                .accessibilityElement(children: .ignore).accessibilityLabel("Play on iPhone").accessibilityAddTraits(.isButton)
             }
             // Where it'll start, and the other way, whenever he's been in it before: from the card, else from Stremio's own
             // Continue watching (Richard, 2026-11-07: "obv when i flick it should start from where i was"). It applies to

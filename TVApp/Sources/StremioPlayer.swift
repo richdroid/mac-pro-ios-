@@ -64,6 +64,11 @@ final class PhoneSession {
     @ObservationIgnored private var hideAt = Date().addingTimeInterval(4)
     @ObservationIgnored private var savedAt = Date()
     @ObservationIgnored private var watchedFrom: Double = 0
+    // Where it was asked to start, and whether playback has really got there: until then the player's own clock reads
+    // 0:00, and writing that would wipe his place everywhere (gate on 916240e, item 1).
+    @ObservationIgnored private var askedStart: Double = 0
+    @ObservationIgnored private var settled = false
+    var place: Double { settled ? position : askedStart }
     @ObservationIgnored private var commands: [(MPRemoteCommand, Any)] = []
     @ObservationIgnored private var art: UIImage?
     @ObservationIgnored var close: @MainActor () -> Void = {}
@@ -86,6 +91,7 @@ final class PhoneSession {
         PhoneLog.note("engine made")
         engine?.onPiP = { [weak self] on in self?.pipActive = on; if on { self?.panel = nil } }
         position = at
+        askedStart = at
         watchedFrom = at
         savedAt = Date()
         ticker = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in Task { @MainActor in self?.tick() } }
@@ -98,7 +104,8 @@ final class PhoneSession {
     private func tick() {
         guard let e = engine else { return }
         ticks += 1
-        if scrubbing == nil { position = e.position }
+        if !settled, e.isPlaying, askedStart < 5 || e.position + 5 >= askedStart { settled = true }
+        if scrubbing == nil, settled { position = e.position }
         if e.duration > 0 { duration = e.duration }
         let p = e.isPlaying
         if p != playing { playing = p; nowPlaying(); PhoneActivity.update(self); PhoneLog.note("playing \(p) at \(Int(position))/\(Int(duration))") }
@@ -110,7 +117,7 @@ final class PhoneSession {
         // Tracks come with the file; asked again now and then, as a second player may take over.
         if ticks % 8 == 1 { audio = e.tracks(audio: true); subs = e.tracks(audio: false) }
         if ticks % 20 == 0 { nowPlaying() }
-        if controls, playing, panel == nil, scrubbing == nil, !locked, Date() > hideAt { withAnimation(.easeOut(duration: 0.3)) { controls = false } }
+        if controls, playing || locked, panel == nil, scrubbing == nil, Date() > hideAt { withAnimation(.easeOut(duration: 0.3)) { controls = false } }
         if playing, Date().timeIntervalSince(savedAt) > 30 { Task { await save() } }
     }
 
@@ -128,6 +135,7 @@ final class PhoneSession {
     }
     func skip(_ seconds: Double) {
         guard let e = engine else { return }
+        guard settled else { return }
         let to = min(max(0, position + seconds), duration > 0 ? duration - 1 : .greatestFiniteMagnitude)
         e.seek(to: to)
         position = to
@@ -136,7 +144,7 @@ final class PhoneSession {
         else { jump = (side, Int(abs(seconds)), Date()) }
         poke(); nowPlaying()
     }
-    func seek(to t: Double) { engine?.seek(to: t); position = t; poke(); nowPlaying() }
+    func seek(to t: Double) { engine?.seek(to: t); position = t; settled = true; poke(); nowPlaying() }
     func setRate(_ r: Float) { rate = r; engine?.rate = r; nowPlaying() }
     func setFill(_ f: Bool) { fill = f; engine?.fill = f }
     func choose(_ id: String?, audio isAudio: Bool) {
@@ -157,9 +165,9 @@ final class PhoneSession {
 
     func save() async {
         savedAt = Date()
-        let at = position, length = duration
+        let at = place, length = duration
         guard at > 0 || length > 0 else { return }
-        let watched = max(0, at - watchedFrom)
+        let watched = settled ? max(0, at - watchedFrom) : 0
         watchedFrom = at
         if library == nil { library = await StremioAPI.libraryItem(title.imdb) }
         let ok = await StremioAPI.putProgress(id: title.imdb, type: title.type, name: title.name, poster: title.poster, video: title.video,
@@ -194,7 +202,7 @@ final class PhoneSession {
         guard !flicking else { return }
         flicking = true
         engine?.pause()
-        let at = position
+        let at = place
         Task {
             await save()
             // The TV's own pick (its 1080p rule, tv.js), not the 4K file this phone was playing.
@@ -209,7 +217,7 @@ final class PhoneSession {
     func nowPlaying() {
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: title.type == "series" ? (title.line.isEmpty ? title.name : title.line) : title.name,
-            MPMediaItemPropertyArtist: title.type == "series" ? title.name : "Stremio",
+            MPMediaItemPropertyArtist: title.type == "series" ? title.name : title.line,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
             MPNowPlayingInfoPropertyPlaybackRate: playing ? Double(rate) : 0,
@@ -245,6 +253,7 @@ final class PhoneSession {
 
 struct PhonePlayerView: View {
     @Bindable var s: PhoneSession
+    @State private var pictureWidth: CGFloat = 0
     var body: some View {
         GeometryReader { g in
             let crease = Self.crease(g)
@@ -306,9 +315,10 @@ struct PhonePlayerView: View {
             jumpMark
         }
         .contentShape(Rectangle())
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pictureWidth = $0 }
         .gesture(SpatialTapGesture(count: 2).onEnded { v in
             guard !s.locked else { return }
-            s.skip(v.location.x < (UIScreen.main.bounds.width / 2) ? -10 : 10)
+            s.skip(v.location.x < pictureWidth / 2 ? -10 : 10)
         }.exclusively(before: TapGesture().onEnded { s.toggleControls() }))
         .simultaneousGesture(MagnifyGesture().onEnded { v in if !s.locked { s.setFill(v.magnification > 1) } })
     }
@@ -452,6 +462,7 @@ struct Scrubber: View {
                 }
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
+                .allowsHitTesting(s.duration > 0)
                 .gesture(DragGesture(minimumDistance: 0).onChanged { v in
                     s.scrubbing = length * min(max(v.location.x / max(g.size.width, 1), 0), 1)
                     s.poke()

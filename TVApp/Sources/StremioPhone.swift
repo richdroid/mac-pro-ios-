@@ -36,9 +36,18 @@ struct PhoneRecent: Codable, Hashable, Identifiable {
         guard let model else { return false }
         let video = title.type == "series" ? title.video : title.imdb
         guard let list = await StreamCache.shared.streams(type: title.type, imdb: title.imdb, video: video), !list.isEmpty else { return false }
-        let pick = stream.flatMap { s in
-            list.first { $0.description == s.file } ?? list.first { $0.quality == s.quality && !s.quality.isEmpty && $0.stalled != true }
-        } ?? list.first { $0.stalled != true } ?? list[0]
+        // A row he chose is sent only if the TV has that very file; otherwise its own streams open on the phone to pick
+        // from, never a stand-in he didn't choose (gate item 5). From the player, the TV's own first pick (1080p).
+        let pick: StremioStream
+        if let s = stream {
+            guard let same = list.first(where: { $0.description == s.file }) else {
+                model.flick(FlickTarget(item: title.item, source: .stremio))
+                return true
+            }
+            pick = same
+        } else {
+            pick = list.first { $0.stalled != true } ?? list[0]
+        }
         var body: [String: Any] = ["token": pick.token, "imdb": title.imdb]
         if title.type == "series" { body["video"] = title.video }
         if at > 30 { body["resumeMs"] = Int(at * 1000) }
@@ -55,6 +64,16 @@ struct PhoneRecent: Codable, Hashable, Identifiable {
 }
 
 // The way in, from a card, the flick page, a shortcut, Spotlight or the widget.
+#if os(iOS)
+// Touches on its own bare root go through to the app below: it never holds a tap while it hides (gate item 2).
+final class PassWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let v = super.hitTest(point, with: event)
+        return v === rootViewController?.view ? nil : v
+    }
+}
+#endif
+
 @MainActor enum PhoneOpen {
     static func open(_ item: MediaItem, model: TVModel?) {
         guard let ref = item.stremioRef else { return }
@@ -94,7 +113,7 @@ struct PhoneRecent: Codable, Hashable, Identifiable {
         guard let scene else { return nil }
         // Never moved while something is up in it: the player keeps playing where it is.
         if window?.windowScene !== scene, window?.rootViewController?.presentedViewController == nil {
-            let w = UIWindow(windowScene: scene)
+            let w = PassWindow(windowScene: scene)
             w.windowLevel = .normal + 1
             w.backgroundColor = .clear
             let root = UIViewController(); root.view.backgroundColor = .clear
@@ -126,7 +145,15 @@ struct PhoneRecent: Codable, Hashable, Identifiable {
     }
     static func present(_ picker: PhonePicker) {
         // One player at a time: one already open is closed (its place saved) before another title opens.
-        if let s = PhoneSession.current { s.close() }
+        if let s = PhoneSession.current {
+            s.close()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { present(picker) }
+            return
+        }
+        if let up = top, up is UIHostingController<PhonePicker>, !up.isBeingDismissed {
+            up.dismiss(animated: true) { present(picker) }
+            return
+        }
         let host = UIHostingController(rootView: picker)
         host.view.backgroundColor = .clear
         host.overrideUserInterfaceStyle = .dark
@@ -213,7 +240,7 @@ struct PhonePicker: View {
         .preferredColorScheme(.dark)
         .presentationBackground(.ultraThinMaterial)
         .task { await load() }
-        .onChange(of: video) { _, _ in Task { await loadStreams() } }
+        .onChange(of: video) { was, _ in if was != nil { Task { await loadStreams(force: true) } } }
     }
 
     var header: some View {
@@ -270,7 +297,7 @@ struct PhonePicker: View {
             }
         }
         .padding(.top, 4)
-        if loading && streams.isEmpty {
+        if (loading || (problem == nil && meta == nil)) && streams.isEmpty {
             Text("Asking your add-ons…").font(.footnote).foregroundStyle(.secondary)
             ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) }
         } else if let problem {
@@ -331,6 +358,11 @@ struct PhonePicker: View {
 
     func load() async {
         guard account.signedIn else { return }
+        loading = true
+        // The streams are asked for at once when what to play is already known (a film, an episode named): the details
+        // and his place come alongside, never first (gate item 3).
+        let early = !playID.isEmpty
+        async let first: Void = early ? loadStreams() : ()
         async let m = StremioAPI.meta(type: type, id: imdb)
         async let l = StremioAPI.libraryItem(imdb)
         library = await l
@@ -339,7 +371,8 @@ struct PhonePicker: View {
             let on = (library?["state"] as? [String: Any])?["video_id"] as? String
             video = meta?.episodes.first { $0.id == on }?.id ?? meta?.episodes.first { $0.season > 0 }?.id ?? meta?.episodes.first?.id
         }
-        await loadStreams()
+        await first
+        if !early { await loadStreams() }
         if PhonePose.shouldPick() { await PhonePose.wait(3); if let s = streams.first(where: { $0.playsHere }) { pick(s) } }
     }
     func loadStreams(force: Bool = false) async {
@@ -469,9 +502,7 @@ enum PhoneLog { static func note(_ s: String) { FileHandle.standardError.write(D
                 // The other way: Play on iPhone from the flick page's own streams.
                 let item = MediaItem(title: "Sample Film", subtitle: "2024", art: "", id: "tt0000001", kind: "movie")
                 model.flick(FlickTarget(item: item, source: .stremio))
-                // Then the row's own work, as its tap does.
-                await wait(6)
-                PhoneOpen.open(PhoneTitle(type: "movie", imdb: "tt0000001", video: "tt0000001", name: item.title, line: "", poster: "", background: ""), model: model)
+                // The row itself is tapped by the film (Device Hub, by its label).
                 return
             }
             let id = UserDefaults.standard.string(forKey: "phoneTitle") ?? "tt0000001"
@@ -489,6 +520,14 @@ enum PhoneLog { static func note(_ s: String) { FileHandle.standardError.write(D
         guard on else { return }
         Task {
             func say(_ what: String) { Task { _ = await TVBridge.data(TVBridge.url("/api/tv/applied?what=phone-\(what)"), timeout: 3) } }
+            // Played on while the film folds, opens and half closes the phone, a panel up part of the way.
+            if pose == "phoneposture" {
+                await wait(6); say("playing"); s.controls = true; s.poke()
+                await wait(16); s.panel = .audio
+                await wait(14); s.panel = nil
+                await wait(30); say("saved"); await s.save()
+                return
+            }
             await wait(6); say("playing"); s.controls = true; s.poke()
             await wait(3); s.skip(10); await wait(0.4); s.skip(10)
             await wait(2); s.skip(-10)

@@ -201,8 +201,13 @@ enum StremioAPI {
             catch { throw StremioError(message: "Couldn’t reach Stremio. Check the connection and try again.") }
         }
         guard let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { throw StremioError(message: "Stremio gave an answer this app can’t read.") }
-        if let e = j["error"] as? [String: Any] { throw StremioError(message: (e["message"] as? String).map(Self.plain) ?? "Stremio said no.") }
-        if let e = j["error"] as? String { throw StremioError(message: Self.plain(e)) }
+        let said = (j["error"] as? [String: Any])?["message"] as? String ?? j["error"] as? String
+        if j["error"] != nil {
+            let message = said.map(Self.plain) ?? "Stremio said no."
+            // Stremio has ended this phone's session: forgotten here too, so Settings says so (gate item 4).
+            if message.hasPrefix("Stremio has signed this phone out") { await MainActor.run { StremioAccount.shared.forget() } }
+            throw StremioError(message: message)
+        }
         guard let result = j["result"] else { throw StremioError(message: "Stremio gave an answer this app can’t read.") }
         return result
     }
@@ -380,6 +385,11 @@ final class StremioAccount {
         self.email = r.email
         signedIn = true
         _ = try? await StremioAPI.addons(force: true)
+    }
+    // Signed out by Stremio: the key dropped, nothing sent.
+    func forget() {
+        StremioKeychain.set("authKey", nil)
+        signedIn = false
     }
     func signOut() {
         let key = StremioKeychain.get("authKey")

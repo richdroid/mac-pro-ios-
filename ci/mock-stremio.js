@@ -81,3 +81,17 @@ http.createServer((q, s) => {
   if (u === '/library') return send(s, 200, library);
   send(s, 404, { error: 'not here' });
 }).listen(PORT, '127.0.0.1', () => console.log(`stand-in Stremio on ${BASE}`));
+
+// The stand-in Mac, through a door that writes down every send to the TV (play-stream and the like) to
+// /tmp/bridge-posts.log, so the film's TV key can be checked for what it really sent. Port 9085 → 9002.
+http.createServer((q, s) => {
+  const chunks = [];
+  q.on('data', c => chunks.push(c));
+  q.on('end', () => {
+    const body = Buffer.concat(chunks);
+    if (q.method === 'POST') fs.appendFileSync('/tmp/bridge-posts.log', `${now()} ${q.url} ${body.toString().slice(0, 600)}\n`);
+    const up = http.request({ host: '127.0.0.1', port: 9002, path: q.url, method: q.method, headers: q.headers }, r => { s.writeHead(r.statusCode, r.headers); r.pipe(s); });
+    up.on('error', () => send(s, 502, { error: 'stand-in Mac down' }));
+    up.end(body);
+  });
+}).listen(9085, '127.0.0.1');
