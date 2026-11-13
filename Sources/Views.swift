@@ -2127,8 +2127,9 @@ struct LogPreview: View {
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        .frame(minHeight: CGFloat(3) * Self.lineHeight + 28)
+        // As tall as its lines need and no taller: a short log is a short card, not a slab with one line at its foot.
+        .frame(maxWidth: .infinity, maxHeight: CGFloat(max(all.count, 3)) * Self.lineHeight + 28, alignment: .bottomLeading)
+        .frame(minHeight: CGFloat(min(max(all.count, 1), 3)) * Self.lineHeight + 28)
         .background(Color(white: 0.06), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }

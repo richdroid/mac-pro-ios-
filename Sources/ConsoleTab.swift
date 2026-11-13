@@ -19,7 +19,7 @@ struct ConsoleState: Decodable, Equatable {
 enum ConsolePlace {
     static let pages: [(id: String, name: String, symbol: String)] = [
         ("home", "Home", "house"), ("overview", "Mac Pro", "gauge.with.dots.needle.67percent"), ("temps", "Temperatures", "thermometer.medium"),
-        ("everything", "Everything", "checklist"), ("activity", "What’s happening", "clock.arrow.circlepath"), ("processes", "Processes", "cpu"),
+        ("everything", "Everything", "checklist"), ("activity", "Activity", "clock.arrow.circlepath"), ("processes", "Processes", "cpu"),
         ("tv", "Google TV", "tv"), ("chumby", "Chumby", "alarm"), ("storage", "Storage", "internaldrive"),
         ("startup", "Startup", "power"), ("updates", "Updates", "arrow.down.circle"), ("logs", "Logs", "doc.text.magnifyingglass"),
         ("terminal", "Terminal", "terminal"), ("settings", "Settings", "gearshape"),
@@ -220,7 +220,7 @@ struct ConsoleTab: View {
 
     var pages: some View {
         Section {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 10)], spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
                 ForEach(ConsolePlace.pages, id: \.id) { p in
                     let on = running && st?.board == nil && st?.page == p.id
                     Button { remote.send(model, "page:" + p.id, "page", p.id) } label: {

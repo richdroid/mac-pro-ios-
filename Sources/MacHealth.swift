@@ -336,6 +336,9 @@ struct MacHealthView: View {
     // Folded and upright, the parts opened to say what they are; open flat, the one shown in the right pane.
     @State private var expanded: Set<String> = []
     @State private var chosen: String?
+    // Open upright there's room under the parts: the chosen part is said whole there, as in the right pane open flat,
+    // rather than an empty half page (Richard, 2026-11-12: open "feels barren").
+    @State private var roomy = false
     // Short, so it fits folded at the tabs' size (Richard, 2026-11-13: the old name was a huge title).
     var title: String { "Everything" }
     var bad: [MacPart] { report?.parts.filter(\.bad) ?? [] }
@@ -461,7 +464,6 @@ struct MacHealthView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(flat && open ? Color(white: 0.17) : cardFill)
         .accessibilityElement(children: .combine)
         .accessibilityValue(down || report == nil ? "Waiting" : isBad(g) ? "Needs a look" : "Running")
         .modifier(OwnSeparator(first: first, ends: 9))
@@ -492,7 +494,7 @@ struct MacHealthView: View {
     }
 
     func list(_ side: Side) -> some View {
-        let flat = side != .all
+        let flat = side != .all || roomy
         return ScrollViewReader { proxy in
             List {
                 Section { PaneHeading(title: title, shown: side != .right, roomAbove: false) }
@@ -503,16 +505,23 @@ struct MacHealthView: View {
                     if let fixNote { Section { FailText(fixNote) } }
                     Section {
                         let gs = groups
-                        ForEach(gs) { g in row(g, first: g.id == gs.first?.id, flat: flat).place(g.id).ownSeparatorRow() }
+                        ForEach(gs) { g in
+                            row(g, first: g.id == gs.first?.id, flat: flat).place(g.id).ownSeparatorRow()
+                                // Open flat, the part shown on the right is lit on the left.
+                                .listRowBackground(flat && picked?.id == g.id ? Color(white: 0.2) : nil)
+                        }
                     }
+                    if side == .all, roomy { Section { detailCard } }
                     if side == .all, !awaited, !down { restartButton }
                 }
                 if side == .right {
-                    Section { detailCard } header: { Text("Details") }
+                    // No heading over it, so its card starts level with the hero beside it.
+                    Section { detailCard }
                     if !awaited, !down { restartButton }
                 }
             }
             .environment(\.defaultMinListRowHeight, 40)
+            .onGeometryChange(for: Bool.self) { $0.size.height > 820 } action: { if side == .all { roomy = $0 } }
             .listSectionSpacing(16)
             .contentMargins(.top, 4 + PaneHeading.roomAbove(statusBarTop), for: .scrollContent)
             .scrollsUnder(side == .right ? 1 : 0)
@@ -524,8 +533,8 @@ struct MacHealthView: View {
     // An action, not a row: the way to a restart, under the parts.
     var restartButton: some View {
         Section {
-            Button(role: .destructive) { model.macPage = .restart } label: { Label("Restart the Mac…", systemImage: "restart") }
-                .buttonStyle(.bordered).controlSize(.regular)
+            Button(role: .destructive) { model.macPage = .restart } label: { Text("Restart the Mac…") }
+                .buttonStyle(.bordered).tint(.red).controlSize(.regular)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
