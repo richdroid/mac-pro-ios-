@@ -82,11 +82,15 @@ final class DeviceStore: ObservableObject {
     // a blip leaves no trace, and the last reading stays at full strength meanwhile (Richard's rulings, 11-11). A request
     // cut short because he left the tab is no answer either way: it flashed "Can't reach it" over greyed tiles for a
     // frame on coming back to Status (gate HOLD of 8446178).
-    var failingSince: Date?
-    func answered() { failingSince = nil; if failed { failed = false } }
+    // The clock starts afresh with each visit, and after a quiet spell with no miss: one miss long ago and one now are two
+    // blips, not 25 s of failure (gate of 87d77ca).
+    var failingSince: Date?, lastMiss: Date?, lastAnswer: Date?
+    func answered() { failingSince = nil; lastMiss = nil; lastAnswer = Date(); if failed { failed = false } }
+    func arrived() { failingSince = nil; lastMiss = nil }
     func missed() {
         let now = Date()
-        if failingSince == nil { failingSince = now }
+        if failingSince == nil || now.timeIntervalSince(lastMiss ?? now) > 10 { failingSince = now }
+        lastMiss = now
         if !failed, now.timeIntervalSince(failingSince!) >= TVModel.unreachableAfter { failed = true }
     }
 }
@@ -96,7 +100,10 @@ struct DeviceTab: View {
     @Environment(\.scenePhase) private var phase
     @ObservedObject private var store = DeviceStore.shared
     var info: DeviceInfo? { store.info }
-    var failed: Bool { store.failed }
+    // Out of touch: the Mac (said once, by the banner at the top, and dimmed with it), or only the box's own readings
+    // while the Mac still answers. While the Mac's own reading is failing too, the box's wait for the banner, so the page
+    // dims once, as the banner arrives (gate of 87d77ca: the pill said it again, and the tiles greyed, 2 s later).
+    var failed: Bool { !model.reachable || (store.failed && !model.retrying) }
     @State private var tidying = false
     @State private var tidyNote: String?
     @State private var breathe = false
@@ -135,8 +142,12 @@ struct DeviceTab: View {
                 .redacted(reason: info == nil ? .placeholder : [])
             HStack(spacing: 6) {
                 Circle().fill(failed ? TVLook.away : Color.green).frame(width: 9, height: 9)
-                // The Mac's own reading failing too: it's the Mac out of reach, said as the banner says it, not the TV.
-                Text(failed ? (model.reachable && !model.retrying ? "Can’t reach the TV" : "Can’t reach the Mac") : screenWords)
+                // The banner says the Mac is out of reach; the pill never says it again, only how old the readings are.
+                if failed, !model.reachable || model.status?.online == false, let at = store.lastAnswer {
+                    Text("Last seen \(Text(at, style: .time))")
+                } else {
+                    Text(!failed ? screenWords : model.reachable ? "Can’t reach the TV" : "Waiting for it")
+                }
             }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).tvCard(14).padding(.top, 6)
             // The dot's colour eases between green and orange, as the tiles do, rather than switching in a frame.
@@ -212,11 +223,16 @@ struct DeviceTab: View {
         // The television's row comes and goes with the whole card easing, so the rows under it never move at a stroke.
         .settledAnimation(.easeOut(duration: 0.25), value: TelevisionRow.value(model.status?.cec))
         .tvCard()
+        // Stepped back with the tiles, so the whole page reads as last seen, not half of it.
+        .opacity(failed ? 0.4 : 1)
+        .saturation(failed ? 0 : 1)
+        .settledAnimation(.easeOut(duration: 0.3), value: failed)
     }
     // Asked for only while this tab is on screen, every 2 s (and so retried every 2 s while it fails). Leaving the tab, or
     // a push over it, cancels the task: whatever that cut short says nothing about the TV, and is dropped.
     func poll() async {
         guard phase == .active else { return }
+        store.arrived()
         while !Task.isCancelled {
             let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 8)
             if Task.isCancelled { return }
@@ -247,6 +263,7 @@ struct DeviceTab: View {
                         .task(id: phase) { await poll() }
                 }
                 .backToTop()
+                .onChange(of: model.reachable) { _, back in if back { store.arrived(); if store.failed { store.failed = false } } }
             }
         } else {
             ScrollView {
@@ -260,6 +277,7 @@ struct DeviceTab: View {
                 .task(id: phase) { await poll() }
             }
             .backToTop()
+            .onChange(of: model.reachable) { _, back in if back { store.arrived(); if store.failed { store.failed = false } } }
         }
     }
 }

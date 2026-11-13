@@ -89,10 +89,12 @@ final class BrowseStore: ObservableObject {
     private var keptDate: Date?
     // Since when asking has failed. The kept list dims and says when it was last seen only once that has gone on about
     // 25 s, as the app's other reach words do: until then it stays at full strength (a blip leaves no trace).
-    private var missSince: Date?
+    // A miss long after the last one starts the clock again: two blips minutes apart are not 25 s of failure.
+    private var missSince: Date?, lastMiss: Date?
     private func stillMissing() -> Bool {
         let now = Date()
-        if missSince == nil { missSince = now }
+        if missSince == nil || now.timeIntervalSince(lastMiss ?? now) > 60 { missSince = now }
+        lastMiss = now
         return now.timeIntervalSince(missSince!) >= TVModel.unreachableAfter
     }
     private static func keptFile(_ name: String) -> URL? {

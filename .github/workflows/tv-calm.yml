@@ -57,8 +57,8 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             hkeep $h $name
           }
-          # The Mac gone 10–50 s after the reset (the app launched at once): stills at 22 s (nothing said yet), 44 s (calm
-          # amber) and 60 s (cleared), all inside the film.
+          # The Mac gone 10–50 s after the reset (the app launched at once): stills at 22 s (nothing said yet), 38 s and 46 s
+          # (calm amber) and 60 s (cleared), all inside the film.
           outage() {
             local name=$1 d=$2 tab=$3 h; h=$(hmark)
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
@@ -66,9 +66,35 @@ jobs:
             curl -s $M/outage/reset; echo
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/outage -tab $tab -swipeLog YES
             sleep 22; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-22s.png
-            sleep 22; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-44s.png
-            sleep 16; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-60s.png
+            sleep 15; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-38s.png
+            sleep 7; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-46s.png
+            sleep 14; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-60s.png
             sleep 4
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            hkeep $h $name
+          }
+          shot() {
+            local name=$1 display=$2 wait=$3; shift 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # Where the app last said a control is (its last non-zero reading), waiting up to ten seconds for one.
+          spot() { local i v; for i in 1 2 3 4 5 6 7 8 9 10; do v=$(grep -oE "what=$1&x=[0-9.]+&y=[0-9.]+" /tmp/tv-home-applied.log 2>/dev/null | grep -v 'x=0.000&y=0.000' | tail -1 | sed -E 's/.*x=([0-9.]+)&y=([0-9.]+)/\1 \2/'); [ -n "$v" ] && { echo "$v"; return; }; sleep 1; done; }
+          at() { if [ -n "$2" ]; then echo "tap $1 at $2"; $D "$DEVICE" touch $2 0.08 || echo "touch $1 failed"; else echo "no position for $1"; fi; }
+          # Open, where touches land: the gear tapped, Back; the gear, TV settings, Back, Back; real touches, slow box.
+          navfilm() {
+            local name=$1 d=$2 h; h=$(hmark)
+            rm -f /tmp/tv-home-applied.log
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/slowdev -tab 5 -pose settingsnav -swipeLog YES
+            sleep 9
+            local G B; G=$(spot gear); B=$(spot back); echo "gear $G back $B"
+            at gear "$G"; sleep 4; at back "$B"; sleep 4
+            at gear "$G"; sleep 4; at tvrow "$(spot tvrow)"; sleep 5; at back "$B"; sleep 4; at back "$B"; sleep 4
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             hkeep $h $name
@@ -81,19 +107,53 @@ jobs:
           $D "$DEVICE" rotate 1 || true; sleep 5
           date
           # Status, another tab, Status again, with every box reading taking 4 s (so leaving cuts one short).
-          film statusreturn-portrait 3 26 -address $M/slowdev -tab 5 -pose tour -tourTabs 5,0,5,3,5,2,5 -swipeLog YES
-          # The gear, Settings, Back; the gear, TV settings, Back, Back; same slow box.
-          film settingsback-portrait 3 25 -address $M/slowdev -tab 5 -pose settingsscript -swipeLog YES
+          # The first stay about 7 s, so a reading is up before he leaves; then out and back at 1.6 s a tab.
+          film statusreturn-portrait 3 34 -address $M/slowdev -tab 5 -pose tour -tourTabs 5,5,5,0,5,3,5,2,5 -swipeLog YES
+          navfilm settingsback-portrait 3
           outage outage-status-portrait 3 5
           outage outage-remote-portrait 3 0
+          # Status' pill with the TV off over HDMI-CEC and on another input (the Remote's words), and the search fields.
+          shot status-tvoff-portrait 3 9 -address $M/rtvoff -tab 5
+          shot status-tvaway-portrait 3 9 -address $M/rtvaway -tab 5
+          shot remote-tvoff-portrait 3 9 -address $M/rtvoff -tab 0
+          for T in 6 3 1; do shot search-tab$T-portrait 3 8 -address $M -tab $T; done
+          # Open flat (the panes), where the Search field said only "Search".
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          shot search-tab6-open 3 8 -address $M -tab 6
+          $D "$DEVICE" rotate 1 || true; sleep 5
           # Folded, upright on the outer display.
           $D "$DEVICE" rotate 1 || true; sleep 3
           $D "$DEVICE" pose closed || true; sleep 5
           $D "$DEVICE" rotate 1 || true; sleep 3
-          film statusreturn 1 26 -address $M/slowdev -tab 5 -pose tour -tourTabs 5,0,5,3,5,2,5 -swipeLog YES
+          film statusreturn 1 34 -address $M/slowdev -tab 5 -pose tour -tourTabs 5,5,5,0,5,3,5,2,5 -swipeLog YES
           film settingsback 1 25 -address $M/slowdev -tab 5 -pose settingsscript -swipeLog YES
           outage outage-status 1 5
           ls dist
+      - name: Baseline tour on 8446178
+        continue-on-error: true
+        timeout-minutes: 25
+        run: |
+          set +e
+          exec > >(tee dist/base.log) 2>&1
+          # 8446178's own build on the same runner and the same slow-box tour, for the hitch logs to be read against.
+          git init -q /tmp/base && cd /tmp/base && git remote add origin https://github.com/richdroid/mac-pro-ios-.git
+          git fetch -q --depth 1 origin 8446178c77ef9642d4c989f404c69bbb27d86107 && git checkout -q FETCH_HEAD || { git fetch -q origin && git checkout -q 8446178; }
+          xcodegen generate > /dev/null
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator -derivedDataPath /tmp/base-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -1
+          cd "$GITHUB_WORKSPACE"
+          DEVICE=$(xcrun simctl list devices booted -j | jq -r '[.devices[][]][0].udid')
+          xcrun simctl install "$DEVICE" /tmp/base-sim/Build/Products/Debug-iphonesimulator/TV.app
+          M=http://127.0.0.1:9002
+          curl -s $M/ > /dev/null || { node ci/mock-chumby.js & sleep 2; }
+          # Folded now (the films ended there); then open upright as statusreturn-portrait.
+          D=/tmp/dh/.build/release/devicehubctl
+          $D "$DEVICE" pose open; sleep 5; $D "$DEVICE" rotate 1; sleep 5
+          h=$(wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0)
+          xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/slowdev -tab 5 -pose tour -tourTabs 5,5,5,0,5,3,5,2,5 -swipeLog YES
+          sleep 34
+          xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          sleep 2
+          tail -n +$((h + 1)) /tmp/tv-hitches.log > dist/tv-statusreturn-portrait-base8446178-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-statusreturn-portrait-base8446178-hitches.log
       - name: Publish
         if: always()
         env:
