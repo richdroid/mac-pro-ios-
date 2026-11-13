@@ -2296,10 +2296,10 @@ struct FlickScreen: View {
             } catch {
                 if Task.isCancelled || cancelled { return }
                 // Called off on the TV's side (his own Home or another app, a newer send): not a failure, nothing to say.
-                // Asked `again` with nothing heard and told something else is the Mac's: this send never reached it, so it
-                // goes once as itself, while it's still the newest.
-                if error is CancellationError, early, dropped > 0, !heard.yes, !plainOnce, ownsStart { plainOnce = true; continue }
-                if error is CancellationError { if ownsStart { model.clearStart() }; FlickClock.current.mark("called-off"); FlickClock.current.finished(); return }
+                // Asked `again` and told the Mac never saw it (lost on the way out): it goes once as itself, while it's
+                // still the newest. Never on the Mac's say-so about a send it did see.
+                if error is TVBridge.Unseen, early, !plainOnce, ownsStart { plainOnce = true; continue }
+                if error is CancellationError || error is TVBridge.Unseen { if ownsStart { model.clearStart() }; FlickClock.current.mark("called-off"); FlickClock.current.finished(); return }
                 // Gone: the list is fetched afresh and the same file (or the next best) sent once more, silently.
                 if error is TVBridge.Gone, !resent, early, let ref = item.stremioRef {
                     resent = true
@@ -3249,10 +3249,10 @@ extension TVModel {
                 } catch {
                     // Ended from here (a newer start, or called off): nothing more of it, as the page's.
                     if Task.isCancelled { return }
-                    if error is CancellationError {
-                        // Asked `again` with nothing heard and told something else is the Mac's: this send never reached
-                        // it (the line dropped on the way out), so it goes once as itself, while it's still the newest.
-                        if dropped > 0, !heard.yes, !plainOnce, owns() { plainOnce = true; continue }
+                    // Asked `again` and told the Mac never saw it (the line dropped on the way out): it goes once as
+                    // itself, while it's still the newest. Never on the Mac's say-so about a send it did see.
+                    if error is TVBridge.Unseen, !plainOnce, owns() { plainOnce = true; continue }
+                    if error is CancellationError || error is TVBridge.Unseen {
                         if owns() { clearStart() }; clock.mark("called-off"); clock.finished(); return
                     }
                     // Gone: the list fetched afresh and the same file (or the next best) sent once more, silently.

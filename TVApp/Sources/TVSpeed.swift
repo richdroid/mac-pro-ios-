@@ -172,6 +172,9 @@ extension TVBridge {
                 // Every stream the Mac tried, kept for the flick to set apart; and a start called off (his own Home, another
                 // app, a newer send) is not a failure.
                 if j["failed"] as? String == "start" { await MainActor.run { TriedStreams.last = j["tried"] as? [String] }; throw DidNotStart() }
+                // Asked `again` about a send the Mac never saw (lost on the way out) while something else is its own: the
+                // flick may send it once as itself.
+                if j["error"] as? String == "Stopped", j["unseen"] as? Bool == true { throw Unseen() }
                 if j["error"] as? String == "Stopped" { throw CancellationError() }
                 if j["retry"] as? Bool == true { throw Slow() }
                 if j["failed"] as? String == "gone" || j["gone"] as? Bool == true { throw Gone() }
