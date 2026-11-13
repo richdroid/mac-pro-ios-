@@ -327,7 +327,7 @@ enum TVIntentError: LocalizedError {
     case noAnswer, cantOpen
     var errorDescription: String? {
         switch self {
-        case .noAnswer: return "The TV didn’t answer. Is Tailscale on?"
+        case .noAnswer: return "The TV didn’t answer. Try again in a moment."
         case .cantOpen: return "That link can’t open on the TV. Try AirPlay."
         }
     }

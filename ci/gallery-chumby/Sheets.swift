@@ -26,8 +26,17 @@ enum ChumbySample {
     // The Chumby not heard from: the alarms still known (they're rules), a last-seen time.
     static var away: ChumbyEntry { var s = base; s.reachable = false; s.lastSeen = Date().addingTimeInterval(-25 * 60); return s }
     static var never: ChumbyEntry { ChumbyEntry(date: Date()) }
+    static var afternoon: ChumbyEntry {
+        var s = base
+        var a = Alarm(); a.time = "880"; a.name = "Calendar: Dentist appointment at the clinic downtown"
+        s.nextAlarm = a
+        s.nextAt = Calendar.current.nextDate(after: Date(), matching: DateComponents(hour: 14, minute: 40), matchingPolicy: .nextTime)
+        return s
+    }
+    static var nightSkipped: ChumbyEntry { var s = skipped; s.sys.night = 1; return s }
     static let states: [(String, ChumbyEntry)] = [("Next alarm", base), ("Skipped", skipped), ("Just this once", moved), ("Night mode", night),
-                                                  ("Music playing", playing), ("No alarm set", noAlarm), ("Not answering (alarms known)", away), ("Never reached", never)]
+                                                  ("Music playing", playing), ("No alarm set", noAlarm), ("Not answering (alarms known)", away), ("Never reached", never),
+                                                  ("A PM calendar alarm, long name", afternoon), ("Night and skipped", nightSkipped)]
 }
 
 struct ChumbySheets: View {

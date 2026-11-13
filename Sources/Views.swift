@@ -1,5 +1,6 @@
 import Charts
 import SwiftUI
+import WidgetKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -21,7 +22,7 @@ struct MacProApp: App {
                 .onChange(of: phase) { _, p in
                     if p == .active { Reach.shared.cameForward(); model.start(); PushToken.share(model.api) } else { model.stop() }
                     #if os(iOS)
-                    if p == .background { AlertWatch.shared.scheduleRefresh() }
+                    if p == .background { AlertWatch.shared.scheduleRefresh(); WidgetCenter.shared.reloadAllTimelines() }
                     #endif
                 }
                 .onAppear {

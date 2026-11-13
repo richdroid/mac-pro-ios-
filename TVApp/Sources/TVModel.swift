@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 import SwiftUI
+import WidgetKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -474,6 +475,8 @@ final class TVModel {
     @ObservationIgnored private var grace: Task<Void, Never>?
     func background() {
         stop()
+        // The Playing widget shows what the app last saw rather than waiting out its own refresh (up to half an hour).
+        WidgetCenter.shared.reloadTimelines(ofKind: "TVNow")
         #if os(iOS)
         grace?.cancel()
         guard TVIsland.live != nil || status?.session?.playing == true || status?.music?.playing == true else { TVBackground.schedule(); return }

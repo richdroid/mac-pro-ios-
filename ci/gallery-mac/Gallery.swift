@@ -43,10 +43,10 @@ enum MacSample {
             "usage": ["plan": plan], "claude": ["remoteControl": true],
             "temps": temps.map { ["name": $0.0, "c": $0.1] },
             "iosApps": ["reachable": true, "apps": [
-                ["name": "Mac Pro", "expires": 0, "state": "testflight", "own": true],
-                ["name": "Chumby", "expires": 0, "state": "testflight", "own": true],
-                ["name": "TV", "expires": 0, "state": "testflight", "own": true],
-                ["name": "SideStore", "expires": soon, "state": "installed", "own": false],
+                ["name": "Mac Pro", "expires": 0, "state": "testflight", "own": true, "icon": "/ios/icon/MacPro.ipa", "build": "291"],
+                ["name": "Chumby", "expires": 0, "state": "testflight", "own": true, "icon": "/ios/icon/Chumby.ipa", "build": "291"],
+                ["name": "TV", "expires": 0, "state": "testflight", "own": true, "icon": "/ios/icon/TV.ipa", "build": "291"],
+                ["name": "SideStore", "expires": soon, "state": "installed", "own": false, "icon": "/ios/icon/SideStore.ipa"],
             ]],
         ]
         return try! JSONDecoder().decode(WidgetStatus.self, from: JSONSerialization.data(withJSONObject: j))
@@ -57,7 +57,9 @@ enum MacSample {
         return [
             ("Live", MacEntry(date: now, state: .ok(status()))),
             ("Busy and hot", MacEntry(date: now, state: .ok(status(cpu: 91, memUsed: 30.9e9, diskFree: 40e9, five: 72, week: 88, temps: hot)))),
-            ("Mac not answering", MacEntry(date: now, state: .unreachable)),
+            ("A blip: last reading 6 min ago", MacEntry(date: now, state: .ok(status()), readAt: now.addingTimeInterval(-6 * 60))),
+            ("Not heard for 2 h: last reading", MacEntry(date: now, state: .ok(status()), readAt: now.addingTimeInterval(-2 * 3600))),
+            ("Mac not answering, nothing kept", MacEntry(date: now, state: .unreachable)),
             ("Answer it can't read", MacEntry(date: now, state: .unreadable)),
             ("No address", MacEntry(date: now, state: .noAddress)),
         ]
@@ -66,6 +68,8 @@ enum MacSample {
 
 struct MacSheets: View {
     @State private var names: [String] = []
+    @State private var icons: [String: Data] = [:]
+    var withIcons: MacEntry { var e = MacSample.states[0].1; e.icons = icons; return e }
     func home(_ look: Look) -> some View {
         Sheet("Mac Pro widgets · \(look.title)", colors: look.wallpaper) {
             ForEach(MacSample.states, id: \.0) { name, e in
@@ -74,7 +78,7 @@ struct MacSheets: View {
                     HomeCell(look, Fam.medium, bg: GraphiteWall()) { StatusView(forced: .systemMedium, entry: e).foregroundStyle(.white) }
                 }
             }
-            ForEach(MacSample.states.prefix(3), id: \.0) { name, e in
+            ForEach(MacSample.states.prefix(5), id: \.0) { name, e in
                 SheetRow("Temperatures · \(name)") {
                     HomeCell(look, Fam.small, bg: GraphiteWall()) { TempView(forced: .systemSmall, entry: e).foregroundStyle(.white) }
                     HomeCell(look, Fam.medium, bg: GraphiteWall()) { TempView(forced: .systemMedium, entry: e).foregroundStyle(.white) }
@@ -82,13 +86,25 @@ struct MacSheets: View {
             }
             SheetRow("Claude Usage · live, busy, week only, not answering") {
                 let s = MacSample.states
-                ForEach(Array([s[0].1, s[1].1, MacEntry(date: Date(), state: .ok(MacSample.status(five: nil))), s[2].1].enumerated()), id: \.offset) { _, e in
+                ForEach(Array([s[0].1, s[1].1, MacEntry(date: Date(), state: .ok(MacSample.status(five: nil))), s[4].1].enumerated()), id: \.offset) { _, e in
                     HomeCell(look, Fam.small, bg: GraphiteWall()) { ClaudeView(entry: e).foregroundStyle(.white) }
                 }
             }
             SheetRow("Apps on this iPhone · live, not answering") {
-                HomeCell(look, Fam.medium, bg: GraphiteWall()) { AppsView(entry: MacSample.states[0].1).foregroundStyle(.white) }
-                HomeCell(look, Fam.medium, bg: GraphiteWall()) { AppsView(entry: MacSample.states[2].1).foregroundStyle(.white) }
+                HomeCell(look, Fam.medium, bg: GraphiteWall()) { AppsView(entry: withIcons).foregroundStyle(.white) }
+                HomeCell(look, Fam.medium, bg: GraphiteWall()) { AppsView(entry: MacSample.states[4].1).foregroundStyle(.white) }
+            }
+        }
+    }
+    func large(_ look: Look) -> some View {
+        Sheet("Mac Pro Temperatures (large) · \(look.title)", colors: look.wallpaper) {
+            SheetRow("Live · Busy and hot") {
+                HomeCell(look, Fam.large, bg: GraphiteWall()) { TempView(forced: .systemLarge, entry: MacSample.states[0].1).foregroundStyle(.white) }
+                HomeCell(look, Fam.large, bg: GraphiteWall()) { TempView(forced: .systemLarge, entry: MacSample.states[1].1).foregroundStyle(.white) }
+            }
+            SheetRow("Not heard for 2 h · Mac not answering, nothing kept") {
+                HomeCell(look, Fam.large, bg: GraphiteWall()) { TempView(forced: .systemLarge, entry: MacSample.states[3].1).foregroundStyle(.white) }
+                HomeCell(look, Fam.large, bg: GraphiteWall()) { TempView(forced: .systemLarge, entry: MacSample.states[4].1).foregroundStyle(.white) }
             }
         }
     }
@@ -116,7 +132,13 @@ struct MacSheets: View {
     }
     var body: some View {
         SheetsDone(names: names).task {
-            for look in Look.allCases { writeSheet("mac-home-\(look.rawValue)", home(look)); names.append("mac-home-\(look.rawValue)") }
+            // The apps' icons from the build's stand-in Mac.
+            icons = await MacProvider.icons(MacSample.status(), URL(string: "http://127.0.0.1:9011"))
+            print("sheets: icons \(icons.keys.sorted())")
+            for look in Look.allCases {
+                writeSheet("mac-home-\(look.rawValue)", home(look)); names.append("mac-home-\(look.rawValue)")
+                writeSheet("mac-large-\(look.rawValue)", large(look)); names.append("mac-large-\(look.rawValue)")
+            }
             writeSheet("mac-lock", scale: 3, lock); names.append("mac-lock")
             writeSheet("mac-standby", standby); names.append("mac-standby")
             print("sheets done")

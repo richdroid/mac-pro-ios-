@@ -9,16 +9,21 @@ import UIKit
 // and poster from their public addresses; any that don't come in 6 s are drawn instead.
 enum TVSample {
     static let names = ["Mint Music", "Letterboxd", "Stremio", "YouTube", "Netflix", "Apple TV"]
-    static func status(screen: String = "on", app: String = "com.codex.musicwebtv", music: [String: Any]? = nil, session: [String: Any]? = nil) -> TVStatus {
+    static func status(screen: String = "on", app: String = "com.codex.musicwebtv", music: [String: Any]? = nil, session: [String: Any]? = nil, airplay: [String: Any]? = nil) -> TVStatus {
         var j: [String: Any] = ["online": true, "screen": screen, "app": app, "volume": 12, "volumeMax": 25,
                                 "apps": zip(TVProvider.favourites, names).map { ["pkg": $0, "name": $1, "hasIcon": true, "wide": true] }]
         if let music { j["music"] = music }
         if let session { j["session"] = session }
+        if let airplay { j["airplay"] = airplay }
         return try! JSONDecoder().decode(TVStatus.self, from: JSONSerialization.data(withJSONObject: j))
     }
     static func song(playing: Bool) -> [String: Any] {
         ["title": "Come Together", "artist": "The Beatles", "album": "Abbey Road", "art": "x", "playing": playing, "position": 39000, "duration": 259000, "sampledAt": Date().timeIntervalSince1970 * 1000]
     }
+    static let video: [String: Any] = ["pkg": "com.google.android.youtube.tv", "playing": true, "description": ["Every Frame a Painting: The Art of Editing", "Tony Zhou"], "position": 95000, "duration": 540000, "sampledAt": Date().timeIntervalSince1970 * 1000, "art": "x"]
+    static let film: [String: Any] = ["pkg": "com.stremio.one", "playing": false, "description": ["The Assassination of Jesse James by the Coward Robert Ford"], "position": 4210000, "duration": 9600000, "sampledAt": Date().timeIntervalSince1970 * 1000, "art": "x"]
+    static let untimed: [String: Any] = ["pkg": "com.stremio.one", "playing": true, "description": ["Twin Peaks", "S1 E3"], "show": "Twin Peaks", "season": 1, "episode": 3, "episodeTitle": "Zen, or the Skill to Catch a Killer", "art": "x"]
+    static let airplay: [String: Any] = ["active": true, "kind": "music", "playing": true, "title": "Here Comes the Sun", "artist": "The Beatles"]
     static let show: [String: Any] = ["pkg": "com.stremio.one", "playing": true, "description": ["Twin Peaks", "S1 E3"], "position": 600000, "duration": 2815000,
                                       "sampledAt": Date().timeIntervalSince1970 * 1000, "show": "Twin Peaks", "season": 1, "episode": 3, "episodeTitle": "Zen, or the Skill to Catch a Killer", "art": "x"]
 }
@@ -35,7 +40,7 @@ struct TVSheets: View {
     }
     func load() async {
         var want: [(String, String)] = [("shot", Self.mock + "/api/tv/shot"), ("box", Self.mock + "/api/tv/device-image"),
-                                         ("poster", "https://images.metahub.space/poster/medium/tt0098936/img")]
+                                         ("poster", "https://images.metahub.space/poster/medium/tt0098936/img"), ("film", "https://images.metahub.space/poster/medium/tt0443680/img")]
         for pkg in TVProvider.favourites { want.append((pkg, Self.mock + "/api/tv/icon?pkg=\(pkg)&v=2")) }
         var out: [String: TVImage] = [:]
         await withTaskGroup(of: (String, TVImage?).self) { group in
@@ -56,6 +61,7 @@ struct TVSheets: View {
     func entry(_ s: TVStatus?, cover: TVImage? = nil, reachable: Bool = true, mirror: Bool = false) -> TVEntry {
         var e = TVEntry()
         e.status = s; e.reachable = reachable
+        if !reachable, s != nil { e.readAt = Date().addingTimeInterval(-8 * 60) }
         if let cover { e.cover = cover; e.wall = TVProvider.shrunk(cover, to: 16) }
         if mirror, reachable, s?.screen != "asleep" { e.mirror = got["shot"] }
         e.logos = reachable ? got.filter { TVProvider.favourites.contains($0.key) } : [:]
@@ -67,7 +73,11 @@ struct TVSheets: View {
             ("A song playing", entry(TVSample.status(music: TVSample.song(playing: true)), cover: album)),
             ("A song paused", entry(TVSample.status(music: TVSample.song(playing: false)), cover: album)),
             ("A show playing in Stremio", entry(TVSample.status(app: "com.stremio.one", session: TVSample.show), cover: got["poster"])),
-            ("TV on, nothing playing", entry(TVSample.status(app: "com.google.android.tvlauncher"))),
+            ("A video in YouTube", entry(TVSample.status(app: "com.google.android.youtube.tv", session: TVSample.video), cover: got["shot"])),
+            ("A film paused, long name", entry(TVSample.status(app: "com.stremio.one", session: TVSample.film), cover: got["film"])),
+            ("A show with no running time", entry(TVSample.status(app: "com.stremio.one", session: TVSample.untimed), cover: got["poster"])),
+            ("Music AirPlayed from this iPhone", entry(TVSample.status(airplay: TVSample.airplay), cover: album)),
+            ("TV on, nothing playing (YouTube in front)", { var e = entry(TVSample.status(app: "com.google.android.youtube.tv")); e.front = got["com.google.android.youtube.tv"]; return e }()),
             ("TV asleep", entry(TVSample.status(screen: "asleep"))),
             ("Mac not answering (last known: a song)", entry(TVSample.status(music: TVSample.song(playing: true)), cover: album, reachable: false)),
             ("Never reached", entry(nil, reachable: false)),
@@ -75,30 +85,35 @@ struct TVSheets: View {
     }
     var box: TVBoxEntry { var b = TVBoxProvider.sample; b.photo = got["box"]; return b }
     var boxStates: [(String, TVBoxEntry)] {
-        var stale = box; stale.reachable = false; stale.screen = ""
+        var stale = box; stale.reachable = false; stale.screen = ""; stale.readAt = Date().addingTimeInterval(-40 * 60)
         var asleep = box; asleep.screen = "asleep"
-        return [("Awake", box), ("Asleep", asleep), ("Mac not answering (last known)", stale), ("Never reached", TVBoxEntry())]
+        var hot = box; hot.info?.cpu = 92; hot.info?.tempC = 78; hot.info?.memUsed = 1.9e9
+        return [("Awake", box), ("Hot and busy", hot), ("Asleep", asleep), ("Mac not answering (last known)", stale), ("Never reached", TVBoxEntry())]
     }
     let dark = Color(hex: 0x14181C)
-    func home(_ look: Look) -> some View {
-        Sheet("TV widgets · \(look.title)", colors: look.wallpaper) {
+    func now(_ look: Look) -> some View {
+        Sheet("Playing on TV · \(look.title)", colors: look.wallpaper) {
             ForEach(nowStates, id: \.0) { name, e in
-                SheetRow("Playing on TV · \(name)") {
+                SheetRow(name) {
                     HomeCell(look, Fam.small, margins: false, bg: WidgetWall(image: e.wall)) { NowBody(family: .systemSmall, entry: e).foregroundStyle(.white) }
                     HomeCell(look, Fam.medium, margins: false, bg: WidgetWall(image: e.wall)) { NowBody(family: .systemMedium, entry: e).foregroundStyle(.white) }
                 }
             }
+        }
+    }
+    func home(_ look: Look) -> some View {
+        Sheet("TV widgets · \(look.title)", colors: look.wallpaper) {
             SheetRow("TV Remote · medium") {
-                HomeCell(look, Fam.medium, margins: false, bg: dark) { RemoteBody(family: .systemMedium, entry: TVEntry()).foregroundStyle(.white) }
+                HomeCell(look, Fam.medium, margins: false, bg: TVGlass()) { RemoteBody(family: .systemMedium, entry: TVEntry()).foregroundStyle(.white) }
             }
             SheetRow("TV Apps · banners, Mac not answering") {
-                HomeCell(look, Fam.medium, margins: false, bg: dark) { AppsBody(entry: entry(TVSample.status())).foregroundStyle(.white) }
-                HomeCell(look, Fam.medium, margins: false, bg: dark) { AppsBody(entry: entry(nil, reachable: false)).foregroundStyle(.white) }
+                HomeCell(look, Fam.medium, margins: false, bg: TVGlass()) { AppsBody(entry: entry(TVSample.status())).foregroundStyle(.white) }
+                HomeCell(look, Fam.medium, margins: false, bg: TVGlass()) { AppsBody(entry: entry(nil, reachable: false)).foregroundStyle(.white) }
             }
             ForEach(boxStates, id: \.0) { name, b in
                 SheetRow("TV Box Status · \(name)") {
-                    HomeCell(look, Fam.small, margins: false, bg: dark) { TVBoxBody(family: .systemSmall, entry: b).foregroundStyle(.white) }
-                    HomeCell(look, Fam.medium, margins: false, bg: dark) { TVBoxBody(family: .systemMedium, entry: b).foregroundStyle(.white) }
+                    HomeCell(look, Fam.small, margins: false, bg: TVGlass()) { TVBoxBody(family: .systemSmall, entry: b).foregroundStyle(.white) }
+                    HomeCell(look, Fam.medium, margins: false, bg: TVGlass()) { TVBoxBody(family: .systemMedium, entry: b).foregroundStyle(.white) }
                 }
             }
         }
@@ -106,12 +121,12 @@ struct TVSheets: View {
     func large(_ look: Look) -> some View {
         Sheet("TV Screen and Remote (large) · \(look.title)", colors: look.wallpaper) {
             SheetRow("On, picture · Asleep") {
-                HomeCell(look, Fam.large, margins: false, bg: dark) { RemoteBody(family: .systemLarge, entry: entry(TVSample.status(app: "com.google.android.tvlauncher"), mirror: true)).foregroundStyle(.white) }
-                HomeCell(look, Fam.large, margins: false, bg: dark) { RemoteBody(family: .systemLarge, entry: entry(TVSample.status(screen: "asleep"), mirror: true)).foregroundStyle(.white) }
+                HomeCell(look, Fam.large, margins: false, bg: TVGlass()) { RemoteBody(family: .systemLarge, entry: entry(TVSample.status(app: "com.google.android.tvlauncher"), mirror: true)).foregroundStyle(.white) }
+                HomeCell(look, Fam.large, margins: false, bg: TVGlass()) { RemoteBody(family: .systemLarge, entry: entry(TVSample.status(screen: "asleep"), mirror: true)).foregroundStyle(.white) }
             }
             SheetRow("Mac not answering · Never reached") {
-                HomeCell(look, Fam.large, margins: false, bg: dark) { RemoteBody(family: .systemLarge, entry: entry(TVSample.status(), reachable: false, mirror: true)).foregroundStyle(.white) }
-                HomeCell(look, Fam.large, margins: false, bg: dark) { RemoteBody(family: .systemLarge, entry: entry(nil, reachable: false)).foregroundStyle(.white) }
+                HomeCell(look, Fam.large, margins: false, bg: TVGlass()) { RemoteBody(family: .systemLarge, entry: entry(TVSample.status(), reachable: false, mirror: true)).foregroundStyle(.white) }
+                HomeCell(look, Fam.large, margins: false, bg: TVGlass()) { RemoteBody(family: .systemLarge, entry: entry(nil, reachable: false)).foregroundStyle(.white) }
             }
         }
     }
@@ -140,6 +155,7 @@ struct TVSheets: View {
         SheetsDone(names: names).task {
             await load()
             for look in Look.allCases {
+                writeSheet("tv-now-\(look.rawValue)", now(look)); names.append("tv-now-\(look.rawValue)")
                 writeSheet("tv-home-\(look.rawValue)", home(look)); names.append("tv-home-\(look.rawValue)")
                 writeSheet("tv-large-\(look.rawValue)", large(look)); names.append("tv-large-\(look.rawValue)")
             }

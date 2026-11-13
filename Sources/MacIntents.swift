@@ -47,7 +47,7 @@ enum MacBridge {
 }
 enum MacIntentError: LocalizedError {
     case noAnswer
-    var errorDescription: String? { "Can’t reach the Mac. Is Tailscale on?" }
+    var errorDescription: String? { "The Mac didn’t answer. Try again in a moment." }
 }
 enum ScreenRequest {
     static let notification = Notification.Name("macOpenScreen")

@@ -63,6 +63,18 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.GalleryTV || true
           done
           ls dist
+      # The sheets first, so they can be looked at while the apps build; status.txt says "sheets" until the end.
+      - name: Publish the sheets
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../sheets.zip . -i '*.png' '*.log' || zip -q ../sheets.zip /dev/null)
+          echo "$GITHUB_SHA sheets" > status.txt
+          gh release view widgets-ci >/dev/null 2>&1 || gh release create widgets-ci --prerelease --title "Widgets CI" --notes "Work in progress on the widgets: sheets from the widgets-polish branch."
+          for f in sheets.zip status.txt; do
+            for i in 1 2 3; do gh release upload widgets-ci "$f" --clobber && break; sleep 15; done
+          done
       - name: Build the apps and their widgets for the simulator
         continue-on-error: true
         timeout-minutes: 30
