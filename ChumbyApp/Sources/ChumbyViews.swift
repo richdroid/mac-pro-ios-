@@ -2126,7 +2126,7 @@ struct SoundsTab: View {
                 }
                 .font(.subheadline.weight(.medium))
                 .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(Color.primary.opacity(dark ? 0.12 : 0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .animation(.easeInOut(duration: 0.2), value: a.soundText)
             }

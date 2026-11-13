@@ -695,14 +695,12 @@ struct WokeUpTo: View {
             let avail = width - 2 * Self.inset
             let fits = width > 0 && n * Self.smallest + spacing <= avail
             let side = fits ? min(Self.largest, ((avail - spacing) / n).rounded(.down)) : Self.smallest
-            let ids = Set(list.flatMap { $0.songs.map(\.id) })
-            let grid = Caption(title: captionHeight(title, ids), artist: captionHeight(artist, ids))
             Section {
                 ScrollView(.horizontal, showsIndicators: false) {
                     // Not lazy: the card is as tall as its tallest tile always, not the leading group's (a one-song ring
                     // arriving shrank it and cut the captions under its edge, gate 11-12). At most 8 rings.
                     HStack(alignment: .top, spacing: Self.groupGap) {
-                        ForEach(list) { w in group(w, side: side, grid: grid).transition(.opacity.combined(with: .scale(scale: 0.92))) }
+                        ForEach(list) { w in group(w, side: side).transition(.opacity.combined(with: .scale(scale: 0.92))) }
                     }
                     .padding(.vertical, Self.vertical)
                     .animation(.snappy, value: list.map { $0.songs.map(\.id) })
@@ -726,27 +724,19 @@ struct WokeUpTo: View {
                     }
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-                .onChange(of: side) { title = [:]; artist = [:] }
                 .listRowInsets(EdgeInsets())
             } header: { SectionHead(icon: "sunrise.fill", text: "Woke up to") }
         }
     }
     struct Ends: Equatable { var start = true, end = true }
     @State private var ends = Ends()
-    // Every caption on one grid: each title takes the room of the strip's tallest title, and each artist the tallest
-    // artist's, so every artist starts the same distance under its cover and a two-line name never makes the tiles
-    // ragged (Richard, 11-13). Read from the words' own heights at this cover size.
-    struct Caption { var title: CGFloat, artist: CGFloat }
-    @State private var title: [String: CGFloat] = [:]
-    @State private var artist: [String: CGFloat] = [:]
-    func captionHeight(_ h: [String: CGFloat], _ ids: Set<String>) -> CGFloat { h.filter { ids.contains($0.key) }.values.max() ?? 0 }
     // One spacing system with the rows and headings around it: the card's 20 pt inset on both sides and 16 pt above and
     // below; 20 pt between rings and 10 pt between a ring's songs; the header 8 pt over its covers, captions 8 pt under.
     static let gap: CGFloat = 10, groupGap: CGFloat = 20, inset: CGFloat = SoloCard.inset, vertical: CGFloat = 16, fade: CGFloat = 28
     static let smallest: CGFloat = 92, largest: CGFloat = 200
     // A ring: when it rang and which alarm, over its songs in the order they played. One cover wide, the alarm's name
     // gives way so the time is never clipped.
-    func group(_ w: Waking, side: CGFloat, grid: Caption) -> some View {
+    func group(_ w: Waking, side: CGFloat) -> some View {
         // A week or more back, the date too, so two Saturdays never read alike. An unnamed ring is its time alone.
         // Each shorter in turn, so one cover wide the header still says the day whole: "Sat, Nov 7" (gate 11-12).
         let at = Date(timeIntervalSince1970: w.t)
@@ -765,12 +755,12 @@ struct WokeUpTo: View {
             .accessibilityLabel(w.alarm.isEmpty ? when : "\(w.alarm), \(when)")
             HStack(alignment: .top, spacing: Self.gap) {
                 ForEach(Array(w.songs.enumerated()), id: \.element.id) { i, s in
-                    tile(s, side: side, time: i > 0, grid: grid).transition(.opacity.combined(with: .scale(scale: 0.92)))
+                    tile(s, side: side, time: i > 0).transition(.opacity.combined(with: .scale(scale: 0.92)))
                 }
             }
         }
     }
-    func tile(_ s: Song, side: CGFloat, time: Bool, grid: Caption) -> some View {
+    func tile(_ s: Song, side: CGFloat, time: Bool) -> some View {
         let f = art.found[SongArt.key(s)]
         return Button {
             var c = URLComponents(string: "https://music.apple.com/search")!
@@ -794,13 +784,11 @@ struct WokeUpTo: View {
                 }
                 .frame(width: side, height: side).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .padding(.bottom, 6)
-                // Top-aligned on one grid: each title and each artist keeps the room of the strip's tallest (Caption).
+                // Every caption starts 8 pt under its cover, on the covers' one top line, the artist straight under its
+                // title (a grid reserving the tallest title's room left a blank line under every one-line title: CI
+                // 9fb78de). Never cut: a long name takes more lines.
                 Text(s.title).font(.subheadline.weight(.semibold)).lineLimit(3).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { title[s.id] = $0 }
-                    .frame(minHeight: grid.title, alignment: .topLeading)
                 Text(s.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { artist[s.id] = $0 }
-                    .frame(minHeight: grid.artist, alignment: .topLeading)
                 // The song's own time, after the first: the group's line already says when the ring began.
                 if time { Text(Date(timeIntervalSince1970: s.t).formatted(.dateTime.hour().minute())).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
             }
