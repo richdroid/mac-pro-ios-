@@ -68,6 +68,8 @@ extension View {
     }
 }
 
+extension String { var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() } }
+
 func number(_ n: Int) -> String { n.formatted(.number) }
 func compact(_ n: Int) -> String { n >= 10_000 ? n.formatted(.number.notation(.compactName).precision(.fractionLength(0...1))) : n.formatted(.number) }
 

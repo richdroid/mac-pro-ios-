@@ -24,6 +24,14 @@ enum LocalDay {
         return utc.addingTimeInterval(-TimeInterval(TimeZone.current.secondsFromGMT(for: utc)))
     }
     static var today: Int { key(Int(Clock.now.timeIntervalSince1970)) }
+    // The calendar month of a day (year × 12 + month), by arithmetic (Hinnant's civil-from-days), cheap enough per play.
+    static func month(_ key: Int) -> Int {
+        let z = key + 719468, era = (z >= 0 ? z : z - 146096) / 146097
+        let doe = z - era * 146097, yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153
+        let m = mp < 10 ? mp + 3 : mp - 9
+        return (yoe + era * 400 + (m <= 2 ? 1 : 0)) * 12 + m - 1
+    }
 }
 
 actor HistoryDB {
@@ -42,6 +50,7 @@ actor HistoryDB {
         for sql in [
             "PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL",
             "CREATE TABLE IF NOT EXISTS plays(uts INTEGER NOT NULL, artist TEXT NOT NULL, album TEXT NOT NULL, track TEXT NOT NULL, day INTEGER NOT NULL, hour INTEGER NOT NULL, PRIMARY KEY(uts, artist, track)) WITHOUT ROWID",
+            "ALTER TABLE plays ADD COLUMN month INTEGER NOT NULL DEFAULT 0",
             "CREATE INDEX IF NOT EXISTS plays_artist ON plays(artist, uts)",
             "CREATE INDEX IF NOT EXISTS plays_day ON plays(day)",
             "CREATE TABLE IF NOT EXISTS art(artist TEXT NOT NULL, album TEXT NOT NULL, url TEXT NOT NULL, PRIMARY KEY(artist, album)) WITHOUT ROWID",
@@ -74,7 +83,7 @@ actor HistoryDB {
 
     // A page's plays and their covers, in one transaction. Plays already kept are left as they are.
     @discardableResult func insert(_ rs: [Row]) -> Int {
-        guard !rs.isEmpty, let p = prepare("INSERT OR IGNORE INTO plays(uts, artist, album, track, day, hour) VALUES(?,?,?,?,?,?)"),
+        guard !rs.isEmpty, let p = prepare("INSERT OR IGNORE INTO plays(uts, artist, album, track, day, hour, month) VALUES(?,?,?,?,?,?,?)"),
               let a = prepare("INSERT OR IGNORE INTO art(artist, album, url) VALUES(?,?,?)") else { return 0 }
         defer { sqlite3_finalize(p); sqlite3_finalize(a) }
         sqlite3_exec(db, "BEGIN", nil, nil, nil)
@@ -83,7 +92,8 @@ actor HistoryDB {
             sqlite3_reset(p)
             sqlite3_bind_int64(p, 1, sqlite3_int64(r.uts))
             sqlite3_bind_text(p, 2, r.artist, -1, TRANSIENT); sqlite3_bind_text(p, 3, r.album, -1, TRANSIENT); sqlite3_bind_text(p, 4, r.track, -1, TRANSIENT)
-            sqlite3_bind_int64(p, 5, sqlite3_int64(LocalDay.key(r.uts))); sqlite3_bind_int64(p, 6, sqlite3_int64(LocalDay.hour(r.uts)))
+            let day = LocalDay.key(r.uts)
+            sqlite3_bind_int64(p, 5, sqlite3_int64(day)); sqlite3_bind_int64(p, 6, sqlite3_int64(LocalDay.hour(r.uts))); sqlite3_bind_int64(p, 7, sqlite3_int64(LocalDay.month(day)))
             if sqlite3_step(p) == SQLITE_DONE, sqlite3_changes(db) > 0 { added += 1 }
             if let u = r.image, !r.album.isEmpty {
                 sqlite3_reset(a)
@@ -118,21 +128,37 @@ actor HistoryDB {
     }
     func artURL(_ artist: String, _ album: String) -> String? { var u: String?; rows("SELECT url FROM art WHERE artist = ? AND album = ?", [artist, album]) { u = text($0, 0) }; return u }
     // How many calendar months had any music, and each artist heard in at least `min` of them: his canon.
-    private var canonKept: (count: Int, months: Int, names: Set<String>, day: Int)?
+    // Worked out once a day and kept (it moves by a month at a time), so a launch never waits on a scan of every play.
     func canon(share: Double = 0.6) -> (months: Int, names: Set<String>) {
-        let n = count(), today = LocalDay.today
-        if let k = canonKept, k.day == today, abs(k.count - n) < 500 { return (k.months, k.names) }
+        let today = LocalDay.today
+        if let raw = meta("canon"), let d = raw.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+           o["day"] as? Int == today, let m = o["months"] as? Int, let n = o["names"] as? [String] { return (m, Set(n)) }
+        backfillMonths()
         var months = 0
-        rows("SELECT COUNT(DISTINCT strftime('%Y-%m', uts, 'unixepoch', 'localtime')) FROM plays") { months = int($0, 0) }
+        rows("SELECT COUNT(DISTINCT month) FROM plays") { months = int($0, 0) }
         var names = Set<String>()
-        rows("SELECT artist, COUNT(DISTINCT strftime('%Y-%m', uts, 'unixepoch', 'localtime')) m FROM plays GROUP BY artist HAVING m >= ?", [max(1, Int((Double(months) * share).rounded(.up)))]) { names.insert(text($0, 0)) }
-        canonKept = (n, months, names, today)
+        rows("SELECT artist, COUNT(DISTINCT month) m FROM plays GROUP BY artist HAVING m >= ?", [max(1, Int((Double(months) * share).rounded(.up)))]) { names.insert(text($0, 0)) }
+        if let d = try? JSONSerialization.data(withJSONObject: ["day": today, "months": months, "names": Array(names)]), let s = String(data: d, encoding: .utf8) { setMeta("canon", s) }
         return (months, names)
     }
+    // Plays kept before months were (none on a phone that started with this build), given theirs once.
+    private func backfillMonths() {
+        var missing = 0
+        rows("SELECT COUNT(*) FROM plays WHERE month = 0") { missing = int($0, 0) }
+        guard missing > 0 else { return }
+        sqlite3_exec(db, "UPDATE plays SET month = CAST(strftime('%Y', uts, 'unixepoch', 'localtime') AS INTEGER) * 12 + CAST(strftime('%m', uts, 'unixepoch', 'localtime') AS INTEGER) - 1 WHERE month = 0", nil, nil, nil)
+    }
     // Artists first heard after a moment, with how much since.
+    // Kept for the day too: it reads every artist's first play.
     func discoveries(since: Int, minPlays: Int) -> [(String, Int, Int)] {
+        let today = LocalDay.today
+        if let raw = meta("discoveries"), let d = raw.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+           o["day"] as? Int == today, let list = o["list"] as? [[Any]] {
+            return list.compactMap { e in e.count == 3 ? (e[0] as? String).flatMap { n in (e[1] as? Int).flatMap { f in (e[2] as? Int).map { (n, f, $0) } } } : nil }
+        }
         var out: [(String, Int, Int)] = []
         rows("SELECT artist, MIN(uts) f, COUNT(*) c FROM plays GROUP BY artist HAVING f >= ? AND c >= ? ORDER BY c DESC LIMIT 12", [since, minPlays]) { out.append((text($0, 0), int($0, 1), int($0, 2))) }
+        if let d = try? JSONSerialization.data(withJSONObject: ["day": today, "list": out.map { [$0.0, $0.1, $0.2] }]), let s = String(data: d, encoding: .utf8) { setMeta("discoveries", s) }
         return out
     }
 }

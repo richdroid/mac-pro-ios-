@@ -151,7 +151,6 @@ struct FlowLayout: Layout {
     }
 }
 
-extension String { var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() } }
 
 // Words that grow in place: three lines, and "More" only when there's more than three lines of them.
 struct MoreText: View {

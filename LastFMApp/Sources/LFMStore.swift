@@ -85,8 +85,8 @@ struct Profile: Sendable {
     }
 
     func start() {
+        // The history loads first; insights follow it (HistorySync's onProgress), the kept ones showing meanwhile.
         sync.start()
-        workInsights(now: true)
         polling?.cancel()
         polling = Task {
             await loadProfile()

@@ -120,7 +120,7 @@ jobs:
           STEPS="pull:5 shot:3" film detailfilm 1 12 -tab 0 -pose detail
           film tour 1 14 -tab 0 -pose tour
           # Folded and turned sideways, a posture he can hold too.
-          orient landscape 1
+          orient landscape 1 || true; orient landscape 1
           shot now-fland 1 8 -tab 0
           shot you-fland 1 8 -tab 1
           shot detail-fland 1 9 -tab 0 -pose detail
