@@ -219,6 +219,14 @@ final class MockLastFM: @unchecked Sendable {
         return a..<max(a, b)
     }
 
+    // A song's length, the same every time it's asked.
+    static func length(_ title: String) -> Int { 150 + hash(title) % 170 }
+    static func hash(_ s: String) -> Int { Int(s.lowercased().unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value } % 1_000_000) }
+    // Artists he's never played, for what's similar and what to discover.
+    static let invented = ["Marrow Lane", "The Paper Kites Club", "Juniper Static", "Hollis Wren", "Saltwater Hymns", "Night Ferry", "Opal Sisters",
+                           "Low Orbit Choir", "Fennel & Frost", "The Quiet Arcade", "Dovetail Radio", "Ines Marlowe", "Cardinal Drift", "Sunday Engines",
+                           "Willow Static", "The Long Afternoons", "Pale Harbour", "Kestrel Bloom", "Mona Vale", "Tin Cathedral"]
+
     // MARK: Replies, in Last.fm's shapes
     private func image(_ art: String) -> [[String: String]] {
         ["small", "medium", "large", "extralarge"].map { ["size": $0, "#text": "mock://\(art)"] }
@@ -285,24 +293,122 @@ final class MockLastFM: @unchecked Sendable {
                 ["name": artists[e.key].albums[0].name, "playcount": "\(e.value)", "artist": ["name": artists[e.key].name], "@attr": ["rank": "\(k + 1)"], "image": image(artists[e.key].albums[0].art)]
             }
             return ["topalbums": ["album": list, "@attr": ["user": profileName, "total": "\(totals.count)"]]]
+        case "user.gettoptracks", "user.getweeklytrackchart", "user.getweeklyartistchart", "user.getweeklyalbumchart":
+            let range: Range<Int>
+            if let f = Int(params["from"] ?? ""), let t = Int(params["to"] ?? "") { range = span(from: f, to: t - 1) }
+            else {
+                let days = ["7day": 7, "1month": 30, "3month": 90, "6month": 180, "12month": 365][params["period"] ?? "overall"]
+                range = span(from: days.map { nowUts - $0 * 86400 } ?? 0, to: nowUts)
+            }
+            let (_, limit) = page(params)
+            if method == "user.getweeklyartistchart" {
+                let c = counts(range).sorted { $0.value > $1.value }.prefix(limit)
+                return ["weeklyartistchart": ["artist": c.map { ["name": artists[$0.key].name, "playcount": "\($0.value)"] }]]
+            }
+            if method == "user.getweeklyalbumchart" {
+                var c: [Int: Int] = [:]
+                for k in range { c[plays[k].artist * 8 + plays[k].album, default: 0] += 1 }
+                let top = c.sorted { $0.value > $1.value }.prefix(limit)
+                return ["weeklyalbumchart": ["album": top.map { e -> [String: Any] in
+                    let a = artists[e.key / 8], al = a.albums[e.key % 8]
+                    return ["name": al.name, "artist": ["#text": a.name], "playcount": "\(e.value)"]
+                }]]
+            }
+            var c: [Int: Int] = [:]
+            for k in range { c[plays[k].artist * 4096 + plays[k].album * 64 + plays[k].track, default: 0] += 1 }
+            let top = c.sorted { $0.value > $1.value }.prefix(limit)
+            let list: [[String: Any]] = top.map { e in
+                let a = artists[e.key / 4096], al = a.albums[(e.key / 64) % 64]
+                return ["name": al.tracks[e.key % 64], "artist": ["name": a.name, "#text": a.name], "playcount": "\(e.value)", "image": image(al.art), "duration": "\(Self.length(al.tracks[e.key % 64]))"]
+            }
+            return method == "user.gettoptracks" ? ["toptracks": ["track": list]] : ["weeklytrackchart": ["track": list]]
+        case "user.getweeklychartlist":
+            // Last.fm's weeks run Sunday noon to Sunday noon, UTC.
+            let reg = profile["registered"] as? Int ?? 1_488_326_400
+            var start = reg - ((reg - 3 * 86400 - 43200) % 604800 + 604800) % 604800
+            var list: [[String: String]] = []
+            while start + 604800 <= nowUts { list.append(["from": "\(start)", "to": "\(start + 604800)"]); start += 604800 }
+            return ["weeklychartlist": ["chart": list]]
+        case "user.getlovedtracks":
+            var seen = Set<Int>(), list: [[String: Any]] = []
+            for p in plays where loved(p) {
+                let key = p.artist * 4096 + p.album * 64 + p.track
+                guard seen.insert(key).inserted else { continue }
+                let a = artists[p.artist], al = a.albums[p.album]
+                list.append(["name": al.tracks[p.track], "artist": ["name": a.name], "image": image(al.art), "date": ["uts": "\(p.uts)"]])
+            }
+            let (pg, limit) = page(params)
+            let slice = Array(list.dropFirst((pg - 1) * limit).prefix(limit))
+            return ["lovedtracks": ["track": slice, "@attr": ["total": "\(list.count)", "totalPages": "\(max(1, (list.count + limit - 1) / limit))", "page": "\(pg)"]]]
         case "artist.getinfo":
-            guard let i = artists.firstIndex(where: { $0.name.lowercased() == (params["artist"] ?? "").lowercased() }) else { return ["error": 6, "message": "The artist you supplied could not be found"] }
+            let name = params["artist"] ?? ""
+            guard let i = artists.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) else {
+                let h = Self.hash(name)
+                return ["artist": ["name": name, "stats": ["listeners": "\(20_000 + h % 900_000)", "playcount": "\((20_000 + h % 900_000) * 19)", "userplaycount": "0"],
+                                   "tags": ["tag": [["name": "indie"], ["name": "dream pop"]]], "url": "https://www.last.fm/music/\(name.replacingOccurrences(of: " ", with: "+"))",
+                                   "bio": ["summary": "\(name) is a band that grew out of late-night sessions in a shared rehearsal room, known for patient songs that build slowly. <a href=\"https://www.last.fm\">Read more on Last.fm</a>"]]]
+            }
             let a = artists[i]
             return ["artist": ["name": a.name, "image": image(a.albums[0].art), "stats": ["listeners": "\(a.listeners)", "playcount": "\(a.listeners * 23)", "userplaycount": "\(plays.filter { $0.artist == i }.count)"],
-                               "tags": ["tag": a.tags.map { ["name": $0] }], "bio": ["summary": ""]]]
-        case "track.getinfo":
+                               "url": "https://www.last.fm/music/\(a.name.replacingOccurrences(of: " ", with: "+"))",
+                               "tags": ["tag": a.tags.map { ["name": $0] }],
+                               "bio": ["summary": "\(a.name) formed in \(a.albums.map(\.year).min() ?? 2010) and have made \(a.albums.count == 1 ? "one album" : "\(a.albums.count) albums") since, moving between \(a.tags.prefix(2).joined(separator: " and ")). Their records are known for warm, wide-open production and songs that reward a second listen; \(a.albums[0].name) is the one most people start with. <a href=\"https://www.last.fm\">Read more on Last.fm</a>"]]]
+        case "artist.getsimilar":
             let name = (params["artist"] ?? "").lowercased()
-            guard let i = artists.firstIndex(where: { $0.name.lowercased() == name }) else { return ["error": 6, "message": "Track not found"] }
-            let a = artists[i]
-            let title = params["track"] ?? ""
-            let al = a.albums.first { $0.tracks.contains(title) } ?? a.albums[0]
-            let mine = plays.filter { $0.artist == i && a.albums[$0.album].tracks[$0.track] == title }
-            return ["track": ["name": title, "listeners": "\(a.listeners / 3 + title.count * 911)", "playcount": "\(a.listeners * 4)", "userplaycount": "\(mine.count)",
-                              "userloved": mine.first.map(loved) == true ? "1" : "0", "duration": "\((180 + title.count * 7) * 1000)",
-                              "artist": ["name": a.name], "album": ["title": al.name, "artist": a.name, "image": image(al.art)],
-                              "toptags": ["tag": a.tags.map { ["name": $0] }],
-                              "wiki": ["summary": "\"\(title)\" is a song by \(a.name), first released in \(al.year). It became a quiet favourite on late-night radio, the song the band closes every show with, and the one most of their listeners found them through. <a href=\"https://www.last.fm\">Read more on Last.fm</a>"],
-                              "url": "https://www.last.fm/music/\(a.name.replacingOccurrences(of: " ", with: "+"))"]]
+            let h = Self.hash(name)
+            let limit = Int(params["limit"] ?? "30") ?? 30
+            var out: [[String: String]] = []
+            var used = Set([name])
+            // Some he knows well, some he's barely heard, some he never has.
+            for k in 0..<limit {
+                let pick: String
+                switch k % 3 {
+                case 0: pick = artists[(h / 7 + k * 5) % max(core, 1)].name
+                case 1: pick = artists[core + (h / 3 + k * 37) % max(artists.count - core, 1)].name
+                default: pick = Self.invented[(h + k * 11) % Self.invented.count]
+                }
+                guard used.insert(pick.lowercased()).inserted else { continue }
+                out.append(["name": pick, "match": String(format: "%.3f", max(0.05, 1 - Double(k) * 0.03))])
+            }
+            return ["similarartists": ["artist": out]]
+        case "artist.gettoptracks":
+            let name = params["artist"] ?? ""
+            let limit = Int(params["limit"] ?? "10") ?? 10
+            let titles: [String]
+            if let a = artists.first(where: { $0.name.lowercased() == name.lowercased() }) { titles = Array(Set(a.albums.flatMap(\.tracks))).sorted { Self.hash($0 + name) < Self.hash($1 + name) } }
+            else { let pool = artists.prefix(core).flatMap { $0.albums.flatMap(\.tracks) }; titles = (0..<12).map { pool[(Self.hash(name) / 5 + $0 * 13) % pool.count] } }
+            let list: [[String: Any]] = Array(Set(titles)).sorted { Self.hash($0 + name) < Self.hash($1 + name) }.prefix(limit).enumerated().map { k, t in
+                ["name": t, "playcount": "\(900_000 / (k + 1) + Self.hash(t) % 5000)", "listeners": "\(240_000 / (k + 1) + Self.hash(t) % 900)", "artist": ["name": name]]
+            }
+            return ["toptracks": ["track": list]]
+        case "artist.gettopalbums":
+            let name = params["artist"] ?? ""
+            if let a = artists.first(where: { $0.name.lowercased() == name.lowercased() }) {
+                return ["topalbums": ["album": a.albums.map { ["name": $0.name, "image": image($0.art)] }]]
+            }
+            let covers = Array(Set(artists.prefix(core).flatMap { $0.albums.map(\.art) })).sorted()
+            return ["topalbums": ["album": [["name": "\(name.split(separator: " ").first ?? "First") Light", "image": image(covers[Self.hash(name) % covers.count])]]]]
+        case "album.getinfo":
+            let name = (params["artist"] ?? "").lowercased(), title = (params["album"] ?? "").lowercased()
+            guard let a = artists.first(where: { $0.name.lowercased() == name }), let al = a.albums.first(where: { $0.name.lowercased() == title }) else {
+                return ["error": 6, "message": "Album not found"]
+            }
+            return ["album": ["name": al.name, "artist": a.name, "image": image(al.art), "listeners": "\(a.listeners / 2)", "playcount": "\(a.listeners * 9)",
+                              "url": "https://www.last.fm/music/\(a.name.replacingOccurrences(of: " ", with: "+"))/\(al.name.replacingOccurrences(of: " ", with: "+"))",
+                              "tags": ["tag": a.tags.map { ["name": $0] }],
+                              "tracks": ["track": al.tracks.enumerated().map { k, t in ["name": t, "duration": "\(Self.length(t))", "@attr": ["rank": "\(k + 1)"]] }],
+                              "wiki": ["summary": "\(al.name) is the \(al.year < 2015 ? "early" : "later") album by \(a.name), released in \(al.year). Recorded over one long winter, it's the record where their sound settled. <a href=\"https://www.last.fm\">Read more on Last.fm</a>"]]]
+        case "track.getsimilar":
+            let name = (params["artist"] ?? "").lowercased()
+            let h = Self.hash(name + (params["track"] ?? ""))
+            var out: [[String: Any]] = []
+            for k in 0..<10 {
+                let a = artists[(h / 3 + k * 7) % max(core, 1)]
+                guard a.name.lowercased() != name else { continue }
+                let al = a.albums[(h + k) % a.albums.count]
+                out.append(["name": al.tracks[(h / 5 + k) % al.tracks.count], "artist": ["name": a.name], "image": image(al.art), "match": "\(1 - Double(k) * 0.07)"])
+            }
+            return ["similartracks": ["track": out]]
         default:
             return ["error": 3, "message": "Invalid Method"]
         }

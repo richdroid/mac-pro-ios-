@@ -56,6 +56,8 @@ struct Profile: Sendable {
     var recent: [Scrobble] = []        // newest first; the song on now is never in it
     var nowPlaying: Scrobble?
     var insights = Insights()
+    var deep = Deep()                  // the insights that need his whole history, worked out once a day
+    var todaySecs: Int?                // today's listening time, once enough of its lengths are known
     var loadingMore = false
     var reachedEnd = false
     // Failing since; the app says so only once it's been a while (never on one miss, never on opening).
@@ -77,11 +79,13 @@ struct Profile: Sendable {
         if let (j, _) = LastFM.shared.kept("user.getinfo") { profile = Profile.parse(j) }
         if let (j, _) = LastFM.shared.kept("user.getrecenttracks", ["limit": "200", "extended": "1"]) { apply(j) }
         if let k = Insights.kept() { insights = k }
+        if let k = Deep.kept() { deep = k }
         // The hero's cover and backdrop from the disk before the first frame, so it opens on the picture, not its stand-in.
         if let h = hero { ArtStore.shared.warm(h.art) }
         // The build's mock makes its listening history off the main thread, while the first frame draws.
         if LastFM.shared.mock { Task.detached(priority: .userInitiated) { _ = MockLastFM.shared.profileName } }
         sync.onProgress = { [weak self] in self?.workInsights() }
+        LengthFill.shared.onChange = { [weak self] in self?.workToday(); self?.workDeep(force: true) }
     }
 
     func start() {
@@ -156,6 +160,33 @@ struct Profile: Sendable {
             if !s.hours.isEmpty { UserDefaults.standard.set(s.dayStart, forKey: "dayStart") }
             lastInsight = Date()
             insightTask = nil
+            workToday()
+            if s.complete { LengthFill.shared.start(); workDeep() }
+        }
+    }
+
+    // Today's listening time: the lengths known, the rest at the middle length, shown once most are known.
+    func workToday() {
+        let from = Int(dayBegan.timeIntervalSince1970), to = Int(Clock.now.timeIntervalSince1970) + 1
+        Task {
+            let db = HistoryDB.shared
+            let t = await db.time(from: from, to: to)
+            let median = await db.medianLength()
+            todaySecs = HistoryDB.listening(plays: t.plays, secs: t.secs, known: t.known, median: median)
+        }
+    }
+
+    // Eras, the river, records and the rest: once a day (and again when more track lengths are known), never before the
+    // whole history is read.
+    @ObservationIgnored private var deepTask: Task<Void, Never>?
+    func workDeep(force: Bool = false) {
+        guard sync.complete, deepTask == nil, force || deep.day != LocalDay.today else { return }
+        deepTask = Task {
+            let (_, names) = await HistoryDB.shared.canon()
+            let d = await Deep.work(canon: names)
+            withAnimation(.smooth(duration: 0.4)) { deep = d }
+            d.keep()
+            deepTask = nil
         }
     }
 

@@ -4,11 +4,18 @@ import Darwin
 // One scale for the whole app. Zune's spirit in Apple's grammar: very big, very thin lowercase titles that run off the
 // edge, bold lowercase section heads, numbers as the graphics, the cover's colours on a near-black ground.
 enum S {
-    static let margin: CGFloat = 20      // a page's side margin
+    // Spacing: one system, and nothing else anywhere (Richard, 2026-11-13: "spacing is bad rn").
+    static let margin: CGFloat = 20      // a page's side inset
     static let section: CGFloat = 36     // between sections
-    static let head: CGFloat = 12        // a section head to its content
-    static let row: CGFloat = 12         // between rows
+    static let head: CGFloat = 12        // a section head (or a hub title) to its content
+    static let gap: CGFloat = 12         // between rows, tiles, chips and cards side by side
+    static let inner: CGFloat = 16       // a card's padding, and between the blocks inside it
+    static let pair: CGFloat = 4         // a figure and its label; a title and its second line
+    static let figures: CGFloat = 24     // between figures side by side
+    static let row: CGFloat = 12         // between rows (the same as gap: rows are 52 pt art, 6 above and below)
     static let corner: CGFloat = 22      // cards
+    static let art: CGFloat = 52         // a row's cover
+    static let tile: CGFloat = 136       // a panorama's cover
     static let ground = Color(red: 0.035, green: 0.035, blue: 0.045)
     static let soft = Color.white.opacity(0.66)   // second lines (an artist under a title), never a footnote
     static let accent = Color(red: 1.0, green: 0.36, blue: 0.36)
@@ -54,7 +61,7 @@ struct Figure: View {
     let label: String
     var size: CGFloat = 30
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: S.pair) {
             Text(value).font(.system(size: size, weight: .light)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
             Text(label).font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
         }
@@ -64,7 +71,7 @@ struct Figure: View {
 
 extension View {
     func card(_ radius: CGFloat = S.corner) -> some View {
-        self.padding(16).frame(maxWidth: .infinity, alignment: .leading).glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+        self.padding(S.inner).frame(maxWidth: .infinity, alignment: .leading).glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 }
 
@@ -176,10 +183,8 @@ struct BarFade: ViewModifier {
 
 // Where a cover tapped opens its page from, so the page grows out of it and shrinks back into it.
 private struct ZoomSpaceKey: EnvironmentKey { static let defaultValue: Namespace.ID? = nil }
-private struct OpenTrackKey: EnvironmentKey { static let defaultValue: (Scrobble) -> Void = { _ in } }
 extension EnvironmentValues {
     var zoomSpace: Namespace.ID? { get { self[ZoomSpaceKey.self] } set { self[ZoomSpaceKey.self] = newValue } }
-    var openTrack: (Scrobble) -> Void { get { self[OpenTrackKey.self] } set { self[OpenTrackKey.self] = newValue } }
 }
 struct ZoomSource: ViewModifier {
     let id: String
@@ -199,6 +204,13 @@ extension View {
         self.navigationTransition(.zoom(sourceID: id, in: space))
         #else
         self
+        #endif
+    }
+    @ViewBuilder func cover<C: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> C) -> some View {
+        #if os(iOS)
+        fullScreenCover(isPresented: isPresented, content: content)
+        #else
+        sheet(isPresented: isPresented, content: content)
         #endif
     }
     @ViewBuilder func cover<Item: Identifiable, C: View>(item: Binding<Item?>, @ViewBuilder content: @escaping (Item) -> C) -> some View {

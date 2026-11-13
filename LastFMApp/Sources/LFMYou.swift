@@ -13,34 +13,42 @@ struct YouTab: View {
     var body: some View {
         if pane {
             FoldSplit {
-                page { VStack(alignment: .leading, spacing: S.section) { identity; if sync.complete { years } } }
+                Page(top: top) {
+                    VStack(alignment: .leading, spacing: S.section) { identity; if sync.complete { YearsSection() }; whole }.padding(.top, S.head)
+                }
             } right: {
-                page { VStack(alignment: .leading, spacing: S.section) { listening }.padding(.top, 28) }
+                Page(top: top) { VStack(alignment: .leading, spacing: S.section) { listening; history }.padding(.top, S.section) }
             }
         } else {
-            page {
+            Page(top: top) {
                 VStack(alignment: .leading, spacing: S.section) {
                     identity
                     listening
+                    history
+                    whole
                     if sync.complete { YearsSection() }
                 }
+                .padding(.top, S.head)
             }
         }
     }
     @ViewBuilder private var identity: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: S.head) {
             HubTitle(text: store.profile?.name ?? LastFM.shared.user, size: 80)
-            ProfileHead().padding(.horizontal, S.margin)
-            // The first read, high on the page while it runs: the moment the app is reading his years.
-            if !sync.complete { YearsSection() }
-            Totals().padding(.horizontal, S.margin)
-            StreakCard().padding(.horizontal, S.margin)
+            VStack(alignment: .leading, spacing: S.section) {
+                ProfileHead().padding(.horizontal, S.margin)
+                // The first read, high on the page while it runs: the moment the app is reading his years.
+                if !sync.complete { YearsSection() }
+                Totals().padding(.horizontal, S.margin)
+                StreakCard().padding(.horizontal, S.margin)
+            }
         }
     }
-    @ViewBuilder private var years: some View { YearsSection() }
+    // This week and what's moving him now.
     @ViewBuilder private var listening: some View {
         PaceCard().padding(.horizontal, S.margin)
         CanonCard().padding(.horizontal, S.margin)
+        RiverCard()
         RisingCard().padding(.horizontal, S.margin)
         WeekHub(title: "on repeat", list: store.insights.week)
         ClockCard().padding(.horizontal, S.margin)
@@ -48,16 +56,17 @@ struct YouTab: View {
         if store.insights.discoveries.count >= 3 { WeekHub(title: "new to you", list: store.insights.discoveries) }
         else if !store.insights.discoveries.isEmpty { NewCard(list: store.insights.discoveries).padding(.horizontal, S.margin) }
     }
-    private func page<C: View>(@ViewBuilder _ c: () -> C) -> some View {
-        let content = c()
-        return ScrollViewReader { proxy in
-            ScrollView {
-                Color.clear.frame(height: 0).id("top")
-                content.padding(.bottom, 40)
-            }
-            .scrollIndicators(.hidden)
-            .onChange(of: top) { _, _ in withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } }
-        }
+    // His story across the years.
+    @ViewBuilder private var history: some View {
+        ErasSection()
+        RecordsSection()
+        DiscoveriesSection()
+    }
+    // All of it in figures and months.
+    @ViewBuilder private var whole: some View {
+        TimeCard()
+        VolumeCard()
+        CarryCard()
     }
 }
 
@@ -65,7 +74,7 @@ struct ProfileHead: View {
     private var store: Store { Store.shared }
     var body: some View {
         let p = store.profile
-        HStack(spacing: 14) {
+        HStack(spacing: S.gap) {
             ZStack {
                 Circle().fill(.white.opacity(0.08))
                 if let p {
@@ -74,7 +83,7 @@ struct ProfileHead: View {
             }
             .frame(width: 64, height: 64).clipShape(Circle())
             .overlay { Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1) }
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: S.pair) {
                 Text(p.map { $0.realname.isEmpty ? $0.name : $0.realname } ?? " ").font(.title3.weight(.semibold)).foregroundStyle(.white)
                 if let p { Text("Scrobbling since \(p.registered.formatted(.dateTime.month(.wide).year()))").font(.subheadline).foregroundStyle(S.soft) }
             }
@@ -88,8 +97,8 @@ struct Totals: View {
     private var store: Store { Store.shared }
     var body: some View {
         let p = store.profile
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: S.inner) {
+            VStack(alignment: .leading, spacing: S.pair) {
                 Text(p.map { number($0.playcount) } ?? "–").font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
                     .lineLimit(1).minimumScaleFactor(0.6).contentTransition(.numericText())
                 Text("scrobbles").font(.title3.weight(.light)).foregroundStyle(S.soft)
@@ -112,7 +121,7 @@ struct StreakCard: View {
         let today = LocalDay.today
         let days = (0..<28).map { i.days[today - 27 + $0] ?? 0 }
         let peak = max(days.max() ?? 1, 1)
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: S.inner) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Image(systemName: "flame.fill").font(.title2).foregroundStyle(LinearGradient(colors: [.yellow, .orange, S.accent], startPoint: .top, endPoint: .bottom))
                     .symbolEffect(.bounce, value: i.streak)
@@ -152,10 +161,10 @@ struct PaceCard: View {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "this week")
                 VStack(alignment: .leading, spacing: S.head) {
-                HStack(alignment: .top, spacing: 28) {
+                HStack(alignment: .top, spacing: S.figures) {
                     Figure(value: number(p.now), label: "plays so far", size: 40)
                     let up = p.delta >= 0
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: S.pair) {
                         HStack(spacing: 4) {
                             Image(systemName: up ? "arrow.up.right" : "arrow.down.right").font(.title3.weight(.semibold))
                             Text("\(Int((abs(p.delta) * 100).rounded()))%").font(.system(size: 40, weight: .light)).monospacedDigit()
@@ -223,21 +232,24 @@ struct RisingCard: View {
             let ref = ArtRef(artist: r.artist, album: r.album, url: r.image)
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "taking over")
+                Opens(route: .artist(r.artist), zoom: "rising|\(r.artist)") {
                 ZStack(alignment: .bottomLeading) {
                     GeometryReader { g in
                         ArtView(ref, px: 900, corner: 0).frame(width: g.size.width, height: g.size.width).position(x: g.size.width / 2, y: g.size.height / 2)
                     }
                     LinearGradient(colors: [.clear, .black.opacity(0.35), .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: S.gap) {
                         Text(r.artist).font(.system(size: 38, weight: .bold)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.7)
                         share(r.weekShare, "of your week", strong: true)
                         share(r.yearShare, "of your year before", strong: false)
                     }
-                    .padding(18)
+                    .padding(S.inner)
                 }
                 .frame(height: 300)
                 .clipShape(RoundedRectangle(cornerRadius: S.corner, style: .continuous))
                 .overlay { RoundedRectangle(cornerRadius: S.corner, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 0.5) }
+                .zoomSource("rising|\(r.artist)")
+                }
                 .accessibilityElement(children: .combine)
             }
         }
@@ -267,7 +279,7 @@ struct WeekHub: View {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: title).padding(.horizontal, S.margin)
                 ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: 14) {
+                    LazyHStack(alignment: .top, spacing: S.gap) {
                         ForEach(Array(list.enumerated()), id: \.element.id) { k, a in tile(k, a) }
                     }
                     .scrollTargetLayout()
@@ -281,9 +293,10 @@ struct WeekHub: View {
         }
     }
     private func tile(_ k: Int, _ a: ArtistCount) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        Opens(route: .artist(a.name), zoom: "\(title)|\(a.name)") {
+        VStack(alignment: .leading, spacing: S.pair) {
             ZStack(alignment: .bottomLeading) {
-                ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 400, corner: 10).frame(width: 136)
+                ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 400, corner: 10).frame(width: S.tile).zoomSource("\(title)|\(a.name)")
                 if title != "new to you" {
                     Text("\(k + 1)").font(.system(size: 64, weight: .ultraLight)).foregroundStyle(.white).shadow(color: .black.opacity(0.5), radius: 8)
                         .offset(x: -2, y: 18)
@@ -293,11 +306,12 @@ struct WeekHub: View {
                         .background(Capsule().fill(.white)).offset(x: 88, y: -104)
                 }
             }
-            .padding(.bottom, title == "new to you" ? 0 : 12)
+            .padding(.bottom, title == "new to you" ? S.pair : S.gap)
             Text(a.name).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
             Text("\(a.plays) \(a.plays == 1 ? "play" : "plays")").font(.footnote).monospacedDigit().foregroundStyle(S.soft)
         }
-        .frame(width: 136, alignment: .leading)
+        .frame(width: S.tile, alignment: .leading)
+        }
         .accessibilityElement(children: .combine)
     }
 }
@@ -316,9 +330,9 @@ struct YearsSection: View {
         VStack(alignment: .leading, spacing: S.head) {
             SectionHead(text: sync.complete ? "your years" : "reading your history",
                         trailing: sync.complete ? nil : "\(Int((sync.fraction * 100).rounded(.down)))%")
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: S.inner) {
                 if !sync.complete {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: S.pair) {
                         Text(number(sync.read)).font(.system(size: 34, weight: .light)).monospacedDigit().foregroundStyle(.white).contentTransition(.numericText())
                         Text(sync.total > 0 ? "of \(number(sync.total)) scrobbles, newest first" : "scrobbles").font(.subheadline).foregroundStyle(S.soft)
                     }
@@ -364,8 +378,8 @@ struct CanonCard: View {
         if let c = store.insights.canon {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "your canon")
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(alignment: .top, spacing: 28) {
+                VStack(alignment: .leading, spacing: S.inner) {
+                    HStack(alignment: .top, spacing: S.figures) {
                         Figure(value: "\(c.artists)", label: "artists in most months", size: 40)
                         Figure(value: "\(Int((c.share * 100).rounded()))%", label: "of this week", size: 40)
                         Spacer(minLength: 0)
@@ -381,9 +395,11 @@ struct CanonCard: View {
                     if !c.thisWeek.isEmpty {
                         HStack(spacing: -14) {
                             ForEach(Array(c.thisWeek.prefix(8).enumerated()), id: \.element.id) { k, a in
-                                ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 160, corner: 8).frame(width: 52)
-                                    .shadow(color: .black.opacity(0.45), radius: 6, x: 2)
-                                    .zIndex(Double(20 - k))
+                                Opens(route: .artist(a.name), zoom: "canon|\(a.name)") {
+                                    ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 160, corner: 8).frame(width: S.art).zoomSource("canon|\(a.name)")
+                                }
+                                .shadow(color: .black.opacity(0.45), radius: 6, x: 2)
+                                .zIndex(Double(20 - k))
                             }
                             Spacer(minLength: 0)
                         }
@@ -411,7 +427,7 @@ struct ClockCard: View {
             let tint = ArtStore.shared.palette(store.hero?.art ?? ArtRef(artist: "", album: "", url: nil))?.vivid.color ?? S.accent
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "your clock")
-                VStack(spacing: 14) {
+                VStack(spacing: S.inner) {
                     ZStack {
                         Canvas { ctx, size in
                             let c = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -484,11 +500,12 @@ struct NewCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: S.head) {
             SectionHead(text: "new to you")
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: S.inner) {
                 ForEach(list) { a in
-                    HStack(spacing: 14) {
-                        ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 260, corner: 10).frame(width: 84)
-                        VStack(alignment: .leading, spacing: 3) {
+                    Opens(route: .artist(a.name), zoom: "new|\(a.name)") {
+                    HStack(spacing: S.gap) {
+                        ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 260, corner: 10).frame(width: 84).zoomSource("new|\(a.name)")
+                        VStack(alignment: .leading, spacing: S.pair) {
                             Text(a.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
                             if let f = a.first {
                                 Text("First played \(Self.day(f))").font(.subheadline).foregroundStyle(S.soft)
@@ -496,6 +513,7 @@ struct NewCard: View {
                             Text("\(a.plays) \(a.plays == 1 ? "play" : "plays") since").font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
                         }
                         Spacer(minLength: 0)
+                    }
                     }
                     .accessibilityElement(children: .combine)
                 }

@@ -3,9 +3,11 @@ import SwiftUI
 import UIKit
 #endif
 
-// Now: what's playing (or last played) as the hero, his day so far drawn in its covers' colours, and every scrobble
-// since, newest first. Folded and open upright one column; open flat the hero holds the left pane still while the day
-// and the list scroll on the right.
+// Now. While a song plays: the song as the hero (its cover large, breathing), his day so far drawn in its covers'
+// colours, his week, and every scrobble since. While nothing plays, nothing pretends to: the page leads with his
+// listening (today's figures, his day, his week) and the last song sits in a small card, "Last played 2 h ago", its
+// cover still. Folded and open upright one column; open flat the hero (or today) holds the left pane while the rest
+// scrolls on the right.
 struct NowTab: View {
     let top: Int
     @Environment(\.paneLayout) private var pane
@@ -15,42 +17,147 @@ struct NowTab: View {
     @State private var sideways = false
     private var store: Store { Store.shared }
     var body: some View {
+        let playing = store.nowPlaying != nil || store.hero == nil
         Group {
             if pane {
                 FoldSplit {
-                    VStack(spacing: 0) {
-                        Spacer(minLength: 0)
-                        NowHero(layout: .stage)
-                        Spacer(minLength: 0)
+                    if playing {
+                        VStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            NowHero(layout: .stage)
+                            Spacer(minLength: 0)
+                        }
+                    } else {
+                        Page(top: top) { idleHead.padding(.top, S.head) }
                     }
                 } right: {
-                    page { VStack(alignment: .leading, spacing: S.section) { trouble; DaySection(); RecentSection() }.padding(.top, 24) }
+                    Page(top: top) {
+                        VStack(alignment: .leading, spacing: S.section) { trouble; DaySection(lead: !playing); WeekGlance(); RecentSection() }.padding(.top, S.section)
+                    }
                 }
             } else {
-                page {
+                Page(top: top) {
                     VStack(alignment: .leading, spacing: S.section) {
-                        NowHero(layout: sideways ? .short : size == .regular ? .wide : .column)
+                        if playing {
+                            NowHero(layout: sideways ? .short : size == .regular ? .wide : .column)
+                        } else {
+                            idleHead
+                        }
                         trouble
-                        DaySection()
+                        DaySection(lead: !playing)
+                        WeekGlance()
                         RecentSection()
                     }
+                    .padding(.top, S.head)
                 }
             }
         }
         .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.15 } action: { sideways = $0 }
     }
+    // Nothing playing: today first, then the last song, plainly.
+    private var idleHead: some View {
+        VStack(alignment: .leading, spacing: S.head) {
+            HubTitle(text: "today", size: 80)
+            VStack(alignment: .leading, spacing: S.section) {
+                TodayFigures()
+                if let last = store.recent.first { LastPlayed(s: last) }
+            }
+            .padding(.horizontal, S.margin)
+        }
+    }
     @ViewBuilder private var trouble: some View {
         if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
     }
-    private func page<C: View>(@ViewBuilder _ c: () -> C) -> some View {
-        let content = c()
-        return ScrollViewReader { proxy in
-            ScrollView {
-                Color.clear.frame(height: 0).id("top")
-                content.padding(.bottom, 40)
+}
+
+// Today in figures: plays, listening time (once enough lengths are known), artists, and the streak it keeps going.
+struct TodayFigures: View {
+    private var store: Store { Store.shared }
+    var body: some View {
+        let today = store.today
+        VStack(alignment: .leading, spacing: S.inner) {
+            VStack(alignment: .leading, spacing: S.pair) {
+                Text(number(today.count)).font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white).contentTransition(.numericText())
+                Text(today.count == 1 ? "play" : "plays").font(.title3.weight(.light)).foregroundStyle(S.soft)
             }
-            .scrollIndicators(.hidden)
-            .onChange(of: top) { _, _ in withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } }
+            .accessibilityElement(children: .combine)
+            FigureGrid(items: [
+                store.todaySecs.map { (duration($0), "listening") },
+                (number(Set(today.map(\.artist)).count), Set(today.map(\.artist)).count == 1 ? "artist" : "artists"),
+                store.insights.streak.map { ("\($0)", $0 == 1 ? "day in a row" : "days in a row") },
+            ].compactMap { $0 })
+        }
+    }
+}
+
+// The last song, when nothing is playing: a small still cover and when it was, opening the song's page.
+struct LastPlayed: View {
+    let s: Scrobble
+    var body: some View {
+        Opens(route: .track(s), zoom: "last|\(s.id)") {
+            HStack(spacing: S.inner) {
+                ArtView(s.art, px: 300, corner: 10).frame(width: 96).zoomSource("last|\(s.id)")
+                VStack(alignment: .leading, spacing: S.pair) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock.arrow.circlepath")
+                        Text("Last played \(when(s.date))")
+                    }
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
+                    Text(s.title).font(.title3.weight(.bold)).foregroundStyle(.white).lineLimit(2)
+                    Text(s.artist).font(.body).foregroundStyle(S.soft).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(S.soft)
+            }
+            .card()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Shows the song")
+    }
+}
+
+// His week at a glance on Now: plays so far, against his usual by now, and who he's played most, each opening its page.
+struct WeekGlance: View {
+    private var store: Store { Store.shared }
+    var body: some View {
+        let i = store.insights
+        if let p = i.pace {
+            VStack(alignment: .leading, spacing: S.head) {
+                SectionHead(text: "this week")
+                VStack(alignment: .leading, spacing: S.inner) {
+                    HStack(alignment: .top, spacing: S.figures) {
+                        Figure(value: number(p.now), label: "plays so far", size: 30)
+                        let up = p.delta >= 0
+                        VStack(alignment: .leading, spacing: S.pair) {
+                            HStack(spacing: 4) {
+                                Image(systemName: up ? "arrow.up.right" : "arrow.down.right").font(.body.weight(.semibold))
+                                Text("\(Int((abs(p.delta) * 100).rounded()))%").font(.system(size: 30, weight: .light)).monospacedDigit()
+                            }
+                            .foregroundStyle(.white)
+                            Text(up ? "more than usual" : "less than usual").font(.subheadline).foregroundStyle(S.soft)
+                        }
+                        .accessibilityElement(children: .combine)
+                        Spacer(minLength: 0)
+                    }
+                    if !i.week.isEmpty {
+                        HStack(spacing: S.gap) {
+                            ForEach(Array(i.week.prefix(5).enumerated()), id: \.element.id) { k, a in
+                                Opens(route: .artist(a.name), zoom: "week|\(a.name)") {
+                                    VStack(alignment: .leading, spacing: S.pair) {
+                                        ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 200, corner: 8).zoomSource("week|\(a.name)")
+                                        Text(a.name).font(.caption.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                                    }
+                                }
+                                .frame(maxWidth: 76)
+                                .accessibilityLabel("\(k + 1). \(a.name), \(a.plays) plays")
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .card()
+            }
+            .padding(.horizontal, S.margin)
         }
     }
 }
@@ -71,24 +178,24 @@ struct TroubleNote: View {
 struct NowHero: View {
     enum Layout { case column, wide, short, stage }
     let layout: Layout
-    @Environment(\.openTrack) private var open
+    @Environment(\.openRoute) private var open
     @State private var breathe = false
     init(layout: Layout) { self.layout = layout; LaunchLog.mark("hero built") }
     private var store: Store { Store.shared }
     var body: some View {
         if let s = store.hero {
             let playing = s.nowPlaying
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: S.head) {
                 HubTitle(text: s.artist, size: layout == .column || layout == .short ? 64 : 88)
                     .id(s.artist).transition(.opacity)
                 Group {
                     if layout == .wide || layout == .short {
-                        HStack(alignment: .bottom, spacing: 24) {
+                        HStack(alignment: .bottom, spacing: S.figures) {
                             art(s, playing).frame(width: layout == .short ? 250 : 300)
                             words(s, playing).padding(.bottom, 6)
                         }
                     } else {
-                        VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: S.inner) {
                             art(s, playing).frame(maxWidth: layout == .stage ? 400 : 440)
                             words(s, playing)
                         }
@@ -98,7 +205,7 @@ struct NowHero: View {
             }
             .animation(.smooth(duration: 0.5), value: s.id)
         } else {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: S.head) {
                 HubTitle(text: "listening", size: 72)
                 // Before the very first answer: a record turning slowly on glass, never an empty box.
                 TimelineView(.animation(minimumInterval: 1 / 30)) { tl in
@@ -114,14 +221,14 @@ struct NowHero: View {
     }
     private func art(_ s: Scrobble, _ playing: Bool) -> some View {
         let tint = ArtStore.shared.palette(s.art)?.vivid.color ?? Palette.from(name: s.artist + s.album).vivid.color
-        return Button { open(s) } label: {
+        return Button { open(Go(route: .track(s), zoom: "hero|\(s.id)")) } label: {
             ArtView(s.art, px: 1000, corner: 14)
                 .id(s.art.key)
                 .transition(.opacity.animation(.easeInOut(duration: 0.45)))
                 .shadow(color: tint.opacity(0.5), radius: 38, y: 16)
                 .scaleEffect(playing && breathe ? 1.012 : 1)
                 .animation(playing ? .easeInOut(duration: 3.6).repeatForever(autoreverses: true) : .smooth, value: breathe)
-                .zoomSource(s.id)
+                .zoomSource("hero|\(s.id)")
         }
         .buttonStyle(Press())
         .onAppear { breathe = true }
@@ -129,7 +236,7 @@ struct NowHero: View {
         .accessibilityHint("Shows the song")
     }
     private func words(_ s: Scrobble, _ playing: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: S.pair) {
             HStack(spacing: 7) {
                 if playing {
                     Image(systemName: "waveform").symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating)
@@ -141,7 +248,7 @@ struct NowHero: View {
             }
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.white.opacity(0.85))
-            .padding(.bottom, 4)
+            .padding(.bottom, S.pair)
             Text(s.title).font(.system(.title, weight: .bold)).foregroundStyle(.white).lineLimit(2)
             Text(s.artist).font(.title3).foregroundStyle(.white.opacity(0.85)).lineLimit(1)
             if !s.album.isEmpty { Text(s.album).font(.body).foregroundStyle(S.soft).lineLimit(1) }
@@ -154,6 +261,8 @@ struct NowHero: View {
 // His day so far, hour by hour, each play a little block in its cover's own colour, stacked up as they happened: a strip
 // that looks like the music it counts. Hold and slide to see an hour's songs.
 struct DaySection: View {
+    // Leading the page (nothing playing): today's figures sit just above, so the head doesn't count the plays again.
+    var lead = false
     private var store: Store { Store.shared }
     @State private var colours = 0          // bumped as covers' colours come in
     @State private var held: Int?
@@ -168,7 +277,7 @@ struct DaySection: View {
         let tallest = max(bySlot.values.map(\.count).max() ?? 1, 6)
         let nowSlot = slot(Clock.now)
         VStack(alignment: .leading, spacing: S.head) {
-            SectionHead(text: "your day", trailing: plays.isEmpty ? nil : "\(plays.count) \(plays.count == 1 ? "play" : "plays")")
+            SectionHead(text: "your day", trailing: plays.isEmpty || lead ? nil : "\(plays.count) \(plays.count == 1 ? "play" : "plays")")
             ZStack(alignment: .top) {
                 GeometryReader { g in
                     let gap: CGFloat = 3
@@ -304,7 +413,7 @@ struct RecentSection: View {
             SectionHead(text: "recent").padding(.bottom, S.head)
             ForEach(days, id: \.self) { day in
                 Text(dayName(day)).font(.headline).foregroundStyle(S.soft)
-                    .padding(.top, day == days.first ? 0 : 22).padding(.bottom, 8)
+                    .padding(.top, day == days.first ? 0 : S.inner).padding(.bottom, S.pair)
                 ForEach(groups[day] ?? []) { s in
                     TrackRow(s: s)
                         .onAppear { if s.id == store.recent.last?.id { Task { await store.loadMore() } } }
@@ -318,12 +427,12 @@ struct RecentSection: View {
 
 struct TrackRow: View {
     let s: Scrobble
-    @Environment(\.openTrack) private var open
+    @Environment(\.openRoute) private var open
     var body: some View {
-        Button { open(s) } label: {
-            HStack(spacing: 14) {
-                ArtView(s.art, px: 156, corner: 6).frame(width: 52).zoomSource(s.id)
-                VStack(alignment: .leading, spacing: 2) {
+        Button { open(Go(route: .track(s), zoom: "recent|\(s.id)")) } label: {
+            HStack(spacing: S.gap) {
+                ArtView(s.art, px: 156, corner: 6).frame(width: S.art).zoomSource("recent|\(s.id)")
+                VStack(alignment: .leading, spacing: S.pair / 2) {
                     Text(s.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
                     Text(s.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
                 }
@@ -331,7 +440,7 @@ struct TrackRow: View {
                 if s.loved { Image(systemName: "heart.fill").font(.footnote).foregroundStyle(S.accent).accessibilityLabel("Loved") }
                 Text(s.date?.formatted(date: .omitted, time: .shortened) ?? "").font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, S.row / 2)
             .contentShape(Rectangle())
         }
         .buttonStyle(Press())

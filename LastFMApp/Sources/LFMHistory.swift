@@ -36,7 +36,7 @@ enum LocalDay {
 
 actor HistoryDB {
     static let shared = HistoryDB()
-    private var db: OpaquePointer?
+    private(set) var db: OpaquePointer?
 
     init() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -55,14 +55,20 @@ actor HistoryDB {
             "CREATE INDEX IF NOT EXISTS plays_day ON plays(day)",
             "CREATE TABLE IF NOT EXISTS art(artist TEXT NOT NULL, album TEXT NOT NULL, url TEXT NOT NULL, PRIMARY KEY(artist, album)) WITHOUT ROWID",
             "CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT NOT NULL)",
+            // Phase 2: albums and tracks read as fast as artists (the library, the pages, the charts), and each track's
+            // length as Last.fm gives it, for listening time.
+            "CREATE INDEX IF NOT EXISTS plays_album ON plays(artist, album, uts)",
+            "CREATE INDEX IF NOT EXISTS plays_track ON plays(artist, track, uts)",
+            "CREATE TABLE IF NOT EXISTS durations(artist TEXT NOT NULL COLLATE NOCASE, track TEXT NOT NULL COLLATE NOCASE, secs INTEGER NOT NULL, PRIMARY KEY(artist, track)) WITHOUT ROWID",
+            "CREATE TABLE IF NOT EXISTS filled(artist TEXT NOT NULL, album TEXT NOT NULL, PRIMARY KEY(artist, album)) WITHOUT ROWID",
         ] { sqlite3_exec(db, sql, nil, nil, nil) }
     }
 
-    private func prepare(_ sql: String) -> OpaquePointer? {
+    func prepare(_ sql: String) -> OpaquePointer? {
         var s: OpaquePointer?
         return sqlite3_prepare_v2(db, sql, -1, &s, nil) == SQLITE_OK ? s : nil
     }
-    private func rows(_ sql: String, _ binds: [Any] = [], _ each: (OpaquePointer) -> Void) {
+    func rows(_ sql: String, _ binds: [Any] = [], _ each: (OpaquePointer) -> Void) {
         guard let s = prepare(sql) else { return }
         defer { sqlite3_finalize(s) }
         for (i, b) in binds.enumerated() {
@@ -71,8 +77,8 @@ actor HistoryDB {
         }
         while sqlite3_step(s) == SQLITE_ROW { each(s) }
     }
-    private func text(_ s: OpaquePointer, _ i: Int32) -> String { sqlite3_column_text(s, i).map { String(cString: $0) } ?? "" }
-    private func int(_ s: OpaquePointer, _ i: Int32) -> Int { Int(sqlite3_column_int64(s, i)) }
+    func text(_ s: OpaquePointer, _ i: Int32) -> String { sqlite3_column_text(s, i).map { String(cString: $0) } ?? "" }
+    func int(_ s: OpaquePointer, _ i: Int32) -> Int { Int(sqlite3_column_int64(s, i)) }
 
     func meta(_ k: String) -> String? { var v: String?; rows("SELECT v FROM meta WHERE k=?", [k]) { v = text($0, 0) }; return v }
     func setMeta(_ k: String, _ v: String) {
@@ -142,7 +148,7 @@ actor HistoryDB {
         return (months, names)
     }
     // Plays kept before months were (none on a phone that started with this build), given theirs once.
-    private func backfillMonths() {
+    func backfillMonths() {
         var missing = 0
         rows("SELECT COUNT(*) FROM plays WHERE month = 0") { missing = int($0, 0) }
         guard missing > 0 else { return }

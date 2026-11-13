@@ -67,12 +67,20 @@ jobs:
           }
           $D "$DEVICE" pose closed || true; sleep 4
           orient portrait 1
-          # One shot: name, display, wait, then the app's own arguments.
+          # One shot: name, display, wait, then the app's own arguments. A shot is checked for having rendered: a frame taken
+          # before the app drew (run 10's lfm-now-portrait.png was the bare ground) compresses to almost nothing, so one
+          # under 250 KB is taken again, up to three times, and named in the log if it never fills.
           shot() {
             local name=$1 display=$2 wait=$3; shift 3
             xcrun simctl launch "$DEVICE" $APP -launchLog YES "$@"
             sleep $wait
-            xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name.png
+            local f=dist/lfm-$name.png n=0
+            xcrun simctl io "$DEVICE" screenshot --display=$display $f > /dev/null 2>&1
+            while [ "$(stat -f %z $f 2>/dev/null || echo 0)" -lt 250000 ] && [ $n -lt 3 ]; do
+              n=$((n + 1)); echo "shot $name looked blank ($(stat -f %z $f 2>/dev/null) bytes), again ($n)"; sleep 4
+              xcrun simctl io "$DEVICE" screenshot --display=$display $f > /dev/null 2>&1
+            done
+            [ "$(stat -f %z $f 2>/dev/null || echo 0)" -lt 250000 ] && echo "SHOT BLANK: $name"
             xcrun simctl terminate "$DEVICE" $APP || true
           }
           # One film: name, display, seconds, then the app's own arguments; steps run while it records (STEPS="cmd:wait ...").
@@ -90,8 +98,9 @@ jobs:
                 flingback) $D "$DEVICE" drag ${X:-0.5} 0.25 ${X:-0.5} 0.8 0.12 || echo "drag failed";;
                 pull) $D "$DEVICE" drag ${X:-0.5} 0.3 ${X:-0.5} 0.85 0.9 || echo "drag failed";;
                 slow) $D "$DEVICE" drag ${X:-0.5} 0.75 ${X:-0.5} 0.35 0.9 || echo "drag failed";;
-                side) $D "$DEVICE" drag 0.8 0.75 0.2 0.75 0.25 || echo "drag failed";;
-                tap) $D "$DEVICE" touch 0.3 0.3 0.05 || echo "tap failed";;
+                side) $D "$DEVICE" drag 0.8 ${Y:-0.75} 0.2 ${Y:-0.75} 0.25 || echo "drag failed";;
+                edge) $D "$DEVICE" drag ${EX:-0.01} 0.5 0.9 0.5 0.8 || echo "drag failed";;
+                tap) $D "$DEVICE" touch ${TX:-0.3} ${TY:-0.3} 0.05 || echo "tap failed";;
                 open|partial|closed) $D "$DEVICE" pose $cmd || echo "pose failed";;
                 portrait) orient portrait $display;;
                 landscape) orient landscape $display;;
@@ -104,53 +113,79 @@ jobs:
             xcrun simctl terminate "$DEVICE" $APP || true
             if [ "$(stat -f %z dist/lfm-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
           }
+          # Every tab and page in one posture: name suffix, display. Tabs: 0 now, 1 charts, 2 library, 3 you, 4 discover.
+          everything() {
+            local x=$1 d=$2
+            shot now$x $d 8 -tab 0
+            shot now-idle$x $d 8 -tab 0 -playing NO
+            shot charts$x $d 9 -tab 1
+            shot library$x $d 9 -tab 2
+            shot you$x $d 9 -tab 3
+            shot discover$x $d 10 -tab 4
+            shot track$x $d 10 -tab 0 -pose track
+            shot artist$x $d 11 -tab 0 -pose artist
+            shot album$x $d 11 -tab 0 -pose album
+            shot weeks$x $d 10 -tab 1 -pose weeks
+            shot search$x $d 9 -tab 2 -pose search
+          }
           date
           # Folded, upright. The first launch: the whole history read in, filmed on You, slowed so it can be seen.
-          STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 1 -fresh YES -mockSyncSlow YES
-          # Read in full at normal speed for everything after (the slowed read above may not have finished).
-          shot you-first 1 16 -tab 1
-          shot now 1 8 -tab 0
-          shot you 1 8 -tab 1
-          shot detail 1 9 -tab 0 -pose detail
-          shot lastplayed 1 8 -tab 0 -playing NO
+          STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 3 -fresh YES -mockSyncSlow YES
+          # Read in full at normal speed for everything after (the slowed read above may not have finished), then the
+          # insights that need all of it, the track lengths and Discover's first list.
+          shot you-first 1 30 -tab 3
+          shot discover-first 1 20 -tab 4
+          everything "" 1
           shot scrub 1 9 -tab 0 -pose scrub
           STEPS="slow:10 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2 flingback:2" film scroll-now 1 26 -tab 0
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 side:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-you 1 28 -tab 1
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 slow:2 shot:2" film scroll-now-idle 1 20 -tab 0 -playing NO
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-you 1 40 -tab 3
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-charts 1 28 -tab 1
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-library 1 20 -tab 2
+          STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll 1 26 -tab 0 -pose artist
+          STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2" film album-scroll 1 20 -tab 0 -pose album
+          STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film track-film 1 20 -tab 0 -pose track
           STEPS="shot:12 shot:12" film live 1 30 -tab 0 -mockAdvance 11
-          STEPS="pull:5 shot:3" film detailfilm 1 12 -tab 0 -pose detail
-          film tour 1 14 -tab 0 -pose tour
+          film tour 1 22 -tab 0 -pose tour
           # Folded and turned sideways, a posture he can hold too.
           orient landscape 1 || true; orient landscape 1
           shot now-fland 1 8 -tab 0
-          shot you-fland 1 8 -tab 1
-          shot detail-fland 1 9 -tab 0 -pose detail
+          shot now-idle-fland 1 8 -tab 0 -playing NO
+          shot charts-fland 1 9 -tab 1
+          shot you-fland 1 9 -tab 3
+          shot artist-fland 1 11 -tab 0 -pose artist
+          shot track-fland 1 10 -tab 0 -pose track
           orient portrait 1
           date
           # Postures changed live. Folded on Now, turned sideways and back: the outer display filmed.
           $D "$DEVICE" pose closed || true; sleep 4; orient portrait 1
           STEPS="landscape:6 shot:2 portrait:6 shot:2" film posture-outer 1 22 -tab 0
-          # Opened upright on Now and scrolled, turned flat, half folded, flat again, upright: the inner display filmed
+          # Opened upright on Charts and scrolled, turned flat, half folded, flat again, upright: the inner display filmed
           # from open (recording it folded gives an empty film).
           $D "$DEVICE" pose open || true; sleep 6; orient portrait 3
-          STEPS="slow:6 shot:2 landscape:6 shot:2 partial:6 shot:2 open:6 shot:2 portrait:6 shot:2" film posture-inner 3 44 -tab 0
+          STEPS="slow:6 shot:2 landscape:6 shot:2 partial:6 shot:2 open:6 shot:2 portrait:6 shot:2" film posture-inner 3 44 -tab 1
+          STEPS="slow:7 shot:2 landscape:6 shot:2 portrait:6 shot:2" film posture-page 3 30 -tab 0 -pose artist
           # Open upright: the posture he holds.
-          $D "$DEVICE" pose open || true; sleep 5
+          $D "$DEVICE" pose open || true; sleep 8
           orient portrait 3
-          shot now-portrait 3 8 -tab 0
-          shot you-portrait 3 8 -tab 1
-          shot detail-portrait 3 9 -tab 0 -pose detail
+          sleep 4
+          everything "-portrait" 3
           shot scrub-portrait 3 9 -tab 0 -pose scrub
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2" film scroll-now-portrait 3 20 -tab 0
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-you-portrait 3 24 -tab 1
-          film tour-portrait 3 14 -tab 0 -pose tour
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-you-portrait 3 34 -tab 3
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-charts-portrait 3 26 -tab 1
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-library-portrait 3 18 -tab 2
+          STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-portrait 3 22 -tab 0 -pose artist
+          film tour-portrait 3 22 -tab 0 -pose tour
           # Open flat, two panes.
           orient landscape 3
-          shot now-open 3 8 -tab 0
-          shot you-open 3 8 -tab 1
-          shot detail-open 3 9 -tab 0 -pose detail
+          sleep 4
+          everything "-open" 3
           X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-now-open 3 18 -tab 0
-          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 side:2 shot:2" film scroll-you-open 3 18 -tab 1
-          film tour-open 3 14 -tab 0 -pose tour
+          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-you-open 3 20 -tab 3
+          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-charts-open 3 18 -tab 1
+          X=0.72 STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-open 3 20 -tab 0 -pose artist
+          film tour-open 3 22 -tab 0 -pose tour
           date
           # How long each launch took to its first frame, step by step (-launchLog).
           C=$(xcrun simctl get_app_container "$DEVICE" $APP data 2>/dev/null) && cp "$C/Library/Caches/launch-log.txt" dist/launch.log 2>/dev/null
