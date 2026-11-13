@@ -89,7 +89,7 @@ final class DeviceStore: ObservableObject {
     func arrived() { failingSince = nil; lastMiss = nil }
     func missed() {
         let now = Date()
-        if failingSince == nil || now.timeIntervalSince(lastMiss ?? now) > 10 { failingSince = now }
+        if failingSince == nil || now.timeIntervalSince(lastMiss ?? now) > 30 { failingSince = now }
         lastMiss = now
         if !failed, now.timeIntervalSince(failingSince!) >= TVModel.unreachableAfter { failed = true }
     }
@@ -105,7 +105,7 @@ struct DeviceTab: View {
     // dims once, as the banner arrives (gate of 87d77ca: the pill said it again, and the tiles greyed, 2 s later).
     // A box failure counted from before the Mac came back is the outage's, and is never said as the TV's: it read "Can't
     // reach the TV" for a quarter second as the Mac returned (gate of f6d2272).
-    var failed: Bool { !model.reachable || (store.failed && !model.retrying && (store.failingSince.map { $0 > model.reachedAt } ?? false)) }
+    var failed: Bool { !model.reachable || model.status?.online == false || (store.failed && !model.retrying && (store.failingSince.map { $0 > model.reachedAt } ?? false)) }
     @State private var tidying = false
     @State private var tidyNote: String?
     @State private var breathe = false
