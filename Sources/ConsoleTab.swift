@@ -28,7 +28,7 @@ enum ConsolePlace {
         ("machine", "The machine", "cpu", "All eight temperatures, the processors, memory, fan, network and disk"),
         ("media", "Playing", "play.tv", "What’s on the TV, music on the Chumby, Stremio’s continue watching"),
         ("home", "The room", "alarm", "The time, the Chumby’s next alarm and the weather"),
-        ("work", "Work", "hammer", "Claude sessions, the translator, tests and TestFlight"),
+        ("work", "Work", "hammer", "Claude sessions, builds, tests and TestFlight"),
     ]
     static func name(_ s: ConsoleState) -> (String, String) {
         if let b = s.board, let x = boards.first(where: { $0.id == b }) { return (x.name, x.symbol) }
@@ -193,7 +193,7 @@ struct ConsoleTab: View {
                         Image(systemName: b.symbol).foregroundStyle(macBlue).frame(width: 26)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(b.name).foregroundStyle(.primary)
-                            Text(b.about).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                            Text(b.about).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer(minLength: 8)
                         trailing("board:" + b.id, on: running && st?.board == b.id)
@@ -220,7 +220,9 @@ struct ConsoleTab: View {
 
     var pages: some View {
         Section {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+            // Two columns in every posture: the 14 pages fill every row, where three left a half-empty last row that read as a
+            // missing tile (designer gate, 2026-11-13).
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
                 ForEach(ConsolePlace.pages, id: \.id) { p in
                     let on = running && st?.board == nil && st?.page == p.id
                     Button { remote.send(model, "page:" + p.id, "page", p.id) } label: {

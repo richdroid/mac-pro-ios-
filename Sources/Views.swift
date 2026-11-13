@@ -1849,6 +1849,16 @@ struct UpgradeTab: View {
         guard let l = s.upgrade.log.split(separator: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return nil }
         var t = String(l)
         if t.hasPrefix("["), let close = t.firstIndex(of: "]") { t = String(t[t.index(after: close)...]).trimmingCharacters(in: .whitespaces) }
+        if let r = t.range(of: #"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d "#, options: .regularExpression) { t.removeSubrange(r) }
+        // In his words while it runs: "Checking softwareupdate catalogue, pass 160 of 160" was plumbing, cut mid-word
+        // (designer gate, 2026-11-13).
+        let low = t.lowercased()
+        if low.contains("softwareupdate") || low.contains("catalog") || low.hasPrefix("tick") { return "Checking for a newer macOS" }
+        if low.contains("kdk") || low.contains("kernel debug") { return "Getting what the patches need" }
+        if low.contains("oclp") || low.contains("opencore") { return "Checking OpenCore Legacy Patcher" }
+        if low.contains("root patch") || low.contains("patching") { return "Patching" }
+        if low.contains("download") { return "Downloading" }
+        if low.contains("install") { return "Installing" }
         return t.isEmpty ? nil : t
     }
     var oclp: String { s.upgrade.state["oclp_tag"] ?? s.oclp.version }
@@ -1910,7 +1920,7 @@ struct UpgradeTab: View {
             Image(systemName: seal.0).font(.system(size: 30)).foregroundStyle(seal.1).symbolRenderingMode(.hierarchical).frame(width: 36)
             VStack(alignment: .leading, spacing: 2) {
                 Text(headline).font(.headline).lineLimit(2)
-                if let line = summaryLine { Text(line).font(.footnote).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
+                if let line = summaryLine { Text(line).font(.footnote).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
             }
             Spacer(minLength: 0)
         }
@@ -1944,7 +1954,7 @@ struct UpgradeTab: View {
     // round arrow on the summary, which read as a refresh against staleness (designer, 2026-11-11).
     var factRows: [(String, String)] {
         let patchedAt: String = s.oclp.patchedAt.isEmpty ? "Not yet" : (Format.stamp(s.oclp.patchedAt).map(Format.when) ?? s.oclp.patchedAt)
-        var rows: [(String, String)] = [("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", patchedFor), ("Patched", patchedAt)]
+        var rows: [(String, String)] = [("Running", "\(s.macos) (\(s.build))"), ("OpenCore Legacy Patcher", oclp), ("Root patches for", patchedFor), ("Patched", patchedAt)]
         if let held { rows.append(("Newest macOS", held)) }
         return rows
     }
@@ -2006,7 +2016,9 @@ struct UpgradeTab: View {
         switch side {
         case .all:
             // Only the log's lines scroll; the summary and the rows stay put above them.
-            VStack(alignment: .leading, spacing: 12) {
+            // Sections 26 pt apart, the other pages' heading rhythm (designer gate, 2026-11-13: 19 pt here against 34 pt on
+            // Console, Connections and Storage, card foot to next heading).
+            VStack(alignment: .leading, spacing: 26) {
                 // "This Mac" over the status card in every posture, as open flat (designer, 2026-11-11).
                 VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
                 agent
@@ -2105,34 +2117,58 @@ struct UpdateLog: View {
 // The log's newest lines in the room it's given, each whole on one line, never a line cut through its glyphs.
 struct LogPreview: View {
     let log: String
-    @State private var height: CGFloat = 0
+    @State private var size: CGSize = .zero
     #if canImport(UIKit)
-    static let lineHeight = ceil(UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular).lineHeight) + 3
+    static let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
+    static let lineHeight = ceil(font.lineHeight)
+    static let charWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
     #else
-    static let lineHeight: CGFloat = 19
+    static let lineHeight: CGFloat = 16
+    static let charWidth: CGFloat = 7.8
     #endif
+    static let gap: CGFloat = 3
+    // Without the year and the seconds, so more of each line fits: "11-12 03:30 tick: macOS 26.7.2".
+    static func short(_ l: String) -> String {
+        guard l.count > 20, l.range(of: #"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d"#, options: .regularExpression) != nil else { return l }
+        return String(l.dropFirst(5).prefix(11)) + String(l.dropFirst(19))
+    }
     var body: some View {
-        let all = log.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        let fit = max(3, Int((height - 28 + 3) / Self.lineHeight))
-        // Without the year and the seconds, so more of each line fits: "11-12 03:30 tick: macOS 26.7.2".
-        let lines = all.suffix(fit).map { l -> String in
-            guard l.count > 20, l.range(of: #"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d"#, options: .regularExpression) != nil else { return l }
-            return String(l.dropFirst(5).prefix(11)) + String(l.dropFirst(19))
+        let all = log.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(Self.short)
+        // Every line whole, wrapped: the newest lines that fit the room in full, never one cut with an ellipsis
+        // (designer gate, 2026-11-13: "Checking softwareupdate cata…"). Rows per line from the card's width in characters.
+        let perRow = max(20, Int((size.width - 40) / Self.charWidth))
+        let rows: (String) -> Int = { max(1, Int(ceil(Double($0.count) / Double(perRow)))) }
+        let room = max(3, Int((size.height - 28 + Self.gap) / (Self.lineHeight + Self.gap / 2)))
+        var shown: [String] = []
+        var used = 0
+        for l in all.reversed() {
+            let r = rows(l)
+            if used + r > room, !shown.isEmpty { break }
+            shown.insert(l, at: 0); used += r
         }
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(lines.indices, id: \.self) { i in
-                Text(lines[i]).font(.system(.footnote, design: .monospaced)).foregroundStyle(UpdateLog.tone(lines[i]))
-                    .lineLimit(1).truncationMode(.tail)
+        let height = CGFloat(used) * Self.lineHeight + CGFloat(max(shown.count - 1, 0)) * Self.gap + 28
+        // Measured on the room around the card (all the height left under Details), not on the card, which is only as
+        // tall as its lines.
+        return ZStack(alignment: .top) {
+            Color.clear
+            card(shown, height: height)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+    }
+    func card(_ shown: [String], height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: Self.gap) {
+            ForEach(shown.indices, id: \.self) { i in
+                Text(shown[i]).font(.system(.footnote, design: .monospaced)).foregroundStyle(UpdateLog.tone(shown[i]))
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
         // As tall as its lines need and no taller: a short log is a short card, not a slab with one line at its foot.
-        .frame(maxWidth: .infinity, maxHeight: CGFloat(max(all.count, 3)) * Self.lineHeight + 28, alignment: .bottomLeading)
-        .frame(minHeight: CGFloat(min(max(all.count, 1), 3)) * Self.lineHeight + 28)
+        .frame(maxWidth: .infinity, maxHeight: max(height, Self.lineHeight + 28), alignment: .topLeading)
         .background(Color(white: 0.06), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
     }
 }
 // The whole log, full screen, wrapped, from its newest end.

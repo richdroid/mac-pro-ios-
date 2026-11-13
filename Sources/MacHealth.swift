@@ -49,9 +49,22 @@ enum MacParts {
         case "letterboxd": return "Letterboxd sign-in"
         case "chumby": return "Chumby"
         case "oclp": return "macOS patches"
-        case "stuck": return "Apps responding"
+        case "stuck": return "Programs"
         case "memory": return "Memory"
         default: return p.prefix(1).uppercased() + p.dropFirst()
+        }
+    }
+    // A check that passed, said as one line.
+    static func passed(_ p: String) -> String? {
+        switch p {
+        case "oclp": return "macOS patches healthy"
+        case "updates": return "No macOS update will install"
+        case "filevault": return "No password at startup"
+        case "autologin": return "Signs in by itself"
+        case "tailscale": return "Remote access starts at login"
+        case "work": return "Nothing long-running"
+        case "keep": return "Temporary files kept"
+        default: return nil
         }
     }
     static func symbol(_ p: String) -> String {
@@ -80,8 +93,8 @@ enum MacParts {
         if hand(p.part, check: check) != nil, let open = t.range(of: " (") { t = String(t[..<open.lowerBound]) }
         if !check {
             switch (p.part, p.bad) {
-            case ("serve", false): return "Points this app at the bridge"
-            case ("serve", true): return "Not pointing at the bridge"
+            case ("serve", false): return "Lets this app reach the Mac"
+            case ("serve", true): return "This app’s link isn’t set up"
             case ("stuck", true):
                 // "2 programs stuck; a restart clears them": the hint under it says the second half.
                 if let semi = t.range(of: "; ") { return String(t[..<semi.lowerBound]) }
@@ -201,7 +214,7 @@ struct MacGroup: Identifiable, Hashable {
         MacGroup(id: "chumby", name: "Chumby", symbol: "alarm", parts: ["chumby"], about: "The alarm clock by the bed."),
         MacGroup(id: "letterboxd", name: "Letterboxd sign-in", symbol: "film", parts: ["letterboxd"], about: "Signs Letterboxd on the TV in through the Mac."),
         MacGroup(id: "oclp", name: "macOS patches", symbol: "wrench.and.screwdriver", parts: ["oclp"], about: "The patches that let macOS Tahoe run on this Mac Pro."),
-        MacGroup(id: "stuck", name: "Apps responding", symbol: "hourglass", parts: ["stuck"], about: "Programs on the Mac that have stopped answering."),
+        MacGroup(id: "stuck", name: "Programs", symbol: "hourglass", parts: ["stuck"], about: "Programs on the Mac that have stopped answering."),
         MacGroup(id: "memory", name: "Memory", symbol: "memorychip", parts: ["memory"], about: "How hard the Mac’s memory is working."),
     ]
     // In the Mac's order; a part this app doesn't know yet gets a line of its own.
@@ -213,6 +226,41 @@ struct MacGroup: Identifiable, Hashable {
         }
         return out
     }
+    // "1 program stuck: Safari; a restart clears it" → "Safari isn't responding". The Mac names them since 2026-11-13;
+    // an older Mac only counts them.
+    static func stuckLine(_ t: String) -> String {
+        let head = t.components(separatedBy: ";").first ?? t
+        if let c = head.range(of: ": ") {
+            let names = head[c.upperBound...].components(separatedBy: ", ").filter { !$0.isEmpty }
+            if names.count == 1 { return "\(names[0]) isn’t responding" }
+            if let last = names.last, names.count > 1 { return names.dropLast().joined(separator: ", ") + " and \(last) aren’t responding" }
+        }
+        return head.replacingOccurrences(of: "stuck", with: "not responding")
+    }
+    // What the Fix button does for a part, said on the button.
+    static func fixLabel(_ part: String) -> String {
+        switch part {
+        case "tailscale": return "Start remote access"
+        case "bridge": return "Restart the Mac dashboard"
+        case "sessions": return "Start the Claude sessions"
+        case "tv": return "Reconnect the TV"
+        case "letterboxd": return "Restart Letterboxd sign-in"
+        default: return "Fix"
+        }
+    }
+    // The Connections rows behind a part, whose facts fill its card open (designer gate, 2026-11-13: the card said only
+    // what the part is, again, over half a pane of nothing).
+    var links: [String] {
+        switch id {
+        case "remote": return ["tailscale", "serve", "funnel"]
+        case "bridge": return ["bridge", "public", "novnc"]
+        case "tv": return ["tv"]
+        case "letterboxd": return ["letterboxd"]
+        case "chumby": return ["chumby", "chumby-remote"]
+        case "sessions": return ["sessions"]
+        default: return []
+        }
+    }
     // How a part stands, in his words.
     static func human(_ g: MacGroup, _ p: MacPart) -> String {
         let t = p.say
@@ -221,6 +269,7 @@ struct MacGroup: Identifiable, Hashable {
             case "tailscale": return "Tailscale is off on the Mac"
             case "serve": return "The Mac’s link for this app is off"
             case "bridge": return "Not answering"
+            case "stuck": return stuckLine(t)
             default: return MacParts.say(p)
             }
         }
@@ -248,6 +297,8 @@ struct HeroCard<Action: View>: View {
     let title: String
     let detail: String?
     var note: String? = nil
+    // Only a short state word is coloured ("Not connected"); a sentence stays grey (designer gate, 2026-11-13).
+    var tintDetail = false
     @ViewBuilder var action: () -> Action
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
@@ -258,7 +309,7 @@ struct HeroCard<Action: View>: View {
             .frame(width: 36)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.headline)
-                if let detail { Text(detail).font(.subheadline).foregroundStyle(color == .red || color == .orange ? color : .secondary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
+                if let detail { Text(detail).font(.subheadline).foregroundStyle(tintDetail ? color : .secondary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
                 if let note { Text(note).font(.subheadline).fixedSize(horizontal: false, vertical: true) }
                 action().padding(.top, 6)
             }
@@ -286,6 +337,11 @@ struct MacPartRow: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: MacParts.symbol(id)).font(.body).foregroundStyle(.secondary).frame(width: 26).padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
+                // A passed check is one line that says what passed ("No password at boot"): its name over a second line
+                // saying the same again was the wall of grey second lines (designer gate, 2026-11-13).
+                if check, pending == nil, let p = part, p.state == "ok", let passed = MacParts.passed(id) {
+                    Text(passed)
+                } else {
                 Text(MacParts.name(id, check: check))
                 if let pending {
                     Text(pending).font(.footnote).foregroundStyle(.secondary)
@@ -298,6 +354,7 @@ struct MacPartRow: View {
                     if p.bad, let h = MacParts.hand(id, check: check) {
                         Text(h).font(.footnote).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
                     }
+                }
                 }
             }
             Spacer(minLength: 8)
@@ -336,6 +393,7 @@ struct MacHealthView: View {
     // Folded and upright, the parts opened to say what they are; open flat, the one shown in the right pane.
     @State private var expanded: Set<String> = []
     @State private var chosen: String?
+    @StateObject private var links = FeedReader<LinksFeed>("/api/mac/links")
     // Open upright there's room under the parts: the chosen part is said whole there, as in the right pane open flat,
     // rather than an empty half page (Richard, 2026-11-12: open "feels barren").
     @State private var roomy = false
@@ -378,7 +436,7 @@ struct MacHealthView: View {
             }
             if let b = watch.backAt {
                 if bad.isEmpty, report != nil { return Line(symbol: "checkmark.circle.fill", color: .green, title: "Everything is up", detail: "Back \(minutes(b.timeIntervalSince(a))) after the restart was asked.") }
-                return Line(symbol: "arrow.triangle.2.circlepath", color: .orange, title: "The Mac is back", detail: "Back \(minutes(b.timeIntervalSince(a))) after the restart was asked. What’s still starting is marked below.")
+                return Line(symbol: "arrow.triangle.2.circlepath", color: .orange, title: "The Mac is back", detail: "Back \(minutes(b.timeIntervalSince(a))) after the restart was asked.")
             }
             return Line(symbol: "power.circle", color: .secondary, title: "The Mac is restarting", detail: "Asked \(clock(since)) ago. It usually takes three to five minutes; each part below fills in as it comes back.")
         }
@@ -413,26 +471,38 @@ struct MacHealthView: View {
         } else if badGroups.isEmpty {
             HeroCard(symbol: "checkmark.circle.fill", color: .green, title: "Everything’s running", detail: nil) { EmptyView() }
         } else {
-            VStack(spacing: 12) { ForEach(badGroups) { g in problem(g) } }
+            VStack(spacing: 16) { ForEach(badGroups) { g in problem(g) } }
         }
     }
-    // A part that needs a look: its name, what's wrong, and the one thing to do, with its button.
-    func problem(_ g: MacGroup) -> some View {
+    // A part that needs a look: its name, what's wrong, and the one thing to do, on its button.
+    func needsRestart(_ g: MacGroup) -> Bool {
         let p = parts(g).first(where: \.bad)
         let fixable = parts(g).contains { $0.bad && MacParts.fixable.contains($0.part) }
+        return !fixable && (["stuck", "memory"].contains(p?.part ?? "") || p.flatMap { MacParts.hand($0.part) } == nil)
+    }
+    func problem(_ g: MacGroup) -> some View {
+        let p = parts(g).first(where: \.bad)
+        let fixPart = parts(g).first { $0.bad && MacParts.fixable.contains($0.part) }
         let hand = p.flatMap { MacParts.hand($0.part) }
+        // The Restart button says what it does; a hand line that only says "restarting clears this" isn't said again.
+        let note: String? = startingWindow || fixPart != nil ? nil : needsRestart(g) && p?.part == "stuck" ? nil : hand ?? "A restart may bring it back."
         return HeroCard(symbol: g.symbol, color: startingWindow ? .orange : .red, title: g.name,
                         detail: p.map { (startingWindow ? "Still starting: " : "") + MacGroup.human(g, $0) },
-                        note: startingWindow ? nil : hand ?? (fixable ? nil : "A restart may bring it back.")) {
+                        note: note, tintDetail: true) {
             if !startingWindow {
-                if fixable {
-                    Button { Task { await fix() } } label: { Text("Fix").frame(minWidth: 64) }
+                if let fixPart {
+                    Button { Task { await fix() } } label: { Text(MacGroup.fixLabel(fixPart.part)) }
                         .buttonStyle(.borderedProminent).tint(macBlue)
-                } else if ["stuck", "memory"].contains(p?.part ?? "") || hand == nil {
-                    Button("Restart the Mac…", role: .destructive) { model.macPage = .restart }.buttonStyle(.bordered)
+                } else if needsRestart(g) {
+                    restartAction
                 }
             }
         }
+    }
+    // The one way to a restart, in one look wherever it is: red, bordered.
+    var restartAction: some View {
+        Button(role: .destructive) { model.macPage = .restart } label: { Text("Restart the Mac…") }
+            .buttonStyle(.bordered).tint(.red).controlSize(.regular)
     }
     // One line a part: its sign, its name, a small dot. Tapped, what it is and how it stands (folded and upright under it;
     // open flat in the right pane).
@@ -457,8 +527,6 @@ struct MacHealthView: View {
                 if open, !flat {
                     Text(stateLine(g)).font(.footnote).foregroundStyle(isBad(g) ? Color.red : Color.secondary)
                         .padding(.leading, 38).fixedSize(horizontal: false, vertical: true)
-                    Text(g.about).font(.footnote).foregroundStyle(.secondary)
-                        .padding(.leading, 38).fixedSize(horizontal: false, vertical: true)
                 }
             }
             .contentShape(Rectangle())
@@ -476,7 +544,8 @@ struct MacHealthView: View {
         return ps.first.map { MacGroup.human(g, $0) } ?? "Running"
     }
     // Open flat: the part chosen on the left, said whole on the right.
-    var picked: MacGroup? { groups.first { $0.id == chosen } ?? badGroups.first ?? groups.first }
+    // Unchosen, the first part that is running: a part that's down is already said whole in its card on the left.
+    var picked: MacGroup? { groups.first { $0.id == chosen } ?? groups.first { !isBad($0) } ?? groups.first }
     @ViewBuilder var detailCard: some View {
         if let g = picked {
             VStack(alignment: .leading, spacing: 8) {
@@ -487,7 +556,28 @@ struct MacHealthView: View {
                     Circle().fill(dot(g)).frame(width: 10, height: 10)
                 }
                 Text(stateLine(g)).foregroundStyle(isBad(g) && !down ? Color.red : Color.primary).fixedSize(horizontal: false, vertical: true)
-                Text(g.about).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                // What stands behind it, from Connections: each link's state in plain words and how long it has run,
+                // and the way there for its buttons and the rest.
+                let ls = (links.value?.links ?? []).filter { g.links.contains($0.id) }
+                if !ls.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(ls) { l in
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(l.name).font(.subheadline)
+                                    Spacer(minLength: 8)
+                                    Text(l.up ? "Up" : l.down ? "Down" : l.state == "off" ? "Off" : "Starting").font(.footnote).foregroundStyle(.secondary)
+                                }
+                                let more = [l.plainDetail.flatMap { $0 == "Working" || $0 == "Answering" || $0 == "Running" ? nil : $0 }, l.uptime.map { "running \(Format.span($0))" }].compactMap { $0 }
+                                if !more.isEmpty { Text(more.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                            }
+                        }
+                    }
+                    .padding(.top, 6)
+                    Button("Open Connections") { model.macPage = .links }.font(.subheadline).foregroundStyle(macBlue).padding(.top, 4)
+                } else if g.id == "oclp" {
+                    Button("Open the macOS tab") { model.tab = 4 }.font(.subheadline).foregroundStyle(macBlue).padding(.top, 4)
+                }
             }
             .padding(.vertical, 6)
         }
@@ -512,12 +602,12 @@ struct MacHealthView: View {
                         }
                     }
                     if side == .all, roomy { Section { detailCard } }
-                    if side == .all, !awaited, !down { restartButton }
+                    if side == .all, !awaited, !down, !badGroups.contains(where: needsRestart) { restartButton }
                 }
                 if side == .right {
                     // No heading over it, so its card starts level with the hero beside it.
                     Section { detailCard }
-                    if !awaited, !down { restartButton }
+                    if !awaited, !down, !badGroups.contains(where: needsRestart) { restartButton }
                 }
             }
             .environment(\.defaultMinListRowHeight, 40)
@@ -533,9 +623,7 @@ struct MacHealthView: View {
     // An action, not a row: the way to a restart, under the parts.
     var restartButton: some View {
         Section {
-            Button(role: .destructive) { model.macPage = .restart } label: { Text("Restart the Mac…") }
-                .buttonStyle(.bordered).tint(.red).controlSize(.regular)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            restartAction.frame(maxWidth: .infinity, alignment: .leading)
         }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
     }
@@ -551,6 +639,7 @@ struct MacHealthView: View {
         .animation(Motion.quick, value: report)
         .animation(Motion.quick, value: down)
         .task { await poll() }
+        .task { await links.loop(model, every: 20) }
         .task { while !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000_000); now = Date() } }
     }
 
@@ -558,7 +647,7 @@ struct MacHealthView: View {
     func poll() async {
         if let posed = Self.posed(model.pose) {
             report = posed.report
-            if posed.fixing { fixing = Date().addingTimeInterval(-23); fixingWhat = "TV and Chumby" }
+            if posed.fixing { fixing = Date().addingTimeInterval(-23); fixingWhat = "TV" }
             // "healthstuck": gone twelve minutes and not back.
             // "didntconfirm": the restart was sent and its answer never came.
             if model.pose == "didntconfirm" { watch.asked(confirmed: false); watch.askedAt = Date().addingTimeInterval(-40) }
@@ -630,7 +719,7 @@ struct MacHealthView: View {
         case "health", "healthmemory": return (r([:]), false)
         case "healthbad": return (r(two), false)
         // One part that needs his hands, as in Richard's screenshot of 2026-11-12: named in the card, first in the list.
-        case "healthone": return (r(["stuck": "1 program stuck; a restart clears it"]), false)
+        case "healthone": return (r(["stuck": "1 program stuck: Safari; a restart clears it"]), false)
         case "healthfixing": return (r(two), true)
         case "healthstuck", "didntconfirm": return (r([:]), false)
         case "healthback": return (r(["sessions": "3 of 6 kept running · 2 others"], fixed: ["letterboxd": "Sign-in relay started"]), false)

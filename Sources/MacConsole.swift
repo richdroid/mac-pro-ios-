@@ -41,6 +41,27 @@ struct MacLink: Decodable, Identifiable, Equatable {
     var detail: String?; var endpoint: String?; var pid: Int?; var uptime: Double?; var lastExit: Int?
     var lastError: Failure?; var checkedAt: Double?; var can: [String]?; var via: String?; var note: String?; var since: Double?
     var up: Bool { state == "up" }
+    // What the row says under its name, in his words. The Mac's own line ("https → the bridge, tailnet only", "Cloudflare
+    // tunnel up", "Running, listening on 8767") was plumbing (designer gate, 2026-11-13); a failure the app has no words
+    // for is still said as the Mac says it, since it is news.
+    var plainDetail: String? {
+        let d = detail ?? ""
+        switch (id, state) {
+        case ("serve", "up"): return "Lets this app reach the Mac"
+        case ("serve", "down"): return "This app’s link isn’t set up"
+        case ("funnel", "look"): return "On: the Mac dashboard is open to the internet"
+        case ("public", "up"), ("novnc", "up"), ("letterboxd", "up") where !d.contains("not listening"): return "Working"
+        case ("letterboxd", "up"): return "Running, but not answering"
+        case ("public", "starting"): return "Starting, no address yet"
+        case ("bridge", _): return d.contains("TestFlight") ? "Answering · sending a build to TestFlight" : d
+        case ("sessions", _):
+            if let r = d.range(of: #"(\d+) of (\d+) kept running"#, options: .regularExpression) {
+                let n = d[r].split(separator: " "); return n[0] == n[2] ? "All \(n[2]) running" : "\(n[0]) of \(n[2]) running"
+            }
+            return d
+        default: return d.isEmpty ? nil : d.replacingOccurrences(of: "the bridge", with: "the Mac dashboard").replacingOccurrences(of: "Tailscale didn’t", with: "Remote access didn’t")
+        }
+    }
     // Off is a state of its own (Funnel is meant to be off), not a fault.
     var down: Bool { state == "down" }
 }
@@ -131,7 +152,7 @@ extension API {
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (d, resp) = try await session.data(for: r)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        if code == 404, (try? JSONDecoder().decode(MacActionResult.self, from: d))?.error == nil { return MacActionResult(ok: false, error: "This Mac’s bridge can’t do that yet.") }
+        if code == 404, (try? JSONDecoder().decode(MacActionResult.self, from: d))?.error == nil { return MacActionResult(ok: false, error: "The Mac doesn’t know how to do that yet.") }
         var a = (try? JSONDecoder().decode(MacActionResult.self, from: d)) ?? MacActionResult(ok: false, error: "The Mac sent an unexpected reply (error \(code)).")
         if code != 200 { a.ok = false; if a.error == nil { a.error = a.say ?? "The Mac refused (error \(code))." } }
         return a
@@ -414,7 +435,7 @@ struct LinkRow: View {
         switch link.state { case "up": return "Up"; case "down": return "Down"; case "off": return "Off"; case "starting": return "Starting"; case "look": return "Needs a look"; default: return "Not known" }
     }
     static func actionName(_ a: String, _ link: MacLink) -> String {
-        switch a { case "restart": return "Restart"; case "repoint": return "Point at the bridge"; case "bringup": return link.down ? "Fix" : "Start"; default: return a.capitalized }
+        switch a { case "restart": return "Restart"; case "repoint": return "Reconnect"; case "bringup": return link.down ? "Fix" : "Start"; default: return a.capitalized }
     }
     static func symbol(_ id: String) -> String {
         switch id {
@@ -433,6 +454,10 @@ struct LinkRow: View {
         if let x = link.lastExit, !link.up { f.append("last \(MacConsole.exitText(x))") }
         return f
     }
+    // Addresses, processes, the last error and the Mac's note only on a tap: he reads the state first, the parts behind it
+    // when he asks (designer gate, 2026-11-13: "ports, pids and addresses go behind a tap").
+    @State private var open = false
+    var more: Bool { !facts.isEmpty || link.lastError != nil || link.note != nil }
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: Self.symbol(link.id)).foregroundStyle(.secondary).frame(width: 26).padding(.top, 1)
@@ -442,13 +467,16 @@ struct LinkRow: View {
                     Text(link.name)
                     Spacer(minLength: 8)
                     HStack(spacing: 6) { Circle().fill(color).frame(width: 8, height: 8); Text(stateWord) }.font(.footnote).foregroundStyle(.secondary)
+                    if more { Image(systemName: "chevron.down").font(.footnote.weight(.semibold)).foregroundStyle(Color.primary.opacity(0.3)).rotationEffect(.degrees(open ? 180 : 0)) }
                 }
-                if let d = link.detail { Text(d).font(.footnote).foregroundStyle(link.down ? Color.red : Color.secondary).fixedSize(horizontal: false, vertical: true) }
-                if !facts.isEmpty { Text(facts.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
-                if let e = link.lastError {
-                    Text("Last error\(e.t.map { " " + Format.ago(ms: $0) } ?? ""): \(e.text)").font(.footnote).foregroundStyle(.secondary).lineLimit(3)
+                if let d = link.plainDetail, d != stateWord { Text(d).font(.footnote).foregroundStyle(link.down ? Color.red : Color.secondary).fixedSize(horizontal: false, vertical: true) }
+                if open {
+                    if !facts.isEmpty { Text(facts.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
+                    if let e = link.lastError {
+                        Text("Last error\(e.t.map { " " + Format.ago(ms: $0) } ?? ""): \(e.text)").font(.footnote).foregroundStyle(.secondary).lineLimit(3)
+                    }
+                    if let n = link.note { Text(n).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                 }
-                if let n = link.note { Text(n).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                 // Only what went wrong: a success shows in the row's own state and line, so saying it again was noise
                 // (designer, CI d9c229c), and a failure the row's line already says isn't repeated.
                 if let outcome, !outcome.done, outcome.error != link.detail { OutcomeLine(result: outcome) }
@@ -465,6 +493,9 @@ struct LinkRow: View {
             }
         }
         .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onTapGesture { if more { withAnimation(.snappy(duration: 0.25)) { open.toggle() } } }
+        .accessibilityAction(named: open ? "Fewer details" : "More details") { open.toggle() }
         .modifier(OwnSeparator(first: first))
     }
 }
@@ -586,7 +617,7 @@ struct LinksView: View {
     var film: Bool { MacConsole.pose == "linkrestartfilm" }
     static func question(_ l: MacLink, _ a: String) -> String {
         switch (l.id, a) {
-        case ("bridge", _): return "The app loses the Mac for a few seconds while the bridge starts again. Anything the bridge is doing stops."
+        case ("bridge", _): return "The app loses the Mac for a few seconds while the Mac dashboard starts again. Anything it is doing stops."
         case ("public", _): return "The public link drops and comes back with a new address."
         case ("letterboxd", _): return "A sign-in in progress on the TV is cut off."
         case ("chumby-remote", _): return "The Chumby app loses the Chumby for a few seconds."
@@ -648,7 +679,7 @@ struct LinksView: View {
                 bridgeRestartAt = Date()
                 let back = await waitForBridge()
                 bridgeRestartAt = nil
-                shown = back ? MacActionResult(ok: true, say: "The bridge restarted and is answering") : MacActionResult(ok: false, error: "The bridge hasn’t come back within a minute. Check Everything on the Mac.")
+                shown = back ? MacActionResult(ok: true, say: "The Mac dashboard restarted and is answering") : MacActionResult(ok: false, error: "The Mac dashboard hasn’t come back within a minute. Check Everything.")
             }
             withAnimation(Motion.quick) { outcomes[l.id] = shown }
             await feed.read(model.api, query: "?fresh")
@@ -805,12 +836,14 @@ struct FansView: View {
             }
         } else if let c {
             Section {
-                Label(c.title ?? "Fan speed is read only", systemImage: "lock")
-                Text(c.note ?? "Speeds are read only and the Mac sets them.")
+                // In his words, the command behind a Copy button: "Fan floor helper not installed" over a raw sudo line was
+                // plumbing (designer gate, 2026-11-13).
+                Label(c.setup != nil ? "Choosing the speed needs a one-time setup" : "The Mac sets the fan speed", systemImage: "lock")
+                Text("Until then the Mac sets the speed itself.")
                     .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                if let cmd = c.setup { CommandRow(command: cmd) }
+                if let cmd = c.setup { CopySetup(command: cmd) }
             } header: { Text("Slowest fan speed") } footer: {
-                if c.setup != nil { Text("Run once in Terminal on the Mac. It asks for the Mac’s password.") }
+                if c.setup != nil { Text("Paste it into Terminal on the Mac. It asks for the Mac’s password once.") }
             }
         }
     }
@@ -896,6 +929,21 @@ struct FansView: View {
 
 // MARK: - Updates
 
+// A setup command he pastes at the Mac, as a button: the command itself isn't for reading.
+struct CopySetup: View {
+    let command: String
+    @State private var copied = false
+    var body: some View {
+        Button {
+            #if canImport(UIKit)
+            UIPasteboard.general.string = command
+            #endif
+            withAnimation(Motion.quick) { copied = true }
+            Task { try? await Task.sleep(nanoseconds: 1_500_000_000); withAnimation(Motion.quick) { copied = false } }
+        } label: { Label(copied ? "Copied" : "Copy the setup command", systemImage: copied ? "checkmark" : "doc.on.doc") }
+        .foregroundStyle(macBlue)
+    }
+}
 struct CommandRow: View {
     let command: String
     @State private var copied = false
@@ -973,7 +1021,7 @@ struct UpdatesView: View {
                     CommandRow(command: c)
                 }
             } header: { Text("OpenCore Legacy Patcher") } footer: {
-                Text(o.latest == nil ? "Couldn’t find out whether a newer OCLP is out; the Mac looks again within half an hour." : o.newer == true ? "A newer OCLP is out. Updating it is done at the Mac, and it patches again after." : "Up to date. Root patches are re-applied by the macOS tab after a macOS update.")
+                Text(o.latest == nil ? "Couldn’t find out whether a newer OpenCore Legacy Patcher is out; the Mac looks again within half an hour." : o.newer == true ? "A newer OpenCore Legacy Patcher is out. Updating it is done at the Mac, and it patches again after." : "Up to date. Root patches are re-applied by the macOS tab after a macOS update.")
             }
         }
     }
@@ -1138,6 +1186,7 @@ struct StartupRow: View {
     let busy: Bool
     let outcome: MacActionResult?
     let ask: (String) -> Void
+    @State private var open = false
     var stateText: String {
         if item.disabled == true { return "Disabled" }
         if item.running { return "Running" }
@@ -1156,18 +1205,24 @@ struct StartupRow: View {
         if item.label != "local.keep-awake" { if item.loaded { a.append("stop") }; a.append("disable") }
         return a
     }
-    // Each in the words Connections uses (Public link, Chumby proxy…), its launchd label under it in full; one the app
-    // doesn't know by name goes by its label (designer, CI d9c229c).
+    // Each in the words Connections uses (Mac dashboard, Public link, Chumby link…). One the app doesn't know is named
+    // from its label's last part ("com.example.sync-photos" → "Sync photos"); the label itself is behind a tap
+    // (designer gate, 2026-11-13: "local.mac-dash", "Chumby proxy" and the node command line were plumbing).
     static let names = [
-        "local.mac-dash": "Bridge", "local.mac-dash-watchdog": "Bridge watchdog", "local.mac-dash-tunnel": "Public link",
-        "local.chumby-remote": "Chumby proxy", "local.claude-sessions": "Claude sessions", "local.claude-remote-control": "Claude remote control",
-        "local.keep-awake": "Keep awake", "local.macpro-console": "MacPro Console", "local.usbmux-kick": "iPhone USB link",
-        "com.mint.sync-youtube": "Mint YouTube sync", "local.oclp-tahoe.agent": "OCLP Tahoe agent",
-        "com.dortania.opencore-legacy-patcher.auto-patch": "OCLP auto-patch", "com.dortania.opencore-legacy-patcher.macos-update": "OCLP macOS update check",
-        "com.dortania.opencore-legacy-patcher.os-caching": "OCLP caching", "com.google.keystone.agent": "Google updater",
+        "local.mac-dash": "Mac dashboard", "local.mac-dash-watchdog": "Mac dashboard keeper", "local.mac-dash-tunnel": "Public link",
+        "local.chumby-remote": "Chumby link", "local.claude-sessions": "Claude sessions", "local.claude-remote-control": "Claude remote control",
+        "local.keep-awake": "Keep awake", "local.macpro-console": "Console", "local.usbmux-kick": "iPhone cable link",
+        "com.mint.sync-youtube": "Mint YouTube sync", "local.oclp-tahoe.agent": "macOS patch check (daily)",
+        "com.dortania.opencore-legacy-patcher.auto-patch": "Patch after macOS updates", "com.dortania.opencore-legacy-patcher.macos-update": "macOS update check",
+        "com.dortania.opencore-legacy-patcher.os-caching": "macOS update caching", "com.google.keystone.agent": "Google updater",
         "com.google.keystone.xpcservice": "Google updater service", "com.google.GoogleUpdater.wake": "Google updater wake",
     ]
-    static func name(_ i: StartupItem) -> String { names[i.label] ?? i.label }
+    static func name(_ i: StartupItem) -> String {
+        if let n = names[i.label] { return n }
+        let last = i.label.split(separator: ".").last.map(String.init) ?? i.label
+        let words = last.replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " ")
+        return words.prefix(1).uppercased() + words.dropFirst()
+    }
     static func word(_ a: String) -> String { ["start": "Start", "stop": "Stop", "restart": "Restart", "enable": "Enable", "disable": "Disable"][a] ?? a }
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -1180,10 +1235,14 @@ struct StartupRow: View {
                 }
                 .font(.footnote).foregroundStyle(.secondary).fixedSize()
             }
-            if Self.names[item.label] != nil { Text(item.label).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled) }
-            if let p = item.program, !p.isEmpty { Text(p).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle) }
-            Text([item.pid.map { "process \($0)" }, item.lastExit.flatMap { $0 != 0 ? "last \(MacConsole.exitText($0))" : nil }, item.keepAlive == true ? "kept running" : nil, item.runAtLoad == true ? "starts at login" : nil, item.protected.map { $0 == "bridge" ? "the app’s own link" : "keeps Claude running" }].compactMap { $0 }.joined(separator: " · "))
-                .font(.footnote).foregroundStyle(.secondary)
+            let plain = [item.keepAlive == true ? "Kept running" : nil, item.runAtLoad == true ? "starts at login" : nil, item.lastExit.flatMap { $0 != 0 && !item.running ? "last \(MacConsole.exitText($0))" : nil }].compactMap { $0 }.joined(separator: " · ")
+            if !plain.isEmpty { Text(plain.prefix(1).uppercased() + plain.dropFirst()).font(.footnote).foregroundStyle(.secondary) }
+            // The Mac's own label, its command line and process number only on a tap.
+            if open {
+                Text(item.label).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                if let p = item.program, !p.isEmpty { Text(p).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(3) }
+                if let pid = item.pid { Text("Process \(pid)").font(.footnote).foregroundStyle(.secondary).monospacedDigit() }
+            }
             if let outcome { OutcomeLine(result: outcome) }
             if !item.mine, let c = item.command {
                 Text("Needs admin at the Mac:").font(.footnote).foregroundStyle(.secondary)
@@ -1198,6 +1257,9 @@ struct StartupRow: View {
             }
         }
         .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation(.snappy(duration: 0.25)) { open.toggle() } }
+        .accessibilityAction(named: open ? "Fewer details" : "More details") { open.toggle() }
     }
 }
 

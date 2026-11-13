@@ -32,7 +32,7 @@ extension API {
         let (d, resp) = try await session.data(for: r)
         let h = resp as? HTTPURLResponse
         if let e = try? JSONDecoder().decode(MPEnvelope.self, from: d), e.ok != nil || e.say != nil { return (e, h?.value(forHTTPHeaderField: "X-MP-Nonce")) }
-        if h?.statusCode == 404 { return (MPEnvelope(ok: false, say: "This Mac’s bridge can’t run Mac Pro actions yet."), nil) }
+        if h?.statusCode == 404 { return (MPEnvelope(ok: false, say: "The Mac doesn’t know how to do Mac Pro actions yet."), nil) }
         throw APIError.badResponse
     }
     // Whether this Mac's bridge has /api/mp: its own refusal of a made-up action, without running anything.

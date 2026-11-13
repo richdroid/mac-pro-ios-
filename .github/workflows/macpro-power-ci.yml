@@ -92,7 +92,7 @@ jobs:
             shot tab4$x $d 9 -tab 4
             shot fulllog$x $d 10 -tab 4 -pose fulllog
             shot longlog$x $d 9 -tab 4 -pose longlog
-            dragshot settings$x $d 9 -tab 0 -openLink macproapp://settings
+            dragshot settings$x $d 14 -tab 0 -openLink macproapp://settings
             shot health$x $d 10 -tab 5 -pose health
             shot healthbad$x $d 10 -tab 5 -pose healthbad
             shot healthone$x $d 10 -tab 5 -pose healthone
