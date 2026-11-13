@@ -479,7 +479,7 @@ jobs:
               done
               xcrun simctl launch "$DEVICE" local.macpro.Chumby -address http://127.0.0.1:9000 -tab 1
               sleep 9
-              $D "$DEVICE" tap "Time on screen" || echo "time menu tap failed"
+              $D "$DEVICE" tap "Time on screen#1" || echo "time menu tap failed"
               sleep 3
               xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pose-timemenu$x.png
               xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
@@ -922,7 +922,7 @@ jobs:
             sleep 8
             $D "$DEVICE" tap "Channel, Default" || true; sleep 2.5
             $D "$DEVICE" tap "News" || true; sleep 4
-            $D "$DEVICE" tap "Time on screen" || true; sleep 2.5
+            $D "$DEVICE" tap "Time on screen#1" || true; sleep 2.5
             xcrun simctl io "$DEVICE" screenshot --display=1 dist/chumby-pose-widgettime.png
             $D "$DEVICE" tap "Auto" || true; sleep 3
             kill -INT $REC; wait $REC; echo "chumby menufilm channels exit $?"

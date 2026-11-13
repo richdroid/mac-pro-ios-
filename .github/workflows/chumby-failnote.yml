@@ -88,7 +88,7 @@ jobs:
             done
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 1
             sleep 9
-            $D "$DEVICE" tap "Time on screen" || echo "time menu tap failed"
+            $D "$DEVICE" tap "Time on screen#1" || echo "time menu tap failed"
             sleep 3
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pose-timemenu$x.png
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
