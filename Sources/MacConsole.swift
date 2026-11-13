@@ -534,7 +534,12 @@ struct LinksView: View {
                     .foregroundStyle(s.good ? Color.green : f.links.contains(where: \.down) ? Color.red : Color.orange)
                     // A new verdict replaces the old one whole, never morphing one sentence into the next.
                     .id(s.text).transition(.opacity)
-                if let b = bridgeRestartAt { HStack { ProgressView().controlSize(.small); Text("Waiting for the Mac dashboard to come back… \(Int(Date().timeIntervalSince(b)))s").monospacedDigit() } }
+                if let b = bridgeRestartAt {
+                    // Ticks every second by itself, not only when something else redraws the page.
+                    TimelineView(.periodic(from: .now, by: 1)) { c in
+                        HStack { ProgressView().controlSize(.small); Text("Waiting for the Mac dashboard to come back… \(Int(c.date.timeIntervalSince(b))) s").monospacedDigit() }
+                    }
+                }
                 // The one Fix: the Mac's own bring-up, which starts only what's down and leaves what's up alone (no question).
                 let fixable = f.links.filter { $0.can?.contains("bringup") == true }
                 if !fixable.isEmpty || fixing || fixOutcome != nil {

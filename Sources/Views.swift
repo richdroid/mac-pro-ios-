@@ -1030,7 +1030,8 @@ struct TempDials: View {
                     // "iterate on the features u removed and make it even better").
                     Text(t.name).font(.caption2.weight(t.name == hottest && temps.count > 1 ? .semibold : .regular))
                         .foregroundStyle(t.name == hottest && temps.count > 1 ? AnyShapeStyle(Heat.color(t.c) == .white ? Color.primary : Heat.color(t.c)) : AnyShapeStyle(.secondary))
-                        .lineLimit(1).minimumScaleFactor(0.8)
+                        // Its own width, centred under the dial, never shrunk: every name at the one size.
+                        .lineLimit(1).fixedSize()
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { model.history = .temperature(t.name) }
@@ -1051,10 +1052,13 @@ struct EvenGrid: Layout {
     // A dial is never wider than this, centred in its column: sized by the column, it grew and shrank with every change of
     // the page's width (a turn into open portrait laid the dials out at 311 pt, then 343 as the side bar's inset went to the
     // foot; designer, resize regate). Wide pages had over-large dials anyway; folded and in a pane they're narrower than this.
-    var largest: CGFloat = 96
+    // 2026-11-13: as large as build 276 drew them (it filled the width open upright, 138 pt); 96 left the card sparse.
+    var largest: CGFloat = 160
     // To whole steps of 8 pt: the page's width settles a few points at a time after a turn (the side bar's inset arriving),
     // and each step resized the dials and their row (CI 7169d6b: 220.5, 212.5, 212.0, 211.5 pt).
-    static func dial(_ cell: CGFloat, _ largest: CGFloat) -> CGFloat { min((cell / 8).rounded(.down) * 8, largest) }
+    // Steps of 2 pt now, not 8: to 8 the folded dials were 64 pt in a 71 pt column, smaller than build 276's and with
+    // "Power supply" shrunk to fit them (Richard, 2026-11-13: spacing on Temperatures "the biggest problem").
+    static func dial(_ cell: CGFloat, _ largest: CGFloat) -> CGFloat { min((cell / 2).rounded(.down) * 2, largest) }
     static func columns(_ n: Int, width: CGFloat) -> Int {
         let fit = max(Int((width + 12) / 76), 1)
         guard n > fit else { return max(n, 1) }
