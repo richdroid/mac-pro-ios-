@@ -15,7 +15,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 80
+    timeout-minutes: 95
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,7 +34,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 60
+        timeout-minutes: 75
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -72,10 +72,14 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby 2>/dev/null || true
             xcrun simctl uninstall "$DEVICE" local.macpro.Chumby
             xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+            # A first launch after an install is slow to load (11-13 run: "No alarms yet" at 14 s), so warm it on the
+            # same scene before any shot.
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $1 -tab 3; sleep 15
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
           scrolled() { # display, name, address, launch args... (top, then the page scrolled twice)
             local d=$1 name=$2 addr=$3; shift 3
-            fresh
+            fresh $addr
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $addr "$@"
             sleep 14
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-$name-top.png
@@ -94,7 +98,7 @@ jobs:
             done
             xcrun simctl ui "$DEVICE" appearance light
             # Film: the five-ring strip dragged slowly, flung to its far end, flung back (fade toggles, bounce).
-            fresh
+            fresh $M/soundsmany
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-stripfilm$x.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/soundsmany -tab 3
@@ -110,7 +114,7 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
             # Film: page drags that begin on an alarm's sound value (slow, then a flick) must scroll, never pick.
             # The page is first scrolled so Alarms play fills the screen; values are found by their row positions.
-            fresh
+            fresh $M/soundsreal
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-pagedrag$x.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/soundsreal -tab 3
