@@ -1,0 +1,113 @@
+name: Chumby woke (branch)
+# A working branch's own short run: "Woke up to" (Sounds) with every song each alarm played, grouped by ring (Richard,
+# 2026-11-12: "does the woke up to tab account for multiple songs playing over the course of a single alarm"). Stills
+# folded, open flat and open portrait, light and dark; films of a wake-up's songs arriving live and of the strip dragged
+# and flung. Only for pushes to chumby-woke; published to the chumby-woke-shots release.
+on:
+  push:
+    branches: [chumby-woke]
+permissions:
+  contents: write
+concurrency:
+  group: chumby-woke
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9000
+          xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 2; sleep 12
+          xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          still() { # display, name, seconds, address, launch args...
+            local d=$1 name=$2 secs=$3 addr=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $addr "$@"
+            sleep $secs
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          film() { # display, name, seconds, address, launch args... (records while the app runs)
+            local d=$1 name=$2 secs=$3 addr=$4; shift 4
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $addr "$@"
+            sleep $secs
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-$name-end.png
+            kill -INT $REC; wait $REC; echo "$name exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          posture() { # display, suffix, strip's height as a fraction of the screen
+            local d=$1 x=$2 y=$3
+            for A in light dark; do
+              xcrun simctl ui "$DEVICE" appearance $A
+              still $d woke-$A$x 12 $M -tab 3
+            done
+            xcrun simctl ui "$DEVICE" appearance light
+            # A wake-up 10 minutes ago: its first song arrives 8 s in, its second 16 s in, live.
+            film $d wokelive$x 28 $M/songchange -tab 3 -pose songchange
+            # The strip dragged slowly, then flung, then flung back.
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-wokefling$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 3
+            sleep 10
+            $D "$DEVICE" drag 0.85 $y 0.35 $y 1.2 || echo "drag failed"; sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-wokefling-dragged$x.png
+            $D "$DEVICE" drag 0.85 $y 0.15 $y 0.12 || echo "fling failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-wokefling-flung$x.png
+            $D "$DEVICE" drag 0.15 $y 0.85 $y 0.12 || echo "fling back failed"; sleep 3
+            kill -INT $REC; wait $REC; echo "wokefling$x exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          $D "$DEVICE" pose closed; sleep 5
+          posture 1 "" ${WOKE_Y:-0.62}
+          $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
+          posture 3 -open ${WOKE_Y_OPEN:-0.62}
+          $D "$DEVICE" rotate 1; sleep 5
+          posture 3 -portrait ${WOKE_Y_PORTRAIT:-0.62}
+      - name: Collect crash reports
+        if: always()
+        run: |
+          mkdir -p dist/crashes
+          cp ~/Library/Logs/DiagnosticReports/*.ips dist/crashes/ 2>/dev/null || true
+      - name: Publish the result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.ips' '*.mp4' || zip -q ../shots.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-woke-shots >/dev/null 2>&1 || gh release create chumby-woke-shots --target chumby-woke --prerelease --title "Chumby woke (branch)" --notes "Branch-only shots."
+          for f in shots.zip status.txt; do
+            for i in 1 2 3 4; do gh release upload chumby-woke-shots "$f" --clobber && break; echo "upload of $f failed, try $i"; sleep 20; done
+          done

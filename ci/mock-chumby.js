@@ -351,23 +351,35 @@ http.createServer((q, s) => {
 // ---- Chumby app poses (separate block) -------------------------------------------------------------------------------
 // Asked for by a path in front of the address (http://127.0.0.1:9000/ringing and so on), so every shot above gets the same
 // answers as before. Anything a scene doesn't change falls through to the answers above.
-// Pandora's history, for "Woke up to": songs just after the Weekend alarm (9:30) on the last two weekend mornings.
+// Pandora's history, for "Woke up to", each ring with every song it played (Richard, 2026-11-12: "does the woke up to tab
+// account for multiple songs playing over the course of a single alarm"). Times follow each song's real length.
+//  - The latest weekend morning (Weekend, 9:30): four songs back to back, then he stopped it partway into the fourth and
+//    put on Feeling Good himself 8 minutes later, inside the alarm's 30: that one never shows as woken up to.
+//  - Yesterday 2:40 PM (Calendar: Shift, gone from the alarm list): one song, snoozed after 100 s, the re-ring 9 minutes
+//    later playing two more; all three are the Shift ring's.
+//  - The weekend before: two songs, the second following the first as it ended.
 {
-  const songs = [], d = new Date();
-  for (let back = 1; songs.length < 4 && back < 14; back++) {
+  const songs = [], rings = [], d = new Date(), weekends = [];
+  for (let back = 1; weekends.length < 2 && back < 14; back++) {
     const day = new Date(d.getFullYear(), d.getMonth(), d.getDate() - back, 9, 30);
-    if (day.getDay() !== 0 && day.getDay() !== 6) continue;
-    const t = day.getTime() / 1000;
-    // A different first song each morning, as Pandora plays it: the same one twice read as a duplicate tile (r27).
-    const first = songs.length ? { title: 'Freddie Freeloader', artist: 'Miles Davis', album: 'Kind of Blue' } : { title: 'So What', artist: 'Miles Davis', album: 'Kind of Blue' };
-    songs.push({ t: t + 70, ...first }, { t: t + 640, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' });
+    if (day.getDay() === 0 || day.getDay() === 6) weekends.push(day.getTime() / 1000);
   }
-  // The Chumby's ring log: each weekend morning's ring, and a once-only calendar alarm from yesterday afternoon, which is
-  // no longer in the alarm list, with its song: Woke up to must pair it from the log (2026-11-06: "woke up to doesnt work").
-  const rings = songs.filter((x, i) => i % 2 === 0).map(x => ({ t: x.t - 70, name: 'Weekend' }));
+  const play = (t, title, artist, album) => songs.push({ t, title, artist, album });
+  const [w1, w2] = weekends;
+  rings.push({ t: w1, name: 'Weekend' });
+  play(w1 + 12, 'So What', 'Miles Davis', 'Kind of Blue');                       // 9:48
+  play(w1 + 563, 'Take Five', 'Dave Brubeck', "Dave Brubeck's Greatest Hits");    // 5:24
+  play(w1 + 891, 'Naima', 'John Coltrane', 'Giant Steps');                       // 4:25
+  play(w1 + 1161, 'Cantaloupe Island', 'Herbie Hancock', 'Empyrean Isles');      // 5:34, stopped about 2 min in
+  play(w1 + 1661, 'Feeling Good', 'Nina Simone', 'I Put a Spell On You');        // his own, after stopping
+  rings.push({ t: w2, name: 'Weekend' });
+  play(w2 + 70, 'Freddie Freeloader', 'Miles Davis', 'Kind of Blue');             // 9:48
+  play(w2 + 640, 'Take Five', 'Dave Brubeck', "Dave Brubeck's Greatest Hits");
   const cal = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1, 14, 40).getTime() / 1000;
-  songs.push({ t: cal + 10, title: 'Save Tonight', artist: 'Eagle-Eye Cherry', album: 'Desireless' });
   rings.push({ t: cal, name: 'Calendar: Shift' });
+  play(cal + 12, 'Save Tonight', 'Eagle-Eye Cherry', 'Desireless');               // snoozed at +100, rings again at +640
+  play(cal + 652, 'My Funny Valentine', 'Chet Baker', 'Chet Baker Sings');        // 2:19
+  play(cal + 794, "'Round Midnight", 'Thelonious Monk', 'Genius of Modern Music, Vol. 1');
   data.hist = { ok: true, songs: songs.sort((x, y) => y.t - x.t), rings: rings.sort((x, y) => y.t - x.t) };
 }
 // The live scenes keep what's saved and what's ringing, for the films of Snooze, Stop and a nap set and cancelled.
@@ -538,13 +550,19 @@ function chumbyScene(q, s) {
   if (scene === 'snoozed' && a === 'state') return json({ ...stateNow(data.state), ringing: { state: 'snoozing', name: 'Work', sound: 'Beep', until: 0 } });
   // A Pandora wake-up 5 minutes ago with no song logged yet; 8 s into the scene the Chumby's state names the first song,
   // so "Woke up to" (Sounds) must gain its tile live.
-  if (scene === 'songchange' && a === 'state') {
+  // A wake-up 10 minutes ago, still playing: 8 s into the scene the Chumby's state names its first song and 16 s in its
+  // second, as Pandora moves on, so "Woke up to" (Sounds) gains a new group, then a second tile in it, live. The ring is
+  // in the state's "rang" as the real one gives it, and in the history once its songs are.
+  if (scene === 'songchange' && (a === 'state' || a === 'hist')) {
     songScene.at ||= Date.now();
-    const now = Date.now() / 1000, fire = Math.floor(now / 60) - 5;
+    const now = Date.now() / 1000, fire = Math.floor(now / 60) - 10, since = Date.now() - songScene.at;
     const wake = alarm({ name: 'Wake', time: String(fire), when: 'once', type: 'audio', arg: 'pandora', param: '1', param_description: 'Morning Mix' });
-    const song = Date.now() - songScene.at > 8000 ? { t: fire * 60 + 40, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' } : null;
+    const live = [{ t: fire * 60 + 12, title: 'Naima', artist: 'John Coltrane', album: 'Giant Steps' }, { t: fire * 60 + 280, title: 'Take Five', artist: 'Dave Brubeck', album: "Dave Brubeck's Greatest Hits" }]
+      .filter((x, i) => since > (i ? 16000 : 8000));
+    const rang = { t: fire * 60, name: 'Wake' };
+    if (a === 'hist') return json({ ok: true, songs: [...live.slice().reverse(), ...data.hist.songs], rings: [rang, ...data.hist.rings] });
     // The wake-up's music is still playing, so Now and Woke up to tell the same story.
-    return json({ ...stateNow(data.state), alarms: [...data.state.alarms, wake], song, music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
+    return json({ ...stateNow(data.state), alarms: [...data.state.alarms, wake], song: live[live.length - 1] || null, rang, music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
   }
   // A nap set 20 minutes from now, as the app's chips or Control Center leave it: the one "Nap" one-off, a short Beep.
   if (scene === 'nap' && a === 'state') {
