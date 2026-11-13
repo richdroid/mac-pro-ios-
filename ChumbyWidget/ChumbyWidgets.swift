@@ -215,7 +215,8 @@ func entryDuration(_ s: Int) -> String {
 struct NotAnswering: View {
     let entry: ChumbyEntry
     var body: some View {
-        Text(entry.lastSeenLine ?? entry.problem).font(.trebuchet(12)).opacity(0.7).lineLimit(1).minimumScaleFactor(0.8)
+        // Never seen: nothing more here (the calm word is already above it).
+        Text(entry.lastSeenLine ?? " ").font(.trebuchet(12)).opacity(0.7).lineLimit(1).minimumScaleFactor(0.8)
             .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
     }
 }
@@ -293,7 +294,7 @@ struct AlarmBody: View {
                     if let s = entry.plainSkip {
                         Text("Skipped").font(.trebuchet(12, .bold)).lineLimit(1)
                         Text(ChumbyEntry.clock(s.date)).font(.trebuchet(19, .bold)).strikethrough().lineLimit(1).minimumScaleFactor(0.7)
-                        if let at = entry.nextAt { Text("then \(ChumbyEntry.then(at))").font(.trebuchet(12)).lineLimit(1) }
+                        if let at = entry.nextAt { Text(ChumbyEntry.then(at)).font(.trebuchet(12)).lineLimit(1).minimumScaleFactor(0.85) }
                     } else if entry.moved != nil, let at = entry.nextAt {
                         Text("Just this once").font(.trebuchet(12, .bold)).lineLimit(1)
                         Text(ChumbyEntry.clock(at)).font(.trebuchet(19, .bold)).lineLimit(1).minimumScaleFactor(0.7)
@@ -302,10 +303,9 @@ struct AlarmBody: View {
                         Text(clock.map { "\($0.0) \($0.1)" } ?? noAlarm).font(.trebuchet(19, .bold)).lineLimit(1).minimumScaleFactor(0.7)
                         if entry.nextAt != nil { Text(entry.whenLine).font(.trebuchet(12)).lineLimit(1) }
                     }
-                    Spacer(minLength: 0)
                 }
-                // Leading, so nothing moves sideways from one state to the next.
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Leading, so nothing moves sideways from one state to the next; centred top to bottom, beside the octopus.
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
         default:
             if let s = entry.plainSkip {
@@ -503,12 +503,14 @@ struct ChumbyStatusBody: View {
     var awake: some View {
         HStack(spacing: 5) {
             Circle().fill(entry.reachable ? Color.green : Color.white.opacity(0.4)).frame(width: 8, height: 8)
-            // Not answering: the time it was last seen (with its day when not today) by a grey dot; the phrase didn't fit.
+            // Not answering: "Last seen" over the time (with its day when not today), so it never reads as an alarm time.
             if entry.reachable {
                 Text("Up \(entryDuration(sys.up))").font(.trebuchet(15, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
             } else {
-                Text(entry.lastSeen.map { Calendar.current.isDateInToday($0) ? ChumbyEntry.clock($0) : $0.formatted(.dateTime.weekday(.abbreviated).hour().minute()) } ?? "Not answering")
-                    .font(.trebuchet(13, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(entry.lastSeen == nil ? "Not answering" : "Last seen").font(.trebuchet(11)).opacity(0.75)
+                    if let t = entry.lastSeen { Text(Calendar.current.isDateInToday(t) ? ChumbyEntry.clock(t) : t.formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.trebuchet(13, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8) }
+                }
             }
         }
     }

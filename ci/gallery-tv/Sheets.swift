@@ -64,7 +64,8 @@ struct TVSheets: View {
         if !reachable, s != nil { e.readAt = Date().addingTimeInterval(-8 * 60) }
         if let cover { e.cover = cover; e.wall = TVProvider.shrunk(cover, to: 16) }
         if mirror, reachable, s?.screen != "asleep" { e.mirror = got["shot"] }
-        e.logos = reachable ? got.filter { TVProvider.favourites.contains($0.key) } : [:]
+        // The banners come from disk once fetched, answer or not (TVProvider.logo); a never-reached phone has none.
+        e.logos = s != nil || reachable ? got.filter { TVProvider.favourites.contains($0.key) } : [:]
         e.chosen = zip(TVProvider.favourites, TVSample.names).map { TVAppEntity(id: $0, name: $1) }
         return e
     }
@@ -107,7 +108,7 @@ struct TVSheets: View {
             SheetRow("TV Remote · medium") {
                 HomeCell(look, Fam.medium, margins: false, bg: TVGlass()) { RemoteBody(family: .systemMedium, entry: TVEntry()).foregroundStyle(.white) }
             }
-            SheetRow("TV Apps · banners, Mac not answering") {
+            SheetRow("TV Apps · banners (the same from disk when the Mac doesn’t answer) · never fetched") {
                 HomeCell(look, Fam.medium, margins: false, bg: TVGlass()) { AppsBody(entry: entry(TVSample.status())).foregroundStyle(.white) }
                 HomeCell(look, Fam.medium, margins: false, bg: TVGlass()) { AppsBody(entry: entry(nil, reachable: false)).foregroundStyle(.white) }
             }

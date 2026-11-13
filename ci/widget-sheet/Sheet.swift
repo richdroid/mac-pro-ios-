@@ -43,7 +43,7 @@ extension View {
     // Colours gone, opacity kept.
     func flattenedWhite() -> some View { colorMultiply(.black).colorInvert() }
     // Brightness as opacity, in white: the Lock Screen's vibrancy.
-    func vibrantWhite() -> some View { luminanceToAlpha().colorMultiply(.black).colorInvert() }
+    func vibrantWhite() -> some View { background(Color.black).compositingGroup().luminanceToAlpha().colorMultiply(.black).colorInvert() }
 }
 
 // A Home Screen widget. `margins`: the system's 16 pt content margins (off for widgets that disable them).

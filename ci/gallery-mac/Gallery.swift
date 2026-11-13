@@ -60,6 +60,7 @@ enum MacSample {
             ("A blip: last reading 6 min ago", MacEntry(date: now, state: .ok(status()), readAt: now.addingTimeInterval(-6 * 60))),
             ("Not heard for 2 h: last reading", MacEntry(date: now, state: .ok(status()), readAt: now.addingTimeInterval(-2 * 3600))),
             ("Mac not answering, nothing kept", MacEntry(date: now, state: .unreachable)),
+            ("Hot, not heard since yesterday", MacEntry(date: now, state: .ok(status(cpu: 91, memUsed: 30.9e9, temps: hot)), readAt: now.addingTimeInterval(-20 * 3600))),
             ("Answer it can't read", MacEntry(date: now, state: .unreadable)),
             ("No address", MacEntry(date: now, state: .noAddress)),
         ]

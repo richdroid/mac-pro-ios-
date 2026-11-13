@@ -12,14 +12,21 @@ enum ShareAddress {
     // The address the Mac Pro app saved (its Keychain item, readable here when the build's signing shares the team's
     // keychain), else the one baked into this build.
     static var base: URL? {
-        for s in [keychain(), Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String] {
+        for s in [keychain(shared: true), keychain(), Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String] {
             if let s, !s.isEmpty, let u = URL(string: s), u.host != nil { return u }
         }
         return nil
     }
-    private static func keychain() -> String? {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address",
+    // `shared`: the Mac Pro app's shared access group (SavedAddress.sharedGroup, given by the TestFlight signing).
+    private static func keychain(shared: Bool = false) -> String? {
+        var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address",
                                 kSecAttrAccount as String: "address", kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        if shared {
+            // The team, as the signing writes it into Info.plist (AppIdentifierPrefix, "TEAM."), else from the bundle id it gives.
+        let prefix = (Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard let team = prefix.flatMap({ $0.isEmpty ? nil : Substring($0) }) ?? Bundle.main.bundleIdentifier?.split(separator: ".").first(where: { $0.count == 10 && $0.allSatisfy { $0.isUppercase || $0.isNumber } }) else { return nil }
+            q[kSecAttrAccessGroup as String] = "\(team).local.macpro.MacPro.shared"
+        }
         var out: CFTypeRef?
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
         return String(data: d, encoding: .utf8)

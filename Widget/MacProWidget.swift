@@ -279,14 +279,18 @@ struct StatusView: View {
         return 1 - f / t
     }
     var week: Double? { entry.isSample ? 47 : entry.status?.usage?.plan?.sevenDay }
+    // The time line is long (stale, or a calm word in its place): it gets the whole width.
+    var long: Bool { entry.quiet || entry.problem != nil }
     var hot: some View {
         Group {
             if let h = entry.hottest {
                 HStack(spacing: 3) {
-                    Image(systemName: heatGlyph(h.c)).font(.system(size: 11, weight: .semibold))
+                    // The flame says it when it's hot; the thermometer only when it isn't.
+                    if h.c < 75 { Image(systemName: heatGlyph(h.c)).font(.system(size: 11, weight: .semibold)) }
                     Reading(text: "\(shownTemp(h.c))°", color: heatColor(h.c), warn: h.c >= 75, size: 14)
                 }
                 .foregroundStyle(.white.opacity(0.8))
+                .fixedSize()
             }
         }
     }
@@ -314,14 +318,18 @@ struct StatusView: View {
                         MacPhoto().frame(width: 34, height: 46, alignment: .leading)
                         VStack(alignment: .leading, spacing: 1) {
                             Text("Mac Pro").font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                            if let up = entry.uptime { Text("Up \(up)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1) }
+                            HStack(spacing: 4) {
+                                if let up = entry.uptime { Text("Up \(up)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1) }
+                                // A long line under the header (stale, waiting) leaves the temperature up here.
+                                if long { Spacer(minLength: 2); hot }
+                            }
                         }
                         Spacer(minLength: 0)
                     }
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        When(entry: entry)
+                        When(entry: entry).layoutPriority(0)
                         Spacer(minLength: 0)
-                        hot
+                        if !long { hot.layoutPriority(1) }
                     }
                     .frame(height: 16)
                     .padding(.top, 2)
@@ -333,16 +341,20 @@ struct StatusView: View {
                 }
             default:
                 HStack(spacing: 16) {
-                    VStack(spacing: 4) {
+                    VStack(spacing: 3) {
                         MacPhoto().frame(maxHeight: 88)
-                        // What needs him takes the uptime's line; the temperature and the time share one.
+                        // What needs him takes the uptime's line; the temperature has its own; the time (or the calm
+                        // word) under it, two lines at most, in the column's fixed width.
                         if let a = entry.status?.alerts?.first(where: { !($0.title ?? "").isEmpty }), entry.readAt == nil {
                             Label(a.title ?? "", systemImage: "exclamationmark.triangle.fill").font(.system(size: 11, weight: .semibold)).foregroundStyle(.orange)
                                 .lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8).labelStyle(.titleAndIcon)
-                        } else if let up = entry.uptime { Text("Up \(up)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1).fixedSize() }
-                        HStack(spacing: 5) { hot; When(entry: entry) }.fixedSize()
+                        } else if let up = entry.uptime { Text("Up \(up)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1) }
+                        hot
+                        if !entry.when.isEmpty {
+                            Text(entry.when).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.55)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.9)
+                        }
                     }
-                    .frame(minWidth: 76, maxWidth: 110)
+                    .frame(width: 96)
                     // The meters share the height evenly, the space falling between them rather than inside them.
                     VStack(alignment: .leading, spacing: 0) {
                         Meter(label: "CPU", value: cpu, text: cpu.map(pct) ?? "")
@@ -363,7 +375,7 @@ struct StatusView: View {
     }
     func slim(_ label: String, _ v: Double?, orange: Double = 0.65, red: Double = 0.85) -> some View {
         HStack(spacing: 5) {
-            Text(label).font(.caption2.weight(.semibold)).frame(width: 26, alignment: .leading)
+            Text(label).font(.caption2.weight(.semibold)).lineLimit(1).fixedSize().frame(width: 30, alignment: .leading)
             Bar(value: v, color: .white, height: 5)
             Text(v.map(pct) ?? "–").font(.system(.caption2, design: .rounded).weight(.semibold)).monospacedDigit().frame(width: 30, alignment: .trailing)
         }
@@ -392,7 +404,8 @@ struct TempView: View {
     func row(_ t: WidgetStatus.Temp, label: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Text(t.name).lineLimit(1).minimumScaleFactor(0.85).font(.system(size: label, weight: .medium)).foregroundStyle(.white.opacity(0.8))
+                // One size for every name in a list: a scale factor here fired on some rows and not others.
+                Text(t.name).lineLimit(1).font(.system(size: label, weight: .medium)).foregroundStyle(.white.opacity(0.8))
                 Spacer(minLength: 2)
                 Reading(text: "\(shownTemp(t.c))°", color: heatColor(t.c), warn: t.c >= 75, size: label + 1)
             }
@@ -425,13 +438,19 @@ struct TempView: View {
                     }
                     Spacer(minLength: 0)
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(hottest.map { "\(shownTemp($0.c))°" } ?? "–").font(.system(size: 50, weight: .semibold, design: .rounded)).monospacedDigit()
+                        Text(hottest.map { "\(shownTemp($0.c))°" } ?? "–").font(.system(size: hottest == nil ? 34 : 50, weight: .semibold, design: .rounded)).monospacedDigit()
+                            .opacity(hottest == nil ? 0.35 : 1)
                             .foregroundStyle(mode == .fullColor ? (hottest.map { heatColor($0.c) } ?? .white) : .white)
                             .lineLimit(1).minimumScaleFactor(0.7)
                         if let h = hottest, h.c >= 75 { Image(systemName: "flame.fill").font(.system(size: 20, weight: .semibold)).foregroundStyle(mode == .fullColor ? heatColor(h.c) : .white) }
                     }
                     if ranked.count > 2 {
-                        Text("\(ranked[1].name) \(shownTemp(ranked[1].c))° · \(ranked[2].name) \(shownTemp(ranked[2].c))°").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1).minimumScaleFactor(0.75)
+                        // The next two hottest, or the next one when two don't fit: never cut.
+                        ViewThatFits(in: .horizontal) {
+                            Text("\(ranked[1].name) \(shownTemp(ranked[1].c))° · \(ranked[2].name) \(shownTemp(ranked[2].c))°").fixedSize()
+                            Text("\(ranked[1].name) \(shownTemp(ranked[1].c))°").fixedSize()
+                        }
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7))
                     }
                     if entry.quiet || entry.problem != nil { When(entry: entry, size: 12) }
                     else { Text(hottest.map { heatLine($0.c) } ?? "").font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1).minimumScaleFactor(0.8) }
@@ -440,7 +459,7 @@ struct TempView: View {
                 // The photo and every sensor, one to a line.
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 12) {
-                        MacPhoto().frame(width: 44, height: 60)
+                        MacPhoto().frame(width: 40, height: 54)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(hottest.map { heatLine($0.c) } ?? "Mac Pro").font(.system(size: 17, weight: .semibold)).lineLimit(1)
                             When(entry: entry, size: 12)
@@ -448,7 +467,7 @@ struct TempView: View {
                         Spacer(minLength: 0)
                         if let h = hottest { Reading(text: "\(shownTemp(h.c))°", color: heatColor(h.c), warn: h.c >= 75, size: 30) }
                     }
-                    Spacer(minLength: 10)
+                    Spacer(minLength: 8)
                     VStack(spacing: 0) {
                         if entry.temps.isEmpty {
                             ForEach(["CPU", "GPU A", "GPU B", "Memory", "Chipset", "Drive", "Power supply", "Intake air"], id: \.self) { n in
@@ -457,7 +476,7 @@ struct TempView: View {
                             }
                         } else {
                             ForEach(Array(entry.temps.enumerated()), id: \.offset) { i, t in
-                                row(t, label: 14)
+                                row(t, label: 14).fixedSize(horizontal: false, vertical: true)
                                 if i < entry.temps.count - 1 { Spacer(minLength: 4) }
                             }
                         }

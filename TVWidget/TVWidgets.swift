@@ -411,7 +411,7 @@ struct NowBody: View {
         case .systemSmall:
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top) {
-                    CoverView(image: picture, glyph: glyph, height: 64, maxWidth: 86).shadow(color: .black.opacity(0.3), radius: 6, y: 3)
+                    CoverView(image: picture, glyph: glyph, height: 64, maxWidth: 74).shadow(color: .black.opacity(0.3), radius: 6, y: 3)
                     Spacer(minLength: 0)
                     if canPlay { RoundPlay(playing: playing) }
                     else if entry.liveStatus && entry.asleep { WidgetPower() }
@@ -669,12 +669,20 @@ struct TVBoxBody: View {
             if let p = entry.photo { Image(tv: p).resizable().widgetAccentedRenderingMode(.desaturated).scaledToFit() }
             else { Image(systemName: "tv.and.mediabox").font(.system(size: 28, weight: .light)).foregroundStyle(.white.opacity(0.7)).widgetAccentable() }
         }
-        .background { Ellipse().fill(RadialGradient(colors: [.white.opacity(mode != .fullColor || !background ? 0.28 : 0.10), .clear], center: .center, startRadius: 2, endRadius: 44)).scaleEffect(1.4) }
+        // The soft light only where the dark box would vanish: none in full colour on its own background.
+        .background { if mode != .fullColor || !background { Ellipse().fill(RadialGradient(colors: [.white.opacity(0.28), .clear], center: .center, startRadius: 2, endRadius: 44)).scaleEffect(1.4) } }
     }
     var state: some View {
         HStack(spacing: 5) {
             Circle().fill(entry.dot).frame(width: 8, height: 8)
             Text(entry.state).font(.system(size: 12, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.75)
+        }
+    }
+    // Not answering: said as "Last seen" over the time, so it never reads as a clock.
+    var seen: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Last seen").font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.7))
+            Text(entry.state).font(.system(size: 12, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
         }
     }
     var dim: Double { entry.reachable ? 1 : 0.55 }
@@ -692,11 +700,15 @@ struct TVBoxBody: View {
                 HStack(spacing: 8) {
                     photo.frame(width: 40, height: 40)
                     VStack(alignment: .leading, spacing: 1) {
-                        state
-                        Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
-                        Text("CPU \(Int(entry.info?.cpu ?? 0))% · \(entry.fahrenheit)°F").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+                        if entry.reachable {
+                            state
+                            Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
+                        } else { seen }
                     }
                 }
+                // CPU and temperature across the full width (beside the photo the temperature was cut).
+                Text("CPU \(Int(entry.info?.cpu ?? 0))% · \(entry.fahrenheit)°F").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75)).monospacedDigit().lineLimit(1)
+                    .opacity(dim)
                 Spacer(minLength: 0)
                 Group {
                     BoxRow(label: "Memory", text: "\(Int((entry.memory * 100).rounded()))%", value: entry.memory)
@@ -709,8 +721,12 @@ struct TVBoxBody: View {
             HStack(spacing: 14) {
                 VStack(spacing: 4) {
                     photo.frame(width: 88, height: 70)
-                    state
-                    Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
+                    if entry.reachable {
+                        state
+                        Text("Up \(entry.uptime)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
+                    } else {
+                        Text("Last seen " + entry.state).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.75)).multilineTextAlignment(.center).lineLimit(2)
+                    }
                 }
                 .frame(width: 100)
                 VStack(alignment: .leading, spacing: 0) {
