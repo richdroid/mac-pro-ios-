@@ -45,9 +45,8 @@ struct MarkNote: View {
     @Environment(\.colorScheme) private var scheme
     let mark: String
     var open: (() -> Void)?
-    // Its words come in once its row has opened, and go before the row closes (model.fading), so the rows below never
-    // slide over them.
-    @State private var appeared = false
+    // Its words come in once its row has opened (model.arriving) and go before the row closes (model.fading), so the
+    // rows below never slide over them.
     // The words the title shows, a beat behind the mark: on a swap the old words go out, then the new come in, never
     // drawn over each other.
     @State private var showTrying = false
@@ -91,10 +90,8 @@ struct MarkNote: View {
             .font(.subheadline)
             .contentShape(Rectangle())
             .onTapGesture { open?() }
-            .opacity(appeared && !model.fading.contains(mark) ? 1 : 0)
-            // In once the row has opened and the rows below have stopped (the list's spring settles by about 0.45 s).
-            .onAppear { showTrying = n.trying; withAnimation(.easeIn(duration: 0.18).delay(0.48)) { appeared = true } }
-            .onDisappear { appeared = false }
+            .opacity(model.arriving.contains(mark) || model.fading.contains(mark) ? 0 : 1)
+            .onAppear { showTrying = n.trying }
             .onChange(of: n.trying) { _, now in
                 withAnimation(.easeOut(duration: 0.12)) { titleOn = false }
                 Task {

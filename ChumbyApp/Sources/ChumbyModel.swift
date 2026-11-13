@@ -536,6 +536,8 @@ final class ChumbyModel: ObservableObject {
     private var retryAt: [String: Date] = [:]
     // Notes fading before their row closes: the words go first, then the rows below move up (no text over text).
     @Published private(set) var fading: Set<String> = []
+    // Notes arriving: their row opens with the words held back, which come in once the rows below have stopped.
+    @Published private(set) var arriving: Set<String> = []
     // A note leaving: fade its words (0.15 s), then close its row in one spring.
     func clearNote(_ mark: String, then: AlarmMark? = nil) {
         guard marks[mark] != nil, !fading.contains(mark) else { return }
@@ -601,8 +603,19 @@ final class ChumbyModel: ObservableObject {
                 if left > 0 { try? await Task.sleep(nanoseconds: UInt64(left * 1e9)) }
             }
             retryAt[mark] = nil
-            // The note springs in (or, after a retry, its words change in place).
-            withAnimation(.snappy) { marks[p.change.mark] = .failed(head: p.change.failHead, why: why) }
+            // A new note: its row springs open with the words held back, and they fade in once the rows have stopped.
+            // After a retry its words change in place.
+            let new: Bool = { switch marks[mark] { case .failed, .retrying: return false; default: return true } }()
+            if new {
+                arriving.insert(mark)
+                withAnimation(.snappy) { marks[mark] = .failed(head: p.change.failHead, why: why) }
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 520_000_000)
+                    withAnimation(.easeIn(duration: 0.18)) { _ = self?.arriving.remove(mark) }
+                }
+            } else {
+                marks[mark] = .failed(head: p.change.failHead, why: why)
+            }
             relay()
             #if canImport(UIKit)
             Haptics.note.notificationOccurred(.error)
