@@ -675,7 +675,8 @@ struct TVBoxBody: View {
     var state: some View {
         HStack(spacing: 5) {
             Circle().fill(entry.dot).frame(width: 8, height: 8)
-            Text(entry.state).font(.system(size: 12, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.75)
+            // The state leads its line at its full size.
+            Text(entry.state).font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize()
         }
     }
     // Not answering: said as "Last seen" over the time, so it never reads as a clock.

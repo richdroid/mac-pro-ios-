@@ -318,11 +318,15 @@ struct StatusView: View {
                         MacPhoto().frame(width: 34, height: 46, alignment: .leading)
                         VStack(alignment: .leading, spacing: 1) {
                             Text("Mac Pro").font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                            HStack(spacing: 4) {
-                                if let up = entry.uptime { Text("Up \(up)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1) }
-                                // A long line under the header (stale, waiting) leaves the temperature up here.
-                                if long { Spacer(minLength: 2); hot }
-                            }
+                            // A long line under the header (stale, waiting) leaves the temperature up here, with the uptime
+                            // only when both fit whole: never an ellipsis.
+                            let up = entry.uptime.map { Text("Up \($0)").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7)).lineLimit(1).fixedSize() }
+                            if long {
+                                ViewThatFits(in: .horizontal) {
+                                    HStack(spacing: 4) { up; hot }
+                                    hot
+                                }
+                            } else { up }
                         }
                         Spacer(minLength: 0)
                     }
