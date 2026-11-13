@@ -234,6 +234,7 @@ struct MacPartRow: View {
 // Everything on the Mac, each part by name, read every few seconds while the page is up. After a restart asked from here,
 // the same page is "Getting everything up": the Mac going away and each part coming back.
 struct MacHealthView: View {
+    @Environment(\.statusBarTop) private var statusBarTop
     let model: AppModel
     @Environment(\.paneLayout) private var panes
     @ObservedObject private var watch = RestartWatch.shared
@@ -372,7 +373,7 @@ struct MacHealthView: View {
     func list(_ side: Side) -> some View {
         ScrollViewReader { proxy in
             List {
-                Section { PaneHeading(title: title, shown: side != .right) }
+                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false) }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right, bannerLine != nil { Section { banner } }
                 // Folded or upright, Fix comes before the parts, where he looks first; open flat it has the right pane.
@@ -387,15 +388,17 @@ struct MacHealthView: View {
                     if !awaited {
                         Section {
                             Button(role: .destructive) { model.macPage = .restart } label: {
-                                HStack { Text("Restart the Mac…"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                                HStack { Text("Restart the Mac…"); Spacer(); RowChevron() }
                             }
                         } footer: { Text("Checks first that the Mac will come back by itself.") }
                     }
                 }
             }
-            .contentMargins(.top, 4, for: .scrollContent)
+            .contentMargins(.top, 4 + PaneHeading.roomAbove(statusBarTop), for: .scrollContent)
             .scrollsUnder(side == .right ? 1 : 0)
             .keepsPlace("machealth", proxy)
+            // The build's shot of the Memory row, the last part, wherever the posture puts it.
+            .task { if model.pose == "healthmemory" { try? await Task.sleep(nanoseconds: 1_500_000_000); proxy.scrollTo("memory", anchor: .center) } }
         }
     }
     var body: some View {
@@ -475,7 +478,7 @@ struct MacHealthView: View {
     // The build's shots: every part up, two red (one the Mac can fix, one that needs him), a fix under way, and the Mac
     // back from a restart with two parts still starting. Only with a pose; never on the phone.
     static func posed(_ pose: String) -> (report: MacReport, fixing: Bool)? {
-        let says = ["tailscale": "Running", "serve": "https → bridge", "bridge": "Answering", "sessions": "6 kept · 2 others", "tv": "Connected",
+        let says = ["tailscale": "Running", "serve": "https → bridge", "bridge": "Answering", "sessions": "6 of 6 kept running · 2 others", "tv": "Connected",
                     "letterboxd": "Sign-in relay running", "chumby": "Answering", "oclp": "HEALTHY: macOS 26.7.2, OCLP 3.0.0", "stuck": "Nothing stuck", "memory": "Normal pressure · 6.4 GB swap in use"]
         func r(_ bad: [String: String], fixed: [String: String] = [:]) -> MacReport {
             MacReport(ok: bad.isEmpty, at: Date().timeIntervalSince1970 * 1000, parts: MacParts.health.map {
@@ -484,7 +487,7 @@ struct MacHealthView: View {
         }
         let two = ["tv": "Not connected", "chumby": "Not answering (asleep, off Wi-Fi, or chumby-remote down)"]
         switch pose {
-        case "health": return (r([:]), false)
+        case "health", "healthmemory": return (r([:]), false)
         case "healthbad": return (r(two), false)
         // One part that needs his hands, as in Richard's screenshot of 2026-11-12: named in the card, first in the list.
         case "healthone": return (r(["stuck": "1 program stuck; a restart clears it"]), false)
@@ -499,6 +502,7 @@ struct MacHealthView: View {
 // Restart the Mac: what it checked first, each green or red with what it means; refused while any is red, saying what to
 // fix; one plain question; then the same page becomes "Getting everything up".
 struct MacRestartView: View {
+    @Environment(\.statusBarTop) private var statusBarTop
     let model: AppModel
     @Environment(\.paneLayout) private var panes
     @ObservedObject private var watch = RestartWatch.shared
@@ -517,7 +521,7 @@ struct MacRestartView: View {
     func list(_ side: Side) -> some View {
         ScrollViewReader { proxy in
             List {
-                Section { PaneHeading(title: "Restart the Mac", shown: side != .right) }
+                Section { PaneHeading(title: "Restart the Mac", shown: side != .right, roomAbove: false) }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right {
                     Section {
@@ -551,7 +555,7 @@ struct MacRestartView: View {
                     }
                 }
             }
-            .contentMargins(.top, 4, for: .scrollContent)
+            .contentMargins(.top, 4 + PaneHeading.roomAbove(statusBarTop), for: .scrollContent)
             .scrollsUnder(side == .right ? 1 : 0)
             .keepsPlace("macrestart", proxy)
         }

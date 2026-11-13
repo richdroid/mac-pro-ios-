@@ -593,13 +593,25 @@ struct PaneHeading: View {
     @Environment(\.statusBarTop) private var statusBarTop
     let title: String
     var shown = true
+    // false in a List row: the list's top margin gives the room (PaneHeading.roomAbove), since inside the row it pushed the
+    // title into the row's rounded corner and notched its first letter (CI d9c229c: the F of Fans, the M of Mac).
+    var roomAbove = true
+    static func roomAbove(_ statusBarTop: CGFloat) -> CGFloat { statusBarTop < 20 ? 14 : 0 }
     var body: some View {
         Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, statusBarTop < 20 ? 14 : 0)
+            .padding(.top, roomAbove ? Self.roomAbove(statusBarTop) : 0)
             .opacity(shown ? 1 : 0)
             .accessibilityHidden(!shown)
             .accessibilityAddTraits(.isHeader)
+    }
+}
+
+// The chevron at the end of a row that opens a page, as the Control tab draws it: footnote, semibold, tertiary label grey,
+// never the row’s tint, so the tertiary grey is drawn as a colour (designer, CI d9c229c: blue chevrons on Actions and Updates beside grey ones on Control).
+struct RowChevron: View {
+    var body: some View {
+        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Color.primary.opacity(0.3))
     }
 }
 
@@ -728,6 +740,9 @@ struct Screen<Content: View>: View {
                 // typed is in Control's Passwords, Claude's service card is at the foot of its pane.
                 if let (t, to) = ["forcequit": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power")][model.pose], t == tab {
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    // The This Mac card is drawn only once its first reads land: waited for, or the scroll found nothing
+                    // and the open portrait and folded shots never showed it (CI d9c229c).
+                    if to == "macctl" { for _ in 0..<40 where ConsoleSummary.shared.links.value == nil { try? await Task.sleep(nanoseconds: 250_000_000) } }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     proxy.scrollTo(to, anchor: .top)
                     return
@@ -1317,7 +1332,7 @@ struct StatusTab: View {
                     LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)).lineLimit(1).place("proc-\(i)")
                 }
                 Button { model.processes = .cpu } label: {
-                    HStack { Text("All processes").foregroundStyle(.primary); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                    HStack { Text("All processes").foregroundStyle(.primary); Spacer(); RowChevron() }
                         .contentShape(Rectangle())
                 }
                 .place("procs-all")
@@ -1465,7 +1480,7 @@ struct ClaudeTab: View {
                     // Through the model, so the side bar's Back knows a page is open over the tab.
                     // A tap on the row, not a button around it, so its own Restart and Start keep their taps.
                     if row.canOpen {
-                        HStack(spacing: 8) { row; Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                        HStack(spacing: 8) { row; RowChevron() }
                             .contentShape(Rectangle())
                             .onTapGesture { model.open(session: x) }
                             .accessibilityAddTraits(.isButton)

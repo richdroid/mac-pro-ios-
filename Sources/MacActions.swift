@@ -163,16 +163,10 @@ struct MPActionRow: View {
 struct MacActionsView: View {
     let model: AppModel
     var body: some View {
-        ConsolePage(title: "Mac Pro actions", place: "macactions", away: false, lastRead: nil) {
-            Section {
-                ForEach(MPAction.check) { MPActionRow(model: model, item: $0) }
-                // One Fix in the app, on Connections, where what's down is named.
-                Button { model.macPage = .links } label: {
-                    HStack { Label("Fix what’s down", systemImage: "wrench.adjustable"); Spacer(); Text("on Connections").font(.footnote).foregroundStyle(.secondary); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
-                }
-            } header: { Text("Check and fix") } footer: {
-                Text("Fix what’s down is on Connections, beside what’s down; it starts only what isn’t running.")
-            }
+        // Named as its row on the This Mac card; Fix what's down lives on Connections alone, beside what's down (designer,
+        // CI d9c229c: a second Fix row here, and a page title that wasn't the row's).
+        ConsolePage(title: "Actions", place: "macactions", away: false, lastRead: nil) {
+            Section { ForEach(MPAction.check) { MPActionRow(model: model, item: $0) } } header: { Text("Check") }
             Section { ForEach(MPAction.clean) { MPActionRow(model: model, item: $0) } } header: { Text("Free up space") } footer: {
                 Text("Each asks first and says exactly what it will remove.")
             }

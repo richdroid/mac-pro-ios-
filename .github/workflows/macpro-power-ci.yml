@@ -1,6 +1,6 @@
 name: Mac Pro power shots (branch)
 # The Control tab's new pages (Connections, Fans & temperatures, Updates, Storage, Startup items) against the stand-in
-# Mac's power feeds (ci/mock-macpower.js), in his three postures: open upright first (the one he holds), open flat, folded.
+# Mac's power feeds (ci/mock-macpower.js), in his three postures: open portrait first (the one he holds), open landscape, folded.
 # Branch only; deleted once the branch ships. Published to the macpro-power-ci release.
 on:
   push:
@@ -90,23 +90,45 @@ jobs:
             shot startup$x $d 10 -tab 5 -pose startup
             shot startup-confirm$x $d 9 -tab 5 -pose startupconfirm
             shot actions$x $d 9 -tab 5 -pose actions
+            # Health's Memory row, and the Status heat heading (the bridge's verdict) scrolled into view.
+            shot health-memory$x $d 10 -tab 5 -pose healthmemory
+            shot status-heat$x $d 10 -tab 0 -pose scrolled
+          }
+          # The public link's restart, filmed from a real tap on its Restart: the page opens at the public link and writes
+          # where the button is (Caches/tap.txt); the tap brings up the question, it's answered, then Starting, then Up.
+          restartfilm() {
+            local name=$1 d=$2 c
+            c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.MacPro data 2>/dev/null) && rm -f "$c/Library/Caches/tap.txt"
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/power-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 5 -pose linkrestartfilm
+            for i in $(seq 1 60); do [ -s "$c/Library/Caches/tap.txt" ] && break; sleep 0.5; done
+            sleep 3
+            if [ -s "$c/Library/Caches/tap.txt" ]; then
+              read X Y < "$c/Library/Caches/tap.txt"; echo "restart tap at $X $Y"
+              /tmp/dh/.build/release/devicehubctl "$DEVICE" touch $X $Y 0.08 || echo "tap failed"
+            else echo "::warning::no Restart position written; the film asks by itself"; fi
+            sleep 18
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
           sleep 5
-          # Open upright, his main posture.
-          poses 3 -upright
-          film links-open-upright 3 14 -tab 5 -pose links
-          film fans-open-upright 3 14 -tab 5 -pose fans
-          # A public-link restart from the question's OK to back up: Restarting, Starting with no address, then Up with a new one.
-          film link-restart-upright 3 22 -tab 5 -pose linkrestartfilm
+          # Open portrait first, the posture he holds (a quarter turn from the open landscape the Duo unfolds to; the
+          # macpro.yml way). Named by what they are: -portrait, -landscape, -folded (CI d9c229c had them swapped).
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 1; sleep 5
+          poses 3 -portrait
+          film links-open-portrait 3 14 -tab 5 -pose links
+          film fans-open-portrait 3 14 -tab 5 -pose fans
+          restartfilm link-restart-portrait 3
           # A link from the Console (macproapp://…) lands on its page.
-          shot deeplink-updates-upright 3 9 -tab 0 -openLink macproapp://control/updates
-          shot deeplink-cpu-upright 3 9 -tab 0 -openLink macproapp://status/temps/CPU
-          # Open flat, two panes.
+          shot deeplink-updates-portrait 3 9 -tab 0 -openLink macproapp://control/updates
+          shot deeplink-cpu-portrait 3 9 -tab 0 -openLink macproapp://status/temps/CPU
+          # Open landscape, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
-          poses 3 -flat
+          poses 3 -landscape
           # Folded, the outer display.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
           poses 1 -folded

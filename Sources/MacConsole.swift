@@ -36,7 +36,7 @@ struct FansFeed: Decodable, Equatable {
     // ("auto" or "floor") and the presets it may raise the floor to. It can only make the fan faster than the Mac would.
     struct Control: Decodable, Equatable {
         struct Preset: Decodable, Equatable, Identifiable { let name: String; let rpm: Int; var id: Int { rpm } }
-        let state: String; var note: String?; var setup: String?; var mode: String?; var floor: Int?; var factoryFloor: Int?; var max: Int?; var presets: [Preset]?
+        let state: String; var title: String?; var note: String?; var setup: String?; var mode: String?; var floor: Int?; var factoryFloor: Int?; var max: Int?; var presets: [Preset]?
         var ready: Bool { state == "ready" }
     }
     var t: Double?; var stale: Bool?; let fans: [MacFan]; var control: Control?
@@ -222,8 +222,10 @@ struct MacConsoleSections: View {
     func row(_ title: String, _ symbol: String, _ page: MacPage, summary: String?, good: Bool? = nil) -> some View {
         Button { model.macPage = page } label: {
             HStack(spacing: 10) {
-                // The row's name is never cut; its summary gives way first (CI 9abf65f: "Fans & tem…").
-                Label(title, systemImage: symbol).lineLimit(1).fixedSize().layoutPriority(1)
+                // The row's name is never cut; its summary gives way first (CI 9abf65f: "Fans & tem…"). An icon column and a
+                // fixed-size name, not a Label: a fixed-size Label drew its icon and no name (CI d9c229c).
+                Image(systemName: symbol).foregroundStyle(macBlue).frame(width: 28)
+                Text(title).foregroundStyle(Color.primary).lineLimit(1).fixedSize().layoutPriority(1)
                 Spacer(minLength: 8)
                 if let summary, !quiet {
                     HStack(spacing: 6) {
@@ -232,7 +234,7 @@ struct MacConsoleSections: View {
                     }
                     .font(.footnote).foregroundStyle(.secondary)
                 }
-                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                RowChevron()
             }
             .contentShape(Rectangle())
         }
@@ -263,7 +265,7 @@ struct MacConsoleSections: View {
     var startupLine: (String, Bool)? {
         guard let items = startup.value?.items else { return nil }
         let mine = items.filter(\.mine)
-        let stopped = StartupView.stopped(mine).map(\.label)
+        let stopped = StartupView.stopped(mine).map(StartupRow.name)
         return stopped.isEmpty ? ("None stopped", true) : (MacConsole.named(stopped, "stopped"), false)
     }
 
@@ -271,8 +273,8 @@ struct MacConsoleSections: View {
         Group {
             if anything {
                 Section {
-                    if let l = links.value { let s = MacConsole.linkSummary(l); row("Connections", "point.3.connected.trianglepath.dotted", .links, summary: s.text, good: s.good) }
-                    if fans.value != nil || temps.value != nil { row("Fans & temperatures", "fan", .fans, summary: fanLine) }
+                    if let l = links.value { let s = MacConsole.linkSummary(l); row("Connections", "point.3.connected.trianglepath.dotted", .links, summary: s.text, good: s.good).id("macctl") }
+                    if fans.value != nil || temps.value != nil { row("Fans & temperatures", "fan", .fans, summary: fanLine).id(links.value == nil ? "macctl" : "macfansrow") }
                     if updates.value != nil { row("Updates", "arrow.down.circle", .updates, summary: updateLine?.0, good: updateLine?.1) }
                     if storage.value != nil { row("Storage", "internaldrive", .storage, summary: storageLine) }
                     if startup.value != nil { row("Startup items", "power", .startup, summary: startupLine?.0, good: startupLine?.1) }
@@ -280,7 +282,6 @@ struct MacConsoleSections: View {
                 } header: { Text("This Mac") } footer: {
                     Text("Proxies and links with a restart for each, the fan and every sensor with its day, updates, disk use, what starts with the Mac, and the Mac Pro’s own actions.")
                 }
-                .id("macctl")
             }
         }
     }
@@ -320,16 +321,19 @@ final class ConsoleSummary: ObservableObject {
 // Mac has gone quiet (what's below stays, dimmed, and takes no taps).
 struct ConsolePage<Left: View, Right: View>: View {
     @Environment(\.paneLayout) private var panes
+    @Environment(\.statusBarTop) private var statusBarTop
     let title: String
     let place: String
     let away: Bool
     let lastRead: Date?
+    // The build's film: the row to open the page at, once it's there (the public link, for its restart).
+    var startAt: String? = nil
     @ViewBuilder let left: () -> Left
     @ViewBuilder let right: () -> Right
     func list(_ side: Side) -> some View {
         ScrollViewReader { proxy in
             List {
-                Section { PaneHeading(title: title, shown: side != .right) }
+                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false) }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if away, side != .right { Section { StaleLine(lastRead: lastRead) } }
                 Group {
@@ -339,9 +343,16 @@ struct ConsolePage<Left: View, Right: View>: View {
                 .opacity(away ? staleDim : 1)
                 .disabled(away)
             }
-            .contentMargins(.top, 4, for: .scrollContent)
+            // The title's room under a side status bar is the list's margin, not the row's: inside the row it pushed the
+            // title down into the row's rounded corner, which notched the F of Fans and the M of Mac (CI d9c229c).
+            .contentMargins(.top, 4 + PaneHeading.roomAbove(statusBarTop), for: .scrollContent)
             .scrollsUnder(side == .right ? 1 : 0)
             .keepsPlace(place, proxy)
+            .task(id: startAt) {
+                guard let to = startAt else { return }
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                proxy.scrollTo(to, anchor: .top)
+            }
         }
     }
     var body: some View {
@@ -406,23 +417,25 @@ struct LinkRow: View {
             Image(systemName: Self.symbol(link.id)).foregroundStyle(.secondary).frame(width: 26).padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(link.name)
+                    // The separator starts under the name, on every row (CI d9c229c: Chumby proxy's ran full width).
+                    Text(link.name).alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
                     Spacer(minLength: 8)
                     HStack(spacing: 6) { Circle().fill(color).frame(width: 8, height: 8); Text(stateWord) }.font(.footnote).foregroundStyle(.secondary)
                 }
                 if let d = link.detail { Text(d).font(.footnote).foregroundStyle(link.down ? Color.red : Color.secondary).fixedSize(horizontal: false, vertical: true) }
-                if !facts.isEmpty { Text(facts.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(2).textSelection(.enabled) }
+                if !facts.isEmpty { Text(facts.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).monospacedDigit().fixedSize(horizontal: false, vertical: true).textSelection(.enabled) }
                 if let e = link.lastError {
                     Text("Last error\(e.t.map { " " + Format.ago(ms: $0) } ?? ""): \(e.text)").font(.footnote).foregroundStyle(.secondary).lineLimit(3)
                 }
                 if let n = link.note { Text(n).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-                if let outcome { OutcomeLine(result: outcome) }
-                // Bring-up is one button for the whole page (Fix what's down, over the links); a row only says it's covered.
-                if link.can?.contains("bringup") == true { Text("Fix what’s down, above, brings this back.").font(.footnote).foregroundStyle(.secondary) }
+                // Only what went wrong: a success shows in the row's own state and line, so saying it again was noise
+                // (designer, CI d9c229c), and a failure the row's line already says isn't repeated.
+                if let outcome, !outcome.done, outcome.error != link.detail { OutcomeLine(result: outcome) }
                 if let can = link.can?.filter({ $0 != "bringup" }), !can.isEmpty {
                     HStack(spacing: 8) {
                         ForEach(can, id: \.self) { a in
                             Button(Self.actionName(a, link)) { act(a) }.buttonStyle(.bordered).controlSize(.small).disabled(busy)
+                                .modifier(FilmTarget(on: MacConsole.pose == "linkrestartfilm" && link.id == "public" && a == "restart"))
                         }
                         if busy { ProgressView().controlSize(.small) }
                     }
@@ -431,7 +444,25 @@ struct LinkRow: View {
             }
         }
         .padding(.vertical, 3)
-        .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] + 38 }
+    }
+}
+
+// The build's film taps the public link's Restart with a real touch: where the button is, as fractions of the window, in
+// Caches/tap.txt for the workflow to read. Only with that pose; never on the phone.
+struct FilmTarget: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        if on {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { r in
+                #if canImport(UIKit)
+                guard let w = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first?.windows.first?.bounds, w.width > 0, w.height > 0 else { return }
+                let line = String(format: "%.4f %.4f\n", r.midX / w.width, r.midY / w.height)
+                try? line.write(to: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("tap.txt"), atomically: true, encoding: .utf8)
+                #endif
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -469,13 +500,15 @@ struct LinksView: View {
             Section {
                 Label(s.good ? "Every link is working" : s.text, systemImage: s.good ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                     .foregroundStyle(s.good ? Color.green : f.links.contains(where: \.down) ? Color.red : Color.orange)
+                    // A new verdict replaces the old one whole, never morphing one sentence into the next.
+                    .id(s.text).transition(.opacity)
                 if let b = bridgeRestartAt { HStack { ProgressView().controlSize(.small); Text("Waiting for the bridge to come back… \(Int(Date().timeIntervalSince(b)))s").monospacedDigit() } }
                 // The one Fix: the Mac's own bring-up, which starts only what's down and leaves what's up alone (no question).
                 let fixable = f.links.filter { $0.can?.contains("bringup") == true }
                 if !fixable.isEmpty || fixing || fixOutcome != nil {
                     Button { fixAll() } label: {
                         HStack {
-                            Label(fixing ? "Fixing… up to two minutes" : fixable.isEmpty ? "Fix what’s down" : "Fix what’s down: " + fixable.map(\.name).joined(separator: ", "), systemImage: "wrench.adjustable")
+                            Label(fixing ? "Fixing… up to two minutes" : "Fix what’s down", systemImage: "wrench.adjustable")
                             Spacer(minLength: 8)
                             if fixing { ProgressView().controlSize(.small) }
                         }
@@ -491,7 +524,7 @@ struct LinksView: View {
         }
     }
     var body: some View {
-        ConsolePage(title: "Connections", place: "maclinks", away: feed.away, lastRead: feed.lastRead) {
+        ConsolePage(title: "Connections", place: "maclinks", away: feed.away, lastRead: feed.lastRead, startAt: (film || MacConsole.pose == "linkstarting") && feed.value != nil ? "public" : nil) {
             verdict
             section(groups[0].0, links(groups[0].1))
             section(groups[1].0, links(groups[1].1))
@@ -506,7 +539,16 @@ struct LinksView: View {
             }
         } message: { Text(asking.map { Self.question($0.link, $0.action) } ?? "") }
         .task { await start() }
+        // The film: the question his tap brought up stays long enough to read, then is answered as he would.
+        .onChange(of: asking?.link.id) { _, id in
+            guard film, id != nil else { return }
+            Task {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                if let a = asking { asking = nil; run(a.link, a.action) }
+            }
+        }
     }
+    var film: Bool { MacConsole.pose == "linkrestartfilm" }
     static func question(_ l: MacLink, _ a: String) -> String {
         switch (l.id, a) {
         case ("bridge", _): return "The app loses the Mac for a few seconds while the bridge starts again. Anything the bridge is doing stops."
@@ -520,13 +562,19 @@ struct LinksView: View {
         if let posed = Self.posed(MacConsole.pose) {
             feed.set(posed)
             if MacConsole.pose == "linkconfirm", let l = posed.links.first(where: { $0.id == "public" }) { asking = (l, "restart") }
-            if MacConsole.pose == "linkrestartfilm" { return }
             if MacConsole.pose == "linkdone" { outcomes["chumby-remote"] = MacActionResult(ok: true, say: "Chumby proxy restarted (now process 51234)"); outcomes["tv"] = MacActionResult(ok: false, error: "TV link needs a reconnect from the Mac: no adb server is running") }
             return
         }
-        // The build's film of a public-link restart against the stand-in Mac: asked (as after his OK) 4 s in, then watched.
-        if MacConsole.pose == "linkrestartfilm" {
-            Task { try? await Task.sleep(nanoseconds: 4_000_000_000); if let l = feed.value?.links.first(where: { $0.id == "public" }) { run(l, "restart") } }
+        // The build's film of a public-link restart against the stand-in Mac: the page opens at the public link, the build
+        // taps its Restart (FilmTarget), the question shows and is answered, then Starting and Up are watched. Should the
+        // tap miss, the question is put up 14 s in, so the film still shows the rest (and the log says it missed).
+        if film {
+            Task {
+                try? await Task.sleep(nanoseconds: 14_000_000_000)
+                if asking == nil, !busy.contains("public"), outcomes["public"] == nil, let l = feed.value?.links.first(where: { $0.id == "public" }), l.uptime ?? 0 > 60 {
+                    print("film: the tap missed; asking without it"); asking = (l, "restart")
+                }
+            }
             await feed.loop(model, every: 2); return
         }
         await feed.loop(model, every: 8)
@@ -598,7 +646,7 @@ struct LinksView: View {
             MacLink(id: "tv", name: "TV link (adb)", state: "up", detail: "Connected", checkedAt: now, can: [], note: "The bridge can only reconnect an adb that already runs; a full repair is from a Claude session on the Mac."),
             MacLink(id: "chumby-remote", name: "Chumby proxy", state: "up", detail: "Running", endpoint: "local.chumby-remote", pid: 40432, uptime: 75_500, lastExit: -15, checkedAt: now, can: ["restart"]),
             MacLink(id: "chumby", name: "Chumby", state: "up", detail: "Answering", checkedAt: now, can: []),
-            MacLink(id: "sessions", name: "Claude sessions", state: "up", detail: "6 kept · 2 others", checkedAt: now, can: []),
+            MacLink(id: "sessions", name: "Claude sessions", state: "up", detail: "6 of 6 kept running · 2 others", checkedAt: now, can: []),
         ]
         if pose == "linksbad" || pose == "linkdone" {
             if let i = l.firstIndex(where: { $0.id == "tv" }) { l[i].state = "down"; l[i].detail = "TV link needs a reconnect from the Mac: no adb server is running"; l[i].can = ["bringup"] }
@@ -614,12 +662,18 @@ struct LinksView: View {
 
 struct FanDial: View {
     let fan: MacFan
+    // The floor helper's word on how the speed is set: a raised slowest speed isn't "Automatic" (designer, 2a9957e).
+    var control: FansFeed.Control? = nil
+    var tag: String {
+        if control?.ready == true, control?.mode == "floor", let f = control?.floor { return "Never under \(f.formatted()) rpm" }
+        return fan.mode == "manual" ? "Set by hand" : "Automatic"
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(fan.name).font(.headline)
                 Spacer()
-                Text(fan.mode == "manual" ? "Set by hand" : "Automatic").font(.footnote).foregroundStyle(.secondary)
+                Text(tag).font(.footnote).foregroundStyle(.secondary).monospacedDigit()
             }
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text("\(Int(fan.rpm.rounded()))").font(.system(size: 44, weight: .semibold, design: .rounded)).monospacedDigit().contentTransition(.numericText())
@@ -668,6 +722,8 @@ struct FansView: View {
     @State private var askFloor: FansFeed.Control.Preset?
     @State private var floorOutcome: MacActionResult?
     @State private var busy = false
+    // The row tapped, while the Mac changes the fan: its spinner (0 for Automatic).
+    @State private var pending: Int?
     var away: Bool { fans.away || temps.away }
 
     @ViewBuilder var fanSections: some View {
@@ -677,7 +733,7 @@ struct FansView: View {
             }
             ForEach(f.fans) { fan in
                 Section {
-                    FanDial(fan: fan)
+                    FanDial(fan: fan, control: f.control)
                     if let h = history[fan.index], h.count > 2 { FanChart(points: h, fan: fan) }
                     else if historyRead { Text("Its day fills in from now: speeds are kept each minute.").font(.footnote).foregroundStyle(.secondary) }
                 } header: { Text(f.fans.count == 1 ? "Fan" : fan.name) } footer: {
@@ -689,56 +745,63 @@ struct FansView: View {
             Section { HStack { ProgressView(); Text("Reading the fan…").foregroundStyle(.secondary) } }
         }
     }
-    // The floor: how slow the fan may go, never how fast. Automatic is always there and needs no asking; a raised floor
-    // is asked first. Not installed, the page says so and shows the one command that installs it.
+    // The slowest speed: how slow the fan may go, never how fast. Automatic is always there and needs no asking, nor does
+    // a lower floor; raising it is asked first. Not installed, the page says so and shows the one command that installs it.
+    // On success the check moves to the tapped row, its spinner gone; only a failure is said in words (designer, 2a9957e).
     @ViewBuilder func fanControl(_ c: FansFeed.Control?) -> some View {
         if let c, c.ready {
             Section {
-                Button { setFloor(nil) } label: { floorRow("Automatic", detail: "The Mac sets the speed", on: c.mode != "floor") }
+                Button { setFloor(nil) } label: { floorRow("Automatic", detail: "The Mac sets the speed", on: c.mode != "floor", spinning: pending == 0) }
                     .disabled(busy || away)
                 ForEach(c.presets ?? []) { p in
-                    Button { askFloor = p } label: { floorRow(p.name, detail: "Never slower than \(p.rpm.formatted()) rpm", on: c.mode == "floor" && c.floor == p.rpm) }
+                    Button { pick(p, c) } label: { floorRow(p.name, detail: "Never slower than \(p.rpm.formatted()) rpm", on: c.mode == "floor" && c.floor == p.rpm, spinning: pending == p.rpm) }
                         .disabled(busy || away)
                 }
                 if c.mode == "floor", let fl = c.floor, !(c.presets ?? []).contains(where: { $0.rpm == fl }) {
-                    floorRow("Raised", detail: "Never slower than \(fl.formatted()) rpm", on: true)
+                    floorRow("Raised", detail: "Never slower than \(fl.formatted()) rpm", on: true, spinning: false)
                 }
-                if let r = floorOutcome { OutcomeLine(result: r) }
-            } header: { Text("Fan floor") } footer: {
-                Text("Only how slow the fan may go: the Mac still speeds it up when it heats. Automatic again after a restart.")
+                if let r = floorOutcome, !r.done { OutcomeLine(result: r) }
+            } header: { Text("Slowest fan speed") } footer: {
+                Text("Each is cooler and louder than Automatic. The Mac still speeds the fan up when it heats, and goes back to Automatic after a restart.")
             }
         } else if let c {
             Section {
-                Label("Fan floor helper not installed", systemImage: "lock")
-                Text(c.note.map { $0.hasPrefix("Fan floor helper not installed") ? String($0.dropFirst(32)).trimmingCharacters(in: .whitespaces) : $0 }.flatMap { $0.isEmpty ? nil : $0 } ?? "Speeds are read only and the Mac sets them.")
+                Label(c.title ?? "Fan speed is read only", systemImage: "lock")
+                Text(c.note ?? "Speeds are read only and the Mac sets them.")
                     .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let cmd = c.setup { CommandRow(command: cmd) }
-            } header: { Text("Fan floor") } footer: {
+            } header: { Text("Slowest fan speed") } footer: {
                 if c.setup != nil { Text("Run once in Terminal on the Mac. It asks for the Mac’s password.") }
             }
         }
     }
-    func floorRow(_ title: String, detail: String, on: Bool) -> some View {
+    // Faster than the floor now (the Mac's own when Automatic) is asked; slower is only ever quieter, so it isn't.
+    func pick(_ p: FansFeed.Control.Preset, _ c: FansFeed.Control) {
+        let now = c.mode == "floor" ? (c.floor ?? 0) : (c.factoryFloor ?? 0)
+        if p.rpm > now { askFloor = p } else { setFloor(p.rpm) }
+    }
+    func floorRow(_ title: String, detail: String, on: Bool, spinning: Bool) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 1) { Text(title).foregroundStyle(Color.primary); Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit() }
             Spacer()
-            if on { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(macBlue) }
+            if spinning { ProgressView().controlSize(.small) }
+            else if on { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(macBlue) }
         }
         .contentShape(Rectangle())
         .accessibilityAddTraits(on ? .isSelected : [])
     }
     func setFloor(_ rpm: Int?) {
-        busy = true
+        busy = true; pending = rpm ?? 0; floorOutcome = nil
         Task {
             do { floorOutcome = try await model.api.macDo("/api/mac/fans/floor", rpm.map { ["rpm": $0, "confirm": true] } ?? ["auto": true], timeout: 20) }
             catch { floorOutcome = MacActionResult(ok: false, error: MacFiles.unreachable(error) ? "The Mac didn’t answer, so it’s not known whether the fan changed. This page reads it again by itself." : error.localizedDescription) }
             await fans.read(model.api)
-            busy = false
+            withAnimation(Motion.quick) { busy = false; pending = nil }
         }
     }
-    // The floor helper installed, the floor raised to Balanced, for the shots.
+    // The floor helper installed, the slowest speed raised to Cooler, for the shots.
     static let posedReady = FansFeed(t: Date().timeIntervalSince1970 * 1000, stale: false, fans: [MacFan(index: 0, name: "Main fan", rpm: 1302, min: 1300, max: 1900, target: 1300, mode: "auto")],
-                                     control: .init(state: "ready", mode: "floor", floor: 1300, factoryFloor: 790, max: 1900, presets: [.init(name: "Quiet", rpm: 1000), .init(name: "Balanced", rpm: 1300), .init(name: "Cool", rpm: 1600)]))
+                                     control: .init(state: "ready", mode: "floor", floor: 1300, factoryFloor: 790, max: 1900, presets: [.init(name: "A little cooler", rpm: 1000), .init(name: "Cooler", rpm: 1300), .init(name: "Coolest", rpm: 1600)]))
     @ViewBuilder var namedSection: some View {
         if let t = temps.value {
             Section {
@@ -774,8 +837,8 @@ struct FansView: View {
         } right: {
             allSections
         }
-        .alert(askFloor.map { "Keep the fan at \($0.rpm.formatted()) rpm or faster?" } ?? "", isPresented: Binding(get: { askFloor != nil }, set: { if !$0 { askFloor = nil } })) {
-            Button("Raise the floor") { if let p = askFloor { setFloor(p.rpm) }; askFloor = nil }
+        .alert(askFloor.map { "Raise the slowest speed to \($0.rpm.formatted()) rpm?" } ?? "", isPresented: Binding(get: { askFloor != nil }, set: { if !$0 { askFloor = nil } })) {
+            Button("Raise") { if let p = askFloor { setFloor(p.rpm) }; askFloor = nil }
             Button("Cancel", role: .cancel) { askFloor = nil }
         } message: { Text("The fan gets louder and the Mac cooler. The Mac still speeds it up when it heats; Automatic or a restart puts it back.") }
         .task {
@@ -843,7 +906,10 @@ struct UpdatesView: View {
                     Task { await feed.read(model.api, query: "?check=1"); try? await Task.sleep(nanoseconds: 1_000_000_000); checking = false }
                 } label: { HStack { Text(m.checking == true || checking ? "Checking…" : "Check now"); Spacer(); if m.checking == true || checking { ProgressView().controlSize(.small) } } }
                 .disabled(m.checking == true || checking)
-                Button { model.macPage = nil; model.tab = 4 } label: { HStack { Text("Install from the macOS tab"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) } }
+                // Only with something to install: with nothing waiting it led nowhere (designer, CI d9c229c).
+                if m.pending?.isEmpty == false {
+                    Button { model.macPage = nil; model.tab = 4 } label: { HStack { Text("Install from the macOS tab"); Spacer(); RowChevron() } }
+                }
             } header: { Text("macOS") } footer: {
                 Text([m.checkedAt.map { "Checked \(Format.ago(ms: $0))." }, m.risk].compactMap { $0 }.joined(separator: " "))
             }
@@ -855,7 +921,8 @@ struct UpdatesView: View {
         if let o = feed.value?.oclp {
             Section {
                 if let v = o.installed { LabeledContent("Installed", value: v) }
-                if let l = o.latest { LabeledContent(o.latestPre == true ? "Newest (pre-release)" : "Newest", value: l) }
+                // The newest only when it is newer: "Newest 3.0.0-rc.5" under "Installed 3.0.0" read as a downgrade on offer.
+                if let l = o.latest, o.newer == true { LabeledContent(o.latestPre == true ? "Newer (pre-release)" : "Newer", value: l) }
                 if let p = o.patches {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: o.healthy == true ? "checkmark.circle.fill" : "exclamationmark.circle.fill").foregroundStyle(o.healthy == true ? Color.green : Color.red)
@@ -887,9 +954,8 @@ struct UpdatesView: View {
                     }
                     if let r = brewOutcome { OutcomeLine(result: r) }
                 } header: { Text("Homebrew") }
-            } else {
-                Section("Homebrew") { Text("Not installed on this Mac").foregroundStyle(.secondary) }
             }
+            // No Homebrew on the Mac: no card saying so (a lone "Not installed" card, designer CI d9c229c).
             if let apps = u.apps, !apps.isEmpty {
                 Section("Apps that update themselves") {
                     ForEach(apps) { a in LabeledContent(a.name, value: [a.installed, a.how].compactMap { $0 }.joined(separator: " · ")) }
@@ -920,7 +986,7 @@ struct UpdatesView: View {
         }
     }
     static let posed = UpdatesFeed(t: 0, macos: .init(current: "26.7.2 (25G332)", checkedAt: Date().timeIntervalSince1970 * 1000 - 2 * 3_600_000, checking: false, pending: [.init(label: "macOS Tahoe 26.7.3", version: "26.7.3", size: "1.9 GB", restart: true)], error: nil, autoInstall: false, command: "softwareupdate --install --all --restart", risk: "A macOS update removes the OpenCore root patches. Updates go through the macOS tab, which patches again after."),
-                                   oclp: .init(installed: "3.0.0", latest: "3.0.0-rc.5", latestPre: true, newer: false, patchedFor: "26.7.2", patchedAt: nil, patches: "HEALTHY: macOS 26.7.2 (25G332), OCLP 3.0.0-rc.5", healthy: true, command: "open -a OpenCore-Patcher"),
+                                   oclp: .init(installed: "3.0.0", latest: "3.0.0-rc.5", latestPre: true, newer: false, patchedFor: "26.7.2", patchedAt: nil, patches: "HEALTHY: macOS 26.7.2 (25G332), OCLP 3.0.0", healthy: true, command: "open -a OpenCore-Patcher"),
                                    brew: nil, apps: [.init(name: "Tailscale", installed: "1.104.4", latest: nil, how: "Updates itself")])
 }
 
@@ -1045,11 +1111,23 @@ struct StartupRow: View {
         if item.label != "local.keep-awake" { if item.loaded { a.append("stop") }; a.append("disable") }
         return a
     }
+    // Each in the words Connections uses (Public link, Chumby proxy…), its launchd label under it in full; one the app
+    // doesn't know by name goes by its label (designer, CI d9c229c).
+    static let names = [
+        "local.mac-dash": "Bridge", "local.mac-dash-watchdog": "Bridge watchdog", "local.mac-dash-tunnel": "Public link",
+        "local.chumby-remote": "Chumby proxy", "local.claude-sessions": "Claude sessions", "local.claude-remote-control": "Claude remote control",
+        "local.keep-awake": "Keep awake", "local.macpro-console": "MacPro Console", "local.usbmux-kick": "iPhone USB link",
+        "com.mint.sync-youtube": "Mint YouTube sync", "local.oclp-tahoe.agent": "OCLP Tahoe agent",
+        "com.dortania.opencore-legacy-patcher.auto-patch": "OCLP auto-patch", "com.dortania.opencore-legacy-patcher.macos-update": "OCLP macOS update check",
+        "com.dortania.opencore-legacy-patcher.os-caching": "OCLP caching", "com.google.keystone.agent": "Google updater",
+        "com.google.keystone.xpcservice": "Google updater service", "com.google.GoogleUpdater.wake": "Google updater wake",
+    ]
+    static func name(_ i: StartupItem) -> String { names[i.label] ?? i.label }
     static func word(_ a: String) -> String { ["start": "Start", "stop": "Stop", "restart": "Restart", "enable": "Enable", "disable": "Disable"][a] ?? a }
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline) {
-                Text(item.label).lineLimit(1).truncationMode(.middle)
+                Text(Self.name(item)).lineLimit(2)
                 Spacer(minLength: 8)
                 HStack(spacing: 6) {
                     Circle().fill(item.disabled == true ? Color.secondary : item.running ? Color.green : item.loaded ? Color.blue : Color.secondary).frame(width: 8, height: 8)
@@ -1057,6 +1135,7 @@ struct StartupRow: View {
                 }
                 .font(.footnote).foregroundStyle(.secondary).fixedSize()
             }
+            if Self.names[item.label] != nil { Text(item.label).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled) }
             if let p = item.program, !p.isEmpty { Text(p).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle) }
             Text([item.pid.map { "process \($0)" }, item.lastExit.flatMap { $0 != 0 ? "last \(MacConsole.exitText($0))" : nil }, item.keepAlive == true ? "kept running" : nil, item.runAtLoad == true ? "starts at login" : nil, item.protected.map { $0 == "bridge" ? "the app’s own link" : "keeps Claude running" }].compactMap { $0 }.joined(separator: " · "))
                 .font(.footnote).foregroundStyle(.secondary)
@@ -1098,7 +1177,7 @@ struct StartupView: View {
     var body: some View {
         ConsolePage(title: "Startup items", place: "macstartup", away: feed.away, lastRead: feed.lastRead) {
             if feed.value != nil {
-                Section { rows(mine) } header: { Text(Self.stopped(mine).isEmpty ? "Yours (\(mine.count))" : "Yours (\(MacConsole.named(Self.stopped(mine).map(\.label), "stopped")))") } footer: {
+                Section { rows(mine) } header: { Text(Self.stopped(mine).isEmpty ? "Yours (\(mine.count))" : "Yours (\(MacConsole.named(Self.stopped(mine).map(StartupRow.name), "stopped")))") } footer: {
                     Text("Launch agents in your Library. Stop lasts until the next login; Disable keeps it from starting at login. The bridge, its watchdog and keep-awake can’t be stopped from here: the app reaches the Mac through them, and without keep-awake the Mac may sleep. The bridge restarts from Connections.")
                 }
             } else if !feed.away {
@@ -1111,7 +1190,7 @@ struct StartupView: View {
                 }
             }
         }
-        .alert(asking.map { "\(StartupRow.word($0.action)) \($0.item.label)?" } ?? "", isPresented: .init(get: { asking != nil }, set: { if !$0 { asking = nil } })) {
+        .alert(asking.map { "\(StartupRow.word($0.action)) \(StartupRow.name($0.item))?" } ?? "", isPresented: .init(get: { asking != nil }, set: { if !$0 { asking = nil } })) {
             if let a = asking {
                 Button(StartupRow.word(a.action), role: .destructive) {
                     if a.item.protected != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { askingAgain = a } } else { run(a.item, a.action, protectedOK: false) }

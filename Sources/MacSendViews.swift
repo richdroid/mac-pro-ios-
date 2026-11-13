@@ -209,7 +209,7 @@ struct MacPowerSections: View {
                         }
                         .font(.footnote).foregroundStyle(.secondary)
                     }
-                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    RowChevron()
                 }
             }
             // Plain, so the summary reads grey and the name white, as a Settings row does; the row is still the button.
@@ -218,7 +218,7 @@ struct MacPowerSections: View {
             .id("power")
             // In Health's card, not a card of one row of its own (designer, 2026-11-11: no lone rows).
             Button(role: .destructive) { model.macPage = .restart } label: {
-                HStack { Text("Restart the Mac…"); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                HStack { Text("Restart the Mac…"); Spacer(); RowChevron() }
             }
         } header: { Text("Health") } footer: {
             Text("Tailscale, the bridge, sessions, the TV link, the Letterboxd relay, the Chumby and OCLP, each with its state. A restart checks first that the Mac will come back by itself.")
