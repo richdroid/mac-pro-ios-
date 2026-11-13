@@ -131,7 +131,9 @@ struct DeviceTab: View {
     var hero: some View {
         VStack(spacing: 4) {
             // Fades in when it comes, rather than appearing in a frame.
-            Cover(url: TVBridge.url("/api/tv/device-image")) { Color.clear }
+            // Asked again once the box first answers: a picture asked for while the Mac was away stayed missing for good,
+            // only its glow showing (gate of 87d77ca).
+            Cover(url: TVBridge.url("/api/tv/device-image"), key: "device-image-\(info != nil)") { Color.clear }
                 .frame(height: panes ? 260 : 170)
                 .background(RadialGradient(colors: [.white.opacity(0.16), .clear], center: .center, startRadius: 4, endRadius: 110).frame(width: 240, height: 240))
                 .accessibilityLabel("The TV box and its remote")

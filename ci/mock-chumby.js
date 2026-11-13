@@ -625,7 +625,7 @@ function tvPose(q, s) {
   if (scene === 'slowdev' && path === '/api/tv/device' && !q.delayed) { q.delayed = true; setTimeout(() => { if (!s.destroyed) tvRoute(q, s); }, 4000); return true; }
   // /outage: the Mac gone from 10 s to 50 s after GET /outage/reset (every connection dropped, as with Tailscale down),
   // then back. Nothing may be said for about 25 s; then a calm amber "Can't reach the Mac", cleared on its return.
-  if (scene === 'outage' && path === '/reset') { tvPose.outage = Date.now(); return json({ ok: true }); }
+  if (scene === 'outage' && path === '/reset') { tvPose.outage = query.has('far') ? Date.now() + 1e9 : Date.now(); return json({ ok: true }); }
   if (scene === 'outage') { const t = Date.now() - (tvPose.outage || 0); if (t > 10000 && t < 50000) { s.destroy(); return true; } }
   if (scene === 'cold' && path === '/api/tv/device') {
     return json({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 0, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 0, txRate: 0, hist: { cpu: [], mem: [], rx: [], tx: [] } });

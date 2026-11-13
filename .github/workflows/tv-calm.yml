@@ -57,14 +57,17 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
             hkeep $h $name
           }
-          # The Mac gone 10–50 s after the reset (the app launched at once): stills at 22 s (nothing said yet), 38 s and 46 s
-          # (calm amber) and 60 s (cleared), all inside the film.
+          # The Mac gone 10–50 s after the reset: stills at 22 s (nothing said yet), 38 s and 46 s (calm amber) and 60 s
+          # (cleared) after it, all inside the film.
           outage() {
             local name=$1 d=$2 tab=$3 h; h=$(hmark)
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            curl -s $M/outage/reset; echo
+            # Launched, given its first readings, then the clock starts: the Mac goes 10 s later (a slow runner once launched
+            # the app after the outage had begun, so nothing was ever kept).
+            curl -s $M/outage/reset?far; echo
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/outage -tab $tab -swipeLog YES
+            sleep 10; curl -s $M/outage/reset; echo
             sleep 22; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-22s.png
             sleep 15; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-38s.png
             sleep 7; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-46s.png
