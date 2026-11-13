@@ -24,6 +24,20 @@ import UIKit
         return false
         #endif
     }
+    // Which still is up, so whoever raised one can tell it's still theirs before lifting it.
+    static var serial: Int {
+        #if os(iOS)
+        return raised
+        #else
+        return 0
+        #endif
+    }
+    // A still that was taking touches lets them through to what's under it from now.
+    static func passTouches() {
+        #if os(iOS)
+        veil?.isUserInteractionEnabled = false
+        #endif
+    }
     // The screen as it is now, over everything, until lift. Never more than one. `underFlight`: the screen as it is once
     // this turn's changes are drawn (the card he threw gone from its shelf), under the picture already in the air.
     static func cover(underFlight: Bool = false, fresh: Bool = true, blocks: Bool = false, for seconds: Double = 1.5) {
@@ -214,6 +228,8 @@ import UIKit
         return false
         #endif
     }
+    // Which flight is in the air: a throw that lets go of its own checks it's still the one flying.
+    static private(set) var serial = 0
     #if os(iOS)
     private static var window: UIWindow? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
@@ -231,6 +247,7 @@ import UIKit
     static func launch(from: CGRect, image: TVImage?, soft: TVImage?, tint: Color?, wide isWide: Bool) {
         #if os(iOS)
         cancel()
+        serial += 1
         guard let w = window, from.width > 4, from.height > 4 else { return }
         wide = isWide
         let g = UIView(frame: from)
@@ -2232,16 +2249,16 @@ struct FlickScreen: View {
         written = true
         var resent = false
         // How many times the line to the Mac dropped under this send, and whether the Mac had begun to answer by then.
-        var dropped = 0
+        var dropped = 0, plainOnce = false
         let heard = HeardBox()
         while true {
             // Made afresh each time round: after a list fetched again, the pick has a new token.
             var order = order
             // The TV's own card of this flick comes in as the send lands there (never for one asked about `again`).
             order.1["receipt"] = FlickReceipt.thrown(receipt, velocity: throwV)
-            // The line dropped after the Mac had the send (the app put away, the tailnet blinking): asked how it went,
-            // which joins that start or hears its answer again. Nothing is started twice.
-            if dropped > 0, heard.yes { order.1["again"] = true }
+            // The line dropped (the app put away, the tailnet blinking): asked how it went, which joins that start or
+            // hears its answer again, whether or not a byte had come back first. Nothing is started twice.
+            if dropped > 0, !plainOnce { order.1["again"] = true }
             do {
                 let answer: Data
                 if early {
@@ -2279,6 +2296,9 @@ struct FlickScreen: View {
             } catch {
                 if Task.isCancelled || cancelled { return }
                 // Called off on the TV's side (his own Home or another app, a newer send): not a failure, nothing to say.
+                // Asked `again` with nothing heard and told something else is the Mac's: this send never reached it, so it
+                // goes once as itself, while it's still the newest.
+                if error is CancellationError, early, dropped > 0, !heard.yes, !plainOnce, ownsStart { plainOnce = true; continue }
                 if error is CancellationError { if ownsStart { model.clearStart() }; FlickClock.current.mark("called-off"); FlickClock.current.finished(); return }
                 // Gone: the list is fetched afresh and the same file (or the next best) sent once more, silently.
                 if error is TVBridge.Gone, !resent, early, let ref = item.stremioRef {
@@ -2467,6 +2487,8 @@ extension UIWindow {
         downAt = t.timestamp
         samples = [(0, t.location(in: nil))]
     }
+    // A finger on the glass now.
+    static var touching: Bool { tracked.map { $0.phase != .ended && $0.phase != .cancelled } ?? false }
     // The current (or last) touch, seconds from its touch-down; nil when there's none.
     static func feel() -> [(t: Double, p: CGPoint)]? { samples.count > 0 ? samples : nil }
     // Now, by the same clock: seconds since the current touch came down.
@@ -2478,6 +2500,7 @@ enum TouchLedger {
     @MainActor static func install() {}
     @MainActor static func feel() -> [(t: Double, p: CGPoint)]? { nil }
     @MainActor static func sinceDown() -> Double? { nil }
+    @MainActor static var touching: Bool { false }
 }
 #endif
 // A row or the card in the hand: its shadow, the light round its edge as it rises, its swell, its lean and its place
@@ -2776,9 +2799,6 @@ struct AppBrowse: View {
     var drag = CGSize.zero
     var lean = 0.0
     var armed = false
-    // Held over the TV long enough to choose: let go, it opens its page at the streams instead of sending Best.
-    var choosing = false
-    @ObservationIgnored var armedAt = Date.distantPast
     // A tap iOS reports with the release of a held card is that release, not a second action.
     @ObservationIgnored var handledAt = Date.distantPast
 }
@@ -2794,21 +2814,9 @@ struct ShelfLiftOverlay: View {
                     .shadow(color: .black.opacity(0.55), radius: 26, y: 18)
                     .overlay(alignment: .top) {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            // Lit only when letting go sends it: not while it says "Let go to choose".
-                            .strokeBorder(TVLook.accent.opacity(hand.armed && !hand.choosing ? 1 : 0.45 * min(1, rise / 80)), lineWidth: hand.armed && !hand.choosing ? 2 : 1.5)
+                            // Lit when letting go sends it.
+                            .strokeBorder(TVLook.accent.opacity(hand.armed ? 1 : 0.45 * min(1, rise / 80)), lineWidth: hand.armed ? 2 : 1.5)
                             .frame(width: hand.width, height: hand.rect.height > 0 ? min(hand.rect.height, hand.width * 1.5) : hand.width * 1.5)
-                    }
-                    .overlay(alignment: .top) {
-                        if hand.choosing {
-                            Text("Let go to choose")
-                                .font(.footnote.weight(.semibold)).foregroundStyle(.black)
-                                .padding(.horizontal, 10).padding(.vertical, 5)
-                                .background(TVLook.accent, in: Capsule())
-                                .fixedSize()
-                                // Above the card, or under it when its top is up under the status bar.
-                                .offset(y: hand.rect.minY + hand.drag.height - o.y < 110 ? (hand.rect.height > 0 ? min(hand.rect.height, hand.width * 1.5) : hand.width * 1.5) + 16 : -30)
-                                .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                        }
                     }
                     .scaleEffect(1.06 + 0.06 * min(1, rise / 240), anchor: .center)
                     .rotationEffect(.degrees(hand.lean))
@@ -2870,21 +2878,29 @@ struct ShelfFlick: ViewModifier {
     @MainActor static func warmRemote(_ model: TVModel) {
         guard !model.remoteBuilt, !warming else { return }
         warming = true
+        // The page the card was on when asked: a page pushed or popped since, and the build waits for another time.
+        let moves = PageMoves.count
         Task { @MainActor in
             defer { warming = false }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
+            // Only at rest: no finger on the glass, nothing in the hand or in the air, no still, no typing, no page moved.
+            @MainActor func idle() -> Bool {
+                !model.remoteBuilt && model.tab != 0 && ShelfHand.shared.item == nil && model.flicking == nil && !ScreenVeil.up
+                    && !RenderFlight.flying && model.typingIn == nil && !TouchLedger.touching && PageMoves.count == moves
+            }
+            var ready = false
             for _ in 0..<40 {
-                if model.remoteBuilt { return }
-                // Not under a finger, a flick, or another still.
-                if ShelfHand.shared.item == nil, model.flicking == nil, !ScreenVeil.up, !RenderFlight.flying, model.tab != 0, model.typingIn == nil { break }
+                if model.remoteBuilt || PageMoves.count != moves { return }
+                if idle() { ready = true; break }
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
-            // Never under his typing (taking the tab drops the keyboard) or a pushed page.
-            guard !model.remoteBuilt, model.tab != 0, ShelfHand.shared.item == nil, model.flicking == nil, !ScreenVeil.up, model.typingIn == nil else { return }
+            guard ready, idle() else { return }
             let back = model.tab
             SwipeLog.note("shelf remote warm")
-            // The still takes touches meanwhile: a tap on the frozen shelf never lands on the Remote's keys under it.
+            // The still takes touches only while the Remote's tab is up under it (the one turn that builds it), so a tap
+            // then never lands on the Remote's keys; from the moment the tab is back they go through to the shelf.
             ScreenVeil.cover(blocks: true, for: 4)
+            let mine = ScreenVeil.serial
             model.remoteWarming = true
             var q = Transaction(); q.disablesAnimations = true
             withTransaction(q) { model.tab = 0 }
@@ -2892,10 +2908,11 @@ struct ShelfFlick: ViewModifier {
             try? await Task.sleep(nanoseconds: 20_000_000)
             if let s = model.mirrorSlot, s.width > 20 { model.lastLanded = (s, RenderFlight.windowSize) }
             if model.tab == 0 { withTransaction(q) { model.tab = back }; RailMark.settle() }
+            if ScreenVeil.serial == mine { ScreenVeil.passTouches() }
             await FlickScreen.settleFrames()
             model.remoteWarming = false
             SwipeLog.note("shelf remote warmed")
-            ScreenVeil.lift(0.12)
+            if ScreenVeil.serial == mine { ScreenVeil.lift(0.12) }
         }
     }
     // The build's shelf films: the first card fully on screen says where it is, for a real finger to land on it.
@@ -2945,7 +2962,7 @@ struct ShelfFlick: ViewModifier {
                         for e in hands.hand.move(CGPoint(x: d.width, y: d.height), at: Date().timeIntervalSince(hands.base)) {
                             if case .armed(let on) = e {
                                 ShelfHand.shared.armed = on
-                                if on { FlickHaptic.detent(); dwell() } else if ShelfHand.shared.choosing { withAnimation(.easeOut(duration: 0.15)) { ShelfHand.shared.choosing = false } }
+                                if on { FlickHaptic.detent() }
                             }
                         }
                         ShelfHand.shared.drag = d
@@ -2960,19 +2977,6 @@ struct ShelfFlick: ViewModifier {
                 if !following { end(hands.hand.up(.zero, at: Date().timeIntervalSince(hands.base)), translation: .zero) }
             }
     }
-    // Held over the TV, still armed a second later: he wants to choose. Felt, and said on the card.
-    func dwell() {
-        guard ShelfSend.ref(item, source) != nil, !model.isOnTV(item, source) else { return }
-        let mark = Date()
-        ShelfHand.shared.armedAt = mark
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            guard up, ShelfHand.shared.armed, ShelfHand.shared.armedAt == mark else { return }
-            HandTrace.note("shelf-choosing")
-            withAnimation(.easeOut(duration: 0.18)) { ShelfHand.shared.choosing = true }
-            FlickHaptic.charged()
-        }
-    }
     // In the hand: felt, drawn over everything, the shelf held still, and the TV told what's coming.
     func lifted() {
         HandTrace.note("shelf-lifted")
@@ -2980,7 +2984,7 @@ struct ShelfFlick: ViewModifier {
         FlickHaptic.lift(); FlickClock.touched()
         ScrollLock.set(lock, true)
         let h = ShelfHand.shared
-        h.item = item; h.source = source; h.width = width; h.rect = rect(); h.drag = .zero; h.lean = 0; h.armed = false; h.choosing = false
+        h.item = item; h.source = source; h.width = width; h.rect = rect(); h.drag = .zero; h.lean = 0; h.armed = false
         if source == .stremio, !item.isYouTube { StreamCache.shared.prefetch(item) }
         guard !model.isOnTV(item, source) else { receipt = ""; return }
         receipt = UUID().uuidString
@@ -3000,16 +3004,7 @@ struct ShelfFlick: ViewModifier {
         HandTrace.note(String(format: "shelf-end %@ dy=%.0f", "\(outcome)", translation.height))
         ShelfHand.shared.handledAt = Date()
         ScrollLock.set(lock, false)
-        let choosing = ShelfHand.shared.choosing
-        ShelfHand.shared.choosing = false
-        // The dwell is over with the touch, whatever a busy main thread does to its timer.
-        ShelfHand.shared.armedAt = .distantPast
         switch outcome {
-        case .thrown where choosing:
-            // Held over the TV until it said "Let go to choose": its page, at the streams, nothing sent.
-            put(back: false)
-            if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
-            FlickCardButton.tap(model, item, source, origin: rect(), held: true)
         case .thrown:
             let v = hands.hand.leaving
             throwIt(velocity: CGSize(width: v.dx, height: v.dy), translation: translation)
@@ -3039,6 +3034,8 @@ struct ShelfFlick: ViewModifier {
         // A film or an episode with its list in hand: the request leaves first, before anything is drawn (the gate on
         // be9f2bd: 0.75-0.9 s from the release to the send, the card frozen at the top meanwhile).
         var direct: [StremioStream]?
+        // The still raised under this throw, so only that one is lifted if he moves on before it sends.
+        var veilOf = -1
         if ShelfSend.ref(item, source) != nil, !startUnderWay, let list = ShelfSend.list(item, source), let best = ShelfSend.best(list) {
             direct = list
             startNow(best, list, velocity: velocity)
@@ -3053,7 +3050,7 @@ struct ShelfFlick: ViewModifier {
             ShelfHand.shared.item = nil
             // The still of the shelf under it: for a send under way, taken in the next turn from what's already drawn
             // (a fresh one forces the whole window to be drawn again first, here and now).
-            if direct == nil { ScreenVeil.cover(underFlight: true, for: 3) }
+            if direct == nil { ScreenVeil.cover(underFlight: true, for: 3); veilOf = ScreenVeil.serial }
             // Set going now, before the page it opens is asked for, and sent to the render server at once: the long commit
             // that builds that page then can't hold it (94d0f11: parked a second where it was let go). Straight into the
             // Remote's picture when its place is known.
@@ -3065,14 +3062,33 @@ struct ShelfFlick: ViewModifier {
         if direct != nil { toRemote(); return }
         if let r = ShelfSend.ref(item, source), !startUnderWay {
             HandTrace.note("shelf-waiting")
+            // What he might do meanwhile through the still (it takes no touches): another tab, another card, a page.
+            let tab = model.tab, moves = PageMoves.count, start = model.startingTarget?.lineage, flight = RenderFlight.serial
+            let flickWas = model.flicking?.id, mine = item.id, veilMine = veilOf
+            let moved = { [model] in
+                model.tab != tab || PageMoves.count != moves || model.startingTarget?.lineage != start || RenderFlight.serial != flight
+                    || (model.flicking != nil && !model.flickRetired && model.flicking?.id != flickWas)
+                    || (ShelfHand.shared.item.map { $0.id != mine } ?? false)
+            }
             Task { @MainActor in
                 let until = Date().addingTimeInterval(0.8)
                 while Date() < until {
                     try? await Task.sleep(nanoseconds: 50_000_000)
+                    if moved() { break }
                     if let list = StreamCache.shared.inHand(type: r.type, imdb: r.imdb, video: r.video), !list.isEmpty {
                         if sendNow(list, velocity: velocity) { return }
                         break
                     }
+                }
+                // He's moved on: nothing sent, nothing opened over what he's doing; this card's flight, still and the
+                // TV's receipt go, and the card is back on its shelf.
+                if moved() {
+                    HandTrace.note("shelf-wait-dropped")
+                    if RenderFlight.serial == flight { RenderFlight.land(after: 0) }
+                    if ScreenVeil.serial == veilMine { ScreenVeil.lift(0.2) }
+                    if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
+                    up = false
+                    return
                 }
                 viaPage(velocity: velocity, from: from)
             }
@@ -3192,26 +3208,34 @@ extension TVModel {
         let lineage = target.lineage
         beginStart(.init(title: item.title, art: item.art, line: ShelfSend.episodeLine(item), token: first.token), target: target)
         standIn(item.art)
-        Task { @MainActor in
+        // This flick's own clock (FlickClock.begin came just before), never a later flick's.
+        let clock = FlickClock.current
+        // Kept by the model: a newer start, or this one called off, ends it, so no retry of it is ever sent after something
+        // newer (it stops at the same points as the page's own request does on its cancel).
+        shelfStart = Task { @MainActor in
             let owns = { self.startingTarget?.lineage == lineage }
             var stream = first, list = list
-            var avoid: Set<String> = [], resent = false, dropped = 0
+            var avoid: Set<String> = [], resent = false, dropped = 0, plainOnce = false
             let heard = HeardBox()
-            FlickClock.current.mark("request")
+            clock.mark("request")
             while true {
+                if Task.isCancelled { return }
                 var body = ShelfSend.body(item, stream, list, avoid: avoid)
                 if let receipt { body["receipt"] = FlickReceipt.thrown(receipt, velocity: velocity) }
-                if dropped > 0, heard.yes { body["again"] = true }
+                // Every send after a dropped line asks how the first went (`again`): the Mac joins it if it's still
+                // starting, or answers again if it ended; whether or not a byte came back first, nothing starts twice.
+                if dropped > 0, !plainOnce { body["again"] = true }
                 do {
-                    let answer = try await TVBridge.playStream(body, opened: { _ in heard.yes = true; FlickClock.current.mark("first-byte") }, phase: { p in
-                        FlickClock.current.mark("phase-" + p)
+                    let answer = try await TVBridge.playStream(body, opened: { _ in heard.yes = true; clock.mark("first-byte") }, phase: { p in
+                        clock.mark("phase-" + p)
                         guard owns() else { return }
                         self.startPhase(p)
-                        if p == "playing" { FlickClock.current.mark("playing"); self.startPlayed() }
+                        if p == "playing" { clock.mark("playing"); self.startPlayed() }
                     })
+                    if Task.isCancelled { return }
                     if let j = try? JSONSerialization.jsonObject(with: answer) as? [String: Any] {
-                        if j["alreadyOn"] as? Bool == true { FlickClock.current.mark("already-on") }
-                        if j["joined"] as? Bool == true { FlickClock.current.mark("joined") }
+                        if j["alreadyOn"] as? Bool == true { clock.mark("already-on") }
+                        if j["joined"] as? Bool == true { clock.mark("joined") }
                         if let t = j["token"] as? String, t != stream.token, let played = list.first(where: { $0.token == t }) { stream = played }
                     }
                     PlayedStream.set(r.imdb + "/" + (r.type == "series" ? r.video ?? "" : ""), stream.description)
@@ -3220,10 +3244,17 @@ extension TVModel {
                     NextUp.shared.forget()
                     UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "flicksDone") + 1, forKey: "flicksDone")
                     if owns() || startingTarget == nil { startPlayed() }
-                    FlickClock.current.mark("answer"); FlickClock.current.finished()
+                    clock.mark("answer"); clock.finished()
                     return
                 } catch {
-                    if error is CancellationError { if owns() { clearStart() }; FlickClock.current.mark("called-off"); FlickClock.current.finished(); return }
+                    // Ended from here (a newer start, or called off): nothing more of it, as the page's.
+                    if Task.isCancelled { return }
+                    if error is CancellationError {
+                        // Asked `again` with nothing heard and told something else is the Mac's: this send never reached
+                        // it (the line dropped on the way out), so it goes once as itself, while it's still the newest.
+                        if dropped > 0, !heard.yes, !plainOnce, owns() { plainOnce = true; continue }
+                        if owns() { clearStart() }; clock.mark("called-off"); clock.finished(); return
+                    }
                     // Gone: the list fetched afresh and the same file (or the next best) sent once more, silently.
                     if error is TVBridge.Gone, !resent {
                         resent = true
@@ -3233,15 +3264,16 @@ extension TVModel {
                            let s = fresh.first(where: { $0.description == stream.description && !avoid.contains($0.token) }) ?? ShelfSend.best(fresh, avoid: avoid) {
                             list = fresh; stream = s; continue
                         }
+                        if Task.isCancelled { return }
                     }
                     // The line dropped, not the start: twice more, a moment apart, before that's believed.
                     if error is URLError, dropped < 2 {
                         dropped += 1
-                        FlickClock.current.mark("line-lost")
+                        clock.mark("line-lost")
                         try? await Task.sleep(nanoseconds: UInt64(dropped) * 700_000_000)
                         continue
                     }
-                    FlickClock.current.mark("failed"); FlickClock.current.finished()
+                    clock.mark("failed"); clock.finished()
                     if error is TVBridge.DidNotStart, let stalled = TriedStreams.last { avoid.formUnion(stalled) } else { avoid.insert(stream.token) }
                     TriedStreams.last = nil
                     // On the Remote: the poster dims, with one way on (Choose another: the page, at its streams).
@@ -3259,24 +3291,35 @@ extension TVModel {
         SwipeLog.note("shelf send tab")
         withTransaction(quiet) { remoteArrival = Date(); flickHandoff = true; tab = 0; keepMood(until: art); mood = tint }
         RailMark.settle()
+        let clock = FlickClock.current
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 16_000_000)
             SwipeLog.note("shelf send under")
             ScreenVeil.lift(0.22)
             var slot: CGRect? = mirrorSlot.flatMap { $0.width > 20 ? $0 : nil }, seen: CGRect?
-            for _ in 0..<(slot == nil ? 40 : 0) {
+            // Not known yet: toward where it last was in this window meanwhile, then onto it the moment it's measured
+            // (two readings that agree), for up to two seconds.
+            var interim = false
+            for i in 0..<(slot == nil ? 80 : 0) {
                 if let s = mirrorSlot, s.width > 20 {
                     if let p = seen, abs(p.minX - s.minX) + abs(p.minY - s.minY) + abs(p.width - s.width) < 0.5 { slot = s; break }
                     seen = s
                 }
+                if i == 12, !interim, seen == nil, let l = lastLanded, l.window == RenderFlight.windowSize { interim = true; RenderFlight.aim(l.rect, first: false) }
                 try? await Task.sleep(nanoseconds: 25_000_000)
             }
             guard let first = slot ?? seen else {
-                RenderFlight.land(after: 0)
+                // Never measured: the card goes where it is, and the landing is still counted, so the flick's times are sent.
+                RenderFlight.land(after: interim ? 0.1 : 0)
                 withAnimation(.easeOut(duration: 0.15)) { flickHandoff = false }
+                clock.remoteLanded()
+                SwipeLog.note("shelf send landed, no slot")
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                if !art.isEmpty { lastArt = art; lastArtTitle = title; lastArtPkg = "com.stremio.one" }
+                await load()
                 return
             }
-            FlickClock.current.mark("move")
+            clock.mark("move")
             remoteMoveAt = Date()
             RenderFlight.aim(first, first: false)
             // The picture can still settle as the Remote lays out: followed until it's still.
@@ -3291,7 +3334,7 @@ extension TVModel {
                 }
                 if Date().timeIntervalSince(start) > 0.36, still >= 3, Date().timeIntervalSince(aimedAt) >= 0.3 { break }
             }
-            FlickClock.current.remoteLanded()
+            clock.remoteLanded()
             SwipeLog.note("shelf send landed")
             lastLanded = (aimed, RenderFlight.windowSize)
             withAnimation(.easeOut(duration: 0.15)) { flickHandoff = false }

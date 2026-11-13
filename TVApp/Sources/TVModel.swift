@@ -237,8 +237,15 @@ final class TVModel {
     // What to reopen for "Choose another", with the streams that didn't start set apart.
     @ObservationIgnored var startingTarget: FlickTarget?
     @ObservationIgnored var startingAvoid: Set<String> = []
+    // A shelf throw's request (startStream), kept so a newer start or the start called off ends it: its retries after a
+    // dropped line never send an older title over a newer one.
+    @ObservationIgnored var shelfStart: Task<Void, Never>?
     func beginStart(_ s: Starting, target: FlickTarget) {
+        shelfStart?.cancel(); shelfStart = nil
         startingTarget = target
+        // A new title's start: the streams an earlier one set apart are no longer this one's (tokens are positional, s0, s1,
+        // so a later "Choose another" would grey out the wrong ones). The page carries its own set apart in its target.
+        startingAvoid = []
         withAnimation(.easeOut(duration: 0.2)) { starting = s }
     }
     func startPhase(_ p: String) {
@@ -280,7 +287,7 @@ final class TVModel {
         withAnimation(.easeOut(duration: 0.25)) { starting?.failed = true }
     }
     // Called off from the Remote (holding ⏯), or done with after a failure.
-    func clearStart() { startEndedAt = Date(); withAnimation(.easeOut(duration: 0.25)) { starting = nil } }
+    func clearStart() { shelfStart?.cancel(); shelfStart = nil; startEndedAt = Date(); withAnimation(.easeOut(duration: 0.25)) { starting = nil } }
     // When a start last ended: the Remote keeps the bar's and episode line's places for a while after, until the TV's own
     // reading of what's on has caught up, so nothing drops out and back in at playing (r24: the pad jumped 10 pt).
     var startEndedAt = Date.distantPast

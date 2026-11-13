@@ -479,12 +479,17 @@ struct Page<C: View>: View {
         // A page opened from a search leaves the keyboard behind.
         .onChange(of: path) { was, now in
             Keyboard.dismiss()
+            PageMoves.count += 1
             #if os(iOS)
             HitchLog.shared.note("\(title) \(now.count > was.count ? "push" : "pop") \(was.count)→\(now.count)")
             #endif
         }
     }
 }
+
+// Every push and pop on any tab's stack, counted: a throw waiting on its list, or the Remote's unseen build, that sees it
+// change since it began knows he has moved on, and lets go.
+@MainActor enum PageMoves { static var count = 0 }
 
 // How far a tab's page has scrolled, from whichever of its scroll views moved last.
 @Observable final class PageScrollY { var y: CGFloat = 0 }
