@@ -76,7 +76,10 @@ func when(_ d: Date?) -> String {
     let gap = Clock.now.timeIntervalSince(d)
     if gap < 60 { return "just now" }
     if gap < 3600 { return "\(Int(gap / 60)) min ago" }
-    return d.formatted(date: .omitted, time: .shortened)
+    let time = d.formatted(date: .omitted, time: .shortened)
+    // Another day says which: "yesterday at 11:52 PM", "Tuesday at 9:10 PM".
+    if !Calendar.current.isDate(d, inSameDayAs: Clock.now) { let n = dayName(d); return "\(n == "yesterday" ? n : n.capitalizedFirst) at \(time)" }
+    return "at \(time)"
 }
 func dayName(_ d: Date) -> String {
     let cal = Calendar.current

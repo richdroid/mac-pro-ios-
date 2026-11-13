@@ -77,7 +77,7 @@ struct TrackPage: View {
                 Text(s.title).font(.system(.largeTitle, weight: .bold)).foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
                 Text(s.artist).font(.title3).foregroundStyle(.white.opacity(0.85))
                 if !s.album.isEmpty { Text(s.album).font(.body).foregroundStyle(S.soft) }
-                Text(s.nowPlaying ? "Playing now" : s.date.map { "\(dayName($0).capitalizedFirst) at \($0.formatted(date: .omitted, time: .shortened))" } ?? "")
+                Text(s.nowPlaying ? "Now playing" : s.date.map { "\(dayName($0).capitalizedFirst) at \($0.formatted(date: .omitted, time: .shortened))" } ?? "")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.8)).padding(.top, 6)
             }
         }

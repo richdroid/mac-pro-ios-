@@ -86,10 +86,10 @@ jobs:
               cmd=${step%%:*}; wait=${step##*:}
               sleep $wait; t=$((t + wait))
               case $cmd in
-                fling) $D "$DEVICE" drag 0.5 0.8 0.5 0.25 0.12 || echo "drag failed";;
-                flingback) $D "$DEVICE" drag 0.5 0.25 0.5 0.8 0.12 || echo "drag failed";;
-                pull) $D "$DEVICE" drag 0.5 0.3 0.5 0.85 0.9 || echo "drag failed";;
-                slow) $D "$DEVICE" drag 0.5 0.75 0.5 0.35 0.9 || echo "drag failed";;
+                fling) $D "$DEVICE" drag ${X:-0.5} 0.8 ${X:-0.5} 0.25 0.12 || echo "drag failed";;
+                flingback) $D "$DEVICE" drag ${X:-0.5} 0.25 ${X:-0.5} 0.8 0.12 || echo "drag failed";;
+                pull) $D "$DEVICE" drag ${X:-0.5} 0.3 ${X:-0.5} 0.85 0.9 || echo "drag failed";;
+                slow) $D "$DEVICE" drag ${X:-0.5} 0.75 ${X:-0.5} 0.35 0.9 || echo "drag failed";;
                 side) $D "$DEVICE" drag 0.8 0.75 0.2 0.75 0.25 || echo "drag failed";;
                 tap) $D "$DEVICE" touch 0.3 0.3 0.05 || echo "tap failed";;
                 open|partial|closed) $D "$DEVICE" pose $cmd || echo "pose failed";;
@@ -147,7 +147,8 @@ jobs:
           shot now-open 3 8 -tab 0
           shot you-open 3 8 -tab 1
           shot detail-open 3 9 -tab 0 -pose detail
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-you-open 3 18 -tab 1
+          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-now-open 3 18 -tab 0
+          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 side:2 shot:2" film scroll-you-open 3 18 -tab 1
           film tour-open 3 14 -tab 0 -pose tour
           date
           ls dist
