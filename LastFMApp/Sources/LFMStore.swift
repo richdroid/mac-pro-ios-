@@ -74,6 +74,11 @@ struct Profile: Sendable {
         // The last thing each screen showed, before anything is asked.
         if let (j, _) = LastFM.shared.kept("user.getinfo") { profile = Profile.parse(j) }
         if let (j, _) = LastFM.shared.kept("user.getrecenttracks", ["limit": "200", "extended": "1"]) { apply(j) }
+        if let k = Insights.kept() { insights = k }
+        // The hero's cover and backdrop from the disk before the first frame, so it opens on the picture, not its stand-in.
+        if let h = hero { ArtStore.shared.warm(h.art) }
+        // The build's mock makes its listening history off the main thread, while the first frame draws.
+        if LastFM.shared.mock { Task.detached(priority: .userInitiated) { _ = MockLastFM.shared.profileName } }
         sync.onProgress = { [weak self] in self?.workInsights() }
     }
 
@@ -145,6 +150,7 @@ struct Profile: Sendable {
             if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
             let s = await Insights.work(coveredFrom: sync.coveredFrom, complete: sync.complete)
             insights = s
+            if s.coveredFrom != .max { s.keep() }
             if !s.hours.isEmpty { UserDefaults.standard.set(s.dayStart, forKey: "dayStart") }
             lastInsight = Date()
             insightTask = nil

@@ -13,7 +13,7 @@ struct TrackPage: View {
     @State private var music: URL?
     var body: some View {
         NavigationStack {
-            PaneReader { Content(s: s, info: info, more: $more, music: music) }
+            Content(s: s, info: info, more: $more, music: music)
                 .background { Backdrop(ref: s.art, moving: false, dim: 0.1) }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -34,9 +34,11 @@ struct TrackPage: View {
         let info: TrackInfo?
         @Binding var more: Bool
         let music: URL?
-        @Environment(\.paneLayout) private var pane
+        @Environment(\.horizontalSizeClass) private var size
         @Environment(\.openURL) private var openURL
+        // Read from the page itself: wider than tall is two panes open flat, side by side folded.
         @State private var sideways = false
+        private var pane: Bool { sideways && size == .regular }
         var body: some View {
             Group { layout }.onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.15 } action: { sideways = $0 }
         }
@@ -173,6 +175,6 @@ struct MoreText: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(!cut && !more)
+        .allowsHitTesting(cut || more)
     }
 }

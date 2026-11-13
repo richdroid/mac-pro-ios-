@@ -99,8 +99,15 @@ struct NowHero: View {
         } else {
             VStack(alignment: .leading, spacing: 18) {
                 HubTitle(text: "listening", size: 72)
-                RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(0.06)).aspectRatio(1, contentMode: .fit).frame(maxWidth: 400)
-                    .padding(.horizontal, S.margin)
+                // Before the very first answer: a record turning slowly on glass, never an empty box.
+                TimelineView(.animation(minimumInterval: 1 / 30)) { tl in
+                    Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(.white.opacity(0.35))
+                        .frame(width: 120).rotationEffect(.degrees(tl.date.timeIntervalSinceReferenceDate * 40))
+                }
+                .frame(maxWidth: 400).aspectRatio(1, contentMode: .fit)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.horizontal, S.margin)
+                .accessibilityLabel("Waiting for your listening")
             }
         }
     }

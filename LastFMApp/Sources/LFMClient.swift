@@ -77,7 +77,7 @@ actor LastFM {
         let k = Self.baked("LastFMKey"), u = Self.baked("LastFMUser")
         mock = Self.mockMode
         key = mock ? nil : k
-        user = mock ? MockLastFM.shared.profileName : (u ?? "")
+        user = mock ? MockLastFM.catalogName : (u ?? "")
     }
 
     nonisolated func cacheKey(_ method: String, _ params: [String: String]) -> String {

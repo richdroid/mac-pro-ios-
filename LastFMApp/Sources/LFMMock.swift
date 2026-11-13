@@ -23,6 +23,12 @@ final class MockLastFM: @unchecked Sendable {
     private var rising = 0, discovery = 0
     private let lock = NSLock()
     var profileName: String { profile["name"] as? String ?? "listener" }
+    // His name alone, from the catalog, without making the history (which takes seconds, and never on the main thread).
+    static var catalogName: String {
+        guard let u = Bundle.main.url(forResource: "catalog", withExtension: "json", subdirectory: "Mock"),
+              let d = try? Data(contentsOf: u), let o = try? JSONSerialization.jsonObject(with: d) else { return "listener" }
+        return J(o)["profile"]["name"].string ?? "listener"
+    }
     // -playing NO: nothing on right now (the "last played" state).
     private let playing = UserDefaults.standard.object(forKey: "playing") == nil || UserDefaults.standard.bool(forKey: "playing")
     // -mockAdvance N: every N seconds the song on now is scrobbled and the next begins.

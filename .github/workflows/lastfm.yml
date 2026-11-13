@@ -14,7 +14,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 90
+    timeout-minutes: 115
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +39,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
-        timeout-minutes: 60
+        timeout-minutes: 80
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -126,12 +126,13 @@ jobs:
           shot detail-fland 1 9 -tab 0 -pose detail
           orient portrait 1
           date
-          # Folded on Now, then opened flat, turned upright, half closed and closed, on each display in turn.
-          for pass in outer inner; do
-            display=1; [ $pass = inner ] && display=3
-            $D "$DEVICE" pose closed || true; sleep 4; orient portrait 1
-            STEPS="landscape:6 open:6 shot:2 portrait:5 shot:2 partial:5 closed:5" film posture-$pass $display 36 -tab 0
-          done
+          # Postures changed live. Folded on Now, turned sideways and back: the outer display filmed.
+          $D "$DEVICE" pose closed || true; sleep 4; orient portrait 1
+          STEPS="landscape:6 shot:2 portrait:6 shot:2" film posture-outer 1 22 -tab 0
+          # Opened upright on Now and scrolled, turned flat, half folded, flat again, upright: the inner display filmed
+          # from open (recording it folded gives an empty film).
+          $D "$DEVICE" pose open || true; sleep 6; orient portrait 3
+          STEPS="slow:6 shot:2 landscape:6 shot:2 partial:6 shot:2 open:6 shot:2 portrait:6 shot:2" film posture-inner 3 44 -tab 0
           # Open upright: the posture he holds.
           $D "$DEVICE" pose open || true; sleep 5
           orient portrait 3

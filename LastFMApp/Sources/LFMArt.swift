@@ -65,6 +65,25 @@ final class ArtStore: @unchecked Sendable {
     func image(_ ref: ArtRef, px: Int) async -> CGImage? {
         if let c = cached(ref, px: px) { return c }
         guard let data = await bytes(ref) else { return nil }
+        // Kept under the album too, whichever source it came from, for warm() on the next launch.
+        let byKey = file("album:" + ref.key)
+        if !FileManager.default.fileExists(atPath: byKey.path) { try? data.write(to: byKey, options: .atomic) }
+        return decode(ref, data, px: px)
+    }
+
+    // The hero's cover and backdrop, decoded now from what's on disk (a few milliseconds), for the first frame.
+    func warm(_ ref: ArtRef) {
+        guard cached(ref, px: 1000) == nil else { return }
+        var data = try? Data(contentsOf: file("album:" + ref.key))
+        if data == nil, let u = ref.url, u.hasPrefix("mock://") {
+            data = Bundle.main.url(forResource: String(u.dropFirst(7)), withExtension: "jpg", subdirectory: "Mock/art").flatMap { try? Data(contentsOf: $0) }
+        }
+        guard let data else { return }
+        _ = decode(ref, data, px: 1000)
+        if let small = decode(ref, data, px: 160) { _ = blurred(ref, small) }
+    }
+
+    private func decode(_ ref: ArtRef, _ data: Data, px: Int) -> CGImage? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil),
               let img = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: px,
                                                                     kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
@@ -168,9 +187,12 @@ final class ArtStore: @unchecked Sendable {
     // A softly blurred, slightly richer copy of the cover, small, for the backdrop that fills the screen behind it.
     private let context = CIContext(options: [.useSoftwareRenderer: false])
     func backdrop(_ ref: ArtRef) async -> CGImage? {
-        let key = "\(ref.key)@backdrop" as NSString
-        if let b = images.object(forKey: key) { return b.image }
+        if let b = cachedBackdrop(ref) { return b }
         guard let small = await image(ref, px: 160) else { return nil }
+        return blurred(ref, small)
+    }
+    private func blurred(_ ref: ArtRef, _ small: CGImage) -> CGImage? {
+        let key = "\(ref.key)@backdrop" as NSString
         let ci = CIImage(cgImage: small).clampedToExtent()
         let blurred = ci.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 14])
             .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.35, kCIInputBrightnessKey: -0.04])

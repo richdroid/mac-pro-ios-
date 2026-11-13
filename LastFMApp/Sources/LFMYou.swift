@@ -13,7 +13,7 @@ struct YouTab: View {
     var body: some View {
         if pane {
             FoldSplit {
-                page { VStack(alignment: .leading, spacing: S.section) { identity; years } }
+                page { VStack(alignment: .leading, spacing: S.section) { identity; if sync.complete { years } } }
             } right: {
                 page { VStack(alignment: .leading, spacing: S.section) { listening }.padding(.top, 28) }
             }
@@ -21,7 +21,6 @@ struct YouTab: View {
             page {
                 VStack(alignment: .leading, spacing: S.section) {
                     identity
-                    if !sync.complete { YearsSection() }
                     listening
                     if sync.complete { YearsSection() }
                 }
@@ -32,6 +31,8 @@ struct YouTab: View {
         VStack(alignment: .leading, spacing: 22) {
             HubTitle(text: store.profile?.name ?? LastFM.shared.user, size: 80)
             ProfileHead().padding(.horizontal, S.margin)
+            // The first read, high on the page while it runs: the moment the app is reading his years.
+            if !sync.complete { YearsSection() }
             Totals().padding(.horizontal, S.margin)
             StreakCard().padding(.horizontal, S.margin)
         }
@@ -119,14 +120,16 @@ struct StreakCard: View {
                 if let best = i.best { Figure(value: "\(best)", label: "best", size: 22).fixedSize() }
             }
             GeometryReader { g in
-                let d = (g.size.width - 27 * 4) / 28
-                HStack(spacing: 4) {
+                // Dots no bigger than 10 pt, spread across the card.
+                let d = min(10, (g.size.width - 27 * 4) / 28)
+                HStack(spacing: 0) {
                     ForEach(0..<28, id: \.self) { k in
                         let v = days[k]
                         Circle()
                             .fill(v == 0 ? Color.white.opacity(0.1) : S.accent.opacity(0.35 + 0.65 * Double(v) / Double(peak)))
                             .frame(width: max(4, d * (v == 0 ? 0.35 : 0.45 + 0.55 * CGFloat(v) / CGFloat(peak))))
                             .frame(width: d, height: d)
+                            .frame(maxWidth: .infinity)
                     }
                 }
             }
@@ -146,6 +149,7 @@ struct PaceCard: View {
             let hero = ArtStore.shared.palette(Store.shared.hero?.art ?? ArtRef(artist: "", album: "", url: nil))?.vivid.color ?? S.accent
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "this week")
+                VStack(alignment: .leading, spacing: S.head) {
                 HStack(alignment: .top, spacing: 28) {
                     Figure(value: number(p.now), label: "plays so far", size: 40)
                     let up = p.delta >= 0
@@ -195,8 +199,9 @@ struct PaceCard: View {
                     legend(RoundedRectangle(cornerRadius: 2).fill(.white.opacity(0.2)).frame(width: 16, height: 10), "usual, \(p.weeks) weeks")
                 }
                 .font(.caption).foregroundStyle(S.soft)
+                }
+                .card()
             }
-            .card()
         }
     }
     private func legend<V: View>(_ mark: V, _ text: String) -> some View { HStack(spacing: 6) { mark; Text(text) } }
@@ -268,6 +273,8 @@ struct WeekHub: View {
                 }
                 .scrollIndicators(.hidden)
                 .scrollTargetBehavior(.viewAligned)
+                // Kept to the page: a scroll draws past its frame into the safe area, under the side bar's buttons.
+                .clipped()
             }
         }
     }
@@ -357,7 +364,7 @@ struct CanonCard: View {
                 SectionHead(text: "your canon")
                 VStack(alignment: .leading, spacing: 16) {
                     HStack(alignment: .top, spacing: 28) {
-                        Figure(value: "\(c.artists)", label: "artists always there", size: 40)
+                        Figure(value: "\(c.artists)", label: "artists in most months", size: 40)
                         Figure(value: "\(Int((c.share * 100).rounded()))%", label: "of this week", size: 40)
                         Spacer(minLength: 0)
                     }
@@ -380,7 +387,6 @@ struct CanonCard: View {
                         }
                         .accessibilityLabel("This week: " + c.thisWeek.prefix(8).map(\.name).joined(separator: ", "))
                     }
-                    Text("Heard in at least 6 of every 10 months since you started.").font(.subheadline).foregroundStyle(S.soft)
                 }
                 .card()
             }
@@ -407,23 +413,35 @@ struct ClockCard: View {
                     ZStack {
                         Canvas { ctx, size in
                             let c = CGPoint(x: size.width / 2, y: size.height / 2)
-                            let r = min(size.width, size.height) / 2 - 18
-                            let inner = r * 0.34
+                            let r = min(size.width, size.height) / 2 - 20
+                            let inner = r * 0.42
                             for ring in [0.5, 1.0] {
                                 let rr = inner + (r - inner) * ring
                                 ctx.stroke(Path(ellipseIn: CGRect(x: c.x - rr, y: c.y - rr, width: rr * 2, height: rr * 2)), with: .color(.white.opacity(0.07)), lineWidth: 1)
                             }
-                            func petal(_ h: Int, _ v: Double, _ fill: GraphicsContext.Shading, _ inset: Double) {
-                                let len = inner + (r - inner) * CGFloat(sqrt(v / peak))
-                                let a0 = (Double(h) / 24) * 2 * .pi - .pi / 2 + inset, a1 = (Double(h + 1) / 24) * 2 * .pi - .pi / 2 - inset
+                            func reach(_ v: Double) -> CGFloat { inner + (r - inner) * CGFloat(sqrt(v / peak)) }
+                            func angle(_ h: Double) -> Double { h / 24 * 2 * .pi - .pi / 2 }
+                            // All his years: a soft petal per hour.
+                            for h in 0..<24 {
+                                let a0 = angle(Double(h)) + 0.02, a1 = angle(Double(h + 1)) - 0.02
                                 var p = Path()
                                 p.addArc(center: c, radius: inner, startAngle: .radians(a0), endAngle: .radians(a1), clockwise: false)
-                                p.addArc(center: c, radius: len, startAngle: .radians(a1), endAngle: .radians(a0), clockwise: true)
+                                p.addArc(center: c, radius: reach(shareA[h]), startAngle: .radians(a1), endAngle: .radians(a0), clockwise: true)
                                 p.closeSubpath()
-                                ctx.fill(p, with: fill)
+                                ctx.fill(p, with: .color(.white.opacity(0.2)))
                             }
-                            for h in 0..<24 { petal(h, shareA[h], .color(.white.opacity(0.16)), 0.012) }
-                            for h in 0..<24 where shareW[h] > 0 { petal(h, shareW[h], .color(tint.opacity(0.8)), 0.05) }
+                            // The last seven days: one line round the clock through each hour's reach, over the petals.
+                            var line = Path()
+                            for h in 0...24 {
+                                let a = angle(Double(h % 24) + 0.5), len = reach(shareW[h % 24])
+                                let pt = CGPoint(x: c.x + CGFloat(cos(a)) * len, y: c.y + CGFloat(sin(a)) * len)
+                                if h == 0 { line.move(to: pt) } else { line.addLine(to: pt) }
+                            }
+                            line.closeSubpath()
+                            ctx.fill(line, with: .color(tint.opacity(0.22)))
+                            ctx.stroke(line, with: .color(tint), style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
+                            // A quiet disc in the middle for the figure.
+                            ctx.fill(Path(ellipseIn: CGRect(x: c.x - inner + 6, y: c.y - inner + 6, width: (inner - 6) * 2, height: (inner - 6) * 2)), with: .color(.black.opacity(0.35)))
                         }
                         VStack(spacing: 0) {
                             Text("\(Int((late * 100).rounded()))%").font(.system(size: 30, weight: .light)).monospacedDigit().foregroundStyle(.white)
@@ -442,7 +460,7 @@ struct ClockCard: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Your listening by hour. \(Int((late * 100).rounded())) percent of your plays are after midnight.")
                     HStack(spacing: 16) {
-                        HStack(spacing: 6) { RoundedRectangle(cornerRadius: 2).fill(tint).frame(width: 14, height: 10); Text("last 7 days") }
+                        HStack(spacing: 6) { Capsule().fill(tint).frame(width: 16, height: 3); Text("last 7 days") }
                         HStack(spacing: 6) { RoundedRectangle(cornerRadius: 2).fill(.white.opacity(0.25)).frame(width: 14, height: 10); Text("all your years") }
                         Spacer(minLength: 0)
                     }

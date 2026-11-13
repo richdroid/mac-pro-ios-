@@ -157,6 +157,22 @@ actor HistoryDB {
     @ObservationIgnored private var pageOldest: [Int: Int] = [:]
     @ObservationIgnored private var pin = 0
 
+    // What the read had reached, from the last launch: the first frame shows it, not "0%" until the database answers.
+    private init() {
+        let d = UserDefaults.standard
+        if d.bool(forKey: "fresh") { d.removeObject(forKey: "history.state"); return }
+        guard let s = d.dictionary(forKey: "history.state") else { return }
+        complete = s["complete"] as? Bool ?? false
+        total = s["total"] as? Int ?? 0
+        read = s["read"] as? Int ?? 0
+        coveredFrom = s["coveredFrom"] as? Int ?? .max
+        years = ((s["years"] as? [String: Int]) ?? [:]).reduce(into: [:]) { if let y = Int($1.key) { $0[y] = $1.value } }
+    }
+    private func save() {
+        UserDefaults.standard.set(["complete": complete, "total": total, "read": read, "coveredFrom": coveredFrom,
+                                   "years": years.reduce(into: [String: Int]()) { $0[String($1.key)] = $1.value }], forKey: "history.state")
+    }
+
     var fraction: Double { total == 0 ? 0 : min(1, Double(read) / Double(total)) }
 
     func start() {
@@ -164,6 +180,7 @@ actor HistoryDB {
         running = true
         Task {
             await load()
+            onProgress?()
             if !complete { await firstRead() }
             if complete { await catchUp() }
             running = false
@@ -180,6 +197,7 @@ actor HistoryDB {
         read = await db.count()
         if read > 0 { years = Dictionary(grouping: await db.dayCounts(), by: { Calendar.current.component(.year, from: LocalDay.date($0.key)) }).mapValues { $0.reduce(0) { $0 + $1.value } } }
         if complete { coveredFrom = 0 }
+        save()
     }
 
     private func parse(_ j: J) -> [Row] {
@@ -222,6 +240,7 @@ actor HistoryDB {
         if !done.isEmpty, done.allSatisfy({ $0 }) {
             complete = true; coveredFrom = 0
             await db.setMeta("complete", "1")
+            save()
             onProgress?()
         }
     }
@@ -248,6 +267,7 @@ actor HistoryDB {
         // The pages before the first gap, read whole: everything since the oldest play on the last of them is here.
         if k > 0, let oldest = pageOldest[k] ?? (k == done.count ? 0 : nil) { coveredFrom = k == done.count ? 0 : min(coveredFrom, oldest) }
         if page % 8 == 0 || k == done.count {
+            save()
             await db.setMeta("done", String(done.map { $0 ? "1" : "0" }))
             if coveredFrom != .max { await db.setMeta("coveredFrom", "\(coveredFrom)") }
         }
@@ -267,6 +287,7 @@ actor HistoryDB {
             if page >= pages || rows.isEmpty { break }
             page += 1
         }
+        save()
         onProgress?()
     }
 
@@ -279,22 +300,23 @@ actor HistoryDB {
 
 // MARK: - What it says about him
 
-struct ArtistCount: Identifiable, Hashable, Sendable { var id: String { name }; let name: String; let plays: Int; var album: String = ""; var image: String? = nil; var isNew = false }
+struct ArtistCount: Identifiable, Hashable, Sendable, Codable { var id: String { name }; let name: String; let plays: Int; var album: String = ""; var image: String? = nil; var isNew = false }
 
-struct Pace: Sendable {
+struct Band: Sendable, Codable { let lo: Int; let mid: Int; let hi: Int }
+struct Pace: Sendable, Codable {
     let days: Int                     // days of this week so far, today included
     let now: Int                      // plays this week so far
     let usual: Int                    // the median of the weeks before at the same moment
     let weeks: Int                    // how many weeks before it was measured against
     let thisWeek: [Int]               // plays by day, cumulative, through today
-    let usualBand: [(lo: Int, mid: Int, hi: Int)]   // the weeks before, cumulative by day: middle half and median
+    let usualBand: [Band]             // the weeks before, cumulative by day: middle half and median
     let lastWeek: [Int]
     var delta: Double { usual == 0 ? 0 : Double(now - usual) / Double(usual) }
 }
 
 // The artists that are always there: heard in at least six of every ten months he's listened, and how much of this
 // week went to them.
-struct Canon: Sendable {
+struct Canon: Sendable, Codable {
     let artists: Int
     let months: Int
     let weekPlays: Int
@@ -303,7 +325,7 @@ struct Canon: Sendable {
     var share: Double { weekTotal == 0 ? 0 : Double(weekPlays) / Double(weekTotal) }
 }
 
-struct Rising: Sendable {
+struct Rising: Sendable, Codable {
     let artist: String
     let album: String
     let image: String?
@@ -312,7 +334,7 @@ struct Rising: Sendable {
     let weekPlays: Int
 }
 
-struct Insights: Sendable {
+struct Insights: Sendable, Codable {
     var coveredFrom = Int.max
     var complete = false
     var days: [Int: Int] = [:]
@@ -326,6 +348,14 @@ struct Insights: Sendable {
     var hoursWeek: [Int] = []         // the last seven days by hour
     var dayStart = 6                  // his quietest hour: where his day begins
     var canon: Canon?
+
+    // The last worked out, kept, so the first frame of a launch shows them; they're worked out again behind it.
+    static var file: URL { FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(LastFM.shared.mock ? "insights-mock.json" : "insights.json") }
+    static func kept() -> Insights? {
+        if UserDefaults.standard.bool(forKey: "fresh") { return nil }
+        return (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(Insights.self, from: $0) }
+    }
+    func keep() { if let d = try? JSONEncoder().encode(self) { try? d.write(to: Insights.file, options: .atomic) } }
 
     static func work(coveredFrom: Int, complete: Bool) async -> Insights {
         let db = HistoryDB.shared
@@ -375,9 +405,9 @@ struct Insights: Sendable {
                 var cum: [Int] = [], acc = 0
                 for i in 0..<daysIn { acc += s.days[wsDay + i] ?? 0; cum.append(acc) }
                 let moments = weeksBefore.map(\.0).sorted()
-                let band = (0..<7).map { i -> (lo: Int, mid: Int, hi: Int) in
+                let band = (0..<7).map { i -> Band in
                     let v = weeksBefore.map { $0.1[i] }.sorted()
-                    return (v[v.count / 4], v[v.count / 2], v[(v.count * 3) / 4])
+                    return Band(lo: v[v.count / 4], mid: v[v.count / 2], hi: v[(v.count * 3) / 4])
                 }
                 s.pace = Pace(days: daysIn, now: await db.between(start, now + 1), usual: moments[moments.count / 2], weeks: weeksBefore.count,
                               thisWeek: cum, usualBand: band, lastWeek: weeksBefore[0].1)
