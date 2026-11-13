@@ -2093,16 +2093,19 @@ struct SoundsTab: View {
     }
 
     // One alarm and what it plays, chosen from the same sources the editor offers, sent the careful way.
+    // What it plays sits under the alarm, the row's full width (Richard, 2026-11-13, build 281: the capsules beside the
+    // alarm cut every station to "Pandora: Sunny C…" and stood at three widths and three x positions). Every value now
+    // starts at the row's inset and ends at the same trailing edge with its chevron, and a long station name takes a
+    // second line rather than losing its words.
     func soundRow(_ title: String, _ detail: String, _ a: Alarm, mark: String?, choose: @escaping (Alarm) -> Void) -> some View {
-        HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.body.weight(.semibold)).lineLimit(1)
-                Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                Text(title).font(.body.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                Text(detail).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 12)
             Menu {
-                // The capsule is the menu's anchor, and its words change its width: so the pick lands once the menu has
-                // gone (MenuClose), never while it closes, which cut the close short.
+                // The value is the menu's anchor: so the pick lands once the menu has gone (MenuClose), never while it
+                // closes, which cut the close short.
                 Picker("Plays", selection: Binding(get: { a.soundTag(streams: model.state.streams) }, set: { t in
                     guard t != a.soundTag(streams: model.state.streams) else { return }
                     var b = a; b.setSound(t, streams: model.state.streams, stations: model.pandoraStations)
@@ -2115,19 +2118,22 @@ struct SoundsTab: View {
                     if a.soundTag(streams: model.state.streams).isEmpty { Text(a.soundText).tag("") }
                 }
             } label: {
-                HStack(spacing: 5) {
-                    Text(a.soundText).lineLimit(1).contentTransition(.opacity)
-                    Image(systemName: "chevron.up.chevron.down").imageScale(.small)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(a.soundText).lineLimit(2).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id(a.soundText).transition(.opacity)
+                    Image(systemName: "chevron.up.chevron.down").imageScale(.small).foregroundStyle(.secondary)
                 }
                 .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(.white.opacity(0.12), in: Capsule())
-                .animation(.snappy, value: a.soundText)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .animation(.easeInOut(duration: 0.2), value: a.soundText)
             }
             .accessibilityLabel("What \(title) plays")
             .overlay(alignment: .top) { if let mark { LandBubble(mark: mark) } }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
 
     var body: some View {
@@ -2140,6 +2146,8 @@ struct SoundsTab: View {
             // capsule beside rounded cards (designer, 11-11).
             Section {
                 NowPlaying(tab: 3, failID: "sounds")
+                    // Its divider starts at the card's inset, as every other row's does, not under the song's words.
+                    .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
                     // For the build (the mock's fail scene): an alarm's sound, the alarm volume and the fade each turned
                     // down, so their notes are seen under their rows (soundsfail).
                     .task {
@@ -2183,7 +2191,7 @@ struct SoundsTab: View {
                     MarkNote(mark: a.key).noteRow(lead: 0)
                 }
                 if let c = calendarSound {
-                    soundRow("Calendar alarms", "Every one your calendar sets", c, mark: nil) { b in
+                    soundRow("Calendar alarms", "Set by your calendar", c, mark: nil) { b in
                         Task { if let why = await model.saveCalendarTemplate(b) { model.fail("calsound", why) } }
                     }
                     if let f = model.failed("calsound") { FailNote(text: f) }
