@@ -302,9 +302,9 @@ struct PhonePicker: View {
         if (loading || (problem == nil && meta == nil) || !placeKnown) && (streams.isEmpty || !placeKnown) && problem == nil {
             Text("Asking your add-ons…").font(.footnote).foregroundStyle(.secondary)
             ForEach(0..<4, id: \.self) { i in PlaceholderRow(delay: Double(i) * 0.12) }
-        } else if let problem {
+        } else if let note = problem {
             VStack(spacing: 10) {
-                Text(problem).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Text(note).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Button("Try again") { Task { if placeKnown && !playID.isEmpty { await loadStreams(force: true) } else { problem = nil; await load() } } }.tint(TVLook.accent)
             }
             .frame(maxWidth: .infinity).padding(.top, 18)
