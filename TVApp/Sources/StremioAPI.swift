@@ -40,6 +40,19 @@ enum StremioKeychain {
     }
 }
 
+// ICU regular expressions, always: String's own .regularExpression went through Swift Regex on the phone, which read
+// one of these patterns differently and stopped the app (CI 01e426f).
+enum Rx {
+    static func has(_ s: String, _ p: String, ci: Bool = false) -> Bool {
+        guard let r = try? NSRegularExpression(pattern: p, options: ci ? [.caseInsensitive] : []) else { return false }
+        return r.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+    }
+    static func strip(_ s: String, _ p: String, ci: Bool = false) -> String {
+        guard let r = try? NSRegularExpression(pattern: p, options: ci ? [.caseInsensitive] : []) else { return s }
+        return r.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "")
+    }
+}
+
 struct StremioError: LocalizedError {
     let message: String
     var errorDescription: String? { message }
@@ -79,7 +92,7 @@ struct PhoneStream: Identifiable, Hashable {
         if service { return name.isEmpty ? addon : name }
         let q = [quality, hdr].filter { !$0.isEmpty }.joined(separator: " ")
         if !q.isEmpty { return q }
-        let n = name.replacingOccurrences(of: "\\[[^\\]]*\\]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+        let n = Rx.strip(name, "\\[[^\\]]*\\]").trimmingCharacters(in: .whitespacesAndNewlines)
         return n.isEmpty ? addon : n
     }
     var size: String? { gb > 0 ? (gb < 1 ? "\(Int(gb * 1024)) MB" : String(format: "%.1f GB", gb)) : nil }
@@ -110,7 +123,7 @@ struct PhoneStream: Identifiable, Hashable {
         if let hints = s["behaviorHints"] as? [String: Any], let proxy = hints["proxyHeaders"] as? [String: Any], let req = proxy["request"] as? [String: String] { headers = req }
         self.headers = headers
         let all = name + " " + text
-        func has(_ p: String) -> Bool { all.range(of: p, options: [.regularExpression, .caseInsensitive]) != nil }
+        func has(_ p: String) -> Bool { Rx.has(all, p, ci: true) }
         quality = has("2160p|\\b4k\\b|\\buhd\\b") ? "4K" : has("1080p") ? "1080p" : has("720p") ? "720p" : has("480p") ? "480p" : ""
         hdr = has("dolby.?vision|\\bdovi\\b|\\bdv\\b") ? "Dolby Vision" : has("hdr10\\+|hdr10.?plus") ? "HDR10+" : has("\\bhdr") ? "HDR" : ""
         var gb = 0.0
@@ -124,24 +137,29 @@ struct PhoneStream: Identifiable, Hashable {
         }
         self.gb = (gb * 10).rounded() / 10
         let svc = addon.range(of: "watchhub", options: .caseInsensitive) != nil
-            || (quality.isEmpty && gb == 0 && text.range(of: "subscription|rent|buy|\\bads\\b|free", options: [.regularExpression, .caseInsensitive]) != nil)
+            || (quality.isEmpty && gb == 0 && Rx.has(text, "subscription|rent|buy|\\bads\\b|free", ci: true))
             || (link == nil && hash == nil)
         service = svc
-        instant = (!svc && (name.contains("⚡") || name.range(of: "\\+\\]", options: .regularExpression) != nil)) || text.contains("⚡")
+        instant = (!svc && (name.contains("⚡") || Rx.has(name, "\\+\\]"))) || text.contains("⚡")
         lang = has("\\b(multi|dual)\\b") ? "Multi-audio" : ""
         file = Self.file(text)
         // A file named as a dub, the title's own words aside (tv.js describeStream).
         let named = title.isEmpty ? file : file.replacingOccurrences(of: title, with: "", options: .caseInsensitive)
-        dubbed = named.range(of: "(?:^|[\\s._\\-\\[(])(ita|italian|vfi|vf2|hindi|tamil|telugu|french|truefrench|vff|vfq|german|deutsch|spanish|castellano|latino|rus|russian|dublado|dubbed|dub|pt[ ._-]?br|polish|czech|turkish|ukr|kor|chinese|mandarin|cantonese)(?=$|[\\s._\\-\\])])", options: [.regularExpression, .caseInsensitive]) != nil
-            || named.range(of: "[\\u0400-\\u04FF\\u0590-\\u06FF\\u0900-\\u0DFF\\u3040-\\u30FF\\u3400-\\u9FFF\\uAC00-\\uD7AF]", options: .regularExpression) != nil
+        dubbed = Rx.has(named, "(?:^|[\\s._\\-\\[(])(ita|italian|vfi|vf2|hindi|tamil|telugu|french|truefrench|vff|vfq|german|deutsch|spanish|castellano|latino|rus|russian|dublado|dubbed|dub|pt[ ._-]?br|polish|czech|turkish|ukr|kor|chinese|mandarin|cantonese)(?=$|[\\s._\\-\\])])", ci: true)
+            || named.unicodeScalars.contains { c in
+                [0x0400...0x04FF, 0x0590...0x06FF, 0x0900...0x0DFF, 0x3040...0x30FF, 0x3400...0x9FFF, 0xAC00...0xD7AF].contains { $0.contains(c.value) }
+            }
         id = (link?.absoluteString ?? hash.map { "\($0):\(s["fileIdx"] as? Int ?? -1)" } ?? ext?.absoluteString ?? UUID().uuidString)
     }
     // The file's name as the Mac shows it: the description's last line, up to its first emoji, without the extension,
     // cut at 110 (tv.js describeStream's `file`). The same stream on the TV's list has this as its description.
     static func file(_ text: String) -> String {
         let last = text.components(separatedBy: "\n").last ?? ""
-        let cut = last.range(of: " ?[👤💾⚙📦📺⚡]", options: .regularExpression).map { String(last[..<$0.lowerBound]) } ?? last
-        let bare = cut.replacingOccurrences(of: "\\.(mkv|mp4|avi)\\b", with: "", options: [.regularExpression, .caseInsensitive])
+        // Up to the first of the add-ons' emoji (scalars, so a variation selector never hides one).
+        let marks: Set<UInt32> = [0x1F464, 0x1F4BE, 0x2699, 0x1F4E6, 0x1F4FA, 0x26A1]
+        var cut = last
+        if let i = last.unicodeScalars.firstIndex(where: { marks.contains($0.value) }) { cut = String(last.unicodeScalars[..<i]) }
+        let bare = Rx.strip(cut, "\\.(mkv|mp4|avi)\\b", ci: true)
         return String(bare.trimmingCharacters(in: .whitespacesAndNewlines).prefix(110))
     }
     // Best first, for this phone: one it can play, ready now, the original sound, then 4K (Richard, 2026-11-13: "i want
