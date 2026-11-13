@@ -466,7 +466,10 @@ struct FlickCardButton: View {
     // A film or show from Stremio's catalogue has its details a tap away, on the "i" at the picture's corner.
     var hasInfo: Bool { source == .stremio && !item.isYouTube && item.stremioRef != nil }
     // What a tap on a card does; the build's real-data flows tap through here too.
-    @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil) {
+    @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil, held: Bool = false) {
+        // The tap iOS reports with the release of a card that was held (thrown, put back, or let go as a tap) is that.
+        // The held card's own release (`held`) is the one that counts.
+        if !held, Date().timeIntervalSince(ShelfHand.shared.handledAt) < 0.35 { return }
         if model.isOnTV(item, source) { model.showOnRemote(); return }
         if item.isYouTube {
             // A YouTube video from Continue watching: thrown like anything else, and on the TV it opens in YouTube where
@@ -486,15 +489,21 @@ struct FlickCardButton: View {
             .buttonStyle(PressCard(onPress: source == .stremio && !item.isYouTube ? { [model] in if !model.isOnTV(item, source) { StreamCache.shared.prefetch(item); Prepare.arm() } } : nil))
             // Outside the press's own squeeze, so the measure never moves with what it measures.
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
+            // Held, it lifts off the shelf; thrown up, it goes to the TV (ShelfFlick, the streams page's own hand).
+            .modifier(ShelfFlick(item: item, source: source, width: width, rect: { [place] in place.rect ?? .zero }))
             .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
             // The details are a pushed page with the system's Back, never a sheet (2026-11-08: the sheet sat inset with a
             // rounded corner and no Back, folded). On a page pushed by an item (an app's page) it opens through that
             // page's own route, as its rows do; elsewhere by value on the tab's path.
             .overlay(alignment: .topTrailing) {
-                if hasInfo {
-                    if let openRow { InfoBadge { model.tick(); openRow(.info(item, source)) } }
-                    else { NavigationLink(value: RowRoute.info(item, source)) { InfoBadge.mark }.buttonStyle(.plain).accessibilityLabel("Details").simultaneousGesture(TapGesture().onEnded { model.tick() }) }
+                Group {
+                    if hasInfo {
+                        if let openRow { InfoBadge { model.tick(); openRow(.info(item, source)) } }
+                        else { NavigationLink(value: RowRoute.info(item, source)) { InfoBadge.mark }.buttonStyle(.plain).accessibilityLabel("Details").simultaneousGesture(TapGesture().onEnded { model.tick() }) }
+                    }
                 }
+                // Lifts with the card: never left floating over its empty place while the card is in the hand or in the air.
+                .opacity(ShelfHand.shared.item?.id == item.id ? 0 : 1)
             }
             // A show he's part way through (Continue watching's tiles carry how far): its episodes asked for as the tile
             // comes on screen, so its page opens on them rather than on grey rows.
@@ -508,10 +517,14 @@ final class FrameBox { var rect: CGRect? }
 // glass side bar.
 private struct RowEdge: ViewModifier {
     @State private var scrolled = false
+    // Something still past the trailing edge: only then does that edge fade (a row of chips that fits, the streams' "720p"
+    // open flat, was cut by a fade with nothing beyond it).
+    @State private var more = true
     func body(content: Content) -> some View {
         content
             .scrollTargetBehavior(FreeScroll())
             .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 4 } action: { _, s in scrolled = s }
+            .onScrollGeometryChange(for: Bool.self) { $0.contentSize.width - $0.contentOffset.x - $0.containerSize.width > 4 } action: { _, m in more = m }
             // The row's own frame already ends where the page's content does (level with the search field), so the fade
             // ends at that edge and nothing of the row is drawn past it. No reader here: measuring the safe area took it
             // off twice, and laid the page out a frame late on first visit.
@@ -519,10 +532,11 @@ private struct RowEdge: ViewModifier {
                 HStack(spacing: 0) {
                     LinearGradient(colors: [.black.opacity(scrolled ? 0 : 1), .black], startPoint: .leading, endPoint: .trailing).frame(width: 28)
                     Color.black
-                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
+                    LinearGradient(colors: [.black, .black.opacity(more ? 0 : 1)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
                 }
                 // Only the fade eases, so nothing in the row animates with it.
                 .animation(.easeOut(duration: 0.2), value: scrolled)
+                .animation(.easeOut(duration: 0.2), value: more)
             }
     }
 }

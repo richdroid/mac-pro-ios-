@@ -1,0 +1,210 @@
+name: TV flick checks
+# The flick's own run, for the tv-flick-everywhere branch (never main): the scripted hands through FlickHand on the Mac,
+# then the streams page and the card filmed in each posture he uses, open upright first, then open flat, then folded.
+# Real touches through Device Hub where it can make them (a tap, a long press, a swipe up the list); the hold-and-throw
+# itself is the app's scripted pose (Device Hub can't rest a finger before it drags). Published to the tv-flick release.
+on:
+  push:
+    branches: [tv-flick-everywhere]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tv-flick
+  cancel-in-progress: true
+jobs:
+  flick:
+    runs-on: xcode-27
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Scripted hands
+        run: |
+          mkdir -p dist
+          swiftc TVApp/Sources/TVFlickHand.swift ci/flick-hands/main.swift -o /tmp/flick-hands
+          /tmp/flick-hands | tee dist/flick-hands.log
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+      - name: Films
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          rm -f /tmp/tv-hitches.log
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 \
+            && F=$(grep -rl 'args\[1\] == "touch" || args\[1\] == "drag"' Sources) \
+            && python3 -c 'import sys; f,p=sys.argv[1:]; m="if args[1] == \"touch\" || args[1] == \"drag\" {"; s=open(f).read(); assert m in s; open(f,"w").write(s.replace(m, open(p).read()+m, 1))' "$F" $GITHUB_WORKSPACE/ci/flick-hands/devicehub-path.swift \
+            && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          # A pose filmed from launch: the app's own scripted hand on the streams page or the card.
+          posefilm() {
+            local name=$1 display=$2 pose=$3 tab=$4 scene=${5:-fnormal}
+            curl -s $M/$scene/reset > /dev/null
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/$scene -tab $tab -pose $pose -swipeLog YES
+            sleep 16
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # The main thread's long turns beside the flick's own steps, for the film's held frames.
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/tv-$name-main.log || true
+          }
+          # A real finger on the first stream row (where the app says it is), filmed: "tap" a quick tap, "long" a press
+          # held 0.7 s and let go where it was (the pick), "swipe" a fast swipe up from the row (a scroll: nothing sent).
+          fingerfilm() {
+            local name=$1 display=$2 how=$3 scene=${4:-fnormal}
+            rm -f /tmp/tv-home-applied.log
+            curl -s $M/$scene/reset > /dev/null
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/$scene -tab 1 -pose flick-stage -swipeLog YES
+            sleep 12
+            local at x y
+            at=$(grep -o 'what=row&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            x=${at#*x=}; x=${x%%&*}; y=${at##*y=}
+            if [ -n "$x" ] && [ -n "$y" ]; then
+              case $how in
+                tap) $D "$DEVICE" touch $x $y 0.08 || echo "touch failed" ;;
+                long) $D "$DEVICE" touch $x $y 0.7 || echo "long touch failed" ;;
+                # A swipe as a finger makes it, moving from the touch on (Device Hub's own drag lands in too few steps
+                # for the list to follow it: CI 0880cb0, a long list never moved).
+                swipe) $D "$DEVICE" path $x $y 0.02 $x 0.2 0.15 0 || echo "path failed" ;;
+                # The same swipe begun above the rows (on the heading), to tell a row that holds the list from a list
+                # that won't move at all.
+                swipehead) $D "$DEVICE" path $x $(echo "$y - 0.2" | bc -l) 0.02 $x 0.1 0.15 0 || echo "path failed" ;;
+                # (Held 0.7 s: the row lifts at 0.3-0.43 s by the screen's clock, and a move begun within 0.2 s of the lift is
+                # a scroll come late by the finger's own clock, rightly put back: held 0.45 s, the short and eased flicks
+                # began 0.02-0.1 s after the lift and were read as scrolls, CI 1fe3641 folded.)
+                # Held, then: a short sharp flick (about 45 pt in 80 ms); a flick easing to a stop before it lifts; a
+                # slow carry well past the line and a rest; carried up then brought back down (must go back); a resting
+                # thumb that swipes as the row lifts (must not send).
+                shortflick) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.13" | bc -l) 0.09 0 || echo "path failed" ;;
+                easeflick) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.15" | bc -l) 0.15 1 $x $(echo "$y - 0.15" | bc -l) 0.03 0 || echo "path failed" ;;
+                carry) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.3" | bc -l) 0.6 0 $x $(echo "$y - 0.3" | bc -l) 0.3 0 || echo "path failed" ;;
+                backdown) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.3" | bc -l) 0.4 0 $x $y 0.4 0 || echo "path failed" ;;
+                # (Asked for at 0.12 s: the injector's first move reaches the app 0.17-0.3 s after it's asked for, so asked
+                # at 0.31 it came 0.48-0.62 s after the touch, a swipe begun well after the lift, CI 82e1830.)
+                latescroll) $D "$DEVICE" path $x $y 0.12 $x $(echo "$y - 0.3" | bc -l) 0.12 0 || echo "path failed" ;;
+              esac
+            else echo "no row position for $name"; fi
+            sleep 14
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # What the mock was sent: a swipe must have sent nothing.
+            cp /tmp/tv-flick-sends.log dist/tv-$name-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$name-sends.log
+            # The page's scroll readings ("page y …") and the main thread's turns, beside the finger.
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/tv-$name-main.log || true
+          }
+          # A card on a shelf, held and thrown with a real finger (Watch, tab 3, at a fixed place: the first card of the
+          # first shelf), and the same card held and put back. What the stand-in Mac was sent says whether it went.
+          shelffilm() {
+            local name=$1 display=$2 x=$3 y=$4 how=$5
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            rm -f /tmp/tv-home-applied.log
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 3 -pose shelf
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-start.png
+            # The first card's centre, as the app says it is (what=card).
+            local at; at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            if [ -n "$at" ]; then x=${at#*x=}; x=${x%%&*}; y=${at##*y=}; else echo "no card position for $name"; fi
+            case $how in
+              throw) $D "$DEVICE" path $x $y 0.7 $x $(echo "$y - 0.3" | bc -l) 0.3 0 $x $(echo "$y - 0.3" | bc -l) 0.2 0 || echo "path failed" ;;
+              back) $D "$DEVICE" path $x $y 0.7 $(echo "$x + 0.2" | bc -l) $y 0.4 0 || echo "path failed" ;;
+            esac
+            sleep 14
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            cp /tmp/tv-home-applied.log dist/tv-$name-applied.log 2>/dev/null || true
+            cp /tmp/tv-home-fetches.log dist/tv-$name-fetches.log 2>/dev/null || true
+          }
+          posture() {
+            local x=$1 d=$2
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose flick-stage; sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-flick-stage$x.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # A series page at rest: the capsule, the episode list, the strip beside the side bar.
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose series; sleep 12
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-series$x.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            # The arrival with the tile's picture already in memory (as on his phone), and two stills in the middle of it.
+            posefilm flicktapart$x $d flick-tap-art 1
+            posefilm flick$x $d flick-starting 1
+            posefilm flickputback$x $d flick-putback 1
+            posefilm flicktap$x $d flick-tap 1
+            posefilm flicklink$x $d flick-link 0
+            posefilm flicklinkart$x $d flick-link-art 0
+            # The same flow on the list as the bridge really hands it over (freal): a dozen rows, long names, dubbed files.
+            posefilm flickreal$x $d flick-starting 1 freal
+            # The list two seconds coming: the page's waiting rows breathing, then the list in one fade, then the pick.
+            posefilm flickslowlist$x $d flick-starting 1 fslowlist
+            # A quick pass (ci/flick-quick in the tree): the poses alone, for iterating on the page's own motion.
+            [ -f ci/flick-quick ] && return
+            fingerfilm finger-tap$x $d tap
+            fingerfilm finger-long$x $d long
+            fingerfilm finger-swipe$x $d swipe
+            # The same swipe on a list longer than the screen (freal's dozen rows): the list must follow the finger.
+            fingerfilm finger-swipelong$x $d swipe freal
+            fingerfilm finger-swipehead$x $d swipehead freal
+            for H in shortflick easeflick carry backdown latescroll; do fingerfilm finger-$H$x $d $H; done
+            shelffilm shelf-throw$x $d 0.15 0.33 throw
+            shelffilm shelf-back$x $d 0.15 0.33 back
+          }
+          # Open upright first, the way he holds it; then open flat; then folded.
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          posture -portrait 3
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          posture -open 3
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          $D "$DEVICE" pose closed || true; sleep 5
+          posture "" 1
+          cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          # Room first: the build's own products are done with (a full disk failed Publish before its first line ran).
+          rm -rf build-sim ~/Library/Developer/Xcode/DerivedData 2>/dev/null
+          { df -h . /tmp; ls -la dist | sort -k5 -n | tail -15; du -sh dist; } > dist/diag.txt 2>&1
+          tail -c 20000 dist/sim.log > dist/sim-tail.txt 2>/dev/null
+          [ $(stat -f %z dist/sim.log 2>/dev/null || echo 0) -gt 20000000 ] && : > dist/sim.log
+          # In three parts: one zip of every film was over 500 MB and its upload failed.
+          (cd dist && zip -q ../flick.zip *.png *.log *.txt 2>/dev/null; zip -q ../flick-pose.mp4.zip tv-flick*.mp4 2>/dev/null; zip -q ../flick-finger.mp4.zip tv-finger*.mp4 tv-shelf*.mp4 2>/dev/null; true)
+          ls -la *.zip
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-flick >/dev/null 2>&1 || gh release create tv-flick --prerelease --title "TV flick checks" --notes "Work in progress on the flick: hands, shots and films from the tv-flick-everywhere branch."
+          # Whatever was made goes up, the status last so a reader never finds it before the films.
+          for f in flick.zip flick-pose.mp4.zip flick-finger.mp4.zip status.txt; do
+            [ -f "$f" ] || { echo "no $f"; continue; }
+            for i in 1 2 3; do gh release upload tv-flick "$f" --clobber && break; echo "upload of $f failed ($i)"; sleep 15; done
+          done
+          true

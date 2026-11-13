@@ -336,6 +336,10 @@ function tvRoute(q, s) {
     return s.end(JSON.stringify({ rows: [{ title: 'Series', items: [{ title: 'Sample Series', subtitle: '2 seasons', art: tvBase + '/poster.png', id: 'tt1234567', kind: 'series' }] }] }));
   }
   // The app says Continue watching is on screen (r27: asked for, but never applied, open).
+  // What a held card sends from a shelf (the tv-flick shelf films): logged beside the app's own word of where it is.
+  if (q.method === 'POST' && /^\/api\/tv\/(flick-lift|flick-cancel|timing|play-stream|send|stremio-open|mint-open|flick|prepare)$/.test(q.url)) {
+    let b = ''; q.on('data', c => b += c); q.on('end', () => { try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' POST ' + q.url + ' ' + b.slice(0, 300) + '\n'); } catch {} });
+  }
   if (q.url.startsWith('/api/tv/applied')) { try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' ' + q.url + '\n'); } catch {} s.setHeader('content-type', 'application/json'); return s.end('{"ok":true}'); }
   if (q.url.startsWith('/api/tv/stremio')) {
     // Logged, so CI can assert the Watch tab really asked for Stremio's home (r26: open, Continue watching never loaded).
@@ -643,6 +647,7 @@ function chumbyScene(q, s) {
 //                 a recording under way, as the bridge does it (headers at once, then after 1.2 s everything since the last
 //                 key frame in one write, counted in x-replay-frames, then 30 a second), on the home screen; and a
 //                 stream that answers and never sends a picture, with no still to be had either, on the home screen.
+//   /fslowlist    freal's list, answered after 2 s.
 //   /fnormal /fslow /ffail /foffline /falready /fbridgeon /fjoined
 //                 The flick's starts (tv-iphone.md §2.5a): play-stream as NDJSON with each step's time since the request
 //                 (awake 0, sent 120, player 2000, playing 3200); slow (playing at 9 s); failing (two fallbacks retried,
@@ -661,7 +666,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage|fslowlist|freal)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; tvReal.long = false; return tvReal(q, s, path, query, json); }
@@ -670,7 +675,7 @@ function tvPose(q, s) {
   if (scene === 'reallong') { tvReal.known = false; tvReal.long = true; return tvReal(q, s, path, query, json); }
   // The real scene with the episode's length known from the start, for the shot of a drag along the bar with its bubble.
   if (scene === 'realscrub') { tvReal.known = true; tvReal.long = false; return tvReal(q, s, path, query, json); }
-  if (/^f(normal|slow|fail|offline|already|bridgeon|joined)$/.test(scene || '')) return tvFlickStart(scene.slice(1), q, s, path, json);
+  if (/^f(normal|real|slowlist|slow|fail|offline|already|bridgeon|joined)$/.test(scene || '')) return tvFlickStart(scene.slice(1), q, s, path, json);
   // The prepare call's answer everywhere else too, in the bridge's own shape.
   if (q.method === 'POST' && path === '/api/tv/prepare') { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} json({ ok: true, awake: true, fresh: !!v.token }); }); return true; }
   // /slowdev: the box slow to answer (its readings take 4 s), so leaving Status or pushing Settings cuts a request short,
@@ -821,8 +826,29 @@ function tvFlickStart(kind, q, s, path, json) {
     if (st.result && now - st.endedAt < 30000) v.lastStart = { result: st.result, token: st.token, at: st.endedAt };
     return json(v);
   }
+  // freal: the list as the bridge really hands it over (describeStream in tv.js): a dozen rows from several addons, long
+  // release names cut at 110 characters, Dolby Vision and HDR10+, dubbed and multi-audio files, a 61 GB remux, rows not
+  // ready yet, and a service row that opens its own app. Made-up release groups; the film's name is a public catalogue's.
+  if ((kind === 'real' || kind === 'slowlist') && path.startsWith('/api/tv/streams')) {
+    const rows = [
+      ['Torrentio', '1080p', '', 'Heat.1995.REMASTERED.1080p.BluRay.x264.DTS-HD.MA.5.1-SAMPLEGRP', 14.2, true, false, ''],
+      ['Torrentio', '4K', 'Dolby Vision', 'Heat 1995 2160p UHD BluRay DoVi HDR10 HEVC TrueHD 7.1 Atmos-SAMPLEGRP', 61.4, true, false, ''],
+      ['Torrentio', '1080p', '', 'Heat (1995) Directors Definitive Edition 1080p BluRay 10bit HEVC 6CH x265 SampleRelease', 4.1, true, false, ''],
+      ['MediaFusion', '1080p', 'HDR10+', 'Heat.1995.1080p.AMZN.WEB-DL.DDP5.1.HDR10Plus.H.265-SAMPLE', 7.8, false, false, ''],
+      ['Torrentio', '720p', '', 'Heat.1995.720p.BrRip.x264.YIFY-ish.SampleCut.Extended.Version.With.A.Very.Long.Name.That.Goes.On.And.On', 1.3, true, false, ''],
+      ['Torrentio', '1080p', '', 'Heat.1995.MULTi.1080p.BluRay.x264-SAMPLEFR', 9.6, true, true, 'Multi-audio'],
+      ['Comet', '4K', 'HDR', 'Heat.1995.2160p.4K.WEB.x265.10bit.AAC5.1-[SAMPLE]', 11.2, false, false, ''],
+      ['Torrentio', '480p', '', 'Heat 1995 480p DVDRip XviD AC3 Sample', 0.7, false, false, ''],
+      ['Torrentio', '1080p', '', 'Heat.1995.iTALiAN.ENGLiSH.1080p.BluRay.x264-SAMPLEiT', 10.9, false, true, ''],
+    ].map(([addon, quality, hdr, file, gb, instant, dubbed, lang], n) => ({ token: 'r' + n, addon, dubbed, name: [quality, hdr].filter(Boolean).join(' '), description: file.slice(0, 110), quality, hdr, gb, instant, service: false, lang }));
+    rows.push({ token: 'rsvc', addon: 'WatchHub', dubbed: false, name: 'Netflix', description: 'Watch on Netflix (subscription)', quality: '', hdr: '', gb: 0, instant: false, service: true, lang: '' });
+    // slowlist: the same list, two seconds coming (his addons on a slow night), so the page's waiting rows are filmed.
+    if (kind === 'slowlist') { setTimeout(() => json({ streams: rows }), 2000); return true; }
+    return json({ streams: rows });
+  }
   if (q.method === 'POST' && path === '/api/tv/prepare') return read(b => { log('prepare', b); setTimeout(() => json({ ok: true, awake: true, fresh: !!b.token }), 300); });
   if (q.method === 'POST' && path === '/api/tv/key') return read(b => { log('key', b); json({ ok: true }); });
+  if (q.method === 'POST' && /^\/api\/tv\/flick-(lift|cancel)$/.test(path)) return read(b => { log(path.slice(8), b); json({ ok: true }); });
   // The app's hand-off timing (frame hitches from release to landing), so the build's log has a line to read.
   if (q.method === 'POST' && path === '/api/tv/timing') return read(b => { log('timing', b); json({ ok: true }); });
   if (q.method === 'POST' && /^\/api\/tv\/(flick|open|stremio-open|film|send|mint-open|music|stop-playing)$/.test(path)) return read(b => { log(path.slice(8), b); if (path.endsWith('stop-playing')) { st.result = 'stopped'; st.endedAt = Date.now(); } json({ ok: true }); });

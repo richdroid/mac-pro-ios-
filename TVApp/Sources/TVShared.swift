@@ -253,6 +253,8 @@ enum TVBridge {
     struct Gone: Error {}
     // The TV took the stream but the player never got going, even after a second try.
     struct DidNotStart: Error {}
+    // An `again` about a send the Mac never saw: the first try was lost on the way, so it can go once as itself.
+    struct Unseen: Error {}
     // Too busy to answer in time. Asking again usually works.
     struct Slow: Error {}
     @discardableResult
