@@ -630,14 +630,17 @@ struct WokeUpTo: View {
     // gives way so the time is never clipped.
     func group(_ w: Waking, side: CGFloat) -> some View {
         // A week or more back, the date too, so two Saturdays never read alike. An unnamed ring is its time alone.
+        // Each shorter in turn, so one cover wide the header still says the day whole: "Sat, Nov 7" (gate 11-12).
         let at = Date(timeIntervalSince1970: w.t)
-        let when = Date().timeIntervalSince(at) < 6 * 86400 ? at.formatted(.dateTime.weekday(.abbreviated).hour().minute())
-            : at.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()) + " · " + at.formatted(.dateTime.hour().minute())
+        let dated = Date().timeIntervalSince(at) >= 6 * 86400
+        let day = at.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+        let when = dated ? day + " · " + at.formatted(.dateTime.hour().minute()) : at.formatted(.dateTime.weekday(.abbreviated).hour().minute())
         let wide = CGFloat(w.songs.count) * side + CGFloat(w.songs.count - 1) * Self.gap
         return VStack(alignment: .leading, spacing: 6) {
             ViewThatFits(in: .horizontal) {
                 if !w.alarm.isEmpty { Text("\(when) · \(w.alarm)").lineLimit(1) }
                 Text(when).lineLimit(1)
+                if dated { Text(day).lineLimit(1) }
             }
             .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             .frame(width: wide, alignment: .leading)

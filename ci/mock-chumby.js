@@ -384,6 +384,10 @@ http.createServer((q, s) => {
   const plain = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 3, 16, 0).getTime() / 1000;
   rings.push({ t: plain, name: '' });
   play(plain + 9, 'Summertime', 'The Sundays', 'Static & Silence');
+  // A one-song ring nine days back: its header carries the date, and one cover wide falls back to "Wed, Nov 4" whole.
+  const old = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 9, 7, 15).getTime() / 1000;
+  rings.push({ t: old, name: 'Early shift' });
+  play(old + 11, 'Pagan Poetry', 'Björk', 'Vespertine');
   data.hist = { ok: true, songs: songs.sort((x, y) => y.t - x.t), rings: rings.sort((x, y) => y.t - x.t) };
 }
 // The live scenes keep what's saved and what's ringing, for the films of Snooze, Stop and a nap set and cancelled.

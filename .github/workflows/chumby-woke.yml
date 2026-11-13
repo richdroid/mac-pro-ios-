@@ -85,6 +85,10 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-wokefling-dragged$x.png
             $D "$DEVICE" drag $r $y $l $y 0.12 || echo "fling failed"; sleep 3
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-wokefling-flung$x.png
+            # The strip's far end (the oldest, dated rings) in dark too, held where the fling left it.
+            xcrun simctl ui "$DEVICE" appearance dark; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-wokefling-flung-dark$x.png
+            xcrun simctl ui "$DEVICE" appearance light; sleep 2
             $D "$DEVICE" drag $l $y $r $y 0.12 || echo "fling back failed"; sleep 3
             kill -INT $REC; wait $REC; echo "wokefling$x exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
