@@ -103,7 +103,9 @@ struct DeviceTab: View {
     // Out of touch: the Mac (said once, by the banner at the top, and dimmed with it), or only the box's own readings
     // while the Mac still answers. While the Mac's own reading is failing too, the box's wait for the banner, so the page
     // dims once, as the banner arrives (gate of 87d77ca: the pill said it again, and the tiles greyed, 2 s later).
-    var failed: Bool { !model.reachable || (store.failed && !model.retrying) }
+    // A box failure counted from before the Mac came back is the outage's, and is never said as the TV's: it read "Can't
+    // reach the TV" for a quarter second as the Mac returned (gate of f6d2272).
+    var failed: Bool { !model.reachable || (store.failed && !model.retrying && (store.failingSince.map { $0 > model.reachedAt } ?? false)) }
     @State private var tidying = false
     @State private var tidyNote: String?
     @State private var breathe = false
@@ -148,7 +150,7 @@ struct DeviceTab: View {
                 if failed, !model.reachable || model.status?.online == false, let at = store.lastAnswer {
                     Text("Last seen \(Text(at, style: .time))")
                 } else {
-                    Text(!failed ? screenWords : model.reachable ? "Can’t reach the TV" : "Waiting for it")
+                    Text(!failed ? screenWords : model.reachable ? "Can’t reach the TV" : "No reading yet")
                 }
             }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).tvCard(14).padding(.top, 6)

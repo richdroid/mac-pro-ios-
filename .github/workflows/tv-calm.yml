@@ -110,6 +110,9 @@ jobs:
           $D "$DEVICE" rotate 1 || true; sleep 5
           date
           # Status, another tab, Status again, with every box reading taking 4 s (so leaving cuts one short).
+          # A first launch after install, unfilmed: on 87d77ca and f6d2272 the first launch of all never reached the mock
+          # (no reading, no picture, on any tab, for its whole 38 s), whichever film came first; later launches did.
+          xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 5; sleep 20; xcrun simctl terminate "$DEVICE" local.macpro.TV || true
           # The first stay about 7 s, so a reading is up before he leaves; then out and back at 1.6 s a tab.
           film statusreturn-portrait 3 34 -address $M/slowdev -tab 5 -pose tour -tourTabs 5,5,5,0,5,3,5,2,5 -swipeLog YES
           navfilm settingsback-portrait 3

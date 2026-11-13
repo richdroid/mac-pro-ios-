@@ -83,6 +83,8 @@ final class TVModel {
     @ObservationIgnored private var foregroundAt = Date()
     static let unreachableAfter: TimeInterval = 25, settleAfterForeground: TimeInterval = 25
     var retrying: Bool { failingSince != nil }
+    // When the Mac last came back: a box failure counted from before then belongs to the outage, not to the TV.
+    @ObservationIgnored private(set) var reachedAt = Date.distantPast
     private func missed() {
         guard !Task.isCancelled else { return }
         let now = Date()
@@ -557,7 +559,7 @@ final class TVModel {
             s = fresh
         }
         failingSince = nil
-        if !reachable { reachable = true }
+        if !reachable { reachedAt = Date(); reachable = true }
         #if os(iOS)
         // The Now Playing card follows on its own, one reading after another, never ahead of the page: awaited here, a
         // new cover's fetch and shrinking (and every update iOS takes its time over) held this reading back from the
