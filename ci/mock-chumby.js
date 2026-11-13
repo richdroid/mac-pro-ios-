@@ -481,9 +481,12 @@ function chumbyScene(q, s) {
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap|missed)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap|missed)\//);
   if (!m) return false;
   const scene = m[1];
+  // failonce…: a live copy of the sample whose first save is turned down after 3 s ("can't write") and whose next is
+  // taken after 2 s, for a Retry that lands. Each name is its own copy, so each film starts fresh.
+  if (scene.startsWith('failonce') && !chumbyLive[scene]) chumbyLive[scene] = { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)), failsLeft: 1 };
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
   if (chumbyLive[scene]) {
     const live = chumbyLive[scene];
@@ -529,6 +532,13 @@ function chumbyScene(q, s) {
         }
         // A channel chosen in the app stays chosen, so the channel shown doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
+        if (a === 'save' && live.failsLeft !== undefined) {
+          if (live.failsLeft > 0) { live.failsLeft--; setTimeout(() => json({ ok: false, error: "can't write" }), 3000); return; }
+          const why = saveProblem(f);
+          if (!why) { live.state.alarms = kept(live.state, f); live.state.volume = +f.get('v'); live.state.fade = +f.get('f'); }
+          setTimeout(() => json(why ? { ok: false, error: why } : { ok: true }), 2000);
+          return;
+        }
         if (a === 'save') {
           const why = saveProblem(f);
           if (why) return json({ ok: false, error: why });
@@ -607,8 +617,10 @@ function chumbyScene(q, s) {
     if (a === 'health') return json({ up: false, lastSeen: Date.now() / 1000 - 25 * 60 });
     if (a === 'sys' || a === 'state' || a === 'chlist') { s.statusCode = 502; s.end(); return true; }
   }
-  // Every save turned down, the way a full Chumby turns one down.
-  if (scene === 'fail' && q.method === 'POST') return json({ ok: false, error: 'bad count' });
+  // Every save turned down, the way a Chumby that can't write its alarm file turns one down (any change can meet this;
+  // "bad count" only ever meets an added alarm, so a failed switch-off must not show it).
+  // Three seconds before saying so, as a slow write would, so "Trying again…" is seen at rest on a retry.
+  if (scene === 'fail' && q.method === 'POST') { setTimeout(() => json({ ok: false, error: "can't write" }), 3000); return true; }
   return false;
 }
 
