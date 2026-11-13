@@ -537,7 +537,7 @@ final class ChumbyModel: ObservableObject {
     // Notes fading before their row closes: the words go first, then the rows below move up (no text over text).
     @Published private(set) var fading: Set<String> = []
     // A note leaving: fade its words (0.15 s), then close its row in one spring.
-    func clearNote(_ mark: String) {
+    func clearNote(_ mark: String, then: AlarmMark? = nil) {
         guard marks[mark] != nil, !fading.contains(mark) else { return }
         if case .landed = marks[mark] { marks[mark] = nil; return }
         let was = marks[mark]
@@ -547,7 +547,7 @@ final class ChumbyModel: ObservableObject {
             guard let self, self.fading.contains(mark) else { return }
             // Something newer arrived meanwhile (a fresh failure, a landing): it stays, its words faded back in.
             guard self.marks[mark] == was else { withAnimation(.easeIn(duration: 0.15)) { _ = self.fading.remove(mark) }; return }
-            withAnimation(.snappy) { self.marks[mark] = nil }
+            withAnimation(.snappy) { self.marks[mark] = then }
             self.fading.remove(mark)
         }
     }
@@ -617,7 +617,8 @@ final class ChumbyModel: ObservableObject {
         if let mark, r.saved {
             let at = Date()
             // A retried change landing takes its note away: words first, then the row (clearNote), the bubble after.
-            if case .retrying = marks[mark] { retryAt[mark] = nil; clearNote(mark) } else { marks[mark] = .landed(at) }
+            // then the landing bubble, as for any change that lands.
+            if case .retrying = marks[mark] { retryAt[mark] = nil; clearNote(mark, then: .landed(at)) } else { marks[mark] = .landed(at) }
             tick()
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 1_400_000_000)

@@ -2146,7 +2146,13 @@ struct SoundsTab: View {
                         guard ChumbyModel.pose == "soundsfail" else { return }
                         for _ in 0..<60 where mine.isEmpty || model.state.volume < 0 { try? await Task.sleep(nanoseconds: 100_000_000) }
                         try? await Task.sleep(nanoseconds: 1_000_000_000)
-                        if let a = mine.first { var b = a; b.snooze = a.snooze == "9" ? "10" : "9"; model.change(.replace(a, b)) }
+                        // A different sound, as he picks one there.
+                        if let a = mine.first {
+                            var b = a
+                            let tag = a.type == "beep" ? (model.state.streams.first.map { "stream:" + $0.key } ?? "none") : "beep:Beep"
+                            b.setSound(tag, streams: model.state.streams, stations: model.pandoraStations)
+                            model.change(.replace(a, b))
+                        }
                         model.change(.volume(model.state.volume >= 95 ? model.state.volume - 5 : model.state.volume + 5))
                         model.change(.fade(model.state.fade == 30 ? 15 : 30))
                     }

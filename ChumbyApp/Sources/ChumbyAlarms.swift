@@ -48,6 +48,10 @@ struct MarkNote: View {
     // Its words come in once its row has opened, and go before the row closes (model.fading), so the rows below never
     // slide over them.
     @State private var appeared = false
+    // The words the title shows, a beat behind the mark: on a swap the old words go out, then the new come in, never
+    // drawn over each other.
+    @State private var showTrying = false
+    @State private var titleOn = true
     var shown: (head: String, why: String, trying: Bool)? {
         switch model.marks[mark] {
         case .failed(let h, let w): return (h, w, false)
@@ -61,8 +65,13 @@ struct MarkNote: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .center, spacing: 6) {
                         title(n.head, n.trying).fixedSize()
-                        Text("·").foregroundStyle(.secondary)
-                        retry(n.trying)
+                        // Trying, in this form, the dot and Retry give way (their space kept) rather than strand a
+                        // dimmed Retry after the shorter words.
+                        Group {
+                            Text("·").foregroundStyle(.secondary)
+                            retry(n.trying)
+                        }
+                        .opacity(showTrying ? 0 : 1)
                         Spacer(minLength: 8)
                         close
                     }
@@ -83,23 +92,33 @@ struct MarkNote: View {
             .contentShape(Rectangle())
             .onTapGesture { open?() }
             .opacity(appeared && !model.fading.contains(mark) ? 1 : 0)
-            .onAppear { withAnimation(.easeIn(duration: 0.18).delay(0.24)) { appeared = true } }
+            // In once the row has opened and the rows below have stopped (the list's spring settles by about 0.45 s).
+            .onAppear { showTrying = n.trying; withAnimation(.easeIn(duration: 0.18).delay(0.48)) { appeared = true } }
             .onDisappear { appeared = false }
+            .onChange(of: n.trying) { _, now in
+                withAnimation(.easeOut(duration: 0.12)) { titleOn = false }
+                Task {
+                    try? await Task.sleep(nanoseconds: 130_000_000)
+                    showTrying = now
+                    withAnimation(.easeIn(duration: 0.15)) { titleOn = true }
+                }
+            }
             .transition(.identity)
         }
     }
     // The title keeps the failed words' size while trying again ("Trying again…" drawn over them, they hidden), so the
     // layout ViewThatFits chose for the failure holds and nothing re-wraps or moves on Retry.
     private func title(_ head: String, _ trying: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: trying ? "arrow.clockwise.circle.fill" : "exclamationmark.circle.fill")
-                .foregroundStyle(trying ? Color.secondary : ChumbyPalette.warn(scheme == .dark))
+        let t = showTrying
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: t ? "arrow.clockwise.circle.fill" : "exclamationmark.circle.fill")
+                .foregroundStyle(t ? Color.secondary : ChumbyPalette.warn(scheme == .dark))
             ZStack(alignment: .topLeading) {
-                Text(head).fontWeight(.semibold).foregroundStyle(ChumbyPalette.warn(scheme == .dark)).opacity(trying ? 0 : 1)
-                Text("Trying again…").fontWeight(.semibold).foregroundStyle(.secondary).lineLimit(1).opacity(trying ? 1 : 0)
+                Text(head).fontWeight(.semibold).foregroundStyle(ChumbyPalette.warn(scheme == .dark)).opacity(t ? 0 : 1)
+                Text("Trying again…").fontWeight(.semibold).foregroundStyle(.secondary).lineLimit(1).opacity(t ? 1 : 0)
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: trying)
+        .opacity(titleOn ? 1 : 0)
     }
     private func reason(_ why: String) -> some View {
         // No width of its own to ask for: ViewThatFits measures the title's line, and the reason wraps under either.

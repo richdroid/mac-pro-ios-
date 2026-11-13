@@ -91,6 +91,18 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-failfilm-dismissed$x.png
             kill -INT $REC; wait $REC; echo "failfilm$x exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            # A Retry that lands (the failonce scene: the first save turned down after 3 s, the next taken after 2 s): the
+            # note's words out, its row closing, the landing bubble, the switch settled off.
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-retryland$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/failonce${x//-/} -tab 2 -pose failure
+            sleep 11
+            $D "$DEVICE" tap "Retry" || echo "retry tap failed"; sleep 1
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-retryland-trying$x.png
+            sleep 4
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-retryland-landed$x.png
+            kill -INT $REC; wait $REC; echo "retryland$x exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
             # Dark: the note arriving, then put away.
             xcrun simctl ui "$DEVICE" appearance dark
             still $d pose-soundsfail-dark$x 16 $M/fail -tab 3 -pose soundsfail
