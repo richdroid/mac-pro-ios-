@@ -499,9 +499,9 @@ struct RootView: View {
                 // system's animated pop (the pushed page holding its layout as it slides, NavTransit). The tab was rebuilt
                 // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
                 // button again it jankily goes back no animation"). Only a tab already at its start is rebuilt at the top.
-                let open = (t == 0 && (model.history != nil || model.processes != nil)) || (t == 1 && model.appHistory != nil) || (t == 2 && model.sessionScreen != nil) || (t == 5 && model.macPage != nil)
+                let open = (t == 0 && (model.history != nil || model.processes != nil || model.nav.settingsOpen)) || (t == 1 && model.appHistory != nil) || (t == 2 && model.sessionScreen != nil) || (t == 5 && model.macPage != nil)
                 if open {
-                    if t == 0 { model.history = nil; model.processes = nil }
+                    if t == 0 { model.history = nil; model.processes = nil; model.nav.settingsOpen = false }
                     if t == 1 { model.appHistory = nil }
                     if t == 2 { model.sessionScreen = nil }
                     if t == 5 { model.macPage = nil }
@@ -520,8 +520,9 @@ struct RootView: View {
                 // "macOS", not "Updates": the Mac's own system updates, kept apart from his apps' updates in Apps (designer, 2026-11-07).
                 Tab(value: 4) { Screen(tab: 4, title: "macOS", listed: false) { UpgradeTab($0, side: $1) }.id(key(4)) } label: { tabLabel("macOS", "arrow.up.circle") }
                 Tab(value: 5) { Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5)) } label: { tabLabel("Control", "display") }
-                // Last, so it sits at the foot of the side bar.
-                Tab(value: 9) { MacSettings().id(resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
+                // The Mac's own screen, the Console, driven from here (Richard, 2026-11-13: "separate tab"). Settings went
+                // behind the gear on Status to keep the bar at six.
+                Tab(value: 6) { Screen(tab: 6, title: "Console") { ConsoleTab($0, side: $1) }.id(key(6)) } label: { tabLabel("Console", "macwindow") }
             }
             .tint(macBlue)
             .onChange(of: model.tab) { _, t in
@@ -815,7 +816,19 @@ struct Screen<Content: View>: View {
     // so both start level. It's not the system's large title: that collapses as either pane scrolls, and scrolling one
     // slid the other up and down (Richard, 2026-11-06: "the elements on status shrink and expand like on the side").
     func paneTitle(_ side: Side) -> some View {
-        Text(title).font(.largeTitle.weight(.bold)).lineLimit(1)
+        HStack(alignment: .center) {
+            Text(title).font(.largeTitle.weight(.bold)).lineLimit(1)
+            Spacer(minLength: 8)
+            // Settings, beside Status's name, the way the App Store keeps its account by its title.
+            if tab == 0, side != .right {
+                Button { model.nav.settingsOpen = true } label: {
+                    Image(systemName: "gearshape").font(.title2).foregroundStyle(macBlue).frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Settings")
+                .padding(.trailing, 4)
+            }
+        }
             .frame(maxWidth: .infinity, alignment: .leading)
             .opacity(side == .right ? 0 : 1)
             .accessibilityHidden(side == .right)
@@ -885,6 +898,8 @@ struct StackPages: ViewModifier {
     func body(content: Content) -> some View {
         content
             .navigationDestination(item: tab == 0 ? $nav.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
+            // Settings, behind the gear beside Status's name.
+            .navigationDestination(isPresented: tab == 0 ? $nav.settingsOpen : .constant(false)) { MacSettings(pushed: true) }
             // All processes, from Status itself; from a history, that page opens them over itself.
             .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
             .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
@@ -1833,6 +1848,18 @@ struct UpgradeTab: View {
         return t.isEmpty ? nil : t
     }
     var oclp: String { s.upgrade.state["oclp_tag"] ?? s.oclp.version }
+    // A newer macOS the service found and is holding back until OCLP can patch it, from its last run's lines
+    // ("macOS Tahoe 26.7.3-25G342 is too new or has no KDK yet, holding").
+    var held: String? {
+        let lines = s.upgrade.log.components(separatedBy: "\n")
+        let lastRun = lines.lastIndex { $0.contains("tick:") } ?? 0
+        for l in lines[lastRun...] {
+            guard l.contains("holding"), let r = l.range(of: #"macOS \S+ ([0-9.]+)-(\w+)"#, options: .regularExpression) else { continue }
+            let parts = l[r].split(separator: " ").last?.split(separator: "-") ?? []
+            if parts.count == 2 { return "\(parts[0]) (\(parts[1])), waiting for patches" }
+        }
+        return nil
+    }
     // A seal for how it stands: done, working, or something to look at.
     var seal: (String, Color) {
         let t = s.upgrade.status.lowercased()
@@ -1851,7 +1878,7 @@ struct UpgradeTab: View {
     var patchedThis: Bool { patchedBuild == s.build }
     var patchedFor: String {
         if s.oclp.patchedFor.isEmpty { return "None yet" }
-        if patchedThis { return "macOS \(s.macos) (\(s.build))" }
+        if patchedThis { return "This macOS" }
         return patchedBuild.map { "Build \($0), not this one" } ?? s.oclp.patchedFor
     }
     var patched: String {
@@ -1862,7 +1889,9 @@ struct UpgradeTab: View {
     // lone line, which at the cards' 26 pt corner read as a capsule (designer, 2026-11-11).
     var summaryLine: String? {
         guard s.upgrade.installed else { return nil }
-        let checked = statusParts.at.map { "checked \($0.formatted(.relative(presentation: .named)))" }
+        // When, in the app's style: the update service checks once a day at 3:30 AM, so "23 hours ago" was true but
+        // read as broken (Richard, 2026-11-13); "Yesterday, 3:30 AM" says the same plainly.
+        let checked = statusParts.at.map { "checked " + Format.when($0).replacingOccurrences(of: "Today", with: "today").replacingOccurrences(of: "Yesterday", with: "yesterday") }
         if !logShown, !s.upgrade.log.isEmpty { return ["Up to date", checked].compactMap { $0 }.joined(separator: " · ") }
         // Running: the step it's on, from the log's newest line. Failed: which step, as the Mac names it after its word
         // ("FAILED: root patch" → "Root patch").
@@ -1909,9 +1938,15 @@ struct UpgradeTab: View {
     }
     // The facts behind the summary, as rows, and at their foot the one thing to do here: run the update check. It was a
     // round arrow on the summary, which read as a refresh against staleness (designer, 2026-11-11).
+    var factRows: [(String, String)] {
+        let patchedAt: String = s.oclp.patchedAt.isEmpty ? "Not yet" : (Format.stamp(s.oclp.patchedAt).map(Format.when) ?? s.oclp.patchedAt)
+        var rows: [(String, String)] = [("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", patchedFor), ("Patched", patchedAt)]
+        if let held { rows.append(("Newest macOS", held)) }
+        return rows
+    }
     var facts: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array([("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", patchedFor), ("Patched", s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)].enumerated()), id: \.offset) { i, row in
+            ForEach(Array(factRows.enumerated()), id: \.offset) { i, row in
                 // The list cards' insets: text 20 pt in, separators stopping 20 pt short of the right edge.
                 if i > 0 { Divider().padding(.horizontal, 20) }
                 LabeledContent(row.0, value: row.1).padding(.horizontal, 20).padding(.vertical, 12)
@@ -1941,6 +1976,23 @@ struct UpgradeTab: View {
         !s.upgrade.log.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     var log: some View { VStack(alignment: .leading, spacing: 8) { header("Log"); UpdateLog(log: s.upgrade.log) } }
+    // Folded and upright the log gets the room left under the facts: its newest lines, whole, as many as fit, and a tap
+    // opens the whole log full screen (Richard, 2026-11-13: "log is too small when folded"; five lines, the last cut).
+    @State private var fullLog = false
+    var logPreview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                header("Log")
+                Spacer()
+                Button("Show all") { fullLog = true }.font(.body).foregroundStyle(macBlue).padding(.trailing, 20)
+            }
+            Button { fullLog = true } label: { LogPreview(log: s.upgrade.log) }
+                .buttonStyle(PressStyle())
+                .accessibilityLabel("Log, newest lines").accessibilityHint("Opens the whole log")
+        }
+        .screenCover(isPresented: $fullLog) { FullLog(log: s.upgrade.log).environmentObject(model) }
+        .task { if model.pose == "fulllog" { try? await Task.sleep(nanoseconds: 1_200_000_000); fullLog = true } }
+    }
     // The Apps tab's section headings ("Updates", "On this iPhone"): bold, secondary, under the title rather than as loud
     // as it, in line with the text in the cards below. "Log" was white and semibold at the cards' very edge.
     func header(_ t: String) -> some View { Text(t).font(.title3.weight(.bold)).foregroundStyle(.secondary).padding(.leading, 20) }
@@ -1955,7 +2007,7 @@ struct UpgradeTab: View {
                 VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
                 agent
                 VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
-                if logShown { log }
+                if logShown { logPreview.frame(maxHeight: .infinity, alignment: .top) }
             }
             // With the side bar beside the page, the cards end at its edge, as the list cards do. Open in portrait the tabs
             // are along the foot and nothing is there: the cards ran into the display's edge and lost their right corners.
@@ -1989,6 +2041,8 @@ struct UpgradeTab: View {
 struct UpdateLog: View {
     @EnvironmentObject var model: AppModel
     let log: String
+    // Full screen: the card takes the whole height, however short the log.
+    var fills = false
     // How tall the lines are, so a short log gets a card its own size rather than an empty slab with one line at its foot.
     @State private var contentHeight: CGFloat?
     @State private var scrolledDown = false
@@ -2031,7 +2085,7 @@ struct UpdateLog: View {
             .scrollEdgeEffectHidden(true, for: .top)
             .scrollBounceBehavior(.basedOnSize)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, h in contentHeight = h }
-            .frame(maxHeight: contentHeight ?? CGFloat(lines.count) * 21)
+            .frame(maxHeight: fills ? .infinity : contentHeight ?? CGFloat(lines.count) * 21)
             .padding(.vertical, 14)
             .background(Color(white: 0.06), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
@@ -2041,6 +2095,54 @@ struct UpdateLog: View {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 proxy.scrollTo(lines.count / 2, anchor: .center)
             }
+        }
+    }
+}
+// The log's newest lines in the room it's given, each whole on one line, never a line cut through its glyphs.
+struct LogPreview: View {
+    let log: String
+    @State private var height: CGFloat = 0
+    #if canImport(UIKit)
+    static let lineHeight = ceil(UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular).lineHeight) + 3
+    #else
+    static let lineHeight: CGFloat = 19
+    #endif
+    var body: some View {
+        let all = log.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let fit = max(3, Int((height - 28 + 3) / Self.lineHeight))
+        // Without the year and the seconds, so more of each line fits: "11-12 03:30 tick: macOS 26.7.2".
+        let lines = all.suffix(fit).map { l -> String in
+            guard l.count > 20, l.range(of: #"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d"#, options: .regularExpression) != nil else { return l }
+            return String(l.dropFirst(5).prefix(11)) + String(l.dropFirst(19))
+        }
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(lines.indices, id: \.self) { i in
+                Text(lines[i]).font(.system(.footnote, design: .monospaced)).foregroundStyle(UpdateLog.tone(lines[i]))
+                    .lineLimit(1).truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .frame(minHeight: CGFloat(3) * Self.lineHeight + 28)
+        .background(Color(white: 0.06), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+    }
+}
+// The whole log, full screen, wrapped, from its newest end.
+struct FullLog: View {
+    @Environment(\.dismiss) private var dismiss
+    let log: String
+    var body: some View {
+        NavigationStack {
+            UpdateLog(log: log, fills: true)
+                .padding(.horizontal, 16).padding(.bottom, 8)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(groupedBackground.ignoresSafeArea())
+                .navigationTitle("Log")
+                .toolbarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
 }

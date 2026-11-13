@@ -50,6 +50,10 @@ enum MacDeepLink {
             }
         case "macos", "updates":
             model.tab = 4
+        case "settings":
+            model.tab = 0; model.history = nil; model.processes = nil; model.nav.settingsOpen = true
+        case "console":
+            model.tab = 6
         default:
             return false
         }
@@ -65,8 +69,8 @@ final class ScreenHandoff {
     private var sent = ""
     // Where the phone was as Screen opened, in the links' words.
     static func context(_ model: AppModel) -> [String: String] {
-        let names = [0: "status", 1: "apps", 2: "claude", 4: "macos", 5: "control", 9: "settings"]
-        var c: [String: String] = ["tab": names[model.tab] ?? "status"]
+        let names = [0: "status", 1: "apps", 2: "claude", 4: "macos", 5: "control", 6: "console"]
+        var c: [String: String] = ["tab": model.tab == 0 && model.nav.settingsOpen ? "settings" : names[model.tab] ?? "status"]
         if let p = model.macPage { c["item"] = p.rawValue }
         else if let h = model.history { c["item"] = h.key }
         else if let s = model.sessionScreen { c["item"] = s.name }

@@ -68,6 +68,7 @@ final class NavStore: ObservableObject {
     @Published var sessionScreen: Status.Session?  // a session's own screen, on the Claude tab's stack
     @Published var appHistory: String?  // the package (TV.ipa) whose Version History is open on the Apps tab's stack
     @Published var macPage: MacPage?  // Everything on the Mac, or Restart the Mac, on the Control tab's stack
+    @Published var settingsOpen = false  // Settings, behind the gear on Status
 }
 
 @MainActor
@@ -137,7 +138,14 @@ final class AppModel: ObservableObject {
     private var pendingSession: String?
     private var lastData: Data?
     // The tab chosen to open on in Settings, or else the one last used.
-    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab { didSet { if tab != oldValue { tabSince = Date(); Self.arrivedAt = Date() } } }
+    // 9 was the Settings tab until 2026-11-13; it's behind the gear on Status now, and a 9 from an old link, widget or the
+    // last tab used opens it there.
+    @Published var tab = AppModel.firstTab == 3 ? 2 : AppModel.firstTab == 9 ? 0 : AppModel.firstTab {
+        didSet {
+            if tab == 9 { tab = 0; nav.settingsOpen = true }
+            if tab != oldValue { tabSince = Date(); Self.arrivedAt = Date() }
+        }
+    }
     // When a tab last came to the front: figures don't roll for the moment after (they're simply there as he arrives).
     static var arrivedAt = Date.distantPast
     static var justArrived: Bool { Date().timeIntervalSince(arrivedAt) < 1.5 }
@@ -165,6 +173,8 @@ final class AppModel: ObservableObject {
         signInSheet = address.isEmpty
         // Usage was a tab of its own until 2026-11-07; a start tab set to it opens on Claude, where it now lives.
         if UserDefaults.standard.integer(forKey: "startTab") == 3 { UserDefaults.standard.set(2, forKey: "startTab") }
+        if UserDefaults.standard.integer(forKey: "startTab") == 9 { UserDefaults.standard.set(0, forKey: "startTab") }
+        if Self.firstTab == 9 { nav.settingsOpen = true }
         let h = UserDefaults.standard.string(forKey: "openHistory").flatMap(HistoryMetric.named)
         let p = UserDefaults.standard.string(forKey: "openProcesses").flatMap(ProcessSort.init(rawValue:))
         // The build's shots of the Control tab's pushed pages (health, a fix under way, back from a restart, the checks).
@@ -526,6 +536,22 @@ enum Format {
     static func staleAge(ms: Double) -> String? {
         let s = Date().timeIntervalSince1970 - ms / 1000
         return s < 1800 ? nil : span(s) + " ago"
+    }
+    // The app's one way to say when: "Today, 3:30 AM", "Yesterday, 3:30 AM", "Oct 30, 5:37 PM" (with the year when it
+    // isn't this one). Never a raw stamp (Richard, 2026-11-13: "Patched October 30, 2026 @ 17:37:28").
+    static func when(_ d: Date) -> String {
+        let cal = Calendar.current, time = d.formatted(date: .omitted, time: .shortened)
+        if cal.isDateInToday(d) { return "Today, \(time)" }
+        if cal.isDateInYesterday(d) { return "Yesterday, \(time)" }
+        let sameYear = cal.component(.year, from: d) == cal.component(.year, from: Date())
+        let day = sameYear ? d.formatted(.dateTime.month(.abbreviated).day()) : d.formatted(.dateTime.month(.abbreviated).day().year())
+        return "\(day), \(time)"
+    }
+    // OCLP's own stamp ("October 30, 2026 @ 17:37:28"), or the update service's ("2026-11-12 03:30:48").
+    static func stamp(_ t: String) -> Date? {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX")
+        for fmt in ["MMMM d, yyyy '@' HH:mm:ss", "yyyy-MM-dd HH:mm:ss", "MMMM d, yyyy 'at' HH:mm:ss"] { f.dateFormat = fmt; if let d = f.date(from: t.trimmingCharacters(in: .whitespaces)) { return d } }
+        return nil
     }
     static func ago(ms: Double) -> String {
         let s = Date().timeIntervalSince1970 - ms / 1000

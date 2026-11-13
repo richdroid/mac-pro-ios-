@@ -30,26 +30,26 @@ enum MacParts {
     static func name(_ p: String, check: Bool = false) -> String {
         if check {
             switch p {
-            case "oclp": return "OCLP patches"
-            case "updates": return "macOS updates"
+            case "oclp": return "macOS patches"
+            case "updates": return "Automatic macOS updates"
             case "filevault": return "FileVault"
-            case "autologin": return "Auto-login"
-            case "tailscale": return "Tailscale at login"
+            case "autologin": return "Signs in by itself"
+            case "tailscale": return "Remote access at login"
             case "work": return "Work in progress"
-            case "keep": return "Files kept from /tmp"
+            case "keep": return "Temporary files saved"
             default: break
             }
         }
         switch p {
-        case "tailscale": return "Tailscale"
-        case "serve": return "Tailscale Serve"
-        case "bridge": return "The bridge"
+        case "tailscale": return "Remote access"
+        case "serve": return "Remote access"
+        case "bridge": return "Mac dashboard"
         case "sessions": return "Claude sessions"
-        case "tv": return "TV link"
-        case "letterboxd": return "Letterboxd relay"
+        case "tv": return "TV"
+        case "letterboxd": return "Letterboxd sign-in"
         case "chumby": return "Chumby"
-        case "oclp": return "OCLP"
-        case "stuck": return "Stuck programs"
+        case "oclp": return "macOS patches"
+        case "stuck": return "Apps responding"
         case "memory": return "Memory"
         default: return p.prefix(1).uppercased() + p.dropFirst()
         }
@@ -107,7 +107,7 @@ enum MacParts {
             }
         }
         switch p {
-        case "serve": return "Ask a Claude session on the Mac to point Tailscale Serve back at the bridge."
+        case "serve": return "Ask a Claude session on the Mac to turn this app’s link back on."
         case "chumby": return "Check the Chumby is on and on Wi-Fi."
         case "oclp": return "Re-apply the root patches in OpenCore Legacy Patcher."
         case "stuck": return "Restarting the Mac clears this."
@@ -185,6 +185,92 @@ final class RestartWatch: ObservableObject {
     func stuck(_ now: Date) -> Bool { wentAway && backAt == nil && askedAt.map { now.timeIntervalSince($0) > 660 } == true }
 }
 
+// The Mac's parts as he knows them, one line each on Everything. Its own ids (tailscale, serve, bridge…) stay in here:
+// Remote access is Tailscale and the link that points this app at the Mac, together.
+struct MacGroup: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let symbol: String
+    let parts: [String]
+    let about: String
+    static let known: [MacGroup] = [
+        MacGroup(id: "remote", name: "Remote access", symbol: "network", parts: ["tailscale", "serve"], about: "Lets this iPhone reach the Mac from anywhere."),
+        MacGroup(id: "bridge", name: "Mac dashboard", symbol: "gauge.with.dots.needle.33percent", parts: ["bridge"], about: "What this app talks to on the Mac."),
+        MacGroup(id: "sessions", name: "Claude sessions", symbol: "terminal", parts: ["sessions"], about: "The Claude sessions the Mac keeps running."),
+        MacGroup(id: "tv", name: "TV", symbol: "tv", parts: ["tv"], about: "The Mac’s link to the Google TV, for the remote and sending things to it."),
+        MacGroup(id: "chumby", name: "Chumby", symbol: "alarm", parts: ["chumby"], about: "The alarm clock by the bed."),
+        MacGroup(id: "letterboxd", name: "Letterboxd sign-in", symbol: "film", parts: ["letterboxd"], about: "Signs Letterboxd on the TV in through the Mac."),
+        MacGroup(id: "oclp", name: "macOS patches", symbol: "wrench.and.screwdriver", parts: ["oclp"], about: "The patches that let macOS Tahoe run on this Mac Pro."),
+        MacGroup(id: "stuck", name: "Apps responding", symbol: "hourglass", parts: ["stuck"], about: "Programs on the Mac that have stopped answering."),
+        MacGroup(id: "memory", name: "Memory", symbol: "memorychip", parts: ["memory"], about: "How hard the Mac’s memory is working."),
+    ]
+    // In the Mac's order; a part this app doesn't know yet gets a line of its own.
+    static func groups(for ids: [String]) -> [MacGroup] {
+        var out: [MacGroup] = []
+        for id in ids {
+            if let g = known.first(where: { $0.parts.contains(id) }) { if !out.contains(g) { out.append(g) } }
+            else { out.append(MacGroup(id: id, name: MacParts.name(id), symbol: MacParts.symbol(id), parts: [id], about: "")) }
+        }
+        return out
+    }
+    // How a part stands, in his words.
+    static func human(_ g: MacGroup, _ p: MacPart) -> String {
+        let t = p.say
+        if p.bad {
+            switch p.part {
+            case "tailscale": return "Tailscale is off on the Mac"
+            case "serve": return "The Mac’s link for this app is off"
+            case "bridge": return "Not answering"
+            default: return MacParts.say(p)
+            }
+        }
+        switch p.part {
+        case "tailscale", "serve": return "Reachable from anywhere"
+        case "bridge": return "Answering"
+        case "letterboxd": return "Ready"
+        case "sessions":
+            // "6 of 6 kept running · 2 others"
+            let n = t.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+            if n.count >= 2 { return (n[0] == n[1] ? "All \(n[1]) running" : "\(n[0]) of \(n[1]) running") + (n.count > 2 && n[2] > 0 ? ", and \(n[2]) more" : "") }
+            return MacParts.say(p)
+        case "oclp":
+            if let r = t.range(of: #"macOS [0-9.]+"#, options: .regularExpression) { return "Patched for " + t[r] }
+            return "Healthy"
+        default: return MacParts.say(p)
+        }
+    }
+}
+
+// A card at the head of a page: a sign, a line, what it means, and what to do, with its button.
+struct HeroCard<Action: View>: View {
+    let symbol: String?
+    let color: Color
+    let title: String
+    let detail: String?
+    var note: String? = nil
+    @ViewBuilder var action: () -> Action
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Group {
+                if let symbol { Image(systemName: symbol).font(.system(size: 28)).foregroundStyle(color).symbolRenderingMode(.hierarchical) }
+                else { ProgressView() }
+            }
+            .frame(width: 36)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.headline)
+                if let detail { Text(detail).font(.subheadline).foregroundStyle(color == .red || color == .orange ? color : .secondary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
+                if let note { Text(note).font(.subheadline).fixedSize(horizontal: false, vertical: true) }
+                action().padding(.top, 6)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+}
+
 // A part's row: its sign, its name, what it means, and what to do when it needs his hands.
 struct MacPartRow: View {
     let id: String
@@ -246,7 +332,12 @@ struct MacHealthView: View {
     @State private var fixing: Date?
     @State private var fixNote: String?
     @State private var now = Date()
-    var title: String { watch.active ? "Getting everything up" : "Everything on the Mac" }
+    @State private var fixingWhat = ""
+    // Folded and upright, the parts opened to say what they are; open flat, the one shown in the right pane.
+    @State private var expanded: Set<String> = []
+    @State private var chosen: String?
+    // Short, so it fits folded at the tabs' size (Richard, 2026-11-13: the old name was a huge title).
+    var title: String { "Everything" }
     var bad: [MacPart] { report?.parts.filter(\.bad) ?? [] }
     var canFix: [MacPart] { bad.filter { MacParts.fixable.contains($0.part) } }
     // While the Mac is down every part waits for it; nothing pretends to know.
@@ -267,20 +358,7 @@ struct MacHealthView: View {
         return nil
     }
 
-    @ViewBuilder var banner: some View {
-        if let line = bannerLine {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: line.symbol).font(.title3).foregroundStyle(line.color).frame(width: 26)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(line.title).font(.body.weight(.semibold))
-                    Text(line.detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit().fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(.vertical, 4)
-            // A restart that never came back has an end: said in red after ten minutes, with a way to stop waiting.
-            if watch.stuck(now) { Button("Stop waiting") { withAnimation(Motion.quick) { watch.done() } } }
-        }
-    }
+    // A restart under way, or the Mac away: said in the hero's place, with how long it has been.
     struct Line { let symbol: String; let color: Color; let title: String; let detail: String }
     var bannerLine: Line? {
         func clock(_ s: TimeInterval) -> String { let t = max(0, Int(s)); return String(format: "%d:%02d", t / 60, t % 60) }
@@ -297,112 +375,160 @@ struct MacHealthView: View {
             }
             if let b = watch.backAt {
                 if bad.isEmpty, report != nil { return Line(symbol: "checkmark.circle.fill", color: .green, title: "Everything is up", detail: "Back \(minutes(b.timeIntervalSince(a))) after the restart was asked.") }
-                return Line(symbol: "arrow.triangle.2.circlepath", color: .orange, title: "The Mac is back", detail: "Back \(minutes(b.timeIntervalSince(a))) after the restart was asked. Parts still starting are below.")
+                return Line(symbol: "arrow.triangle.2.circlepath", color: .orange, title: "The Mac is back", detail: "Back \(minutes(b.timeIntervalSince(a))) after the restart was asked. What’s still starting is marked below.")
             }
-            return Line(symbol: "power.circle", color: .secondary, title: "The Mac is restarting", detail: "Asked \(clock(since)) ago. It usually takes three to five minutes; each part below fills in by itself as it comes back.")
+            return Line(symbol: "power.circle", color: .secondary, title: "The Mac is restarting", detail: "Asked \(clock(since)) ago. It usually takes three to five minutes; each part below fills in as it comes back.")
         }
         if away { return Line(symbol: "wifi.exclamationmark", color: .red, title: Phrase.macAwayShort, detail: "It may be restarting, or Tailscale may be off on this iPhone.") }
         return nil
     }
 
-    @ViewBuilder var fixSection: some View {
-        if let f = fixing {
-            Section {
-                HStack(spacing: 12) {
-                    ProgressView()
-                    Text("Fixing \(canFix.count == 1 ? MacParts.name(canFix[0].part) : "\(canFix.count) parts")… \(Int(now.timeIntervalSince(f)))s").monospacedDigit()
-                }
-            } footer: { Text("This can take up to two minutes. Each part says how it went.") }
-        } else if !canFix.isEmpty, !down {
-            Section {
-                Button { Task { await fix() } } label: {
-                    Label(canFix.count == 1 ? "Fix \(MacParts.name(canFix[0].part))" : "Fix \(canFix.count) parts", systemImage: "wrench.adjustable")
-                }
-                if let fixNote { FailText(fixNote) }
-            } footer: { Text("Restarts what’s down on the Mac. Parts that need you say what to do.") }
-        } else if let fixNote {
-            Section { FailText(fixNote) }
+    // MARK: The page (Richard, 2026-11-13, of the old wall of rows: "horrific"). All well: one calm line over a compact
+    // list, one line a part in his words, a small dot each, tap for what it is. Something wrong: that part leads, named,
+    // with the plain fix and its button. Fix and Restart are buttons, never rows.
+
+    // The parts as he knows them: the Mac's own ids stay inside the app.
+    var groups: [MacGroup] { MacGroup.groups(for: ids) }
+    func parts(_ g: MacGroup) -> [MacPart] { g.parts.compactMap { id in report?.parts.first { $0.part == id } } }
+    func isBad(_ g: MacGroup) -> Bool { parts(g).contains(where: \.bad) }
+    var badGroups: [MacGroup] { groups.filter(isBad) }
+    func dot(_ g: MacGroup) -> Color {
+        if down || report == nil { return Color(white: 0.4) }
+        if isBad(g) { return startingWindow ? .orange : .red }
+        return .green
+    }
+
+    @ViewBuilder var hero: some View {
+        if let line = bannerLine {
+            HeroCard(symbol: line.symbol, color: line.color, title: line.title, detail: line.detail) {
+                if watch.stuck(now) { Button("Stop waiting") { withAnimation(Motion.quick) { watch.done() } }.buttonStyle(.bordered) }
+            }
+        } else if let f = fixing {
+            HeroCard(symbol: nil, color: .secondary, title: "Fixing \(fixingWhat)…", detail: "This can take up to two minutes · \(Int(now.timeIntervalSince(f))) s") { EmptyView() }
+        } else if report == nil {
+            HeroCard(symbol: nil, color: .secondary, title: "Checking the Mac…", detail: nil) { EmptyView() }
+        } else if badGroups.isEmpty {
+            HeroCard(symbol: "checkmark.circle.fill", color: .green, title: "Everything’s running", detail: nil) { EmptyView() }
+        } else {
+            VStack(spacing: 12) { ForEach(badGroups) { g in problem(g) } }
         }
     }
-    // The page's one verdict, said the same in the parts' heading and over the card that names them (Richard, 2026-11-12,
-    // of "1 needs a look" over all-green rows beside "1 needs your hands" naming nothing: "wow u fucked this up bad").
-    var headline: String? {
-        guard let r = report, !down, !awaited else { return nil }
-        let n = r.parts.filter(\.bad).count
-        return n == 0 ? "All running" : startingWindow ? "\(n) still starting" : "\(n) need\(n == 1 ? "s" : "") a look"
+    // A part that needs a look: its name, what's wrong, and the one thing to do, with its button.
+    func problem(_ g: MacGroup) -> some View {
+        let p = parts(g).first(where: \.bad)
+        let fixable = parts(g).contains { $0.bad && MacParts.fixable.contains($0.part) }
+        let hand = p.flatMap { MacParts.hand($0.part) }
+        return HeroCard(symbol: g.symbol, color: startingWindow ? .orange : .red, title: g.name,
+                        detail: p.map { (startingWindow ? "Still starting: " : "") + MacGroup.human(g, $0) },
+                        note: startingWindow ? nil : hand ?? (fixable ? nil : "A restart may bring it back.")) {
+            if !startingWindow {
+                if fixable {
+                    Button { Task { await fix() } } label: { Text("Fix").frame(minWidth: 64) }
+                        .buttonStyle(.borderedProminent).tint(macBlue)
+                } else if ["stuck", "memory"].contains(p?.part ?? "") || hand == nil {
+                    Button("Restart the Mac…", role: .destructive) { model.macPage = .restart }.buttonStyle(.bordered)
+                }
+            }
+        }
     }
-    // What needs a look, each by name, what's wrong and what to do; or, when nothing does, that all is running.
-    @ViewBuilder var verdictSection: some View {
-        if let line = headline, fixing == nil {
-            Section {
-                if !bad.isEmpty {
-                    ForEach(bad) { p in
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: MacParts.symbol(p.part)).foregroundStyle(.red).frame(width: 26).padding(.top, 1)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(MacParts.name(p.part)).font(.body.weight(.semibold))
-                                Text(MacParts.say(p)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
-                                Text(MacParts.hand(p.part) ?? (MacParts.fixable.contains(p.part) ? "The Mac can bring this back: tap Fix." : "A restart may bring it back."))
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                        .accessibilityElement(children: .combine)
+    // One line a part: its sign, its name, a small dot. Tapped, what it is and how it stands (folded and upright under it;
+    // open flat in the right pane).
+    func row(_ g: MacGroup, first: Bool, flat: Bool) -> some View {
+        let open = flat ? picked?.id == g.id : expanded.contains(g.id)
+        return Button {
+            withAnimation(Motion.quick) {
+                if flat { chosen = g.id } else if expanded.contains(g.id) { expanded.remove(g.id) } else { expanded.insert(g.id) }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 12) {
+                    Image(systemName: g.symbol).font(.body).foregroundStyle(.secondary).frame(width: 26)
+                    Text(g.name).foregroundStyle(.primary).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Circle().fill(dot(g)).frame(width: 8, height: 8)
+                    if !flat {
+                        Image(systemName: "chevron.down").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(open ? 180 : 0))
                     }
                 }
-            } header: { Text(line) }
-        }
-    }
-    func partsSection(heading: Bool) -> some View {
-        Section {
-            // Anything that needs a look first, so it's never below the fold under a heading that counts it.
-            let order = ids.filter { id in bad.contains { $0.part == id } } + ids.filter { id in !bad.contains { $0.part == id } }
-            ForEach(order, id: \.self) { id in
-                MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id), starting: startingWindow, first: id == order.first).place(id).ownSeparatorRow()
+                if open, !flat {
+                    Text(stateLine(g)).font(.footnote).foregroundStyle(isBad(g) ? Color.red : Color.secondary)
+                        .padding(.leading, 38).fixedSize(horizontal: false, vertical: true)
+                    Text(g.about).font(.footnote).foregroundStyle(.secondary)
+                        .padding(.leading, 38).fixedSize(horizontal: false, vertical: true)
+                }
             }
-        } header: {
-            // While the Mac is away nothing is known of its parts: no heading then (each row says it's waiting), never
-            // what was last read.
-            // Nor while a restart is asked and the Mac isn't back from it: "All running" over a banner that says it may be
-            // restarting said two things at once (designer, 2026-11-11). The rows keep what was last read.
-            // Open flat the verdict card beside says it; here only the parts' name.
-            // In one column the parts themselves are the verdict's card (what needs a look is first, with what to do), so the
-            // heading carries the verdict and nothing names a part twice (designer, 2026-11-12).
-            // Only the parts' name: a verdict over them ("All running") said again what the rows' own ticks say (Richard,
-            // 2026-11-13: no summary lines restating what's beside them). What needs a look is first, in red, with what to do.
-            if heading, !down, !awaited { Text("Parts") }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(flat && open ? Color(white: 0.17) : cardFill)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(down || report == nil ? "Waiting" : isBad(g) ? "Needs a look" : "Running")
+        .modifier(OwnSeparator(first: first, ends: 9))
+    }
+    func stateLine(_ g: MacGroup) -> String {
+        if down { return "Waiting for the Mac" }
+        if report == nil { return "Checking…" }
+        let ps = parts(g)
+        if let b = ps.first(where: \.bad) { return MacGroup.human(g, b) }
+        return ps.first.map { MacGroup.human(g, $0) } ?? "Running"
+    }
+    // Open flat: the part chosen on the left, said whole on the right.
+    var picked: MacGroup? { groups.first { $0.id == chosen } ?? badGroups.first ?? groups.first }
+    @ViewBuilder var detailCard: some View {
+        if let g = picked {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    Image(systemName: g.symbol).font(.title3).foregroundStyle(.secondary).frame(width: 26)
+                    Text(g.name).font(.title3.weight(.semibold))
+                    Spacer(minLength: 8)
+                    Circle().fill(dot(g)).frame(width: 10, height: 10)
+                }
+                Text(stateLine(g)).foregroundStyle(isBad(g) && !down ? Color.red : Color.primary).fixedSize(horizontal: false, vertical: true)
+                Text(g.about).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 6)
         }
     }
+
     func list(_ side: Side) -> some View {
-        ScrollViewReader { proxy in
+        let flat = side != .all
+        return ScrollViewReader { proxy in
             List {
                 Section { PaneHeading(title: title, shown: side != .right, roomAbove: false) }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
-                if side != .right, bannerLine != nil { Section { banner } }
-                // Folded or upright, Fix comes before the parts, where he looks first; open flat it has the right pane.
-                if side == .all { fixSection }
-                // Open flat with the Mac away there's nothing to fix, so the parts take the right pane and the banner has the
-                // left: the whole page sat in the left pane, cut off, beside an empty one (designer, 2026-11-10).
-                if side == .all || (side == .left && !down) || (side == .right && down) { partsSection(heading: true) }
-                if side == .right, !down {
-                    verdictSection; fixSection
-                    // The way out when a part needs a restart, beside the verdict, so open flat the pane isn't one card over
-                    // nothing (designer, 2026-11-12).
-                    if !awaited {
-                        Section {
-                            Button(role: .destructive) { model.macPage = .restart } label: {
-                                HStack { Text("Restart the Mac…"); Spacer(); RowChevron() }
-                            }
-                        } footer: { Text("Checks first that the Mac will come back by itself.") }
+                if side != .right {
+                    Section { hero }
+                        .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
+                    if let fixNote { Section { FailText(fixNote) } }
+                    Section {
+                        let gs = groups
+                        ForEach(gs) { g in row(g, first: g.id == gs.first?.id, flat: flat).place(g.id).ownSeparatorRow() }
                     }
+                    if side == .all, !awaited, !down { restartButton }
+                }
+                if side == .right {
+                    Section { detailCard } header: { Text("Details") }
+                    if !awaited, !down { restartButton }
                 }
             }
+            .environment(\.defaultMinListRowHeight, 40)
+            .listSectionSpacing(16)
             .contentMargins(.top, 4 + PaneHeading.roomAbove(statusBarTop), for: .scrollContent)
             .scrollsUnder(side == .right ? 1 : 0)
             .keepsPlace("machealth", proxy)
             // The build's shot of the Memory row, the last part, wherever the posture puts it.
-            .task { if model.pose == "healthmemory" { try? await Task.sleep(nanoseconds: 1_500_000_000); proxy.scrollTo("memory", anchor: .center) } }
+            .task { if model.pose == "healthmemory" { try? await Task.sleep(nanoseconds: 1_500_000_000); expanded.insert("memory"); chosen = "memory"; proxy.scrollTo("memory", anchor: .center) } }
         }
+    }
+    // An action, not a row: the way to a restart, under the parts.
+    var restartButton: some View {
+        Section {
+            Button(role: .destructive) { model.macPage = .restart } label: { Label("Restart the Mac…", systemImage: "restart") }
+                .buttonStyle(.bordered).controlSize(.regular)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
     }
     var body: some View {
         Group {
@@ -423,7 +549,7 @@ struct MacHealthView: View {
     func poll() async {
         if let posed = Self.posed(model.pose) {
             report = posed.report
-            if posed.fixing { fixing = Date().addingTimeInterval(-23) }
+            if posed.fixing { fixing = Date().addingTimeInterval(-23); fixingWhat = "TV and Chumby" }
             // "healthstuck": gone twelve minutes and not back.
             // "didntconfirm": the restart was sent and its answer never came.
             if model.pose == "didntconfirm" { watch.asked(confirmed: false); watch.askedAt = Date().addingTimeInterval(-40) }
@@ -472,6 +598,8 @@ struct MacHealthView: View {
     }
     func fix() async {
         fixNote = nil
+        let names = badGroups.filter { g in parts(g).contains { $0.bad && MacParts.fixable.contains($0.part) } }.map(\.name)
+        fixingWhat = names.count == 1 ? names[0] : names.isEmpty ? "what’s down" : names.dropLast().joined(separator: ", ") + " and " + names.last!
         withAnimation(Motion.quick) { fixing = Date() }
         do { report = try await model.api.macBringUp() }
         catch { fixNote = MacFiles.unreachable(error) ? "The Mac stopped answering while fixing. It may still be working; this page checks again by itself." : error.localizedDescription }

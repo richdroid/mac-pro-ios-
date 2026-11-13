@@ -35,8 +35,27 @@ const feeds = {
   ].map(([label, program, pid, prot]) => ({ label, kind: 'agent', domain: 'user', path: '~/Library/LaunchAgents/' + label + '.plist', program, loaded: true, pid, lastExit: 0, runAtLoad: true, keepAlive: pid !== null, interval: pid === null ? 120 : null, disabled: false, protected: prot, editable: true }))
     .concat([{ label: 'local.oclp-tahoe.agent', kind: 'daemon', domain: 'system', path: '/Library/LaunchDaemons/local.oclp-tahoe.agent.plist', program: '/bin/bash /Library/Application Support/oclp-tahoe/agent.sh', loaded: true, pid: null, lastExit: 0, runAtLoad: true, keepAlive: false, interval: 300, disabled: false, protected: null, editable: false, command: 'sudo launchctl bootout system/local.oclp-tahoe.agent' }]) }),
 };
+// The Console on the Mac as the bridge relays it (API.md "Console remote"): a command is acked after 0.7 s, and changes
+// the state that GET /api/mac/console reports.
+const consoleState = { running: true, frontmost: true, fullscreen: true, page: 'temps', board: null, rotate: false, animations: 'full', display: 'awake', at: Date.now() };
 module.exports = (q, s) => {
   const u = new URL(q.url, 'http://x');
+  if (u.pathname === '/api/mac/console' && q.method === 'GET') { s.end(JSON.stringify(consoleState)); return true; }
+  if (u.pathname === '/api/mac/console/command' && q.method === 'POST') {
+    let body = ''; q.on('data', c => { body += c; }); q.on('end', () => {
+      let b = {}; try { b = JSON.parse(body); } catch {}
+      const cmd = b.cmd, arg = b.arg || '';
+      if (cmd === 'page') { consoleState.page = arg; consoleState.board = null; }
+      if (cmd === 'board') { consoleState.board = arg === 'off' ? null : arg; if (arg !== 'off') consoleState.page = 'boards'; }
+      if (cmd === 'rotate') consoleState.rotate = arg === 'on';
+      if (cmd === 'animations') consoleState.animations = arg;
+      if (cmd === 'display') consoleState.display = arg === 'wake' ? 'awake' : 'asleep';
+      if (cmd === 'show') { consoleState.running = true; consoleState.frontmost = true; consoleState.fullscreen = true; }
+      if (cmd === 'hide') consoleState.frontmost = false;
+      setTimeout(() => s.end(JSON.stringify({ ok: true, acked: true, console: consoleState })), 700);
+    });
+    return true;
+  }
   if (u.pathname === '/api/trend' && /^fan:\d$/.test(u.searchParams.get('m') || '')) {
     const t = now();
     s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => ({ t: t - (1440 - i) * 60000, v: Math.round(1000 + 120 * Math.sin(i / 120) + (i % 300 < 20 ? 300 : 0)) })) }));

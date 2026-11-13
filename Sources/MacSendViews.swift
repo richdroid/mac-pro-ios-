@@ -198,7 +198,7 @@ struct MacPowerSections: View {
         Section {
             Button { model.macPage = .health } label: {
                 HStack {
-                    Label(watch.active ? "Getting everything up" : "Everything on the Mac", systemImage: "checklist").lineLimit(1)
+                    Label(watch.active ? "Getting everything up" : "Everything", systemImage: "checklist").lineLimit(1)
                     Spacer()
                     // None while a restart is under way: "Getting everything up · All running" said two things at once.
                     if let s = summary, model.problem == nil, !watch.active {
@@ -220,9 +220,7 @@ struct MacPowerSections: View {
             Button(role: .destructive) { model.macPage = .restart } label: {
                 HStack { Text("Restart the Mac…"); Spacer(); RowChevron() }
             }
-        } header: { Text("Health") } footer: {
-            Text("Tailscale, the bridge, sessions, the TV link, the Letterboxd relay, the Chumby and OCLP, each with its state. A restart checks first that the Mac will come back by itself.")
-        }
+        } header: { Text("Health") }
         .task {
             if let p = MacHealthView.posed(model.pose == "send" ? "healthbad" : "health") , !model.pose.isEmpty { summary = p.report; return }
             while !Task.isCancelled {

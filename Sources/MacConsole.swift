@@ -16,7 +16,28 @@ import UIKit
 
 struct MacLink: Decodable, Identifiable, Equatable {
     struct Failure: Decodable, Equatable { let text: String; var t: Double? }
-    let id: String; let name: String; var state: String
+    let id: String; var state: String
+    // The Mac's own name for it ("Tailscale Serve", "Chumby proxy"), said in his words here (Richard, 2026-11-13: no
+    // plumbing words on any page).
+    private let rawName: String
+    var name: String {
+        switch id {
+        case "serve": return "Link for this app"
+        case "funnel": return "Public sharing"
+        case "bridge": return "Mac dashboard"
+        case "public": return "Public link"
+        case "novnc": return "Screen link"
+        case "letterboxd": return "Letterboxd sign-in"
+        case "tv": return "TV"
+        case "chumby-remote": return "Chumby link"
+        default: return rawName
+        }
+    }
+    enum CodingKeys: String, CodingKey { case id, state, rawName = "name", detail, endpoint, pid, uptime, lastExit, lastError, checkedAt, can, via, note, since }
+    init(id: String, name: String, state: String, detail: String? = nil, endpoint: String? = nil, pid: Int? = nil, uptime: Double? = nil, lastExit: Int? = nil, lastError: Failure? = nil, checkedAt: Double? = nil, can: [String]? = nil, via: String? = nil, note: String? = nil, since: Double? = nil) {
+        self.id = id; self.rawName = name; self.state = state; self.detail = detail; self.endpoint = endpoint; self.pid = pid; self.uptime = uptime
+        self.lastExit = lastExit; self.lastError = lastError; self.checkedAt = checkedAt; self.can = can; self.via = via; self.note = note; self.since = since
+    }
     var detail: String?; var endpoint: String?; var pid: Int?; var uptime: Double?; var lastExit: Int?
     var lastError: Failure?; var checkedAt: Double?; var can: [String]?; var via: String?; var note: String?; var since: Double?
     var up: Bool { state == "up" }
@@ -279,9 +300,7 @@ struct MacConsoleSections: View {
                     if storage.value != nil { row("Storage", "internaldrive", .storage, summary: storageLine) }
                     if startup.value != nil { row("Startup items", "power", .startup, summary: startupLine?.0, good: startupLine?.1) }
                     if mp { row("Actions", "bolt", .actions, summary: "Clean, ship, tests") }
-                } header: { Text("This Mac") } footer: {
-                    Text("Proxies and links with a restart for each, the fan and every sensor with its day, updates, disk use, what starts with the Mac, and the Mac Pro’s own actions.")
-                }
+                } header: { Text("This Mac") }
             }
         }
     }
@@ -488,7 +507,7 @@ struct LinksView: View {
     @State private var fixOutcome: MacActionResult?
 
     var groups: [(String, [String])] {
-        [("Tailscale", ["tailscale", "serve", "funnel"]), ("The bridge", ["bridge", "public", "novnc"]), ("Relays and devices", ["letterboxd", "tv", "chumby-remote", "chumby", "sessions"])]
+        [("Remote access", ["tailscale", "serve", "funnel"]), ("Mac dashboard", ["bridge", "public", "novnc"]), ("Relays and devices", ["letterboxd", "tv", "chumby-remote", "chumby", "sessions"])]
     }
     func links(_ ids: [String]) -> [MacLink] { (feed.value?.links ?? []).filter { ids.contains($0.id) } }
     var others: [MacLink] { let known = Set(groups.flatMap(\.1)); return (feed.value?.links ?? []).filter { !known.contains($0.id) } }
@@ -515,7 +534,7 @@ struct LinksView: View {
                     .foregroundStyle(s.good ? Color.green : f.links.contains(where: \.down) ? Color.red : Color.orange)
                     // A new verdict replaces the old one whole, never morphing one sentence into the next.
                     .id(s.text).transition(.opacity)
-                if let b = bridgeRestartAt { HStack { ProgressView().controlSize(.small); Text("Waiting for the bridge to come back… \(Int(Date().timeIntervalSince(b)))s").monospacedDigit() } }
+                if let b = bridgeRestartAt { HStack { ProgressView().controlSize(.small); Text("Waiting for the Mac dashboard to come back… \(Int(Date().timeIntervalSince(b)))s").monospacedDigit() } }
                 // The one Fix: the Mac's own bring-up, which starts only what's down and leaves what's up alone (no question).
                 let fixable = f.links.filter { $0.can?.contains("bringup") == true }
                 if !fixable.isEmpty || fixing || fixOutcome != nil {
@@ -1095,7 +1114,7 @@ struct StorageView: View {
                     HStack { ProgressView().controlSize(.small); Text("Measuring the home folder; this takes a minute or two the first time").font(.footnote).foregroundStyle(.secondary) }
                 }
             } header: { Text("Biggest folders at home") } footer: {
-                Text("Measured on the Mac at low priority, and kept ten minutes. Folders macOS keeps private (Documents, Mail, Photos and the like) are never opened from here.")
+                Text("Private folders (Documents, Mail, Photos and the like) are never opened from here.")
             }
         }
     }
@@ -1199,7 +1218,7 @@ struct StartupView: View {
         ConsolePage(title: "Startup items", place: "macstartup", away: feed.away, lastRead: feed.lastRead) {
             if feed.value != nil {
                 Section { rows(mine) } header: { Text(Self.stopped(mine).isEmpty ? "Yours (\(mine.count))" : "Yours (\(MacConsole.named(Self.stopped(mine).map(StartupRow.name), "stopped")))") } footer: {
-                    Text("Launch agents in your Library. Stop lasts until the next login; Disable keeps it from starting at login. The bridge, its watchdog and keep-awake can’t be stopped from here: the app reaches the Mac through them, and without keep-awake the Mac may sleep. The bridge restarts from Connections.")
+                    Text("Stop lasts until the next login; Disable keeps it from starting at login. What this app reaches the Mac through, and what keeps the Mac awake, can’t be stopped from here.")
                 }
             } else if !feed.away {
                 Section { HStack { ProgressView(); Text("Reading what starts with the Mac…").foregroundStyle(.secondary) } }
@@ -1207,7 +1226,7 @@ struct StartupView: View {
         } right: {
             if feed.value != nil {
                 Section { rows(system) } header: { Text("For the whole Mac (\(system.count))") } footer: {
-                    Text("System-wide agents and daemons, such as OCLP’s. Read only here: changing them needs the admin password at the Mac.")
+                    Text("Changing these needs the Mac’s password, at the Mac.")
                 }
             }
         }

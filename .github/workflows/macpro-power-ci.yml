@@ -73,8 +73,43 @@ jobs:
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
+          # A page at its top, then dragged up twice with a real finger: -mid and -foot (every page judged whole).
+          dragshot() {
+            local name=$1 display=$2 wait=$3; shift 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/power-$name.png
+            /tmp/dh/.build/release/devicehubctl "$DEVICE" drag 0.3 0.78 0.3 0.3 0.7 || echo "drag failed"; sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/power-$name-mid.png
+            /tmp/dh/.build/release/devicehubctl "$DEVICE" drag 0.3 0.78 0.3 0.2 0.7 || true; sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/power-$name-foot.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # Every tab and page of the app (2026-11-13 sweep: the gate walks every page in every posture).
+          everypage() {
+            local d=$1 x=$2
+            for T in 0 1 2 5 6; do dragshot tab$T$x $d 9 -tab $T; done
+            shot tab4$x $d 9 -tab 4
+            shot fulllog$x $d 10 -tab 4 -pose fulllog
+            shot longlog$x $d 9 -tab 4 -pose longlog
+            dragshot settings$x $d 9 -tab 0 -openLink macproapp://settings
+            shot health$x $d 10 -tab 5 -pose health
+            shot healthbad$x $d 10 -tab 5 -pose healthbad
+            shot healthone$x $d 10 -tab 5 -pose healthone
+            shot healthfixing$x $d 10 -tab 5 -pose healthfixing
+            shot healthback$x $d 10 -tab 5 -pose healthback
+            shot healthstuck$x $d 10 -tab 5 -pose healthstuck
+            shot restart$x $d 10 -tab 5 -pose restart
+            shot consoleoff$x $d 9 -tab 6 -pose consoleoff
+            shot consoleboard$x $d 9 -tab 6 -pose consoleboard
+            shot history$x $d 9 -tab 0 -openHistory cpu
+            shot processes$x $d 9 -tab 0 -openProcesses cpu
+            shot versions$x $d 9 -tab 1 -pose versions
+            shot session$x $d 9 -tab 2 -pose session
+          }
           poses() {
             local d=$1 x=$2
+            everypage $d $x
             shot control$x $d 9 -tab 5 -pose macpower
             shot control-oldbridge$x $d 9 -tab 5 -pose oldbridge
             shot links$x $d 10 -tab 5 -pose links
