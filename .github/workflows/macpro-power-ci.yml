@@ -1,0 +1,118 @@
+name: Mac Pro power shots (branch)
+# The Control tab's new pages (Connections, Fans & temperatures, Updates, Storage, Startup items) against the stand-in
+# Mac's power feeds (ci/mock-macpower.js), in his three postures: open upright first (the one he holds), open flat, folded.
+# Branch only; deleted once the branch ships. Published to the macpro-power-ci release.
+on:
+  push:
+    branches: [macpro-power]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: macpro-power-ci
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Mac Pro launch glow
+        run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          node ci/mock-chumby.js &
+          sleep 2
+          # Every route the pages read, answered by the stand-in, in the log.
+          for p in links fans temps updates storage startup; do curl -s http://127.0.0.1:9001/api/mac/$p | head -c 160; echo; done
+          shot() {
+            local name=$1 display=$2 wait=$3; shift 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/power-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # A shot after a tap: name, display, wait, x, y (fractions), then the app's own arguments.
+          tapshot() {
+            local name=$1 display=$2 wait=$3 x=$4 y=$5; shift 5
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            /tmp/dh/.build/release/devicehubctl "$DEVICE" touch $x $y 0.08 || echo "tap failed"
+            sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/power-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # A pushed page from its first frame to rest, filmed: it must arrive lit (never dimmed on open), each figure in
+          # place, nothing jumping when the first read lands.
+          film() {
+            local name=$1 display=$2 length=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/power-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $length
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          poses() {
+            local d=$1 x=$2
+            shot control$x $d 9 -tab 5 -pose macpower
+            shot control-oldbridge$x $d 9 -tab 5 -pose oldbridge
+            shot links$x $d 10 -tab 5 -pose links
+            shot links-bad$x $d 9 -tab 5 -pose linksbad
+            shot links-confirm$x $d 9 -tab 5 -pose linkconfirm
+            shot links-done$x $d 9 -tab 5 -pose linkdone
+            shot fans$x $d 10 -tab 5 -pose fans
+            shot updates$x $d 10 -tab 5 -pose updates
+            shot updates-waiting$x $d 9 -tab 5 -pose updateswaiting
+            shot storage$x $d 10 -tab 5 -pose storage
+            shot startup$x $d 10 -tab 5 -pose startup
+            shot startup-confirm$x $d 9 -tab 5 -pose startupconfirm
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          open -a DeviceHub; sleep 10
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose open; echo "unfold exit $?"
+          sleep 5
+          # Open upright, his main posture.
+          poses 3 -upright
+          film links-open-upright 3 14 -tab 5 -pose links
+          film fans-open-upright 3 14 -tab 5 -pose fans
+          # Open flat, two panes.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
+          poses 3 -flat
+          # Folded, the outer display.
+          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
+          poses 1 -folded
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }} $(ls dist/*.png 2>/dev/null | wc -l | tr -d ' ') shots" > status.txt
+          gh release view macpro-power-ci >/dev/null 2>&1 || gh release create macpro-power-ci --prerelease --title "Mac Pro power shots (branch)" --notes "Branch shots for macpro-power; removed when it ships."
+          for f in shots.zip films.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload macpro-power-ci "$f" --clobber && break; sleep 15; done
+          done

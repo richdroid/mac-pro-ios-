@@ -720,7 +720,7 @@ struct Screen<Content: View>: View {
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
                 // And of a state that sits down the page: Force Quit's question hangs off Apps' open apps, the secret being
                 // typed is in Control's Passwords, Claude's service card is at the foot of its pane.
-                if let (t, to) = ["forcequit": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart")][model.pose], t == tab {
+                if let (t, to) = ["forcequit": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power")][model.pose], t == tab {
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     proxy.scrollTo(to, anchor: .top)
@@ -837,7 +837,16 @@ struct StackPages: ViewModifier {
             .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { VersionHistoryView(file: $0, model: model) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             .navigationDestination(item: tab == 5 ? $nav.macPage : Binding<MacPage?>.constant(nil)) { p in
-                if p == .health { MacHealthView(model: model) } else { MacRestartView(model: model) }
+                switch p {
+                case .health: MacHealthView(model: model)
+                case .restart: MacRestartView(model: model)
+                // The Mac as a control surface (MacConsole.swift).
+                case .links: LinksView(model: model)
+                case .fans: FansView(model: model)
+                case .updates: UpdatesView(model: model)
+                case .storage: StorageView(model: model)
+                case .startup: StartupView(model: model)
+                }
             }
     }
 }
@@ -2183,6 +2192,8 @@ struct ControlTab: View {
             } header: { Text("Remote access") } footer: {
                 if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }
             }
+            // Connections, fans and temperatures, updates, storage and startup items, each its own page (2026-11-13).
+            MacConsoleSections()
             // Health and Restart the Mac, last and apart from the everyday buttons, each its own page.
             MacPowerSections()
         }

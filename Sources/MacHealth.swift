@@ -5,7 +5,7 @@ import SwiftUI
 // its state and a Fix only when something fixable is red; and "Restart the Mac", its checks first, refusing while any is
 // red, then the same parts coming back one by one. Never one spinner that hides which part is stuck.
 
-enum MacPage: String, Identifiable, Hashable { case health, restart; var id: String { rawValue } }
+enum MacPage: String, Identifiable, Hashable { case health, restart, links, fans, updates, storage, startup; var id: String { rawValue } }
 
 // One part, as the Mac's scripts report it: state ok, fixed or bad, and what it means.
 struct MacPart: Decodable, Identifiable, Hashable {
