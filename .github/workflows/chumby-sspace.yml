@@ -68,8 +68,14 @@ jobs:
             kill -INT $REC; wait $REC; echo "$name exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
+          fresh() { # a clean install, so one scene's kept history never joins the next scene's
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby 2>/dev/null || true
+            xcrun simctl uninstall "$DEVICE" local.macpro.Chumby
+            xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          }
           scrolled() { # display, name, address, launch args... (top, then the page scrolled twice)
             local d=$1 name=$2 addr=$3; shift 3
+            fresh
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $addr "$@"
             sleep 14
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-$name-top.png
@@ -80,29 +86,53 @@ jobs:
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
           posture() { # display, suffix, strip's height, its right and left ends, as fractions of the screen
-            local d=$1 x=$2 y=$3 r=$4 l=$5
+            local d=$1 x=$2 y=$3 r=$4 l=$5 px=$6 starts=$7
             for A in light dark; do
               xcrun simctl ui "$DEVICE" appearance $A
               scrolled $d real-$A$x $M/soundsreal -tab 3
               scrolled $d many-$A$x $M/soundsmany -tab 3
             done
             xcrun simctl ui "$DEVICE" appearance light
-            # The five-ring strip dragged partway (both fades), then to its far end.
+            # Film: the five-ring strip dragged slowly, flung to its far end, flung back (fade toggles, bounce).
+            fresh
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-stripfilm$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/soundsmany -tab 3
             sleep 14
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-strip-rest$x.png
             $D "$DEVICE" drag $r $y $l $y 1.2 || echo "drag failed"; sleep 2
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-strip-mid$x.png
-            $D "$DEVICE" drag $r $y $l $y 0.12 || echo "fling failed"; sleep 3
+            $D "$DEVICE" drag $r $y $l $y 0.12 || echo "fling failed"; sleep 2
             $D "$DEVICE" drag $r $y $l $y 0.12 || echo "fling failed"; sleep 3
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-strip-end$x.png
+            $D "$DEVICE" drag $l $y $r $y 0.12 || echo "fling back failed"; sleep 3
+            kill -INT $REC; wait $REC; echo "stripfilm$x exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            # Film: page drags that begin on an alarm's sound value (slow, then a flick) must scroll, never pick.
+            # The page is first scrolled so Alarms play fills the screen; values are found by their row positions.
+            fresh
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-pagedrag$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/soundsreal -tab 3
+            sleep 14
+            $D "$DEVICE" drag $px 0.85 $px 0.35 1.0 || echo "scroll failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pagedrag-before$x.png
+            for v in $starts; do
+              $D "$DEVICE" drag $px $v $px 0.2 1.0 || echo "slow drag failed"; sleep 2
+              $D "$DEVICE" drag $px 0.2 $px $v 1.0 || echo "slow drag back failed"; sleep 2
+              $D "$DEVICE" drag $px $v $px 0.2 0.15 || echo "flick failed"; sleep 2
+              $D "$DEVICE" drag $px 0.2 $px $v 0.6 || echo "flick back failed"; sleep 2
+            done
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pagedrag-after$x.png
+            kill -INT $REC; wait $REC; echo "pagedrag$x exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
           $D "$DEVICE" pose closed; sleep 5
-          posture 1 "" 0.64 0.72 0.1
+          posture 1 "" 0.64 0.72 0.1 0.3 "0.45 0.6 0.75"
           $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
-          posture 3 -open 0.67 0.42 0.05
+          posture 3 -open 0.67 0.42 0.05 0.7 "0.3 0.45 0.6"
           $D "$DEVICE" rotate 1; sleep 5
-          posture 3 -portrait 0.55 0.85 0.08
+          posture 3 -portrait 0.55 0.85 0.08 0.3 "0.45 0.6 0.75"
       - name: Collect crash reports
         if: always()
         run: |

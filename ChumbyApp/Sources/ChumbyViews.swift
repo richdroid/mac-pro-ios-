@@ -2118,22 +2118,26 @@ struct SoundsTab: View {
                     if a.soundTag(streams: model.state.streams).isEmpty { Text(a.soundText).tag("") }
                 }
             } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(a.soundText).lineLimit(2).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .id(a.soundText).transition(.opacity)
+                // Shrink-wrapped to its words, left on the row's inset under the alarm: every value starts at one x,
+                // and the menu's target is only the value (a full-width box caught page drags that began on it, and
+                // the menu's press-and-drag picked a station: gate on b849752). A long name takes more lines, never "…".
+                // The new value is drawn once the menu has gone (MenuClose), in place, never crossfaded over the old.
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(a.soundText).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                     Image(systemName: "chevron.up.chevron.down").imageScale(.small).foregroundStyle(.secondary)
                 }
                 .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(Color.primary.opacity(dark ? 0.12 : 0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .animation(.easeInOut(duration: 0.2), value: a.soundText)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(Color.primary.opacity(dark ? 0.12 : 0.06), in: Capsule())
+                .contentShape(Capsule())
+                .transaction { $0.animation = nil }
             }
+            .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel("What \(title) plays")
             .overlay(alignment: .top) { if let mark { LandBubble(mark: mark) } }
         }
-        .padding(.vertical, 4)
+        // A touch more under the value than over the time: the row reads level (the gate measured 23 pt over, 19 under).
+        .padding(.top, 4).padding(.bottom, 8)
     }
 
     var body: some View {

@@ -694,7 +694,7 @@ struct WokeUpTo: View {
             let spacing = (n - g) * Self.gap + (g - 1) * Self.groupGap
             let avail = width - 2 * Self.inset
             let fits = width > 0 && n * Self.smallest + spacing <= avail
-            let side = fits ? min(Self.largest, ((avail - spacing) / n).rounded(.down)) : Self.smallest
+            let side = fits ? min(Self.largest, (avail - spacing) / n) : Self.peeking(list, avail: avail)
             Section {
                 ScrollView(.horizontal, showsIndicators: false) {
                     // Not lazy: the card is as tall as its tallest tile always, not the leading group's (a one-song ring
@@ -710,7 +710,7 @@ struct WokeUpTo: View {
                 .scrollDisabled(fits)
                 .onScrollGeometryChange(for: Ends.self) { g in
                     Ends(start: g.contentOffset.x <= -g.contentInsets.leading + 1,
-                         end: g.contentOffset.x + g.containerSize.width >= g.contentSize.width + g.contentInsets.trailing - 1)
+                         end: g.contentOffset.x + g.containerSize.width >= g.contentSize.width + Self.inset - 2)
                 } action: { _, e in withAnimation(.easeOut(duration: 0.15)) { ends = e } }
                 // The covers are seen only inside the card's insets; on a side with more to scroll to they fade out over
                 // the last 28 pt before the inset line, so a cover leaving is a fade, never a cut.
@@ -734,6 +734,25 @@ struct WokeUpTo: View {
     // below; 20 pt between rings and 10 pt between a ring's songs; the header 8 pt over its covers, captions 8 pt under.
     static let gap: CGFloat = 10, groupGap: CGFloat = 20, inset: CGFloat = SoloCard.inset, vertical: CGFloat = 16, fade: CGFloat = 28
     static let smallest: CGFloat = 92, largest: CGFloat = 200
+    // Scrolling, the cover size (92 to 120 pt) at which the cover met at the inset line shows between a third and
+    // two thirds of itself at rest: a real part of a cover that says "more", never a sliver of letters in the fade.
+    static func peeking(_ list: [Waking], avail: CGFloat) -> CGFloat {
+        for side in stride(from: smallest, through: 120, by: 1) {
+            var x: CGFloat = 0
+            search: for (gi, w) in list.enumerated() {
+                if gi > 0 { x += groupGap - gap }
+                for _ in w.songs {
+                    if x + side > avail {
+                        let shown = (avail - x) / side
+                        if shown >= 0.34 && shown <= 0.67 { return side }
+                        break search
+                    }
+                    x += side + gap
+                }
+            }
+        }
+        return smallest
+    }
     // A ring: when it rang and which alarm, over its songs in the order they played. One cover wide, the alarm's name
     // gives way so the time is never clipped.
     func group(_ w: Waking, side: CGFloat) -> some View {
