@@ -175,7 +175,13 @@ enum StremioAPI {
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
         let d: Data
-        do { d = try await URLSession.shared.data(for: r).0 } catch { throw StremioError(message: "Couldn’t reach Stremio. Check the connection and try again.") }
+        do { d = try await URLSession.shared.data(for: r).0 }
+        catch {
+            // Once more after a moment: the first request after launch sometimes loses its connection.
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            do { d = try await URLSession.shared.data(for: r).0 }
+            catch { throw StremioError(message: "Couldn’t reach Stremio. Check the connection and try again.") }
+        }
         guard let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { throw StremioError(message: "Stremio gave an answer this app can’t read.") }
         if let e = j["error"] as? [String: Any] { throw StremioError(message: (e["message"] as? String).map(Self.plain) ?? "Stremio said no.") }
         if let e = j["error"] as? String { throw StremioError(message: Self.plain(e)) }

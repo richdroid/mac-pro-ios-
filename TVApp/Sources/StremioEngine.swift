@@ -205,7 +205,8 @@ final class AVLayerView: UIView {
         get { layer.player.contentMode == .scaleAspectFill }
         set { layer.player.contentMode = newValue ? .scaleAspectFill : .scaleAspectFit }
     }
-    var pip: AVPictureInPictureController? { layer.player.pipController }
+    // Asked only once the player is ready: FFmpeg's player makes its controller the first time it's asked.
+    var pip: AVPictureInPictureController? { [.initialized, .preparing].contains(state) ? nil : layer.player.pipController }
     func play() { ended = false; layer.play() }
     func pause() { layer.pause() }
     func seek(to seconds: Double) {
@@ -238,6 +239,7 @@ final class AVLayerView: UIView {
 
     func player(layer: KSPlayerLayer, state: KSPlayerState) {
         self.state = state
+        PhoneLog.note("ks \(state) \(type(of: layer.player))")
         if state == .readyToPlay {
             attach()
             pip?.delegate = self

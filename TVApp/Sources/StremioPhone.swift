@@ -100,6 +100,7 @@ struct PhoneRecent: Codable, Hashable, Identifiable {
         top?.present(host, animated: true)
     }
     static func play(_ title: PhoneTitle, stream: PhoneStream, others: [PhoneStream], library: [String: Any]?, at: Double, model: TVModel?) {
+        PhoneLog.note("play \(stream.title) from \(Int(at))")
         let s = PhoneSession(title: title, stream: stream, others: others, library: library, model: model)
         let vc = PhonePlayerController(s)
         s.close = { [weak vc, weak s] in
@@ -107,7 +108,7 @@ struct PhoneRecent: Codable, Hashable, Identifiable {
             vc?.presentingViewController?.dismiss(animated: true)
         }
         s.start(at: at)
-        let go = { top?.present(vc, animated: true) }
+        let go = { PhoneLog.note("present player"); top?.present(vc, animated: true) }
         if let picker = top, picker is UIHostingController<PhonePicker> { picker.dismiss(animated: true) { go() } } else { go() }
     }
     #endif
@@ -402,6 +403,9 @@ struct StremioAccountPage: View {
         .summonsBar()
     }
 }
+
+// What the player is doing, on the console (the build's films keep it; nothing about his account is in it).
+enum PhoneLog { static func note(_ s: String) { print("[phone] " + s) } }
 
 // For the build's films only, against the stand-in Stremio ("-stremioAPI http://127.0.0.1:…"), never his account: the
 // stand-in's sample login filled in, a title opened, its best stream played, and every key of the player pressed in

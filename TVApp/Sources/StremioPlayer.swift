@@ -79,9 +79,11 @@ final class PhoneSession {
     func start(at: Double) {
         guard let url = stream.url else { failed = "This stream can only play on the TV."; return }
         Self.current = self
+        PhoneLog.note("start \(PhoneEngines.name) at \(Int(at)) \(url.pathExtension)")
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, policy: .default)
         try? AVAudioSession.sharedInstance().setActive(true)
         engine = PhoneEngines.make(url: url, headers: stream.headers, start: at)
+        PhoneLog.note("engine made")
         engine?.onPiP = { [weak self] on in self?.pipActive = on; if on { self?.panel = nil } }
         position = at
         watchedFrom = at
@@ -99,9 +101,9 @@ final class PhoneSession {
         if scrubbing == nil { position = e.position }
         if e.duration > 0 { duration = e.duration }
         let p = e.isPlaying
-        if p != playing { playing = p; nowPlaying(); PhoneActivity.update(self) }
+        if p != playing { playing = p; nowPlaying(); PhoneActivity.update(self); PhoneLog.note("playing \(p) at \(Int(position))/\(Int(duration))") }
         buffering = e.isBuffering && failed == nil
-        if failed == nil, let err = e.error { failed = err; buffering = false }
+        if failed == nil, let err = e.error { failed = err; buffering = false; PhoneLog.note("failed: \(err)") }
         if e.ended, !ended { ended = true; Task { await save() } }
         caption = e.subtitle(at: position)
         // Tracks come with the file; asked again now and then, as a second player may take over.
