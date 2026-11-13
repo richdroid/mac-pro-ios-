@@ -2198,6 +2198,9 @@ struct ControlTab: View {
             MacConsoleSections()
             // Health and Restart the Mac, last and apart from the everyday buttons, each its own page.
             MacPowerSections()
+                // The This Mac card's readings: here, on a card that's always drawn (MacConsole.swift, ConsoleSummary).
+                .task { await ConsoleSummary.shared.loop(model) }
+                .onReceive(model.nav.$macPage.dropFirst()) { p in if p == nil { Task { await ConsoleSummary.shared.readAll(model.api) } } }
         }
     }
 }

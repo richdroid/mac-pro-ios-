@@ -197,13 +197,16 @@ extension MacPage {
 struct MacConsoleSections: View {
     @EnvironmentObject private var noticeState: NoticeStore
     @EnvironmentObject var model: AppModel
-    @StateObject private var links = FeedReader<LinksFeed>("/api/mac/links")
-    @StateObject private var fans = FeedReader<FansFeed>("/api/mac/fans")
-    @StateObject private var temps = FeedReader<TempsFeed>("/api/mac/temps")
-    @StateObject private var updates = FeedReader<UpdatesFeed>("/api/mac/updates")
-    @StateObject private var storage = FeedReader<StorageFeed>("/api/mac/storage")
-    @StateObject private var startup = FeedReader<StartupFeed>("/api/mac/startup")
-    @State private var mp = false
+    // Read by ConsoleSummary, whose loop hangs off the Health card (always on the page): a .task here would never start
+    // while this section has nothing to show, so it never would have (CI ee040e3: no This Mac card at all).
+    @ObservedObject private var summary = ConsoleSummary.shared
+    @ObservedObject private var links = ConsoleSummary.shared.links
+    @ObservedObject private var fans = ConsoleSummary.shared.fans
+    @ObservedObject private var temps = ConsoleSummary.shared.temps
+    @ObservedObject private var updates = ConsoleSummary.shared.updates
+    @ObservedObject private var storage = ConsoleSummary.shared.storage
+    @ObservedObject private var startup = ConsoleSummary.shared.startup
+    var mp: Bool { summary.mp }
     // Nothing is said while the Mac is away: the summaries are only ever what it said last, never passed off as now.
     var quiet: Bool { model.problem != nil }
     var anything: Bool { [mp, links.value != nil, fans.value != nil, updates.value != nil, storage.value != nil, startup.value != nil].contains(true) }
@@ -271,23 +274,33 @@ struct MacConsoleSections: View {
                 .id("macctl")
             }
         }
-        .task {
-            if MacConsole.pose == "oldbridge" { return }
-            while !Task.isCancelled {
-                // Asked again until it answers: a Mac away at the first look mustn't hide Actions for good.
-                if !mp, !model.screenOpen { mp = await model.api.mpAvailable() }
-                if !model.screenOpen {
-                    await withTaskGroup(of: Void.self) { g in
-                        g.addTask { await links.read(model.api) }; g.addTask { await fans.read(model.api) }; g.addTask { await temps.read(model.api) }
-                        g.addTask { await updates.read(model.api) }; g.addTask { await storage.read(model.api) }; g.addTask { await startup.read(model.api) }
-                    }
-                }
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
-            }
+    }
+}
+
+// The This Mac card's readings, every 30 s while Control is up, and at once on coming back from one of its pages.
+@MainActor
+final class ConsoleSummary: ObservableObject {
+    static let shared = ConsoleSummary()
+    let links = FeedReader<LinksFeed>("/api/mac/links")
+    let fans = FeedReader<FansFeed>("/api/mac/fans")
+    let temps = FeedReader<TempsFeed>("/api/mac/temps")
+    let updates = FeedReader<UpdatesFeed>("/api/mac/updates")
+    let storage = FeedReader<StorageFeed>("/api/mac/storage")
+    let startup = FeedReader<StartupFeed>("/api/mac/startup")
+    @Published var mp = false
+    func readAll(_ api: API) async {
+        // Asked again until it answers: a Mac away at the first look mustn't hide Actions for good.
+        if !mp { let m = await api.mpAvailable(); if m != mp { mp = m } }
+        await withTaskGroup(of: Void.self) { g in
+            g.addTask { await self.links.read(api) }; g.addTask { await self.fans.read(api) }; g.addTask { await self.temps.read(api) }
+            g.addTask { await self.updates.read(api) }; g.addTask { await self.storage.read(api) }; g.addTask { await self.startup.read(api) }
         }
-        // Back from one of its pages: the rows say what that page last saw.
-        .onReceive(model.nav.$macPage.dropFirst()) { p in
-            if p == nil { Task { await links.read(model.api); await updates.read(model.api); await startup.read(model.api) } }
+    }
+    func loop(_ model: AppModel) async {
+        if MacConsole.pose == "oldbridge" { return }
+        while !Task.isCancelled {
+            if !model.screenOpen { await readAll(model.api) }
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
         }
     }
 }
