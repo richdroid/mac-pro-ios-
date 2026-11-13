@@ -175,17 +175,26 @@ struct ChartWeek: Identifiable, Hashable, Sendable {
     let from: Int
     let to: Int
     var label: String {
-        let a = Date(timeIntervalSince1970: TimeInterval(from)), b = Date(timeIntervalSince1970: TimeInterval(to - 1))
+        // Last.fm's weeks turn at Sunday noon: said as Sunday to Saturday, so two weeks never share a day.
+        let a = Date(timeIntervalSince1970: TimeInterval(from)), b = Date(timeIntervalSince1970: TimeInterval(to - 86400))
         let sameMonth = Calendar.current.isDate(a, equalTo: b, toGranularity: .month)
         return a.formatted(.dateTime.month(.abbreviated).day()) + " – " + (sameMonth ? b.formatted(.dateTime.day()) : b.formatted(.dateTime.month(.abbreviated).day()))
     }
     var year: Int { Calendar.current.component(.year, from: Date(timeIntervalSince1970: TimeInterval(from))) }
-    static func load() async -> [ChartWeek] {
+    @MainActor static func load() async -> [ChartWeek] {
         guard let j = try? await LastFM.shared.call("user.getweeklychartlist", fresh: 86400) else { return [] }
         return j["weeklychartlist"]["chart"].array.compactMap { c in
             guard let f = Int(c["from"].text), let t = Int(c["to"].text) else { return nil }
             return ChartWeek(from: f, to: t)
-        }.sorted { $0.from > $1.from }
+        }
+        // Last.fm lists every week since it began; only his count.
+        .filter { $0.to > since }
+        .sorted { $0.from > $1.from }
+    }
+    // His first week: his first play, else when he joined.
+    @MainActor private static var since: Int {
+        let joined = Store.shared.profile.map { Int($0.registered.timeIntervalSince1970) } ?? 0
+        return joined
     }
 }
 

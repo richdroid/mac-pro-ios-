@@ -195,13 +195,13 @@ struct ChartsTab: View {
         Group {
             if pane {
                 FoldSplit {
-                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { head; figures; collage }.padding(.top, S.head) }
+                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { head; waiting; figures; collage }.padding(.top, S.head) }
                 } right: {
                     Page(top: top) { VStack(alignment: .leading, spacing: S.section) { list; BumpSection() }.padding(.top, S.section) }
                 }
             } else {
                 Page(top: top) {
-                    VStack(alignment: .leading, spacing: S.section) { head; figures; collage; list; BumpSection() }.padding(.top, S.head)
+                    VStack(alignment: .leading, spacing: S.section) { head; waiting; figures; collage; list; BumpSection() }.padding(.top, S.head)
                 }
             }
         }
@@ -259,6 +259,11 @@ struct ChartsTab: View {
             .clipped()
             .onChange(of: m.period) { _, p in withAnimation(.smooth) { proxy.scrollTo(p, anchor: .center) } }
         }
+    }
+
+    // Only the very first time a chart is worked out (a later one keeps the last on screen until the new one is ready).
+    @ViewBuilder private var waiting: some View {
+        if m.entries.isEmpty { ProgressView().tint(.white).controlSize(.large).frame(maxWidth: .infinity).padding(.vertical, S.section) }
     }
 
     @ViewBuilder private var figures: some View {
@@ -328,7 +333,6 @@ struct ChartsTab: View {
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .frame(maxWidth: 560)
                 .animation(.smooth(duration: 0.35), value: n)
             }
             .padding(.horizontal, S.margin)
@@ -365,7 +369,7 @@ struct BumpSection: View {
     private var m: ChartsModel { ChartsModel.shared }
     var body: some View {
         if !m.bump.isEmpty, m.bumpRanks.count >= 2 {
-            let depth = 20
+            let depth = 15
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "the last 12 weeks")
                 VStack(alignment: .leading, spacing: S.inner) {
@@ -386,27 +390,28 @@ struct BumpSection: View {
                 let w = size.width - left - right, h = size.height - 8
                 func x(_ i: Int) -> CGFloat { left + CGFloat(i) / CGFloat(weeks - 1) * w }
                 func y(_ r: Int) -> CGFloat { 4 + CGFloat(r - 1) / CGFloat(depth - 1) * h }
-                for r in [1, 5, 10, 15, 20] {
+                for r in [1, 5, 10, 15] {
                     ctx.draw(Text("\(r)").font(.caption2.weight(.medium)).foregroundStyle(S.soft), at: CGPoint(x: 8, y: y(r)))
                     ctx.stroke(Path { $0.move(to: CGPoint(x: left, y: y(r))); $0.addLine(to: CGPoint(x: size.width - right, y: y(r))) }, with: .color(.white.opacity(0.05)), lineWidth: 1)
                 }
-                let order = m.bump.sorted { a, _ in a.id != follow }
-                for e in order {
-                    let on = follow == nil || follow == e.id
-                    let c = colour(e).opacity(on ? 1 : 0.18)
-                    var path = Path(), drawing = false
+                // The line followed is drawn last, bright and thick; the rest stay as a faint weave behind it.
+                let lead = followed
+                for e in m.bump.sorted(by: { a, _ in a.id != lead }) {
+                    let on = e.id == lead
+                    let c = colour(e).opacity(on ? 1 : 0.28)
+                    var runs: [[CGPoint]] = [], run: [CGPoint] = []
                     for i in 0..<weeks {
-                        if let r = m.bumpRanks[i][e.rankKey], r <= depth {
-                            let p = CGPoint(x: x(i), y: y(r))
-                            if drawing { path.addLine(to: p) } else { path.move(to: p) }
-                            drawing = true
-                        } else { drawing = false }
+                        if let r = m.bumpRanks[i][e.rankKey], r <= depth { run.append(CGPoint(x: x(i), y: y(r))) }
+                        else if !run.isEmpty { runs.append(run); run = [] }
                     }
-                    ctx.stroke(path, with: .color(c), style: StrokeStyle(lineWidth: follow == e.id ? 4 : 2.5, lineCap: .round, lineJoin: .round))
-                    for i in 0..<weeks {
-                        if let r = m.bumpRanks[i][e.rankKey], r <= depth {
-                            let d: CGFloat = follow == e.id ? 9 : 6
-                            ctx.fill(Path(ellipseIn: CGRect(x: x(i) - d / 2, y: y(r) - d / 2, width: d, height: d)), with: .color(c))
+                    if !run.isEmpty { runs.append(run) }
+                    for pts in runs {
+                        var path = Path()
+                        smooth(&path, pts, move: true)
+                        ctx.stroke(path, with: .color(c), style: StrokeStyle(lineWidth: on ? 4 : 1.8, lineCap: .round, lineJoin: .round))
+                        for p in pts {
+                            let d: CGFloat = on ? 9 : 4
+                            ctx.fill(Path(ellipseIn: CGRect(x: p.x - d / 2, y: p.y - d / 2, width: d, height: d)), with: .color(c))
                         }
                     }
                 }
@@ -423,23 +428,26 @@ struct BumpSection: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Ranks over the last twelve weeks: " + m.bump.map { e in "\(e.title), now \(m.bumpRanks.last?[e.rankKey].map { "number \($0)" } ?? "out of the top 20")" }.joined(separator: "; "))
     }
+    // Followed: the one tapped, else whichever leads this week.
+    private var followed: String? { follow ?? byNow.first?.id }
+    private var byNow: [Entry] { m.bump.sorted { (m.bumpRanks.last?[$0.rankKey] ?? 99) < (m.bumpRanks.last?[$1.rankKey] ?? 99) } }
     private var legend: some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: S.gap), GridItem(.flexible(), spacing: S.gap)], alignment: .leading, spacing: S.pair * 2) {
-            ForEach(m.bump) { e in
-                let on = follow == nil || follow == e.id
-                Button { withAnimation(.snappy) { follow = follow == e.id ? nil : e.id } } label: {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: S.figures)], alignment: .leading, spacing: S.pair * 2) {
+            ForEach(byNow) { e in
+                let on = followed == e.id
+                Button { withAnimation(.snappy) { follow = e.id } } label: {
                     HStack(spacing: 8) {
                         Capsule().fill(colour(e)).frame(width: 14, height: 4)
-                        Text(e.title).font(.subheadline.weight(follow == e.id ? .bold : .medium)).foregroundStyle(.white).lineLimit(1)
+                        Text(e.title).font(.subheadline.weight(on ? .bold : .medium)).foregroundStyle(.white).lineLimit(1)
                         Spacer(minLength: 0)
                         Text(m.bumpRanks.last?[e.rankKey].map { "\($0)" } ?? "–").font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
                     }
                     .frame(minHeight: 32)
-                    .opacity(on ? 1 : 0.45)
+                    .opacity(on ? 1 : 0.6)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(Press())
-                .accessibilityAddTraits(follow == e.id ? .isSelected : [])
+                .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
     }

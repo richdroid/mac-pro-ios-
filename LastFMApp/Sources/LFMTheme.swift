@@ -35,7 +35,9 @@ struct HubTitle: View {
             .fixedSize()
             .foregroundStyle(.white.opacity(0.94))
             .padding(.leading, S.margin - 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Both bounds, so the frame is the page's width however long the name: with only a maximum it took the
+            // text's own width, and a long album's title pushed the whole page off the left edge (run 11).
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             .clipped()
             .accessibilityAddTraits(.isHeader)
     }

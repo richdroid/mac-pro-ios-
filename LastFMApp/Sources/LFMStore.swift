@@ -161,7 +161,7 @@ struct Profile: Sendable {
             lastInsight = Date()
             insightTask = nil
             workToday()
-            if s.complete { LengthFill.shared.start(); workDeep() }
+            if s.complete { workDeep() }
         }
     }
 
@@ -180,13 +180,17 @@ struct Profile: Sendable {
     // whole history is read.
     @ObservationIgnored private var deepTask: Task<Void, Never>?
     func workDeep(force: Bool = false) {
-        guard sync.complete, deepTask == nil, force || deep.day != LocalDay.today else { return }
+        guard sync.complete, deepTask == nil else { return }
+        guard force || deep.day != LocalDay.today else { Task { try? await Task.sleep(nanoseconds: 3_000_000_000); LengthFill.shared.start() }; return }
         deepTask = Task {
             let (_, names) = await HistoryDB.shared.canon()
             let d = await Deep.work(canon: names)
             withAnimation(.smooth(duration: 0.4)) { deep = d }
             d.keep()
             deepTask = nil
+            // Track lengths after: the database answers the screens first.
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            LengthFill.shared.start()
         }
     }
 

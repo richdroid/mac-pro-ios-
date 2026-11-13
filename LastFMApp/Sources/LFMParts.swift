@@ -83,11 +83,13 @@ struct EntryRow: View {
                     else if let s = e.secs { Text(duration(s)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1) }
                 }
                 Spacer(minLength: 8)
+                // His plays, the number alone (the list says what it counts); sorted by a date, the date leads.
                 VStack(alignment: .trailing, spacing: S.pair / 2) {
                     Text(trailing ?? number(e.plays)).font(.body.weight(.medium)).monospacedDigit().foregroundStyle(.white)
-                    Text(trailing == nil ? (e.plays == 1 ? "play" : "plays") : "\(number(e.plays)) \(e.plays == 1 ? "play" : "plays")").font(.caption).monospacedDigit().foregroundStyle(S.soft)
+                    if trailing != nil, e.plays > 0 { Text(plays(e.plays)).font(.caption).monospacedDigit().foregroundStyle(S.soft) }
                 }
                 .fixedSize()
+                .accessibilityLabel(trailing.map { "\($0), \(plays(e.plays))" } ?? plays(e.plays))
             }
             .padding(.vertical, S.row / 2)
         }
@@ -103,7 +105,14 @@ struct Panorama: View {
     var ranks = false
     var caption: (Entry) -> String = { "\(number($0.plays)) \($0.plays == 1 ? "play" : "plays")" }
     var body: some View {
-        if !items.isEmpty {
+        if !items.isEmpty && items.count < 3 {
+            // One or two: rows, never a sparse panorama.
+            VStack(alignment: .leading, spacing: S.head) {
+                SectionHead(text: title, trailing: trailing)
+                VStack(spacing: 0) { ForEach(items) { e in EntryRow(e: e, showRank: false, context: title) } }
+            }
+            .padding(.horizontal, S.margin)
+        } else if !items.isEmpty {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: title, trailing: trailing).padding(.horizontal, S.margin)
                 ScrollView(.horizontal) {
@@ -196,16 +205,7 @@ struct Tide: View {
                     }
                 }
                 .frame(height: height)
-                GeometryReader { g in
-                    let years = (first / 12)...(last / 12)
-                    let step = max(1, Int((Double(years.count) * 34 / max(g.size.width, 1)).rounded(.up)))
-                    ForEach(Array(years).filter { ($0 - years.lowerBound) % step == 0 }, id: \.self) { y in
-                        let i = max(0, y * 12 - first)
-                        Text("’" + String(String(y).suffix(2))).font(.caption2.weight(.medium)).monospacedDigit().foregroundStyle(S.soft).fixedSize()
-                            .position(x: min(max(12, CGFloat(i) / CGFloat(span - 1) * g.size.width + 12), g.size.width - 12), y: 7)
-                    }
-                }
-                .frame(height: 14)
+                YearAxis(from: first, months: span)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Your plays by month since \(monthName(first)). Busiest: \(monthName(first + busiest)), \(Int(vals[busiest])) plays.")
@@ -233,13 +233,27 @@ struct WaysOut: View {
 }
 
 // A row of figures that wraps as the width allows, each the same width, so a grid of them stays even.
+// Columns are chosen so every row is full where the count allows (three figures are three across, four are four or two
+// and two), never two and a stray one.
 struct FigureGrid: View {
     let items: [(String, String)]
     var size: CGFloat = 30
+    @State private var width: CGFloat = 360
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: S.figures, alignment: .topLeading)], alignment: .leading, spacing: S.inner) {
+        let room: CGFloat = (width + S.figures) / (104 + S.figures)
+        let fit: Int = max(1, Int(room))
+        let n: Int = items.count
+        let cols: Int = n <= fit ? max(n, 1) : Self.even(n, fit)
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: S.figures, alignment: .topLeading), count: cols), alignment: .leading, spacing: S.inner) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, f in Figure(value: f.0, label: f.1, size: size) }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+    // The most columns that fit and leave no row short, else as many as fit.
+    static func even(_ n: Int, _ fit: Int) -> Int {
+        var c = fit
+        while c >= 2 { if n % c == 0 { return c }; c -= 1 }
+        return fit
     }
 }
 

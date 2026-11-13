@@ -142,11 +142,9 @@ struct WeekGlance: View {
                     if !i.week.isEmpty {
                         HStack(spacing: S.gap) {
                             ForEach(Array(i.week.prefix(5).enumerated()), id: \.element.id) { k, a in
+                                // Covers only: five names cut short in a narrow card read as clutter.
                                 Opens(route: .artist(a.name), zoom: "week|\(a.name)") {
-                                    VStack(alignment: .leading, spacing: S.pair) {
-                                        ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 200, corner: 8).zoomSource("week|\(a.name)")
-                                        Text(a.name).font(.caption.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                                    }
+                                    ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 200, corner: 8).zoomSource("week|\(a.name)")
                                 }
                                 .frame(maxWidth: 76)
                                 .accessibilityLabel("\(k + 1). \(a.name), \(a.plays) plays")

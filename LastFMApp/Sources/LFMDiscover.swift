@@ -147,7 +147,7 @@ struct ArtistRec: View {
                     ArtView(ArtRef(artist: r.name, album: r.album, url: r.image), px: 300, corner: 10).frame(width: 84).zoomSource("rec|\(r.id)")
                     VStack(alignment: .leading, spacing: S.pair) {
                         Text(r.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                        Text("Because you play \(r.because.joined(separator: " and "))").font(.subheadline).foregroundStyle(S.soft).lineLimit(2)
+                        Text("Because you play \(r.because.joined(separator: " and "))").font(.subheadline).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true)
                         Text(r.plays == 0 ? "New to you" : "You: \(plays(r.plays))").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85))
                     }
                     Spacer(minLength: 0)

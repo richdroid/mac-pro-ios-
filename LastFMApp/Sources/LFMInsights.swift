@@ -34,7 +34,7 @@ struct RiverCard: View {
                 SectionHead(text: "always there", trailing: "\(river.layers.count) artists")
                 VStack(alignment: .leading, spacing: S.inner) {
                     stream(order, from: river.from).id(tick)
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: S.gap), GridItem(.flexible(), spacing: S.gap)], alignment: .leading, spacing: S.pair * 2) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: S.figures)], alignment: .leading, spacing: S.pair * 2) {
                         ForEach(bySize) { l in
                             Opens(route: .artist(l.artist), zoom: nil) {
                                 HStack(spacing: 8) {
@@ -77,13 +77,25 @@ struct RiverCard: View {
                 for i in 0..<n where (from + i) % 12 == 0 {
                     ctx.stroke(Path { $0.move(to: CGPoint(x: x(i), y: 0)); $0.addLine(to: CGPoint(x: x(i), y: size.height)) }, with: .color(.white.opacity(0.08)), lineWidth: 1)
                 }
-                // Each name where its stream runs widest, when there's room to read it.
+                // Each name where its stream runs widest, when it fits inside its stream there and clear of every name
+                // already placed; else it's left to the legend.
                 var lowerAgain = totals.map { -CGFloat($0) * k / 2 }
+                var placed: [CGRect] = []
                 for l in layers {
                     let thick = (0..<n).map { CGFloat(l.values[$0]) * k }
-                    if let i = thick.indices.max(by: { thick[$0] < thick[$1] }), thick[i] >= 14 {
-                        let cx = min(max(x(i), 50), size.width - 50)
-                        ctx.draw(Text(l.artist).font(.caption2.weight(.bold)).foregroundStyle(.black.opacity(0.75)), at: CGPoint(x: cx, y: mid + lowerAgain[i] + thick[i] / 2))
+                    let label = ctx.resolve(Text(l.artist).font(.caption2.weight(.bold)).foregroundStyle(.black.opacity(0.78)))
+                    let sz = label.measure(in: CGSize(width: 300, height: 40))
+                    let order = thick.indices.sorted { thick[$0] > thick[$1] }.prefix(12)
+                    let halfW: CGFloat = sz.width / 2, halfH: CGFloat = sz.height / 2
+                    for i in order where thick[i] >= sz.height + 4 {
+                        let lo: CGFloat = halfW + 4, hi: CGFloat = size.width - halfW - 4
+                        let cx: CGFloat = min(max(x(i), lo), hi)
+                        let cy: CGFloat = mid + lowerAgain[i] + thick[i] / 2
+                        let r = CGRect(x: cx - halfW - 4, y: cy - halfH, width: sz.width + 8, height: sz.height)
+                        guard !placed.contains(where: { $0.intersects(r) }) else { continue }
+                        ctx.draw(label, at: CGPoint(x: cx, y: r.midY))
+                        placed.append(r)
+                        break
                     }
                     lowerAgain = (0..<n).map { lowerAgain[$0] + thick[$0] }
                 }
@@ -112,14 +124,25 @@ func smooth(_ p: inout Path, _ pts: [CGPoint], move: Bool) {
 struct YearAxis: View {
     let from: Int
     let months: Int
+    struct Mark { let year: Int; let label: String; let x: CGFloat }
+    // Each year's January along the width, thinned so the labels never touch.
+    static func marks(from: Int, months: Int, width: CGFloat) -> [Mark] {
+        let first = from / 12, last = (from + months - 1) / 12
+        let count = Double(last - first + 1)
+        let step = max(1, Int((count * 34.0 / Double(max(width, 1))).rounded(.up)))
+        let span = CGFloat(max(months - 1, 1))
+        var out: [Mark] = []
+        for y in first...last where (y - first) % step == 0 {
+            let i = CGFloat(max(0, y * 12 - from))
+            let x: CGFloat = min(max(12, i / span * width + 12), width - 12)
+            out.append(Mark(year: y, label: "’" + String(String(y).suffix(2)), x: x))
+        }
+        return out
+    }
     var body: some View {
         GeometryReader { g in
-            let years = Array((from / 12)...((from + months - 1) / 12))
-            let step = max(1, Int((Double(years.count) * 34 / max(g.size.width, 1)).rounded(.up)))
-            ForEach(years.filter { ($0 - years[0]) % step == 0 }, id: \.self) { y in
-                let i = max(0, y * 12 - from)
-                Text("’" + String(String(y).suffix(2))).font(.caption2.weight(.medium)).monospacedDigit().foregroundStyle(S.soft).fixedSize()
-                    .position(x: min(max(12, CGFloat(i) / CGFloat(max(months - 1, 1)) * g.size.width + 12), g.size.width - 12), y: 7)
+            ForEach(Self.marks(from: from, months: months, width: g.size.width), id: \.year) { m in
+                Text(m.label).font(.caption2.weight(.medium)).monospacedDigit().foregroundStyle(S.soft).fixedSize().position(x: m.x, y: 7)
             }
         }
         .frame(height: 14)
@@ -351,11 +374,11 @@ struct DiscoveriesSection: View {
                     ForEach(y.top) { a in
                         Opens(route: .artist(a.name), zoom: "found|\(y.year)|\(a.name)") {
                             VStack(alignment: .leading, spacing: S.pair) {
-                                ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 200, corner: 8).frame(width: 64).zoomSource("found|\(y.year)|\(a.name)")
-                                Text(a.name).font(.caption.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                                ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 220, corner: 8).frame(width: 76).zoomSource("found|\(y.year)|\(a.name)")
+                                Text(a.name).font(.caption.weight(.semibold)).foregroundStyle(.white).lineLimit(2, reservesSpace: true)
                                 Text(compact(a.plays)).font(.caption2).monospacedDigit().foregroundStyle(S.soft)
                             }
-                            .frame(width: 64, alignment: .leading)
+                            .frame(width: 76, alignment: .leading)
                         }
                         .accessibilityLabel("\(a.name), \(a.plays) plays")
                     }

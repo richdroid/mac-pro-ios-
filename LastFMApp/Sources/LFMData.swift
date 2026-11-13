@@ -287,16 +287,20 @@ extension HistoryDB {
         rows("SELECT artist, COUNT(*), MIN(uts), MAX(uts) FROM plays GROUP BY artist") { out.append((text($0, 0), int($0, 1), int($0, 2), int($0, 3))) }
         return out.map { (artist: $0.0, plays: $0.1, first: $0.2, last: $0.3) }
     }
-    // The days that broke records: the most plays in a day, of one track in a day, of one artist in a day.
-    func recordDay() -> (day: Int, plays: Int)? { var r: (Int, Int)?; rows("SELECT day, COUNT(*) c FROM plays GROUP BY day ORDER BY c DESC LIMIT 1") { r = (int($0, 0), int($0, 1)) }; return r }
+    // The days that broke records: the most plays in a day, of one track in a day, of one artist in a day. Only plays
+    // that could have been listened to count: one at least a minute and a half after the play before it. His history
+    // holds an imported burst (October 2019, scrobbles seconds apart, 1,309 in one day) that was never a day's listening.
+    private static let listened = "WITH g AS (SELECT day, artist, track, album, uts - LAG(uts) OVER (ORDER BY uts) AS gap FROM plays) "
+    private static let heard = " WHERE gap IS NULL OR gap >= 90 "
+    func recordDay() -> (day: Int, plays: Int)? { var r: (Int, Int)?; rows(Self.listened + "SELECT day, COUNT(*) c FROM g" + Self.heard + "GROUP BY day ORDER BY c DESC LIMIT 1") { r = (int($0, 0), int($0, 1)) }; return r }
     func recordTrackDay() -> (day: Int, artist: String, track: String, album: String, plays: Int)? {
         var r: (Int, String, String, String, Int)?
-        rows("SELECT day, artist, track, MAX(album), COUNT(*) c FROM plays GROUP BY day, artist, track ORDER BY c DESC LIMIT 1") { r = (int($0, 0), text($0, 1), text($0, 2), text($0, 3), int($0, 4)) }
+        rows(Self.listened + "SELECT day, artist, track, MAX(album), COUNT(*) c FROM g" + Self.heard + "GROUP BY day, artist, track ORDER BY c DESC LIMIT 1") { r = (int($0, 0), text($0, 1), text($0, 2), text($0, 3), int($0, 4)) }
         return r.map { (day: $0.0, artist: $0.1, track: $0.2, album: $0.3, plays: $0.4) }
     }
     func recordArtistDay() -> (day: Int, artist: String, plays: Int)? {
         var r: (Int, String, Int)?
-        rows("SELECT day, artist, COUNT(*) c FROM plays GROUP BY day, artist ORDER BY c DESC LIMIT 1") { r = (int($0, 0), text($0, 1), int($0, 2)) }
+        rows(Self.listened + "SELECT day, artist, COUNT(*) c FROM g" + Self.heard + "GROUP BY day, artist ORDER BY c DESC LIMIT 1") { r = (int($0, 0), text($0, 1), int($0, 2)) }
         return r.map { (day: $0.0, artist: $0.1, plays: $0.2) }
     }
     func dayTopAlbum(_ day: Int) -> (artist: String, album: String)? {
@@ -331,9 +335,10 @@ extension Entry {
             let db = HistoryDB.shared
             median = await db.medianLength()
             var done = 0
-            while done < 400 {
-                let batch = await db.albumsToFill(limit: 20)
-                if batch.isEmpty { break }
+            // One look for the albums to ask (the look reads every play, so it isn't repeated per batch: run 11 had the
+            // charts waiting behind twenty of them).
+            let batch = await db.albumsToFill(limit: 400)
+            do {
                 for (artist, album) in batch {
                     if let j = try? await LastFM.shared.call("album.getinfo", ["artist": artist, "album": album, "autocorrect": "0"], keep: false) {
                         let list = j["album"]["tracks"]["track"].array.compactMap { t -> (String, String, Int)? in
@@ -345,7 +350,7 @@ extension Entry {
                     } else if Task.isCancelled { break }
                     else { await db.markFilled(artist, album) }
                     done += 1
-                    if done % 40 == 0 { median = await db.medianLength(); onChange?() }
+                    if done % 40 == 0 { median = await db.medianLength() }
                 }
             }
             median = await db.medianLength()
@@ -511,7 +516,8 @@ struct Deep: Codable, Sendable {
             let y = Calendar.current.component(.year, from: Date(timeIntervalSince1970: TimeInterval(s.first)))
             byYear[y, default: []].append((s.artist, s.plays, s.first, s.last))
         }
-        for y in byYear.keys.sorted() where y > regYear {
+        let thisYear = Calendar.current.component(.year, from: Clock.now)
+        for y in byYear.keys.sorted() where y > regYear && y < thisYear {
             let list = byYear[y] ?? []
             let stuck = list.filter { $0.1 >= 20 && $0.3 - $0.2 >= 365 * 86400 }.sorted { $0.1 > $1.1 }
             var top: [ArtistCount] = []

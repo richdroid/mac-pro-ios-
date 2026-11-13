@@ -50,14 +50,21 @@ enum LibShelf: Int, CaseIterable, Sendable {
             loading.remove(k)
         }
     }
+    // Sorted once per list and order, not on every redraw (sixteen thousand tracks by name is a noticeable sort).
+    @ObservationIgnored private var sortedCache: [String: [Entry]] = [:]
     func sorted(_ k: Kind) -> [Entry] {
         let l = lists[k] ?? []
+        if sort == .plays { return l }
+        let key = "\(k.rawValue)|\(sort.rawValue)|\(l.count)|\(stamp[k] ?? 0)"
+        if let hit = sortedCache[key] { return hit }
+        let out: [Entry]
         switch sort {
-        case .plays: return l
-        case .name: return l.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-        case .first: return l.sorted { ($0.first ?? 0) > ($1.first ?? 0) }
-        case .last: return l.sorted { ($0.last ?? 0) > ($1.last ?? 0) }
+        case .name: out = l.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        case .first: out = l.sorted { ($0.first ?? 0) > ($1.first ?? 0) }
+        default: out = l.sorted { ($0.last ?? 0) > ($1.last ?? 0) }
         }
+        sortedCache[key] = out
+        return out
     }
     // Everything whose name (or artist) holds the words typed, most played first.
     func search(_ k: Kind) -> [Entry] {
@@ -81,24 +88,25 @@ struct LibraryTab: View {
     @State private var shown = 200
     @State private var grown: Set<Kind> = []
     private var m: LibraryModel { LibraryModel.shared }
+    @Environment(\.paneLayout) private var pane
     var body: some View {
-        Page(top: top) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: S.head) {
-                    HubTitle(text: "library", size: 80)
-                    search.padding(.horizontal, S.margin)
-                    if m.query.isEmpty {
-                        Picker("Show", selection: Binding(get: { m.shelf }, set: { m.shelf = $0; shown = 200 })) {
-                            ForEach(LibShelf.allCases, id: \.self) { Text($0.name).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.horizontal, S.margin)
-                    }
+        Group {
+            if pane {
+                // Open flat: the search and the shelves on the left, the list on the right; nothing crosses the fold.
+                FoldSplit {
+                    Page(top: top) { head.padding(.top, S.head) }
+                } right: {
+                    Page(top: top) { LazyVStack(alignment: .leading, spacing: 0) { if m.query.isEmpty { shelf } else { results } }.padding(.top, S.section) }
                 }
-                .padding(.bottom, S.section)
-                if m.query.isEmpty { shelf } else { results }
+            } else {
+                Page(top: top) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        head.padding(.bottom, S.section)
+                        if m.query.isEmpty { shelf } else { results }
+                    }
+                    .padding(.top, S.head)
+                }
             }
-            .padding(.top, S.head)
         }
         .scrollDismissesKeyboard(.immediately)
         .onAppear { m.appear() }
@@ -108,6 +116,20 @@ struct LibraryTab: View {
             guard Pose.name == "search" else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             m.query = LastFM.shared.mock ? "glass" : ""
+        }
+    }
+
+    private var head: some View {
+        VStack(alignment: .leading, spacing: S.head) {
+            HubTitle(text: "library", size: 80)
+            search.padding(.horizontal, S.margin)
+            if m.query.isEmpty {
+                Picker("Show", selection: Binding(get: { m.shelf }, set: { m.shelf = $0; shown = 200 })) {
+                    ForEach(LibShelf.allCases, id: \.self) { Text($0.name).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, S.margin)
+            }
         }
     }
 

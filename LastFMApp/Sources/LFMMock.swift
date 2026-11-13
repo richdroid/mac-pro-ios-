@@ -409,6 +409,24 @@ final class MockLastFM: @unchecked Sendable {
                 out.append(["name": al.tracks[(h / 5 + k) % al.tracks.count], "artist": ["name": a.name], "image": image(al.art), "match": "\(1 - Double(k) * 0.07)"])
             }
             return ["similartracks": ["track": out]]
+        case "track.getinfo":
+            let name = (params["artist"] ?? "").lowercased()
+            guard let i = artists.firstIndex(where: { $0.name.lowercased() == name }) else {
+                let title = params["track"] ?? ""
+                return ["track": ["name": title, "listeners": "\(30_000 + Self.hash(title) % 200_000)", "userplaycount": "0", "userloved": "0", "duration": "\(Self.length(title) * 1000)",
+                                  "artist": ["name": params["artist"] ?? ""], "toptags": ["tag": [["name": "indie"]]],
+                                  "url": "https://www.last.fm/music/\((params["artist"] ?? "").replacingOccurrences(of: " ", with: "+"))"]]
+            }
+            let a = artists[i]
+            let title = params["track"] ?? ""
+            let al = a.albums.first { $0.tracks.contains(title) } ?? a.albums[0]
+            let mine = plays.filter { $0.artist == i && a.albums[$0.album].tracks[$0.track] == title }
+            return ["track": ["name": title, "listeners": "\(a.listeners / 3 + title.count * 911)", "playcount": "\(a.listeners * 4)", "userplaycount": "\(mine.count)",
+                              "userloved": mine.first.map(loved) == true ? "1" : "0", "duration": "\(Self.length(title) * 1000)",
+                              "artist": ["name": a.name], "album": ["title": al.name, "artist": a.name, "image": image(al.art)],
+                              "toptags": ["tag": a.tags.map { ["name": $0] }],
+                              "wiki": ["summary": "\"\(title)\" is a song by \(a.name), first released in \(al.year). It became a quiet favourite on late-night radio, the song the band closes every show with, and the one most of their listeners found them through. <a href=\"https://www.last.fm\">Read more on Last.fm</a>"],
+                              "url": "https://www.last.fm/music/\(a.name.replacingOccurrences(of: " ", with: "+"))"]]
         default:
             return ["error": 3, "message": "Invalid Method"]
         }
