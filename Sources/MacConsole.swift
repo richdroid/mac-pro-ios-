@@ -162,9 +162,11 @@ enum MacConsole {
     static func linkSummary(_ f: LinksFeed) -> (good: Bool, text: String) {
         let down = f.links.filter(\.down).map(\.name)
         let look = f.links.filter { $0.state == "look" }.map(\.name)
-        let unsure = f.links.filter { !["up", "off", "down", "look"].contains($0.state) }.map(\.name)
+        let starting = f.links.filter { $0.state == "starting" }.map(\.name)
+        let unsure = f.links.filter { !["up", "off", "down", "look", "starting"].contains($0.state) }.map(\.name)
         if !down.isEmpty { return (false, named(down, "down")) }
         if !look.isEmpty { return (false, named(look, look.count == 1 ? "needs a look" : "need a look")) }
+        if !starting.isEmpty { return (false, named(starting, "starting")) }
         if !unsure.isEmpty { return (false, named(unsure, "not known")) }
         return (true, "All \(f.links.filter(\.up).count) working")
     }
@@ -179,7 +181,7 @@ extension MacPage {
     // The build's shots of each page, opened on the Control tab.
     static func consolePosed(_ pose: String) -> MacPage? {
         switch pose {
-        case "links", "linksbad", "linkconfirm", "linkdone": return .links
+        case "links", "linksbad", "linkconfirm", "linkdone", "linkstarting": return .links
         case "fans": return .fans
         case "updates", "updateswaiting": return .updates
         case "storage": return .storage
@@ -536,7 +538,7 @@ struct LinksView: View {
     // The build's shots: all working, and one relay down with the TV link.
     static func posed(_ pose: String) -> LinksFeed? {
         // Plain "links" reads the stand-in Mac, so the shot tests the real feed too.
-        guard ["linksbad", "linkconfirm", "linkdone"].contains(pose) else { return nil }
+        guard ["linksbad", "linkconfirm", "linkdone", "linkstarting"].contains(pose) else { return nil }
         let now = Date().timeIntervalSince1970 * 1000
         var l: [MacLink] = [
             MacLink(id: "tailscale", name: "Tailscale", state: "up", detail: "Running · 4 of 6 devices online", endpoint: "100.64.0.10 · mac-pro.example.ts.net", checkedAt: now, can: [], note: "Never stopped from here: the phone reaches the Mac through it."),
@@ -555,6 +557,8 @@ struct LinksView: View {
             if let i = l.firstIndex(where: { $0.id == "tv" }) { l[i].state = "down"; l[i].detail = "TV link needs a reconnect from the Mac: no adb server is running"; l[i].can = ["bringup"] }
             if let i = l.firstIndex(where: { $0.id == "letterboxd" }) { l[i].state = "down"; l[i].detail = "Not running"; l[i].pid = nil; l[i].uptime = nil; l[i].can = ["bringup"]; l[i].lastError = .init(text: "OSError: [Errno 49] Can't assign requested address", t: now - 600_000) }
         }
+        // Just after a restart of the public link: the tunnel is up, its new address not yet known.
+        if pose == "linkstarting", let i = l.firstIndex(where: { $0.id == "public" }) { l[i].state = "starting"; l[i].detail = "Tunnel running, no address yet"; l[i].endpoint = ""; l[i].uptime = 4; l[i].pid = 51234 }
         return LinksFeed(t: now, healthAt: now, links: l)
     }
 }

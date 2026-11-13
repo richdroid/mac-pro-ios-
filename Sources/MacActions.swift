@@ -220,7 +220,9 @@ struct MacRunActionIntent: AppIntent {
         let api = API(base: base), c = choice.call
         var nonce: String?
         if c.confirm {
-            let (dry, n) = try await api.mp(c.action, c.args, dryRun: true, timeout: 60)
+            let dry: MPEnvelope, n: String?
+            do { (dry, n) = try await api.mp(c.action, c.args, dryRun: true, timeout: 60) }
+            catch { let s = "Can’t reach the Mac, so nothing was done. Is Tailscale on?"; return .result(value: s, dialog: IntentDialog(stringLiteral: s)) }
             guard dry.ok != false, let n, MPActionRow.wouldDo(dry.say) else { let s = dry.say ?? "The Mac said no."; return .result(value: s, dialog: IntentDialog(stringLiteral: s)) }
             try await requestConfirmation(result: .result(dialog: IntentDialog(stringLiteral: "This will " + MPActionRow.lowerFirst(dry.say ?? "go ahead"))))
             nonce = n
