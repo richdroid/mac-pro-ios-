@@ -619,8 +619,13 @@ struct OwnSeparator: ViewModifier {
         content
             .padding(.vertical, ends)
             .overlay(alignment: .top) { if !first { Divider().padding(.leading, inset) } }
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+    }
+}
+extension View {
+    // The list's side of OwnSeparator, on the row's outermost view (after .place): inside it, under .place's wrapper, the
+    // List never saw them, and drew its own line and ends as well as ours (CI 3609ee9: two lines between rows).
+    func ownSeparatorRow() -> some View {
+        listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
     }
 }
 

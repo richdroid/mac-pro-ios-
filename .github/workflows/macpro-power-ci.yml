@@ -14,7 +14,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 60
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,7 +33,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 45
+        timeout-minutes: 65
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -108,7 +108,8 @@ jobs:
               read X Y < "$c/Library/Caches/tap.txt"; echo "restart tap at $X $Y at $(date +%s)"
               /tmp/dh/.build/release/devicehubctl "$DEVICE" touch $X $Y 0.15 || echo "tap failed"
             else echo "::warning::no Restart position written; the film asks by itself"; fi
-            sleep 18
+            # Its touch can take ~17 s to land (CI 3609ee9), then 2.5 s of question, the restart, Starting, Up.
+            sleep 40
             kill -INT $REC; wait $REC
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
             cat "$c/Library/Caches/film.txt" 2>/dev/null || echo "no film log"
@@ -131,7 +132,8 @@ jobs:
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -landscape
           # Folded, the outer display.
-          /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed || true; sleep 5
+          # Closing can miss once (CI 3609ee9: "the outer display still isn't the live one"): tried twice.
+          for i in 1 2; do /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed && break; sleep 10; done; sleep 5
           poses 1 -folded
           ls dist
       - name: Publish

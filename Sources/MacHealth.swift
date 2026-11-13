@@ -360,7 +360,7 @@ struct MacHealthView: View {
             // Anything that needs a look first, so it's never below the fold under a heading that counts it.
             let order = ids.filter { id in bad.contains { $0.part == id } } + ids.filter { id in !bad.contains { $0.part == id } }
             ForEach(order, id: \.self) { id in
-                MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id), starting: startingWindow, first: id == order.first).place(id)
+                MacPartRow(id: id, part: report?.parts.first { $0.part == id }, pending: pending(id), starting: startingWindow, first: id == order.first).place(id).ownSeparatorRow()
             }
         } header: {
             // While the Mac is away nothing is known of its parts: no heading then (each row says it's waiting), never
@@ -529,7 +529,7 @@ struct MacRestartView: View {
                 if side != .right {
                     Section {
                         ForEach(MacParts.checks, id: \.self) { id in
-                            MacPartRow(id: id, part: checks?.parts.first { $0.part == id }, check: true, pending: checking || (checks == nil && failure == nil) ? "Checking…" : checks == nil ? "Not checked yet" : nil, first: id == MacParts.checks.first).place(id)
+                            MacPartRow(id: id, part: checks?.parts.first { $0.part == id }, check: true, pending: checking || (checks == nil && failure == nil) ? "Checking…" : checks == nil ? "Not checked yet" : nil, first: id == MacParts.checks.first).place(id).ownSeparatorRow()
                         }
                     } header: { Text("Before it restarts") } footer: {
                         Text("It has to come back by itself, with no one at the Mac.")

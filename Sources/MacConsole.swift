@@ -502,6 +502,7 @@ struct LinksView: View {
                     if a == "bringup" { run(l, a) } else { asking = (l, a) }
                 }
                 .place(l.id)
+                .ownSeparatorRow()
             }
         }
     }
@@ -578,10 +579,11 @@ struct LinksView: View {
         }
         // The build's film of a public-link restart against the stand-in Mac: the page opens at the public link, the build
         // taps its Restart (FilmTarget), the question shows and is answered, then Starting and Up are watched. Should the
-        // tap miss, the question is put up 14 s in, so the film still shows the rest (and the log says it missed).
+        // tap miss, the question is put up 40 s in, so the film still shows the rest (and the log says it missed). The
+        // build's touches land up to ~17 s after they're sent (CI 3609ee9), so it waits that long first.
         if film {
             Task {
-                try? await Task.sleep(nanoseconds: 14_000_000_000)
+                try? await Task.sleep(nanoseconds: 40_000_000_000)
                 if asking == nil, !busy.contains("public"), outcomes["public"] == nil, let l = feed.value?.links.first(where: { $0.id == "public" }), l.uptime ?? 0 > 60 {
                     FilmTarget.note("the tap missed; asking without it"); asking = (l, "restart")
                 }
