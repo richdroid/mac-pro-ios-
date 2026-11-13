@@ -97,6 +97,9 @@ jobs:
             sleep 2
             [ "$(stat -f %z dist/phone-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ] && echo "film $name empty"
           }
+          # A first launch to warm the simulator (the first one after boot came up on the wrong display, 916240e).
+          $D "$DEVICE" pose closed; sleep 3
+          xcrun simctl launch "$DEVICE" local.macpro.TV -address $M; sleep 12; xcrun simctl terminate "$DEVICE" local.macpro.TV; sleep 2
           date
           # 1. Signed out: the picker's own sign-in (the stand-in's sample login), the streams, the best one played and every
           #    key pressed in turn; then closed, its place written to the library.

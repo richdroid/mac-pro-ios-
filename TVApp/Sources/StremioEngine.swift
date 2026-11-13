@@ -166,6 +166,8 @@ final class AVLayerView: UIView {
     private(set) var error: String?
     private(set) var ended = false
     private var subtitleTrack: (any MediaPlayerTrack)?
+    // Where it should open, checked once it plays: a cold first start once opened at 0:00 regardless (CI 916240e).
+    private var pendingStart: Double = 0
     var onPiP: (@MainActor (Bool) -> Void)?
     init(url: URL, headers: [String: String], start: Double) {
         KSOptions.canBackgroundPlay = true
@@ -190,6 +192,7 @@ final class AVLayerView: UIView {
         super.init()
         layer.delegate = self
         if native, start > 0 { layer.seek(time: start, autoPlay: true) { _ in } }
+        pendingStart = start
         attach()
     }
     private func attach() {
@@ -217,13 +220,13 @@ final class AVLayerView: UIView {
     var pip: AVPictureInPictureController? {
         if [.initialized, .preparing].contains(state) { return nil }
         if let p = layer.player.pipController { return p }
-        if ownPiP == nil, let me = layer.player as? KSMEPlayer, let out = me.videoOutput {
+        if ownPiP == nil, AVPictureInPictureController.isPictureInPictureSupported(), let me = layer.player as? KSMEPlayer, let out = me.videoOutput {
             let source = AVPictureInPictureController.ContentSource(sampleBufferDisplayLayer: out.displayLayer, playbackDelegate: self)
             let p = AVPictureInPictureController(contentSource: source)
             p.delegate = self
             p.canStartPictureInPictureAutomaticallyFromInline = true
             ownPiP = p
-            PhoneLog.note("own picture in picture; supported \(AVPictureInPictureController.isPictureInPictureSupported())")
+            PhoneLog.note("own picture in picture")
         }
         return ownPiP
     }
@@ -276,12 +279,20 @@ final class AVLayerView: UIView {
 
     func player(layer: KSPlayerLayer, state: KSPlayerState) {
         self.state = state
+        if state == .bufferFinished, pendingStart > 0 {
+            let want = pendingStart
+            pendingStart = 0
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                if self.position + 5 < want { PhoneLog.note("opened at \(Int(self.position)), not \(Int(want)): seeking"); self.seek(to: want) }
+            }
+        }
         PhoneLog.note("ks \(state) \(type(of: layer.player))")
         if state == .readyToPlay {
             attach()
             if ownPiP == nil { layer.player.pipController?.delegate = self }
             pip?.canStartPictureInPictureAutomaticallyFromInline = true
-            PhoneLog.note("ready; picture in picture \(pip == nil ? "missing" : "there"), possible \(pip?.isPictureInPicturePossible ?? false)")
+            PhoneLog.note("ready; picture in picture \(pip == nil ? "missing" : "there") (supported here: \(AVPictureInPictureController.isPictureInPictureSupported()))")
         }
         if state == .error, error == nil { error = "This stream won’t play on the phone." }
     }
