@@ -627,7 +627,7 @@ struct ReachRow: View {
                     Text(model.reachWords + seen).font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1)
                 }
                 if open {
-                    Text(model.dead ? model.deadText : "Showing what the Chumby last said. It may be fine. Check Tailscale on this phone.")
+                    Text(model.dead ? model.deadText : "Showing what the Chumby last said. It may be fine. Check this phone’s connection to home.")
                         .font(.custom("Trebuchet MS", size: 15)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 300, alignment: .leading)
                 }
             }
@@ -2415,7 +2415,7 @@ struct TinkerTab: View {
                     HStack(spacing: 14) {
                         Image(systemName: model.unreachable ? "wifi.exclamationmark" : "wifi").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
                             .frame(width: 32, height: 32).background(model.dead ? ChumbyPalette.remove(dark) : model.offline ? ChumbyPalette.away : ChumbyPalette.on, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        Text(model.unreachable ? model.reachWords : "Connected").font(.body.weight(.semibold))
+                        Text(model.unreachable ? (model.dead ? "The Chumby isn’t answering" : model.reachWords) : "Connected").font(.body.weight(.semibold))
                     }
                     .padding(.vertical, 2)
                 }

@@ -804,7 +804,7 @@ struct AlarmsTab: View {
     var missedWhy: String {
         let silent = missed.contains { $0.silent == true }, other = missed.contains { $0.silent != true }
         let these = missed.count == 1 ? "it" : "these"
-        if silent && other { return "The Chumby was frozen or off when some came due, and \(missed.filter { $0.silent == true }.count == 1 ? "one" : "some") rang with no sound." }
+        if silent && other { return "The Chumby was frozen or off when some came due." }
         if silent { return "The Chumby rang, but no sound came from \(missed.count == 1 ? "it" : "them")." }
         return "The Chumby was frozen or off when \(these) came due."
     }

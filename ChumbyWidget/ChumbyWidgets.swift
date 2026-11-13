@@ -410,7 +410,6 @@ struct RemoteBody: View {
                     Text(entry.whenLine).font(.trebuchet(13)).opacity(0.85).lineLimit(1).minimumScaleFactor(0.8)
                 } else {
                     Text(entry.reachable ? (entry.alarmsKnown ? "No alarm set" : "Chumby") : entry.problem).font(.trebuchet(15, .bold)).lineLimit(2).minimumScaleFactor(0.8)
-                    if !entry.reachable, let seen = entry.lastSeenLine { Text(seen).font(.trebuchet(12)).opacity(0.8).lineLimit(1) }
                 }
                 Spacer(minLength: 6)
                 if entry.reachable { SkipButton(entry: entry, height: 30) } else { NotAnswering(entry: entry) }
