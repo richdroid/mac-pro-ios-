@@ -75,9 +75,14 @@ final class TVModel {
     // change, Tailscale reconnecting after the phone wakes, or the dashboard restarting each lost a reading or two and put
     // the red note up for a moment (Richard, 2026-11-10: "cant reach the mac is tailscale on keeps happening in tv and
     // its annoying"). Not in the first seconds back in the foreground either, while the tunnel comes back.
+    // The app's one rule for it (as the Chumby and Mac Pro apps): kept readings show at once and at full strength, a
+    // failed reading is retried every 2 s, and nothing is said for about 25 s; then a calm amber "Can't reach the Mac".
+    // Red only when the TV itself is down (Richard, 11-11: a blip leaves no trace; calm status only after sustained
+    // failure).
     @ObservationIgnored private var failingSince: Date?
     @ObservationIgnored private var foregroundAt = Date()
-    private static let unreachableAfter: TimeInterval = 8, settleAfterForeground: TimeInterval = 6
+    static let unreachableAfter: TimeInterval = 25, settleAfterForeground: TimeInterval = 25
+    var retrying: Bool { failingSince != nil }
     private func missed() {
         guard !Task.isCancelled else { return }
         let now = Date()
@@ -431,7 +436,7 @@ final class TVModel {
                     // The Remote shows play/pause and what's on: every second there, as a check costs the bridge 20-400 ms
                     // (Richard, 2026-11-07: "playing and not playing dont update fast enough", "doesnt update based on
                     // whats on screen" at 5 s).
-                    try? await Task.sleep(nanoseconds: self?.tab == 0 ? 1_000_000_000 : self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
+                    try? await Task.sleep(nanoseconds: self?.tab == 0 ? 1_000_000_000 : self?.retrying == true ? 2_000_000_000 : self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
                 }
             },
             // Still pictures, only while the screen is on show and the live stream isn't. Never switched off by itself

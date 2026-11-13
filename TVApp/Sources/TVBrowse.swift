@@ -23,7 +23,6 @@ enum MediaSource: String, CaseIterable, Identifiable {
     var name: String { self == .mint ? "Mint Music" : "Stremio" }
     var pkg: String { self == .mint ? "com.codex.musicwebtv" : "com.stremio.one" }
     static func of(pkg: String) -> MediaSource? { allCases.first { $0.pkg == pkg } }
-    var prompt: String { self == .mint ? "Search music" : "Search films and series" }
     var coverAspect: CGFloat { self == .mint ? 1 : 2.0 / 3 }
     // Each app's own colour, for the page behind it.
     var mood: Color { self == .mint ? Color(hex: 0x1F9E78) : Color(hex: 0x6A3FD0) }
@@ -88,6 +87,14 @@ final class BrowseStore: ObservableObject {
     // When the kept list was last fresh, once the Mac has failed to give a newer one: the pages dim it and say so.
     @Published private(set) var keptSince: Date?
     private var keptDate: Date?
+    // Since when asking has failed. The kept list dims and says when it was last seen only once that has gone on about
+    // 25 s, as the app's other reach words do: until then it stays at full strength (a blip leaves no trace).
+    private var missSince: Date?
+    private func stillMissing() -> Bool {
+        let now = Date()
+        if missSince == nil { missSince = now }
+        return now.timeIntervalSince(missSince!) >= TVModel.unreachableAfter
+    }
     private static func keptFile(_ name: String) -> URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tv-rows-\(name).json")
     }
@@ -151,13 +158,13 @@ final class BrowseStore: ObservableObject {
             // Results for some other search aren't an answer to this one.
             // (The list kept from last time stays while the Mac can't be asked for a fresh one.)
             if loadedFor != q, !(fromDisk && q.isEmpty) { if !rows.isEmpty { rows = [] }; loadedFor = nil }
-            if fromDisk, q.isEmpty, keptSince != keptDate { keptSince = keptDate }
+            if fromDisk, q.isEmpty, stillMissing(), keptSince != keptDate { keptSince = keptDate }
             if failed != rows.isEmpty { failed = rows.isEmpty }
             return
         }
         // The same list again (a revisit after a minute) changes nothing on screen, so it isn't set again.
         if decoded != rows { rows = decoded }
-        loadedFor = q; loadedAt = Date(); fromDisk = false
+        loadedFor = q; loadedAt = Date(); fromDisk = false; missSince = nil
         if keptSince != nil { keptSince = nil }
         if q.isEmpty, !decoded.isEmpty { keep(data) }
     }
@@ -182,12 +189,12 @@ final class BrowseStore: ObservableObject {
         guard query.trimmingCharacters(in: .whitespaces).isEmpty && genre.isEmpty else { return }
         guard let decoded else {
             if failed != rows.isEmpty { failed = rows.isEmpty }
-            if fromDisk, keptSince != keptDate { keptSince = keptDate }
+            if fromDisk, stillMissing(), keptSince != keptDate { keptSince = keptDate }
             return
         }
         if failed { failed = false }
         if decoded != rows { rows = decoded }
-        loadedFor = ""; loadedAt = Date(); fromDisk = false
+        loadedFor = ""; loadedAt = Date(); fromDisk = false; missSince = nil
         if keptSince != nil { keptSince = nil }
     }
     // Each title once on the page, in the first row it comes in. Continue watching is his own and is kept whole, but what
@@ -401,7 +408,7 @@ struct BrowseColumn: View {
                 // The app's name leads the page. Unfolded, the other side keeps its room empty, so both sides' rows start level.
                 PageHeading(store.source.name).padding(.horizontal, 20).padding(.bottom, -10).opacity(part == .right ? 0 : 1).accessibilityHidden(part == .right)
                 // The one search (the Search tab), which finds this app's things among everything else.
-                if part != .right { OpensSearchField(prompt: store.source.prompt).padding(.horizontal, 20) }
+                if part != .right { OpensSearchField().padding(.horizontal, 20) }
                 if store.rows.isEmpty && part != .right {
                     Group {
                         if store.loading { VStack(spacing: 22) { ForEach(0..<3, id: \.self) { _ in PlaceholderShelf() } } }

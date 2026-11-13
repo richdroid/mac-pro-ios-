@@ -328,16 +328,18 @@ private struct StatusFollower: View {
 private struct ProblemBanner: View {
     @Environment(TVModel.self) var model
     var problem: String? {
-        if !model.reachable { return "Can’t reach the Mac. Is Tailscale on?" }
+        if !model.reachable { return "Can’t reach the Mac" }
         if model.status?.online == false { return "The Mac can’t reach the TV" }
         return nil
     }
+    // Calm amber for the Mac out of reach (only ever after a sustained failure); red is kept for the TV itself down.
+    var tint: Color { model.reachable ? Color.red.opacity(0.85) : TVLook.away.opacity(0.9) }
     var body: some View {
         ZStack {
             if let problem {
                 // Snug to the top edge, so its foot stays clear of the title under it.
                 Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(Color.red.opacity(0.85), in: Capsule())
+                    .background(tint, in: Capsule())
                     // In from the top edge and back out, never popped on and off over the title.
                     .transition(.move(edge: .top).combined(with: .opacity))
             }

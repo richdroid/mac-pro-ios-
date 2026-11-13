@@ -264,7 +264,7 @@ const tvScene = scene => {
   if (scene === 'youtube') { v.app = 'com.google.android.youtube.tv'; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['A sample video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 600000, canSeek: false, art: tvBase + '/api/tv/shot' }; }
   return JSON.stringify(v);
 };
-http.createServer((q, s) => {
+function tvRoute(q, s) {
   // Frames the app took longer than 34 ms to draw, in any scene, kept for the build (r21: stalls as numbers).
   if (q.method === 'POST' && /\/api\/tv\/hitch$/.test(q.url)) {
     let body = ''; q.on('data', c => body += c);
@@ -346,7 +346,8 @@ http.createServer((q, s) => {
   if (q.url === '/still.png') { s.setHeader('content-type', 'image/png'); return s.end(pictures.wide); }
   s.setHeader('content-type', 'application/json');
   s.end(q.url === '/api/tv/status' ? tvStatus : q.url === '/api/tv/letterboxd' ? tvFilms : '{"ok":true}');
-}).listen(9002, '127.0.0.1');
+}
+http.createServer(tvRoute).listen(9002, "127.0.0.1");
 
 // ---- Chumby app poses (separate block) -------------------------------------------------------------------------------
 // Asked for by a path in front of the address (http://127.0.0.1:9000/ringing and so on), so every shot above gets the same
@@ -607,7 +608,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; tvReal.long = false; return tvReal(q, s, path, query, json); }
@@ -619,6 +620,13 @@ function tvPose(q, s) {
   if (/^f(normal|slow|fail|offline|already|bridgeon|joined)$/.test(scene || '')) return tvFlickStart(scene.slice(1), q, s, path, json);
   // The prepare call's answer everywhere else too, in the bridge's own shape.
   if (q.method === 'POST' && path === '/api/tv/prepare') { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} json({ ok: true, awake: true, fresh: !!v.token }); }); return true; }
+  // /slowdev: the box slow to answer (its readings take 4 s), so leaving Status or pushing Settings cuts a request short,
+  // as on a slow tunnel: nothing may be said for that (gate HOLD of 8446178).
+  if (scene === 'slowdev' && path === '/api/tv/device' && !q.delayed) { q.delayed = true; setTimeout(() => { if (!s.destroyed) tvRoute(q, s); }, 4000); return true; }
+  // /outage: the Mac gone from 10 s to 50 s after GET /outage/reset (every connection dropped, as with Tailscale down),
+  // then back. Nothing may be said for about 25 s; then a calm amber "Can't reach the Mac", cleared on its return.
+  if (scene === 'outage' && path === '/reset') { tvPose.outage = Date.now(); return json({ ok: true }); }
+  if (scene === 'outage') { const t = Date.now() - (tvPose.outage || 0); if (t > 10000 && t < 50000) { s.destroy(); return true; } }
   if (scene === 'cold' && path === '/api/tv/device') {
     return json({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 0, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 0, txRate: 0, hist: { cpu: [], mem: [], rx: [], tx: [] } });
   }

@@ -569,7 +569,7 @@ struct SearchPage: View {
         HStack(spacing: 8) {
             Image(systemName: link ? "paperplane" : "magnifyingglass").foregroundStyle(.secondary).padding(.leading, 14)
                 .contentTransition(.symbolEffect(.replace))
-            TextField(panes ? "Search" : "Shows, films, music, apps", text: $draft.text)
+            TextField("Shows, films, music, apps", text: $draft.text)
                 .focused($focused).autocorrectionDisabled().textInputAutocapitalization(.never)
                 .submitLabel(link ? .send : .search)
                 // The bar follows the keyboard only once it has settled: a focus that flickers on and off as the page lays

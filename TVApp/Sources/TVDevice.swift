@@ -78,6 +78,17 @@ final class DeviceStore: ObservableObject {
     static let shared = DeviceStore()
     @Published var info: DeviceInfo?
     @Published var failed = false
+    // Since when no answer has come, by any asking. "Can't reach" only after about 25 s of that, as everywhere in the app:
+    // a blip leaves no trace, and the last reading stays at full strength meanwhile (Richard's rulings, 11-11). A request
+    // cut short because he left the tab is no answer either way: it flashed "Can't reach it" over greyed tiles for a
+    // frame on coming back to Status (gate HOLD of 8446178).
+    var failingSince: Date?
+    func answered() { failingSince = nil; if failed { failed = false } }
+    func missed() {
+        let now = Date()
+        if failingSince == nil { failingSince = now }
+        if !failed, now.timeIntervalSince(failingSince!) >= TVModel.unreachableAfter { failed = true }
+    }
 }
 struct DeviceTab: View {
     @Environment(TVModel.self) var model
@@ -101,6 +112,15 @@ struct DeviceTab: View {
             tidying = false
         }
     }
+    // The same words as the Remote's, from the same reading: the television off over HDMI-CEC is "Asleep" there, so it
+    // is here (it said "Awake" beside the Remote's "Asleep", gate of 8446178).
+    var screenWords: String {
+        guard let s = model.status else { return "Awake" }
+        if s.screen == "asleep" { return "Asleep" }
+        if let a = s.away { return a.line }
+        if s.screen == "screensaver" { return "Screensaver" }
+        return "Awake"
+    }
     var hero: some View {
         VStack(spacing: 4) {
             // Fades in when it comes, rather than appearing in a frame.
@@ -114,8 +134,9 @@ struct DeviceTab: View {
             Text(info.map { "Android \($0.android) · up \(span($0.uptime))" } ?? "Android 14 · up 1d 1h").font(.subheadline).foregroundStyle(.secondary)
                 .redacted(reason: info == nil ? .placeholder : [])
             HStack(spacing: 6) {
-                Circle().fill(failed ? Color.orange : Color.green).frame(width: 9, height: 9)
-                Text(failed ? "Can’t reach it" : model.status?.screen == "asleep" ? "Asleep" : "Awake")
+                Circle().fill(failed ? TVLook.away : Color.green).frame(width: 9, height: 9)
+                // The Mac's own reading failing too: it's the Mac out of reach, said as the banner says it, not the TV.
+                Text(failed ? (model.reachable && !model.retrying ? "Can’t reach the TV" : "Can’t reach the Mac") : screenWords)
             }
             .font(.footnote.weight(.medium)).padding(.horizontal, 11).padding(.vertical, 5).tvCard(14).padding(.top, 6)
             // The dot's colour eases between green and orange, as the tiles do, rather than switching in a frame.
@@ -192,15 +213,18 @@ struct DeviceTab: View {
         .settledAnimation(.easeOut(duration: 0.25), value: TelevisionRow.value(model.status?.cec))
         .tvCard()
     }
-    // Asked for only while this tab is on screen.
+    // Asked for only while this tab is on screen, every 2 s (and so retried every 2 s while it fails). Leaving the tab, or
+    // a push over it, cancels the task: whatever that cut short says nothing about the TV, and is dropped.
     func poll() async {
         guard phase == .active else { return }
         while !Task.isCancelled {
-            if let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 8), let i = try? JSONDecoder().decode(DeviceInfo.self, from: d) {
+            let d = await TVBridge.data(TVBridge.url("/api/tv/device"), timeout: 8)
+            if Task.isCancelled { return }
+            if let d, let i = try? JSONDecoder().decode(DeviceInfo.self, from: d) {
                 // The first answer just appears; only later changes ease, so the name never crossfades over a placeholder.
                 if store.info == nil { store.info = i } else { withAnimation(.easeOut(duration: 0.25)) { store.info = i } }
-                if store.failed { store.failed = false }
-            } else { store.failed = true }
+                store.answered()
+            } else { store.missed() }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }

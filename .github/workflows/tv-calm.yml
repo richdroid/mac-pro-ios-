@@ -1,0 +1,108 @@
+name: TV calm reach films
+# Branch-only: the tv-calm-reach branch's films for the design gate (Status left and come back to with the box slow to
+# answer; Settings pushed and popped over it; a 40 s outage of the Mac), open upright and folded. Published to the
+# tv-calm-ci release. Deleted before the branch merges.
+on:
+  push:
+    branches: [tv-calm-reach]
+permissions:
+  contents: write
+concurrency:
+  group: tv-calm
+  cancel-in-progress: true
+jobs:
+  films:
+    runs-on: xcode-27
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Films
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          rm -f /tmp/tv-hitches.log
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          hmark() { wc -l < /tmp/tv-hitches.log 2>/dev/null || echo 0; }
+          hkeep() { sleep 2; tail -n +$(($1 + 1)) /tmp/tv-hitches.log > dist/tv-$2-hitches.log 2>/dev/null || echo "no hitch log" > dist/tv-$2-hitches.log; }
+          # A film: name, display, seconds, then the app's arguments. Screen recording at the display's own rate (60 Hz).
+          film() {
+            local name=$1 d=$2 secs=$3 h; shift 3; h=$(hmark)
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV "$@"
+            sleep $secs
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            hkeep $h $name
+          }
+          # The Mac gone 10–50 s after the reset (the app launched at once): stills at 22 s (nothing said yet), 44 s (calm
+          # amber) and 60 s (cleared), all inside the film.
+          outage() {
+            local name=$1 d=$2 tab=$3 h; h=$(hmark)
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            curl -s $M/outage/reset; echo
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/outage -tab $tab -swipeLog YES
+            sleep 22; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-22s.png
+            sleep 22; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-44s.png
+            sleep 16; xcrun simctl io "$DEVICE" screenshot --display=$d dist/tv-$name-60s.png
+            sleep 4
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            hkeep $h $name
+          }
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          # Open upright (his main posture).
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 1 || true; sleep 5
+          date
+          # Status, another tab, Status again, with every box reading taking 4 s (so leaving cuts one short).
+          film statusreturn-portrait 3 26 -address $M/slowdev -tab 5 -pose tour -tourTabs 5,0,5,3,5,2,5 -swipeLog YES
+          # The gear, Settings, Back; the gear, TV settings, Back, Back; same slow box.
+          film settingsback-portrait 3 25 -address $M/slowdev -tab 5 -pose settingsscript -swipeLog YES
+          outage outage-status-portrait 3 5
+          outage outage-remote-portrait 3 0
+          # Folded, upright on the outer display.
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          $D "$DEVICE" pose closed || true; sleep 5
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          film statusreturn 1 26 -address $M/slowdev -tab 5 -pose tour -tourTabs 5,0,5,3,5,2,5 -swipeLog YES
+          film settingsback 1 25 -address $M/slowdev -tab 5 -pose settingsscript -swipeLog YES
+          outage outage-status 1 5
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-calm-ci >/dev/null 2>&1 || gh release create tv-calm-ci --prerelease --title "TV calm reach films" --notes "Films from the tv-calm-reach branch."
+          for f in shots.zip films.zip status.txt; do
+            for i in 1 2 3; do gh release upload tv-calm-ci "$f" --clobber && break; sleep 15; done
+          done
