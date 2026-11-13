@@ -378,11 +378,11 @@ struct NoteLines: View {
     let notes: [String]
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(notes.enumerated()), id: \.offset) { i, n in
+            ForEach(Array(notes.enumerated()), id: \.offset) { _, n in
                 // "# " starts a heading over the lines under it, as an App Store or GitHub release groups its notes.
                 if n.hasPrefix("# ") {
+                    // No extra space above it: three lines stay exactly three lines' height, so the cut never slices one.
                     Text(n.dropFirst(2)).fontWeight(.semibold).fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, i == 0 ? 0 : 6)
                 } else {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("•").foregroundStyle(.secondary)

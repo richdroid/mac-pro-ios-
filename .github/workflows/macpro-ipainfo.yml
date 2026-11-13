@@ -63,6 +63,47 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/$name-foot.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
+          # A first-ever open (nothing kept on the phone; the Mac answers a second late) and then a second open, filmed from
+          # the Apps tab: the page must arrive whole both times, never filling in as he looks.
+          openfilm() {
+            local name=$1 display=$2; shift 2
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 1 -pose ipafirst "$@"
+            sleep 6.5; xcrun simctl io "$DEVICE" screenshot --display=$display dist/$name-0s.png
+            sleep 0.5; xcrun simctl io "$DEVICE" screenshot --display=$display dist/$name-1s.png
+            sleep 1; xcrun simctl io "$DEVICE" screenshot --display=$display dist/$name-2s.png
+            sleep 4
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # Back tapped with a real touch (x y of the system's Back in that posture): Apps at rest after.
+          backfilm() {
+            local name=$1 display=$2 bx=$3 by=$4; shift 4
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 1 -pose ipahistory
+            sleep 10
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/$name-page.png
+            $D "$DEVICE" touch $bx $by 0.08 || echo "tap failed"; sleep 2.5
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/$name-after.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # The page up while the Duo turns and folds: upright, flat, closed, open again (inner display filmed).
+          posturefilm() {
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/posture-ipahistory.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 1 -pose ipahistory
+            sleep 10
+            $D "$DEVICE" drag 0.5 0.8 0.5 0.4 || true; sleep 2
+            $D "$DEVICE" rotate 3 || true; sleep 5
+            xcrun simctl io "$DEVICE" screenshot --display=3 dist/posture-ipahistory-flat.png
+            $D "$DEVICE" rotate 1 || true; sleep 5
+            xcrun simctl io "$DEVICE" screenshot --display=3 dist/posture-ipahistory-upright.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
           # The page opened, then flung down and back, filmed: its rows must not jump as the details land.
           film() {
             local name=$1 display=$2 x=$3; shift 3
@@ -82,6 +123,8 @@ jobs:
             shot ipainfo$x $d 10 -tab 1 -pose ipainfo
             shot ipahistory$x $d 10 -tab 1 -pose ipahistory
             shot ipaold$x $d 10 -tab 1 -pose ipaold
+            shot ipaupdate$x $d 10 -tab 1 -pose ipaupdate
+            shot ipamissing$x $d 10 -tab 1 -pose ipamissing
             shot versions$x $d 10 -tab 1 -pose versions
             scrolled ipainfo$x $d $px -tab 1 -pose ipainfo
             scrolled ipahistory$x $d $px -tab 1 -pose ipahistory
@@ -94,16 +137,24 @@ jobs:
           open -a DeviceHub; sleep 10
           $D "$DEVICE" pose open; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
+          openfilm firstopen-upright 3 -noInfoCache YES
+          openfilm secondopen-upright 3
           poses 3 -upright 0.5 ""
           film ipahistory-upright 3 0.5 -tab 1 -pose ipahistory
+          backfilm back-upright 3 0.065 0.049
+          posturefilm
           xcrun simctl ui "$DEVICE" appearance light
           shot ipainfo-upright-light 3 10 -tab 1 -pose ipainfo
           shot ipahistory-upright-light 3 10 -tab 1 -pose ipahistory
           shot ipaapps-upright-light 3 9 -tab 1 -pose ipaapps
           xcrun simctl ui "$DEVICE" appearance dark
           $D "$DEVICE" rotate 3 || true; sleep 5
+          openfilm firstopen-flat 3 -noInfoCache YES
+          openfilm secondopen-flat 3
           poses 3 -flat 0.3 0.72
           film ipahistory-flat 3 0.3 -tab 1 -pose ipahistory
+          film ipahistory-flatright 3 0.72 -tab 1 -pose ipahistory
+          backfilm back-flat 3 0.948 0.222
           $D "$DEVICE" pose closed || true; sleep 5
           poses 1 -folded 0.45 ""
           film ipahistory-folded 1 0.45 -tab 1 -pose ipahistory

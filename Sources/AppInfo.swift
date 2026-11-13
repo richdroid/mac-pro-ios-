@@ -19,7 +19,7 @@ struct IPADetails: Codable, Equatable {
 }
 // Versions found in public, newest first, from one place.
 struct OutsideHistory: Codable, Equatable {
-    struct Entry: Codable, Equatable, Identifiable { let version: String; let at: Double; let notes: [String]; var id: String { version } }
+    struct Entry: Codable, Equatable, Identifiable { let version: String; let at: Double; let notes: [String]; var mine: Bool?; var id: String { version } }
     let from: String; var link: String?; var by: String?; let entries: [Entry]
 }
 struct IPAAnswer: Codable, Equatable { var info: IPADetails?; var history: OutsideHistory?; var historyPending: Bool? }
@@ -45,12 +45,30 @@ struct AppInfoView: View {
     @ObservedObject private var seeds: SeedStore
     let file: String
     @State private var answer: IPAAnswer?
+    // The Mac answered that it doesn't know this request (one from before it): the page shows what the Apps tab knows.
+    @State private var oldMac = false
     // Kept on the phone, so the page opens drawn, as Version History does, while the Mac is asked again.
     @MainActor static var known: [String: IPAAnswer] = {
+        // The build's film of a first-ever open starts with nothing kept.
+        if UserDefaults.standard.bool(forKey: "noInfoCache") { return [:] }
         guard let d = try? Data(contentsOf: knownFile) else { return [:] }
         return (try? JSONDecoder().decode([String: IPAAnswer].self, from: d)) ?? [:]
     }()
     private static var knownFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("app-info.json") }
+    @MainActor static func keep(_ file: String, _ got: IPAAnswer) {
+        guard got != known[file] else { return }
+        known[file] = got
+        let all = known, to = knownFile
+        Task.detached(priority: .utility) { try? JSONEncoder().encode(all).write(to: to, options: .atomic) }
+    }
+    // Asked as soon as a status names an added app, so its page opens whole the first time, never filling in as he looks.
+    @MainActor private static var asked: Set<String> = []
+    @MainActor static func prefetch(_ s: Status?, api: API) {
+        for a in s?.iosApps?.apps ?? [] where a.own && !a.isOurs && !a.file.isEmpty && !asked.contains(a.file + "@" + a.build) {
+            asked.insert(a.file + "@" + a.build)
+            Task { if let got = try? await api.ipaInfo(a.file) { keep(a.file, got) } }
+        }
+    }
 
     init(file: String, model: AppModel) {
         self.file = file
@@ -62,12 +80,18 @@ struct AppInfoView: View {
     private var app: Status.SeedApp? { seeds.seed?.apps.first { $0.file == file } }
     private var info: IPADetails? { answer?.info }
     private var history: OutsideHistory? { answer?.history.flatMap { $0.entries.isEmpty ? nil : $0 } }
+    // The version on this iPhone, only when the Mac knows the phone has the copy it holds; otherwise nothing is claimed.
+    private var phoneVersion: String? {
+        guard let app, app.state == "current" else { return nil }
+        return app.version.isEmpty ? info?.version : app.version
+    }
 
     @Environment(\.paneLayout) private var panes
     var body: some View {
         Group {
             // Open flat: the app and what's known of its versions on the left, the facts on the right; with no history,
-            // the facts split across both, so neither pane is mostly empty and nothing runs across the fold.
+            // the package's facts under the app on the left and its copies on the right, so neither pane is mostly
+            // empty and nothing runs across the fold.
             if panes { FoldSplit { pane(.left) } right: { pane(.right) } }
             else { pane(.whole) }
         }
@@ -80,7 +104,8 @@ struct AppInfoView: View {
 
     enum Side { case left, right, whole }
     private func pane(_ side: Side) -> some View {
-        ScrollViewReader { proxy in
+        let g = groups()
+        return ScrollViewReader { proxy in
         List {
             Section { PaneHeading(title: "App Info", shown: side != .right) }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
@@ -89,15 +114,20 @@ struct AppInfoView: View {
                 whatsNew(history)
                 if history.entries.count > 1 { olderVersions(history) }
             }
-            // With history the facts are the right pane's. Without it, the package's facts sit under the app on the left,
-            // and what it uses, its signature and where it came from on the right.
-            if side == .whole || (side == .right && history != nil) || (side == .left && history == nil && info != nil) || (side == .right && info == nil) {
-                general()
-            }
-            if side == .whole || side == .right {
-                uses()
-                signature()
-                origin()
+            ForEach(Array(g.enumerated()), id: \.offset) { i, group in
+                // Without history the first group (Information) is the left pane's; the rest the right's.
+                let left = history == nil && i == 0 && info != nil
+                if side == .whole || (side == .left && left) || (side == .right && !left) {
+                    Section(group.title) {
+                        ForEach(group.facts, id: \.label) { f in
+                            LabeledContent(f.label) {
+                                Text(f.value).foregroundStyle(f.color).multilineTextAlignment(.trailing)
+                                    .lineLimit(f.label == "Bundle ID" ? 1 : nil).truncationMode(.middle)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                }
             }
         }
         .contentMargins(.top, 4, for: .scrollContent)
@@ -115,7 +145,7 @@ struct AppInfoView: View {
             AppIcon(app: app, size: 58)
             VStack(alignment: .leading, spacing: 2) {
                 Text(app.name).font(.title3.weight(.bold)).lineLimit(2)
-                Text(Self.versionLine(info?.version ?? app.version, info?.build ?? app.build)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                Text(Self.versionLine(app.version.isEmpty ? info?.version ?? "" : app.version, app.build.isEmpty ? info?.build ?? "" : app.build)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
                 if let line { Text(line.0).font(.subheadline).foregroundStyle(line.1).monospacedDigit() }
             }
             Spacer(minLength: 8)
@@ -161,21 +191,24 @@ struct AppInfoView: View {
                 }
             }
         } header: { Text("What’s New") } footer: {
-            // Where it was read, so a newer App Store version than his copy isn't taken for his.
-            Text(Self.sourceNote(h, have: info?.version ?? app?.version ?? ""))
+            // Where it was read, so a newer version than his copy isn't taken for his.
+            Text(sourceNote(h))
         }
     }
-    static func sourceNote(_ h: OutsideHistory, have: String) -> String {
+    func isMine(_ e: OutsideHistory.Entry) -> Bool {
+        guard let v = phoneVersion else { return false }
+        return e.mine ?? (e.version == v)
+    }
+    func sourceNote(_ h: OutsideHistory) -> String {
         let place = h.from == "GitHub" ? "its GitHub releases" : "the App Store"
-        let newest = h.entries[0].version
-        if !have.isEmpty, newest != have, !h.entries.contains(where: { $0.version == have }) { return "From \(place). The copy on this iPhone is \(have)." }
-        if !have.isEmpty, newest != have { return "From \(place). This iPhone has \(have), listed below." }
-        return "From \(place)."
+        guard let have = phoneVersion, !isMine(h.entries[0]) else { return "From \(place)." }
+        if h.entries.contains(where: isMine) { return "From \(place). This iPhone has \(have), listed below." }
+        return "From \(place). This iPhone has \(have)."
     }
     func versionTitle(_ e: OutsideHistory.Entry) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("Version \(e.version)").font(.headline).monospacedDigit().lineLimit(1)
-            if e.version == (info?.version ?? app?.version) {
+            if isMine(e) {
                 Text("On this iPhone").font(.caption.weight(.semibold)).foregroundStyle(.green)
                     .padding(.horizontal, 8)
                     .background(Capsule().fill(.green.opacity(0.15)).padding(.vertical, -2))
@@ -198,75 +231,60 @@ struct AppInfoView: View {
         }
     }
 
-    // The App Store's Information list, in groups: the package and what it runs on, what it uses, its signature, its
-    // origin. From a Mac too old to read the package, the little the Apps tab knows, in one card.
-    @ViewBuilder func general() -> some View {
-        if let i = info {
-            Section("Information") {
-                if let by = history?.by, !by.isEmpty { row("Developer", by) }
-                if let s = i.size, s > 0 { row("Size", Self.bytes(s)) }
-                if let c = i.category, !c.isEmpty { row("Category", c) }
-                if let m = i.minimumOS, !m.isEmpty { row("Requires", "iOS \(m) or later") }
-                if let d = i.devices, !d.isEmpty { row("Runs on", d) }
-                if let n = i.languages, n > 1 { row("Languages", "\(n)") }
-                if let s = i.sdk, !s.isEmpty { row("Built for", s) }
-                if let c = i.copyright, !c.isEmpty { row("Copyright", c) }
-            }
-        } else if let app, app.installedAt > 1_000_000_000 || app.expires > 0 {
-            Section("Information") {
-                if app.installedAt > 1_000_000_000 { row("Installed", Self.day(app.installedAt)) }
-                if app.expires > 0 { expiry(app.expires) }
-            }
+    // The App Store's Information list, in groups: the package, what it uses, the copy on this iPhone, the one on the
+    // Mac. A group of one row joins Information (never a lone capsule beside rounded cards). From a Mac too old to read
+    // the package, the little the Apps tab knows, in one card. While the first answer is on its way, nothing yet.
+    struct Fact { let label: String; let value: String; var color: Color = .secondary }
+    struct FactGroup { let title: String; var facts: [Fact] }
+    func groups() -> [FactGroup] {
+        guard let i = info else {
+            guard oldMac, let app else { return [] }
+            var f: [Fact] = []
+            if app.installedAt > 1_000_000_000 { f.append(Fact(label: "Installed", value: Self.day(app.installedAt))) }
+            if app.expires > 0 { f.append(expiry(app.expires)) }
+            return f.isEmpty ? [] : [FactGroup(title: "Information", facts: f)]
         }
-    }
-    @ViewBuilder func uses() -> some View {
-        let inc = info?.extensions ?? [], asks = info?.asks ?? [], caps = info?.capabilities ?? []
-        if !inc.isEmpty || !asks.isEmpty || !caps.isEmpty {
-            Section("What It Uses") {
-                if !inc.isEmpty { row("Includes", inc.joined(separator: ", ")) }
-                if !asks.isEmpty { row("Can ask for", asks.joined(separator: ", ")) }
-                if !caps.isEmpty { row("Uses", caps.joined(separator: ", ")) }
-            }
+        var main = FactGroup(title: "Information", facts: [])
+        if let by = history?.by, !by.isEmpty { main.facts.append(Fact(label: "Developer", value: by)) }
+        if let s = i.size, s > 0 { main.facts.append(Fact(label: "Size", value: Self.bytes(s))) }
+        if let c = i.category, !c.isEmpty { main.facts.append(Fact(label: "Category", value: c)) }
+        if let m = i.minimumOS, !m.isEmpty { main.facts.append(Fact(label: "Requires", value: "iOS \(m) or later")) }
+        if let d = i.devices, !d.isEmpty { main.facts.append(Fact(label: "Runs on", value: d)) }
+        if let n = i.languages, n > 1 { main.facts.append(Fact(label: "Languages", value: "\(n)")) }
+        if let c = i.copyright, !c.isEmpty { main.facts.append(Fact(label: "Copyright", value: c)) }
+        var uses = FactGroup(title: "What It Uses", facts: [])
+        if let x = i.extensions, !x.isEmpty { uses.facts.append(Fact(label: "Includes", value: x.joined(separator: ", "))) }
+        if let x = i.asks, !x.isEmpty { uses.facts.append(Fact(label: "Can ask for", value: x.joined(separator: ", "))) }
+        if let x = i.capabilities, !x.isEmpty { uses.facts.append(Fact(label: "Uses", value: x.joined(separator: ", "))) }
+        // The copy on this iPhone: when it went on, when its signature ends (the phone's copy, as the header counts it).
+        var phone = FactGroup(title: "On This iPhone", facts: [])
+        let team = i.signed?.team ?? ""
+        if let app, app.installedAt > 1_000_000_000, app.state != "missing" {
+            phone.facts.append(Fact(label: "Installed", value: Self.day(app.installedAt)))
+            if app.expires > 0 { phone.facts.append(expiry(app.expires)) }
+            if !team.isEmpty { phone.facts.append(Fact(label: "Signed by", value: team)) }
         }
-    }
-    // The copy on this iPhone is signed on the Mac; the package as it came may have had a signature of its own, or none.
-    @ViewBuilder func signature() -> some View {
-        if let i = info {
-            let s = i.signed
-            let ends = (s?.expires).flatMap { $0 > 0 ? $0 : nil } ?? app.flatMap { $0.expires > 0 ? $0.expires : nil }
-            Section("Signature") {
-                if let t = s?.team, !t.isEmpty { row("Signed by", t) }
-                if let c = s?.created, c > 0 { row("Signed", Self.day(c)) }
-                if let ends { expiry(ends) }
-                if let t = i.cameSigned?.team, !t.isEmpty { row("As it came", "Signed by \(t)") }
-                else { row("As it came", "Unsigned") }
-            }
+        // The package the Mac keeps: where it came from, when, and how it came.
+        var mac = FactGroup(title: "On the Mac", facts: [])
+        if let src = i.source {
+            if src.kind == "files" { mac.facts.append(Fact(label: "Added from", value: "Files")) }
+            else if let h = src.host, !h.isEmpty { mac.facts.append(Fact(label: "Downloaded from", value: h)) }
         }
+        if let a = i.addedAt, a > 0 { mac.facts.append(Fact(label: "Added", value: Self.day(a))) }
+        if phone.facts.isEmpty, !team.isEmpty { mac.facts.append(Fact(label: "Signed by", value: team)) }
+        if let t = i.cameSigned?.team, !t.isEmpty { mac.facts.append(Fact(label: "Originally", value: "Signed by \(t)")) }
+        else { mac.facts.append(Fact(label: "Originally", value: "Unsigned")) }
+        var out: [FactGroup] = []
+        for g in [uses, phone, mac] where !g.facts.isEmpty {
+            if g.facts.count == 1 { main.facts.append(contentsOf: g.facts) } else { out.append(g) }
+        }
+        if let b = i.bundle, !b.isEmpty { main.facts.append(Fact(label: "Bundle ID", value: b)) }
+        return [main] + out
     }
-    func expiry(_ ends: Double) -> some View {
+    // The header's own rule for colour: grey until the last day, orange on it, red once it's passed.
+    func expiry(_ ends: Double) -> Fact {
         let days = Int(ceil((ends / 1000 - Date().timeIntervalSince1970) / 86400))
-        return LabeledContent("Expires") {
-            Text(Self.day(ends)).foregroundStyle(days <= 1 ? Color.red : days <= 30 ? Color.orange : Color.secondary)
-        }
-    }
-    @ViewBuilder func origin() -> some View {
-        if let i = info {
-            let installed = i.installedAt ?? app?.installedAt ?? 0
-            Section("On the Mac") {
-                if let src = i.source {
-                    if src.kind == "files" { row("Added from", "Files") }
-                    else if let h = src.host, !h.isEmpty { row("Downloaded from", h) }
-                }
-                if let a = i.addedAt, a > 0 { row("Added", Self.day(a)) }
-                if installed > 1_000_000_000 { row("Installed", Self.day(installed)) }
-                if let b = i.bundle, !b.isEmpty {
-                    LabeledContent("Bundle ID") { Text(b).textSelection(.enabled).lineLimit(1).truncationMode(.middle) }
-                }
-            }
-        }
-    }
-    func row(_ label: String, _ value: String) -> some View {
-        LabeledContent(label) { Text(value).multilineTextAlignment(.trailing) }
+        return Fact(label: "Expires", value: Self.day(ends), color: days <= 0 ? .red : days == 1 ? .orange : .secondary)
     }
 
     static func bytes(_ n: Double) -> String { ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file) }
@@ -277,26 +295,22 @@ struct AppInfoView: View {
         return d.formatted(.dateTime.month(.abbreviated).day().year())
     }
 
-    // Asked as the page opens; asked again while the Mac is still looking in public (it answers what it has after 6 s).
-    // A Mac too old to know the page's details answers "not found": the page keeps what the Apps tab already knows, and
-    // says nothing about it. One that doesn't answer is asked again every 3 s while the page is up.
+    // Asked as the page opens; asked again while the Mac is still looking in public (it answers its facts at once and
+    // what it found when it has it). A Mac too old to know the request answers "not found": the page keeps what the Apps
+    // tab already knows, and says nothing about it. One that doesn't answer is asked again every 3 s while the page is up.
     func load() async {
         var tries = 0
         while !Task.isCancelled {
             do {
                 let got = try await model.api.ipaInfo(file)
                 if got != answer { withAnimation(Motion.quick) { answer = got } }
-                if got != Self.known[file] {
-                    Self.known[file] = got
-                    let all = Self.known, to = Self.knownFile
-                    Task.detached(priority: .utility) { try? JSONEncoder().encode(all).write(to: to, options: .atomic) }
-                }
+                Self.keep(file, got)
                 tries += 1
-                guard got.historyPending == true, tries < 6 else { return }
+                guard got.historyPending == true, tries < 8 else { return }
             } catch is CancellationError { return }
             catch let e as URLError where e.code == .cancelled { return }
             catch is URLError {}
-            catch { return }
+            catch { if answer == nil { oldMac = true }; return }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
     }
