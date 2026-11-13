@@ -52,8 +52,21 @@ jobs:
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           D=/tmp/dh/.build/release/devicehubctl
           open -a DeviceHub; sleep 10
+          # Turn the phone until a display's screenshot has the shape wanted. Device Hub's rotate numbers didn't land the
+          # same way in every pose (run 2: "rotate 1" right after closing left the outer display sideways, and open flat
+          # 1 and 3 came out the other way round), so the shape is checked rather than assumed.
+          orient() {
+            local want=$1 display=$2 r w h
+            for r in 1 3 1 3 1; do
+              xcrun simctl io "$DEVICE" screenshot --display=$display /tmp/o.png > /dev/null 2>&1
+              w=$(sips -g pixelWidth /tmp/o.png 2>/dev/null | awk '/pixelWidth/{print $2}'); h=$(sips -g pixelHeight /tmp/o.png 2>/dev/null | awk '/pixelHeight/{print $2}')
+              if [ -n "$w" ] && { { [ $want = portrait ] && [ "$w" -lt "$h" ]; } || { [ $want = landscape ] && [ "$w" -gt "$h" ]; }; }; then echo "orient $want $display: ${w}x${h}"; return 0; fi
+              $D "$DEVICE" rotate $r || true; sleep 4
+            done
+            echo "orient $want $display FAILED (${w}x${h})"
+          }
           $D "$DEVICE" pose closed || true; sleep 4
-          $D "$DEVICE" rotate 1 || true; sleep 3
+          orient portrait 1
           # One shot: name, display, wait, then the app's own arguments.
           shot() {
             local name=$1 display=$2 wait=$3; shift 3
@@ -80,8 +93,8 @@ jobs:
                 side) $D "$DEVICE" drag 0.8 0.75 0.2 0.75 0.25 || echo "drag failed";;
                 tap) $D "$DEVICE" touch 0.3 0.3 0.05 || echo "tap failed";;
                 open|partial|closed) $D "$DEVICE" pose $cmd || echo "pose failed";;
-                portrait) $D "$DEVICE" rotate 1 || echo "rotate failed";;
-                landscape) $D "$DEVICE" rotate 3 || echo "rotate failed";;
+                portrait) orient portrait $display;;
+                landscape) orient landscape $display;;
                 shot) xcrun simctl io "$DEVICE" screenshot --display=$display dist/lfm-$name-$t.png;;
               esac
             done
@@ -106,16 +119,22 @@ jobs:
           STEPS="shot:12 shot:12" film live 1 30 -tab 0 -mockAdvance 11
           STEPS="pull:5 shot:3" film detailfilm 1 12 -tab 0 -pose detail
           film tour 1 14 -tab 0 -pose tour
+          # Folded and turned sideways, a posture he can hold too.
+          orient landscape 1
+          shot now-fland 1 8 -tab 0
+          shot you-fland 1 8 -tab 1
+          shot detail-fland 1 9 -tab 0 -pose detail
+          orient portrait 1
           date
           # Folded on Now, then opened flat, turned upright, half closed and closed, on each display in turn.
           for pass in outer inner; do
             display=1; [ $pass = inner ] && display=3
-            $D "$DEVICE" pose closed || true; sleep 4; $D "$DEVICE" rotate 1 || true; sleep 2
+            $D "$DEVICE" pose closed || true; sleep 4; orient portrait 1
             STEPS="landscape:6 open:6 shot:2 portrait:5 shot:2 partial:5 closed:5" film posture-$pass $display 36 -tab 0
           done
           # Open upright: the posture he holds.
           $D "$DEVICE" pose open || true; sleep 5
-          $D "$DEVICE" rotate 1 || true; sleep 5
+          orient portrait 3
           shot now-portrait 3 8 -tab 0
           shot you-portrait 3 8 -tab 1
           shot detail-portrait 3 9 -tab 0 -pose detail
@@ -124,7 +143,7 @@ jobs:
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-you-portrait 3 24 -tab 1
           film tour-portrait 3 14 -tab 0 -pose tour
           # Open flat, two panes.
-          $D "$DEVICE" rotate 3 || true; sleep 5
+          orient landscape 3
           shot now-open 3 8 -tab 0
           shot you-open 3 8 -tab 1
           shot detail-open 3 9 -tab 0 -pose detail

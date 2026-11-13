@@ -145,14 +145,22 @@ struct Profile: Sendable {
             if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
             let s = await Insights.work(coveredFrom: sync.coveredFrom, complete: sync.complete)
             insights = s
+            if !s.hours.isEmpty { UserDefaults.standard.set(s.dayStart, forKey: "dayStart") }
             lastInsight = Date()
             insightTask = nil
         }
     }
 
-    // Today's plays, oldest first, the one on now included.
+    // Where his day begins: his quietest hour, from his history (kept, so the first frame of the next launch has it too).
+    var dayStart: Int { insights.hours.isEmpty ? (UserDefaults.standard.object(forKey: "dayStart") as? Int ?? 6) : insights.dayStart }
+    var dayBegan: Date {
+        let cal = Calendar.current
+        let start = cal.date(byAdding: .hour, value: dayStart, to: cal.startOfDay(for: Clock.now)) ?? Clock.now
+        return start > Clock.now ? start.addingTimeInterval(-86400) : start
+    }
+    // His day's plays so far, oldest first.
     var today: [Scrobble] {
-        let start = Calendar.current.startOfDay(for: Clock.now)
+        let start = dayBegan
         return recent.filter { ($0.date ?? .distantPast) >= start }.reversed()
     }
 }
@@ -176,7 +184,7 @@ struct TrackInfo: Sendable {
         info.loved = t["userloved"].bool
         info.listeners = t["listeners"].int
         info.duration = t["duration"].int.flatMap { $0 > 0 ? $0 / 1000 : nil }
-        info.tags = t["toptags"]["tag"].array.map(\.text).filter { !$0.isEmpty }.prefix(5).map { $0.lowercased() }
+        info.tags = t["toptags"]["tag"].array.map { $0["name"].text }.filter { !$0.isEmpty }.prefix(5).map { $0.lowercased() }
         // Last.fm ends each summary with a link back to itself; the words are kept, the link isn't.
         if let raw = t["wiki"]["summary"].string {
             let cut = raw.components(separatedBy: "<a href").first ?? raw

@@ -36,13 +36,27 @@ struct TrackPage: View {
         let music: URL?
         @Environment(\.paneLayout) private var pane
         @Environment(\.openURL) private var openURL
+        @State private var sideways = false
         var body: some View {
+            Group { layout }.onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.15 } action: { sideways = $0 }
+        }
+        @ViewBuilder private var layout: some View {
             if pane {
                 FoldSplit {
                     VStack(alignment: .leading, spacing: 18) { cover; titles }.padding(S.margin).frame(maxHeight: .infinity)
                 } right: {
                     ScrollView { facts.padding(S.margin).padding(.top, 24) }.scrollIndicators(.hidden)
                 }
+            } else if sideways {
+                // Folded and turned: the cover beside its titles, the rest under them.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        HStack(alignment: .bottom, spacing: 22) { cover.frame(width: 240); titles }
+                        facts
+                    }
+                    .padding(S.margin)
+                }
+                .scrollIndicators(.hidden)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) { cover; titles; facts }
@@ -72,7 +86,7 @@ struct TrackPage: View {
                 HStack(alignment: .top, spacing: 26) {
                     Figure(value: info?.userPlays.map(number) ?? "–", label: info?.userPlays == 1 ? "your play" : "your plays", size: 40)
                     Figure(value: info?.listeners.map(compact) ?? "–", label: "listeners", size: 40)
-                    if let d = info?.duration { Figure(value: String(format: "%d:%02d", d / 60, d % 60), label: "long", size: 40) }
+                    if let d = info?.duration { Figure(value: String(format: "%d:%02d", d / 60, d % 60), label: "length", size: 40) }
                     Spacer(minLength: 0)
                     if info?.loved ?? s.loved {
                         Image(systemName: "heart.fill").font(.title).foregroundStyle(S.accent).padding(.top, 6).accessibilityLabel("Loved")
@@ -82,16 +96,7 @@ struct TrackPage: View {
                 if let tags = info?.tags, !tags.isEmpty {
                     FlowTags(tags: tags)
                 }
-                if let words = info?.summary {
-                    // More text grows in place.
-                    Button { withAnimation(.smooth) { more.toggle() } } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(words).font(.body).foregroundStyle(.white.opacity(0.9)).lineLimit(more ? nil : 3).multilineTextAlignment(.leading)
-                            Text(more ? "Less" : "More").font(.subheadline.weight(.semibold)).foregroundStyle(S.accent)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
+                if let words = info?.summary { MoreText(text: words, more: $more) }
                 VStack(spacing: 10) {
                     if let music {
                         Button { openURL(music) } label: { Label("Open in Apple Music", systemImage: "music.note").frame(maxWidth: .infinity) }
@@ -145,3 +150,29 @@ struct FlowLayout: Layout {
 }
 
 extension String { var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() } }
+
+// Words that grow in place: three lines, and "More" only when there's more than three lines of them.
+struct MoreText: View {
+    let text: String
+    @Binding var more: Bool
+    @State private var full: CGFloat = 0
+    @State private var short: CGFloat = 0
+    var body: some View {
+        let cut = full > short + 1
+        Button { if cut || more { withAnimation(.smooth) { more.toggle() } } } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(text).font(.body).foregroundStyle(.white.opacity(0.9)).lineLimit(more ? nil : 3).multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if !more { short = $0 } }
+                    .background {
+                        // The whole of it, measured unseen at the same width.
+                        Text(text).font(.body).fixedSize(horizontal: false, vertical: true).hidden()
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full = $0 }
+                    }
+                if cut || more { Text(more ? "Less" : "More").font(.subheadline.weight(.semibold)).foregroundStyle(S.accent) }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!cut && !more)
+    }
+}

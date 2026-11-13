@@ -39,8 +39,10 @@ struct YouTab: View {
     @ViewBuilder private var years: some View { YearsSection() }
     @ViewBuilder private var listening: some View {
         PaceCard().padding(.horizontal, S.margin)
+        CanonCard().padding(.horizontal, S.margin)
         RisingCard().padding(.horizontal, S.margin)
-        WeekHub(title: "this week", list: store.insights.week)
+        WeekHub(title: "on repeat", list: store.insights.week)
+        ClockCard().padding(.horizontal, S.margin)
         if !store.insights.discoveries.isEmpty { WeekHub(title: "new to you", list: store.insights.discoveries) }
     }
     private func page<C: View>(@ViewBuilder _ c: () -> C) -> some View {
@@ -342,5 +344,112 @@ struct YearsSection: View {
         }
         .padding(.horizontal, S.margin)
         .accessibilityElement(children: .combine)
+    }
+}
+
+// His canon: the artists that are always there (heard in at least six of every ten months he's listened), how much of
+// this week went to them, and their covers from this week.
+struct CanonCard: View {
+    private var store: Store { Store.shared }
+    var body: some View {
+        if let c = store.insights.canon {
+            VStack(alignment: .leading, spacing: S.head) {
+                SectionHead(text: "your canon")
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .top, spacing: 28) {
+                        Figure(value: "\(c.artists)", label: "artists always there", size: 40)
+                        Figure(value: "\(Int((c.share * 100).rounded()))%", label: "of this week", size: 40)
+                        Spacer(minLength: 0)
+                    }
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.white.opacity(0.12))
+                            Capsule().fill(S.accent).frame(width: max(6, g.size.width * c.share))
+                        }
+                    }
+                    .frame(height: 8)
+                    .accessibilityHidden(true)
+                    if !c.thisWeek.isEmpty {
+                        HStack(spacing: -14) {
+                            ForEach(Array(c.thisWeek.prefix(8).enumerated()), id: \.element.id) { k, a in
+                                ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 160, corner: 8).frame(width: 52)
+                                    .shadow(color: .black.opacity(0.45), radius: 6, x: 2)
+                                    .zIndex(Double(20 - k))
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .accessibilityLabel("This week: " + c.thisWeek.prefix(8).map(\.name).joined(separator: ", "))
+                    }
+                    Text("Heard in at least 6 of every 10 months since you started.").font(.subheadline).foregroundStyle(S.soft)
+                }
+                .card()
+            }
+        }
+    }
+}
+
+// His clock: when he listens. All his plays by hour as soft petals, the last seven days drawn over them in the cover's
+// colour, midnight at the top. In the middle, the share of his plays after midnight.
+struct ClockCard: View {
+    private var store: Store { Store.shared }
+    var body: some View {
+        let i = store.insights
+        if i.hours.reduce(0, +) > 500 {
+            let all = i.hours.map(Double.init), week = i.hoursWeek.map(Double.init)
+            let sa = max(all.reduce(0, +), 1), sw = max(week.reduce(0, +), 1)
+            let shareA = all.map { $0 / sa }, shareW = week.map { $0 / sw }
+            let peak = max(shareA.max() ?? 0.01, shareW.max() ?? 0.01)
+            let late = (0..<5).reduce(0.0) { $0 + shareA[$1] }
+            let tint = ArtStore.shared.palette(store.hero?.art ?? ArtRef(artist: "", album: "", url: nil))?.vivid.color ?? S.accent
+            VStack(alignment: .leading, spacing: S.head) {
+                SectionHead(text: "your clock")
+                VStack(spacing: 14) {
+                    ZStack {
+                        Canvas { ctx, size in
+                            let c = CGPoint(x: size.width / 2, y: size.height / 2)
+                            let r = min(size.width, size.height) / 2 - 18
+                            let inner = r * 0.34
+                            for ring in [0.5, 1.0] {
+                                let rr = inner + (r - inner) * ring
+                                ctx.stroke(Path(ellipseIn: CGRect(x: c.x - rr, y: c.y - rr, width: rr * 2, height: rr * 2)), with: .color(.white.opacity(0.07)), lineWidth: 1)
+                            }
+                            func petal(_ h: Int, _ v: Double, _ fill: GraphicsContext.Shading, _ inset: Double) {
+                                let len = inner + (r - inner) * CGFloat(sqrt(v / peak))
+                                let a0 = (Double(h) / 24) * 2 * .pi - .pi / 2 + inset, a1 = (Double(h + 1) / 24) * 2 * .pi - .pi / 2 - inset
+                                var p = Path()
+                                p.addArc(center: c, radius: inner, startAngle: .radians(a0), endAngle: .radians(a1), clockwise: false)
+                                p.addArc(center: c, radius: len, startAngle: .radians(a1), endAngle: .radians(a0), clockwise: true)
+                                p.closeSubpath()
+                                ctx.fill(p, with: fill)
+                            }
+                            for h in 0..<24 { petal(h, shareA[h], .color(.white.opacity(0.16)), 0.012) }
+                            for h in 0..<24 where shareW[h] > 0 { petal(h, shareW[h], .color(tint.opacity(0.8)), 0.05) }
+                        }
+                        VStack(spacing: 0) {
+                            Text("\(Int((late * 100).rounded()))%").font(.system(size: 30, weight: .light)).monospacedDigit().foregroundStyle(.white)
+                            Text("after midnight").font(.caption).foregroundStyle(S.soft)
+                        }
+                        ForEach([0, 6, 12, 18], id: \.self) { h in
+                            GeometryReader { g in
+                                let r = min(g.size.width, g.size.height) / 2 - 6
+                                let a = Double(h) / 24 * 2 * .pi - .pi / 2
+                                Text(DaySection.hourLabel(h)).font(.caption2.weight(.medium)).foregroundStyle(S.soft).fixedSize()
+                                    .position(x: g.size.width / 2 + CGFloat(cos(a)) * r, y: g.size.height / 2 + CGFloat(sin(a)) * r)
+                            }
+                        }
+                    }
+                    .frame(height: 260)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Your listening by hour. \(Int((late * 100).rounded())) percent of your plays are after midnight.")
+                    HStack(spacing: 16) {
+                        HStack(spacing: 6) { RoundedRectangle(cornerRadius: 2).fill(tint).frame(width: 14, height: 10); Text("last 7 days") }
+                        HStack(spacing: 6) { RoundedRectangle(cornerRadius: 2).fill(.white.opacity(0.25)).frame(width: 14, height: 10); Text("all your years") }
+                        Spacer(minLength: 0)
+                    }
+                    .font(.caption).foregroundStyle(S.soft)
+                }
+                .card()
+            }
+        }
     }
 }

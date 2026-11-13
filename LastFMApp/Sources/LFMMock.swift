@@ -24,7 +24,7 @@ final class MockLastFM: @unchecked Sendable {
     private let lock = NSLock()
     var profileName: String { profile["name"] as? String ?? "listener" }
     // -playing NO: nothing on right now (the "last played" state).
-    private let playing = UserDefaults.standard.object(forKey: "playing") as? Bool ?? true
+    private let playing = UserDefaults.standard.object(forKey: "playing") == nil || UserDefaults.standard.bool(forKey: "playing")
     // -mockAdvance N: every N seconds the song on now is scrobbled and the next begins.
     private let advance = UserDefaults.standard.double(forKey: "mockAdvance")
 
@@ -108,7 +108,7 @@ final class MockLastFM: @unchecked Sendable {
         func weight(_ i: Int, _ day: Int) -> Double {
             guard day >= start[i] else { return 0 }
             let back = totalDays - day
-            if i == rising { return back <= 6 ? 34 : artists[i].weight * 0.6 }
+            if i == rising { return back <= 6 ? 7 : artists[i].weight * 0.6 }
             if i == discovery { return 4 }
             let w = artists[i].weight
             switch shape[i] {
@@ -137,10 +137,14 @@ final class MockLastFM: @unchecked Sendable {
             let weekday = cal.component(.weekday, from: date)
             if weekday == 1 || weekday == 7 { target = Int(Double(target) * 1.25) }
             if date >= weekStart { target = Int(Double(target) * 1.2) }
-            var made = 0
-            while made < target {
+            var made = 0, sessions = 0
+            // Today, only the hours already lived.
+            let nowHour = cal.component(.hour, from: now)
+            let dayHours = back == 0 ? hours.enumerated().map { $0.offset <= nowHour ? $0.element : 0 } : hours
+            while made < target && sessions < 400 {
+                sessions += 1
                 // A session: one artist, an album in order, sometimes on to the next.
-                let h = pick(hours, &r)
+                let h = pick(dayHours, &r)
                 var t = date.addingTimeInterval(Double(h) * 3600 + Double(r.int(3600)))
                 let x = r.unit() * (cumulative.last ?? 1)
                 var lo = 0, hi = cumulative.count - 1
@@ -157,7 +161,6 @@ final class MockLastFM: @unchecked Sendable {
                     tr += 1
                     if tr >= artists[a].albums[al].tracks.count { al = (al + 1) % artists[a].albums.count; tr = 0 }
                 }
-                if back == 0 && Int(t.timeIntervalSince1970) >= nowUts { break }
             }
         }
         // Sessions overlap; one phone plays one song at a time, so a scrobble every two and a half minutes at most.
@@ -290,7 +293,7 @@ final class MockLastFM: @unchecked Sendable {
                               "userloved": mine.first.map(loved) == true ? "1" : "0", "duration": "\((180 + title.count * 7) * 1000)",
                               "artist": ["name": a.name], "album": ["title": al.name, "artist": a.name, "image": image(al.art)],
                               "toptags": ["tag": a.tags.map { ["name": $0] }],
-                              "wiki": ["summary": "\"\(title)\" is a song by \(a.name), from the \(al.year) album \(al.name). It became a quiet favourite on late-night radio and is one of the band's most played songs. <a href=\"https://www.last.fm\">Read more on Last.fm</a>"],
+                              "wiki": ["summary": "\"\(title)\" is a song by \(a.name), first released in \(al.year). It became a quiet favourite on late-night radio, the song the band closes every show with, and the one most of their listeners found them through. <a href=\"https://www.last.fm\">Read more on Last.fm</a>"],
                               "url": "https://www.last.fm/music/\(a.name.replacingOccurrences(of: " ", with: "+"))"]]
         default:
             return ["error": 3, "message": "Invalid Method"]

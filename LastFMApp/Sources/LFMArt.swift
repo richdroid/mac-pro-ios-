@@ -59,8 +59,8 @@ final class ArtStore: @unchecked Sendable {
 
     // Only what's in memory: for a view's first frame, so a cover seen before is there at once, never faded in again.
     func cached(_ ref: ArtRef, px: Int) -> CGImage? { images.object(forKey: "\(ref.key)@\(px)" as NSString)?.image }
-    func palette(_ ref: ArtRef) -> Palette? { lock.lock(); defer { lock.unlock() }; return palettes[ref.key] }
-    func appleMusic(_ ref: ArtRef) -> URL? { lock.lock(); defer { lock.unlock() }; return links[ref.key].flatMap(URL.init(string:)) }
+    func palette(_ ref: ArtRef) -> Palette? { lock.withLock { palettes[ref.key] } }
+    func appleMusic(_ ref: ArtRef) -> URL? { lock.withLock { links[ref.key] }.flatMap(URL.init(string:)) }
 
     func image(_ ref: ArtRef, px: Int) async -> CGImage? {
         if let c = cached(ref, px: px) { return c }
@@ -70,7 +70,7 @@ final class ArtStore: @unchecked Sendable {
                                                                     kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
         images.setObject(CGImageBox(img), forKey: "\(ref.key)@\(px)" as NSString)
         if palette(ref) == nil, let p = Self.extract(img) {
-            lock.lock(); palettes[ref.key] = p; let all = palettes; lock.unlock()
+            let all = lock.withLock { palettes[ref.key] = p; return palettes }
             if let d = try? JSONEncoder().encode(all) { try? d.write(to: dir.appendingPathComponent("palettes.json"), options: .atomic) }
         }
         return img
@@ -110,12 +110,10 @@ final class ArtStore: @unchecked Sendable {
 
     // Apple's store, by artist and album, once per album ever, no more than one look every second and a half.
     private func storeArt(_ ref: ArtRef) async -> String? {
-        lock.lock(); let known = itunes[ref.key]; lock.unlock()
+        let known = lock.withLock { itunes[ref.key] }
         if let known { return known.isEmpty ? nil : known }
         guard !LastFM.shared.mock else { return nil }
-        lock.lock()
-        let slot = max(Date(), itunesNext); itunesNext = slot.addingTimeInterval(1.5)
-        lock.unlock()
+        let slot = lock.withLock { let s = max(Date(), itunesNext); itunesNext = s.addingTimeInterval(1.5); return s }
         let wait = slot.timeIntervalSinceNow
         if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
         var c = URLComponents(string: "https://itunes.apple.com/search")!
@@ -126,11 +124,12 @@ final class ArtStore: @unchecked Sendable {
         let want = ref.artist.lowercased()
         let hit = results.first { $0["artistName"].text.lowercased() == want } ?? results.first { $0["artistName"].text.lowercased().contains(want) || want.contains($0["artistName"].text.lowercased()) }
         let art = hit?["artworkUrl100"].string?.replacingOccurrences(of: "100x100bb", with: "1000x1000bb") ?? ""
-        lock.lock()
-        itunes[ref.key] = art
-        if let l = hit?["collectionViewUrl"].string { links[ref.key] = l }
-        let all = itunes.reduce(into: [String: [String]]()) { $0[$1.key] = [$1.value, links[$1.key] ?? ""] }
-        lock.unlock()
+        let link = hit?["collectionViewUrl"].string
+        let all = lock.withLock {
+            itunes[ref.key] = art
+            if let link { links[ref.key] = link }
+            return itunes.reduce(into: [String: [String]]()) { $0[$1.key] = [$1.value, links[$1.key] ?? ""] }
+        }
         if let d = try? JSONEncoder().encode(all) { try? d.write(to: dir.appendingPathComponent("itunes.json"), options: .atomic) }
         return art.isEmpty ? nil : art
     }

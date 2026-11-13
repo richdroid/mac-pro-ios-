@@ -217,5 +217,5 @@ struct Press: ButtonStyle {
 // The build's poses: launch arguments that put a screen in a state to be shot. Never set on the phone.
 enum Pose {
     static let name = UserDefaults.standard.string(forKey: "pose") ?? ""
-    static var tab: Int { UserDefaults.standard.object(forKey: "tab") as? Int ?? 0 }
+    static var tab: Int { UserDefaults.standard.integer(forKey: "tab") }
 }

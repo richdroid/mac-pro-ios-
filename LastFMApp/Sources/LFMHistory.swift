@@ -117,6 +117,18 @@ actor HistoryDB {
         return (album, url)
     }
     func artURL(_ artist: String, _ album: String) -> String? { var u: String?; rows("SELECT url FROM art WHERE artist = ? AND album = ?", [artist, album]) { u = text($0, 0) }; return u }
+    // How many calendar months had any music, and each artist heard in at least `min` of them: his canon.
+    private var canonKept: (count: Int, months: Int, names: Set<String>, day: Int)?
+    func canon(share: Double = 0.6) -> (months: Int, names: Set<String>) {
+        let n = count(), today = LocalDay.today
+        if let k = canonKept, k.day == today, abs(k.count - n) < 500 { return (k.months, k.names) }
+        var months = 0
+        rows("SELECT COUNT(DISTINCT strftime('%Y-%m', uts, 'unixepoch', 'localtime')) FROM plays") { months = int($0, 0) }
+        var names = Set<String>()
+        rows("SELECT artist, COUNT(DISTINCT strftime('%Y-%m', uts, 'unixepoch', 'localtime')) m FROM plays GROUP BY artist HAVING m >= ?", [max(1, Int((Double(months) * share).rounded(.up)))]) { names.insert(text($0, 0)) }
+        canonKept = (n, months, names, today)
+        return (months, names)
+    }
     // Artists first heard after a moment, with how much since.
     func discoveries(since: Int, minPlays: Int) -> [(String, Int, Int)] {
         var out: [(String, Int, Int)] = []
@@ -280,6 +292,17 @@ struct Pace: Sendable {
     var delta: Double { usual == 0 ? 0 : Double(now - usual) / Double(usual) }
 }
 
+// The artists that are always there: heard in at least six of every ten months he's listened, and how much of this
+// week went to them.
+struct Canon: Sendable {
+    let artists: Int
+    let months: Int
+    let weekPlays: Int
+    let weekTotal: Int
+    let thisWeek: [ArtistCount]       // the canon's artists heard in the last seven days, most played first
+    var share: Double { weekTotal == 0 ? 0 : Double(weekPlays) / Double(weekTotal) }
+}
+
 struct Rising: Sendable {
     let artist: String
     let album: String
@@ -299,6 +322,10 @@ struct Insights: Sendable {
     var rising: Rising?
     var week: [ArtistCount] = []
     var discoveries: [ArtistCount] = []
+    var hours: [Int] = []             // all his plays by hour of the day
+    var hoursWeek: [Int] = []         // the last seven days by hour
+    var dayStart = 6                  // his quietest hour: where his day begins
+    var canon: Canon?
 
     static func work(coveredFrom: Int, complete: Bool) async -> Insights {
         let db = HistoryDB.shared
@@ -307,6 +334,11 @@ struct Insights: Sendable {
         let now = Int(Clock.now.timeIntervalSince1970)
         let cal = Calendar.current
         s.days = await db.dayCounts()
+        // His clock: all of it, and the last seven days. His day starts at its quietest hour (a night owl's midnight is
+        // the middle of his evening), once there's enough to know.
+        s.hours = await db.hourCounts()
+        s.hoursWeek = await db.hourCounts(since: now - 7 * 86400)
+        if s.hours.reduce(0, +) > 2000, let q = s.hours.indices.min(by: { s.hours[$0] < s.hours[$1] }) { s.dayStart = q }
         let today = LocalDay.today
         let coveredDay = complete ? Int.min : LocalDay.key(coveredFrom) + 1
 
@@ -386,6 +418,15 @@ struct Insights: Sendable {
                 for (name, _, n) in found.prefix(6) {
                     let c = await db.cover(of: name)
                     s.discoveries.append(ArtistCount(name: name, plays: n, album: c?.album ?? "", image: c?.url, isNew: true))
+                }
+            }
+            if complete, weekTotal > 0 {
+                let (months, names) = await db.canon()
+                if months >= 6, !names.isEmpty {
+                    let mine = list.filter { names.contains($0.name) }
+                    var inCanon = 0
+                    for (name, n) in await db.artists(from: weekFrom, to: now + 1, limit: 400) where names.contains(name) { inCanon += n }
+                    s.canon = Canon(artists: names.count, months: months, weekPlays: inCanon, weekTotal: weekTotal, thisWeek: mine)
                 }
             }
             s.week = list

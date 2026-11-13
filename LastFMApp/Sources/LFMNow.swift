@@ -10,6 +10,9 @@ struct NowTab: View {
     let top: Int
     @Environment(\.paneLayout) private var pane
     @Environment(\.horizontalSizeClass) private var size
+    // Wider than tall in one column: folded and turned sideways. The hero goes side by side so the song's words stay
+    // on screen with its cover.
+    @State private var sideways = false
     private var store: Store { Store.shared }
     var body: some View {
         Group {
@@ -26,7 +29,7 @@ struct NowTab: View {
             } else {
                 page {
                     VStack(alignment: .leading, spacing: S.section) {
-                        NowHero(layout: size == .regular ? .wide : .column)
+                        NowHero(layout: sideways ? .short : size == .regular ? .wide : .column)
                         trouble
                         DaySection()
                         RecentSection()
@@ -34,6 +37,7 @@ struct NowTab: View {
                 }
             }
         }
+        .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.15 } action: { sideways = $0 }
     }
     @ViewBuilder private var trouble: some View {
         if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
@@ -65,7 +69,7 @@ struct TroubleNote: View {
 }
 
 struct NowHero: View {
-    enum Layout { case column, wide, stage }
+    enum Layout { case column, wide, short, stage }
     let layout: Layout
     @Environment(\.openTrack) private var open
     @State private var breathe = false
@@ -74,12 +78,12 @@ struct NowHero: View {
         if let s = store.hero {
             let playing = s.nowPlaying
             VStack(alignment: .leading, spacing: 18) {
-                HubTitle(text: s.artist, size: layout == .column ? 72 : 88)
+                HubTitle(text: s.artist, size: layout == .column || layout == .short ? 64 : 88)
                     .id(s.artist).transition(.opacity)
                 Group {
-                    if layout == .wide {
+                    if layout == .wide || layout == .short {
                         HStack(alignment: .bottom, spacing: 24) {
-                            art(s, playing).frame(width: 300)
+                            art(s, playing).frame(width: layout == .short ? 250 : 300)
                             words(s, playing).padding(.bottom, 6)
                         }
                     } else {
@@ -149,9 +153,12 @@ struct DaySection: View {
     @MainActor static var shown = false
     var body: some View {
         let plays = store.today
-        let byHour = Dictionary(grouping: plays) { Calendar.current.component(.hour, from: $0.date ?? Clock.now) }
-        let tallest = max(byHour.values.map(\.count).max() ?? 1, 6)
-        let nowHour = Calendar.current.component(.hour, from: Clock.now)
+        let start = store.dayStart
+        // Columns run from the hour his day begins, round to the hour before it.
+        let slot = { (d: Date) in (Calendar.current.component(.hour, from: d) - start + 24) % 24 }
+        let bySlot = Dictionary(grouping: plays) { slot($0.date ?? Clock.now) }
+        let tallest = max(bySlot.values.map(\.count).max() ?? 1, 6)
+        let nowSlot = slot(Clock.now)
         VStack(alignment: .leading, spacing: S.head) {
             SectionHead(text: "your day", trailing: plays.isEmpty ? nil : "\(plays.count) \(plays.count == 1 ? "play" : "plays")")
             ZStack(alignment: .top) {
@@ -161,39 +168,38 @@ struct DaySection: View {
                     let h = g.size.height - 22
                     let unit = min(h / CGFloat(tallest), 9)
                     ZStack(alignment: .topLeading) {
-                        // Night hours, a shade darker.
-                        ForEach([0, 20], id: \.self) { start in
-                            let span = start == 0 ? 6 : 4
-                            RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.035))
-                                .frame(width: CGFloat(span) * (w + gap) - gap, height: h + 6)
-                                .offset(x: CGFloat(start) * (w + gap), y: -3)
+                        // The hours after dark, a shade lighter behind, so a night owl's evening reads as one stretch.
+                        ForEach(Array(Self.nightRuns(start: start).enumerated()), id: \.offset) { _, run in
+                            RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.04))
+                                .frame(width: CGFloat(run.count) * (w + gap) - gap, height: h + 6)
+                                .offset(x: CGFloat(run.first) * (w + gap), y: -3)
                         }
                         HStack(alignment: .bottom, spacing: gap) {
-                            ForEach(0..<24, id: \.self) { hr in
-                                column(byHour[hr] ?? [], hour: hr, now: nowHour, unit: unit, width: w, height: h)
+                            ForEach(0..<24, id: \.self) { k in
+                                column(bySlot[k] ?? [], slot: k, now: nowSlot, unit: unit, width: w, height: h)
                             }
                         }
                         .frame(height: h, alignment: .bottom)
-                        ForEach([0, 6, 12, 18], id: \.self) { hr in
-                            Text(Self.hourLabel(hr)).font(.caption2.weight(.medium)).foregroundStyle(S.soft)
+                        ForEach([0, 6, 12, 18], id: \.self) { k in
+                            Text(Self.hourLabel((start + k) % 24)).font(.caption2.weight(.medium)).foregroundStyle(S.soft)
                                 .fixedSize()
-                                .offset(x: CGFloat(hr) * (w + gap), y: h + 6)
+                                .offset(x: CGFloat(k) * (w + gap), y: h + 6)
                         }
                     }
                     .contentShape(Rectangle())
                     .holdToScrub { p in
                         guard let p else { withAnimation(.snappy) { held = nil }; return }
-                        let hr = max(0, min(23, Int(p.x / (w + gap))))
-                        if hr != held {
+                        let k = max(0, min(23, Int(p.x / (w + gap))))
+                        if k != held {
                             #if os(iOS)
                             UISelectionFeedbackGenerator().selectionChanged()
                             #endif
-                            withAnimation(.snappy(duration: 0.2)) { held = hr }
+                            withAnimation(.snappy(duration: 0.2)) { held = k }
                         }
                     }
                 }
                 .frame(height: 132)
-                if let held { callout(byHour[held] ?? [], hour: held).offset(y: -8) }
+                if let held { callout(bySlot[held] ?? [], hour: (start + held) % 24).offset(y: -8) }
             }
             .id(colours)
         }
@@ -210,7 +216,7 @@ struct DaySection: View {
             // The build's pose: an hour held, its songs showing.
             guard Pose.name == "scrub" else { return }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            withAnimation(.snappy) { held = 21 }
+            withAnimation(.snappy) { held = (21 - Store.shared.dayStart + 24) % 24 }
         }
         .onAppear {
             guard !landed else { return }
@@ -225,7 +231,16 @@ struct DaySection: View {
         var c = DateComponents(); c.hour = h
         return (Calendar.current.date(from: c) ?? .now).formatted(.dateTime.hour())
     }
-    private func column(_ list: [Scrobble], hour: Int, now: Int, unit: CGFloat, width: CGFloat, height: CGFloat) -> some View {
+    // Night: 8 PM to 6 AM, as runs of columns from where his day starts (one run, or two when the day starts at night).
+    static func nightRuns(start: Int) -> [(first: Int, count: Int)] {
+        let night = (0..<24).map { k -> Bool in let h = (start + k) % 24; return h >= 20 || h < 6 }
+        var runs: [(first: Int, count: Int)] = []
+        for k in 0..<24 where night[k] {
+            if let last = runs.last, last.first + last.count == k { runs[runs.count - 1].count += 1 } else { runs.append((k, 1)) }
+        }
+        return runs
+    }
+    private func column(_ list: [Scrobble], slot hour: Int, now: Int, unit: CGFloat, width: CGFloat, height: CGFloat) -> some View {
         VStack(spacing: 1.5) {
             if hour == now, let p = Store.shared.nowPlaying {
                 // The song on now, a bright bead on top, breathing.
