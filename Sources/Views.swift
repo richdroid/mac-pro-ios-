@@ -1036,16 +1036,22 @@ struct EvenGrid: Layout {
     }
 }
 
-// Over the dials: which sensor is hottest and how the Mac is doing for heat, in words (normal, warm, hot) from the same
-// thresholds the dials colour by. A tap on any dial opens its 24 hours, as the tiles do.
+// Over the dials: how the Mac is doing for heat (normal, warm, hot) and the sensor nearest its limit, in the bridge's words:
+// each sensor against its own limits, the rule Fans & temperatures, alerts and the Console use (2026-11-12: a flat 75 °C
+// here said "Warm" at a normal 83 °C CPU while everything else said Normal). The flat rule is kept only for an older bridge.
+// A tap on any dial opens its 24 hours, as the tiles do.
 struct TempsHeader: View {
     @EnvironmentObject var store: LiveStore
     let s: Status
     var body: some View {
         let temps = store.live?.temps ?? s.temps ?? []
-        let top = temps.max(by: { $0.c < $1.c })
-        let word = (top?.c ?? 0) >= 90 ? "Hot" : (top?.c ?? 0) >= 75 ? "Warm" : "Normal"
-        let summary = top.map { Text("\(word) · hottest \(appleCased($0.name)) \(Heat.shown($0.c))°").foregroundStyle($0.c >= 75 ? Heat.color($0.c) : .secondary).monospacedDigit() }
+        let heat = store.live?.heat ?? s.heat
+        let flatTop = temps.max(by: { $0.c < $1.c })
+        // The hottest's reading is today's, from the dials, so the words never lag the number under them.
+        let top = heat?.hottest.map { h in temps.first { $0.name == h.name } ?? h } ?? flatTop
+        let word = heat?.verdict ?? ((flatTop?.c ?? 0) >= 90 ? "Hot" : (flatTop?.c ?? 0) >= 75 ? "Warm" : "Normal")
+        let tint: Color = word == "Hot" ? .red : word == "Warm" ? .orange : .secondary
+        let summary = top.map { Text("\(word) · hottest \(appleCased($0.name)) \(Heat.shown($0.c))°").foregroundStyle(tint).monospacedDigit() }
         // Always on its own line under the heading, in one size: chosen by what fit, it sat beside the heading at one reading
         // and under it at another, and the dials moved (designer, 2026-11-12).
         VStack(alignment: .leading, spacing: 2) { Text("Temperatures"); summary.lineLimit(1).minimumScaleFactor(0.8).font(.subheadline) }

@@ -23,7 +23,7 @@ struct MacReport: Decodable, Equatable {
 
 enum MacParts {
     // The health check's parts, in the order the Mac reports them, by the names he'd use.
-    static let health = ["tailscale", "serve", "bridge", "sessions", "tv", "letterboxd", "chumby", "oclp", "stuck"]
+    static let health = ["tailscale", "serve", "bridge", "sessions", "tv", "letterboxd", "chumby", "oclp", "stuck", "memory"]
     static let checks = ["oclp", "updates", "filevault", "autologin", "tailscale", "work", "keep"]
     // The ones the Mac can bring back itself (mac-bringup.sh); the rest need a hand, and say what to do.
     static let fixable: Set<String> = ["tailscale", "bridge", "sessions", "tv", "letterboxd"]
@@ -50,6 +50,7 @@ enum MacParts {
         case "chumby": return "Chumby"
         case "oclp": return "OCLP"
         case "stuck": return "Stuck programs"
+        case "memory": return "Memory"
         default: return p.prefix(1).uppercased() + p.dropFirst()
         }
     }
@@ -64,6 +65,7 @@ enum MacParts {
         case "chumby": return "alarm"
         case "oclp": return "wrench.and.screwdriver"
         case "stuck": return "hourglass"
+        case "memory": return "memorychip"
         case "updates": return "arrow.down.circle"
         case "filevault": return "lock"
         case "autologin": return "person.crop.circle"
@@ -80,6 +82,9 @@ enum MacParts {
             switch (p.part, p.bad) {
             case ("serve", false): return "Points this app at the bridge"
             case ("serve", true): return "Not pointing at the bridge"
+            case ("stuck", true):
+                // "2 programs stuck; a restart clears them": the hint under it says the second half.
+                if let semi = t.range(of: "; ") { return String(t[..<semi.lowerBound]) }
             case ("oclp", _):
                 if t.hasPrefix("HEALTHY: ") { t = "Healthy: " + t.dropFirst(9) }
             default: break
@@ -105,7 +110,8 @@ enum MacParts {
         case "serve": return "Ask a Claude session on the Mac to point Tailscale Serve back at the bridge."
         case "chumby": return "Check the Chumby is on and on Wi-Fi."
         case "oclp": return "Re-apply the root patches in OpenCore Legacy Patcher."
-        case "stuck": return "A restart clears them."
+        case "stuck": return "Restarting the Mac clears this."
+        case "memory": return "Quit something large, or restart the Mac."
         default: return nil
         }
     }
@@ -469,8 +475,8 @@ struct MacHealthView: View {
     // The build's shots: every part up, two red (one the Mac can fix, one that needs him), a fix under way, and the Mac
     // back from a restart with two parts still starting. Only with a pose; never on the phone.
     static func posed(_ pose: String) -> (report: MacReport, fixing: Bool)? {
-        let says = ["tailscale": "Running", "serve": "https → bridge", "bridge": "Answering", "sessions": "6 of 6 running", "tv": "Connected",
-                    "letterboxd": "Sign-in relay running", "chumby": "Answering", "oclp": "HEALTHY: macOS 26.7.2, OCLP 3.0.0", "stuck": "Nothing stuck"]
+        let says = ["tailscale": "Running", "serve": "https → bridge", "bridge": "Answering", "sessions": "6 kept · 2 others", "tv": "Connected",
+                    "letterboxd": "Sign-in relay running", "chumby": "Answering", "oclp": "HEALTHY: macOS 26.7.2, OCLP 3.0.0", "stuck": "Nothing stuck", "memory": "Normal pressure · 6.4 GB swap in use"]
         func r(_ bad: [String: String], fixed: [String: String] = [:]) -> MacReport {
             MacReport(ok: bad.isEmpty, at: Date().timeIntervalSince1970 * 1000, parts: MacParts.health.map {
                 MacPart(part: $0, state: bad[$0] != nil ? "bad" : fixed[$0] != nil ? "fixed" : "ok", say: bad[$0] ?? fixed[$0] ?? says[$0]!)
@@ -481,10 +487,10 @@ struct MacHealthView: View {
         case "health": return (r([:]), false)
         case "healthbad": return (r(two), false)
         // One part that needs his hands, as in Richard's screenshot of 2026-11-12: named in the card, first in the list.
-        case "healthone": return (r(["stuck": "2 programs not responding"]), false)
+        case "healthone": return (r(["stuck": "1 program stuck; a restart clears it"]), false)
         case "healthfixing": return (r(two), true)
         case "healthstuck", "didntconfirm": return (r([:]), false)
-        case "healthback": return (r(["sessions": "3 of 6 running"], fixed: ["letterboxd": "Sign-in relay started"]), false)
+        case "healthback": return (r(["sessions": "3 of 6 kept running · 2 others"], fixed: ["letterboxd": "Sign-in relay started"]), false)
         default: return nil
         }
     }

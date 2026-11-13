@@ -105,6 +105,8 @@ struct Status: Decodable {
     let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
     var displayOn: Bool?
     var temps: [Temp]?
+    // The bridge's heat verdict (each sensor against its own limits); nil from a bridge older than 2026-11-12.
+    var heat: HeatVerdict?
     let services: [Service]?
     var iosApps: SeedStatus?
     var alerts: [Alert]?
@@ -155,7 +157,10 @@ struct LiveStatus: Decodable, Equatable {
     // The display's real state each second, so the Display key follows the Mac by itself (Richard, 2026-11-07: "should
     // self update not requiring refresh").
     var displayOn: Bool?
+    var heat: HeatVerdict?
 }
+// How the Mac is doing for heat, in the bridge's one rule: "Normal", "Warm" or "Hot", and the sensor nearest its limit.
+struct HeatVerdict: Decodable, Equatable { let verdict: String; let hottest: Status.Temp? }
 // Compared, so a reading that's the same as the last one doesn't redraw the live tiles.
 extension Status.CPU: Equatable {}
 extension Status.Memory: Equatable {}

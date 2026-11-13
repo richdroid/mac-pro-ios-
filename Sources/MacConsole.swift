@@ -32,7 +32,13 @@ struct MacFan: Decodable, Identifiable, Equatable {
     var level: Double { max > min ? Swift.min(Swift.max((rpm - min) / (max - min), 0), 1) : 0 }
 }
 struct FansFeed: Decodable, Equatable {
-    struct Control: Decodable, Equatable { let state: String; var note: String? }
+    // The fan floor helper (installed once by Richard): "needs-setup" until it answers, then "ready" with its mode
+    // ("auto" or "floor") and the presets it may raise the floor to. It can only make the fan faster than the Mac would.
+    struct Control: Decodable, Equatable {
+        struct Preset: Decodable, Equatable, Identifiable { let name: String; let rpm: Int; var id: Int { rpm } }
+        let state: String; var note: String?; var setup: String?; var mode: String?; var floor: Int?; var factoryFloor: Int?; var max: Int?; var presets: [Preset]?
+        var ready: Bool { state == "ready" }
+    }
     var t: Double?; var stale: Bool?; let fans: [MacFan]; var control: Control?
 }
 struct TempsFeed: Decodable, Equatable {
@@ -182,7 +188,7 @@ extension MacPage {
     static func consolePosed(_ pose: String) -> MacPage? {
         switch pose {
         case "links", "linksbad", "linkconfirm", "linkdone", "linkstarting", "linkrestartfilm": return .links
-        case "fans": return .fans
+        case "fans", "fanready": return .fans
         case "updates", "updateswaiting": return .updates
         case "storage": return .storage
         case "startup", "startupconfirm": return .startup
@@ -592,7 +598,7 @@ struct LinksView: View {
             MacLink(id: "tv", name: "TV link (adb)", state: "up", detail: "Connected", checkedAt: now, can: [], note: "The bridge can only reconnect an adb that already runs; a full repair is from a Claude session on the Mac."),
             MacLink(id: "chumby-remote", name: "Chumby proxy", state: "up", detail: "Running", endpoint: "local.chumby-remote", pid: 40432, uptime: 75_500, lastExit: -15, checkedAt: now, can: ["restart"]),
             MacLink(id: "chumby", name: "Chumby", state: "up", detail: "Answering", checkedAt: now, can: []),
-            MacLink(id: "sessions", name: "Claude sessions", state: "up", detail: "6 of 6 running", checkedAt: now, can: []),
+            MacLink(id: "sessions", name: "Claude sessions", state: "up", detail: "6 kept · 2 others", checkedAt: now, can: []),
         ]
         if pose == "linksbad" || pose == "linkdone" {
             if let i = l.firstIndex(where: { $0.id == "tv" }) { l[i].state = "down"; l[i].detail = "TV link needs a reconnect from the Mac: no adb server is running"; l[i].can = ["bringup"] }
@@ -659,6 +665,9 @@ struct FansView: View {
     @StateObject private var temps = FeedReader<TempsFeed>("/api/mac/temps")
     @State private var history: [Int: [TrendPoint]] = [:]
     @State private var historyRead = false
+    @State private var askFloor: FansFeed.Control.Preset?
+    @State private var floorOutcome: MacActionResult?
+    @State private var busy = false
     var away: Bool { fans.away || temps.away }
 
     @ViewBuilder var fanSections: some View {
@@ -675,14 +684,61 @@ struct FansView: View {
                     if f.fans.count == 1 { Text("This Mac Pro has one fan, under the top vent; it draws air up through the core.") }
                 }
             }
-            Section {
-                Label("Read only for now", systemImage: "lock")
-                Text(f.control?.note ?? "Fan control needs a helper installed once on the Mac; until then the Mac sets the speed.").font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            } header: { Text("Fan control") }
+            fanControl(f.control)
         } else if fans.unsupported == false, !fans.away {
             Section { HStack { ProgressView(); Text("Reading the fan…").foregroundStyle(.secondary) } }
         }
     }
+    // The floor: how slow the fan may go, never how fast. Automatic is always there and needs no asking; a raised floor
+    // is asked first. Not installed, the page says so and shows the one command that installs it.
+    @ViewBuilder func fanControl(_ c: FansFeed.Control?) -> some View {
+        if let c, c.ready {
+            Section {
+                Button { setFloor(nil) } label: { floorRow("Automatic", detail: "The Mac sets the speed", on: c.mode != "floor") }
+                    .disabled(busy || away)
+                ForEach(c.presets ?? []) { p in
+                    Button { askFloor = p } label: { floorRow(p.name, detail: "Never slower than \(p.rpm.formatted()) rpm", on: c.mode == "floor" && c.floor == p.rpm) }
+                        .disabled(busy || away)
+                }
+                if c.mode == "floor", let fl = c.floor, !(c.presets ?? []).contains(where: { $0.rpm == fl }) {
+                    floorRow("Raised", detail: "Never slower than \(fl.formatted()) rpm", on: true)
+                }
+                if let r = floorOutcome { OutcomeLine(result: r) }
+            } header: { Text("Fan floor") } footer: {
+                Text("Only how slow the fan may go: the Mac still speeds it up when it heats. Automatic again after a restart.")
+            }
+        } else if let c {
+            Section {
+                Label("Fan floor helper not installed", systemImage: "lock")
+                Text(c.note.map { $0.hasPrefix("Fan floor helper not installed") ? String($0.dropFirst(32)).trimmingCharacters(in: .whitespaces) : $0 }.flatMap { $0.isEmpty ? nil : $0 } ?? "Speeds are read only and the Mac sets them.")
+                    .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let cmd = c.setup { CommandRow(command: cmd) }
+            } header: { Text("Fan floor") } footer: {
+                if c.setup != nil { Text("Run once in Terminal on the Mac. It asks for the Mac’s password.") }
+            }
+        }
+    }
+    func floorRow(_ title: String, detail: String, on: Bool) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 1) { Text(title).foregroundStyle(Color.primary); Text(detail).font(.footnote).foregroundStyle(.secondary).monospacedDigit() }
+            Spacer()
+            if on { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(macBlue) }
+        }
+        .contentShape(Rectangle())
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+    func setFloor(_ rpm: Int?) {
+        busy = true
+        Task {
+            do { floorOutcome = try await model.api.macDo("/api/mac/fans/floor", rpm.map { ["rpm": $0, "confirm": true] } ?? ["auto": true], timeout: 20) }
+            catch { floorOutcome = MacActionResult(ok: false, error: MacFiles.unreachable(error) ? "The Mac didn’t answer, so it’s not known whether the fan changed. This page reads it again by itself." : error.localizedDescription) }
+            await fans.read(model.api)
+            busy = false
+        }
+    }
+    // The floor helper installed, the floor raised to Balanced, for the shots.
+    static let posedReady = FansFeed(t: Date().timeIntervalSince1970 * 1000, stale: false, fans: [MacFan(index: 0, name: "Main fan", rpm: 1302, min: 1300, max: 1900, target: 1300, mode: "auto")],
+                                     control: .init(state: "ready", mode: "floor", floor: 1300, factoryFloor: 790, max: 1900, presets: [.init(name: "Quiet", rpm: 1000), .init(name: "Balanced", rpm: 1300), .init(name: "Cool", rpm: 1600)]))
     @ViewBuilder var namedSection: some View {
         if let t = temps.value {
             Section {
@@ -718,7 +774,14 @@ struct FansView: View {
         } right: {
             allSections
         }
-        .task { await fans.loop(model, every: 3) }
+        .alert(askFloor.map { "Keep the fan at \($0.rpm.formatted()) rpm or faster?" } ?? "", isPresented: Binding(get: { askFloor != nil }, set: { if !$0 { askFloor = nil } })) {
+            Button("Raise the floor") { if let p = askFloor { setFloor(p.rpm) }; askFloor = nil }
+            Button("Cancel", role: .cancel) { askFloor = nil }
+        } message: { Text("The fan gets louder and the Mac cooler. The Mac still speeds it up when it heats; Automatic or a restart puts it back.") }
+        .task {
+            if MacConsole.pose == "fanready" { fans.set(Self.posedReady); return }
+            await fans.loop(model, every: 3)
+        }
         .task { await temps.loop(model, every: 3) }
         .task(id: fans.value?.fans.map(\.index) ?? []) {
             for f in fans.value?.fans ?? [] where history[f.index] == nil {

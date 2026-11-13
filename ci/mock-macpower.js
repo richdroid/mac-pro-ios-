@@ -16,9 +16,9 @@ const feeds = {
     link('tv', 'TV link (adb)', 'up', 'Connected'),
     link('chumby-remote', 'Chumby proxy', 'up', 'Running', { endpoint: 'local.chumby-remote', pid: 40432, uptime: 75500, can: ['restart'] }),
     link('chumby', 'Chumby', 'up', 'Answering'),
-    link('sessions', 'Claude sessions', 'up', '6 of 6 running'),
+    link('sessions', 'Claude sessions', 'up', '6 kept · 2 others'),
   ] }),
-  '/api/mac/fans': () => ({ t: now(), stale: false, fans: [{ index: 0, name: 'Main fan', rpm: 1184, min: 790, max: 1900, target: 1180, mode: 'auto' }], control: { state: 'needs-setup', setup: null, note: 'Fan control needs a small helper Richard installs once himself; until then speeds are read only and the Mac sets them.' } }),
+  '/api/mac/fans': () => ({ t: now(), stale: false, fans: [{ index: 0, name: 'Main fan', rpm: 1184, min: 790, max: 1900, target: 1180, mode: 'auto' }], control: { state: 'needs-setup', installed: false, setup: 'sudo ~/code/Tools/macpro-console/helper/install-fan-helper.sh', note: 'Fan floor helper not installed. Speeds are read only and the Mac sets them.' } }),
   '/api/mac/temps': () => {
     const named = [['CPU', 'TCXc', 54, 88, 95], ['GPU A', 'TG0D', 44, 90, 100], ['GPU B', 'TG1D', 46, 90, 100], ['Memory', 'TM0P', 49, 85, 95], ['Chipset', 'TPCD', 52, 85, 95], ['Drive', 'TH0A', 41, 65, 75], ['Power supply', 'Tp0F', 38, 80, 90], ['Intake air', 'TA0P', 24, 40, 45]].map(([name, key, c, warn, hot]) => ({ name, key, c, warn, hot }));
     const all = [['TA0P', 'Air', 'Intake air', 24], ['TA0V', 'Air', 'Ambient', 21], ['TC0P', 'CPU', 'CPU proximity', 47], ['TC0c', 'CPU', 'CPU core 1', 53], ['TC1c', 'CPU', 'CPU core 2', 51], ['TC2c', 'CPU', 'CPU core 3', 52], ['TC3c', 'CPU', 'CPU core 4', 54], ['TCXc', 'CPU', 'CPU (hottest core)', 54], ['TG0D', 'GPU A', 'GPU A die', 44], ['TG0P', 'GPU A', 'GPU A proximity', 40], ['TG1D', 'GPU B', 'GPU B die', 46], ['TG1P', 'GPU B', 'GPU B proximity', 41], ['TH0A', 'Drive', 'Drive', 41], ['TM0P', 'Memory', 'Memory proximity', 49], ['TPCD', 'Chipset', 'Chipset die', 52], ['Tp0F', 'Power supply', 'Power supply', 38], ['TI0P', 'Other', 'Other · TI0P', 33]].map(([key, group, label, c]) => ({ key, group, label, c }));

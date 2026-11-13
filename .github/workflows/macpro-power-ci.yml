@@ -83,6 +83,7 @@ jobs:
             shot links-done$x $d 9 -tab 5 -pose linkdone
             shot links-starting$x $d 9 -tab 5 -pose linkstarting
             shot fans$x $d 10 -tab 5 -pose fans
+            shot fans-ready$x $d 9 -tab 5 -pose fanready
             shot updates$x $d 10 -tab 5 -pose updates
             shot updates-waiting$x $d 9 -tab 5 -pose updateswaiting
             shot storage$x $d 10 -tab 5 -pose storage
