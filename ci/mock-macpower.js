@@ -44,6 +44,16 @@ module.exports = (q, s) => {
     s.end(JSON.stringify({ path: u.searchParams.get('path'), measuring: false, at: now(), children: [['Caches', 21e9], ['Developer', 18e9], ['Application Support', 14e9], ['Containers', null, true], ['Logs', 2.2e9]].map(([name, bytes, priv]) => ({ name, bytes, dir: true, private: !!priv })) }));
     return true;
   }
+  // mp's actions: a made-up action is refused (the app's probe), a dry run hands out a nonce, a run answers its line.
+  if (u.pathname === '/api/mp') {
+    if (q.method === 'GET') { s.statusCode = 404; s.end(JSON.stringify({ ok: false, command: u.searchParams.get('action') || '', say: 'Not an action the Mac takes from here.' })); return true; }
+    let body = ''; q.on('data', c => { body += c; }); q.on('end', () => {
+      let b = {}; try { b = JSON.parse(body); } catch {}
+      if (b.dryRun) { s.setHeader('X-MP-Nonce', 'c0ffee00c0ffee00c0ffee00c0ffee00'); return s.end(JSON.stringify({ ok: true, command: b.action, dryRun: true, say: 'Dry run: would remove 3.4 GB. Nothing was removed.' })); }
+      s.end(JSON.stringify({ ok: true, command: b.action, say: b.action === 'fix' ? 'All running; nothing needed fixing.' : 'Done.', rows: [{ part: 'tv', label: 'TV link', state: 'ok', say: 'Connected' }] }));
+    });
+    return true;
+  }
   if (q.method === 'POST' && u.pathname.startsWith('/api/mac/') && u.pathname.endsWith('/action')) { s.end(JSON.stringify({ ok: true, say: 'Restarted (now process 51234)' })); return true; }
   const f = feeds[u.pathname];
   if (!f) return false;

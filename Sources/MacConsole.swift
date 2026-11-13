@@ -179,6 +179,7 @@ extension MacPage {
         case "updates", "updateswaiting": return .updates
         case "storage": return .storage
         case "startup", "startupconfirm": return .startup
+        case "actions": return .actions
         default: return nil
         }
     }
@@ -197,9 +198,10 @@ struct MacConsoleSections: View {
     @StateObject private var updates = FeedReader<UpdatesFeed>("/api/mac/updates")
     @StateObject private var storage = FeedReader<StorageFeed>("/api/mac/storage")
     @StateObject private var startup = FeedReader<StartupFeed>("/api/mac/startup")
+    @State private var mp = false
     // Nothing is said while the Mac is away: the summaries are only ever what it said last, never passed off as now.
     var quiet: Bool { model.problem != nil }
-    var anything: Bool { [links.value != nil, fans.value != nil, updates.value != nil, storage.value != nil, startup.value != nil].contains(true) }
+    var anything: Bool { [mp, links.value != nil, fans.value != nil, updates.value != nil, storage.value != nil, startup.value != nil].contains(true) }
 
     func row(_ title: String, _ symbol: String, _ page: MacPage, summary: String?, good: Bool? = nil) -> some View {
         Button { model.macPage = page } label: {
@@ -255,14 +257,16 @@ struct MacConsoleSections: View {
                     if updates.value != nil { row("Updates", "arrow.down.circle", .updates, summary: updateLine?.0, good: updateLine?.1) }
                     if storage.value != nil { row("Storage", "internaldrive", .storage, summary: storageLine) }
                     if startup.value != nil { row("Startup items", "power", .startup, summary: startupLine) }
+                    if mp { row("Actions", "bolt", .actions, summary: "Fix, clean, ship, tests") }
                 } header: { Text("This Mac") } footer: {
-                    Text("Proxies and links with a restart for each, the fan and every sensor with its day, updates, disk use, and what starts with the Mac.")
+                    Text("Proxies and links with a restart for each, the fan and every sensor with its day, updates, disk use, what starts with the Mac, and the Mac Pro’s own actions.")
                 }
                 .id("macctl")
             }
         }
         .task {
             if MacConsole.pose == "oldbridge" { return }
+            mp = await model.api.mpAvailable()
             while !Task.isCancelled {
                 if !model.screenOpen {
                     await withTaskGroup(of: Void.self) { g in

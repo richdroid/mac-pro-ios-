@@ -34,7 +34,8 @@ struct MacProApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: AlertWatch.openAlert)) { n in openAlert(n.object as? String ?? "") }
                 .onReceive(NotificationCenter.default.publisher(for: ScreenRequest.notification)) { _ in openScreenIfAsked() }
-                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.show(tab: t) } }
+                // macproapp://tab/<n>, and the places the Console names (MacHandoff.swift).
+                .onOpenURL { _ = MacDeepLink.open($0, model) }
         }
         #if os(iOS)
         // iOS decides when, and may not for hours. The banner on Status is always current.
@@ -530,7 +531,7 @@ struct RootView: View {
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }
         .onChange(of: celsius) { _, _ in MacPrefs.shareWithWidgets() }
         .onChange(of: model.address) { _, _ in MacPrefs.shareWithWidgets() }
-        .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
+        .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) }.modifier(ReportsScreen(model: model)) }
         .screenCover(isPresented: $model.signInSheet) { SignInView().environmentObject(model) }
         // Up here, so unfolding doesn't close it and lose what's typed.
         .sheet(isPresented: $model.signingIn) {
@@ -846,6 +847,7 @@ struct StackPages: ViewModifier {
                 case .updates: UpdatesView(model: model)
                 case .storage: StorageView(model: model)
                 case .startup: StartupView(model: model)
+                case .actions: MacActionsView(model: model)
                 }
             }
     }

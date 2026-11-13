@@ -87,6 +87,7 @@ jobs:
             shot storage$x $d 10 -tab 5 -pose storage
             shot startup$x $d 10 -tab 5 -pose startup
             shot startup-confirm$x $d 9 -tab 5 -pose startupconfirm
+            shot actions$x $d 9 -tab 5 -pose actions
           }
           git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
           open -a DeviceHub; sleep 10
@@ -96,6 +97,13 @@ jobs:
           poses 3 -upright
           film links-open-upright 3 14 -tab 5 -pose links
           film fans-open-upright 3 14 -tab 5 -pose fans
+          # A link from the Console (macproapp://control/<section>) lands on its page.
+          xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 -tab 0; sleep 8
+          xcrun simctl openurl "$DEVICE" "macproapp://control/updates"; sleep 4
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/power-deeplink-updates-upright.png
+          xcrun simctl openurl "$DEVICE" "macproapp://status/temps/CPU"; sleep 4
+          xcrun simctl io "$DEVICE" screenshot --display=3 dist/power-deeplink-cpu-upright.png
+          xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           # Open flat, two panes.
           /tmp/dh/.build/release/devicehubctl "$DEVICE" rotate 3 || true; sleep 5
           poses 3 -flat
