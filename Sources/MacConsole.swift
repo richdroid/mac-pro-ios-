@@ -106,7 +106,7 @@ extension API {
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if code == 404, (try? JSONDecoder().decode(MacActionResult.self, from: d))?.error == nil { return MacActionResult(ok: false, error: "This Mac’s bridge can’t do that yet.") }
         var a = (try? JSONDecoder().decode(MacActionResult.self, from: d)) ?? MacActionResult(ok: false, error: "The Mac sent an unexpected reply (error \(code)).")
-        if code != 200 { a.ok = false; if a.error == nil { a.error = "The Mac refused (error \(code))." } }
+        if code != 200 { a.ok = false; if a.error == nil { a.error = a.say ?? "The Mac refused (error \(code))." } }
         return a
     }
 }
@@ -158,10 +158,15 @@ enum MacConsole {
     static func named(_ n: [String], _ word: String) -> String {
         n.isEmpty ? "" : n.count <= 2 ? "\(n.joined(separator: ", ")) \(word)" : "\(n.count) \(word): \(n.prefix(2).joined(separator: ", ")) and \(n.count - 2) more"
     }
+    // Green only when every link is known to be up (or off as it should be); anything else is named.
     static func linkSummary(_ f: LinksFeed) -> (good: Bool, text: String) {
         let down = f.links.filter(\.down).map(\.name)
-        let up = f.links.filter(\.up).count
-        return down.isEmpty ? (true, "All \(up) working") : (false, named(down, "down"))
+        let look = f.links.filter { $0.state == "look" }.map(\.name)
+        let unsure = f.links.filter { !["up", "off", "down", "look"].contains($0.state) }.map(\.name)
+        if !down.isEmpty { return (false, named(down, "down")) }
+        if !look.isEmpty { return (false, named(look, look.count == 1 ? "needs a look" : "need a look")) }
+        if !unsure.isEmpty { return (false, named(unsure, "not known")) }
+        return (true, "All \(f.links.filter(\.up).count) working")
     }
     static func exitText(_ code: Int) -> String {
         code < 0 ? "stopped by signal \(-code)" : code == 0 ? "exited cleanly" : "exited with code \(code)"
@@ -242,10 +247,12 @@ struct MacConsoleSections: View {
         guard let v = storage.value?.volumes.first(where: { $0.isInternal == true }) ?? storage.value?.volumes.first else { return nil }
         return "\(Format.bytes(v.free)) free of \(Format.bytes(v.total))"
     }
-    var startupLine: String? {
+    // Kept-running agents that aren't, by name; timed ones idle between runs by design and aren't counted.
+    var startupLine: (String, Bool)? {
         guard let items = startup.value?.items else { return nil }
         let mine = items.filter(\.mine)
-        return "\(mine.filter(\.running).count) of \(mine.count) of yours running"
+        let stopped = StartupView.stopped(mine).map(\.label)
+        return stopped.isEmpty ? ("\(mine.count) of yours, none stopped", true) : (MacConsole.named(stopped, "stopped"), false)
     }
 
     var body: some View {
@@ -256,7 +263,7 @@ struct MacConsoleSections: View {
                     if fans.value != nil || temps.value != nil { row("Fans & temperatures", "fan", .fans, summary: fanLine) }
                     if updates.value != nil { row("Updates", "arrow.down.circle", .updates, summary: updateLine?.0, good: updateLine?.1) }
                     if storage.value != nil { row("Storage", "internaldrive", .storage, summary: storageLine) }
-                    if startup.value != nil { row("Startup items", "power", .startup, summary: startupLine) }
+                    if startup.value != nil { row("Startup items", "power", .startup, summary: startupLine?.0, good: startupLine?.1) }
                     if mp { row("Actions", "bolt", .actions, summary: "Fix, clean, ship, tests") }
                 } header: { Text("This Mac") } footer: {
                     Text("Proxies and links with a restart for each, the fan and every sensor with its day, updates, disk use, what starts with the Mac, and the Mac Pro’s own actions.")
@@ -266,8 +273,9 @@ struct MacConsoleSections: View {
         }
         .task {
             if MacConsole.pose == "oldbridge" { return }
-            mp = await model.api.mpAvailable()
             while !Task.isCancelled {
+                // Asked again until it answers: a Mac away at the first look mustn't hide Actions for good.
+                if !mp, !model.screenOpen { mp = await model.api.mpAvailable() }
                 if !model.screenOpen {
                     await withTaskGroup(of: Void.self) { g in
                         g.addTask { await links.read(model.api) }; g.addTask { await fans.read(model.api) }; g.addTask { await temps.read(model.api) }
@@ -347,9 +355,9 @@ struct LinkRow: View {
     let busy: Bool
     let outcome: MacActionResult?
     let act: (String) -> Void
-    var color: Color { link.up ? .green : link.down ? .red : link.state == "starting" ? .orange : .secondary }
+    var color: Color { link.up ? .green : link.down ? .red : ["starting", "look"].contains(link.state) ? .orange : .secondary }
     var stateWord: String {
-        switch link.state { case "up": return "Up"; case "down": return "Down"; case "off": return "Off"; case "starting": return "Starting"; default: return "Not known" }
+        switch link.state { case "up": return "Up"; case "down": return "Down"; case "off": return "Off"; case "starting": return "Starting"; case "look": return "Needs a look"; default: return "Not known" }
     }
     static func actionName(_ a: String, _ link: MacLink) -> String {
         switch a { case "restart": return "Restart"; case "repoint": return "Point at the bridge"; case "bringup": return link.down ? "Fix" : "Start"; default: return a.capitalized }
@@ -434,10 +442,10 @@ struct LinksView: View {
             let s = MacConsole.linkSummary(f)
             Section {
                 Label(s.good ? "Every link is working" : s.text, systemImage: s.good ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .foregroundStyle(s.good ? Color.green : Color.red)
+                    .foregroundStyle(s.good ? Color.green : f.links.contains(where: \.down) ? Color.red : Color.orange)
                 if let b = bridgeRestartAt { HStack { ProgressView().controlSize(.small); Text("Waiting for the bridge to come back… \(Int(Date().timeIntervalSince(b)))s").monospacedDigit() } }
             } footer: {
-                Text("Read every 5 seconds. Tailscale is never stopped from here: the app reaches the Mac through it.")
+                Text("Read every few seconds. Tailscale is never stopped from here: the app reaches the Mac through it.")
             }
         } else if !feed.away {
             Section { HStack { ProgressView(); Text("Reading the links…").foregroundStyle(.secondary) } }
@@ -476,7 +484,7 @@ struct LinksView: View {
             if MacConsole.pose == "linkdone" { outcomes["chumby-remote"] = MacActionResult(ok: true, say: "Chumby proxy restarted (now process 51234)"); outcomes["tv"] = MacActionResult(ok: false, error: "TV link needs a reconnect from the Mac: no adb server is running") }
             return
         }
-        await feed.loop(model, every: 5)
+        await feed.loop(model, every: 8)
     }
     func run(_ l: MacLink, _ a: String) {
         guard !busy.contains(l.id) else { return }
@@ -738,7 +746,7 @@ struct UpdatesView: View {
                     CommandRow(command: c)
                 }
             } header: { Text("OpenCore Legacy Patcher") } footer: {
-                Text(o.newer == true ? "A newer OCLP is out. Updating it is done at the Mac, and it patches again after." : "Up to date. Root patches are re-applied by the macOS tab after a macOS update.")
+                Text(o.latest == nil ? "Couldn’t find out whether a newer OCLP is out; the Mac looks again within half an hour." : o.newer == true ? "A newer OCLP is out. Updating it is done at the Mac, and it patches again after." : "Up to date. Root patches are re-applied by the macOS tab after a macOS update.")
             }
         }
     }
@@ -910,7 +918,10 @@ struct StartupRow: View {
         if item.disabled == true { return ["enable"] }
         if !item.running { a.append("start") }
         if item.running { a.append("restart") }
-        if item.protected != "bridge" { if item.loaded { a.append("stop") }; a.append("disable") }
+        // The bridge and its watchdog restart from Connections, which waits for the bridge to come back; never stopped.
+        if item.protected == "bridge" { return item.running || item.interval != nil ? [] : ["start"] }
+        // Without keep-awake the Mac may sleep, out of the phone's reach: restart only.
+        if item.label != "local.keep-awake" { if item.loaded { a.append("stop") }; a.append("disable") }
         return a
     }
     static func word(_ a: String) -> String { ["start": "Start", "stop": "Stop", "restart": "Restart", "enable": "Enable", "disable": "Disable"][a] ?? a }
@@ -966,8 +977,8 @@ struct StartupView: View {
     var body: some View {
         ConsolePage(title: "Startup items", place: "macstartup", away: feed.away, lastRead: feed.lastRead) {
             if feed.value != nil {
-                Section { rows(mine) } header: { Text("Yours (\(mine.filter(\.running).count) of \(mine.count) running)") } footer: {
-                    Text("Launch agents in your Library. Stop lasts until the next login; Disable keeps it from starting at login. The bridge and its watchdog can’t be stopped from here: the app reaches the Mac through them.")
+                Section { rows(mine) } header: { Text(Self.stopped(mine).isEmpty ? "Yours (\(mine.count))" : "Yours (\(MacConsole.named(Self.stopped(mine).map(\.label), "stopped")))") } footer: {
+                    Text("Launch agents in your Library. Stop lasts until the next login; Disable keeps it from starting at login. The bridge, its watchdog and keep-awake can’t be stopped from here: the app reaches the Mac through them, and without keep-awake the Mac may sleep. The bridge restarts from Connections.")
                 }
             } else if !feed.away {
                 Section { HStack { ProgressView(); Text("Reading what starts with the Mac…").foregroundStyle(.secondary) } }
@@ -1002,6 +1013,8 @@ struct StartupView: View {
             await feed.loop(model, every: 10)
         }
     }
+    // Agents meant to keep running that aren't (timed ones idle between runs by design).
+    static func stopped(_ items: [StartupItem]) -> [StartupItem] { items.filter { $0.keepAlive == true && $0.disabled != true && !$0.running } }
     static func question(_ i: StartupItem, _ a: String) -> String {
         switch a {
         case "stop": return "It stops now and stays stopped until the next login, or until you start it here."

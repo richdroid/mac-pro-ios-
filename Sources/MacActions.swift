@@ -81,6 +81,7 @@ struct MPActionRow: View {
     let item: MPAction
     @State private var busy = false
     @State private var answer: MPEnvelope?
+    @State private var answeredAt: Date?
     @State private var asking: (say: String, nonce: String)?
     @State private var failure: String?
     static func color(_ s: String?) -> Color {
@@ -108,6 +109,7 @@ struct MPActionRow: View {
                 }
                 ForEach(a.notes ?? [], id: \.self) { Text($0).font(.footnote).foregroundStyle(.secondary) }
                 if let j = a.job { Text("Running on the Mac: \(j.title ?? j.kind ?? "a job"). Long jobs shows how it goes.").font(.footnote).foregroundStyle(.secondary) }
+                if let t = answeredAt { Text("Answered \(t.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.tertiary) }
                 if a.admin == true, let c = a.adminCommand { Text("Needs admin at the Mac:").font(.footnote).foregroundStyle(.secondary); CommandRow(command: c) }
             }
             if let failure { FailText(failure) }
@@ -150,7 +152,7 @@ struct MPActionRow: View {
             defer { busy = false }
             do {
                 let (e, _) = try await model.api.mp(item.action, item.args, confirm: nonce != nil, nonce: nonce)
-                withAnimation(Motion.quick) { answer = e }
+                withAnimation(Motion.quick) { answer = e; answeredAt = Date() }
             } catch {
                 // No answer: whether it ran isn't known, and the row says so rather than "done".
                 failure = MacFiles.unreachable(error) || (error as? URLError)?.code == .timedOut ? "The Mac didn’t answer, so it’s not known whether that ran. Check again in a moment." : error.localizedDescription
@@ -223,7 +225,13 @@ struct MacRunActionIntent: AppIntent {
             try await requestConfirmation(result: .result(dialog: IntentDialog(stringLiteral: "This will " + MPActionRow.lowerFirst(dry.say ?? "go ahead"))))
             nonce = n
         }
-        let (e, _) = try await api.mp(c.action, c.args, confirm: nonce != nil, nonce: nonce, timeout: 25)
+        let e: MPEnvelope
+        do { e = try await api.mp(c.action, c.args, confirm: nonce != nil, nonce: nonce, timeout: c.action == "clean" ? 300 : c.action == "fix" ? 200 : 60).0 }
+        catch {
+            // No answer: whether it ran isn't known, and Siri says so.
+            let s = "The Mac didn’t answer in time, so it’s not known whether that ran. Look in the Mac Pro app’s Actions."
+            return .result(value: s, dialog: IntentDialog(stringLiteral: s))
+        }
         let s = e.say ?? (e.ok == true ? "Done." : "Not done.")
         return .result(value: s, dialog: IntentDialog(stringLiteral: s))
     }
