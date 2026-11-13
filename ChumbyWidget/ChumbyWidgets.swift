@@ -29,7 +29,10 @@ struct ChumbyEntry: TimelineEntry {
     var deviceDown = false
     // When the Chumby was last heard from, for saying how long it's been gone rather than guessing why.
     var lastSeen: Date?
-    var problem: String { deviceDown ? "Chumby isn’t answering" : "Can’t reach it" }
+    // Calm words, never an alarm: a reading missed is usually a blip (Richard, 2026-11-11).
+    var problem: String { deviceDown ? "Chumby isn’t answering" : "Waiting for the Chumby" }
+    // The figures read last time, shown dimmed with when, while it isn't answering.
+    var known: Bool { sys.up > 0 }
     // Its own smaller line, so the time never reads as an alarm time.
     var lastSeenLine: String? {
         guard let lastSeen else { return nil }
@@ -47,7 +50,8 @@ struct ChumbyEntry: TimelineEntry {
     var whenLine: String {
         guard let a = nextAlarm else { return whenText }
         let n = Self.label(a.name)
-        return (n.isEmpty ? whenText : "\(whenText) · \(n)") + (usualText.map { " · usually \($0)" } ?? "")
+        // Moved just this once, the usual time is on the button ("Back to 6:45 AM"), so the line stays short.
+        return n.isEmpty ? whenText : "\(whenText) · \(n)"
     }
     static func label(_ name: String) -> String {
         var n = name.hasPrefix("Calendar: ") ? String(name.dropFirst(10)) : name
@@ -97,6 +101,7 @@ struct ChumbyProvider: AppIntentTimelineProvider {
         return ChumbyEntry(date: Date(), reachable: true, sys: s, alarmsKnown: true, nextAlarm: a, nextAt: at)
     }
     private static var cacheFile: URL { chumbyWidgetCache }
+    private static var sysFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("widget-sys.json") }
     private static var seenFile: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("widget-seen") }
     func load(_ c: ChumbyWidgetAddress) async -> (ChumbyEntry, ChumbyState?) {
         var e = ChumbyEntry(date: Date())
@@ -111,7 +116,7 @@ struct ChumbyProvider: AppIntentTimelineProvider {
                 e.sys = s; e.deviceDown = r.age > 60; e.reachable = !e.deviceDown
                 // A day/night tap a moment ago wins over a reading the Mac took before the Chumby had it.
                 if e.reachable, let want = chumbyNightWanted() { e.sys.night = want ? 1 : 0 }
-                if e.reachable { try? Data().write(to: Self.seenFile) }
+                if e.reachable { try? Data().write(to: Self.seenFile); try? r.data.write(to: Self.sysFile, options: .atomic) }
             } catch ChumbyError.deviceDown { e.deviceDown = true; continue } catch { continue }
             // The Mac's copy of the alarms can be many minutes old by the time a widget asks (a skip made on the Chumby, say),
             // so an old one is asked for again rather than drawn as it is.
@@ -123,7 +128,11 @@ struct ChumbyProvider: AppIntentTimelineProvider {
             }
             break
         }
-        if !e.reachable { e.lastSeen = (try? FileManager.default.attributesOfItem(atPath: Self.seenFile.path))?[.modificationDate] as? Date }
+        if !e.reachable {
+            e.lastSeen = (try? FileManager.default.attributesOfItem(atPath: Self.seenFile.path))?[.modificationDate] as? Date
+            // Its last figures, when this time brought none (a day old at most).
+            if e.sys.up == 0, let seen = e.lastSeen, Date().timeIntervalSince(seen) < 86400, let d = try? Data(contentsOf: Self.sysFile), let s = try? JSONDecoder().decode(Sys.self, from: d) { e.sys = s }
+        }
         // Alarms are rules, so the last list read still answers "when's the next one" with no connection.
         if state == nil, let d = try? Data(contentsOf: Self.cacheFile) { state = try? JSONDecoder().decode(ChumbyState.self, from: d) }
         if let state {
@@ -175,11 +184,12 @@ struct SkipButton: View {
             // Undo for a skip; "Back to 6:45 AM" for an alarm moved just this once (the same intent: it takes the
             // app's undoJustOnce path when a just-once stands behind the skip).
             Button(intent: ChumbyUnskipIntent()) {
-                Text(entry.usualText.map { "Back to \($0)" } ?? "Undo").font(.trebuchet(15, .bold)).foregroundStyle(full ? ChumbyPalette.hex(0x1f2f5c) : .white)
+                // On the night-navy gel: a white pill was the loudest thing in the widget, and a lit block by the bed.
+                Text(entry.usualText.map { "Back to \($0)" } ?? "Undo").font(.trebuchet(15, .bold)).foregroundStyle(.white)
                     .lineLimit(1).minimumScaleFactor(0.8)
                     .widgetAccentable(!full)
                     .frame(maxWidth: .infinity, minHeight: height)
-                    .background(full ? AnyShapeStyle(.white) : AnyShapeStyle(.white.opacity(0.22)), in: Capsule())
+                    .background { if full { MiniGel(night: true) } else { Capsule().fill(.white.opacity(0.22)) } }
             }
             .buttonStyle(.plain).invalidatableContent().accessibilityLabel(entry.usualText.map { "Back to the usual \($0) alarm" } ?? "Undo the skip")
         } else if entry.nextAt != nil {
@@ -201,13 +211,22 @@ func entryDuration(_ s: Int) -> String {
 }
 
 // A sad octopus when the Chumby can't be reached.
+// Where Skip sits, while the Chumby isn't answering: when it was last heard from, small and calm, so the space says why.
+struct NotAnswering: View {
+    let entry: ChumbyEntry
+    var body: some View {
+        // Never seen: nothing more here (the calm word is already above it).
+        Text(entry.lastSeenLine ?? " ").font(.trebuchet(12)).opacity(0.7).lineLimit(1).minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+    }
+}
 struct Lost: View {
-    var text = "Can’t reach it"
+    var text = "Waiting for the Chumby"
     var seen: String?
     var body: some View {
         VStack(spacing: 4) {
             Octo(faded: true).frame(maxHeight: 62)
-            Label(text, systemImage: "wifi.slash").font(.trebuchet(14, .bold)).multilineTextAlignment(.center).minimumScaleFactor(0.8)
+            Text(text).font(.trebuchet(14, .bold)).multilineTextAlignment(.center).minimumScaleFactor(0.8)
             if let seen { Text(seen).font(.trebuchet(12)).opacity(0.8).lineLimit(1).minimumScaleFactor(0.8) }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -223,12 +242,13 @@ struct ClockText: View {
         return (String(t[..<r.lowerBound]), String(t[r.upperBound...]))
     }
     var body: some View {
+        // Skipped, the line runs through the digits only and the AM dims.
         HStack(alignment: .firstTextBaseline, spacing: 2) {
             Text(parts.0).font(.trebuchet(big, .bold)).minimumScaleFactor(0.6).monospacedDigit()
-            if !parts.1.isEmpty && small > 0 { Text(parts.1).font(.trebuchet(small, .bold)) }
+                .overlay { if struck { Rectangle().fill(.white.opacity(0.7)).frame(height: 2) } }
+            if !parts.1.isEmpty && small > 0 { Text(parts.1).font(.trebuchet(small, .bold)).opacity(struck ? 0.6 : 1) }
         }
         .lineLimit(1)
-        .overlay { if struck { Rectangle().fill(.white.opacity(0.7)).frame(height: 2) } }
     }
 }
 
@@ -249,7 +269,12 @@ struct AlarmBody: View {
                     if let s = entry.plainSkip {
                         ClockText(date: s.date, big: 15, small: 0, struck: true).minimumScaleFactor(0.6)
                     } else {
-                        Text(clock?.0 ?? (entry.alarmsKnown ? "–" : "?")).font(.trebuchet(15, .bold)).minimumScaleFactor(0.6)
+                        // With its AM or PM, small: he has afternoon alarms as well as morning ones.
+                        HStack(alignment: .firstTextBaseline, spacing: 1) {
+                            Text(clock?.0 ?? (entry.alarmsKnown ? "–" : "?")).font(.trebuchet(15, .bold))
+                            if let m = clock?.1 { Text(m).font(.trebuchet(9, .bold)) }
+                        }
+                        .lineLimit(1).minimumScaleFactor(0.6)
                     }
                 }
             }
@@ -257,18 +282,19 @@ struct AlarmBody: View {
             if let s = entry.plainSkip {
                 Text("Skipped \(ChumbyEntry.clock(s.date))")
             } else if entry.moved != nil, let at = entry.nextAt {
-                Text("Just this once \(ChumbyEntry.clock(at))" + (entry.usualText.map { " · usually \($0)" } ?? ""))
+                Text("\(ChumbyEntry.clock(at)) just this once")
             } else {
                 Text(clock.map { "\($0.0) \($0.1)" + (entry.nextAlarm.map { ChumbyEntry.label($0.name) }.map { $0.isEmpty ? "" : " · \($0)" } ?? "") } ?? noAlarm)
             }
         case .accessoryRectangular:
             HStack(spacing: 7) {
                 OctopusMark(color: .white, blink: entry.plainSkip == nil ? 1 : 0.08).frame(width: 30, height: 24)
+                    .frame(maxHeight: .infinity, alignment: .center)
                 VStack(alignment: .leading, spacing: 0) {
                     if let s = entry.plainSkip {
                         Text("Skipped").font(.trebuchet(12, .bold)).lineLimit(1)
                         Text(ChumbyEntry.clock(s.date)).font(.trebuchet(19, .bold)).strikethrough().lineLimit(1).minimumScaleFactor(0.7)
-                        if let at = entry.nextAt { Text("then \(ChumbyEntry.then(at))").font(.trebuchet(12)).lineLimit(1) }
+                        if let at = entry.nextAt { Text(ChumbyEntry.then(at)).font(.trebuchet(12)).lineLimit(1).minimumScaleFactor(0.85) }
                     } else if entry.moved != nil, let at = entry.nextAt {
                         Text("Just this once").font(.trebuchet(12, .bold)).lineLimit(1)
                         Text(ChumbyEntry.clock(at)).font(.trebuchet(19, .bold)).lineLimit(1).minimumScaleFactor(0.7)
@@ -278,6 +304,8 @@ struct AlarmBody: View {
                         if entry.nextAt != nil { Text(entry.whenLine).font(.trebuchet(12)).lineLimit(1) }
                     }
                 }
+                // Leading, so nothing moves sideways from one state to the next; centred top to bottom, beside the octopus.
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
         default:
             if let s = entry.plainSkip {
@@ -290,16 +318,16 @@ struct AlarmBody: View {
                     }
                     Spacer(minLength: 0)
                     ClockText(date: s.date, big: 34, small: 14, struck: true)
-                    Text(entry.nextAt.map { "then \(ChumbyEntry.then($0))" } ?? "then none set").font(.trebuchet(14)).lineLimit(1).minimumScaleFactor(0.8)
+                    Text(entry.nextAt.map { "then \(ChumbyEntry.then($0))" } ?? "no other alarm set").font(.trebuchet(14)).lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: 6)
-                    if entry.reachable { SkipButton(entry: entry, height: 30) }
+                    if entry.reachable { SkipButton(entry: entry, height: 30) } else { NotAnswering(entry: entry) }
                 }
             } else if let c = clock, entry.nextAt != nil {
                 // Moved just this once, the octopus is awake and the new time leads, with "Just this once" where
                 // "Skipped" would sit; the usual time is in the line under it, and the button says "Back to 6:45 AM".
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top) {
-                        Octo(faded: !entry.reachable).frame(width: 46, height: 34)
+                        Octo(faded: !entry.reachable, blink: entry.night ? 0.08 : 1).frame(width: entry.moved != nil ? 40 : 46, height: entry.moved != nil ? 30 : 34)
                         if entry.moved != nil { Spacer(); Text("Just this once").font(.trebuchet(13, .bold)).opacity(0.85).lineLimit(1).minimumScaleFactor(0.8) }
                     }
                     Spacer(minLength: 0)
@@ -311,14 +339,15 @@ struct AlarmBody: View {
                     Text(entry.whenLine).font(.trebuchet(14)).opacity(0.85).lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: 6)
                     // Only when it can reach the Chumby: a skip that can't be sent is a dead button.
-                    if entry.reachable { SkipButton(entry: entry, height: 30) }
+                    if entry.reachable { SkipButton(entry: entry, height: 30) } else { NotAnswering(entry: entry) }
                 }
             } else if !entry.alarmsKnown {
                 Lost(text: entry.problem, seen: entry.lastSeenLine)
             } else {
-                VStack(spacing: 6) {
-                    Octo(blink: 0.08).frame(maxHeight: 74)
-                    Text("sleep in").font(.trebuchet(15, .bold))
+                VStack(spacing: 4) {
+                    Octo(blink: 0.08).frame(maxHeight: 66)
+                    Text("No alarm set").font(.trebuchet(15, .bold))
+                    Text("sleep in").font(.trebuchet(12)).opacity(0.75)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -329,13 +358,14 @@ struct AlarmBody: View {
 struct BuddyBody: View {
     let entry: ChumbyEntry
     var line: String {
-        if !entry.reachable { return "where’d you go?" }
-        if Calendar.current.component(.hour, from: entry.date) < 6 { return "shh. sleeping." }
+        // Only once it's been a while: one missed reading is a blip, not gone.
+        if !entry.reachable, let seen = entry.lastSeen, entry.date.timeIntervalSince(seen) > 30 * 60 { return "where’d you go?" }
+        if entry.night { return "shh. sleeping." }
         return buddyLines[(Calendar.current.ordinality(of: .hour, in: .year, for: entry.date) ?? 0) % buddyLines.count]
     }
     var body: some View {
         VStack(spacing: 4) {
-            Octo(faded: !entry.reachable, blink: Calendar.current.component(.hour, from: entry.date) < 6 ? 0.08 : 1).frame(maxHeight: .infinity)
+            Octo(faded: !entry.reachable, blink: entry.night ? 0.08 : 1).frame(maxHeight: .infinity)
             Text(line).font(.trebuchet(13, .bold)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -365,7 +395,7 @@ struct RemoteBody: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 0) {
-                Octo(faded: !entry.reachable, blink: entry.plainSkip != nil || entry.night ? 0.08 : 1).frame(width: 46, height: 34)
+                Octo(faded: !entry.reachable, blink: entry.plainSkip != nil || entry.night ? 0.08 : 1).frame(width: entry.moved != nil ? 40 : 46, height: entry.moved != nil ? 30 : 34)
                 Spacer(minLength: 2)
                 if let s = entry.plainSkip {
                     ClockText(date: s.date, big: 26, small: 13, struck: true)
@@ -383,7 +413,7 @@ struct RemoteBody: View {
                     if !entry.reachable, let seen = entry.lastSeenLine { Text(seen).font(.trebuchet(12)).opacity(0.8).lineLimit(1) }
                 }
                 Spacer(minLength: 6)
-                if entry.reachable { SkipButton(entry: entry, height: 30) }
+                if entry.reachable { SkipButton(entry: entry, height: 30) } else { NotAnswering(entry: entry) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Grid(horizontalSpacing: 10, verticalSpacing: 10) {
@@ -466,33 +496,45 @@ struct ChumbyStatusBody: View {
     var memoryUsed: Double { sys.memTotal > 0 ? 1 - Double(sys.memFree) / Double(sys.memTotal) : 0 }
     var memoryColor: Color { memoryUsed > 0.92 ? .red : memoryUsed > 0.8 ? .orange : ChumbyPalette.oct(true) }
     var alarmText: String? {
-        guard let a = entry.nextAlarm else { return entry.alarmsKnown ? "None set" : nil }
+        guard let a = entry.nextAlarm else { return entry.alarmsKnown ? "No alarm set" : nil }
         return "\(entry.whenText) \(a.clock) \(a.meridiem)"
     }
+    // Up and for how long; not answering, when it was last seen instead, its figures from then shown dimmed.
     var awake: some View {
         HStack(spacing: 5) {
-            Circle().fill(.green).frame(width: 8, height: 8)
-            Text("Up \(entryDuration(sys.up))").font(.trebuchet(15, .bold)).monospacedDigit().lineLimit(1)
+            Circle().fill(entry.reachable ? Color.green : Color.white.opacity(0.4)).frame(width: 8, height: 8)
+            // Not answering: "Last seen" over the time (with its day when not today), so it never reads as an alarm time.
+            if entry.reachable {
+                Text("Up \(entryDuration(sys.up))").font(.trebuchet(15, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(entry.lastSeen == nil ? "Not answering" : "Last seen").font(.trebuchet(11)).opacity(0.75)
+                    if let t = entry.lastSeen { Text(Calendar.current.isDateInToday(t) ? ChumbyEntry.clock(t) : t.formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.trebuchet(13, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8) }
+                }
+            }
         }
     }
     var body: some View {
-        if !entry.reachable {
+        if !entry.reachable && !entry.known {
             Lost(text: entry.problem, seen: entry.lastSeenLine)
         } else if family == .systemSmall {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .top) {
-                    Octo().frame(width: 48, height: 40)
+                    Octo(faded: !entry.reachable).frame(width: 48, height: 40)
                     Spacer(minLength: 0)
                     awake
                 }
                 Spacer(minLength: 0)
-                if sys.wifi >= 0 { StatusRow(label: "Wi-Fi", text: "\(sys.wifi)%", value: Double(sys.wifi) / 100) }
-                StatusRow(label: "Memory", text: "\(Int((memoryUsed * 100).rounded()))%", value: memoryUsed, color: memoryColor)
+                Group {
+                    if sys.wifi >= 0 { StatusRow(label: "Wi-Fi", text: "\(sys.wifi)%", value: Double(sys.wifi) / 100) }
+                    StatusRow(label: "Memory", text: "\(Int((memoryUsed * 100).rounded()))%", value: memoryUsed, color: memoryColor)
+                }
+                .opacity(entry.reachable ? 1 : 0.55)
             }
         } else {
             HStack(spacing: 14) {
                 VStack(spacing: 6) {
-                    Octo().frame(width: 92, height: 76)
+                    Octo(faded: !entry.reachable).frame(width: 92, height: 76)
                     awake
                 }
                 VStack(alignment: .leading, spacing: 6) {
@@ -503,6 +545,7 @@ struct ChumbyStatusBody: View {
                     // (and only when there's room: the next alarm takes two lines)
                     if alarmText == nil && !sys.chan.isEmpty && sys.chan != "Default" { StatusRow(label: "Channel", text: sys.chan) }
                 }
+                .opacity(entry.reachable ? 1 : 0.55)
             }
         }
     }

@@ -77,7 +77,7 @@ func card<C: View, B: View>(_ w: CGFloat, _ h: CGFloat, _ bg: B, @ViewBuilder _ 
         }
     }
     var body: some Scene { WindowGroup {
-        if let page = UserDefaults.standard.string(forKey: "page"), page.hasPrefix("island") { IslandPage(page: page) } else {
+        if UserDefaults.standard.bool(forKey: "sheets") { TVSheets() } else if let page = UserDefaults.standard.string(forKey: "page"), page.hasPrefix("island") { IslandPage(page: page) } else {
         ScrollView { VStack(spacing: 14) {
             HStack(spacing: 14) { card(158, 158, WidgetWall(image: e.wall)) { NowBody(family: .systemSmall, entry: e) }; card(158, 158, WidgetWall(image: nil)) { NowBody(family: .systemSmall, entry: off) } }
             card(338, 158, WidgetWall(image: e.wall)) { NowBody(family: .systemMedium, entry: e) }

@@ -169,15 +169,26 @@ struct IslandKeys: View {
     let state: TVIslandAttributes.ContentState
     var play: CGFloat = 24
     var body: some View {
-        HStack(spacing: 34) {
-            IslandSkip(app: state.app, forward: false, size: 22, wide: true)
-            IslandPlay(playing: state.playing, size: play)
-            IslandSkip(app: state.app, forward: true, size: 22, wide: true)
+        // Three centred; with next episode, four spaced evenly across the row (as an overlay at the end it stood 15 pt
+        // nearer its neighbour than the others stood to theirs).
+        Group {
+            if state.next == true {
+                HStack(spacing: 0) {
+                    IslandSkip(app: state.app, forward: false, size: 22, wide: true).frame(maxWidth: .infinity)
+                    IslandPlay(playing: state.playing, size: play).frame(maxWidth: .infinity)
+                    IslandSkip(app: state.app, forward: true, size: 22, wide: true).frame(maxWidth: .infinity)
+                    IslandNext(size: 22, wide: true).frame(maxWidth: .infinity)
+                }
+            } else {
+                HStack(spacing: 34) {
+                    IslandSkip(app: state.app, forward: false, size: 22, wide: true)
+                    IslandPlay(playing: state.playing, size: play)
+                    IslandSkip(app: state.app, forward: true, size: 22, wide: true)
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
         .frame(height: 40)
-        // The three stay centred; next episode stands at the row's end.
-        .frame(maxWidth: .infinity)
-        .overlay(alignment: .trailing) { if state.next == true { IslandNext(size: 22, wide: true) } }
     }
 }
 
