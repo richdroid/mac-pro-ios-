@@ -252,7 +252,6 @@ struct PhonePicker: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(shownName).font(.title3.weight(.bold)).lineLimit(2)
                 if !line.isEmpty { Text(line).font(.subheadline).foregroundStyle(.secondary).lineLimit(2) }
-                if let e = account.email, account.signedIn { Text("Your Stremio · \(e)").font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
             }
         }
     }
@@ -273,12 +272,13 @@ struct PhonePicker: View {
             HStack {
                 Image(systemName: "list.bullet").foregroundStyle(TVLook.accent)
                 Text(episode.map { "Season \($0.season), episode \($0.episode)" } ?? (meta == nil ? "Finding episodes…" : "Choose an episode"))
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                 Spacer()
                 Image(systemName: "chevron.up.chevron.down").font(.footnote).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 16).frame(height: 48).tvCard(14)
         }
+        .tint(.white)
         .disabled(meta?.episodes.isEmpty != false)
     }
 
@@ -305,7 +305,7 @@ struct PhonePicker: View {
         } else if let note = problem {
             VStack(spacing: 10) {
                 Text(note).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("Try again") { Task { if placeKnown && !playID.isEmpty { await loadStreams(force: true) } else { problem = nil; await load() } } }.tint(TVLook.accent)
+                Button("Try again") { Task { if placeKnown && !playID.isEmpty { await loadStreams(force: true) } else { problem = nil; streams = []; await load() } } }.tint(TVLook.accent)
             }
             .frame(maxWidth: .infinity).padding(.top, 18)
         }
@@ -370,8 +370,15 @@ struct PhonePicker: View {
         let read = await l
         library = read.item
         meta = await m
+        if !read.ok {
+            // No rows until his place is known: a tap would start at 0:00 and then save over it (gate on 36e1b24).
+            await first
+            streams = []
+            loading = false
+            problem = "Couldn’t read where you are in it from Stremio. Try again."
+            return
+        }
         placeKnown = true
-        if !read.ok { problem = "Couldn’t read where you are in it from Stremio. Try again."; loading = false; return }
         if type == "series", video == nil {
             let on = (library?["state"] as? [String: Any])?["video_id"] as? String
             video = meta?.episodes.first { $0.id == on }?.id ?? meta?.episodes.first { $0.season > 0 }?.id ?? meta?.episodes.first?.id

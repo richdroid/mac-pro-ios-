@@ -122,6 +122,11 @@ jobs:
           #    opened again with no episode named: Resume for that episode.
           SHOTS="10 30" film series 1 75 folded -tab 1 -pose phoneplay-close -phoneTitle tt0000002:1:2
           SHOTS="10" film series-again 1 15 folded -tab 1 -pose phonepicker -phoneTitle tt0000002 -phoneType series
+          # 8b. His library unreadable at first (the stand-in fails one read): a note and no rows, then Try again brings
+          #     back Resume at 3:20, and what plays after writes from there on, never below it.
+          ( sleep 16; $D "$DEVICE" tap "Try again" || echo "try-again tap failed" ) & RETRY=$!
+          SHOTS="10 25 40" film flaky 1 60 folded -tab 1 -pose phonefail -phoneTitle tt0000003
+          wait $RETRY
           # 9. Playing on through the postures, a panel up part of the way: folded, opened flat, half closed, folded.
           ( sleep 20; $D "$DEVICE" pose open; sleep 6; xcrun simctl io "$DEVICE" screenshot --display=3 dist/phone-posture-open.png
             sleep 5; xcrun simctl io "$DEVICE" screenshot --display=3 dist/phone-posture-open-panel.png

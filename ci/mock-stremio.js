@@ -17,9 +17,16 @@ const library = {
       duration: 600000, video_id: 'tt0000001', watched: null, noNotif: false },
     behaviorHints: { defaultVideoId: null, featuredVideoId: null, hasScheduledVideos: false } },
 };
+// A second film he's part way through (3:20), whose first library read fails, as on a bad connection: the picker must
+// show no rows until a Try again reads his place.
+library.tt0000003 = JSON.parse(JSON.stringify(library.tt0000001));
+Object.assign(library.tt0000003, { _id: 'tt0000003', name: 'Flaky Film' });
+Object.assign(library.tt0000003.state, { timeOffset: 200000, video_id: 'tt0000003' });
+let flakyLeft = 1;
 const manifest = { id: 'local.sample.streams', version: '1.0.0', name: 'Sample add-on', resources: ['stream'], types: ['movie', 'series'], idPrefixes: ['tt'], catalogs: [] };
 const metas = {
   'movie/tt0000001': { id: 'tt0000001', type: 'movie', name: 'Sample Film', poster: `${BASE}/art/poster.png`, background: '', releaseInfo: '2024', videos: [] },
+  'movie/tt0000003': { id: 'tt0000003', type: 'movie', name: 'Flaky Film', poster: `${BASE}/art/poster.png`, background: '', releaseInfo: '2024', videos: [] },
   'series/tt0000002': { id: 'tt0000002', type: 'series', name: 'Sample Show', poster: `${BASE}/art/poster.png`, background: '',
     videos: [1, 2, 3].map(e => ({ id: `tt0000002:1:${e}`, season: 1, episode: e, name: `Sample Episode ${e}` })) },
 };
@@ -57,6 +64,7 @@ http.createServer((q, s) => {
     if (b.authKey !== KEY) return send(s, 200, { error: { message: 'Session does not exist', code: 1 } });
     if (method === 'logout') return send(s, 200, { result: { success: true } });
     if (method === 'addonCollectionGet') return send(s, 200, { result: { addons: [{ transportUrl: `${BASE}/addon/manifest.json`, manifest, flags: {} }] } });
+    if (method === 'datastoreGet' && (b.ids || []).includes('tt0000003') && flakyLeft > 0) { flakyLeft--; s.statusCode = 503; return s.end('busy'); }
     if (method === 'datastoreGet') {
       const all = Object.values(library);
       return send(s, 200, { result: b.all ? all : all.filter(i => (b.ids || []).includes(i._id)) });

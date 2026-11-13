@@ -206,17 +206,23 @@ final class PhoneSession {
 
     // The same stream, at this very moment of it, on the TV: his place saved first, then the TV's own list asked for the
     // same file (the Mac's tokens are its own), and that one started there at this spot, the way a flick starts one.
+    // The TV's own stream list for this film or episode, ranked for the TV (1080p first), with where he is carried:
+    // he picks, and it starts there at this moment (Richard, 2026-11-13). The phone stops here, its place saved, so
+    // the list opens on the app's own flick page.
     func flickToTV() {
-        guard !flicking else { return }
+        guard !flicking, let model else { return }
         flicking = true
         engine?.pause()
-        let at = place
+        let at = place, length = duration
         Task {
             await save()
-            // The TV's own pick (its 1080p rule, tv.js), not the 4K file this phone was playing.
-            let ok = await PhoneFlick.send(title: title, stream: nil, at: at, model: model)
             flicking = false
-            if ok { close() } else { flickNote = "The TV couldn’t take it. Check the Mac’s connection."; clearNote() }
+            var item = title.item
+            if length > 0, at > 30 { item.progress = min(at / length, 0.99) }
+            close()
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            model.closeFlick()
+            model.flick(FlickTarget(item: item, source: .stremio))
         }
     }
 
@@ -284,7 +290,7 @@ struct PhonePlayerView: View {
                     if s.controls && !s.locked { shade.ignoresSafeArea().allowsHitTesting(false).transition(.opacity) }
                     overlay(g)
                 }
-                if let note = s.flickNote ?? (s.flicking ? "Sending to the TV…" : nil) {
+                if let note = s.flickNote ?? (s.flicking ? "Opening the TV’s streams…" : nil) {
                     Text(note).font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 10)
                         .background(.ultraThinMaterial, in: Capsule()).frame(maxHeight: .infinity, alignment: .top).padding(.top, 60)
                         .transition(.opacity)
