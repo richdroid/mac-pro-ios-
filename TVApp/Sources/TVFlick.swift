@@ -2900,14 +2900,19 @@ struct ShelfFlick: ViewModifier {
         #if canImport(UIKit)
         // A Stremio film's or episode's card, the throw that sends with no page (not a YouTube video's, which has its own).
         guard UserDefaults.standard.string(forKey: "pose") == "shelf", !Self.reported, ShelfSend.ref(item, source) != nil else { return }
-        try? await Task.sleep(nanoseconds: 2_500_000_000)
-        guard !Self.reported, let screen = (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?.screen.bounds,
-              screen.width > 0 else { return }
-        let r = rect()
-        let x = r.midX / screen.width, y = r.midY / screen.height
-        guard r.width > 0, x > 0.05, x < 0.6, y > 0.15, y < 0.8 else { return }
-        Self.reported = true
-        _ = await TVBridge.data(TVBridge.url(String(format: "/api/tv/applied?what=card&x=%.3f&y=%.3f", x, y)), timeout: 3)
+        // Looked for until one is fully in sight, the Remote's unseen build (its tab up and back) in between included.
+        for _ in 0..<24 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled || Self.reported { return }
+            guard model.tab != 0, !ScreenVeil.up, let screen = (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?.screen.bounds,
+                  screen.width > 0 else { continue }
+            let r = rect()
+            let x = r.midX / screen.width, y = r.midY / screen.height
+            guard r.width > 0, x > 0.05, x < 0.8, y > 0.15, y < 0.8, r.minX >= 0, r.maxX <= screen.width else { continue }
+            Self.reported = true
+            _ = await TVBridge.data(TVBridge.url(String(format: "/api/tv/applied?what=card&x=%.3f&y=%.3f", x, y)), timeout: 3)
+            return
+        }
         #endif
     }
     var gesture: some Gesture {
