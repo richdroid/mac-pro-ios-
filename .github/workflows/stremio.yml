@@ -1,0 +1,132 @@
+name: Play on iPhone
+# Work in progress on the TV app's own Stremio player, pushed to the stremio-native branch (never main): the app built
+# with KSPlayer, then filmed against a stand-in Stremio (ci/mock-stremio.js: a sample login, one add-on, generated test
+# pattern files; no account, nothing real) and the stand-in Mac (ci/mock-chumby.js): signing in, Play on iPhone, every
+# key of the player, Picture in Picture, Flick to the TV from the player, and resuming where the TV left off, folded,
+# open flat, open upright and half closed. Published to the stremio-native release.
+on:
+  push:
+    branches: [stremio-native]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: stremio-native
+  cancel-in-progress: true
+jobs:
+  phone:
+    runs-on: xcode-27
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO build 2>&1 \
+            | tee dist/build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" | head -60
+      - name: Build for the phone (unsigned, compile check)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build-dev -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO build 2>&1 \
+            | tee dist/build-device.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" | head -40
+      - name: Sample media
+        run: |
+          command -v ffmpeg || brew install ffmpeg
+          M=/tmp/stremio-media; mkdir -p $M
+          # Ten minutes of test pattern and two tones (English and French), with English subtitles, as an HEVC MKV (the
+          # FFmpeg player's) and an H.264 MP4 (AVPlayer's).
+          node -e 'let o="";for(let i=0;i<120;i++){const t=s=>new Date(s*1000).toISOString().substr(11,8)+",000";o+=`${i+1}\n${t(i*5)} --> ${t(i*5+4)}\nSample subtitle line ${i+1}\n\n`}require("fs").writeFileSync("/tmp/stremio-media/sample.srt",o)'
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=960x540:rate=24:duration=600 -f lavfi -i sine=frequency=440:duration=600 \
+            -f lavfi -i sine=frequency=660:duration=600 -i $M/sample.srt -map 0:v -map 1:a -map 2:a -map 3:s \
+            -c:v libx265 -preset ultrafast -tag:v hvc1 -c:a aac -b:a 96k -c:s srt \
+            -metadata:s:a:0 language=eng -metadata:s:a:0 title="English" -metadata:s:a:1 language=fre -metadata:s:a:1 title="Français" \
+            -metadata:s:s:0 language=eng $M/sample.mkv
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=1280x720:rate=24:duration=600 -f lavfi -i sine=frequency=440:duration=600 \
+            -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -b:a 96k -movflags +faststart $M/sample.mp4
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=0x1d3557:size=400x600,drawtext=text='SAMPLE':fontcolor=white:fontsize=60:x=(w-tw)/2:y=(h-th)/2" -frames:v 1 $M/poster.png \
+            || ffmpeg -hide_banner -loglevel error -y -f lavfi -i color=c=0x1d3557:size=400x600 -frames:v 1 $M/poster.png
+          ls -la $M
+      - name: Films
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          node ci/mock-chumby.js &
+          node ci/mock-stremio.js 9083 /tmp/stremio-media > dist/mock-stremio.log 2>&1 &
+          sleep 3
+          M=http://127.0.0.1:9002
+          S="-stremioAPI http://127.0.0.1:9083 -stremioMeta http://127.0.0.1:9083"
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          # One film: the posture first, then the app launched with its pose, recorded for `secs`, shots at the marks.
+          film() {
+            local name=$1 display=$2 secs=$3 posture=$4; shift 4
+            case $posture in
+              folded) $D "$DEVICE" pose closed; sleep 3; $D "$DEVICE" rotate 1; sleep 2;;
+              flat) $D "$DEVICE" pose open; sleep 3; $D "$DEVICE" rotate 3; sleep 3;;
+              upright) $D "$DEVICE" pose open; sleep 3; $D "$DEVICE" rotate 1; sleep 3;;
+              partial) $D "$DEVICE" pose open; sleep 3; $D "$DEVICE" rotate 1; sleep 2; $D "$DEVICE" pose partial; sleep 3;;
+            esac
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/phone-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M $S "$@"
+            local t=0
+            while [ $t -lt $secs ]; do
+              sleep 5; t=$((t + 5))
+              case " $SHOTS " in *" $t "*) xcrun simctl io "$DEVICE" screenshot --display=$display dist/phone-$name-$t.png;; esac
+            done
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            sleep 2
+            [ "$(stat -f %z dist/phone-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ] && echo "film $name empty"
+          }
+          date
+          # 1. Signed out: the picker's own sign-in (the stand-in's sample login), the streams, the best one played and every
+          #    key pressed in turn; then closed, its place written to the library.
+          SHOTS="10 15 20 25 35 45 55 65 75" film login 1 95 folded -tab 1 -pose phoneplay-close -phoneSignOut YES
+          # 2. Settings, signed in: the Stremio row.
+          SHOTS="10" film settings 1 12 folded -tab 9
+          # 3. Opened flat: resumes where film 1 left off, all the keys again, Picture in Picture.
+          SHOTS="10 20 30 45 60 70" film flat 3 85 flat -tab 1 -pose phoneplay-close
+          # 4. Open upright (his main posture).
+          SHOTS="10 20 30 45 60 70" film upright 3 85 upright -tab 1 -pose phoneplay-close
+          # 5. Half closed: the picture above the fold, the keys below.
+          SHOTS="15 30 50" film partial 3 60 partial -tab 1 -pose phoneplay-close
+          # 6. Flick to the TV from the player, folded: the Remote comes up with the start.
+          SHOTS="20 70 80" film flick 1 90 folded -tab 1 -pose phoneplay-flick
+          # 7. The flick page's own Play on iPhone, and the picker it opens (a show: its episode).
+          SHOTS="8 15 25" film flickpage 1 30 folded -tab 1 -pose phoneflick
+          SHOTS="10 18" film series 1 22 folded -tab 1 -pose phonepicker -phoneTitle tt0000002:1:2
+          date
+          cp /tmp/stremio-puts.log dist/stremio-puts.log 2>/dev/null || echo "no library writes" > dist/stremio-puts.log
+          cp /tmp/stremio-api.log dist/stremio-api.log 2>/dev/null || true
+          cp /tmp/tv-home-applied.log dist/applied.log 2>/dev/null || true
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../phone.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../phone.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }} $(grep -c 'BUILD SUCCEEDED' dist/build.log 2>/dev/null) $(grep -c 'BUILD SUCCEEDED' dist/build-device.log 2>/dev/null)" > status.txt
+          gh release view stremio-native >/dev/null 2>&1 || gh release create stremio-native --prerelease --title "Play on iPhone" --notes "Work in progress: the TV app's own Stremio player, from the stremio-native branch."
+          for f in phone.zip status.txt; do
+            for i in 1 2 3; do gh release upload stremio-native "$f" --clobber && break; sleep 15; done
+          done

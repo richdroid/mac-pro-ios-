@@ -860,6 +860,17 @@ struct FlickScreen: View {
                 Text("Choose on the TV").font(.subheadline.weight(.semibold))
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("flick")) } action: { rects.map["tv"] = $0 }
+            // Or on this phone instead, from his own add-ons (StremioPhone.swift).
+            if let ref = item.stremioRef {
+                row(selected: false) {
+                    model.tick()
+                    PhoneOpen.open(PhoneTitle(type: ref.type, imdb: ref.imdb, video: ref.type == "series" ? (episode?.id ?? ref.video ?? "") : ref.imdb,
+                                              name: item.title, line: "", poster: item.art, background: ""), model: model)
+                } label: {
+                    Image(systemName: "iphone").font(.system(size: 17, weight: .semibold)).foregroundStyle(TVLook.accent).frame(width: 28)
+                    Text("Play on iPhone").font(.subheadline.weight(.semibold))
+                }
+            }
             // Where it'll start, and the other way, whenever he's been in it before: from the card, else from Stremio's own
             // Continue watching (Richard, 2026-11-07: "obv when i flick it should start from where i was"). It applies to
             // whichever stream he picks.

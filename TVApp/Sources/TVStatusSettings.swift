@@ -33,6 +33,7 @@ struct StatusTab: View {
                 }
             }
             .navigationDestination(for: SettingsRoute.self) { _ in TVSettingsPage() }
+            .navigationDestination(for: StremioRoute.self) { _ in StremioAccountPage() }
             .navigationDestination(for: ManagePage.self) { page in
                 switch page {
                 case .apps: ManageAppsView(store: store)
@@ -90,10 +91,10 @@ struct TVSettingsPage: View {
                 FoldSplit {
                     page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections(level: true).shotSpot("tvrow", pose: "settingsnav") })
                 } right: {
-                    page(Group { PageHeading(" ").padding(.horizontal, 4).hidden(); TVActionSections() })
+                    page(Group { PageHeading(" ").padding(.horizontal, 4).hidden(); TVActionSections(); StremioSettingsSection() })
                 }
             } else {
-                page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections().shotSpot("tvrow", pose: "settingsnav"); TVActionSections() })
+                page(Group { PageHeading("Settings").padding(.horizontal, 4); TVManageSections().shotSpot("tvrow", pose: "settingsnav"); TVActionSections(); StremioSettingsSection() })
             }
         }
         .summonsBar()
