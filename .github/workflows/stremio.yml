@@ -86,7 +86,7 @@ jobs:
             esac
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/phone-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
-            xcrun simctl launch --stdout=dist/phone-$name-out.log --stderr=dist/phone-$name-err.log "$DEVICE" local.macpro.TV -address $M $S "$@"
+            xcrun simctl launch --stdout=$PWD/dist/phone-$name-out.log --stderr=$PWD/dist/phone-$name-err.log "$DEVICE" local.macpro.TV -address $M $S "$@"
             local t=0
             while [ $t -lt $secs ]; do
               sleep 5; t=$((t + 5))
