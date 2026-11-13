@@ -912,6 +912,7 @@ struct TVWidgets: WidgetBundle {
         TVScreenWidget()
         TVAppsWidget()
         TVBoxWidget()
+        PhoneContinueWidget()
         TVIslandWidget()
         TVFlickControl()
         TVPlayControl()

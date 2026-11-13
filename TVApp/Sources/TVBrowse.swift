@@ -510,6 +510,8 @@ struct FlickCardButton: View {
             // A show he's part way through (Continue watching's tiles carry how far): its episodes asked for as the tile
             // comes on screen, so its page opens on them rather than on grey rows.
             .onAppear { if source == .stremio, item.progress != nil { NextUp.prefetch(item) } }
+            // Held: the same title on this phone instead, from his own add-ons.
+            .contextMenu { if hasInfo { Button("Play on iPhone", systemImage: "iphone") { model.tick(); PhoneOpen.open(item, model: model) } } }
     }
 }
 final class FrameBox { var rect: CGRect? }
