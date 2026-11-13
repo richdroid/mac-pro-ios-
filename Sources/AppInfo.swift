@@ -237,12 +237,15 @@ struct AppInfoView: View {
     struct Fact { let label: String; let value: String; var color: Color = .secondary }
     struct FactGroup { let title: String; var facts: [Fact] }
     func groups() -> [FactGroup] {
+        // Before the Mac's answer (or from a Mac too old to give one), what the Apps list already knows about the copy on
+        // this iPhone, at once and in its final place (the right pane open flat), so the page never opens on its header
+        // alone; the package's facts join it when they come.
         guard let i = info else {
-            guard oldMac, let app else { return [] }
+            guard let app else { return [] }
             var f: [Fact] = []
-            if app.installedAt > 1_000_000_000 { f.append(Fact(label: "Installed", value: Self.day(app.installedAt))) }
-            if app.expires > 0 { f.append(expiry(app.expires)) }
-            return f.isEmpty ? [] : [FactGroup(title: "Information", facts: f)]
+            if app.installedAt > 1_000_000_000, app.state != "missing" { f.append(Fact(label: "Installed", value: Self.day(app.installedAt))) }
+            if app.expires > 0, app.state != "missing" { f.append(expiry(app.expires)) }
+            return f.isEmpty ? [] : [FactGroup(title: "On this iPhone", facts: f)]
         }
         var main = FactGroup(title: "Information", facts: [])
         if let by = history?.by, !by.isEmpty { main.facts.append(Fact(label: "Developer", value: by)) }
@@ -257,7 +260,7 @@ struct AppInfoView: View {
         if let x = i.asks, !x.isEmpty { uses.facts.append(Fact(label: "Can ask for", value: x.joined(separator: ", "))) }
         if let x = i.capabilities, !x.isEmpty { uses.facts.append(Fact(label: "Uses", value: x.joined(separator: ", "))) }
         // The copy on this iPhone: when it went on, when its signature ends (the phone's copy, as the header counts it).
-        var phone = FactGroup(title: "On This iPhone", facts: [])
+        var phone = FactGroup(title: "On this iPhone", facts: [])
         let team = i.signed?.team ?? ""
         if let app, app.installedAt > 1_000_000_000, app.state != "missing" {
             phone.facts.append(Fact(label: "Installed", value: Self.day(app.installedAt)))

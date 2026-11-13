@@ -137,6 +137,8 @@ jobs:
           open -a DeviceHub; sleep 10
           $D "$DEVICE" pose open; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
+          # One throwaway launch first, so the film is of a first open of the page, not of the simulator's first launch.
+          shot warmup 3 10 -tab 1
           openfilm firstopen-upright 3 -noInfoCache YES
           openfilm secondopen-upright 3
           poses 3 -upright 0.5 ""
