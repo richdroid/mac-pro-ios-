@@ -14,6 +14,12 @@ final class StreamCache {
     static let shared = StreamCache()
     private struct Entry { let at: Date; let task: Task<[StremioStream]?, Never> }
     private var entries: [String: Entry] = [:]
+    // Lists that have answered, for a page to be laid out with them before it shows.
+    private var answered: [String: (at: Date, streams: [StremioStream])] = [:]
+    func inHand(type: String, imdb: String, video: String) -> [StremioStream]? {
+        guard let a = answered[Self.key(type, imdb, video)], Date().timeIntervalSince(a.at) < Self.fresh else { return nil }
+        return a.streams
+    }
     private static let fresh: TimeInterval = 600
     static func key(_ type: String, _ imdb: String, _ video: String) -> String { "\(type)/\(imdb)/\(video)" }
     func streams(type: String, imdb: String, video: String, again: Bool = false) async -> [StremioStream]? {
@@ -30,9 +36,18 @@ final class StreamCache {
         }
         entries[k] = Entry(at: Date(), task: task)
         let s = await task.value
+        if let s, !s.isEmpty { answered[k] = (Date(), s) }
         // Nothing found is worth asking again for next time.
         if s?.isEmpty != false, entries[k]?.task == task { entries[k] = nil }
         return s
+    }
+    // An episode row under a finger ("tt…:s:e"): its list asked for now, so the tap that follows finds it on its way
+    // (an episode's list not asked for ahead took 0.5–1.3 s after the tap, 07:17–07:24Z on 11-11).
+    func prefetch(episode video: String) {
+        guard let imdb = video.split(separator: ":").first.map(String.init), imdb.hasPrefix("tt"), video.contains(":") else { return }
+        let k = Self.key("series", imdb, video)
+        if let e = entries[k], Date().timeIntervalSince(e.at) < Self.fresh { return }
+        Task { _ = await streams(type: "series", imdb: imdb, video: video) }
     }
     // A list that turned out stale: the next look asks afresh.
     func forget(type: String, imdb: String, video: String) { entries[Self.key(type, imdb, video)] = nil }
@@ -157,6 +172,9 @@ extension TVBridge {
                 // Every stream the Mac tried, kept for the flick to set apart; and a start called off (his own Home, another
                 // app, a newer send) is not a failure.
                 if j["failed"] as? String == "start" { await MainActor.run { TriedStreams.last = j["tried"] as? [String] }; throw DidNotStart() }
+                // Asked `again` about a send the Mac never saw (lost on the way out) while something else is its own: the
+                // flick may send it once as itself.
+                if j["error"] as? String == "Stopped", j["unseen"] as? Bool == true { throw Unseen() }
                 if j["error"] as? String == "Stopped" { throw CancellationError() }
                 if j["retry"] as? Bool == true { throw Slow() }
                 if j["failed"] as? String == "gone" || j["gone"] as? Bool == true { throw Gone() }
@@ -189,6 +207,7 @@ final class HitchLog: NSObject {
     private var hitches: [[String: Any]] = []
     private var flushing: Task<Void, Never>?
     func start() {
+        MainTurns.start()
         guard link == nil, UserDefaults.standard.string(forKey: "pose") != nil else { return }
         let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
         l.add(to: .main, forMode: .common)
@@ -224,7 +243,30 @@ final class HitchLog: NSObject {
         guard gap > 34 else { return }
         hitches.append(["ms": Int(gap), "at": Date().timeIntervalSince1970 * 1000])
         print("HITCH \(Int(gap)) ms")
+        // Beside the flick's steps in the films' main log: a frame the screen really missed, unlike a long turn, which
+        // can be many frames' work with no wait between.
+        SwipeLog.note("late frame \(Int(gap)) ms")
         flushSoon()
+    }
+}
+#endif
+
+// The build's films only (-swipeLog YES): every main-thread turn over 24 ms, into the swipe log beside the flick's own
+// steps (open, fade, covers, move, landed), so a held frame in a film is told apart as a stall or an animation that
+// didn't run.
+#if os(iOS)
+enum MainTurns {
+    nonisolated(unsafe) private static var woke: CFAbsoluteTime = 0
+    nonisolated(unsafe) private static var started = false
+    @MainActor static func start() {
+        guard SwipeLog.on, !started else { return }
+        started = true
+        let o = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { _, a in
+            let now = CFAbsoluteTimeGetCurrent()
+            if a == .afterWaiting { woke = now }
+            else if woke > 0 { if now - woke > 0.024 { SwipeLog.note(String(format: "main turn %.0f ms", (now - woke) * 1000)) }; woke = 0 }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), o, .commonModes)
     }
 }
 #endif

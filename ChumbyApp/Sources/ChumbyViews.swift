@@ -627,7 +627,7 @@ struct ReachRow: View {
                     Text(model.reachWords + seen).font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1)
                 }
                 if open {
-                    Text(model.dead ? model.deadText : "Showing what the Chumby last said. It may be fine. Check Tailscale on this phone.")
+                    Text(model.dead ? model.deadText : "Showing what the Chumby last said. It may be fine. Check this phone’s connection to home.")
                         .font(.custom("Trebuchet MS", size: 15)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 300, alignment: .leading)
                 }
             }
@@ -1208,11 +1208,14 @@ struct HomeTab: View {
                     .animation(.snappy, value: model.unreachable)
                 }.roomyIndicators()
                 // For the build's shot: Home scrolled so the device's caption sits right at the tab bar, where Richard saw
-                // "Chumby Classic" through it.
+                // "Chumby Classic" through it. homecard: Home scrolled to its Playing card (the playing scene), folded.
                 .task {
-                    guard ChumbyModel.pose == "homebar" else { return }
+                    guard ["homebar", "homecard"].contains(ChumbyModel.pose) else { return }
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
-                    scroll.scrollTo("homebar", anchor: .bottom)
+                    // The card only shows once a fresh reading says music is playing.
+                    for _ in 0..<40 where ChumbyModel.pose == "homecard" && !(model.state.musicPlaying && model.stateConfirmed) { try? await Task.sleep(nanoseconds: 100_000_000) }
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    withAnimation(.snappy) { scroll.scrollTo(ChumbyModel.pose == "homebar" ? "homebar" : "homeplaying", anchor: .bottom) }
                 }
                 // For the branch film of a song chosen on Sounds: Home brought to its Playing card while it starts.
                 .task(id: model.macStarting != nil) {
@@ -2137,6 +2140,22 @@ struct SoundsTab: View {
             // capsule beside rounded cards (designer, 11-11).
             Section {
                 NowPlaying(tab: 3, failID: "sounds")
+                    // For the build (the mock's fail scene): an alarm's sound, the alarm volume and the fade each turned
+                    // down, so their notes are seen under their rows (soundsfail).
+                    .task {
+                        guard ChumbyModel.pose == "soundsfail" else { return }
+                        for _ in 0..<60 where mine.isEmpty || model.state.volume < 0 { try? await Task.sleep(nanoseconds: 100_000_000) }
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        // A different sound, as he picks one there.
+                        if let a = mine.first {
+                            var b = a
+                            let tag = a.type == "beep" ? (model.state.streams.first.map { "stream:" + $0.key } ?? "none") : "beep:Beep"
+                            b.setSound(tag, streams: model.state.streams, stations: model.pandoraStations)
+                            model.change(.replace(a, b))
+                        }
+                        model.change(.volume(model.state.volume >= 95 ? model.state.volume - 5 : model.state.volume + 5))
+                        model.change(.fade(model.state.fade == 30 ? 15 : 30))
+                    }
                 Toggle(isOn: Binding(get: { model.sys.airplayOn }, set: { on in model.sys.airplayOn = on; model.cmd("airplay", on ? "1" : "0", id: "airplay") })) {
                     Label("Accept AirPlay", systemImage: "airplayaudio")
                 }
@@ -2157,12 +2176,11 @@ struct SoundsTab: View {
             Section {
                 // A row arriving with a fresher reading slides into its place rather than reshuffling the list in a frame.
                 ForEach(mine, id: \.key) { a in
-                    VStack(alignment: .leading, spacing: 4) {
-                        soundRow("\(a.clock) \(a.meridiem)", [a.name, a.whenUnlessNamed].filter { !$0.isEmpty }.joined(separator: " · "), a, mark: a.key) { b in
-                            model.change(.replace(a, b))
-                        }
-                        MarkNote(mark: a.key)
+                    soundRow("\(a.clock) \(a.meridiem)", [a.name, a.whenUnlessNamed].filter { !$0.isEmpty }.joined(separator: " · "), a, mark: a.key) { b in
+                        model.change(.replace(a, b))
                     }
+                    // Its own row, so it springs in and out as a row does (MarkNote).
+                    MarkNote(mark: a.key).noteRow(lead: 0)
                 }
                 if let c = calendarSound {
                     soundRow("Calendar alarms", "Every one your calendar sets", c, mark: nil) { b in
@@ -2186,12 +2204,12 @@ struct SoundsTab: View {
                         Text("\(Int(alarmVolume))%").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 40, alignment: .trailing)
                     }
                 }
-                MarkNote(mark: "alarmVolume")
+                MarkNote(mark: "alarmVolume").noteRow(lead: 0)
                 }
                 Picker("Fade in", selection: Binding(get: { model.state.fade }, set: { model.change(.fade($0)) })) {
                     ForEach([(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")], id: \.0) { Text($0.1).tag($0.0) }
                 }
-                MarkNote(mark: "fade")
+                MarkNote(mark: "fade").noteRow(lead: 0)
             } header: { SectionHead(icon: "alarm", text: "Alarms play", color: ChumbyPalette.sub(dark)) }
             .animation(.snappy, value: mine.map(\.key))
             Section {
@@ -2397,7 +2415,7 @@ struct TinkerTab: View {
                     HStack(spacing: 14) {
                         Image(systemName: model.unreachable ? "wifi.exclamationmark" : "wifi").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
                             .frame(width: 32, height: 32).background(model.dead ? ChumbyPalette.remove(dark) : model.offline ? ChumbyPalette.away : ChumbyPalette.on, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        Text(model.unreachable ? model.reachWords : "Connected").font(.body.weight(.semibold))
+                        Text(model.unreachable ? (model.dead ? "The Chumby isn’t answering" : model.reachWords) : "Connected").font(.body.weight(.semibold))
                     }
                     .padding(.vertical, 2)
                 }

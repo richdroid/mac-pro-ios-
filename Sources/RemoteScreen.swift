@@ -99,6 +99,13 @@ final class RemoteScreen: ObservableObject {
     private var rememberedSpeed = false
     private var base: URL?
     private var wanted = false          // someone wants the screen, so a drop means reconnect
+    // The bridge keeps a Screen session for about a minute after the phone goes (the app in the background, a network
+    // change) and hands out a token for it. With the token the phone reattaches to that very session and carries on
+    // from the byte it last had: no new sign-in, no new picture, no "Reconnecting…" unless the reattach fails.
+    private var resumeToken: String?
+    private var resuming: URLSessionWebSocketTask?
+    private var lastResumeTry = Date.distantPast
+    private var canResume: Bool { resumeToken != nil && hasPicture && (decoder?.resumable ?? false) }
     private var attempts = 0
     private var retry: Task<Void, Never>?
     private var closeLater: Task<Void, Never>?
@@ -160,7 +167,7 @@ final class RemoteScreen: ObservableObject {
         running = false
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
-        if phase == .connected || phase == .connecting { phase = hasPicture ? .reconnecting : .idle }
+        if phase == .connected || phase == .connecting { if !canResume { phase = hasPicture ? .reconnecting : .idle } }
         // The return starts its own 1.5 s before any "Reconnecting…".
         slowTimer?.cancel(); slowTimer = nil; slowReconnect = false
     }
@@ -232,12 +239,18 @@ final class RemoteScreen: ObservableObject {
         self.base = base
         guard !backgrounded else { return }
         running = false
-        socket?.cancel(with: .goingAway, reason: nil)
+        // A reattach leaves the old socket with "going away" (the bridge keeps the session for it); a fresh start closes it for good.
+        let reattach = canResume, replaced = socket
         socket = nil
+        replaced?.cancel(with: reattach ? .goingAway : .normalClosure, reason: nil)
+        resuming = nil
+        let got = reattach ? decoder?.pauseForReattach() : nil
         self.base = base
         guard var parts = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return }
         parts.scheme = parts.scheme == "http" ? "ws" : "wss"
         parts.path = "/novnc/ws/vnc"
+        if reattach, let token = resumeToken, let got { parts.queryItems = [URLQueryItem(name: "resume", value: token), URLQueryItem(name: "got", value: String(got))] }
+        else { resumeToken = nil }
         guard let url = parts.url else { return }
         var request = URLRequest(url: url)
         request.setValue("\(base.scheme ?? "https")://\(base.host ?? "")\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
@@ -245,6 +258,21 @@ final class RemoteScreen: ObservableObject {
         let task = URLSession.shared.webSocketTask(with: request)
         task.maximumMessageSize = 32 << 20
         socket = task
+        if reattach, let kept = decoder {
+            kept.reattach(to: task)
+            resuming = task; running = true; lastResumeTry = Date()
+            task.resume()
+            // No "resumed" from the bridge in 6 s: that session is gone, so start afresh (over the same picture).
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                guard let self, self.resuming === task, self.socket === task else { return }
+                self.resuming = nil; self.resumeToken = nil
+                task.cancel(with: .abnormalClosure, reason: nil)
+                self.connect(base: base)
+            }
+            Task.detached(priority: .userInitiated) { [weak self] in await Self.receiveLoop(task, decoder: kept, owner: self) }
+            return
+        }
         // Full colour only where the last picture came in fast (home Wi-Fi); otherwise 16-bit, less than half the bytes.
         // The new connection starts from the last picture, so it fills in over it, never over black.
         let decoder = ScreenDecoder(socket: task, pipeline: Self.pipeline, deep: Self.deepColour, seed: hasPicture ? self.decoder?.snapshot().0 : nil)
@@ -269,7 +297,8 @@ final class RemoteScreen: ObservableObject {
         liveCheck?.cancel()
         stopMeasuring()
         flushTimer = nil
-        socket?.cancel(with: .goingAway, reason: nil)
+        resumeToken = nil; resuming = nil
+        socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
         if phase != .needsLogin { phase = .idle }
     }
@@ -295,7 +324,8 @@ final class RemoteScreen: ObservableObject {
                 await owner?.dropped(task, code: code)
                 return
             }
-            let events = decoder.feed(data)
+            let events = decoder.feed(data, from: task)
+            if decoder.socket !== task { return }
             let state = events.filter { !$0.isDrawing }
             let firstPicture = !told && events.contains { $0.isDrawing }
             // And once more when the first picture is whole (the first may only have been its top), for its timing.
@@ -330,8 +360,19 @@ final class RemoteScreen: ObservableObject {
     // {"pixelScroll":true} when the bridge's input helper can post smooth scrolls. False once this socket isn't wanted.
     private func bridgeSaid(_ text: String, on task: URLSessionWebSocketTask) -> Bool {
         guard running, socket === task else { return false }
-        if let d = text.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let on = o["pixelScroll"] as? Bool {
-            pixelScrollAvailable = on
+        guard let d = text.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return true }
+        if let on = o["pixelScroll"] as? Bool { pixelScrollAvailable = on }
+        if let token = o["resume"] as? String { resumeToken = token }
+        if o["resumed"] as? Bool == true, resuming === task {
+            // Back on the same session: the picture never went, so there's nothing to show but the picture.
+            resuming = nil
+            attempts = 0
+            if phase == .reconnecting || phase == .connecting { phase = .connected }
+            slowTimer?.cancel(); slowTimer = nil; slowReconnect = false
+            send([251, 0, 0, 0])
+            request(incremental: false)
+            startMeasuring()
+            watchWhole()
         }
         return true
     }
@@ -342,6 +383,10 @@ final class RemoteScreen: ObservableObject {
         running = false
         socket = nil
         if code == 409 { phase = .needsLogin; return }
+        // A reattach that was refused (the bridge let that session go) starts afresh at once; a session that was up and
+        // dropped is reattached to at once, without a banner, unless it was only just tried.
+        if resuming === task || code == 410 { resuming = nil; resumeToken = nil; if let base, wanted, !backgrounded { connect(base: base) }; return }
+        if canResume, wanted, !backgrounded, let base, Date().timeIntervalSince(lastResumeTry) > 2 { connect(base: base); return }
         // Dropped: try again quietly. Only say so if it keeps failing.
         if attempts >= 8 && !hasPicture { phase = .failed("Can’t reach the Mac’s screen."); return }
         scheduleRetry()
@@ -696,7 +741,17 @@ struct ScreenTimings: Sendable {
 //    in, top down, rather than only once its last byte is in.
 //  - A reconnect starts from the last picture, so what's still to come is the old picture, never black.
 final class ScreenDecoder: @unchecked Sendable {
-    let socket: URLSessionWebSocketTask
+    // The socket this decoder is fed from and answers on. It can move to a new one (a reattach to the bridge's kept
+    // session, which carries on from the byte `received` counts); nothing from any other socket is taken in.
+    private let socketLock = NSLock()
+    private var current: URLSessionWebSocketTask?
+    private var receivedBytes = 0
+    var socket: URLSessionWebSocketTask? { socketLock.lock(); defer { socketLock.unlock() }; return current }
+    var received: Int { socketLock.lock(); defer { socketLock.unlock() }; return receivedBytes }
+    // Stops taking anything in and returns how many bytes of the Mac's stream have been.
+    func pauseForReattach() -> Int { socketLock.lock(); defer { socketLock.unlock() }; current = nil; return receivedBytes }
+    func reattach(to task: URLSessionWebSocketTask) { socketLock.lock(); current = task; socketLock.unlock() }
+    var resumable: Bool { stage == .messages }
     private let pipeline: Int
     // 4 bytes a pixel (32-bit, 3 on the wire in ZRLE) or 2 (16-bit, 5-6-5).
     let deep: Bool
@@ -815,19 +870,23 @@ final class ScreenDecoder: @unchecked Sendable {
     private var stage = Stage.version
     private var events: [ScreenEvent] = []
     init(socket: URLSessionWebSocketTask, pipeline: Int = 4, deep: Bool = true, seed: FrameBuffer? = nil) {
-        self.socket = socket; self.pipeline = max(1, pipeline); self.deep = deep; self.seed = seed
+        self.current = socket; self.pipeline = max(1, pipeline); self.deep = deep; self.seed = seed
         times.deep = deep
     }
-    func feed(_ data: Data) -> [ScreenEvent] {
+    func feed(_ data: Data, from task: URLSessionWebSocketTask) -> [ScreenEvent] {
         events = []
-        guard stage != .stopped else { return [] }
+        socketLock.lock()
+        let mine = current === task
+        if mine { receivedBytes += data.count }
+        socketLock.unlock()
+        guard mine, stage != .stopped else { return [] }
         buffer.append(data)
         if countingFirst { firstUpdateBytes += data.count }
         parse()
         return events
     }
     private func fail(_ message: String) { stage = .stopped; events.append(.failed(message)) }
-    private func send(_ bytes: [UInt8]) { socket.send(.data(Data(bytes))) { _ in } }
+    private func send(_ bytes: [UInt8]) { socket?.send(.data(Data(bytes))) { _ in } }
     private func take(_ n: Int) -> Data? {
         guard buffer.count >= n else { return nil }
         let out = Data(buffer.prefix(n))
@@ -847,7 +906,7 @@ final class ScreenDecoder: @unchecked Sendable {
             case .stopped: return
             case .version:
                 guard take(12) != nil else { return }
-                socket.send(.data(Data("RFB 003.008\n".utf8))) { _ in }
+                socket?.send(.data(Data("RFB 003.008\n".utf8))) { _ in }
                 stage = .security
             case .security:
                 guard let head = buffer.first, buffer.count >= 1 + Int(head), take(1 + Int(head)) != nil else { return }

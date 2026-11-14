@@ -34,12 +34,14 @@ struct TVApp: App {
                 // update automatically").
                 .onChange(of: phase, initial: true) { _, p in
                     switch p {
-                    case .active: model.start()
+                    case .active: model.start(); PhonePose.launch(model)
                     case .background: model.background()
                     default: break
                     }
                 }
+                .phoneContinuation()
                 .onOpenURL { u in
+                    if u.host == "phone" { PhoneOpen.open(url: u, model: model) }
                     if u.host == "tab", let t = Int(u.lastPathComponent) { model.tab = t == 4 ? 1 : t }  // 9: Status, Settings pushed
                     // The Now Playing card's next-episode key: the Remote, and that episode's streams as soon as it's
                     // known (a launch from cold has to hear from the TV first; about three seconds at most, then said).
@@ -73,6 +75,7 @@ struct RootView: View {
         HitchLog.shared.start()
         #endif
         guard let pose = UserDefaults.standard.string(forKey: "pose") else { return }
+        if pose == "shelf" { return } // the shelf films land a finger on Watch themselves (tv-flick workflow)
         // Words typed into the Apps page's search: the keyboard up, as it is when he types them.
         if pose == "search" { model.tab = 6; SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1; SendDraft.shared.text = "Heat"; return }
         // The search tab opened with nothing typed (recent searches and what he's in the middle of), then typed into a key at a
@@ -132,7 +135,7 @@ struct RootView: View {
         // A title's details page, pushed over Stremio's page (AppBrowse opens it once the rows are in).
         if pose == "details" { model.tab = 1; model.browsing = .stremio; return }
         // A link pasted into the Remote's field: its card comes up, and the flick's own demo throws it.
-        if pose == "flick-link" {
+        if pose == "flick-link" || pose == "flick-link-art" {
             Task { try? await Task.sleep(nanoseconds: 3_000_000_000); model.send("https://www.youtube.com/watch?v=dQw4w9WgXcQ") }
             return
         }
@@ -220,6 +223,9 @@ struct RootView: View {
                 if let item = BrowseStore.shared(.stremio).rows.flatMap(\.items).first(where: { $0.kind == (["streams", "flickdemo", "flickdemo-stream", "blurbopen"].contains(pose) || pose.hasPrefix("flick-") ? "movie" : "series") }) {
                     // The stream flick goes as he does it most: the best stream found for him, in the hand, thrown.
                     // Through the card's own tap, as a finger would: what's already on goes to the Remote with nothing sent.
+                    // "-art" poses: the tile's picture is in memory first, as on his phone, so the page's arrival is judged
+                    // with its poster and ground.
+                    if pose.hasSuffix("-art"), let u = URL(string: item.art) { _ = await ImageStore.shared.load(u); _ = await ImageStore.shared.band(u); if let h = ImageStore.shared.cached(u) { _ = await ImageStore.shrunk(h, 16) } }
                     FlickCardButton.tap(model, item, .stremio, ready: pose == "flickdemo-stream" || pose.hasPrefix("flick-")); return
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
@@ -231,6 +237,7 @@ struct RootView: View {
     // never redraws the whole tab view.
     @State private var playingSymbol = "play.circle"
     var body: some View {
+        let _ = SwipeLog.mark("body root")
         PaneReader {
             TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
                 // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
@@ -266,6 +273,8 @@ struct RootView: View {
                 // Opening Search brings the keyboard, unless it's already being asked for.
                 if t == 6, was != 6, !SendDraft.shared.wantsFocus { SendDraft.shared.wantsFocus = true; SendDraft.shared.focusRequest += 1 }
             }
+            // A card held on a shelf, over everything, where the finger has it (ShelfFlick).
+            .overlay { ShelfLiftOverlay() }
             // Over everything, side bar included, and edge to edge. Not a presented screen: the system slides those up
             // from the bottom, a blurred panel with a hard top edge. The flick fades its own way in and out.
             .overlay {
@@ -328,21 +337,29 @@ private struct StatusFollower: View {
 private struct ProblemBanner: View {
     @Environment(TVModel.self) var model
     var problem: String? {
-        if !model.reachable { return "Can’t reach the Mac. Is Tailscale on?" }
+        if !model.reachable { return "Can’t reach the Mac" }
         if model.status?.online == false { return "The Mac can’t reach the TV" }
         return nil
     }
+    // Calm amber for the Mac out of reach (only ever after a sustained failure); red is kept for the TV itself down.
+    var tint: Color { shown == "Can’t reach the Mac" ? TVLook.away.opacity(0.9) : Color.red.opacity(0.85) }
+    // What's shown, set by an explicit animation as the problem changes: the Remote's own quiet transactions (its keys
+    // arriving without animation) swallowed the implicit one, and the banner left in a single frame (gate of 87d77ca).
+    @State private var shown: String?
     var body: some View {
         ZStack {
-            if let problem {
+            if let problem = shown {
                 // Snug to the top edge, so its foot stays clear of the title under it.
                 Label(problem, systemImage: "wifi.exclamationmark").font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(Color.red.opacity(0.85), in: Capsule())
+                    .background(tint, in: Capsule())
                     // In from the top edge and back out, never popped on and off over the title.
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.spring(response: 0.4, dampingFraction: 0.9), value: problem)
+        .onChange(of: problem, initial: true) { _, p in
+            guard p != shown else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { shown = p }
+        }
     }
 }
 private struct ToastBubble: View {
@@ -427,7 +444,7 @@ struct Page<C: View>: View {
         // The art and the edge setting sit on the stack, not the page. The fade itself is on each scroll view (backToTop).
         NavigationStack(path: $path) {
             content()
-                .underFlick()
+                .underFlick(warms: alwaysInline)
                 .modifier(TabBarFade())
                 .modifier(TypingHidesTabBar(enabled: !alwaysInline))
                 .environment(\.backToTop, top)
@@ -459,6 +476,9 @@ struct Page<C: View>: View {
         }
         .topShade()
         .background { Ambience() }
+        // Over the art too, so the strip round the bars beside or under a flick's page is black like the page's own foot,
+        // never a lighter band of the tab's art (open upright, under the tab bar).
+        .modifier(UnderFlickGround(warms: alwaysInline))
         // How wide the side bar is, for pages laid over everything. The page's trailing inset is wider than the bar itself
         // folded (about 173 pt against a 72 pt bar and its margin), so it's capped at the bar's own room.
         .background { Color.clear.onGeometryChange(for: CGFloat.self) { min($0.safeAreaInsets.trailing, TVLook.railRoom) } action: { w in if abs(model.railWidth - w) > 0.5 { model.railWidth = w } } }
@@ -469,12 +489,17 @@ struct Page<C: View>: View {
         // A page opened from a search leaves the keyboard behind.
         .onChange(of: path) { was, now in
             Keyboard.dismiss()
+            PageMoves.count += 1
             #if os(iOS)
             HitchLog.shared.note("\(title) \(now.count > was.count ? "push" : "pop") \(was.count)→\(now.count)")
             #endif
         }
     }
 }
+
+// Every push and pop on any tab's stack, counted: a throw waiting on its list, or the Remote's unseen build, that sees it
+// change since it began knows he has moved on, and lets go.
+@MainActor enum PageMoves { static var count = 0 }
 
 // How far a tab's page has scrolled, from whichever of its scroll views moved last.
 @Observable final class PageScrollY { var y: CGFloat = 0 }
@@ -1444,6 +1469,7 @@ struct RemoteTab: View {
             .modifier(KeysArrive(gate: keysGate))
     }
     var body: some View {
+        let _ = SwipeLog.mark("body remote")
         Group {
             if size == .regular {
                 FoldSplit {
@@ -1502,7 +1528,7 @@ struct RemoteTab: View {
         #endif
         // Started as the tab comes up, so the first live picture is there by the time it's looked at. It stays on, as
         // he left it, for the next visit.
-        .onAppear { model.warmMirror() }
+        .onAppear { model.remoteBuilt = true; model.warmMirror() }
         // Leaving the tab leaves the typing too, so coming back never finds the keyboard already up.
         .onDisappear { typing = false }
         // The app tiles' banners fetched once, ahead, so the open Remote's tiles never show their stand-ins first.
@@ -1513,6 +1539,10 @@ struct RemoteTab: View {
         }
         .task(id: model.remoteArrival) {
             guard Date().timeIntervalSince(model.remoteArrival) < 1 else { return }
+            // The pick's picture flying in the render server: the flick's page went under the still at the pick, so there
+            // is nothing of it to sit on the keys, and the keys come up with the rest of the Remote as the still fades off
+            // it (gated, they came 0.3 s after the picture had landed: the review of d5d94f4).
+            guard !RenderFlight.flying else { return }
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { keysGate.shown = false }
             // Once the flick's title, poster and controls are nearly gone (they fade in 0.12 s from the move's start), so the
@@ -1705,8 +1735,13 @@ private struct StartingPicture: View {
     let start: TVModel.Starting
     var body: some View {
         ZStack {
-            // Opaque from its first frame, whatever is or isn't loaded yet: nothing under it ever reads through (r26).
-            Color.black
+            // Opaque from its first frame, whatever is or isn't loaded yet: nothing under it ever reads through (r26). Before
+            // its picture comes, the app's purple with the title on it, never an empty box (the review of 94d0f11).
+            LinearGradient(colors: [Color(hex: 0x352B4E), Color(hex: 0x16121F)], startPoint: .top, endPoint: .bottom)
+            if start.art.isEmpty {
+                Text(start.title).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+                    .multilineTextAlignment(.center).lineLimit(2).padding(.horizontal, 24)
+            }
             // Failed: dimmed to half by black over it, not by fading it, which let the picture under it show through (r19).
             PosterOnBlur(url: URL(string: start.art))
                 .overlay { Color.black.opacity(start.failed ? 0.5 : 0) }
@@ -2204,6 +2239,7 @@ struct AppsTab: View {
         .padding(.horizontal, 20).frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
     }
     var body: some View {
+        let _ = SwipeLog.mark("body apps")
         content.navigationDestination(item: Binding(get: { model.browsing }, set: { model.browsing = $0 })) { AppBrowse(source: $0).underFlick(barHidden: true).modifier(TypingHidesTabBar()) }
             #if os(iOS)
             .onChange(of: model.browsing) { _, b in HitchLog.shared.note(b == nil ? "Apps pop app page" : "Apps push app page") }
@@ -2828,6 +2864,7 @@ struct PlayingTab: View {
         .settledAnimation(.easeOut(duration: 0.3), value: watching)
     }
     var body: some View {
+        let _ = SwipeLog.mark("body playing")
         Group {
             if panes {
                 FoldSplit { ScrollView { nowPane }.backToTop() } right: {
@@ -2926,6 +2963,7 @@ struct FilmsTab: View {
     static let genres = ["Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "History", "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "War", "Western"]
     @Environment(\.paneLayout) private var panes
     var body: some View {
+        let _ = SwipeLog.mark("body films")
         // Films or shows only swaps the rows: the switch itself, the search and the place on the page stay put.
         Group {
             // Unfolded, the rows take turns on each side of the fold, as on an app's own page, rather than running across it.
@@ -3406,20 +3444,36 @@ struct UnderFlick: ViewModifier {
     // A page pushed over a tab that draws its own large heading: the system's bar stays, for its Back (the Duo's own,
     // 2026-11-08), but carries no title, so the heading isn't printed twice.
     var barHidden = false
+    // The Remote's page: drawn, not hidden, while it's built unseen ahead of the first pick (remoteWarming), so its text and
+    // pictures are drawn then rather than at the pick.
+    var warms = false
     func body(content: Content) -> some View {
         // Not once a pick is on its way to the Remote (flickHandoff): the Remote's tab is up under the flick's page then,
         // and must be drawn there for the picture to land on, while the page's own rail stays beside it.
-        let covered = (model.flickChoosing && !model.flickHandoff) || model.flickCovering
+        let covered = ((model.flickChoosing && model.flickArrived && !model.flickHandoff) || model.flickCovering) && !(warms && model.remoteWarming)
         content
             .opacity(covered ? 0 : 1)
             // Black under the side bar too while covered: the strip beside a show's or stream's page showed whatever lay
             // under the faded page, a brown (28,16,10) against the page's near-black (8,5,4) edge, a band (r30).
             .overlay { Color.black.ignoresSafeArea().opacity(covered ? 1 : 0).allowsHitTesting(false) }
-            .animation(.easeOut(duration: 0.15), value: covered)
+            // Covered as the flick's page fades up over it (flickArrived, set with the fade once the page is drawn), slowly
+            // at first so the flick is mostly up before the page darkens; uncovered at once.
+            .animation(covered ? .easeIn(duration: 0.22) : .easeOut(duration: 0.15), value: covered)
             .modifier(Untitled(on: barHidden))
             #if os(iOS)
             .toolbarVisibility(barHidden ? .visible : .automatic, for: .navigationBar)
             #endif
+    }
+}
+// The black over a whole tab's stack, art included, while a flick's page covers it (the same rule as UnderFlick).
+struct UnderFlickGround: ViewModifier {
+    @Environment(TVModel.self) private var model
+    var warms = false
+    func body(content: Content) -> some View {
+        let covered = ((model.flickChoosing && model.flickArrived && !model.flickHandoff) || model.flickCovering) && !(warms && model.remoteWarming)
+        content
+            .overlay { Color.black.ignoresSafeArea().opacity(covered ? 1 : 0).allowsHitTesting(false) }
+            .animation(covered ? .easeIn(duration: 0.22) : .easeOut(duration: 0.15), value: covered)
     }
 }
 // The bar's title emptied for a page that draws its own heading; off, whatever the page set stands.
@@ -3429,7 +3483,7 @@ private struct Untitled: ViewModifier {
         if on { content.navigationTitle("").navigationBarTitleDisplayMode(.inline) } else { content }
     }
 }
-extension View { func underFlick(barHidden: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden)) } }
+extension View { func underFlick(barHidden: Bool = false, warms: Bool = false) -> some View { modifier(UnderFlick(barHidden: barHidden, warms: warms)) } }
 
 // While a search or send box has the keyboard, the tab bar steps aside, as the Remote's does while typing on the TV: the
 // keyboard sliced the side bar and left half a button peeking over it (review of dfd490e, tv-realsearch 12–14 s). The

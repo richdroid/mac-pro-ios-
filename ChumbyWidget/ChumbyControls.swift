@@ -28,6 +28,15 @@ struct ChumbyNow {
         n.next = both.1?.nextRing()?.at
         return n
     }
+    // The alarms as last read, when the Chumby can't be asked: they're rules, so a skip set is still a skip.
+    static func cached() -> ChumbyNow? {
+        guard let d = try? Data(contentsOf: chumbyWidgetCache), let st = try? JSONDecoder().decode(ChumbyState.self, from: d) else { return nil }
+        var n = ChumbyNow(night: chumbyNightWanted() ?? false)
+        n.skipped = st.skipped.flatMap { $0.date > Date() ? $0 : nil }
+        n.moved = st.justOnce().flatMap { $0.pinned ? $0 : nil }
+        n.next = st.nextRing()?.at
+        return n
+    }
     var skipLabel: String {
         if let m = moved { return "Just this once \(m.at.formatted(date: .omitted, time: .shortened))" }
         if let s = skipped { return "Skipped \(s.date.formatted(date: .omitted, time: .shortened))" }
@@ -39,7 +48,7 @@ struct ChumbySkipState: Sendable { var on: Bool; var label: String; var moved = 
 struct ChumbySkipValue: ControlValueProvider {
     var previewValue: ChumbySkipState { ChumbySkipState(on: false, label: "Skip 6:45 AM") }
     func currentValue() async throws -> ChumbySkipState {
-        let n = await ChumbyNow.read()
+        let n = await ChumbyNow.read() ?? ChumbyNow.cached()
         return ChumbySkipState(on: n?.skipped != nil, label: n?.skipLabel ?? "Skip Alarm", moved: n?.moved != nil)
     }
 }

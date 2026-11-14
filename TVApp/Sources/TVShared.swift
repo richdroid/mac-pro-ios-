@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import WidgetKit
 import Security
 import SwiftUI
 #if canImport(UIKit)
@@ -187,11 +188,44 @@ enum SavedAddress {
     static var value: String {
         let stored = UserDefaults.standard.string(forKey: "address") ?? ""
         if !stored.isEmpty { return stored }
+        if let k = sharedValue(), !k.isEmpty { return k }
         if let k = keychain(), !k.isEmpty { return k }
         return Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String ?? ""
     }
+    // The address shared with this app's widgets, controls and share sheet: a Keychain item in the app's shared access
+    // group ("<team>.local.macpro.TV.shared"), which the TestFlight signing (store-sign.sh) gives the app and each of
+    // its extensions. Their own settings and Keychain are their own, so before this they only ever had the address
+    // baked into the build. No group (a simulator build, no team in the bundle id): nil, and nothing changes.
+    static var sharedGroup: String? {
+        // The team, as the signing writes it into Info.plist (AppIdentifierPrefix, "TEAM."), else from the bundle id it gives.
+        let prefix = (Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        guard let team = prefix.flatMap({ $0.isEmpty ? nil : Substring($0) }) ?? Bundle.main.bundleIdentifier?.split(separator: ".").first(where: { $0.count == 10 && $0.allSatisfy { $0.isUppercase || $0.isNumber } }) else { return nil }
+        return "\(team).local.macpro.TV.shared"
+    }
+    static func sharedValue() -> String? {
+        guard let g = sharedGroup else { return nil }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
+    }
+    static func share(_ s: String) {
+        guard let g = sharedGroup, sharedValue() != s else { return }
+        var q = base
+        q[kSecAttrAccessGroup as String] = g
+        SecItemDelete(q as CFDictionary)
+        guard !s.isEmpty else { return }
+        q[kSecValueData as String] = Data(s.utf8)
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        // The widgets redraw with the new address rather than at their next refresh.
+        if SecItemAdd(q as CFDictionary, nil) == errSecSuccess { WidgetCenter.shared.reloadAllTimelines() }
+    }
     static func save(_ s: String) {
         UserDefaults.standard.set(s, forKey: "address")
+        share(s)
         guard keychain() != s else { return }
         SecItemDelete(base as CFDictionary)
         guard !s.isEmpty else { return }
@@ -219,6 +253,8 @@ enum TVBridge {
     struct Gone: Error {}
     // The TV took the stream but the player never got going, even after a second try.
     struct DidNotStart: Error {}
+    // An `again` about a send the Mac never saw: the first try was lost on the way, so it can go once as itself.
+    struct Unseen: Error {}
     // Too busy to answer in time. Asking again usually works.
     struct Slow: Error {}
     @discardableResult
@@ -327,7 +363,7 @@ enum TVIntentError: LocalizedError {
     case noAnswer, cantOpen
     var errorDescription: String? {
         switch self {
-        case .noAnswer: return "The TV didn’t answer. Is Tailscale on?"
+        case .noAnswer: return "The TV didn’t answer. Try again in a moment."
         case .cantOpen: return "That link can’t open on the TV. Try AirPlay."
         }
     }

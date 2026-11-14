@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 import SwiftUI
+import WidgetKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -31,6 +32,9 @@ final class TVModel {
     // the launch's first pick aims there at once, the Remote not yet built to say where its picture is (it waited on
     // that, up to a second), and follows the real place as soon as it's known.
     @ObservationIgnored private var landedSlots: [String: [Double]] = UserDefaults.standard.dictionary(forKey: "mirrorSlots") as? [String: [Double]] ?? [:]
+    // Where the last pick landed (the Remote's picture, window points) and the window's size then: for a card thrown
+    // from a shelf to fly straight there before its own pick is made.
+    @ObservationIgnored var lastLanded: (rect: CGRect, window: CGSize)?
     func rememberedSlot(_ key: String) -> CGRect? {
         guard let v = landedSlots[key], v.count == 4, v[2] > 20 else { return nil }
         return CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
@@ -64,9 +68,17 @@ final class TVModel {
     var footBarRoom: CGFloat = 0
     // The flick screen is on a show's or a stream's page (not the card): the side bar stays usable, and a tab leaves it.
     var flickChoosing = false
+    // The flick's page is fully up: only then are the pages under it put out of sight, so nothing between them is ever
+    // black (the flick page fades up over what he tapped, which then goes unseen).
+    var flickArrived = false
     // The flick's stage is up over a page (not yet moving onto the Remote): the page steps out of sight under it, so its
     // rows never ghost through the stage's fade (r18).
     var flickCovering = false
+    // The Remote's tab has been built once (its first build is the costly one: 200-700 ms in CI), and it is being built
+    // now, unseen under a flick's page and a veil, ahead of the first pick (FlickScreen.warmRemote). While warming nothing
+    // of it starts: no live picture, no reading.
+    @ObservationIgnored var remoteBuilt = false
+    @ObservationIgnored var remoteWarming = false
     // A film's colour kept on the pages behind after the flick closes, until something else is playing.
     @ObservationIgnored var moodArt: String?
     func keepMood(until art: String) { moodArt = art }
@@ -75,9 +87,16 @@ final class TVModel {
     // change, Tailscale reconnecting after the phone wakes, or the dashboard restarting each lost a reading or two and put
     // the red note up for a moment (Richard, 2026-11-10: "cant reach the mac is tailscale on keeps happening in tv and
     // its annoying"). Not in the first seconds back in the foreground either, while the tunnel comes back.
+    // The app's one rule for it (as the Chumby and Mac Pro apps): kept readings show at once and at full strength, a
+    // failed reading is retried every 2 s, and nothing is said for about 25 s; then a calm amber "Can't reach the Mac".
+    // Red only when the TV itself is down (Richard, 11-11: a blip leaves no trace; calm status only after sustained
+    // failure).
     @ObservationIgnored private var failingSince: Date?
     @ObservationIgnored private var foregroundAt = Date()
-    private static let unreachableAfter: TimeInterval = 8, settleAfterForeground: TimeInterval = 6
+    static let unreachableAfter: TimeInterval = 25, settleAfterForeground: TimeInterval = 25
+    var retrying: Bool { failingSince != nil }
+    // When the Mac last came back: a box failure counted from before then belongs to the outage, not to the TV.
+    @ObservationIgnored private(set) var reachedAt = Date.distantPast
     private func missed() {
         guard !Task.isCancelled else { return }
         let now = Date()
@@ -89,8 +108,14 @@ final class TVModel {
     var recommended: [Film] = []
     var flicking: FlickTarget?
     @ObservationIgnored private var lastFlick: (id: String, at: Date)?
-    // The colour of wherever you are: an app's own, or whatever you've picked. Nil lets what's playing set it.
-    var mood: Color?
+    // The colour of wherever you are: an app's own, or whatever you've picked. Nil lets what's playing set it. Set to what
+    // it already is, nothing redraws: every page's ground reads it, and the pick set it again to the same colour in the
+    // turn that brings the Remote up.
+    var mood: Color? {
+        get { access(keyPath: \.mood); return moodStore }
+        set { guard newValue != moodStore else { return }; withMutation(keyPath: \.mood) { moodStore = newValue } }
+    }
+    @ObservationIgnored private var moodStore: Color?
     // The cover of the last thing flicked, for when the TV's player has none of its own to show.
     var lastArt: String?
     var lastArtPkg: String?
@@ -136,7 +161,13 @@ final class TVModel {
             lastFlick = (target.item.id, Date())
         }
         var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { flicking = target; flickRetired = false }
+        // Choosing from the first frame, in the same quiet transaction: set by the screen once it was up, the change
+        // animated the host's inset and the new page's first layout with it, so the page grew in from a narrow column
+        // ("Choos / e on / the TV", CI tv-flicktap at 13 s).
+        // The screen as it is, held over the window while the page is built under it (ScreenVeil); the page lifts it in
+        // its first frame, so the fade can't be held by the build. Under it the pages beneath go out of sight at once.
+        ScreenVeil.cover()
+        withTransaction(t) { flicking = target; flickRetired = false; flickChoosing = true; flickArrived = true }
     }
     // The thing on a card is what the TV is playing now (the same film, or the episode named on the card): tapping it goes
     // straight to the Remote, with nothing thrown, prepared or sent, and asked to play if it's paused (r17 item 6). A show
@@ -214,8 +245,15 @@ final class TVModel {
     // What to reopen for "Choose another", with the streams that didn't start set apart.
     @ObservationIgnored var startingTarget: FlickTarget?
     @ObservationIgnored var startingAvoid: Set<String> = []
+    // A shelf throw's request (startStream), kept so a newer start or the start called off ends it: its retries after a
+    // dropped line never send an older title over a newer one.
+    @ObservationIgnored var shelfStart: Task<Void, Never>?
     func beginStart(_ s: Starting, target: FlickTarget) {
+        shelfStart?.cancel(); shelfStart = nil
         startingTarget = target
+        // A new title's start: the streams an earlier one set apart are no longer this one's (tokens are positional, s0, s1,
+        // so a later "Choose another" would grey out the wrong ones). The page carries its own set apart in its target.
+        startingAvoid = []
         withAnimation(.easeOut(duration: 0.2)) { starting = s }
     }
     func startPhase(_ p: String) {
@@ -257,7 +295,7 @@ final class TVModel {
         withAnimation(.easeOut(duration: 0.25)) { starting?.failed = true }
     }
     // Called off from the Remote (holding ⏯), or done with after a failure.
-    func clearStart() { startEndedAt = Date(); withAnimation(.easeOut(duration: 0.25)) { starting = nil } }
+    func clearStart() { shelfStart?.cancel(); shelfStart = nil; startEndedAt = Date(); withAnimation(.easeOut(duration: 0.25)) { starting = nil } }
     // When a start last ended: the Remote keeps the bar's and episode line's places for a while after, until the TV's own
     // reading of what's on has caught up, so nothing drops out and back in at playing (r24: the pad jumped 10 pt).
     var startEndedAt = Date.distantPast
@@ -431,7 +469,7 @@ final class TVModel {
                     // The Remote shows play/pause and what's on: every second there, as a check costs the bridge 20-400 ms
                     // (Richard, 2026-11-07: "playing and not playing dont update fast enough", "doesnt update based on
                     // whats on screen" at 5 s).
-                    try? await Task.sleep(nanoseconds: self?.tab == 0 ? 1_000_000_000 : self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
+                    try? await Task.sleep(nanoseconds: self?.tab == 0 ? 1_000_000_000 : self?.retrying == true ? 2_000_000_000 : self?.tab == 2 ? 2_500_000_000 : 5_000_000_000)
                 }
             },
             // Still pictures, only while the screen is on show and the live stream isn't. Never switched off by itself
@@ -474,6 +512,8 @@ final class TVModel {
     @ObservationIgnored private var grace: Task<Void, Never>?
     func background() {
         stop()
+        // The Playing widget shows what the app last saw rather than waiting out its own refresh (up to half an hour).
+        WidgetCenter.shared.reloadTimelines(ofKind: "TVNow")
         #if os(iOS)
         grace?.cancel()
         guard TVIsland.live != nil || status?.session?.playing == true || status?.music?.playing == true else { TVBackground.schedule(); return }
@@ -506,7 +546,7 @@ final class TVModel {
     // The live stream started early, as the Remote comes up, so its first picture is there by the time it's looked at.
     func warmMirror() {
         #if os(iOS)
-        if mirrorLive && !filmOnScreen && !flickHandoff { live.start(url("/api/tv/screen-live")) }
+        if mirrorLive && !filmOnScreen && !flickHandoff && !remoteWarming { live.start(url("/api/tv/screen-live")) }
         #endif
     }
     // The Remote's picture of the TV coming on and off the screen.
@@ -514,7 +554,7 @@ final class TVModel {
         mirrorViewers = max(0, mirrorViewers + (on ? 1 : -1))
         if on {
             warmMirror()
-            if mirrorLive && !liveShowing && !flickHandoff { Task { await loadMirror() } }
+            if mirrorLive && !liveShowing && !flickHandoff && !remoteWarming { Task { await loadMirror() } }
         } else if mirrorViewers == 0 {
             mirrorSlot = nil
             #if os(iOS)
@@ -552,7 +592,7 @@ final class TVModel {
             s = fresh
         }
         failingSince = nil
-        if !reachable { reachable = true }
+        if !reachable { reachedAt = Date(); reachable = true }
         #if os(iOS)
         // The Now Playing card follows on its own, one reading after another, never ahead of the page: awaited here, a
         // new cover's fetch and shrinking (and every update iOS takes its time over) held this reading back from the

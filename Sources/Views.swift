@@ -1,5 +1,6 @@
 import Charts
 import SwiftUI
+import WidgetKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -21,7 +22,7 @@ struct MacProApp: App {
                 .onChange(of: phase) { _, p in
                     if p == .active { Reach.shared.cameForward(); model.start(); PushToken.share(model.api) } else { model.stop() }
                     #if os(iOS)
-                    if p == .background { AlertWatch.shared.scheduleRefresh() }
+                    if p == .background { AlertWatch.shared.scheduleRefresh(); WidgetCenter.shared.reloadAllTimelines() }
                     #endif
                 }
                 .onAppear {
@@ -903,7 +904,7 @@ struct StackPages: ViewModifier {
             // All processes, from Status itself; from a history, that page opens them over itself.
             .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
             .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
-            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { VersionHistoryView(file: $0, model: model) }
+            .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             .navigationDestination(item: tab == 5 ? $nav.macPage : Binding<MacPage?>.constant(nil)) { p in
                 switch p {
@@ -2634,7 +2635,7 @@ struct SeedSection: View {
                 // changelogs in mac pro app"). Its own buttons keep their taps. The system's style, so the press is
                 // the list's own row highlight, inside the card's corners (a wash of our own stuck out square past
                 // them; designer HOLD 2026-11-08).
-                .accessibilityHint("Opens its version history")
+                .accessibilityHint(a.isOurs ? "Opens its version history" : "Opens its details")
                 .place("seed-\(a.id)")
             }
             // His TestFlight apps: one way into TestFlight on the page, and once, the tip that makes it hands-off.

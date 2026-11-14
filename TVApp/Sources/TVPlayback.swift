@@ -726,7 +726,8 @@ struct EpisodePicker: View {
             .overlay { if busy == e.id { LoadingRing(radius: 14) } }
             .contentShape(Rectangle())
         }
-        .buttonStyle(PressCard())
+        // The press asks for its streams, so the list is on its way before the tap lands.
+        .buttonStyle(PressCard(onPress: { StreamCache.shared.prefetch(episode: e.id) }))
         .disabled(busy != nil)
     }
     var body: some View {

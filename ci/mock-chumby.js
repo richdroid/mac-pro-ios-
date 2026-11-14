@@ -104,9 +104,24 @@ const macProcs = JSON.stringify({
   mem: [macProc(42, 'Claude Code', 12, 690, 'Claude session'), macProc(40, 'Google Chrome Helper', 84, 610, null), macProc(46, 'mediaanalysisd', 0, 490, 'System process'), macProc(43, 'Music', 6, 380, null), macProc(44, 'node', 3, 310, 'The dashboard'), macProc(47, 'Code Helper', 1, 290, null)],
 });
 // His apps' own icons for the Apps tab, from the repo's icon sets.
-const appIcon = (q, s) => { const f = { 'MacPro.ipa': 'Assets.xcassets', 'Chumby.ipa': 'ChumbyApp/Assets.xcassets', 'TV.ipa': 'TVApp/Assets.xcassets' }[decodeURIComponent(q.url.slice('/ios/icon/'.length))]; try { const png = require('fs').readFileSync(require('path').join(__dirname, '..', f, 'AppIcon.appiconset/icon.png')); s.setHeader('content-type', 'image/png'); s.end(png); } catch { s.statusCode = 404; s.end(); } };
+const appIcon = (q, s) => { const n = decodeURIComponent(q.url.slice('/ios/icon/'.length)), f = { 'MacPro.ipa': 'Assets.xcassets', 'Chumby.ipa': 'ChumbyApp/Assets.xcassets', 'TV.ipa': 'TVApp/Assets.xcassets' }[n]; try { const png = require('fs').readFileSync(f ? require('path').join(__dirname, '..', f, 'AppIcon.appiconset/icon.png') : require('path').join(__dirname, 'mock-icons', n.replace(/\.ipa$/, '') + '.png')); s.setHeader('content-type', 'image/png'); s.end(png); } catch { s.statusCode = 404; s.end(); } };
 // The Mac's routes, for the still Mac (9001) and the one whose figures move (9021).
-const macRoutes = (q, s, status, live) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); if (macPower(q, s)) return; if (q.url.startsWith('/api/trend')) { const now = Date.now(); if (new URL(q.url, 'http://x').searchParams.get('m') === 'disk') { /* The disk in bytes, filling slowly through a day as a real one does, with a cleanup at 4 AM-ish. */ return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 2.1e11 + (1440 - i) * 9e6 - (i > 900 ? 0 : 6e9) + 4e8 * Math.sin(i / 37); return { t: now - (1440 - i) * 60000, v, peak: v }; }) })); } const m = new URL(q.url, 'http://x').searchParams.get('m'); if (m && m.startsWith('temp:')) { const c = (JSON.parse(macStatus).temps.find(t => 'temp:' + t.name === m) || { c: 45 }).c; return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = i === 1439 ? c : c - 4 + 3 * Math.sin(i / 90) + 1.5 * Math.sin(i / 11); return { t: now - (1440 - i) * 60000, v, peak: v + 1 }; }) })); } /* Speeds in bytes a second, ending at the figure the Status tile shows, so the two screens agree. */ const scale = m === 'rx' ? 1500 : m === 'tx' ? 260 : 1, end = m === 'rx' ? 52000 : m === 'tx' ? 9000 : null; return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); const pv = i === 1439 && end ? end : Math.max(1, v) * scale; return { t: now - (1440 - i) * 60000, v: pv, peak: scale === 1 ? Math.min(100, v + 12) : Math.max(pv, (v + 12) * scale) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/ios-history')) { const file = new URL(q.url, 'http://x').searchParams.get('file'), now = Date.now(), told = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', 'whats-new.json'), 'utf8'))[file] || {}; return s.end(JSON.stringify({ builds: Object.keys(told).sort((x, y) => y - x).map((b, i) => ({ build: b, at: now - (i < 3 ? (2 + 3 * i) : 26 + 20 * i) * 3600000, notes: told[b] })) })); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); if (q.url.startsWith('/api/files/recent')) { const now = Date.now(); return s.end(JSON.stringify({ folder: '~/Downloads/From iPhone', files: [['IMG_4126.HEIC', 2.9e6, 4], ['Boarding pass.pdf', 310e3, 52], ['apple.com.webloc', 240, 190], ['Shopping list.txt', 1.2e3, 1500], ['Trip.mov', 48e6, 4000], ['IMG_4101.HEIC', 3.1e6, 9000]].map(([name, size, min]) => ({ name, size, at: now - min * 60000, dir: false })) })); } if (q.url.startsWith('/api/mac/health')) { const p = [['tailscale', 'Running'], ['serve', 'https → bridge'], ['bridge', 'Answering'], ['sessions', '6 of 6 kept running · 2 others'], ['tv', 'Connected'], ['letterboxd', 'Sign-in relay running'], ['chumby', 'Answering'], ['oclp', 'HEALTHY: macOS 26.7.2, OCLP 3.0.0'], ['stuck', 'Nothing stuck'], ['memory', 'Normal pressure · 6.4 GB swap in use']]; return s.end(JSON.stringify({ ok: true, at: Date.now(), parts: p.map(([part, say]) => ({ part, state: 'ok', say })) })); } if (q.url.startsWith('/api/mac/prerestart')) { const p = [['oclp', 'Patches healthy'], ['updates', 'No macOS update will install'], ['filevault', 'Off; no password at boot'], ['autologin', 'Logs in by itself'], ['tailscale', 'Starts at login'], ['work', 'Nothing long-running'], ['keep', 'Scripts from /tmp kept in ~/.local/share/keep-after-reboot']]; return s.end(JSON.stringify({ ok: true, at: Date.now(), parts: p.map(([part, say]) => ({ part, state: 'ok', say })) })); } if (q.url === '/api/live' && live) return s.end(live()); s.end(q.url === '/api/status' ? status() : q.url === '/api/procs' ? macProcs : '{}'); };
+// Apps he added himself, as the Mac reads their packages (made-up apps, no real names): Lantern with nothing found in
+// public, Pebble with its GitHub releases (1.7 out, 1.6 on the phone). Kite isn't known: the Mac before this answers 404.
+const ipaInfo = file => {
+  const now = Date.now(), d = 86400e3;
+  const base = { addedAt: now - 2 * d, installedAt: now - 2 * d, signed: { team: 'Example Team', created: now - 2 * d, expires: now + 361 * d, development: true } };
+  if (file === 'Lantern.ipa') return { info: { ...base, name: 'Lantern', bundle: 'com.example.lantern', version: '2.1.0', build: '24', size: 84705521, unpacked: 171860758, minimumOS: '15.0', devices: 'iPhone and iPad', category: 'Entertainment', languages: 51, sdk: 'iOS 27.1', copyright: '', extensions: ['Widgets'], asks: [], capabilities: [], cameSigned: null, source: { kind: 'files' }, own: false }, history: null, historyPending: false };
+  if (file === 'Pebble.ipa') return { info: { ...base, signed: { ...base.signed, expires: now + 340 * d }, name: 'Pebble', bundle: 'io.github.example.pebble', version: '1.6', build: '160', size: 13767495, unpacked: 46924980, minimumOS: '14.0', devices: 'iPhone and iPad', category: 'Productivity', languages: 3, sdk: 'iOS 26.2', copyright: '© 2026 Example Developer', extensions: [], asks: ['Camera', 'Saving to Photos'], capabilities: ['iCloud'], cameSigned: { team: 'Example Developer', created: now - 40 * d, expires: now + 325 * d, development: false }, source: { kind: 'link', host: 'github.com', url: 'https://github.com/example/pebble/releases/download/v1.6/Pebble.ipa' }, own: false },
+    history: { from: 'GitHub', link: 'https://github.com/example/pebble/releases', by: '', entries: [
+      { version: '1.7', at: now - 3 * d, notes: ['# New', 'Notes can be pinned to the top of a stack', 'A widget for the note you pinned', '# Fixed', 'Photos taken in the app keep their date', 'Search finds words inside checklists'] },
+      { version: '1.6', at: now - 26 * d, notes: ['Stacks can be shared with a link', 'Dark icons for the Home Screen', 'Faster opening with thousands of notes'] },
+      { version: '1.5', at: now - 74 * d, notes: [] },
+      { version: '1.4.2', at: now - 400 * d, notes: ['Fixes a crash when importing from Files'] },
+    ] }, historyPending: false };
+  return null;
+};
+const macRoutes = (q, s, status, live) => { if (q.url.startsWith('/ios/icon/')) return appIcon(q, s); s.setHeader('content-type', 'application/json'); if (macPower(q, s)) return; if (q.url.startsWith('/api/trend')) { const now = Date.now(); if (new URL(q.url, 'http://x').searchParams.get('m') === 'disk') { /* The disk in bytes, filling slowly through a day as a real one does, with a cleanup at 4 AM-ish. */ return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 2.1e11 + (1440 - i) * 9e6 - (i > 900 ? 0 : 6e9) + 4e8 * Math.sin(i / 37); return { t: now - (1440 - i) * 60000, v, peak: v }; }) })); } const m = new URL(q.url, 'http://x').searchParams.get('m'); if (m && m.startsWith('temp:')) { const c = (JSON.parse(macStatus).temps.find(t => 'temp:' + t.name === m) || { c: 45 }).c; return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = i === 1439 ? c : c - 4 + 3 * Math.sin(i / 90) + 1.5 * Math.sin(i / 11); return { t: now - (1440 - i) * 60000, v, peak: v + 1 }; }) })); } /* Speeds in bytes a second, ending at the figure the Status tile shows, so the two screens agree. */ const scale = m === 'rx' ? 1500 : m === 'tx' ? 260 : 1, end = m === 'rx' ? 52000 : m === 'tx' ? 9000 : null; return s.end(JSON.stringify({ points: Array.from({ length: 1440 }, (_, i) => { const v = 14 + 9 * Math.sin(i / 90) + 5 * Math.sin(i / 7) + (i % 211 < 12 ? 38 : 0); const pv = i === 1439 && end ? end : Math.max(1, v) * scale; return { t: now - (1440 - i) * 60000, v: pv, peak: scale === 1 ? Math.min(100, v + 12) : Math.max(pv, (v + 12) * scale) }; }).filter((_, i) => i < 600 || i > 660) })); } if (q.url.startsWith('/api/ios-history')) { const file = new URL(q.url, 'http://x').searchParams.get('file'), now = Date.now(), told = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', 'whats-new.json'), 'utf8'))[file] || {}; return s.end(JSON.stringify({ builds: Object.keys(told).sort((x, y) => y - x).map((b, i) => ({ build: b, at: now - (i < 3 ? (2 + 3 * i) : 26 + 20 * i) * 3600000, notes: told[b] })) })); } if (q.url.startsWith('/api/ios-info')) { /* A second late, as a Mac over Tailscale is: the first open must not fill in. */ const i = ipaInfo(new URL(q.url, 'http://x').searchParams.get('file')); return setTimeout(() => { if (!i) { s.statusCode = 404; return s.end('{"error":"not found"}'); } s.end(JSON.stringify(i)); }, 1000); } if (q.url.startsWith('/api/term')) return s.end(JSON.stringify({ running: true, text: '╭─ Claude Code ─╮\n\n> fix the widget\n\n⏺ Updated widget.swift\n\n  Teach auto mode about your environment?\n  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again\n\n  Enter to confirm · Esc to cancel' })); if (q.url.startsWith('/api/files/recent')) { const now = Date.now(); return s.end(JSON.stringify({ folder: '~/Downloads/From iPhone', files: [['IMG_4126.HEIC', 2.9e6, 4], ['Boarding pass.pdf', 310e3, 52], ['apple.com.webloc', 240, 190], ['Shopping list.txt', 1.2e3, 1500], ['Trip.mov', 48e6, 4000], ['IMG_4101.HEIC', 3.1e6, 9000]].map(([name, size, min]) => ({ name, size, at: now - min * 60000, dir: false })) })); } if (q.url.startsWith('/api/mac/health')) { const p = [['tailscale', 'Running'], ['serve', 'https → bridge'], ['bridge', 'Answering'], ['sessions', '6 of 6 kept running · 2 others'], ['tv', 'Connected'], ['letterboxd', 'Sign-in relay running'], ['chumby', 'Answering'], ['oclp', 'HEALTHY: macOS 26.7.2, OCLP 3.0.0'], ['stuck', 'Nothing stuck'], ['memory', 'Normal pressure · 6.4 GB swap in use']]; return s.end(JSON.stringify({ ok: true, at: Date.now(), parts: p.map(([part, say]) => ({ part, state: 'ok', say })) })); } if (q.url.startsWith('/api/mac/prerestart')) { const p = [['oclp', 'Patches healthy'], ['updates', 'No macOS update will install'], ['filevault', 'Off; no password at boot'], ['autologin', 'Logs in by itself'], ['tailscale', 'Starts at login'], ['work', 'Nothing long-running'], ['keep', 'Scripts from /tmp kept in ~/.local/share/keep-after-reboot']]; return s.end(JSON.stringify({ ok: true, at: Date.now(), parts: p.map(([part, say]) => ({ part, state: 'ok', say })) })); } if (q.url === '/api/live' && live) return s.end(live()); s.end(q.url === '/api/status' ? status() : q.url === '/api/procs' ? macProcs : '{}'); };
 http.createServer((q, s) => macRoutes(q, s, () => macStatus)).listen(9001, '127.0.0.1').on('upgrade', (q, k) => mockScreen(q, k));
 // The same Mac with its readings changing every second, as the real one's do, for the films of a page pulled past
 // its end and let go while readings land (Richard, 2026-11-08: "it doesnt bounce back naturally its like a sudden move
@@ -266,7 +281,7 @@ const tvScene = scene => {
   if (scene === 'youtube') { v.app = 'com.google.android.youtube.tv'; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['A sample video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 600000, canSeek: false, art: tvBase + '/api/tv/shot' }; }
   return JSON.stringify(v);
 };
-http.createServer((q, s) => {
+function tvRoute(q, s) {
   // Frames the app took longer than 34 ms to draw, in any scene, kept for the build (r21: stalls as numbers).
   if (q.method === 'POST' && /\/api\/tv\/hitch$/.test(q.url)) {
     let body = ''; q.on('data', c => body += c);
@@ -323,6 +338,10 @@ http.createServer((q, s) => {
     return s.end(JSON.stringify({ rows: [{ title: 'Series', items: [{ title: 'Sample Series', subtitle: '2 seasons', art: tvBase + '/poster.png', id: 'tt1234567', kind: 'series' }] }] }));
   }
   // The app says Continue watching is on screen (r27: asked for, but never applied, open).
+  // What a held card sends from a shelf (the tv-flick shelf films): logged beside the app's own word of where it is.
+  if (q.method === 'POST' && /^\/api\/tv\/(flick-lift|flick-cancel|timing|play-stream|send|stremio-open|mint-open|flick|prepare)$/.test(q.url)) {
+    let b = ''; q.on('data', c => b += c); q.on('end', () => { try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' POST ' + q.url + ' ' + b.slice(0, 300) + '\n'); } catch {} });
+  }
   if (q.url.startsWith('/api/tv/applied')) { try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' ' + q.url + '\n'); } catch {} s.setHeader('content-type', 'application/json'); return s.end('{"ok":true}'); }
   if (q.url.startsWith('/api/tv/stremio')) {
     // Logged, so CI can assert the Watch tab really asked for Stremio's home (r26: open, Continue watching never loaded).
@@ -348,28 +367,49 @@ http.createServer((q, s) => {
   if (q.url === '/still.png') { s.setHeader('content-type', 'image/png'); return s.end(pictures.wide); }
   s.setHeader('content-type', 'application/json');
   s.end(q.url === '/api/tv/status' ? tvStatus : q.url === '/api/tv/letterboxd' ? tvFilms : '{"ok":true}');
-}).listen(9002, '127.0.0.1');
+}
+http.createServer(tvRoute).listen(9002, "127.0.0.1");
 
 // ---- Chumby app poses (separate block) -------------------------------------------------------------------------------
 // Asked for by a path in front of the address (http://127.0.0.1:9000/ringing and so on), so every shot above gets the same
 // answers as before. Anything a scene doesn't change falls through to the answers above.
-// Pandora's history, for "Woke up to": songs just after the Weekend alarm (9:30) on the last two weekend mornings.
+// Pandora's history, for "Woke up to", each ring with every song it played (Richard, 2026-11-12: "does the woke up to tab
+// account for multiple songs playing over the course of a single alarm"). Times follow each song's real length.
+//  - The latest weekend morning (Weekend, 9:30): four songs back to back, then he stopped it partway into the fourth and
+//    put on Feeling Good himself 8 minutes later, inside the alarm's 30: that one never shows as woken up to.
+//  - Yesterday 2:40 PM (Calendar: Shift, gone from the alarm list): one song, snoozed after 100 s, the re-ring 9 minutes
+//    later playing two more; all three are the Shift ring's.
+//  - The weekend before: two songs, the second following the first as it ended.
 {
-  const songs = [], d = new Date();
-  for (let back = 1; songs.length < 4 && back < 14; back++) {
+  const songs = [], rings = [], d = new Date(), weekends = [];
+  for (let back = 1; weekends.length < 2 && back < 14; back++) {
     const day = new Date(d.getFullYear(), d.getMonth(), d.getDate() - back, 9, 30);
-    if (day.getDay() !== 0 && day.getDay() !== 6) continue;
-    const t = day.getTime() / 1000;
-    // A different first song each morning, as Pandora plays it: the same one twice read as a duplicate tile (r27).
-    const first = songs.length ? { title: 'Freddie Freeloader', artist: 'Miles Davis', album: 'Kind of Blue' } : { title: 'So What', artist: 'Miles Davis', album: 'Kind of Blue' };
-    songs.push({ t: t + 70, ...first }, { t: t + 640, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' });
+    if (day.getDay() === 0 || day.getDay() === 6) weekends.push(day.getTime() / 1000);
   }
-  // The Chumby's ring log: each weekend morning's ring, and a once-only calendar alarm from yesterday afternoon, which is
-  // no longer in the alarm list, with its song: Woke up to must pair it from the log (2026-11-06: "woke up to doesnt work").
-  const rings = songs.filter((x, i) => i % 2 === 0).map(x => ({ t: x.t - 70, name: 'Weekend' }));
+  const play = (t, title, artist, album) => songs.push({ t, title, artist, album });
+  const [w1, w2] = weekends;
+  rings.push({ t: w1, name: 'Weekend' });
+  play(w1 + 12, 'So What', 'Miles Davis', 'Kind of Blue');                       // 9:48
+  play(w1 + 563, 'Take Five', 'Dave Brubeck', "Dave Brubeck's Greatest Hits");    // 5:24
+  play(w1 + 891, 'Naima', 'John Coltrane', 'Giant Steps');                       // 4:25
+  play(w1 + 1161, 'Cantaloupe Island', 'Herbie Hancock', 'Empyrean Isles');      // 5:34, stopped about 2 min in
+  play(w1 + 1661, 'Feeling Good', 'Nina Simone', 'I Put a Spell On You');        // his own, after stopping
+  rings.push({ t: w2, name: 'Weekend' });
+  play(w2 + 70, 'Freddie Freeloader', 'Miles Davis', 'Kind of Blue');             // 9:48
+  play(w2 + 640, 'Take Five', 'Dave Brubeck', "Dave Brubeck's Greatest Hits");
   const cal = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1, 14, 40).getTime() / 1000;
-  songs.push({ t: cal + 10, title: 'Save Tonight', artist: 'Eagle-Eye Cherry', album: 'Desireless' });
   rings.push({ t: cal, name: 'Calendar: Shift' });
+  play(cal + 12, 'Save Tonight', 'Eagle-Eye Cherry', 'Desireless');               // snoozed at +100, rings again at +640
+  play(cal + 652, 'My Funny Valentine', 'Chet Baker', 'Chet Baker Sings');        // 2:19
+  play(cal + 794, "'Round Midnight", 'Thelonious Monk', 'Genius of Modern Music, Vol. 1');
+  // A ring with no name (a test ring, or "Ring now" from the web page) three days ago: its header is the time alone.
+  const plain = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 3, 16, 0).getTime() / 1000;
+  rings.push({ t: plain, name: '' });
+  play(plain + 9, 'Summertime', 'The Sundays', 'Static & Silence');
+  // A one-song ring nine days back: its header carries the date, and one cover wide falls back to "Wed, Nov 4" whole.
+  const old = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 9, 7, 15).getTime() / 1000;
+  rings.push({ t: old, name: 'Early shift' });
+  play(old + 11, 'Pagan Poetry', 'Björk', 'Vespertine');
   data.hist = { ok: true, songs: songs.sort((x, y) => y.t - x.t), rings: rings.sort((x, y) => y.t - x.t) };
 }
 // The live scenes keep what's saved and what's ringing, for the films of Snooze, Stop and a nap set and cancelled.
@@ -448,9 +488,12 @@ function chumbyScene(q, s) {
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap|missed)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap|missed)\//);
   if (!m) return false;
   const scene = m[1];
+  // failonce…: a live copy of the sample whose first save is turned down after 3 s ("can't write") and whose next is
+  // taken after 2 s, for a Retry that lands. Each name is its own copy, so each film starts fresh.
+  if (scene.startsWith('failonce') && !chumbyLive[scene]) chumbyLive[scene] = { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)), failsLeft: 1 };
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
   if (chumbyLive[scene]) {
     const live = chumbyLive[scene];
@@ -496,6 +539,13 @@ function chumbyScene(q, s) {
         }
         // A channel chosen in the app stays chosen, so the channel shown doesn't snap back on the next reading.
         if (a === 'cmd' && qs.get('c') === 'channel') { live.state.channel = qs.get('v'); live.sys.chan = qs.get('v'); }
+        if (a === 'save' && live.failsLeft !== undefined) {
+          if (live.failsLeft > 0) { live.failsLeft--; setTimeout(() => json({ ok: false, error: "can't write" }), 3000); return; }
+          const why = saveProblem(f);
+          if (!why) { live.state.alarms = kept(live.state, f); live.state.volume = +f.get('v'); live.state.fade = +f.get('f'); }
+          setTimeout(() => json(why ? { ok: false, error: why } : { ok: true }), 2000);
+          return;
+        }
         if (a === 'save') {
           const why = saveProblem(f);
           if (why) return json({ ok: false, error: why });
@@ -540,13 +590,19 @@ function chumbyScene(q, s) {
   if (scene === 'snoozed' && a === 'state') return json({ ...stateNow(data.state), ringing: { state: 'snoozing', name: 'Work', sound: 'Beep', until: 0 } });
   // A Pandora wake-up 5 minutes ago with no song logged yet; 8 s into the scene the Chumby's state names the first song,
   // so "Woke up to" (Sounds) must gain its tile live.
-  if (scene === 'songchange' && a === 'state') {
+  // A wake-up 10 minutes ago, still playing: 8 s into the scene the Chumby's state names its first song and 16 s in its
+  // second, as Pandora moves on, so "Woke up to" (Sounds) gains a new group, then a second tile in it, live. The ring is
+  // in the state's "rang" as the real one gives it, and in the history once its songs are.
+  if (scene === 'songchange' && (a === 'state' || a === 'hist')) {
     songScene.at ||= Date.now();
-    const now = Date.now() / 1000, fire = Math.floor(now / 60) - 5;
+    const now = Date.now() / 1000, fire = Math.floor(now / 60) - 10, since = Date.now() - songScene.at;
     const wake = alarm({ name: 'Wake', time: String(fire), when: 'once', type: 'audio', arg: 'pandora', param: '1', param_description: 'Morning Mix' });
-    const song = Date.now() - songScene.at > 8000 ? { t: fire * 60 + 40, title: 'Take Five', artist: 'The Dave Brubeck Quartet', album: 'Time Out' } : null;
+    const live = [{ t: fire * 60 + 12, title: 'Naima', artist: 'John Coltrane', album: 'Giant Steps' }, { t: fire * 60 + 280, title: 'Take Five', artist: 'Dave Brubeck', album: "Dave Brubeck's Greatest Hits" }]
+      .filter((x, i) => since > (i ? 16000 : 8000));
+    const rang = { t: fire * 60, name: 'Wake' };
+    if (a === 'hist') return json({ ok: true, songs: [...live.slice().reverse(), ...data.hist.songs], rings: [rang, ...data.hist.rings] });
     // The wake-up's music is still playing, so Now and Woke up to tell the same story.
-    return json({ ...stateNow(data.state), alarms: [...data.state.alarms, wake], song, music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
+    return json({ ...stateNow(data.state), alarms: [...data.state.alarms, wake], song: live[live.length - 1] || null, rang, music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
   }
   // A nap set 20 minutes from now, as the app's chips or Control Center leave it: the one "Nap" one-off, a short Beep.
   if (scene === 'nap' && a === 'state') {
@@ -568,8 +624,10 @@ function chumbyScene(q, s) {
     if (a === 'health') return json({ up: false, lastSeen: Date.now() / 1000 - 25 * 60 });
     if (a === 'sys' || a === 'state' || a === 'chlist') { s.statusCode = 502; s.end(); return true; }
   }
-  // Every save turned down, the way a full Chumby turns one down.
-  if (scene === 'fail' && q.method === 'POST') return json({ ok: false, error: 'bad count' });
+  // Every save turned down, the way a Chumby that can't write its alarm file turns one down (any change can meet this;
+  // "bad count" only ever meets an added alarm, so a failed switch-off must not show it).
+  // Three seconds before saying so, as a slow write would, so "Trying again…" is seen at rest on a retry.
+  if (scene === 'fail' && q.method === 'POST') { setTimeout(() => json({ ok: false, error: "can't write" }), 3000); return true; }
   return false;
 }
 
@@ -591,6 +649,7 @@ function chumbyScene(q, s) {
 //                 a recording under way, as the bridge does it (headers at once, then after 1.2 s everything since the last
 //                 key frame in one write, counted in x-replay-frames, then 30 a second), on the home screen; and a
 //                 stream that answers and never sends a picture, with no still to be had either, on the home screen.
+//   /fslowlist    freal's list, answered after 2 s.
 //   /fnormal /fslow /ffail /foffline /falready /fbridgeon /fjoined
 //                 The flick's starts (tv-iphone.md §2.5a): play-stream as NDJSON with each step's time since the request
 //                 (awake 0, sent 120, player 2000, playing 3200); slow (playing at 9 s); failing (two fallbacks retried,
@@ -609,7 +668,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage|fslowlist|freal)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; tvReal.long = false; return tvReal(q, s, path, query, json); }
@@ -618,9 +677,16 @@ function tvPose(q, s) {
   if (scene === 'reallong') { tvReal.known = false; tvReal.long = true; return tvReal(q, s, path, query, json); }
   // The real scene with the episode's length known from the start, for the shot of a drag along the bar with its bubble.
   if (scene === 'realscrub') { tvReal.known = true; tvReal.long = false; return tvReal(q, s, path, query, json); }
-  if (/^f(normal|slow|fail|offline|already|bridgeon|joined)$/.test(scene || '')) return tvFlickStart(scene.slice(1), q, s, path, json);
+  if (/^f(normal|real|slowlist|slow|fail|offline|already|bridgeon|joined)$/.test(scene || '')) return tvFlickStart(scene.slice(1), q, s, path, json);
   // The prepare call's answer everywhere else too, in the bridge's own shape.
   if (q.method === 'POST' && path === '/api/tv/prepare') { let b = ''; q.on('data', c => b += c); q.on('end', () => { let v = {}; try { v = JSON.parse(b || '{}'); } catch {} json({ ok: true, awake: true, fresh: !!v.token }); }); return true; }
+  // /slowdev: the box slow to answer (its readings take 4 s), so leaving Status or pushing Settings cuts a request short,
+  // as on a slow tunnel: nothing may be said for that (gate HOLD of 8446178).
+  if (scene === 'slowdev' && path === '/api/tv/device' && !q.delayed) { q.delayed = true; setTimeout(() => { if (!s.destroyed) tvRoute(q, s); }, 4000); return true; }
+  // /outage: the Mac gone from 10 s to 50 s after GET /outage/reset (every connection dropped, as with Tailscale down),
+  // then back. Nothing may be said for about 25 s; then a calm amber "Can't reach the Mac", cleared on its return.
+  if (scene === 'outage' && path === '/reset') { tvPose.outage = query.has('far') ? Date.now() + 1e9 : Date.now(); return json({ ok: true }); }
+  if (scene === 'outage') { const t = Date.now() - (tvPose.outage || 0); if (t > 10000 && t < 50000) { s.destroy(); return true; } }
   if (scene === 'cold' && path === '/api/tv/device') {
     return json({ model: 'onn. 4K Streaming Box', android: '14', resolution: '1920x1080', wifi: 'Home Wi-Fi', ip: '192.168.1.2', uptime: 122000, cpu: 0, memUsed: 1.4e9, memTotal: 2e9, diskUsed: 3.3e9, diskTotal: 4.7e9, tempC: 46, rxRate: 0, txRate: 0, hist: { cpu: [], mem: [], rx: [], tx: [] } });
   }
@@ -762,8 +828,29 @@ function tvFlickStart(kind, q, s, path, json) {
     if (st.result && now - st.endedAt < 30000) v.lastStart = { result: st.result, token: st.token, at: st.endedAt };
     return json(v);
   }
+  // freal: the list as the bridge really hands it over (describeStream in tv.js): a dozen rows from several addons, long
+  // release names cut at 110 characters, Dolby Vision and HDR10+, dubbed and multi-audio files, a 61 GB remux, rows not
+  // ready yet, and a service row that opens its own app. Made-up release groups; the film's name is a public catalogue's.
+  if ((kind === 'real' || kind === 'slowlist') && path.startsWith('/api/tv/streams')) {
+    const rows = [
+      ['Torrentio', '1080p', '', 'Heat.1995.REMASTERED.1080p.BluRay.x264.DTS-HD.MA.5.1-SAMPLEGRP', 14.2, true, false, ''],
+      ['Torrentio', '4K', 'Dolby Vision', 'Heat 1995 2160p UHD BluRay DoVi HDR10 HEVC TrueHD 7.1 Atmos-SAMPLEGRP', 61.4, true, false, ''],
+      ['Torrentio', '1080p', '', 'Heat (1995) Directors Definitive Edition 1080p BluRay 10bit HEVC 6CH x265 SampleRelease', 4.1, true, false, ''],
+      ['MediaFusion', '1080p', 'HDR10+', 'Heat.1995.1080p.AMZN.WEB-DL.DDP5.1.HDR10Plus.H.265-SAMPLE', 7.8, false, false, ''],
+      ['Torrentio', '720p', '', 'Heat.1995.720p.BrRip.x264.YIFY-ish.SampleCut.Extended.Version.With.A.Very.Long.Name.That.Goes.On.And.On', 1.3, true, false, ''],
+      ['Torrentio', '1080p', '', 'Heat.1995.MULTi.1080p.BluRay.x264-SAMPLEFR', 9.6, true, true, 'Multi-audio'],
+      ['Comet', '4K', 'HDR', 'Heat.1995.2160p.4K.WEB.x265.10bit.AAC5.1-[SAMPLE]', 11.2, false, false, ''],
+      ['Torrentio', '480p', '', 'Heat 1995 480p DVDRip XviD AC3 Sample', 0.7, false, false, ''],
+      ['Torrentio', '1080p', '', 'Heat.1995.iTALiAN.ENGLiSH.1080p.BluRay.x264-SAMPLEiT', 10.9, false, true, ''],
+    ].map(([addon, quality, hdr, file, gb, instant, dubbed, lang], n) => ({ token: 'r' + n, addon, dubbed, name: [quality, hdr].filter(Boolean).join(' '), description: file.slice(0, 110), quality, hdr, gb, instant, service: false, lang }));
+    rows.push({ token: 'rsvc', addon: 'WatchHub', dubbed: false, name: 'Netflix', description: 'Watch on Netflix (subscription)', quality: '', hdr: '', gb: 0, instant: false, service: true, lang: '' });
+    // slowlist: the same list, two seconds coming (his addons on a slow night), so the page's waiting rows are filmed.
+    if (kind === 'slowlist') { setTimeout(() => json({ streams: rows }), 2000); return true; }
+    return json({ streams: rows });
+  }
   if (q.method === 'POST' && path === '/api/tv/prepare') return read(b => { log('prepare', b); setTimeout(() => json({ ok: true, awake: true, fresh: !!b.token }), 300); });
   if (q.method === 'POST' && path === '/api/tv/key') return read(b => { log('key', b); json({ ok: true }); });
+  if (q.method === 'POST' && /^\/api\/tv\/flick-(lift|cancel)$/.test(path)) return read(b => { log(path.slice(8), b); json({ ok: true }); });
   // The app's hand-off timing (frame hitches from release to landing), so the build's log has a line to read.
   if (q.method === 'POST' && path === '/api/tv/timing') return read(b => { log('timing', b); json({ ok: true }); });
   if (q.method === 'POST' && /^\/api\/tv\/(flick|open|stremio-open|film|send|mint-open|music|stop-playing)$/.test(path)) return read(b => { log(path.slice(8), b); if (path.endsWith('stop-playing')) { st.result = 'stopped'; st.endedAt = Date.now(); } json({ ok: true }); });

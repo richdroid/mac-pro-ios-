@@ -59,6 +59,8 @@ struct TVShortcuts: AppShortcutsProvider {
         AppShortcut(intent: TVOpenOnTV(), phrases: ["Open \(\.$app) on the \(.applicationName)"], shortTitle: "Open App", systemImageName: "square.grid.2x2")
         AppShortcut(intent: TVPower(), phrases: ["Turn the \(.applicationName) on or off", "Toggle the \(.applicationName)"], shortTitle: "On or Off", systemImageName: "power")
         AppShortcut(intent: TVKeyIntent(), phrases: ["Press a button on the \(.applicationName)"], shortTitle: "Remote Button", systemImageName: "av.remote")
+        AppShortcut(intent: ResumeOnIPhone(), phrases: ["Resume on iPhone in \(.applicationName)", "Carry on watching in \(.applicationName)"], shortTitle: "Resume on iPhone", systemImageName: "iphone")
+        AppShortcut(intent: PlayOnIPhone(), phrases: ["Play something on iPhone with \(.applicationName)"], shortTitle: "Play on iPhone", systemImageName: "play.rectangle")
         AppShortcut(intent: SendToTV(), phrases: ["Send a link to the \(.applicationName)"], shortTitle: "Send Link", systemImageName: "link")
     }
 }

@@ -1,4 +1,5 @@
 import UIKit
+import Security
 import UniformTypeIdentifiers
 
 // Send to TV from any app's share sheet. The Mac decides where a link goes; this only passes it along.
@@ -27,8 +28,19 @@ final class ShareViewController: UIViewController {
         }
         return nil
     }
+    // The TV app's address from its shared Keychain group (given by the TestFlight signing), else the one baked in.
+    static func address() -> String? {
+        let prefix = (Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        if let team = prefix.flatMap({ $0.isEmpty ? nil : Substring($0) }) ?? Bundle.main.bundleIdentifier?.split(separator: ".").first(where: { $0.count == 10 && $0.allSatisfy { $0.isUppercase || $0.isNumber } }) {
+            let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "local.macpro.address", kSecAttrAccount as String: "address",
+                                    kSecAttrAccessGroup as String: "\(team).local.macpro.TV.shared", kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+            var out: CFTypeRef?
+            if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data, let s = String(data: d, encoding: .utf8), !s.isEmpty { return s }
+        }
+        return Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String
+    }
     private func run() async {
-        guard let text = await item(), let address = Bundle.main.object(forInfoDictionaryKey: "DefaultAddress") as? String,
+        guard let text = await item(), let address = Self.address(),
               let base = URL(string: address), let u = URL(string: address + "/api/tv/send") else { await finish("Nothing to send"); return }
         var r = URLRequest(url: u); r.httpMethod = "POST"; r.timeoutInterval = 10
         r.setValue("\(base.scheme ?? "https")://\(base.host ?? "")", forHTTPHeaderField: "Origin")
