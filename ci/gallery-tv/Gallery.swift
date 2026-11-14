@@ -40,7 +40,7 @@ func card<C: View, B: View>(_ w: CGFloat, _ h: CGFloat, _ bg: B, @ViewBuilder _ 
             return (st, size)
         }
         // The card Richard saw redacted: South Park, an episode with its own name, a running clock, the next one known.
-        var park = made("South Park", "S27 E3 · Sack Lunch", "Stremio", playing: true, at: 480, of: 1320, art: real["show"] ?? poster(400, 600, .systemYellow, .systemBlue, "SOUTH PARK")).0
+        var park = made("South Park", "S27 E3 · Sack Lunch", "Stremio", playing: true, at: 480, of: 1320, art: poster(400, 600, .systemYellow, .systemBlue, "SOUTH PARK")).0
         park.next = true
         let show = made("Twin Peaks", "S1 E3 · Zen, or the Skill to Catch a Killer", "Stremio", playing: true, at: 600, of: 2815, art: real["show"] ?? poster(400, 600, .systemOrange, .systemRed, "PEAKS"))
         let song = made("Come Together", "The Beatles", "Mint", playing: false, at: 39, of: 259, art: real["album"] ?? poster(600, 600, .systemTeal, .systemIndigo, "ROAD"))

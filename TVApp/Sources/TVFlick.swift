@@ -1273,12 +1273,13 @@ struct FlickScreen: View {
     // An episode's row thrown to the TV: chosen as if tapped, and its best stream sent the moment its list is in.
     func throwEpisode(_ e: StremioEpisode) {
         guard !flown else { return }
-        throwAt = e.id
         let had = episode == e && !streams.isEmpty
         choose(e)
+        throwAt = e.id
         if had { throwPick(streams) }
     }
     func choose(_ e: StremioEpisode) {
+        throwAt = nil
         if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All"; runtime = nil; startOverChoice = nil; choseOnTV = false }
         go(.streams)
     }
@@ -2887,6 +2888,8 @@ struct ShelfFlick: ViewModifier {
     // On a page that is itself the flick's choosing (the episodes there): the throw is the page's to make, with the list
     // it already holds, instead of another flick opened over it.
     var onThrow: (() -> Void)?
+    // Held and let go where it was: the page's own choosing, not a second flick opened over it.
+    var onTap: (() -> Void)?
     @State private var hands = HandBox()
     @State private var lock = ScrollLockBox()
     @State private var up = false
@@ -3041,7 +3044,7 @@ struct ShelfFlick: ViewModifier {
             // Held and let go where it was: a tap, its page, as on any button.
             put(back: false)
             if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
-            FlickCardButton.tap(model, item, source, origin: rect(), held: true)
+            if let onTap { onTap() } else { FlickCardButton.tap(model, item, source, origin: rect(), held: true) }
         default:
             FlickHaptic.settle()
             if !receipt.isEmpty { FlickReceipt.cancel(receipt) }

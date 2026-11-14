@@ -2902,7 +2902,7 @@ struct FilmCard: View {
     let film: Film
     @State private var place = FrameBox()
     var body: some View {
-        Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio, origin: place.rect) } label: {
+        Button { guard Date().timeIntervalSince(ShelfHand.shared.handledAt) >= 0.35 else { return }; model.tick(); FlickCardButton.tap(model, film.media, .stremio, origin: place.rect) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                     .frame(width: 118, height: 177).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))

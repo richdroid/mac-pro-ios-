@@ -74,13 +74,18 @@ struct IslandCover: View {
 struct IslandTitles: View {
     let state: TVIslandAttributes.ContentState
     var under: Bool { !state.subtitle.isEmpty && state.subtitle != state.title && state.subtitle != state.app }
-    var body: some View {
+    func titles(titleLines: Int, subLines: Int) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            // A long name steps down a size before it's cut, and a film's (no second line) wraps to two first.
-            Text(state.title).font(.system(size: under ? 16 : 15, weight: .semibold)).foregroundStyle(.white).lineLimit(under ? 1 : 2)
-                .minimumScaleFactor(0.82)
-                .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-            if under { Text(state.subtitle).font(.system(size: 13)).foregroundStyle(.white.opacity(0.62)).lineLimit(2).minimumScaleFactor(0.85).fixedSize(horizontal: false, vertical: true) }
+            Text(state.title).font(.system(size: under ? 16 : 15, weight: .semibold)).foregroundStyle(.white).lineLimit(under ? titleLines : 2)
+                .minimumScaleFactor(0.82).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+            if under { Text(state.subtitle).font(.system(size: 13)).foregroundStyle(.white.opacity(0.62)).lineLimit(subLines).minimumScaleFactor(0.85).fixedSize(horizontal: false, vertical: true) }
+        }
+    }
+    var body: some View {
+        // Whole, never cut: each on one line when they fit, else both wrap (to two lines at most).
+        ViewThatFits(in: .horizontal) {
+            titles(titleLines: 1, subLines: 1)
+            titles(titleLines: 2, subLines: 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -313,7 +318,7 @@ struct IslandCompactTrailing: View {
             // A running time takes all the room it's offered, so it's given exactly its own: "13:16" at 12 pt is 36 pt wide, and
             // the 40 it had left "13:1(" cut on the glass (Richard, 2026-11-14: "look at the corner"). Whole, never cut.
             Text(timerInterval: a...b, countsDown: true).font(.system(size: 12, weight: .semibold).monospacedDigit()).foregroundStyle(TVLook.accent)
-                .multilineTextAlignment(.trailing).lineLimit(1).minimumScaleFactor(0.8).frame(width: (state.length ?? 0) >= 3600 ? 52 : 44, alignment: .trailing)
+                .multilineTextAlignment(.trailing).lineLimit(1).minimumScaleFactor(0.8).frame(width: b.timeIntervalSince(a) >= 3600 ? 52 : 44, alignment: .trailing)
         } else {
             Image(systemName: "waveform").font(.system(size: 14, weight: .semibold)).foregroundStyle(TVLook.accent).accessibilityLabel("Playing")
         }

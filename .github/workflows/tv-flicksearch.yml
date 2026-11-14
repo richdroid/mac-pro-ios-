@@ -97,16 +97,32 @@ jobs:
             shot search-$tag $display 12 $M -tab 1 -pose search
             shot search-$tag $display 12 $M -tab 1 -pose search
             shot searchshow-$tag $display 14 $M -tab 1 -pose searchtype-show
-            shot episodes-$tag $display 14 $M -tab 1 -pose showpage
+            shot episodes-$tag $display 24 $M -tab 1 -pose showpage
             shot remote-episodes-$tag $display 10 $M/repisode -tab 0 -pose episodes
             shot streams-$tag $display 14 $M -tab 1 -pose flick-stage
             shot info-$tag $display 12 $M -tab 1 -pose details
           }
           postureshots folded 1
+          pivotfilm pivot-folded 1 0.8 0.2 0.6
+          holdshot() {
+            local name=$1 display=$2 x=$3 y=$4 wait=$5; shift 5
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M "$@"
+            sleep $wait
+            $D "$DEVICE" touch $x $y 2.5 &
+            sleep 1.4
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            wait
+            sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-after.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
           $D "$DEVICE" pose open; sleep 5
           $D "$DEVICE" rotate 1; sleep 5
           pivotfilm pivot-portrait 3 0.8 0.2 0.62
           postureshots portrait 3
+          # A real touch held on a poster: lifted off the page in the hand, then let go where it was (put back, a tap).
+          holdshot hold-searchtop-portrait 3 0.09 0.28 12 -tab 1 -pose search
+          holdshot hold-episode-portrait 3 0.2 0.55 24 -tab 1 -pose showpage
           $D "$DEVICE" rotate 3 || true; sleep 5
           postureshots landscape 3
           pivotfilm pivot-landscape 3 0.85 0.55 0.6

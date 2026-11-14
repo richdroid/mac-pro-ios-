@@ -653,6 +653,8 @@ extension StremioEpisode {
     // The last moment a finger was pulling sideways: a row lifted at the end of that pull is the pull's, never a tap (a button
     // fires on any release inside it, however far the finger travelled).
     var pulledAt = Date.distantPast
+    // Which way the season on is leaving: with the next one, forward.
+    var forward = true
     var justPulled: Bool { Date().timeIntervalSince(pulledAt) < 0.45 }
 }
 // The season headers as a Zune pivot: the one he's on large and bright in the middle, the seasons either side of it
@@ -661,7 +663,8 @@ extension StremioEpisode {
 struct SeasonPivot: View {
     let seasons: [Int]
     @Binding var selected: Int
-    // Chosen apart from the swipe: the sheet's header and its rows are two views.
+    // The big title's size; the sheet's header, under a show name, is smaller so it never outranks it.
+    var size: CGFloat = 26
     var swipe = SeasonSwipe.shared
     @State private var widths: [Int: CGFloat] = [:]
     @State private var span: CGFloat = 0
@@ -669,82 +672,105 @@ struct SeasonPivot: View {
     static func move(_ seasons: [Int], _ selected: Binding<Int>, to s: Int) {
         guard s != selected.wrappedValue, seasons.contains(s) else { return }
         Haptic.fire(.tick)
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { selected.wrappedValue = s }
+        let from = seasons.firstIndex(of: selected.wrappedValue) ?? 0, to = seasons.firstIndex(of: s) ?? 0
+        // The direction is set first, a turn before the change, so the rows that leave know which way to go.
+        SeasonSwipe.shared.forward = to > from
+        Task { @MainActor in withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { selected.wrappedValue = s } }
     }
-    private let gap: CGFloat = 20, small: CGFloat = 0.6, height: CGFloat = 46
-    // Where each title's middle is, from the one on: titles beside it are drawn at the small size, so they sit that close.
-    private func distance(_ from: Int, _ to: Int) -> CGFloat {
-        guard from != to else { return 0 }
-        let step = from < to ? 1 : -1
-        var d: CGFloat = 0, i = from
-        while i != to {
-            let j = i + step
-            let a = (widths[seasons[i]] ?? 90) * (i == from ? 1 : small), b = (widths[seasons[j]] ?? 90) * small
-            // The one beside the chosen: its middle near the edge, so the edge cuts it by a fifth of its own width.
-            d += i == from && span > 0 ? max((a + b) / 2 + gap, span / 2 - b * 0.2) : (a + b) / 2 + gap
-            i = j
+    private let gap: CGFloat = 18, small: CGFloat = 0.62
+    private var height: CGFloat { size * 1.5 }
+    private func width(_ i: Int) -> CGFloat { (widths[seasons[i]] ?? size * 3.2) }
+    // Each title's middle and size with season `k` chosen: it in the middle at full size, the one either side with its
+    // middle near the edge (the edge cuts about a fifth of it), the rest beyond at the small size's own spacing.
+    private func layout(_ k: Int) -> [(x: CGFloat, scale: CGFloat)] {
+        seasons.indices.map { i in
+            if i == k { return (span / 2, 1) }
+            var x = span / 2
+            let step = i > k ? 1 : -1
+            var j = k
+            while j != i {
+                let n = j + step
+                let near = abs(n - k) == 1
+                let a = j == k ? width(j) : width(j) * small, bw = width(n) * small
+                let d = near ? max((a + bw) / 2 + gap, span / 2 - bw * 0.2 + (j == k ? 0 : 0)) : (a + bw) / 2 + gap
+                x += CGFloat(step) * (near ? d : d)
+                j = n
+            }
+            return (x, small)
         }
-        return d * CGFloat(step)
     }
     var body: some View {
         let k = seasons.firstIndex(of: selected) ?? 0
         let f = span > 0 ? max(-1, min(1, -swipe.dx / span)) : 0
         let n = f > 0 ? k + 1 : k - 1
-        let reach = seasons.indices.contains(n) ? abs(distance(k, n)) : 0
-        let shift = abs(f) * reach
+        let t = seasons.indices.contains(n) ? abs(f) : 0
+        let here = layout(k), there = seasons.indices.contains(n) ? layout(n) : here
         ZStack {
             ForEach(Array(seasons.enumerated()), id: \.element) { i, s in
-                let x = span / 2 + distance(k, i) - (f > 0 ? shift : -shift)
-                let away = min(1, abs(x - span / 2) / max(reach > 0 ? reach : 120, 1))
-                let on = i == k
-                Text(Self.name(s)).font(.system(size: 30, weight: .bold)).lineLimit(1).fixedSize()
-                    .foregroundStyle(.white.opacity(1 - 0.62 * away))
-                    .scaleEffect(1 - (1 - small) * away)
+                let x = here[i].x + (there[i].x - here[i].x) * t
+                let sc = here[i].scale + (there[i].scale - here[i].scale) * t
+                let lit = (sc - small) / (1 - small)
+                Text(Self.name(s)).font(.system(size: size, weight: .bold)).lineLimit(1).fixedSize()
+                    .foregroundStyle(.white.opacity(0.38 + 0.62 * lit))
+                    .scaleEffect(sc * (size >= 26 ? 1.15 : 1))
                     .background(GeometryReader { g in Color.clear.onAppear { widths[s] = g.size.width }.onChange(of: g.size.width) { _, w in widths[s] = w } })
+                    .padding(.vertical, 12).contentShape(Rectangle())
                     .position(x: x, y: height / 2)
                     .accessibilityElement().accessibilityLabel(Self.name(s))
-                    .accessibilityAddTraits(on ? [.isButton, .isSelected, .isHeader] : .isButton)
+                    .accessibilityAddTraits(i == k ? [.isButton, .isSelected, .isHeader] : .isButton)
                     .onTapGesture { Self.move(seasons, $selected, to: s) }
             }
         }
-        .frame(maxWidth: .infinity).frame(height: height)
+        .frame(maxWidth: .infinity).frame(height: max(height, 44))
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { span = $0 }
-        .clipped()
+        // The edge fades the peeking titles out instead of cutting a letter square.
+        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.07), .init(color: .black, location: 0.93), .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Seasons")
     }
 }
-// The episodes of the season on: pulled sideways, they follow the finger a little and the headers slide in step; let go
-// past a third of the way or fast, they move to the next or the one before, and the headers land with a tick.
+// The episodes of the season on: they follow the finger as it pulls, the headers slide in step, and let go past a third of
+// the way or fast, the season on leaves the way the finger went and the next comes in behind it, with a tick.
 struct SeasonSwipeRows: ViewModifier {
     let seasons: [Int]
     @Binding var season: Int
     var swipe = SeasonSwipe.shared
+    @GestureState private var active = false
     func body(content: Content) -> some View {
-        content
-            .offset(x: swipe.dx * 0.22)
-            .contentShape(Rectangle())
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 16)
-                    .onChanged { g in
-                        guard ShelfHand.shared.item == nil, seasons.count > 1 else { return }
-                        guard abs(g.translation.width) > abs(g.translation.height) * 1.4 else { if swipe.dx != 0 { swipe.dx = 0 }; return }
-                        swipe.pulledAt = Date()
-                        let k = seasons.firstIndex(of: season) ?? 0
-                        // Past either end, it gives, but only a little.
-                        let blocked = (g.translation.width > 0 && k == 0) || (g.translation.width < 0 && k == seasons.count - 1)
-                        swipe.dx = blocked ? g.translation.width * 0.2 : g.translation.width
-                    }
-                    .onEnded { g in
-                        defer { withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { swipe.dx = 0 } }
-                        guard ShelfHand.shared.item == nil, seasons.count > 1, abs(g.translation.width) > abs(g.translation.height) * 1.4 else { return }
-                        let k = seasons.firstIndex(of: season) ?? 0
-                        let far = abs(g.predictedEndTranslation.width) > 140 || abs(g.translation.width) > 70
-                        guard far else { return }
-                        let to = g.translation.width < 0 ? k + 1 : k - 1
-                        if seasons.indices.contains(to) { SeasonPivot.move(seasons, $season, to: seasons[to]) }
-                    }
-            )
+        ZStack(alignment: .top) {
+            content
+                .id(season)
+                .transition(.asymmetric(insertion: .move(edge: swipe.forward ? .trailing : .leading).combined(with: .opacity),
+                                        removal: .move(edge: swipe.forward ? .leading : .trailing).combined(with: .opacity)))
+        }
+        .offset(x: swipe.dx * 0.6)
+        .clipped()
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 16)
+                .updating($active) { _, s, _ in s = true }
+                .onChanged { g in
+                    guard ShelfHand.shared.item == nil, seasons.count > 1 else { return }
+                    guard abs(g.translation.width) > abs(g.translation.height) * 1.4 else { if swipe.dx != 0 { swipe.dx = 0 }; return }
+                    swipe.pulledAt = Date()
+                    let k = seasons.firstIndex(of: season) ?? 0
+                    // Past either end, it gives, but only a little.
+                    let blocked = (g.translation.width > 0 && k == 0) || (g.translation.width < 0 && k == seasons.count - 1)
+                    swipe.dx = blocked ? g.translation.width * 0.2 : g.translation.width
+                }
+                .onEnded { g in
+                    if abs(g.translation.width) > 16 { swipe.pulledAt = Date() }
+                    defer { withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { swipe.dx = 0 } }
+                    guard ShelfHand.shared.item == nil, seasons.count > 1, abs(g.translation.width) > abs(g.translation.height) * 1.4 else { return }
+                    let k = seasons.firstIndex(of: season) ?? 0
+                    let far = abs(g.predictedEndTranslation.width) > 140 || abs(g.translation.width) > 70
+                    guard far else { return }
+                    let to = g.translation.width < 0 ? k + 1 : k - 1
+                    if seasons.indices.contains(to) { SeasonPivot.move(seasons, $season, to: seasons[to]) }
+                }
+        )
+        // A pull the scroll view took over lets go without an end: the headers and rows come home all the same.
+        .onChange(of: active) { _, on in if !on, swipe.dx != 0 { withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { swipe.dx = 0 } } }
     }
 }
 
@@ -753,6 +779,7 @@ struct SeasonSwipeRows: ViewModifier {
 struct EpisodeFlick: ViewModifier {
     let item: MediaItem?
     var onThrow: (() -> Void)?
+    var onTap: (() -> Void)?
     @State private var place = FrameBox()
     func body(content: Content) -> some View {
         if let item {
@@ -761,7 +788,7 @@ struct EpisodeFlick: ViewModifier {
                     // The picture that comes up is the poster's size, at the row's leading edge.
                     let r = place.rect ?? .zero
                     return CGRect(x: r.minX + 8, y: r.midY - 42, width: 56, height: 84)
-                }, onThrow: onThrow))
+                }, onThrow: onThrow, onTap: onTap))
         } else { content }
     }
 }
@@ -799,7 +826,7 @@ struct EpisodePicker: View {
     }
     var header: some View {
         // One season has nothing to swipe to: its name stands alone, still large.
-        SeasonPivot(seasons: seasons, selected: $season)
+        SeasonPivot(seasons: seasons, selected: $season, size: part == .header ? 22 : 26)
     }
     // In a narrow pane the still gives way to the name, so a name is never cut to "Episod…" (r19).
     @State private var narrow = false
@@ -808,7 +835,7 @@ struct EpisodePicker: View {
         let on = e.id == current
         let mins = info?.minutes[e.id] ?? e.runtime ?? info?.show
         let about = info?.about[e.id] ?? e.overview
-        return Button { guard !SeasonSwipe.shared.justPulled else { return }; choose(e) } label: {
+        return Button { guard !SeasonSwipe.shared.justPulled, Date().timeIntervalSince(ShelfHand.shared.handledAt) >= 0.35 else { return }; choose(e) } label: {
             HStack(spacing: 12) {
                 Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                     .frame(width: thumb, height: thumb * 9 / 16)
@@ -849,7 +876,7 @@ struct EpisodePicker: View {
         // The press asks for its streams, so the list is on its way before the tap lands.
         .buttonStyle(PressCard(onPress: { StreamCache.shared.prefetch(episode: e.id) }))
         .disabled(busy != nil)
-        .modifier(EpisodeFlick(item: flickItem?(e), onThrow: onThrow.map { f in { f(e) } }))
+        .modifier(EpisodeFlick(item: flickItem?(e), onThrow: onThrow.map { f in { f(e) } }, onTap: { choose(e) }))
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -860,7 +887,6 @@ struct EpisodePicker: View {
             }
         }
         .onGeometryChange(for: Bool.self) { $0.size.width < 330 } action: { narrow = $0 }
-        .animation(.easeInOut(duration: 0.2), value: season)
         // The episode the list rests on, still the same a second later: its link is resolved on the TV, so picking it
         // finds it answering rather than paying the cold 7 to 13 s.
         .task(id: restsOn) {

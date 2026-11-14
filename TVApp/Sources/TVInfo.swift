@@ -200,9 +200,9 @@ struct TitleInfoPage: View {
                 .ignoresSafeArea(edges: [.top, .horizontal])
             Art(url: URL(string: info?.poster ?? item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1) }
                 .frame(width: 84, height: 126).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .measured(posterPlace)
                 .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
                 .padding(.leading, 22).offset(y: 30)
-                .measured(posterPlace)
                 // Held, the poster lifts off the page and goes to the TV like any card; the key at the foot stays the tap.
                 .modifier(InfoPosterFlick(item: item, source: source, place: posterPlace, on: !fromFlick))
         }
