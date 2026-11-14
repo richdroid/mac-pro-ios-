@@ -517,8 +517,6 @@ struct FlickScreen: View {
     @GestureState private var touching: String?
     // The row or card just thrown: hidden where it was, as its picture is what flies.
     @State private var thrownID: String?
-    // Inside the release of a throw (not a tap): the flight leaves at the finger's speed.
-    @State private var thrownNow = false
     // The row going back to its place after a put-back.
     @State private var settling: String?
     // The row put back, while its picture travels home in the render server: hidden in its place until it's there.
@@ -1485,11 +1483,9 @@ struct FlickScreen: View {
             if id == "card" { FlickHaptic.caught() }
             // The send first: its flight is handed to the render server before anything on this page is marked changed,
             // so nothing is laid out again between the release and the flight's first frame.
-            thrownNow = true
+            hands.throwing = true; hands.thrown = id
             send()
-            thrownNow = false
-            var quiet = Transaction(); quiet.disablesAnimations = true
-            withTransaction(quiet) { thrownID = id }
+            hands.throwing = false
         case .longTap:
             // A press that ran long and was let go where it landed is a tap, and a tap is the pick, however long it was
             // held: lifted and put straight back, it did nothing, and a deliberate press read as a dead row.
@@ -1768,13 +1764,9 @@ struct FlickScreen: View {
     // picked thing's picture moves onto it while this page dissolves. On the Remote within 0.4 s, the TV starting in the
     // meantime, never waited for.
     func send(from: CGRect?) {
-        guard !flown else { return }
+        guard !flown, !hands.sending else { return }
         SwipeLog.note("send begin")
         FlickClock.begin()
-        releasedAt = Date()
-        // The request leaves now, in the first moment the main thread is free, never after the Remote's long turn (the
-        // review of ef52168: release to request about a second).
-        flight = Task { await start() }
         // Worked out first and handed to the render server before any of this page's state changes: each flush of the
         // screen with this page's state changed laid the whole page out again (CI ef52168: two flushes in the pick, 0.36
         // and 0.66 s, before the Remote's tab was even asked for).
@@ -1805,13 +1797,13 @@ struct FlickScreen: View {
             let fresh = !RenderFlight.flying
             if fresh { RenderFlight.launch(from: fromRect.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), image: image, soft: soft, tint: tint,
                                 wide: image.map(PosterOnBlur.isWide) ?? (shown.kind == "youtube" || isLink),
-                                velocity: thrownNow ? CGVector(dx: throwV.width, dy: throwV.height) : .zero) }
+                                velocity: hands.throwing ? CGVector(dx: throwV.width, dy: throwV.height) : .zero) }
             SwipeLog.note("send launched")
             if let aim = model.mirrorSlot.flatMap({ $0.width > 20 ? $0 : nil }) ?? model.rememberedSlot(slotKey) ?? model.rememberedSlot("warm" + slotKey) {
                 aimTo = aim
                 // Thrown: on its way now, from the finger's own speed, sent to the render server before this turn does
                 // anything else (it waited for the next turn before, still where he'd let go, then started from rest).
-                if fresh, thrownNow { RenderFlight.aim(aim, first: true, flush: true); aimedAtRelease = true }
+                if fresh, hands.throwing { RenderFlight.aim(aim, first: true, flush: true); aimedAtRelease = true }
             } else if flickFrame.width > 0 {
                 // Nowhere known yet (the first pick ever on a screen this size): up toward the top, where the picture is,
                 // and on to the real place the moment the Remote says it.
@@ -1830,35 +1822,55 @@ struct FlickScreen: View {
             ScreenVeil.dissolve(flickFrame, hole: hole.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), soft: soft, tint: tint, flush: false, animate: false)
             SwipeLog.note("send flown")
         }
-        flown = true
-        FlickReceipt.thrown(receiptID)
-        liftedID = nil
-        answered = false; written = false
-        flyFrom = fromRect
-        if target.image == nil { heldImage = image; softImage = soft }
-        if softImage == nil, let h = heldImage { Task { softImage = await ImageStore.shrunk(h, 16) } }
-        // Held where it is first: the tab changing under it lays the space around it out again.
-        if flickFrame.width > 0 { held = flickFrame }
-        if rendered {
-            // Not in memory: fetched now and put on the flight wherever it has got to.
-            if image == nil, target.image == nil, let u = URL(string: startingArt) ?? carried {
-                Task {
-                    guard let i = await ImageStore.shared.load(u) else { return }
-                    heldImage = i
-                    RenderFlight.picture(i)
-                }
+        // The rest (the request, this page's own changes, the Remote's tab) once the flight is on the screen: for a throw
+        // already aimed, in the next turn, so this one ends with nothing of the page changed and the flight is drawn in
+        // the very next frame (the page's changes were drawn first, and the row hung where he'd let go: CI 664153f,
+        // 83-197 ms to the flight's first frame).
+        let leftFrom = fromRect, theImage = image, theSoft = soft, theAim = aimTo
+        let rest = { @MainActor in
+            hands.sending = false
+            releasedAt = Date()
+            // The request leaves now, in the first moment the main thread is free, never after the Remote's long turn.
+            flight = Task { await start() }
+            if let t = hands.thrown {
+                hands.thrown = nil
+                var quiet = Transaction(); quiet.disablesAnimations = true
+                withTransaction(quiet) { thrownID = t }
             }
-            if aimTo != nil { renderAimed = true }
-            renderFlown = true
-            var under = Transaction(); under.disablesAnimations = true
-            withTransaction(under) { fadingOut = true }
+            flown = true
+            FlickReceipt.thrown(receiptID)
+            liftedID = nil
+            answered = false; written = false
+            flyFrom = leftFrom
+            if target.image == nil { heldImage = theImage; softImage = theSoft }
+            if softImage == nil, let h = heldImage { Task { softImage = await ImageStore.shrunk(h, 16) } }
+            // Held where it is first: the tab changing under it lays the space around it out again.
+            if flickFrame.width > 0 { held = flickFrame }
+            if rendered {
+                // Not in memory: fetched now and put on the flight wherever it has got to.
+                if theImage == nil, target.image == nil, let u = URL(string: startingArt) ?? carried {
+                    Task {
+                        guard let i = await ImageStore.shared.load(u) else { return }
+                        heldImage = i
+                        RenderFlight.picture(i)
+                    }
+                }
+                if theAim != nil { renderAimed = true }
+                renderFlown = true
+                var under = Transaction(); under.disablesAnimations = true
+                withTransaction(under) { fadingOut = true }
+            }
+            // The Remote's tab is the long turn: it comes in the next one, after this one has been drawn and the flight and
+            // the dissolve are running in the render server, so nothing he sees waits on it. (A timer, not a task: a task
+            // queued on the main queue runs before the screen is drawn.)
+            let later = aimedAtRelease ? nil : theAim
+            let hand = { @MainActor in self.handOver(aim: later) }
+            if rendered { Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { hand() } } } else { hand() }
         }
-        // The Remote's tab is the long turn: it comes in the next one, after this one has been drawn and the flight and
-        // the dissolve are running in the render server, so nothing he sees waits on it. (A timer, not a task: a task
-        // queued on the main queue runs before the screen is drawn.)
-        let later = aimedAtRelease ? nil : aimTo
-        let hand = { @MainActor in self.handOver(aim: later) }
-        if rendered { Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { hand() } } } else { hand() }
+        if aimedAtRelease {
+            hands.sending = true
+            Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { rest() } }
+        } else { rest() }
     }
     func handOver(aim: CGRect? = nil) {
         SwipeLog.note("send hand-over")
@@ -2303,6 +2315,12 @@ final class HandBox {
     var hand = FlickHand(.list)
     var id: String?
     var base = Date()
+    // Inside the release of a throw (not a tap): the flight leaves at the finger's speed.
+    var throwing = false
+    // The row or card just thrown, to be hidden where it was once its flight is on the screen.
+    var thrown: String?
+    // A send whose flight is up and whose own business comes in the next turn: not to be begun twice.
+    var sending = false
 }
 // The finger by the screen's own clock: every touch's timestamp and place (each coalesced sample too), from its
 // touch-down, read off the window's own event delivery before any gesture sees it. Nothing is added to the gesture
@@ -2926,8 +2944,6 @@ struct ShelfFlick: ViewModifier {
         // A film or an episode with its list in hand goes from here, no page.
         var direct: (best: StremioStream, list: [StremioStream])?
         if ShelfSend.ref(item, source) != nil, !startUnderWay, let list = ShelfSend.list(item, source), let best = ShelfSend.best(list) { direct = (best, list) }
-        // The still raised under this throw, so only that one is lifted if he moves on before it sends.
-        var veilOf = -1
         // In the air from the moment he lets go, before anything else is done: the very picture that was under his finger
         // goes on from where it is at the speed he threw it, in the render server, so nothing that follows (the request,
         // the still, the Remote's long turn) can hold it at the release (it sat there from rest before, a smaller copy).
@@ -2943,17 +2959,27 @@ struct ShelfFlick: ViewModifier {
                                 tint: ImageStore.shared.cachedBand(u), wide: item.isYouTube)
             RenderFlight.rise(toward: slot)
         }
+        // Everything else (the request, the still, the Remote) in the next turn: this one ends with nothing changed but
+        // the flight, so it's on the screen in the very next frame. Done here, the start's own changes were drawn first
+        // and the card hung where he'd let go for a fifth of a second (CI 664153f, tv-shelf-flick-portrait 27.49-27.71).
+        let thrownFrom = from, sure = direct
+        if RenderFlight.flying {
+            Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { thrown(velocity: velocity, from: thrownFrom, direct: sure) } }
+        } else { thrown(velocity: velocity, from: thrownFrom, direct: sure) }
+    }
+    // The throw's own business, once its flight is in the air.
+    func thrown(velocity: CGSize, from thrownFrom: CGRect, direct: (best: StremioStream, list: [StremioStream])?) {
+        // The still raised under this throw, so only that one is lifted if he moves on before it sends.
+        var veilOf = -1
         if RenderFlight.flying {
             // The still of the shelf under it, the card's place empty: for a send under way, taken in the next turn from
             // what's already drawn (a fresh one forces the whole window to be drawn again first, here and now).
             if direct == nil { ScreenVeil.cover(underFlight: true, for: 3); veilOf = ScreenVeil.serial }
         }
-        // The request leaves in this same turn, the flight already running.
         if let d = direct { startNow(d.best, d.list, velocity: velocity) }
         // A film or an episode: sent from here, no page, with the list in hand; a moment for a list on its way, the card
         // in the air meanwhile; the page only when there's nothing to send without it.
         HandTrace.note("shelf-flying")
-        let thrownFrom = from
         if direct != nil { toRemote(); return }
         if let r = ShelfSend.ref(item, source), !startUnderWay {
             HandTrace.note("shelf-waiting")
