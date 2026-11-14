@@ -1273,7 +1273,7 @@ struct RemoteTab: View {
     @ObservedObject private var epPanel = EpisodesPanel.shared
     // The episodes, over what they're given: a page's whole width or the left column, with a margin the pad's size.
     @ViewBuilder func episodesPanel() -> some View {
-        if epPanel.open && (session || model.status?.session != nil) { EpisodePanel().padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 12).transition(.opacity) }
+        if epPanel.open && (session || model.status?.session != nil) { EpisodePanel().padding(.horizontal, 12).padding(.top, -10).padding(.bottom, 12).transition(.opacity) }
     }
     var state: String {
         // Not reaching it is said once, by the red note at the top; "Connecting…" under it contradicted it.
@@ -1455,13 +1455,27 @@ struct RemoteTab: View {
     // between them, in the height the posture gives it.
     func padRow(_ grid: RemoteGrid) -> some View {
         let d = grid.padWidth
-        return VStack(spacing: RemoteGrid.volGap) {
-            HStack(spacing: RemoteGrid.sideGap) {
-                VolumeKey(down: true, size: grid.key)
-                pad.frame(width: d, height: grid.pad)
-                VolumeKey(down: false, size: grid.key)
+        return Group {
+            if grid.volBelow {
+                // A tall column: the pad as wide as the column, − bar + on a row under it, the keys' own size.
+                VStack(spacing: 14) {
+                    pad.frame(width: d, height: grid.pad)
+                    HStack(spacing: RemoteGrid.sideGap) {
+                        VolumeKey(down: true, size: grid.key)
+                        VolumeBar()
+                        VolumeKey(down: false, size: grid.key)
+                    }
+                }
+            } else {
+                VStack(spacing: RemoteGrid.volGap) {
+                    HStack(spacing: RemoteGrid.sideGap) {
+                        VolumeKey(down: true, size: grid.key)
+                        pad.frame(width: d, height: grid.pad)
+                        VolumeKey(down: false, size: grid.key)
+                    }
+                    VolumeBar().frame(width: d)
+                }
             }
-            VolumeBar().frame(width: d)
         }
         .frame(width: grid.width)
         .opacity(unreachable || asleep || away != nil ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
@@ -1655,9 +1669,9 @@ struct RemoteTab: View {
                         // anchored from the foot, where the thumbs are, the transport's row always counted; the spare room is
                         // the one gap between them. Nothing moves either way as something starts or stops.
                         if !lay {
-                            picture(closable: true).frame(width: grid.width, height: grid.width * 9 / 16).transition(.opacity)
-                            if !musicShown { progress.frame(width: grid.width) }
-                            episodes.frame(width: grid.width); music.frame(width: grid.width)
+                            picture(closable: true).frame(width: grid.pic ?? grid.width, height: (grid.pic ?? grid.width) * 9 / 16).transition(.opacity)
+                            if !musicShown { progress.frame(width: grid.pic ?? grid.width) }
+                            episodes.frame(width: grid.pic ?? grid.width); music.frame(width: grid.pic ?? grid.width)
                         } else if typingPic >= grid.width * 0.5 {
                             picture(closable: true).frame(width: typingPic, height: typingPic * 9 / 16).transition(.opacity)
                         }
@@ -1778,46 +1792,51 @@ struct RemoteGrid: Equatable {
     var width: CGFloat, key: CGFloat, play: CGFloat
     // The pad's one diameter, when the posture works it out from its height; otherwise a little over half the column.
     var padSet: CGFloat?
+    // Folded, the picture and what hangs from it can be narrower than the keys' column (the height decides it).
+    var pic: CGFloat?
+    // Volume: − and + either side of the pad (a short column), or on a row of their own under it (a tall one).
+    var volBelow = false
     var gap: CGFloat { (width - 5 * key) / 4 }
     var pad: CGFloat { padSet ?? max(110, (width * 0.54).rounded()) }
     // The keys' own room: the two rows (the keys, a gap, the transport with ⏯ a quarter bigger).
     var rows: CGFloat { key + 12 + play }
-    // The volume keys sit either side of the pad and its level bar under it: the ring is the width between the keys.
     static let sideGap: CGFloat = 14, volGap: CGFloat = 10, barH: CGFloat = 6
     static var volRoom: CGFloat { volGap + barH }
-    var padWidth: CGFloat { max(60, min(pad, width - 2 * key - 2 * Self.sideGap)) }
-    // Five keys and four gaps make exactly the width: as big as the width allows (a gap of 8 pt at least), 88 pt at most,
-    // 44 at least. Open and folded alike the keys are thumb-sized, not a remote's 54 pt on a wide screen (Richard, 2026-11-14).
-    static func keys(_ width: CGFloat, maxKey: CGFloat = 88) -> RemoteGrid {
-        let w = max(width, 212)
+    var padWidth: CGFloat { volBelow ? min(pad, width) : max(60, min(pad, width - 2 * key - 2 * Self.sideGap)) }
+    // Five keys and four gaps make exactly the width: as big as the width allows (a gap of 8 pt at least), 96 pt at most,
+    // 44 at least; the column is 520 pt at most, so a wide screen never spreads them. Thumb-sized, not a remote's 54 pt
+    // (Richard, 2026-11-14).
+    static func keys(_ width: CGFloat, maxKey: CGFloat = 96) -> RemoteGrid {
+        let w = min(max(width, 212), 520)
         let k = min(maxKey, max(44, ((w - 32) / 5).rounded(.down)))
         return RemoteGrid(width: w, key: k, play: (k * 68 / 54).rounded())
     }
-    // A column with a height to fill: the keys take what the width gives but leave the pad about twice a key across, and
-    // the pad takes all the rest (down to 100 pt, up to the column's width). The top-to-foot gaps are 14 pt: above the pad,
-    // and between the pad and the keys.
+    // Given the height left for the pad and the volume, choose where the volume goes and how big the pad is: the ring
+    // as large as fits (100 pt at least, the column's width at most).
+    mutating func place(room: CGFloat) {
+        let side = min(width - 2 * key - 2 * Self.sideGap, room - Self.volRoom)
+        let below = min(width, room - 14 - key)
+        if below > side * 1.2, below >= 100 { volBelow = true; padSet = below.rounded(.down) }
+        else { volBelow = false; padSet = max(100, side.rounded(.down)) }
+    }
+    // A column with a height to fill: the keys take what the width gives but leave the pad room, and the pad takes all
+    // the rest. The gaps are 14 pt: above the pad, and between the pad and the keys.
     static func fit(width: CGFloat, height: CGFloat) -> RemoteGrid {
         var g = keys(width)
         let kH = ((height - 28 - volRoom - 12) / 4.26).rounded(.down)
         if kH < g.key { g = keys(width, maxKey: max(52, kH)) }
-        g.padSet = max(100, min(g.width, (height - 28 - volRoom - g.rows).rounded(.down)))
+        g.place(room: height - 28 - g.rows)
         return g
     }
-    // Folded, everything is in one column and its width is the unknown: the widest (to the room's own width) at which
-    // the picture, the room for the bar and the episode line, a pad of at least 110 pt and both rows of keys all fit the
-    // height. The transport's row is always counted, so the picture is one size whether or not something is on. The spare
-    // height goes to the pad, up to the column's width (never to gaps), and it is fixed per posture.
+    // Folded, the keys are as big as the column's width allows, and the picture, the room for the bar and the episode
+    // line and the pad share the height: the picture as wide as fits (the column's width at most, 200 pt at least), the
+    // pad the rest. Fixed per posture, never by what's on.
     static func folded(width: CGFloat, height: CGFloat, under: CGFloat) -> RemoteGrid {
-        var w = min(width, 520)
-        var g = keys(w)
-        while w > 220 {
-            g = keys(w)
-            let need = w * 9 / 16 + under + 14 + 110 + volRoom + 14 + g.rows
-            if need <= height { break }
-            w -= 2
-        }
-        let spare = height - (w * 9 / 16 + under + 14 + volRoom + 14 + g.rows)
-        g.padSet = max(110, min(g.width, spare.rounded(.down)))
+        var g = keys(width)
+        let avail = height - (under + 14 + 14 + g.rows)
+        let pic = min(g.width, max(200, ((avail - 110 - volRoom) * 16 / 9).rounded(.down)))
+        g.place(room: avail - pic * 9 / 16)
+        g.pic = pic
         return g
     }
 }
