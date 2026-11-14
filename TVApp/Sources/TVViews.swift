@@ -1505,30 +1505,31 @@ struct RemoteTab: View {
     private var keysColumn: some View {
         GeometryReader { geo in
             let stacked = stackedUpright
-            let grid = RemoteGrid.keys(min(geo.size.width, vSize == .compact ? 260 : 380, stacked && pictureWidth > 120 ? pictureWidth : .infinity))
+            // The column's whole width and height, margins aside: keys and pad fill it (Richard, 2026-11-14: "the buttons
+            // are so small"), the pad taking what height the two rows of keys leave.
+            let grid = RemoteGrid.fit(width: geo.size.width, height: geo.size.height)
             if stacked {
                 // Open upright, under the picture's pane: one pad diameter in every state, hung from the top with the keys
                 // under it and the spare room at the foot (gate 2: 160 pt with a show, 216 with Mint, and moving 28 pt).
                 // Typing, it gives way so the bar and the keys stay above the keyboard.
                 // Anchored from the foot, where the thumbs are, the transport's row always counted (Remote rule,
                 // 2026-11-11). Typing, the pad steps aside and the bar and keys sit just above the keyboard.
-                let d = min((grid.width * 0.6).rounded(), 210)
                 VStack(spacing: 14) {
                     Spacer(minLength: 0)
-                    if !lay { pad.frame(width: grid.width, height: d).transition(.opacity) }
-                    keysBlock(grid).frame(height: lay ? nil : grid.key + 12 + grid.play, alignment: .top)
+                    if !lay { pad.frame(width: grid.width, height: grid.pad).transition(.opacity) }
+                    keysBlock(grid).frame(height: lay ? nil : grid.rows, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // Typing, the pad steps aside here too, rather than shrink to a 60 pt miniature (Remote gate 4).
                 VStack(spacing: 14) {
-                    if lay { Spacer(minLength: 0) } else { pad.frame(maxWidth: grid.width).frame(maxHeight: .infinity).transition(.opacity) }
+                    if lay { Spacer(minLength: 0) } else { pad.frame(maxWidth: grid.width, maxHeight: grid.pad).frame(maxHeight: .infinity).transition(.opacity) }
                     keysBlock(grid)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(.horizontal, 20).padding(.bottom, 16)
+        .padding(.horizontal, 12).padding(.bottom, 16)
         .modifier(KeysArrive(gate: keysGate))
     }
     // The folded column as it was before typing began, kept while typing so the keys don't move or shrink.
@@ -1575,7 +1576,7 @@ struct RemoteTab: View {
                         // Typing, the keyboard covers nearly all of the pane under the fold, so the bar and the keys' row
                         // come up above it, under the picture's pane (CI 219df47: under the fold they sat beneath the keyboard).
                         // At the column's width from before typing: the picture shrinks to give up the height, the keys don't.
-                        let tg = RemoteGrid.keys(min(g.size.width - 40, 380, calmPictureWidth > 120 ? calmPictureWidth : .infinity))
+                        let tg = RemoteGrid.keys(min(g.size.width - 40, 380, calmPictureWidth > 120 ? calmPictureWidth : .infinity), maxKey: 54)
                         let rows = 50 + 12 + tg.key
                         VStack(spacing: 14) {
                             side(apps: false).frame(height: max(0, crease.minY - 14 - rows - 8))
@@ -1752,27 +1753,45 @@ private extension View {
 // 54 pt keys at most (a remote's own size) and 40 at least; ⏯ is a quarter bigger, as it always was.
 struct RemoteGrid: Equatable {
     var width: CGFloat, key: CGFloat, play: CGFloat
+    // The pad's one diameter, when the posture works it out from its height; otherwise a little over half the column.
+    var padSet: CGFloat?
     var gap: CGFloat { (width - 5 * key) / 4 }
-    // Folded, the pad's one diameter: a little over half the column (gate, 2026-11-11: it was 108 to 277 pt by state).
-    var pad: CGFloat { max(110, (width * 0.54).rounded()) }
-    static func keys(_ width: CGFloat) -> RemoteGrid {
+    var pad: CGFloat { padSet ?? max(110, (width * 0.54).rounded()) }
+    // The keys' own room: the two rows (the keys, a gap, the transport with ⏯ a quarter bigger).
+    var rows: CGFloat { key + 12 + play }
+    // Five keys and four gaps make exactly the width: as big as the width allows (a gap of 8 pt at least), 88 pt at most,
+    // 44 at least. Open and folded alike the keys are thumb-sized, not a remote's 54 pt on a wide screen (Richard, 2026-11-14).
+    static func keys(_ width: CGFloat, maxKey: CGFloat = 88) -> RemoteGrid {
         let w = max(width, 212)
-        let k = min(54, max(40, ((w - 48) / 5).rounded(.down)))
+        let k = min(maxKey, max(44, ((w - 32) / 5).rounded(.down)))
         return RemoteGrid(width: w, key: k, play: (k * 68 / 54).rounded())
     }
-    // Folded, everything is in one column and its width is the unknown: the widest (to the room's own width, 380 pt at
-    // most) at which the picture, the room for the bar and the episode line, a pad in proportion (44 % of the width,
-    // 110 pt at least) and both rows of keys all fit the height. The transport's row is always counted, so the picture
-    // is one size whether or not something is on, and the pad has the spare height when nothing is.
+    // A column with a height to fill: the keys take what the width gives but leave the pad about twice a key across, and
+    // the pad takes all the rest (down to 100 pt, up to the column's width). The top-to-foot gaps are 14 pt: above the pad,
+    // and between the pad and the keys.
+    static func fit(width: CGFloat, height: CGFloat) -> RemoteGrid {
+        var g = keys(width)
+        let kH = ((height - 28 - 12) / 4.26).rounded(.down)
+        if kH < g.key { g = keys(width, maxKey: max(52, kH)) }
+        g.padSet = max(100, min(g.width, (height - 28 - g.rows).rounded(.down)))
+        return g
+    }
+    // Folded, everything is in one column and its width is the unknown: the widest (to the room's own width) at which
+    // the picture, the room for the bar and the episode line, a pad of at least 110 pt and both rows of keys all fit the
+    // height. The transport's row is always counted, so the picture is one size whether or not something is on. The spare
+    // height goes to the pad, up to the column's width (never to gaps), and it is fixed per posture.
     static func folded(width: CGFloat, height: CGFloat, under: CGFloat) -> RemoteGrid {
-        var w = min(width, 380)
+        var w = min(width, 520)
+        var g = keys(w)
         while w > 220 {
-            let g = keys(w)
-            let need = w * 9 / 16 + under + 14 + g.pad + 14 + g.key + 12 + g.play
+            g = keys(w)
+            let need = w * 9 / 16 + under + 14 + 110 + 14 + g.rows
             if need <= height { break }
             w -= 2
         }
-        return keys(w)
+        let spare = height - (w * 9 / 16 + under + 14 + 14 + g.rows)
+        g.padSet = max(110, min(g.width, spare.rounded(.down)))
+        return g
     }
 }
 struct PictureColumn: Layout {
