@@ -14,6 +14,8 @@ struct ConsoleState: Decodable, Equatable {
     var rotate: Bool?
     var animations: String?
     var display: String?
+    // Glance from bed: big, dim figures to read across the room (Richard, 2026-11-13).
+    var glance: Bool?
 }
 
 enum ConsolePlace {
@@ -256,11 +258,28 @@ struct ConsoleTab: View {
         .disabled(!running || remote.busy != nil)
     }
 
+    // Glance mode, first under what's on the screen: the one he reaches for from bed.
+    var glance: some View {
+        Section {
+            Toggle(isOn: Binding(get: { st?.glance == true }, set: { on in remote.send(model, "glance", "glance", on ? "on" : "off") })) {
+                HStack(spacing: 12) {
+                    Image(systemName: "bed.double").foregroundStyle(macBlue).frame(width: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Glance mode").font(.headline)
+                        Text("Big, dim figures to read from bed").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if remote.busy == "glance" { ProgressView().padding(.leading, 6) }
+                }
+            }
+            .tint(macBlue)
+        } footer: { failLine(["glance"]) }
+        .disabled(!running || remote.busy != nil)
+    }
     var body: some View {
         Group {
             switch side {
-            case .all: nowCard; boards; pages; motion
-            case .left: nowCard; boards
+            case .all: nowCard; glance; boards; pages; motion
+            case .left: nowCard; glance; boards
             case .right: pages; motion
             }
         }

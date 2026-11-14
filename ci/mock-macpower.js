@@ -37,7 +37,7 @@ const feeds = {
 };
 // The Console on the Mac as the bridge relays it (API.md "Console remote"): a command is acked after 0.7 s, and changes
 // the state that GET /api/mac/console reports.
-const consoleState = { running: true, frontmost: true, fullscreen: true, page: 'temps', board: null, rotate: false, animations: 'full', display: 'awake', at: Date.now() };
+const consoleState = { running: true, frontmost: true, fullscreen: true, page: 'temps', board: null, rotate: false, animations: 'full', display: 'awake', glance: false, at: Date.now() };
 module.exports = (q, s) => {
   const u = new URL(q.url, 'http://x');
   if (u.pathname === '/api/mac/console' && q.method === 'GET') { s.end(JSON.stringify(consoleState)); return true; }
@@ -51,6 +51,7 @@ module.exports = (q, s) => {
       if (cmd === 'page') { consoleState.page = arg; consoleState.board = null; }
       if (cmd === 'board') { consoleState.board = arg === 'off' ? null : arg; if (arg !== 'off') consoleState.page = 'boards'; }
       if (cmd === 'rotate') consoleState.rotate = arg === 'on';
+      if (cmd === 'glance') consoleState.glance = arg === 'on';
       if (cmd === 'animations') consoleState.animations = arg;
       if (cmd === 'display') consoleState.display = arg === 'wake' ? 'awake' : 'asleep';
       if (cmd === 'show') { consoleState.running = true; consoleState.frontmost = true; consoleState.fullscreen = true; }
