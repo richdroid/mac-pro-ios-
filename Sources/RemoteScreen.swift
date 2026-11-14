@@ -207,7 +207,7 @@ final class RemoteScreen: ObservableObject {
         attempts = 0
         connect(base: base)
     }
-    func dropConnection() { socket?.cancel(with: .abnormalClosure, reason: nil) }
+    func dropConnection() { socket?.cancel(with: .abnormalClosure, reason: nil); forgetMovesInFlight() }
 
     private func watchSlowReconnect() {
         guard slowTimer == nil || slowTimer!.isCancelled else { return }
@@ -426,7 +426,7 @@ final class RemoteScreen: ObservableObject {
             width = w; height = h
             size = CGSize(width: w, height: h)
             cursor = CGPoint(x: w / 2, y: h / 2)
-            phase = .connected
+            phase = .connected; forgetMovesInFlight()
             slowTimer?.cancel(); slowReconnect = false
             attempts = 0
             // Tells the bridge this end speaks its extras; it answers in a text frame. A plain RFB bridge would pass the
@@ -482,7 +482,9 @@ final class RemoteScreen: ObservableObject {
     }
     // Moves handed to the socket and not yet written out. Past two, the newest position waits (only it matters) instead
     // of queueing behind the older ones on a slow link, so the pointer never replays the path it already took.
-    private var movesInFlight = 0
+    private var movesInFlight = 0 { didSet { if movesInFlight < 0 { movesInFlight = 0 } } }
+    // A dropped or new connection forgets sends that will never report back, so the pointer can't stay frozen.
+    func forgetMovesInFlight() { movesInFlight = 0; if pendingMove { flushMove() } }
     private func movesDone() {
         movesInFlight = max(0, movesInFlight - 1)
         if pendingMove, movesInFlight < 2 { flushMove() }
