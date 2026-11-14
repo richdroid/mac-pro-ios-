@@ -507,7 +507,7 @@ function chumbyScene(q, s) {
     return false;
   }
   if (a === 'shot' && !/^\/slow\//.test(q.url)) return shot();
-  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany)\//);
+  const m = q.url.match(/^\/(ringing|snoozed|dead|slow|failonce[a-z]*|fail|live|liveringing|skipped|playing|night|songchange|orphan|moved|nap|missed|soundsreal|soundsmany|soundsfail)\//);
   if (!m) return false;
   const scene = m[1];
   // failonce…: a live copy of the sample whose first save is turned down after 3 s ("can't write") and whose next is
@@ -516,6 +516,13 @@ function chumbyScene(q, s) {
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
   if (scene.startsWith('sounds')) {
     if (a === 'hist') return json(soundsHist(scene));
+    // soundsfail: every save is turned down after 3 s, for the film of a pick that doesn't reach the Chumby.
+    if (scene === 'soundsfail') {
+      if (q.method === 'POST') { q.resume(); setTimeout(() => json({ ok: false, error: "can't write" }), 3000); return true; }
+      if (a === 'state') return json(stateNow(soundsState()));
+      if (a === 'sys') return json({ ...data.sys, ring: '' });
+      return false;
+    }
     if (!chumbyLive[scene]) chumbyLive[scene] = { sys: { ...data.sys, ring: '' }, state: soundsState() };
   }
   if (chumbyLive[scene]) {

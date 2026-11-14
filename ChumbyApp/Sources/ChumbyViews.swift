@@ -2098,6 +2098,22 @@ struct SoundsTab: View {
     // starts at the row's inset and ends at the same trailing edge with its chevron, and a long station name takes a
     // second line rather than losing its words.
     @State private var picked: [String: String] = [:]
+    // A chosen value, as every menu on Sounds draws it: its words on a soft box with the menu's chevron, left on the
+    // row's inset under its label. Shrink-wrapped to its words, so the menu's target is only the value (a full-width box
+    // caught page drags that began on it, and the menu's press-and-drag picked a station: gate on b849752). A long
+    // name takes more lines, never "…". A new value is drawn in place, never crossfaded over the old.
+    func valueBox(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(text).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+            Image(systemName: "chevron.up.chevron.down").imageScale(.small).foregroundStyle(.secondary)
+        }
+        .font(.subheadline.weight(.medium))
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        // 16 pt corners: a capsule on one line, and the same curve on two (not a 26 pt pill).
+        .background(Color.primary.opacity(dark ? 0.12 : 0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .transaction { $0.animation = nil }
+    }
     func soundRow(_ title: String, _ detail: String, _ a: Alarm, mark: String?, choose: @escaping (Alarm) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
@@ -2115,8 +2131,9 @@ struct SoundsTab: View {
                     picked[a.key] = b.soundText
                     MenuClose.then {
                         choose(b)
-                        // Let go once the alarm says it (below), or after a while if the save never lands.
-                        Task { @MainActor in try? await Task.sleep(nanoseconds: 8_000_000_000); picked[a.key] = nil }
+                        // His own alarms take the change at once (kept, with Retry, if it fails), so the words are
+                        // the alarm's own from here. Calendar alarms let go when their save answers (below).
+                        if mark != nil { picked[a.key] = nil }
                     }
                 })) {
                     Section("Tones") { ForEach(model.state.tones, id: \.self) { Text($0).tag("beep:" + $0) } }
@@ -2126,20 +2143,7 @@ struct SoundsTab: View {
                     if a.soundTag(streams: model.state.streams).isEmpty { Text(a.soundText).tag("") }
                 }
             } label: {
-                // Shrink-wrapped to its words, left on the row's inset under the alarm: every value starts at one x,
-                // and the menu's target is only the value (a full-width box caught page drags that began on it, and
-                // the menu's press-and-drag picked a station: gate on b849752). A long name takes more lines, never "…".
-                // The new value is drawn once the menu has gone (MenuClose), in place, never crossfaded over the old.
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(picked[a.key] ?? a.soundText).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                    Image(systemName: "chevron.up.chevron.down").imageScale(.small).foregroundStyle(.secondary)
-                }
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                // 16 pt corners: a capsule on one line, and the same curve on two (not a 26 pt pill).
-                .background(Color.primary.opacity(dark ? 0.12 : 0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .transaction { $0.animation = nil }
+                valueBox(picked[a.key] ?? a.soundText)
             }
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel("What \(title) plays")
@@ -2209,7 +2213,8 @@ struct SoundsTab: View {
                 }
                 if let c = calendarSound {
                     soundRow("Calendar alarms", "Set by your calendar", c, mark: nil) { b in
-                        Task { if let why = await model.saveCalendarTemplate(b) { model.fail("calsound", why) } }
+                        // Back to what the Chumby has, in one cut, if the save fails.
+                        Task { if let why = await model.saveCalendarTemplate(b) { model.fail("calsound", why) }; picked[c.key] = nil }
                     }
                     if let f = model.failed("calsound") { FailNote(text: f) }
                 }
@@ -2231,9 +2236,24 @@ struct SoundsTab: View {
                 }
                 MarkNote(mark: "alarmVolume").noteRow(lead: 0)
                 }
-                Picker("Fade in", selection: Binding(get: { model.state.fade }, set: { model.change(.fade($0)) })) {
-                    ForEach([(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")], id: \.0) { Text($0.1).tag($0.0) }
+                // Fade in draws its value as the alarms' values do: label, then the value box under it (lead, 11-13).
+                let fades = [(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")]
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Fade in").font(.subheadline.weight(.semibold))
+                    Menu {
+                        Picker("Fade in", selection: Binding(get: { model.state.fade }, set: { v in
+                            guard v != model.state.fade else { return }
+                            picked["fade"] = fades.first { $0.0 == v }?.1
+                            MenuClose.then { model.change(.fade(v)); picked["fade"] = nil }
+                        })) {
+                            ForEach(fades, id: \.0) { Text($0.1).tag($0.0) }
+                        }
+                    } label: { valueBox(picked["fade"] ?? fades.first { $0.0 == model.state.fade }?.1 ?? "\(model.state.fade) seconds") }
+                    .accessibilityLabel("Fade in")
+                    .fixedSize(horizontal: false, vertical: true)
                 }
+                .padding(.top, 4).padding(.bottom, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 MarkNote(mark: "fade").noteRow(lead: 0)
             } header: { SectionHead(icon: "alarm", text: "Alarms play", color: ChumbyPalette.sub(dark)) }
             .animation(.snappy, value: mine.map(\.key))

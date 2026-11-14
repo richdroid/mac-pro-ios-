@@ -148,6 +148,29 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pick-back$x.png
             kill -INT $REC; wait $REC; echo "pick$x exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            # Film: picks the Chumby turns down. His own alarm keeps the pick with its Retry note; the calendar alarms'
+            # value goes back to what the Chumby has, in one cut. Then Fade in's value box, opened and picked.
+            fresh $M/soundsfail
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-pickfail$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/soundsfail -tab 3
+            sleep 14
+            $D "$DEVICE" drag $px 0.85 $px 0.35 1.0 || echo "scroll failed"; sleep 3
+            $D "$DEVICE" tap "What 11:00 AM plays" || echo "open failed"; sleep 2
+            $D "$DEVICE" tap "My Bloody Valentine and Shoegaze Essentials Radio" || echo "pick failed"; sleep 6
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pickfail-own$x.png
+            $D "$DEVICE" drag $px 0.8 $px 0.45 1.0 || echo "scroll failed"; sleep 3
+            $D "$DEVICE" tap "What Calendar alarms plays" || echo "open cal failed"; sleep 2
+            $D "$DEVICE" tap "Sunny Day Real Estate Radio" || echo "pick cal failed"; sleep 1
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pickfail-calpicked$x.png
+            sleep 6
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pickfail-cal$x.png
+            $D "$DEVICE" tap "Fade in" || echo "open fade failed"; sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-fade-menu$x.png
+            $D "$DEVICE" tap "1 minute" || echo "pick fade failed"; sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-fade-picked$x.png
+            kill -INT $REC; wait $REC; echo "pickfail$x exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
           $D "$DEVICE" pose closed; sleep 5
           posture 1 "" 0.64 0.72 0.1 0.3 "0.45 0.6 0.75"
