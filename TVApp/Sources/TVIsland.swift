@@ -5,6 +5,35 @@ import Foundation
 import ImageIO
 import UIKit
 
+#if targetEnvironment(macCatalyst)
+// Live Activities reach Mac Catalyst only in 27.3, and this target builds for 26: on the Mac there is no card. These
+// stand in for ActivityKit's types there (a module's own names win over an imported one's), so everything below and
+// its callers compile unchanged and simply find nothing live.
+struct ActivityContent<State: Codable & Hashable> {
+    var state: State
+    var staleDate: Date?
+}
+struct ActivityAuthorizationInfo {
+    var areActivitiesEnabled: Bool { false }
+}
+protocol IslandCardAttributes { associatedtype ContentState: Codable & Hashable }
+extension TVIslandAttributes: IslandCardAttributes {}
+struct Activity<Attributes: IslandCardAttributes> {
+    enum State { case active, stale }
+    enum DismissalPolicy { case immediate }
+    enum PushType { case token }
+    struct Unavailable: Error {}
+    static var activities: [Activity] { [] }
+    let id: String
+    var content: ActivityContent<Attributes.ContentState>
+    var activityState: State { .active }
+    var pushTokenUpdates: AsyncStream<Data> { AsyncStream { $0.finish() } }
+    func update(_ content: ActivityContent<Attributes.ContentState>) async {}
+    func end(_ content: ActivityContent<Attributes.ContentState>?, dismissalPolicy: DismissalPolicy) async {}
+    static func request(attributes: Attributes, content: ActivityContent<Attributes.ContentState>, pushType: PushType?) throws -> Activity { throw Unavailable() }
+}
+#endif
+
 // What's playing on the TV, in the Dynamic Island, with a play and pause button.
 struct TVIslandAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
