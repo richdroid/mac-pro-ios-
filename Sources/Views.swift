@@ -2006,7 +2006,10 @@ struct UpgradeTab: View {
     // Folded and upright the log gets the room left under the facts: its newest lines, whole, as many as fit, and a tap
     // opens the whole log full screen (Richard, 2026-11-13: "log is too small when folded"; five lines, the last cut).
     @State private var fullLog = false
-    @State private var logRoom: CGFloat = 0
+    @State private var pageHeight: CGFloat = 0
+    @State private var aboveHeight: CGFloat = 0
+    // What's left under Details (less the Log heading and the gaps), and at least twelve lines.
+    var logRoom: CGFloat { max(LogPreview.twelveLines, pageHeight - aboveHeight - 26 - 44 - 12) }
     var logPreview: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
@@ -2014,15 +2017,9 @@ struct UpgradeTab: View {
                 Spacer()
                 Button("Show all") { fullLog = true }.font(.body).foregroundStyle(macBlue).padding(.trailing, 20)
             }
-            // The room is measured on an empty frame that takes all the height left; the card in it is only as tall as the
-            // lines it shows (CI f3a3118: measured on the button, it never saw the room and kept to two rows).
-            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { logRoom = $0 }
-                .overlay(alignment: .top) {
-                    Button { fullLog = true } label: { LogPreview(log: s.upgrade.log, room: logRoom) }
-                        .buttonStyle(PressStyle())
-                        .accessibilityLabel("Log, newest lines").accessibilityHint("Opens the whole log")
-                }
+            Button { fullLog = true } label: { LogPreview(log: s.upgrade.log, room: logRoom) }
+                .buttonStyle(PressStyle())
+                .accessibilityLabel("Log, newest lines").accessibilityHint("Opens the whole log")
         }
         .screenCover(isPresented: $fullLog) { FullLog(log: s.upgrade.log).environmentObject(model) }
         .task { if model.pose == "fulllog" { try? await Task.sleep(nanoseconds: 1_200_000_000); fullLog = true } }
@@ -2035,20 +2032,29 @@ struct UpgradeTab: View {
     var body: some View {
         switch side {
         case .all:
-            // Only the log's lines scroll; the summary and the rows stay put above them.
             // Sections 26 pt apart, the other pages' heading rhythm (designer gate, 2026-11-13: 19 pt here against 34 pt on
             // Console, Connections and Storage, card foot to next heading).
-            VStack(alignment: .leading, spacing: 26) {
-                // "This Mac" over the status card in every posture, as open flat (designer, 2026-11-11).
-                VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
-                agent
-                VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
-                if logShown { logPreview.frame(maxHeight: .infinity, alignment: .top) }
+            // The log takes the room left under Details, and never less than twelve lines: folded that is more than the
+            // screen has, so the page scrolls to it (Richard, 2026-11-13: "log is too small when folded"; CI 35659b7 had
+            // room for one entry).
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    VStack(alignment: .leading, spacing: 26) {
+                        // "This Mac" over the status card in every posture, as open flat (designer, 2026-11-11).
+                        VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
+                        agent
+                        VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { aboveHeight = $0 }
+                    if logShown { logPreview }
+                }
+                // With the side bar beside the page, the cards end at its edge, as the list cards do. Open in portrait the
+                // tabs are along the foot and nothing is there: the cards ran into the display's edge and lost their corners.
+                .padding(.trailing, trailingInset > 20 ? 0 : 20).padding(.bottom, 12)
             }
-            // With the side bar beside the page, the cards end at its edge, as the list cards do. Open in portrait the tabs
-            // are along the foot and nothing is there: the cards ran into the display's edge and lost their right corners.
-            .padding(.trailing, trailingInset > 20 ? 0 : 20).padding(.bottom, 12)
-            .frame(maxHeight: .infinity, alignment: .top)
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollEdgeEffectHidden(true, for: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { trailingInset = $0 }
         case .left:
             // A header of its own, like the details' beside it, so both panes' first cards start on one line.
@@ -2149,6 +2155,7 @@ struct LogPreview: View {
     static let charWidth: CGFloat = 7.8
     #endif
     static let gap: CGFloat = 3
+    static var twelveLines: CGFloat { 12 * lineHeight + 11 * gap + 28 }
     // Without the year and the seconds, so more of each line fits: "11-12 03:30 tick: macOS 26.7.2".
     static func short(_ l: String) -> String {
         guard l.count > 20, l.range(of: #"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d"#, options: .regularExpression) != nil else { return l }
