@@ -1548,9 +1548,9 @@ struct RemoteTab: View {
                 // Typing, it gives way so the bar and the keys stay above the keyboard.
                 // Anchored from the foot, where the thumbs are, the transport's row always counted (Remote rule,
                 // 2026-11-11). Typing, the pad steps aside and the bar and keys sit just above the keyboard.
-                VStack(spacing: 14) {
-                    Spacer(minLength: 0)
-                    if !lay { padRow(grid).transition(.opacity) }
+                VStack(spacing: 0) {
+                    Spacer(minLength: 14)
+                    if !lay { padRow(grid).transition(.opacity); Spacer(minLength: 14) }
                     keysBlock(grid).frame(height: lay ? nil : grid.rows, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
