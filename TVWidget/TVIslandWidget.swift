@@ -1,6 +1,7 @@
 #if os(iOS)
 import ActivityKit
 import AppIntents
+import ImageIO
 import SwiftUI
 import UIKit
 import WidgetKit
@@ -28,6 +29,22 @@ private func glyphTint(_ app: String) -> Color {
 // there's room (a poster upright, an album square, a still wide, to 4:3 at most); cut square for the small island.
 // Corners as the system's own covers have them, small, so it reads as a cover and never as an app's icon. With none,
 // the kind of thing on a quiet tile, the size a cover would be, never a loose glyph.
+// The cover as the card draws it: decoded at no more than the size it's shown at (the activity's own thumbnail is 168 px
+// at most), never as a full UIImage. The widget extension shares one small memory allowance with every widget, and an
+// extension over it is ended: the Lock Screen and the island then draw only grey placeholders (2026-11-14).
+enum IslandArt {
+    private static let cache = NSCache<NSData, UIImage>()
+    static func image(_ d: Data) -> UIImage? {
+        let key = d as NSData
+        if let i = cache.object(forKey: key) { return i }
+        guard let src = CGImageSourceCreateWithData(d as CFData, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                                                                   kCGImageSourceShouldCacheImmediately: true, kCGImageSourceThumbnailMaxPixelSize: 168] as CFDictionary) else { return nil }
+        let i = UIImage(cgImage: cg)
+        cache.setObject(i, forKey: key, cost: cg.width * cg.height * 4)
+        return i
+    }
+}
 struct IslandCover: View {
     let state: TVIslandAttributes.ContentState
     var height: CGFloat
@@ -37,7 +54,7 @@ struct IslandCover: View {
     var widest: CGFloat = 1.33
     var body: some View {
         let radius: CGFloat = height >= 40 ? 6 : 5
-        if let d = state.art, let i = UIImage(data: d) {
+        if let d = state.art, let i = IslandArt.image(d) {
             let shape = i.size.width / max(i.size.height, 1)
             Image(uiImage: i).resizable().aspectRatio(contentMode: .fill)
                 .frame(width: height * (square ? 1 : min(max(shape, 0.66), widest)), height: height)
@@ -45,9 +62,9 @@ struct IslandCover: View {
                 .overlay { RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(0.14), lineWidth: 0.5) }
                 .accessibilityHidden(true)
         } else {
-            Image(systemName: glyph(state.app)).font(.system(size: height * 0.42, weight: .semibold)).foregroundStyle(glyphTint(state.app))
+            Image(systemName: glyph(state.app)).font(.system(size: height * (height < 30 ? 0.5 : 0.42), weight: .semibold)).foregroundStyle(glyphTint(state.app))
                 .frame(width: height * (square || state.app == "Mint" ? 1 : 0.72), height: height)
-                .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .background(glyphTint(state.app).opacity(0.28), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
                 .accessibilityHidden(true)
         }
     }
@@ -113,7 +130,7 @@ struct IslandTime: View {
             }
         }
         .font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.62)).lineLimit(1)
-        .frame(width: (long ? 54 : 38) + (left ? 8 : 0), alignment: left ? .trailing : .leading)
+        .frame(width: (long ? 58 : 42) + (left ? 8 : 0), alignment: left ? .trailing : .leading)
     }
 }
 // Play or pause, saying what a press will do, as every player's does: a bare white glyph, as the system's card has, in
@@ -293,8 +310,10 @@ struct IslandCompactTrailing: View {
     var body: some View {
         if stale || !state.playing { EmptyView() }
         else if let a = state.start, let b = state.end, b > a {
-            Text(timerInterval: a...b, countsDown: true).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(TVLook.accent)
-                .multilineTextAlignment(.trailing).lineLimit(1).frame(width: (state.length ?? 0) >= 3600 ? 56 : 40, alignment: .trailing)
+            // A running time takes all the room it's offered, so it's given exactly its own: "13:16" at 12 pt is 36 pt wide, and
+            // the 40 it had left "13:1(" cut on the glass (Richard, 2026-11-14: "look at the corner"). Whole, never cut.
+            Text(timerInterval: a...b, countsDown: true).font(.system(size: 12, weight: .semibold).monospacedDigit()).foregroundStyle(TVLook.accent)
+                .multilineTextAlignment(.trailing).lineLimit(1).minimumScaleFactor(0.8).frame(width: (state.length ?? 0) >= 3600 ? 52 : 44, alignment: .trailing)
         } else {
             Image(systemName: "waveform").font(.system(size: 14, weight: .semibold)).foregroundStyle(TVLook.accent).accessibilityLabel("Playing")
         }

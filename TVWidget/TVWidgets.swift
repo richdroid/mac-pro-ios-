@@ -625,7 +625,7 @@ struct TVBoxProvider: TimelineProvider {
         }
         if let d = await status, let s = try? JSONDecoder().decode(TVStatus.self, from: d) { e.screen = s.screen ?? "" }
         if let d = await photo, d.count > 100 { try? d.write(to: photoFile, options: .atomic) }
-        if let d = try? Data(contentsOf: photoFile) { e.photo = TVImage(data: d) }
+        if let d = try? Data(contentsOf: photoFile) { e.photo = ImageStore.decode(d, maxPixels: 480) }
         return e
     }
 }

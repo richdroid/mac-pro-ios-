@@ -2900,18 +2900,20 @@ struct PlayingTab: View {
 struct FilmCard: View {
     @Environment(TVModel.self) var model
     let film: Film
+    @State private var place = FrameBox()
     var body: some View {
-        Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio) } label: {
+        Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio, origin: place.rect) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                     .frame(width: 118, height: 177).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .measured(place)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(film.title).font(.footnote.weight(.semibold)).lineLimit(1)
                     if !film.note.isEmpty { Text(film.note).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 .frame(width: 118, alignment: .leading)
             }
-        }.buttonStyle(PressCard()).accessibilityLabel(film.title)
+        }.buttonStyle(PressCard()).modifier(RowFlick(item: film.media, source: .stremio, width: 118, place: place)).accessibilityLabel(film.title)
     }
 }
 struct FilmRow: View {
@@ -2932,10 +2934,11 @@ struct FilmList: View {
     var body: some View {
         RowList(title: title) {
             ForEach(films) { film in
-                Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio) } label: {
+                FlickRowBox(item: film.media, source: .stremio, width: 50, label: { place in AnyView(
                     HStack(spacing: 12) {
                         Art(url: URL(string: film.poster)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                             .frame(width: 50, height: 75).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .measured(place)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(film.title).font(.body.weight(.semibold)).lineLimit(2)
                             HStack(spacing: 6) {
@@ -2947,9 +2950,7 @@ struct FilmList: View {
                         Image(systemName: "tv").foregroundStyle(TVLook.accent).accessibilityHidden(true)
                     }
                     .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(film.title)
+                ) })
             }
         }
     }

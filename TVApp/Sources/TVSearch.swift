@@ -725,6 +725,21 @@ private struct ResultList: View {
     }
 }
 
+// Every film, show, video and song in the results lifts and throws exactly as a shelf's card does (ShelfFlick): held, the
+// poster comes up out of the row and goes to the TV; a show throws as itself, so it opens on its episodes at the one he's
+// up to. An app has nothing to throw. The tap stays as it was.
+struct HitFlick: ViewModifier {
+    let hit: SearchHit
+    let place: FrameBox
+    let width: CGFloat
+    // What the tap sends, when it isn't the search's own target (Continue watching's carry-on link).
+    var item: MediaItem?
+    @ViewBuilder func body(content: Content) -> some View {
+        if hit.kind == .app { content }
+        else { content.modifier(ShelfFlick(item: item ?? SearchStore.target(hit), source: hit.source, width: width, rect: { [place] in place.rect ?? .zero })) }
+    }
+}
+
 // The one he most likely means, larger, saying what a tap does.
 private struct TopHit: View {
     @Environment(TVModel.self) var model
@@ -757,6 +772,7 @@ private struct TopHit: View {
             .contentShape(RoundedRectangle(cornerRadius: TVLook.card, style: .continuous))
         }
         .buttonStyle(PressCard(onPress: hit.kind == .film ? { StreamCache.shared.prefetch(SearchStore.target(hit)); Prepare.arm() } : nil))
+        .modifier(HitFlick(hit: hit, place: place, width: HitArt.width(hit, compact ? 76 : 118)))
         .padding(.horizontal, 12)
         .accessibilityLabel("\(hit.item.title), \(hit.line). \(hit.action)")
     }
@@ -786,6 +802,7 @@ private struct HitRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressCard(onPress: hit.kind == .film ? { StreamCache.shared.prefetch(SearchStore.target(hit)); Prepare.arm() } : nil))
+        .modifier(HitFlick(hit: hit, place: place, width: HitArt.width(hit, 60)))
         .accessibilityLabel("\(hit.item.title), \(hit.line)")
     }
 }
@@ -808,7 +825,8 @@ private struct HitRowWait: View {
 private struct HitArt: View {
     let hit: SearchHit
     let height: CGFloat
-    var width: CGFloat {
+    var width: CGFloat { Self.width(hit, height) }
+    static func width(_ hit: SearchHit, _ height: CGFloat) -> CGFloat {
         switch hit.kind {
         case .show, .film: return height * 2 / 3
         case .music: return height
@@ -948,6 +966,7 @@ private struct SuggestionRow: View {
             .padding(.horizontal, 8).padding(.vertical, 6).frame(minHeight: 72).contentShape(Rectangle())
         }
         .buttonStyle(PressCard(onPress: { if !model.isOnTV(hit.item, .stremio) { StreamCache.shared.prefetch(hit.item); Prepare.arm() } }))
+        .modifier(HitFlick(hit: hit, place: place, width: HitArt.width(hit, 60), item: hit.item))
         .onAppear { if hit.item.progress != nil, hit.kind == .show { NextUp.prefetch(hit.item) } }
     }
 }

@@ -195,6 +195,8 @@ struct PhonePicker: View {
     @State private var startOver = false
     @State private var sending = false
     @State private var only = "All"
+    // The season the pivot shows, which the episode menu lists; follows the chosen episode.
+    @State private var pivotSeason: Int?
     // His place is known (the library answered, or said it has none): until then a row would start at 0:00.
     @State private var placeKnown = false
     @Environment(\.dismiss) private var dismiss
@@ -264,28 +266,32 @@ struct PhonePicker: View {
 
     var episodeRow: some View {
         let seasons = Dictionary(grouping: meta?.episodes ?? [], by: { $0.season }).keys.sorted { ($0 == 0 ? 999 : $0) < ($1 == 0 ? 999 : $1) }
-        return Menu {
-            ForEach(seasons, id: \.self) { s in
-                Section(s == 0 ? "Specials" : "Season \(s)") {
-                    ForEach((meta?.episodes ?? []).filter { $0.season == s }, id: \.id) { e in
-                        Button { if video != e.id { Haptic.fire(.tick) }; video = e.id } label: {
-                            if e.id == video { Label("\(e.episode). \(e.name)", systemImage: "checkmark") } else { Text("\(e.episode). \(e.name)") }
-                        }
+        let shown = pivotSeason ?? episode?.season ?? seasons.first ?? 1
+        let pivot = Binding<Int>(get: { shown }, set: { pivotSeason = $0 })
+        return VStack(alignment: .leading, spacing: 8) {
+            // The seasons as a pivot, the one on large and the ones either side peeking in at the edges; swipe the picker
+            // or tap a title to move between them. One season has nothing to swipe to, but still names itself.
+            if seasons.count > 0 { SeasonPivot(seasons: seasons, selected: pivot) }
+            Menu {
+                ForEach((meta?.episodes ?? []).filter { $0.season == shown }, id: \.id) { e in
+                    Button { if video != e.id { Haptic.fire(.tick) }; video = e.id } label: {
+                        if e.id == video { Label("\(e.episode). \(e.name)", systemImage: "checkmark") } else { Text("\(e.episode). \(e.name)") }
                     }
                 }
+            } label: {
+                HStack {
+                    Image(systemName: "list.bullet").foregroundStyle(TVLook.accent)
+                    Text(episode.map { "Season \($0.season), episode \($0.episode)" } ?? (meta == nil ? "Finding episodes…" : "Choose an episode"))
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.85)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down").font(.footnote).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16).frame(height: 48).tvCard(14)
             }
-        } label: {
-            HStack {
-                Image(systemName: "list.bullet").foregroundStyle(TVLook.accent)
-                Text(episode.map { "Season \($0.season), episode \($0.episode)" } ?? (meta == nil ? "Finding episodes…" : "Choose an episode"))
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                Spacer()
-                Image(systemName: "chevron.up.chevron.down").font(.footnote).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 16).frame(height: 48).tvCard(14)
+            .tint(.white)
+            .disabled(meta?.episodes.isEmpty != false)
         }
-        .tint(.white)
-        .disabled(meta?.episodes.isEmpty != false)
+        .modifier(SeasonSwipeRows(seasons: seasons, season: pivot))
     }
 
     @ViewBuilder var streamList: some View {

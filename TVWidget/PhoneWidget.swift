@@ -36,7 +36,7 @@ struct PhoneShelfProvider: TimelineProvider {
         for r in Self.read().prefix(3) {
             var poster: TVImage?
             if let s = r["poster"] as? String, let u = URL(string: s), s.hasPrefix("http"),
-               let d = try? await URLSession.shared.data(for: URLRequest(url: u, timeoutInterval: 6)).0 { poster = TVImage(data: d) }
+               let d = try? await URLSession.shared.data(for: URLRequest(url: u, timeoutInterval: 6)).0 { poster = ImageStore.decode(d, maxPixels: 240) }
             items.append(.init(type: r["type"] as? String ?? "movie", imdb: r["imdb"] as? String ?? "", video: r["video"] as? String ?? "",
                                name: r["name"] as? String ?? "", line: r["line"] as? String ?? "", progress: r["progress"] as? Double ?? 0,
                                left: r["left"] as? Double ?? 0, poster: poster))

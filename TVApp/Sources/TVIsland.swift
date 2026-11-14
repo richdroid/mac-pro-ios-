@@ -210,6 +210,8 @@ enum TVIsland {
         }
         if let t = await thumbnail(art) { next.art = t.0; next.artKey = t.1 }
         else if let old = current?.content.state, old.title == next.title { next.art = old.art; next.artKey = old.artKey }
+        // Whole under 4 KB with the cover in it; over it iOS drops the update without a word and the card is left as it was.
+        if next.art != nil, let d = try? JSONEncoder().encode(next), d.count > 3800 { next.art = nil; next.artKey = nil }
         if let current {
             let changed = !same(current.content.state, next)
             if changed || (current.content.staleDate ?? .distantPast) < Date().addingTimeInterval(staleAfter / 2) { await current.update(ActivityContent(state: next, staleDate: staleDate(next))) }

@@ -319,7 +319,7 @@ function tvRoute(q, s) {
   }
   // The TV's settings and its apps, for Settings' pages (TV settings, Apps on the TV).
   if (q.url === '/api/tv/manage') { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ settings: { sleep_after: 3600000, screensaver_after: 600000, animations: 0.5, cec_auto_off: 1 }, volume: 8, volumeMax: 15, canArrange: true, apps: tvApps.filter(a => a[0] !== 'com.google.android.play.games').map((a, i) => ({ pkg: a[0], name: a[1], hasIcon: true, wide: true, removable: !['com.codex.musicwebtv', 'com.android.tv.settings', 'flar2.homebutton'].includes(a[0]), row: 'APPS' })) })); }
-  if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' }))) })); }
+  if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2, 3].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' }))) })); }
   // Mint's own screen for the song on: its words, timed, and what plays after it (the Playing tab mirrors both).
   if (q.url.startsWith('/api/tv/music-detail')) {
     s.setHeader('content-type', 'application/json');
@@ -939,7 +939,7 @@ function tvReal(q, s, path, query, json) {
   }
   // The series lookup takes a few seconds, as the real catalogue can, so ⏭ pressed before it's in shows its light (r21).
   if (path === '/api/tv/stremio-meta') {
-    const eps = [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' })));
+    const eps = [1, 2, 3, 4].flatMap(n => [1, 2, 3].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' })));
     return late(3000, () => json({ about: ABOUT, episodes: eps }));
   }
   if (path === '/api/tv/stremio' || (path === '/api/tv/discover' && !query.get('genre'))) {

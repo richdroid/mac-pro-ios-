@@ -39,6 +39,9 @@ func card<C: View, B: View>(_ w: CGFloat, _ h: CGFloat, _ bg: B, @ViewBuilder _ 
             let size = st.art.map { d in String(format: " · cover %.1f KB ", Double(d.count) / 1000) + (d.count > 8 && String(decoding: d[4..<8], as: UTF8.self) == "ftyp" ? "heic" : "jpeg") } ?? ""
             return (st, size)
         }
+        // The card Richard saw redacted: South Park, an episode with its own name, a running clock, the next one known.
+        var park = made("South Park", "S27 E3 · Sack Lunch", "Stremio", playing: true, at: 480, of: 1320, art: real["show"] ?? poster(400, 600, .systemYellow, .systemBlue, "SOUTH PARK")).0
+        park.next = true
         let show = made("Twin Peaks", "S1 E3 · Zen, or the Skill to Catch a Killer", "Stremio", playing: true, at: 600, of: 2815, art: real["show"] ?? poster(400, 600, .systemOrange, .systemRed, "PEAKS"))
         let song = made("Come Together", "The Beatles", "Mint", playing: false, at: 39, of: 259, art: real["album"] ?? poster(600, 600, .systemTeal, .systemIndigo, "ROAD"))
         let film = made("The Assassination of Jesse James by the Coward Robert Ford", "", "Stremio", playing: true, at: 4210, of: 9600, art: real["film"] ?? poster(400, 600, .darkGray, .brown, "JESSE"))
@@ -48,7 +51,7 @@ func card<C: View, B: View>(_ w: CGFloat, _ h: CGFloat, _ bg: B, @ViewBuilder _ 
         var showNext = show.0; showNext.next = true
         var nolenNext = nolen.0; nolenNext.next = true
         let all: [(name: String, state: TVIslandAttributes.ContentState, stale: Bool)] = [
-            ("A show, playing, next known" + show.1, showNext, false), ("A song, paused" + song.1, song.0, false), ("Out of date" + show.1, show.0, true),
+            ("South Park, playing, next known", park, false), ("A show, playing, next known" + show.1, showNext, false), ("A song, paused" + song.1, song.0, false), ("Out of date" + show.1, show.0, true),
             ("A film, long name" + film.1, film.0, false), ("A video, wide still" + video.1, video.0, false), ("No cover, no length", bare.0, false),
             ("A show with no running time, next known" + nolen.1, nolenNext, false),
         ]
