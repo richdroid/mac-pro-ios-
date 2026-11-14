@@ -2706,8 +2706,6 @@ struct HiddenInHand<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View { content.opacity(ShelfHand.shared.item?.id == id ? 0 : 1) }
 }
-// The card's picture, made ready while the finger rests on it.
-final class PictureBox { var image: CGImage?; var task: Task<Void, Never>? }
 // The scroll views a held card sits in hold still while it's in the hand, as the streams page's list does.
 #if canImport(UIKit)
 final class ScrollLockBox { weak var view: UIView?; var locked: [UIScrollView] = [] }
@@ -2741,26 +2739,11 @@ struct ShelfFlick: ViewModifier {
     @State private var lock = ScrollLockBox()
     @State private var up = false
     @State private var receipt = ""
-    @State private var ready = PictureBox()
-    // A finger resting on the card, before the hold is done.
-    @GestureState private var pressing = false
     func body(content: Content) -> some View {
         content
             .opacity(up ? 0 : 1)
             .background(ScrollLock(box: lock).allowsHitTesting(false))
             .simultaneousGesture(gesture)
-            // The picture he'll lift is drawn while he's still holding (a tenth of a second in, so a scroll's touch never
-            // pays for it): the lift itself then has nothing to make.
-            .onChange(of: pressing) { _, on in
-                ready.task?.cancel()
-                ready.image = nil
-                guard on, !up else { return }
-                ready.task = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 110_000_000)
-                    guard !Task.isCancelled, !up else { return }
-                    ready.image = Self.picture(item, source, width)
-                }
-            }
             .accessibilityAction(named: "Flick to the TV") { hands.hand = FlickHand(.list); throwIt(velocity: CGSize(width: 0, height: -800), translation: .zero) }
             .task { TouchLedger.install(); Self.warmRemote(model); await reportPlace() }
     }
@@ -2838,16 +2821,23 @@ struct ShelfFlick: ViewModifier {
     }
     // The card as it's drawn at rest, as one picture: what's lifted, carried and thrown. From the cover already in memory
     // (never a fetch, never a capture of the screen, which had the press's squeeze and the "i" in it).
+    // Kept for the cards he's lifted lately (a second lift of the same card makes nothing). Nothing is drawn while a
+    // finger is merely resting: drawing it during the press sat on every touch that began on a card.
+    @MainActor static var pictures: [String: CGImage] = [:]
     @MainActor static func picture(_ item: MediaItem, _ source: MediaSource, _ width: CGFloat) -> CGImage? {
-        let art = ImageStore.shared.cached(URL(string: item.art)).map { Image(tv: $0) }
-        let r = ImageRenderer(content: MediaCard(item: item, source: source, width: width, image: art, still: true).environment(\.colorScheme, .dark))
+        let cover = ImageStore.shared.cached(URL(string: item.art))
+        let key = "\(source)|\(item.id)|\(Int(width))|\(item.title)|\(item.shownSubtitle)|\(item.progress ?? -1)|\(cover != nil)"
+        if let kept = pictures[key] { return kept }
+        let r = ImageRenderer(content: MediaCard(item: item, source: source, width: width, image: cover.map { Image(tv: $0) }, still: true).environment(\.colorScheme, .dark))
         r.scale = RenderFlight.screenScale
-        return r.cgImage
+        guard let made = r.cgImage else { return nil }
+        if pictures.count > 12 { pictures.removeAll() }
+        pictures[key] = made
+        return made
     }
     var gesture: some Gesture {
         let rules = FlickHand.Rules.list
         return LongPressGesture(minimumDuration: rules.hold, maximumDistance: rules.slop)
-            .updating($pressing) { now, state, _ in state = now }
             .onEnded { _ in
                 // In the hand: from here the finger is followed off the window's own events, as a stream row's is, so
                 // the shelf and the page under it scroll freely under any swipe that isn't a hold.
@@ -2882,9 +2872,7 @@ struct ShelfFlick: ViewModifier {
     // False if there's nothing to lift (no picture could be made of it): it stays on its shelf.
     func lifted() -> Bool {
         let r = rect()
-        ready.task?.cancel()
-        guard r.width > 4, let image = ready.image ?? Self.picture(item, source, width) else { return false }
-        ready.image = nil
+        guard r.width > 4, let image = Self.picture(item, source, width) else { return false }
         HandTrace.note("shelf-lifted")
         FlickMeter.shared.lifted("shelf", hold: hands.hand.realLift)
         RenderFlight.pick(image, at: r, cover: min(r.height, width / source.coverAspect), corner: width > 200 ? 8 : 6, wide: item.isYouTube)
