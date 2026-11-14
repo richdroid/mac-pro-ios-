@@ -67,7 +67,7 @@ struct Figure: View {
             Text(value).font(.system(size: size, weight: .light)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
                 // One height whatever the shrink, so labels in a row of figures share a line.
                 .frame(height: ceil(size * 1.2), alignment: .bottom)
-            Text(label).font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+            Text(label).font(.subheadline).foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.85)
         }
         .accessibilityElement(children: .combine)
     }
