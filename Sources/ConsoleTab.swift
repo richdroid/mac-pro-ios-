@@ -175,7 +175,7 @@ struct ConsoleTab: View {
                     Button { remote.send(model, "show", "show") } label: { busyLabel("Start", "show") }.buttonStyle(.borderedProminent).tint(macBlue)
                 }
             }
-        } footer: { failLine(["show", "hide", "display"]) }
+        } header: { Text("On the Mac") } footer: { failLine(["show", "hide", "display"]) }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
     }
     func busyLabel(_ t: String, _ key: String) -> some View {
@@ -388,9 +388,10 @@ struct ShowOnMacButton: View {
         .accessibilityLabel("Show on the Mac")
         // The build's films of the button: pressed by itself, a moment after the page is up, and answered well or badly.
         .task { if ["showonmacfilm", "showonmacfail"].contains(model.pose), page == "overview" || page == "updates" { try? await Task.sleep(nanoseconds: 3_000_000_000); go() } }
-        .alert("Not shown on the Mac", isPresented: Binding(get: { why != nil }, set: { if !$0 { why = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: { Text(why ?? "") }
+        // The reason at the button, not a modal over the page: the button already says "Not shown".
+        .popover(isPresented: Binding(get: { why != nil }, set: { if !$0 { why = nil } })) {
+            Text(why ?? "").font(.subheadline).padding(14).frame(maxWidth: 280).presentationCompactAdaptation(.popover)
+        }
     }
     func go() {
         phase = 1

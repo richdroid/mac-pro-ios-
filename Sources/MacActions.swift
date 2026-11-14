@@ -96,6 +96,12 @@ struct MPActionRow: View {
                 }
             }
             .disabled(busy)
+            .confirmationDialog(item.title + "?", isPresented: .init(get: { asking != nil }, set: { if !$0 { asking = nil } }), titleVisibility: .visible) {
+                if let a = asking {
+                    Button(item.title, role: .destructive) { run(nonce: a.nonce) }
+                    Button("Cancel", role: .cancel) {}
+                }
+            } message: { Text(asking.map { "This will " + Self.lowerFirst($0.say) } ?? "") }
             if let a = answer {
                 Label(a.say ?? (a.ok == true ? "Done" : "Not done"), systemImage: a.ok == true ? "checkmark.circle.fill" : a.needs == "yes" ? "hand.raised.fill" : "exclamationmark.circle.fill")
                     .font(.footnote).foregroundStyle(a.ok == true ? Color.green : a.needs == "yes" ? Color.orange : Color.red)
@@ -113,12 +119,6 @@ struct MPActionRow: View {
             }
             if let failure { FailText(failure) }
         }
-        .alert(item.title + "?", isPresented: .init(get: { asking != nil }, set: { if !$0 { asking = nil } })) {
-            if let a = asking {
-                Button(item.title, role: .destructive) { run(nonce: a.nonce) }
-                Button("Cancel", role: .cancel) {}
-            }
-        } message: { Text(asking.map { "This will " + Self.lowerFirst($0.say) } ?? "") }
     }
     // A dry run that describes a change ("would remove …"), rather than saying there's nothing to do.
     static func wouldDo(_ s: String?) -> Bool { guard let s else { return false }; return s.lowercased().hasPrefix("would ") || s.lowercased().contains(" would ") }

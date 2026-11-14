@@ -273,11 +273,11 @@ struct HistoryView: View {
             if panes {
                 // The name first in the left pane, carried unseen in the right so both start level (PaneHeading).
                 FoldSplit {
-                    VStack(spacing: 14) { PaneHeading(title: metric.title); staleLine; readout; chart.frame(maxHeight: .infinity).opacity(stale ? staleDim : 1) }
+                    VStack(spacing: 14) { PaneHeading(title: metric.title, nudge: 5); staleLine; readout; chart.frame(maxHeight: .infinity).opacity(stale ? staleDim : 1) }
                         .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 20)
                 } right: {
                     ScrollView {
-                        VStack(spacing: 14) { PaneHeading(title: metric.title, shown: false); range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
+                        VStack(spacing: 14) { PaneHeading(title: metric.title, shown: false, nudge: 5); range.place("range"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
                             .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 20)
                     }
                     .scrollsUnder()
@@ -285,7 +285,7 @@ struct HistoryView: View {
                 }
             } else {
                 ScrollView {
-                    VStack(spacing: 14) { PaneHeading(title: metric.title).place("title"); staleLine; readout.place("readout"); range.place("range"); chart.frame(height: 260).opacity(stale ? staleDim : 1).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
+                    VStack(spacing: 14) { PaneHeading(title: metric.title, nudge: 5).place("title"); staleLine; readout.place("readout"); range.place("range"); chart.frame(height: 260).opacity(stale ? staleDim : 1).place("chart"); stats.place("stats"); processes.place("procs"); coverage.place("coverage") }
                         .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
                 }
                 .scrollsUnder()

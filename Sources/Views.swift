@@ -151,6 +151,8 @@ struct TopEdge: ViewModifier {
 // reading redrew the page, and the whole page dropped 14 pt seconds after the turn, untouched (designer, resize regate).
 private struct StatusBarTopKey: EnvironmentKey { static let defaultValue: CGFloat = 59 }
 private struct CompactWindowKey: EnvironmentKey { static let defaultValue = false }
+private struct HandTitleKey: EnvironmentKey { static let defaultValue: AnyView? = nil }
+extension EnvironmentValues { var handTitle: AnyView? { get { self[HandTitleKey.self] } set { self[HandTitleKey.self] = newValue } } }
 extension EnvironmentValues { var compactWindow: Bool { get { self[CompactWindowKey.self] } set { self[CompactWindowKey.self] = newValue } } }
 extension EnvironmentValues { var statusBarTop: CGFloat { get { self[StatusBarTopKey.self] } set { self[StatusBarTopKey.self] = newValue } } }
 struct StatusBarTopReader: ViewModifier {
@@ -602,6 +604,10 @@ struct PaneHeading: View {
     var roomAbove = true
     // The Console page that shows the same thing, for "Show on Mac" beside the name.
     var onMac: String? = nil
+    // Where a page's own structure leaves its title off the others' line (CI 9e5c096, measured): always, or only where
+    // the clock is on the side (folded and open flat).
+    var nudge: CGFloat = 0
+    var nudgeSide: CGFloat = 0
     static func roomAbove(_ statusBarTop: CGFloat) -> CGFloat { statusBarTop < 20 ? 14 : 0 }
     var body: some View {
         HStack(alignment: .center) {
@@ -611,7 +617,7 @@ struct PaneHeading: View {
             if let onMac { ShowOnMacButton(page: onMac).padding(.trailing, 4).allowsHitTesting(shown) }
         }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, roomAbove ? Self.roomAbove(statusBarTop) : 0)
+            .padding(.top, (roomAbove ? Self.roomAbove(statusBarTop) : 0) + nudge + (statusBarTop < 20 ? nudgeSide : 0))
             .opacity(shown ? 1 : 0)
             .accessibilityHidden(!shown)
             .accessibilityAddTraits(.isHeader)
@@ -855,7 +861,9 @@ struct Screen<Content: View>: View {
         VStack(spacing: 12) {
             // As high as the listed tabs' titles (the list's 4 pt margin, and 14 pt more where the clock is on the side):
             // macOS's sat 18 pt above Apps' folded, so the title jumped going from one tab to the next.
-            paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 4)
+            // One column: the title goes up with the page, inside its scroll view (HandTitle), as on the list tabs; pinned
+            // above it, the content was cut flat under it (designer gate, 2026-11-14).
+            if side != .all { paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 4) }
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             }
@@ -863,6 +871,7 @@ struct Screen<Content: View>: View {
             else if side != .right { connecting.frame(maxHeight: .infinity) }
         }
         .modifier(PageLead(on: side != .right))
+        .environment(\.handTitle, side == .all ? AnyView(paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 4)) : nil)
     }
     var body: some View {
         let _ = SwipeLog.mark("screen \(tab) body")
@@ -1470,6 +1479,15 @@ struct AppsTab: View {
                         else {
                             Button("Quit") { pending = a }
                                 .rowCapsule(prominent: false)
+                                // One question from the row's Quit, hung off it; Force Quit is a second, only for an app that didn't go.
+                                .confirmationDialog("Quit \(a.name)?", isPresented: .init(get: { pending?.pid == a.pid }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
+                                    Button("Quit", role: .destructive) { Task { await quit(a, force: false) } }
+                                    Button("Cancel", role: .cancel) {}
+                                } message: { Text("It’s asked to close. Unsaved work may be lost.") }
+                                .confirmationDialog("\(a.name) didn’t quit. Force it?", isPresented: .init(get: { forcing?.pid == a.pid }, set: { if !$0 { forcing = nil } }), titleVisibility: .visible) {
+                                    Button("Force Quit", role: .destructive) { Task { await quit(a, force: true) } }
+                                    Button("Cancel", role: .cancel) {}
+                                } message: { Text("Unsaved work is lost.") }
                                 .disabled(working != nil)
                                 .accessibilityLabel("Quit \(a.name)")
                         }
@@ -1485,19 +1503,7 @@ struct AppsTab: View {
                 } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
                 .place("launch")
             }
-            // One question from the row's Quit; Force Quit is a second question, only for an app that didn't go.
-            .alert(pending.map { "Quit \($0.name)?" } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
-                if let p = pending {
-                    Button("Quit", role: .destructive) { Task { await quit(p, force: false) } }
-                    Button("Cancel", role: .cancel) {}
-                }
-            } message: { Text("It’s asked to close. Unsaved work may be lost.") }
-            .alert(forcing.map { "\($0.name) didn’t quit. Force it?" } ?? "", isPresented: .init(get: { forcing != nil }, set: { if !$0 { forcing = nil } })) {
-                if let p = forcing {
-                    Button("Force Quit", role: .destructive) { Task { await quit(p, force: true) } }
-                    Button("Cancel", role: .cancel) {}
-                }
-            } message: { Text("Unsaved work is lost.") }
+
             .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
             // The build's shot of the second question, for an app that was asked to quit and stayed.
             .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } } }
@@ -1851,6 +1857,7 @@ struct UpgradeTab: View {
     @State private var agentPassword = ""
     @State private var confirmRun = false
     @State private var trailingInset: CGFloat = 0
+    @Environment(\.handTitle) private var handTitle
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -2064,11 +2071,14 @@ struct UpgradeTab: View {
             // room for one entry).
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
-                    VStack(alignment: .leading, spacing: 26) {
-                        // "This Mac" over the status card in every posture, as open flat (designer, 2026-11-11).
-                        VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
-                        agent
-                        VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let t = handTitle { t }
+                        VStack(alignment: .leading, spacing: 26) {
+                            // "This Mac" over the status card in every posture, as open flat (designer, 2026-11-11).
+                            VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
+                            agent
+                            VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
+                        }
                     }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { aboveHeight = $0 }
                     if logShown { logPreview }

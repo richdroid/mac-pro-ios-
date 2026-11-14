@@ -69,6 +69,10 @@ struct MacLink: Decodable, Identifiable, Equatable {
                 let n = d[r].split(separator: " "); return n[0] == n[2] ? "All \(n[2]) running" : "\(n[0]) of \(n[2]) running"
             }
             return d
+        case ("tailscale", _) where state == "up":
+            // "Running · 4 of 6 devices online": the state is said by the row; the count is the news.
+            return d.hasPrefix("Running · ") ? String(d.dropFirst(10)) : (filler.contains(d.lowercased()) ? nil : d)
+        case (_, "down") where ["not running", "down", "not answering"].contains(d.lowercased()): return nil
         default:
             if state != "down", filler.contains(d.lowercased()) { return nil }
             return d.isEmpty ? nil : d.replacingOccurrences(of: "the bridge", with: "the Mac dashboard").replacingOccurrences(of: "Tailscale didn’t", with: "Remote access didn’t")
@@ -593,7 +597,11 @@ struct LinksView: View {
     func links(_ ids: [String]) -> [MacLink] { (feed.value?.links ?? []).filter { ids.contains($0.id) } }
     var others: [MacLink] { let known = Set(groups.flatMap(\.1)); return (feed.value?.links ?? []).filter { !known.contains($0.id) } }
 
-    func section(_ title: String, _ list: [MacLink]) -> some View {
+    @ViewBuilder func section(_ title: String, _ list: [MacLink]) -> some View {
+        // No heading over nothing: the first read hasn't come (designer gate, 2026-11-14: empty headings, then a reflow).
+        if !list.isEmpty { sectionBody(title, list) }
+    }
+    func sectionBody(_ title: String, _ list: [MacLink]) -> some View {
         Section(title) {
             ForEach(list) { l in
                 LinkRow(link: l, busy: busy.contains(l.id), outcome: outcomes[l.id], first: l.id == list.first?.id, act: { a in
@@ -956,7 +964,7 @@ struct FansView: View {
         }
     }
     var body: some View {
-        ConsolePage(title: "Fans & temperatures", place: "macfans", away: away, lastRead: [fans.lastRead, temps.lastRead].compactMap { $0 }.min()) {
+        ConsolePage(title: "Fans & heat", place: "macfans", away: away, lastRead: [fans.lastRead, temps.lastRead].compactMap { $0 }.min()) {
             fanSections
             namedSection
         } right: {
@@ -1062,12 +1070,8 @@ struct UpdatesView: View {
                 if let v = o.installed { LabeledContent("Installed", value: v) }
                 // The newest only when it is newer: "Newest 3.0.0-rc.5" under "Installed 3.0.0" read as a downgrade on offer.
                 if let l = o.latest, o.newer == true { LabeledContent(o.latestPre == true ? "Newer (pre-release)" : "Newer", value: l) }
-                if let p = o.patches {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: o.healthy == true ? "checkmark.circle.fill" : "exclamationmark.circle.fill").foregroundStyle(o.healthy == true ? Color.green : Color.red)
-                        Text(Self.plain(p.replacingOccurrences(of: "HEALTHY: ", with: "Patches healthy: "))).font(.footnote).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+                // A row, "Patches · Healthy": the versions were said again in a sentence beside the ones above.
+                if o.patches != nil { LabeledContent("Patches", value: o.healthy == true ? "Healthy" : "Needs a look") }
                 if let c = o.command, o.newer == true || o.healthy == false {
                     Text("Needs you at the Mac:").font(.footnote).foregroundStyle(.secondary)
                     CommandRow(command: c)

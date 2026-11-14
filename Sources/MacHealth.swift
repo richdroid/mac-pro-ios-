@@ -270,6 +270,11 @@ struct MacGroup: Identifiable, Hashable {
             case "serve": return "The Mac’s link for this app is off"
             case "bridge": return "Not answering"
             case "stuck": return stuckLine(t)
+            case "sessions":
+                // The same words as when well: "3 of 6 running", not the Mac's "3 of 6 kept running · 2 others".
+                let n = t.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+                if n.count >= 2 { return n[0] == n[1] ? "All \(n[1]) running" : "\(n[0]) of \(n[1]) running" }
+                return MacParts.say(p)
             default: return MacParts.say(p)
             }
         }
@@ -571,7 +576,11 @@ struct MacHealthView: View {
                 }
                 // While the Mac is away what the links last said is last known, never current.
                 let lastKnown = down || links.away
-                if !ls.isEmpty {
+                // A part that is down says so once above; its links' rows beside it could disagree (and did, on a part named
+                // for one link), so it keeps its reason and the way to Connections.
+                if !ls.isEmpty, isBad(g) {
+                    Button("Open Connections") { model.macPage = .links }.font(.subheadline).foregroundStyle(macBlue).padding(.top, 4)
+                } else if !ls.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(ls) { l in
                             VStack(alignment: .leading, spacing: 2) {
