@@ -371,7 +371,7 @@ struct MediaList: View {
     var body: some View {
         RowList(title: row.title) {
             ForEach(row.items) { item in
-                Button { FlickCardButton.tap(model, item, source) } label: {
+                FlickRowBox(item: item, source: source, width: 50, label: { place in AnyView(
                     HStack(spacing: 12) {
                         Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                             // One picture column for every row, so every title starts at the same place and the lines between
@@ -379,6 +379,7 @@ struct MediaList: View {
                             // the posters', a ragged column). In a list the title says what it is; the still fills the poster's
                             // place, its middle kept.
                             .frame(width: 50, height: 50 / source.coverAspect).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .measured(place)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title).font(.body.weight(.semibold)).lineLimit(2)
                             if !item.shownSubtitle.isEmpty { Text(item.shownSubtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
@@ -386,9 +387,7 @@ struct MediaList: View {
                         Spacer(minLength: 0)
                     }
                     .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
+                ) })
             }
         }
     }
@@ -515,6 +514,34 @@ struct FlickCardButton: View {
     }
 }
 final class FrameBox { var rect: CGRect? }
+extension View {
+    // Where a picture is, kept in a box without redrawing anything while the page scrolls.
+    func measured(_ box: FrameBox) -> some View { onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { box.rect = $0 } }
+}
+// Any row or card of a film, show, video or song that isn't a shelf card: held anywhere on it, its picture lifts out and
+// is thrown to the TV, exactly as a shelf's does (ShelfFlick). The tap stays as the row had it.
+struct RowFlick: ViewModifier {
+    let item: MediaItem
+    let source: MediaSource
+    let width: CGFloat
+    let place: FrameBox
+    func body(content: Content) -> some View {
+        content.modifier(ShelfFlick(item: item, source: source, width: width, rect: { [place] in place.rect ?? .zero }))
+    }
+}
+// One row of a list (a film, a show, a video), flickable and tappable; the picture's place is its own.
+struct FlickRowBox: View {
+    @Environment(TVModel.self) var model
+    let item: MediaItem, source: MediaSource, width: CGFloat
+    @State private var place = FrameBox()
+    var label: (FrameBox) -> AnyView
+    var body: some View {
+        Button { FlickCardButton.tap(model, item, source, origin: place.rect) } label: { label(place) }
+            .buttonStyle(PressCard(onPress: source == .stremio && !item.isYouTube ? { [model] in if !model.isOnTV(item, source) { StreamCache.shared.prefetch(item); Prepare.arm() } } : nil))
+            .modifier(RowFlick(item: item, source: source, width: width, place: place))
+            .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
+    }
+}
 
 // A row of cards that scrolls sideways. It stops where the page's other content stops, fading out there rather than cut
 // square, and fading in at the start too once it's been scrolled. Folded or open, nothing runs on under the clock or the

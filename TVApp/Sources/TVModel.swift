@@ -199,8 +199,7 @@ final class TVModel {
     }
     func showOnRemote() {
         Keyboard.dismiss()
-        tick()
-        if status?.session?.playing == false { holdPlay(true); key("resume") }
+        if status?.session?.playing == false { holdPlay(true); key("resume") } else { tick() }
         tab = 0
     }
     func closeFlick() {
@@ -273,9 +272,7 @@ final class TVModel {
         holdPlay(true)
         // The light finishes its lap and the picture becomes the TV's own (the Remote reads `played`).
         withAnimation(.easeOut(duration: 0.3)) { starting?.played = true }
-        #if canImport(UIKit)
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        #endif
+        Haptic.fire(.done)
         Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
             startEndedAt = Date()
@@ -289,9 +286,7 @@ final class TVModel {
     func startFailed(tokens: [String]) {
         guard let st = starting, !st.failed, !st.played else { return }
         startingAvoid.formUnion(tokens)
-        #if canImport(UIKit)
-        UINotificationFeedbackGenerator().notificationOccurred(.error)
-        #endif
+        Haptic.fire(.fail)
         withAnimation(.easeOut(duration: 0.25)) { starting?.failed = true }
     }
     // Called off from the Remote (holding ⏯), or done with after a failure.
@@ -456,7 +451,7 @@ final class TVModel {
         // Back in the foreground: the polls take over from the background grace.
         grace?.cancel(); grace = nil
         #if canImport(UIKit)
-        Haptics.warm()
+        Haptic.warm()
         #endif
         // Nobody looking, nothing polled. Status steps aside just after a key, so it never competes with one.
         loops = [
@@ -759,9 +754,7 @@ final class TVModel {
         toastTask = Task { [weak self] in try? await Task.sleep(nanoseconds: 2_000_000_000); if !Task.isCancelled { self?.toast = nil } }
     }
     func tick() {
-        #if canImport(UIKit)
-        Haptics.light.impactOccurred(); Haptics.light.prepare()
-        #endif
+        Haptic.fire(.tap)
     }
     private func request(_ path: String, _ body: [String: Any]) -> URLRequest? {
         guard let u = url("/api/tv/" + path), let base = URL(string: address) else { return nil }
@@ -777,7 +770,7 @@ final class TVModel {
         lastKeyAt = Date(); lastTouch = Date()
         // Home, Back or anything else pressed after a tile: the ring goes back to what the TV says is in front.
         if openingApp != nil { openingApp = nil }
-        if !repeating { tick() }
+        if !repeating { Haptic.fire(long ? .thunk : .tap) }
         // A hold can't get ahead of the connection, so lifting your finger stops the TV promptly.
         if repeating && repeatPending { return }
         keySeq += 1
@@ -790,7 +783,7 @@ final class TVModel {
             await typing?.value
             defer { if repeating { self?.repeatPending = false } }
             let result = try? await URLSession.shared.data(for: r)
-            if (result?.1 as? HTTPURLResponse)?.statusCode != 200, !repeating { self?.say("The TV didn’t get that") }
+            if (result?.1 as? HTTPURLResponse)?.statusCode != 200, !repeating { self?.say("The TV didn’t get that"); Haptic.fire(.warn) }
         }
         // Outside the chain, so a slow picture never holds up the next press. The live stream shows the press by
         // itself; without it, the first still taken after the press is asked for straight away.
@@ -848,7 +841,7 @@ final class TVModel {
         tick()
         Task {
             guard let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
-                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { say("The TV didn’t get that"); return }
+                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { say("The TV didn’t get that"); Haptic.fire(.warn); return }
             // Only a link the TV can't open needs saying, since then there's something else to do.
             if !["apple", "words", "youtube", "film", "imdb"].contains(j["kind"] as? String ?? "") { say("That link can’t open on the TV. Try AirPlay.") }
         }
@@ -886,41 +879,16 @@ enum Keyboard {
     }
 }
 
-#if canImport(UIKit)
-// Made once and kept warm, so a press buzzes the moment it lands rather than after the generator wakes up.
-@MainActor enum Haptics {
-    static let light: UIImpactFeedbackGenerator = { let g = UIImpactFeedbackGenerator(style: .light); g.prepare(); return g }()
-    static func warm() { light.prepare() }
-}
-#endif
-
 // The flick's whole set of touches and nothing else (§2.5a C9): lift, the one detent, charged, the impact, caught, and
 // the outcome on the Remote. Each generator made once and kept warm, so the hit lands on the frame it belongs to.
 @MainActor enum FlickHaptic {
-    #if canImport(UIKit)
-    private static let soft = { let g = UIImpactFeedbackGenerator(style: .soft); g.prepare(); return g }()
-    private static let rigid = { let g = UIImpactFeedbackGenerator(style: .rigid); g.prepare(); return g }()
-    private static let medium = { let g = UIImpactFeedbackGenerator(style: .medium); g.prepare(); return g }()
-    private static let heavy = { let g = UIImpactFeedbackGenerator(style: .heavy); g.prepare(); return g }()
-    private static let note = { let g = UINotificationFeedbackGenerator(); g.prepare(); return g }()
-    static func warm() { soft.prepare(); rigid.prepare(); medium.prepare(); heavy.prepare(); note.prepare() }
-    static func lift() { soft.impactOccurred(intensity: 0.5); soft.prepare() }
-    static func detent() { rigid.impactOccurred(intensity: 0.45); rigid.prepare() }
-    static func charged() { medium.impactOccurred(intensity: 0.8); medium.prepare() }
-    static func impact() { heavy.impactOccurred(intensity: 1); heavy.prepare() }
-    static func caught() { rigid.impactOccurred(intensity: 0.6); rigid.prepare() }
-    static func putBack() { soft.impactOccurred(intensity: 0.6); soft.prepare() }
-    static func settle() { soft.impactOccurred(intensity: 0.35); soft.prepare() }
-    static func error() { note.notificationOccurred(.error); note.prepare() }
-    #else
-    static func warm() {}
-    static func lift() {}
+    // The flick keeps the vocabulary's two: thunk on the throw, done on the landing (TVModel, when the TV answers). The hold
+    // completing is a thunk too. The detent, the put-back and the settle are silent now: his finger is already feeling them.
+    static func warm() { Haptic.warm() }
+    static func lift() { Haptic.fire(.thunk) }
     static func detent() {}
-    static func charged() {}
-    static func impact() {}
-    static func caught() {}
+    static func caught() { Haptic.fire(.thunk) }
     static func putBack() {}
     static func settle() {}
-    static func error() {}
-    #endif
+    static func error() { Haptic.fire(.fail) }
 }

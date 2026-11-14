@@ -240,7 +240,7 @@ struct RootView: View {
     var body: some View {
         let _ = SwipeLog.mark("body root")
         PaneReader {
-            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
+            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
                 // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
                 // rebuilt, so what was loaded, and the choices made on it, stay.
                 if t == 1 { model.browsing = nil }
@@ -2771,6 +2771,7 @@ struct PlayingTab: View {
                     ForEach([("Song", "song"), ("Album", "album"), ("Playlist", "playlist"), ("Artist", "artist"), ("Station", "station")], id: \.1) { Text($0.0).tag($0.1) }
                 }
                 .pickerStyle(.segmented).labelsHidden()
+                .haptic(.tick, trigger: kind)
                 HStack(spacing: 10) {
                     HStack(spacing: 8) {
                         TextField("What should play?", text: $query).autocorrectionDisabled().submitLabel(.go).onSubmit { play() }
@@ -2899,18 +2900,20 @@ struct PlayingTab: View {
 struct FilmCard: View {
     @Environment(TVModel.self) var model
     let film: Film
+    @State private var place = FrameBox()
     var body: some View {
-        Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio) } label: {
+        Button { guard Date().timeIntervalSince(ShelfHand.shared.handledAt) >= 0.35 else { return }; model.tick(); FlickCardButton.tap(model, film.media, .stremio, origin: place.rect) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 Art(url: URL(string: film.poster)) { i in i.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                     .frame(width: 118, height: 177).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .measured(place)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(film.title).font(.footnote.weight(.semibold)).lineLimit(1)
                     if !film.note.isEmpty { Text(film.note).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 .frame(width: 118, alignment: .leading)
             }
-        }.buttonStyle(PressCard()).accessibilityLabel(film.title)
+        }.buttonStyle(PressCard()).modifier(RowFlick(item: film.media, source: .stremio, width: 118, place: place)).accessibilityLabel(film.title)
     }
 }
 struct FilmRow: View {
@@ -2931,10 +2934,11 @@ struct FilmList: View {
     var body: some View {
         RowList(title: title) {
             ForEach(films) { film in
-                Button { model.tick(); FlickCardButton.tap(model, film.media, .stremio) } label: {
+                FlickRowBox(item: film.media, source: .stremio, width: 50, label: { place in AnyView(
                     HStack(spacing: 12) {
                         Art(url: URL(string: film.poster)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                             .frame(width: 50, height: 75).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .measured(place)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(film.title).font(.body.weight(.semibold)).lineLimit(2)
                             HStack(spacing: 6) {
@@ -2946,9 +2950,7 @@ struct FilmList: View {
                         Image(systemName: "tv").foregroundStyle(TVLook.accent).accessibilityHidden(true)
                     }
                     .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(film.title)
+                ) })
             }
         }
     }
@@ -3069,6 +3071,7 @@ struct DiscoverColumn: View {
         }
         Picker("Kind", selection: $kind) { Text("Films").tag("movie"); Text("Shows").tag("series") }
             .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
+            .haptic(.tick, trigger: kind)
             // Whether Stremio's home had a Continue watching, for keeping its room next time before it's in.
             .onChange(of: home.rows.isEmpty || !store.query.isEmpty ? nil : continuing != nil, initial: true) { _, v in
                 if let v { UserDefaults.standard.set(v, forKey: "hadContinueWatching") }
@@ -3275,9 +3278,7 @@ struct VideoProgress: View {
                     let d = try await TVBridge.post("player-seek-to", ["ms": Int(sent)], timeout: 60)
                     landed = ((try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["position"] as? NSNumber)?.doubleValue
                 } catch {
-                    #if canImport(UIKit)
-                    UINotificationFeedbackGenerator().notificationOccurred(.error)
-                    #endif
+                    Haptic.fire(.fail)
                     model.say("Couldn’t move there"); landed = nil; break
                 }
                 guard let t = target, t != sent else { break }

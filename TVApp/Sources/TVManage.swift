@@ -36,9 +36,7 @@ final class ManageStore: ObservableObject {
             do { try await TVBridge.post(path, body); await then?() }
             // No alert with only an OK in it: what changed snaps back to what the TV really has, with the buzz for no.
             catch {
-                #if canImport(UIKit)
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
-                #endif
+                Haptic.fire(.fail)
                 await load()
             }
         }
