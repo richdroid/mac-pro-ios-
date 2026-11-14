@@ -246,7 +246,9 @@ struct FigureGrid: View {
         let need: CGFloat = max(84, (CGFloat(longest) * size * 0.46 + 4) * 0.72)
         let fit: Int = max(1, Int((width + S.figures) / (need + S.figures)))
         let n: Int = items.count
-        let cols: Int = n <= fit ? max(n, 1) : Self.even(n, fit)
+        // Three that almost fit go three across (their digits shrink a little) rather than two and a stray one.
+        let across: CGFloat = (width - S.figures * CGFloat(max(n - 1, 0))) / CGFloat(max(n, 1))
+        let cols: Int = n <= fit ? max(n, 1) : (n <= 3 && across >= need * 0.95 ? n : Self.even(n, fit))
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: S.figures, alignment: .topLeading), count: cols), alignment: .leading, spacing: S.inner) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, f in Figure(value: f.0, label: f.1, size: size) }
         }
