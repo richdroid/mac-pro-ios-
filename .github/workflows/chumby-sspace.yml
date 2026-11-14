@@ -15,7 +15,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 95
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,7 +34,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 75
+        timeout-minutes: 90
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -129,6 +129,24 @@ jobs:
             done
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pagedrag-after$x.png
             kill -INT $REC; wait $REC; echo "pagedrag$x exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            # Film: a pick from a one-line station to a two-line one and back, on the 11:00 alarm (the scene is live, so
+            # the Chumby keeps it as it would).
+            fresh $M/soundsreal
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-pick$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/soundsreal -tab 3
+            sleep 14
+            $D "$DEVICE" drag $px 0.85 $px 0.35 1.0 || echo "scroll failed"; sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pick-before$x.png
+            $D "$DEVICE" tap "What 11:00 AM plays" || echo "open failed"; sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pick-menu$x.png
+            $D "$DEVICE" tap "My Bloody Valentine and Shoegaze Essentials Radio" || echo "pick failed"; sleep 5
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pick-two$x.png
+            $D "$DEVICE" tap "What 11:00 AM plays" || echo "open again failed"; sleep 2
+            $D "$DEVICE" tap "Sunny Day Real Estate Radio" || echo "pick back failed"; sleep 5
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pick-back$x.png
+            kill -INT $REC; wait $REC; echo "pick$x exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
           $D "$DEVICE" pose closed; sleep 5

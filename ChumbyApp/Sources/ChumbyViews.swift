@@ -2128,8 +2128,9 @@ struct SoundsTab: View {
                 }
                 .font(.subheadline.weight(.medium))
                 .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(Color.primary.opacity(dark ? 0.12 : 0.06), in: Capsule())
-                .contentShape(Capsule())
+                // 16 pt corners: a capsule on one line, and the same curve on two (not a 26 pt pill).
+                .background(Color.primary.opacity(dark ? 0.12 : 0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .transaction { $0.animation = nil }
             }
             .fixedSize(horizontal: false, vertical: true)

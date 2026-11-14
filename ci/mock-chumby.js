@@ -413,6 +413,27 @@ http.createServer(tvRoute).listen(9002, "127.0.0.1");
 // The live scenes keep what's saved and what's ringing, for the films of Snooze, Stop and a nap set and cancelled.
 const chumbyLive = { live: { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)) },
   liveringing: { sys: { ...data.sys, ring: 'r\tWork\tBeep' }, state: JSON.parse(JSON.stringify(data.state)) } };
+// Sounds as Richard's looks (build 281, 11-13): long Pandora station names on every alarm and on calendar alarms, and
+// "Woke up to" with three one-song rings whose artists run to two lines (soundsreal), or the five rings of the sample
+// history, several songs each (soundsmany). Both are live, so a sound picked in a film is kept as the Chumby keeps it.
+function soundsState() {
+  const st = [['21', 'Sunny Day Real Estate Radio'], ['22', 'Cocteau Twins & Slowdive Radio'], ['23', 'Starflyer 59 Radio'], ['24', 'My Bloody Valentine and Shoegaze Essentials Radio']];
+  const p = i => ({ type: 'audio', arg: 'pandora', param: st[i][0], param_description: st[i][1] });
+  const fire = Math.floor(Date.now() / 60000) + 3 * 1440;
+  return { ...JSON.parse(JSON.stringify(data.state)), pandora: st.map(([id, name]) => ({ id, name })),
+    calTpl: alarm({ name: 'Calendar: Shift', when: 'once', time: String(fire), ...p(2) }),
+    alarms: [alarm({ name: 'omg', time: '660', when: 'daily', ...p(0) }), alarm({ name: 'hell nah', time: '885', when: 'weekday', ...p(1) }),
+             alarm({ name: 'Weekend', time: '570', when: 'weekend', ...p(3) }), alarm({ name: 'Calendar: Shift', when: 'once', time: String(fire), ...p(2) })] };
+}
+function soundsHist(scene) {
+  if (scene === 'soundsmany') return data.hist;
+  const d = new Date(), at = (back, h, m) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - back, h, m).getTime() / 1000;
+  const r1 = at(1, 10, 0), r2 = at(2, 13, 30), r3 = at(3, 14, 40);
+  return { ok: true, rings: [{ t: r1, name: '' }, { t: r2, name: '' }, { t: r3, name: '' }],
+    songs: [{ t: r1 + 12, title: 'Twilight', artist: 'bôa', album: 'Twilight' },
+            { t: r2 + 12, title: "I Don't Care", artist: 'LSD And The Search For God', album: 'LSD And The Search For God' },
+            { t: r3 + 12, title: 'Adore', artist: 'Glixen', album: 'She Wants To Be Seen' }] };
+}
 // The next Work alarm (6:45 on a weekday), as the Chumby names a skipped one.
 function nextWork() {
   const d = new Date();
@@ -493,6 +514,10 @@ function chumbyScene(q, s) {
   // taken after 2 s, for a Retry that lands. Each name is its own copy, so each film starts fresh.
   if (scene.startsWith('failonce') && !chumbyLive[scene]) chumbyLive[scene] = { sys: { ...data.sys, ring: '' }, state: JSON.parse(JSON.stringify(data.state)), failsLeft: 1 };
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(JSON.stringify(v)); return true; };
+  if (scene.startsWith('sounds')) {
+    if (a === 'hist') return json(soundsHist(scene));
+    if (!chumbyLive[scene]) chumbyLive[scene] = { sys: { ...data.sys, ring: '' }, state: soundsState() };
+  }
   if (chumbyLive[scene]) {
     const live = chumbyLive[scene];
     if (q.method === 'POST') {
@@ -603,27 +628,6 @@ function chumbyScene(q, s) {
     return json({ ...stateNow(data.state), alarms: [...data.state.alarms, wake], song: live[live.length - 1] || null, rang, music: { source: 'pandora', label: 'Pandora Radio', state: 'playing', playing: true } });
   }
   // A nap set 20 minutes from now, as the app's chips or Control Center leave it: the one "Nap" one-off, a short Beep.
-  // Sounds as Richard's looks (build 281, 11-13): long Pandora station names on every alarm and on calendar alarms, and
-  // "Woke up to" with three one-song rings whose artists run to two lines (soundsreal), or the five rings of the sample
-  // history, several songs each (soundsmany).
-  if ((scene === 'soundsreal' || scene === 'soundsmany') && (a === 'state' || a === 'hist')) {
-    if (a === 'hist' && scene === 'soundsmany') return json(data.hist);
-    if (a === 'hist') {
-      const d = new Date(), at = (back, h, m) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - back, h, m).getTime() / 1000;
-      const r1 = at(1, 10, 0), r2 = at(2, 13, 30), r3 = at(3, 14, 40);
-      return json({ ok: true, rings: [{ t: r1, name: '' }, { t: r2, name: '' }, { t: r3, name: '' }],
-        songs: [{ t: r1 + 12, title: 'Twilight', artist: 'bôa', album: 'Twilight' },
-                { t: r2 + 12, title: "I Don't Care", artist: 'LSD And The Search For God', album: 'LSD And The Search For God' },
-                { t: r3 + 12, title: 'Adore', artist: 'Glixen', album: 'She Wants To Be Seen' }] });
-    }
-    const st = [['21', 'Sunny Day Real Estate Radio'], ['22', 'Cocteau Twins & Slowdive Radio'], ['23', 'Starflyer 59 Radio'], ['24', 'My Bloody Valentine and Shoegaze Essentials Radio']];
-    const p = i => ({ type: 'audio', arg: 'pandora', param: st[i][0], param_description: st[i][1] });
-    const fire = Math.floor(Date.now() / 60000) + 3 * 1440;
-    return json({ ...stateNow(data.state), pandora: st.map(([id, name]) => ({ id, name })),
-      calTpl: alarm({ name: 'Calendar: Shift', when: 'once', time: String(fire), ...p(2) }),
-      alarms: [alarm({ name: 'omg', time: '660', when: 'daily', ...p(0) }), alarm({ name: 'hell nah', time: '885', when: 'weekday', ...p(1) }),
-               alarm({ name: 'Weekend', time: '570', when: 'weekend', ...p(3) }), alarm({ name: 'Calendar: Shift', when: 'once', time: String(fire), ...p(2) })] });
-  }
   if (scene === 'nap' && a === 'state') {
     return json({ ...stateNow(data.state), alarms: [...data.state.alarms, alarm({ name: 'Nap', when: 'once', time: String(Math.floor(Date.now() / 60000) + 20), duration: '5' })] });
   }

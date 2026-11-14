@@ -702,16 +702,20 @@ struct WokeUpTo: View {
                     HStack(alignment: .top, spacing: Self.groupGap) {
                         ForEach(list) { w in group(w, side: side).transition(.opacity.combined(with: .scale(scale: 0.92))) }
                     }
+                    .onGeometryChange(for: Ends.self) { g in
+                        let f = g.frame(in: .named(Self.space))
+                        return Ends(start: f.minX >= Self.inset - 1, end: f.maxX <= width - Self.inset + 1)
+                    } action: { e in withAnimation(.easeOut(duration: 0.15)) { ends = e } }
                     .padding(.vertical, Self.vertical)
                     .animation(.snappy, value: list.map { $0.songs.map(\.id) })
                     .animation(.snappy, value: side)
                 }
                 .contentMargins(.horizontal, Self.inset, for: .scrollContent)
                 .scrollDisabled(fits)
-                .onScrollGeometryChange(for: Ends.self) { g in
-                    Ends(start: g.contentOffset.x <= -g.contentInsets.leading + 1,
-                         end: g.contentOffset.x + g.containerSize.width >= g.contentSize.width + Self.inset - 2)
-                } action: { _, e in withAnimation(.easeOut(duration: 0.15)) { ends = e } }
+                // Which ends have more past them, read from where the covers themselves sit in the strip's visible
+                // bounds (the scroll geometry's own sums left the far end faded with the last cover whole on the line:
+                // gate on 1075bc4).
+                .coordinateSpace(.named(Self.space))
                 // The covers are seen only inside the card's insets; on a side with more to scroll to they fade out over
                 // the last 28 pt before the inset line, so a cover leaving is a fade, never a cut.
                 .mask {
@@ -729,6 +733,7 @@ struct WokeUpTo: View {
         }
     }
     struct Ends: Equatable { var start = true, end = true }
+    static let space = "wokeStrip"
     @State private var ends = Ends()
     // One spacing system with the rows and headings around it: the card's 20 pt inset on both sides and 16 pt above and
     // below; 20 pt between rings and 10 pt between a ring's songs; the header 8 pt over its covers, captions 8 pt under.
