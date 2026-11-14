@@ -82,10 +82,13 @@ extension HistoryDB {
     }
 }
 
+// Library. Folded and open upright, a pivot of his shelves (artists, albums, tracks, loved), a swipe from one to the next,
+// the search at the top of each reaching all of them; while he types the shelves hold still under the results. Open
+// flat, the search and the shelves on the left and the list on the right.
 struct LibraryTab: View {
     let top: Int
-    @FocusState private var typing: Bool
-    @State private var shown = 200
+    @FocusState private var typing: LibShelf?
+    @State private var shown: [LibShelf: Int] = [:]
     @State private var grown: Set<Kind> = []
     private var m: LibraryModel { LibraryModel.shared }
     @Environment(\.paneLayout) private var pane
@@ -96,22 +99,25 @@ struct LibraryTab: View {
                 FoldSplit {
                     Page(top: top) { VStack(alignment: .leading, spacing: S.section) { head; overview }.padding(.top, S.head) }
                 } right: {
-                    Page(top: top) { LazyVStack(alignment: .leading, spacing: 0) { if m.query.isEmpty { shelf } else { results } }.padding(.top, S.section) }
+                    Page(top: top) { LazyVStack(alignment: .leading, spacing: 0) { if m.query.isEmpty { shelf(m.shelf) } else { results } }.padding(.top, S.section) }
                 }
             } else {
-                Page(top: top) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        head.padding(.bottom, S.section)
-                        if m.query.isEmpty { shelf } else { results }
-                    }
-                    .padding(.top, S.head)
-                }
+                Pager(.pivot, page: Binding(get: { m.shelf.rawValue }, set: { m.shelf = LibShelf(rawValue: $0) ?? .artists }), top: top, locked: !m.query.isEmpty,
+                      panels: LibShelf.allCases.map { sh in
+                          Panel(sh.rawValue, sh.name.lowercased()) {
+                              LazyVStack(alignment: .leading, spacing: 0) {
+                                  search(sh).padding(.horizontal, S.margin).padding(.bottom, S.section)
+                                  if m.query.isEmpty { shelf(sh) } else { results }
+                              }
+                          }
+                      })
             }
         }
         .scrollDismissesKeyboard(.immediately)
+        .sensoryFeedback(.tick, trigger: m.sort)
         .onAppear { m.appear() }
         // Leaving for a page puts the keyboard away; it never outlives the search it served.
-        .onDisappear { typing = false }
+        .onDisappear { typing = nil }
         .task {
             guard Pose.name == "search" else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -122,13 +128,14 @@ struct LibraryTab: View {
     private var head: some View {
         VStack(alignment: .leading, spacing: S.head) {
             HubTitle(text: "library", size: 80)
-            search.padding(.horizontal, S.margin)
+            search(m.shelf).padding(.horizontal, S.margin)
             if m.query.isEmpty {
-                Picker("Show", selection: Binding(get: { m.shelf }, set: { m.shelf = $0; shown = 200 })) {
+                Picker("Show", selection: Binding(get: { m.shelf }, set: { m.shelf = $0 })) {
                     ForEach(LibShelf.allCases, id: \.self) { Text($0.name).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal, S.margin)
+                .sensoryFeedback(.tick, trigger: m.shelf)
             }
         }
     }
@@ -160,13 +167,13 @@ struct LibraryTab: View {
         .padding(.horizontal, S.margin)
     }
 
-    private var search: some View {
+    private func search(_ sh: LibShelf) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").foregroundStyle(S.soft)
             TextField("Artists, albums and tracks", text: Binding(get: { m.query }, set: { m.query = $0 }))
-                .focused($typing)
+                .focused($typing, equals: sh)
                 .submitLabel(.search)
-                .onSubmit { typing = false }
+                .onSubmit { typing = nil }
                 .autocorrectionDisabled()
                 .foregroundStyle(.white)
             if !m.query.isEmpty {
@@ -180,16 +187,17 @@ struct LibraryTab: View {
     }
 
     // One shelf, sorted as chosen, with how many there are and the sort beside it.
-    @ViewBuilder private var shelf: some View {
-        let isLoved = m.shelf == .loved
-        let kind = Kind(rawValue: m.shelf.rawValue) ?? .artists
+    @ViewBuilder private func shelf(_ sh: LibShelf) -> some View {
+        let isLoved = sh == .loved
+        let kind = Kind(rawValue: sh.rawValue) ?? .artists
+        let limit = self.shown[sh, default: 200]
         let list = isLoved ? [] : m.sorted(kind)
         HStack(alignment: .firstTextBaseline) {
             Text(isLoved ? "\(number(m.loved.count)) loved" : "\(number(list.count)) \(kind.noun)").font(.system(.title2, weight: .bold)).foregroundStyle(.white)
             Spacer(minLength: 8)
             if !isLoved {
                 Menu {
-                    Picker("Sort by", selection: Binding(get: { m.sort }, set: { m.sort = $0; shown = 200 })) {
+                    Picker("Sort by", selection: Binding(get: { m.sort }, set: { m.sort = $0; self.shown = [:] })) {
                         ForEach(LibSort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
                 } label: {
@@ -203,10 +211,10 @@ struct LibraryTab: View {
         if isLoved {
             ForEach(m.loved) { l in lovedRow(l).padding(.horizontal, S.margin) }
         } else {
-            ForEach(list.prefix(shown)) { e in
+            ForEach(list.prefix(limit)) { e in
                 EntryRow(e: e, showRank: m.sort == .plays, context: "lib", trailing: trailing(e))
                     .padding(.horizontal, S.margin)
-                    .onAppear { if e.id == list.prefix(shown).last?.id, shown < list.count { shown += 300 } }
+                    .onAppear { if e.id == list.prefix(limit).last?.id, limit < list.count { self.shown[sh] = limit + 300 } }
             }
             if m.lists[kind] == nil { ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, S.section) }
         }

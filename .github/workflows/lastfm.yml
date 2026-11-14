@@ -37,6 +37,9 @@ jobs:
           set -o pipefail
           xcodebuild -project MacPro.xcodeproj -scheme LastFM -configuration Debug -sdk iphonesimulator \
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+          # The widgets' gallery: every family, look and state drawn as sheets.
+          xcodebuild -project MacPro.xcodeproj -scheme GalleryLastFM -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
       - name: Shots and films
         continue-on-error: true
         timeout-minutes: 80
@@ -99,6 +102,9 @@ jobs:
                 pull) $D "$DEVICE" drag ${X:-0.5} 0.3 ${X:-0.5} 0.85 0.9 || echo "drag failed";;
                 slow) $D "$DEVICE" drag ${X:-0.5} 0.75 ${X:-0.5} 0.35 0.9 || echo "drag failed";;
                 side) $D "$DEVICE" drag 0.8 ${Y:-0.75} 0.2 ${Y:-0.75} 0.25 || echo "drag failed";;
+                sideback) $D "$DEVICE" drag 0.2 ${Y:-0.75} 0.8 ${Y:-0.75} 0.25 || echo "drag failed";;
+                sideslow) $D "$DEVICE" drag 0.75 ${Y:-0.75} 0.35 ${Y:-0.75} 1.2 || echo "drag failed";;
+                link) xcrun simctl openurl "$DEVICE" "$LINK" || echo "link failed";;
                 edge) $D "$DEVICE" drag ${EX:-0.01} 0.5 0.9 0.5 0.8 || echo "drag failed";;
                 tap) $D "$DEVICE" touch ${TX:-0.3} ${TY:-0.3} 0.05 || echo "tap failed";;
                 open|partial|closed) $D "$DEVICE" pose $cmd || echo "pose failed";;
@@ -113,15 +119,18 @@ jobs:
             xcrun simctl terminate "$DEVICE" $APP || true
             if [ "$(stat -f %z dist/lfm-$name.mp4 2>/dev/null || echo 0)" -lt 20000 ]; then echo "film $name empty"; fi
           }
-          # Every tab and page in one posture: name suffix, display. Tabs: 0 now, 1 charts, 2 library, 3 you, 4 discover.
+          # Every tab and page in one posture: name suffix, display. Tabs: 0 you (Start, panels 0 stats, 1 now, 2 lately,
+          # 3 story), 1 charts, 2 library, 3 discover.
           everything() {
             local x=$1 d=$2
-            shot now$x $d 8 -tab 0
-            shot now-idle$x $d 8 -tab 0 -playing NO
+            shot start$x $d 9 -tab 0
+            shot now$x $d 8 -tab 0 -panel 1
+            shot now-idle$x $d 8 -tab 0 -panel 1 -playing NO
+            shot lately$x $d 9 -tab 0 -panel 2
+            shot story$x $d 9 -tab 0 -panel 3
             shot charts$x $d 9 -tab 1
             shot library$x $d 9 -tab 2
-            shot you$x $d 9 -tab 3
-            shot discover$x $d 10 -tab 4
+            shot discover$x $d 10 -tab 3
             shot track$x $d 10 -tab 0 -pose track
             shot artist$x $d 11 -tab 0 -pose artist
             shot album$x $d 11 -tab 0 -pose album
@@ -130,29 +139,40 @@ jobs:
           }
           date
           # Folded, upright. The first launch: the whole history read in, filmed on You, slowed so it can be seen.
-          STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 3 -fresh YES -mockSyncSlow YES
+          STEPS="shot:6 shot:8 shot:8" film sync 1 34 -tab 0 -fresh YES -mockSyncSlow YES
           # Read in full at normal speed for everything after (the slowed read above may not have finished), then the
           # insights that need all of it, the track lengths and Discover's first list.
-          shot you-first 1 30 -tab 3
-          shot discover-first 1 20 -tab 4
+          shot start-first 1 30 -tab 0
+          shot discover-first 1 20 -tab 3
           everything "" 1
-          shot scrub 1 9 -tab 0 -pose scrub
-          STEPS="slow:10 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2 flingback:2" film scroll-now 1 26 -tab 0
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 slow:2 shot:2" film scroll-now-idle 1 20 -tab 0 -playing NO
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-you 1 40 -tab 3
+          shot scrub 1 9 -tab 0 -panel 1 -pose scrub
+          # The panorama: across Start's four sections and back (a slow drag, then flicks), the title sliding behind.
+          STEPS="sideslow:6 shot:2 side:2 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film pan-start 1 28 -tab 0
+          # Scrolled down a section, then across: the title rising with it and meeting the next.
+          STEPS="slow:6 shot:2 side:2 shot:2 sideback:2 shot:2" film pan-start-scrolled 1 18 -tab 0
+          # The pivots: Charts' stretches and the Library's shelves, swiped through and back.
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 shot:1 sideback:2 sideback:2 shot:2" film pivot-charts 1 26 -tab 1
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pivot-library 1 24 -tab 2
+          STEPS="slow:10 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2 flingback:2" film scroll-now 1 26 -tab 0 -panel 1
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 slow:2 shot:2" film scroll-now-idle 1 20 -tab 0 -panel 1 -playing NO
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-you 1 30 -tab 0
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2 flingback:2" film scroll-story 1 34 -tab 0 -panel 3
+          # A widget's link into the app while it's open: to a section, then to an artist's page.
+          LINK="rotation://lately" STEPS="link:6 shot:3" film link-lately 1 12 -tab 0
+          LINK="rotation://artist?name=Glass%20Harbor" STEPS="link:6 shot:4" film link-artist 1 14 -tab 1
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-charts 1 28 -tab 1
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-library 1 20 -tab 2
           STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll 1 26 -tab 0 -pose artist
           STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2" film album-scroll 1 20 -tab 0 -pose album
           STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film track-film 1 20 -tab 0 -pose track
-          STEPS="shot:12 shot:12" film live 1 30 -tab 0 -mockAdvance 11
+          STEPS="shot:12 shot:12" film live 1 30 -tab 0 -panel 1 -mockAdvance 11
           film tour 1 22 -tab 0 -pose tour
           # Folded and turned sideways, a posture he can hold too.
           orient landscape 1 || true; orient landscape 1
-          shot now-fland 1 8 -tab 0
-          shot now-idle-fland 1 8 -tab 0 -playing NO
+          shot start-fland 1 9 -tab 0
+          shot now-fland 1 8 -tab 0 -panel 1
+          shot now-idle-fland 1 8 -tab 0 -panel 1 -playing NO
           shot charts-fland 1 9 -tab 1
-          shot you-fland 1 9 -tab 3
           shot artist-fland 1 11 -tab 0 -pose artist
           shot track-fland 1 10 -tab 0 -pose track
           orient portrait 1
@@ -170,9 +190,11 @@ jobs:
           orient portrait 3
           sleep 4
           everything "-portrait" 3
-          shot scrub-portrait 3 9 -tab 0 -pose scrub
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2" film scroll-now-portrait 3 20 -tab 0
-          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-you-portrait 3 34 -tab 3
+          shot scrub-portrait 3 9 -tab 0 -panel 1 -pose scrub
+          STEPS="sideslow:6 shot:2 side:2 shot:2 side:2 shot:2 side:2 shot:2 sideback:2 sideback:2 sideback:2 shot:2" film pan-start-portrait 3 26 -tab 0
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 sideback:2 sideback:2 shot:2" film pivot-charts-portrait 3 18 -tab 1
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 pull:2 flingback:2" film scroll-now-portrait 3 20 -tab 0 -panel 1
+          STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2 flingback:2" film scroll-you-portrait 3 28 -tab 0
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-charts-portrait 3 26 -tab 1
           STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-library-portrait 3 18 -tab 2
           STEPS="slow:7 shot:2 fling:2 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-portrait 3 22 -tab 0 -pose artist
@@ -182,11 +204,19 @@ jobs:
           sleep 4
           everything "-open" 3
           X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 flingback:2" film scroll-now-open 3 18 -tab 0
-          X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-you-open 3 20 -tab 3
+          X=0.28 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-you-open 3 20 -tab 0
+          Y=0.6 STEPS="side:6 shot:2 side:2 shot:2 sideback:2 sideback:2 shot:2" film pan-start-open 3 18 -tab 0
           X=0.72 STEPS="slow:6 shot:2 fling:2 shot:2 fling:2 shot:2" film scroll-charts-open 3 18 -tab 1
           X=0.72 STEPS="slow:7 shot:2 fling:2 shot:2 edge:2 shot:2" film artist-scroll-open 3 20 -tab 0 -pose artist
           film tour-open 3 22 -tab 0 -pose tour
           date
+          # The widgets: every family, look and state, drawn by the gallery as sheets.
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryLastFM.app
+          xcrun simctl launch "$DEVICE" local.macpro.GalleryLastFM -sheets YES
+          sleep 40
+          G=$(xcrun simctl get_app_container "$DEVICE" local.macpro.GalleryLastFM data 2>/dev/null) && cp "$G"/Documents/sheets/*.png dist/ 2>/dev/null
+          xcrun simctl terminate "$DEVICE" local.macpro.GalleryLastFM || true
+          ls dist | grep -c lfm-widgets || echo "NO WIDGET SHEETS"
           # How long each launch took to its first frame, step by step (-launchLog).
           C=$(xcrun simctl get_app_container "$DEVICE" $APP data 2>/dev/null) && cp "$C/Library/Caches/launch-log.txt" dist/launch.log 2>/dev/null
           cat dist/launch.log 2>/dev/null | head -80

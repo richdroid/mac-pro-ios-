@@ -63,17 +63,21 @@ struct ChartSummary: Sendable {
     var bumpRanks: [[String: Int]] = []
     var bumpWeeks: [(Int, Int)] = []
     var shareImage: Image?
-    @ObservationIgnored private var cache: [String: ([Entry], ChartSummary?)] = [:]
+    // Every chart worked out, by stretch and kind: a pivot's pages read theirs from here, the ones beside the one he's on
+    // worked out ahead so a swipe lands on a chart already drawn.
+    private(set) var cache: [String: ([Entry], ChartSummary?)] = [:]
+    @ObservationIgnored private var computing: Set<String> = []
+    private(set) var generation = 0            // bumped when the kept charts are let go (the history grew)
     @ObservationIgnored private var bumpCache: [Kind: ([Entry], [[String: Int]], [(Int, Int)])] = [:]
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var stamp = 0       // the history's size when the cache was made
 
-    private func key(_ p: Period, _ k: Kind) -> String { "\(p)|\(k.rawValue)" }
+    func key(_ p: Period, _ k: Kind) -> String { "\(p)|\(k.rawValue)" }
 
     func appear() {
         // Kept for a while: worked out again only when the history has grown by a song or two.
         let read = HistorySync.shared.read
-        if abs(read - stamp) > 3 { cache = [:]; bumpCache = [:]; stamp = read }
+        if abs(read - stamp) > 3 { cache = [:]; bumpCache = [:]; stamp = read; generation += 1 }
         reload(); reloadBump()
         if weeks.isEmpty { Task { weeks = await ChartWeek.load() } }
     }
@@ -92,46 +96,58 @@ struct ChartSummary: Sendable {
         if let hit = cache[ck] { entries = hit.0; summary = hit.1; render(); return }
         task?.cancel()
         task = Task {
-            let sync = HistorySync.shared
-            let w = window(p)
-            let db = HistoryDB.reader
-            var list: [Entry] = []
-            var sum: ChartSummary?
-            if sync.complete || sync.coveredFrom <= w.from {
-                let median = await db.medianLength()
-                list = await db.top(k, from: w.from, to: w.to, limit: 100, median: median)
-                let withPrev = sync.complete || sync.coveredFrom <= w.prevFrom
-                if withPrev {
-                    let prev = await db.ranks(k, from: w.prevFrom, to: w.prevTo, limit: 1000)
-                    for i in list.indices {
-                        if let r = prev[list[i].rankKey] { list[i].move = r > list[i].rank ? .up(r - list[i].rank) : r < list[i].rank ? .down(list[i].rank - r) : .same }
-                        else { list[i].move = .new }
-                    }
-                }
-                let t = await db.time(from: w.from, to: w.to)
-                let d = await db.distinct(from: w.from, to: w.to)
-                var change: Double?
-                if withPrev, case .all = p {} else if withPrev {
-                    let before = await db.between(w.prevFrom, w.prevTo)
-                    if before > 0 { change = Double(t.plays - before) / Double(before) }
-                }
-                sum = ChartSummary(plays: t.plays, secs: HistoryDB.listening(plays: t.plays, secs: t.secs, known: t.known, median: median),
-                                   artists: d.artists, albums: d.albums, tracks: d.tracks, change: change)
-            } else {
-                var week: ChartWeek?
-                if case .week(let x) = p { week = x }
-                list = await RemoteChart.top(k, period: p.lastfm, week: week)
-            }
-            guard !Task.isCancelled else { return }
-            cache[ck] = (list, sum)
-            if period == p && kind == k {
-                withAnimation(.smooth(duration: 0.3)) { entries = list; summary = sum }
-                render()
-            }
+            await compute(p, k)
+            guard !Task.isCancelled, period == p, kind == k, let hit = cache[ck] else { return }
+            withAnimation(.smooth(duration: 0.3)) { entries = hit.0; summary = hit.1 }
+            render()
         }
     }
 
-    // The last twelve weeks (his calendar's weeks, this one so far), and how the ten most played across them ranked in each.
+    // A stretch's chart worked out ahead, without changing the one on screen.
+    func ensure(_ p: Period) {
+        let k = kind, ck = key(p, k)
+        guard cache[ck] == nil, !computing.contains(ck) else { return }
+        Task { await compute(p, k) }
+    }
+
+    private func compute(_ p: Period, _ k: Kind) async {
+        let ck = key(p, k)
+        if cache[ck] != nil { return }
+        computing.insert(ck)
+        defer { computing.remove(ck) }
+        let sync = HistorySync.shared
+        let w = window(p)
+        let db = HistoryDB.reader
+        var list: [Entry] = []
+        var sum: ChartSummary?
+        if sync.complete || sync.coveredFrom <= w.from {
+            let median = await db.medianLength()
+            list = await db.top(k, from: w.from, to: w.to, limit: 100, median: median)
+            let withPrev = sync.complete || sync.coveredFrom <= w.prevFrom
+            if withPrev {
+                let prev = await db.ranks(k, from: w.prevFrom, to: w.prevTo, limit: 1000)
+                for i in list.indices {
+                    if let r = prev[list[i].rankKey] { list[i].move = r > list[i].rank ? .up(r - list[i].rank) : r < list[i].rank ? .down(list[i].rank - r) : .same }
+                    else { list[i].move = .new }
+                }
+            }
+            let t = await db.time(from: w.from, to: w.to)
+            let d = await db.distinct(from: w.from, to: w.to)
+            var change: Double?
+            if withPrev, case .all = p {} else if withPrev {
+                let before = await db.between(w.prevFrom, w.prevTo)
+                if before > 0 { change = Double(t.plays - before) / Double(before) }
+            }
+            sum = ChartSummary(plays: t.plays, secs: HistoryDB.listening(plays: t.plays, secs: t.secs, known: t.known, median: median),
+                               artists: d.artists, albums: d.albums, tracks: d.tracks, change: change)
+        } else {
+            var week: ChartWeek?
+            if case .week(let x) = p { week = x }
+            list = await RemoteChart.top(k, period: p.lastfm, week: week)
+        }
+        cache[ck] = (list, sum)
+    }
+
     func reloadBump() {
         let k = kind
         if let hit = bumpCache[k] { bump = hit.0; bumpRanks = hit.1; bumpWeeks = hit.2; return }
@@ -185,29 +201,53 @@ struct ChartSummary: Sendable {
     }
 }
 
+// Charts. Folded and open upright, a pivot: the stretches (week, month, 3 months, 6 months, year, all time, and a past
+// week once chosen) across the top in large light type, a swipe from one to the next, each page its own chart; the
+// kind (artists, albums, tracks) and "Any week" under them. Open flat, the stretches are chips over the left pane and
+// the list and the last twelve weeks fill the right.
 struct ChartsTab: View {
     let top: Int
     @Environment(\.paneLayout) private var pane
     @State private var picking = false
     @State private var all = false
+    @State private var page = 0
     private var m: ChartsModel { ChartsModel.shared }
+    private var pages: [Period] { if case .week = m.period { return Period.rolling + [m.period] }; return Period.rolling }
     var body: some View {
         Group {
             if pane {
                 FoldSplit {
-                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { head; waiting; figures; collage }.padding(.top, S.head) }
+                    Page(top: top) {
+                        VStack(alignment: .leading, spacing: S.section) {
+                            VStack(alignment: .leading, spacing: S.head) { HubTitle(text: "charts", size: 80); periods; kindPicker }
+                            content(m.period, onlyLeft: true)
+                        }
+                        .padding(.top, S.head)
+                    }
                 } right: {
-                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { list; BumpSection() }.padding(.top, S.section) }
+                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { list(m.entries); BumpSection() }.padding(.top, S.section) }
                 }
             } else {
-                Page(top: top) {
-                    VStack(alignment: .leading, spacing: S.section) { head; waiting; figures; collage; list; BumpSection() }.padding(.top, S.head)
-                }
+                Pager(.pivot, page: $page, top: top,
+                      accessory: AnyView(HStack(spacing: S.gap) { kindPicker; anyWeek }.padding(.horizontal, S.margin)),
+                      panels: pages.enumerated().map { i, p in
+                          Panel(i, p.name.lowercased()) {
+                              VStack(alignment: .leading, spacing: S.section) {
+                                  content(p, onlyLeft: false)
+                                  list(m.cache[m.key(p, m.kind)]?.0 ?? [])
+                                  // The last twelve weeks are three months: they belong on that page.
+                                  if p == .days(90) { BumpSection() }
+                              }
+                              .task(id: "\(m.kind.rawValue)|\(m.generation)") { m.ensure(p) }
+                          }
+                      })
             }
         }
-        .onAppear { m.appear() }
-        .onChange(of: m.period) { _, _ in all = false }
+        .onAppear { m.appear(); page = pages.firstIndex(of: m.period) ?? 0 }
+        .onChange(of: page) { _, i in if i < pages.count, pages[i] != m.period { m.period = pages[i] } }
+        .onChange(of: m.period) { _, p in all = false; if let i = pages.firstIndex(of: p), i != page { page = i } }
         .onChange(of: m.kind) { _, _ in all = false }
+        .sensoryFeedback(.tick, trigger: m.kind)
         .cover(isPresented: $picking) { WeekPicker() }
         .task {
             guard Pose.name == "weeks" else { return }
@@ -216,25 +256,37 @@ struct ChartsTab: View {
         }
     }
 
-    private var head: some View {
-        VStack(alignment: .leading, spacing: S.head) {
-            HubTitle(text: "charts", size: 80)
-            periods
-            Picker("Show", selection: Binding(get: { m.kind }, set: { m.kind = $0 })) {
-                ForEach(Kind.allCases, id: \.self) { Text($0.name).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, S.margin)
-        }
+    // One stretch's chart: its figures and its collage (the list follows, or sits on the right open flat).
+    @ViewBuilder private func content(_ p: Period, onlyLeft: Bool) -> some View {
+        let hit = p == m.period ? (m.entries, m.summary) : (m.cache[m.key(p, m.kind)] ?? ([], nil))
+        if hit.0.isEmpty { ProgressView().tint(.white).controlSize(.large).frame(maxWidth: .infinity).padding(.vertical, S.section) }
+        figures(hit.1, p)
+        collage(hit.0, current: p == m.period)
     }
 
-    // The stretches as glass capsules, a past week among them once chosen, and the way to choose one.
+    private var kindPicker: some View {
+        Picker("Show", selection: Binding(get: { m.kind }, set: { m.kind = $0 })) {
+            ForEach(Kind.allCases, id: \.self) { Text($0.name).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, pane ? S.margin : 0)
+    }
+
+    private var anyWeek: some View {
+        Button { picking = true } label: {
+            Label("Any week", systemImage: "calendar").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                .padding(.horizontal, 14).frame(height: 32)
+                .glassEffect(.regular, in: Capsule())
+        }
+        .buttonStyle(Press())
+    }
+
+    // Open flat: the stretches as glass capsules, a past week among them once chosen, and the way to choose one.
     private var periods: some View {
-        let list: [Period] = { if case .week = m.period { return Period.rolling + [m.period] }; return Period.rolling }()
-        return ScrollViewReader { proxy in
+        ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 HStack(spacing: S.gap / 1.5) {
-                    ForEach(list, id: \.self) { p in
+                    ForEach(pages, id: \.self) { p in
                         let on = p == m.period
                         Button { withAnimation(.snappy(duration: 0.25)) { m.period = p } } label: {
                             Text(p.name).font(.subheadline.weight(.semibold)).foregroundStyle(on ? .black : .white)
@@ -246,28 +298,19 @@ struct ChartsTab: View {
                         .id(p)
                         .accessibilityAddTraits(on ? .isSelected : [])
                     }
-                    Button { picking = true } label: {
-                        Label("Any week", systemImage: "calendar").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                            .padding(.horizontal, 14).frame(height: 36)
-                            .glassEffect(.regular, in: Capsule())
-                    }
-                    .buttonStyle(Press())
+                    anyWeek
                 }
                 .padding(.horizontal, S.margin)
             }
             .scrollIndicators(.hidden)
             .clipped()
+            .sensoryFeedback(.tick, trigger: m.period)
             .onChange(of: m.period) { _, p in withAnimation(.smooth) { proxy.scrollTo(p, anchor: .center) } }
         }
     }
 
-    // Only the very first time a chart is worked out (a later one keeps the last on screen until the new one is ready).
-    @ViewBuilder private var waiting: some View {
-        if m.entries.isEmpty { ProgressView().tint(.white).controlSize(.large).frame(maxWidth: .infinity).padding(.vertical, S.section) }
-    }
-
-    @ViewBuilder private var figures: some View {
-        if let s = m.summary {
+    @ViewBuilder private func figures(_ s: ChartSummary?, _ p: Period) -> some View {
+        if let s {
             VStack(alignment: .leading, spacing: S.inner) {
                 HStack(alignment: .lastTextBaseline, spacing: S.figures) {
                     VStack(alignment: .leading, spacing: S.pair) {
@@ -282,7 +325,7 @@ struct ChartsTab: View {
                                 Text("\(Int((abs(c) * 100).rounded()))%").font(.system(size: 30, weight: .light)).monospacedDigit()
                             }
                             .foregroundStyle(.white)
-                            Text("against \(m.period.before)").font(.subheadline).foregroundStyle(S.soft)
+                            Text("against \(p.before)").font(.subheadline).foregroundStyle(S.soft)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -300,10 +343,10 @@ struct ChartsTab: View {
     }
 
     // The covers edge to edge, a hairline apart, in the grid chosen; shared as one picture.
-    @ViewBuilder private var collage: some View {
-        if !m.entries.isEmpty {
+    @ViewBuilder private func collage(_ entries: [Entry], current: Bool) -> some View {
+        if !entries.isEmpty {
             let n = m.size
-            let cells = Array(m.entries.prefix(n * n))
+            let cells = Array(entries.prefix(n * n))
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "collage")
                 HStack(spacing: S.gap) {
@@ -311,7 +354,7 @@ struct ChartsTab: View {
                         ForEach([3, 4, 5], id: \.self) { Text("\($0)×\($0)").tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    if let img = m.shareImage {
+                    if current, let img = m.shareImage {
                         ShareLink(item: img, preview: SharePreview("Your \(m.period.name.lowercased()) in \(m.kind.noun)", image: img)) {
                             Label("Share", systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold))
                                 .padding(.horizontal, 14).frame(height: 32)
@@ -335,21 +378,22 @@ struct ChartsTab: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .animation(.smooth(duration: 0.35), value: n)
             }
+            .sensoryFeedback(.tick, trigger: m.size)
             .padding(.horizontal, S.margin)
         }
     }
 
-    @ViewBuilder private var list: some View {
-        if !m.entries.isEmpty {
-            let shown = all ? m.entries : Array(m.entries.prefix(10))
+    @ViewBuilder private func list(_ entries: [Entry]) -> some View {
+        if !entries.isEmpty {
+            let shown = all ? entries : Array(entries.prefix(10))
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "top \(m.kind.noun)")
                 VStack(spacing: 0) {
                     ForEach(shown) { e in EntryRow(e: e, context: "chart") }
                 }
-                if m.entries.count > 10 {
+                if entries.count > 10 {
                     Button { withAnimation(.smooth) { all.toggle() } } label: {
-                        Text(all ? "Show the top 10" : "Show all \(m.entries.count)").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        Text(all ? "Show the top 10" : "Show all \(entries.count)").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                             .frame(maxWidth: .infinity).frame(height: 44)
                             .glassEffect(.regular, in: Capsule())
                     }

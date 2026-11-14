@@ -3,73 +3,6 @@ import SwiftUI
 import UIKit
 #endif
 
-// Now. While a song plays: the song as the hero (its cover large, breathing), his day so far drawn in its covers'
-// colours, his week, and every scrobble since. While nothing plays, nothing pretends to: the page leads with his
-// listening (today's figures, his day, his week) and the last song sits in a small card, "Last played 2 h ago", its
-// cover still. Folded and open upright one column; open flat the hero (or today) holds the left pane while the rest
-// scrolls on the right.
-struct NowTab: View {
-    let top: Int
-    @Environment(\.paneLayout) private var pane
-    @Environment(\.horizontalSizeClass) private var size
-    // Wider than tall in one column: folded and turned sideways. The hero goes side by side so the song's words stay
-    // on screen with its cover.
-    @State private var sideways = false
-    private var store: Store { Store.shared }
-    var body: some View {
-        let playing = store.nowPlaying != nil || store.hero == nil
-        Group {
-            if pane {
-                FoldSplit {
-                    if playing {
-                        VStack(spacing: 0) {
-                            Spacer(minLength: 0)
-                            NowHero(layout: .stage)
-                            Spacer(minLength: 0)
-                        }
-                    } else {
-                        Page(top: top) { idleHead.padding(.top, S.head) }
-                    }
-                } right: {
-                    Page(top: top) {
-                        VStack(alignment: .leading, spacing: S.section) { trouble; DaySection(lead: !playing); WeekGlance(); RecentSection() }.padding(.top, S.section)
-                    }
-                }
-            } else {
-                Page(top: top) {
-                    VStack(alignment: .leading, spacing: S.section) {
-                        if playing {
-                            NowHero(layout: sideways ? .short : size == .regular ? .wide : .column)
-                        } else {
-                            idleHead
-                        }
-                        trouble
-                        DaySection(lead: !playing)
-                        WeekGlance()
-                        RecentSection()
-                    }
-                    .padding(.top, S.head)
-                }
-            }
-        }
-        .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.15 } action: { sideways = $0 }
-    }
-    // Nothing playing: today first, then the last song, plainly.
-    private var idleHead: some View {
-        VStack(alignment: .leading, spacing: S.head) {
-            HubTitle(text: "today", size: 80)
-            VStack(alignment: .leading, spacing: S.section) {
-                TodayFigures()
-                if let last = store.recent.first { LastPlayed(s: last) }
-            }
-            .padding(.horizontal, S.margin)
-        }
-    }
-    @ViewBuilder private var trouble: some View {
-        if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
-    }
-}
-
 // Today in figures: plays, listening time (once enough lengths are known), artists, and the streak it keeps going.
 struct TodayFigures: View {
     private var store: Store { Store.shared }
@@ -77,7 +10,7 @@ struct TodayFigures: View {
         let today = store.today
         VStack(alignment: .leading, spacing: S.inner) {
             VStack(alignment: .leading, spacing: S.pair) {
-                Text(number(today.count)).font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white).contentTransition(.numericText())
+                Counting(today.count, key: "today").font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
                 Text(today.count == 1 ? "play" : "plays").font(.title3.weight(.light)).foregroundStyle(S.soft)
             }
             .accessibilityElement(children: .combine)
@@ -176,16 +109,20 @@ struct TroubleNote: View {
 struct NowHero: View {
     enum Layout { case column, wide, short, stage }
     let layout: Layout
+    // In a panorama the section's header names it and the hub's title is his; the artist is said in the words.
+    var titled = true
     @Environment(\.openRoute) private var open
     @State private var breathe = false
-    init(layout: Layout) { self.layout = layout; LaunchLog.mark("hero built") }
+    init(layout: Layout, titled: Bool = true) { self.layout = layout; self.titled = titled; LaunchLog.mark("hero built") }
     private var store: Store { Store.shared }
     var body: some View {
         if let s = store.hero {
             let playing = s.nowPlaying
             VStack(alignment: .leading, spacing: S.head) {
-                HubTitle(text: s.artist, size: layout == .column || layout == .short ? 64 : 88)
-                    .id(s.artist).transition(.opacity)
+                if titled {
+                    HubTitle(text: s.artist, size: layout == .column || layout == .short ? 64 : 88)
+                        .id(s.artist).transition(.opacity)
+                }
                 Group {
                     if layout == .wide || layout == .short {
                         HStack(alignment: .bottom, spacing: S.figures) {
@@ -204,7 +141,7 @@ struct NowHero: View {
             .animation(.smooth(duration: 0.5), value: s.id)
         } else {
             VStack(alignment: .leading, spacing: S.head) {
-                HubTitle(text: "listening", size: 72)
+                if titled { HubTitle(text: "listening", size: 72) }
                 // Before the very first answer: a record turning slowly on glass, never an empty box.
                 TimelineView(.animation(minimumInterval: 1 / 30)) { tl in
                     Image(systemName: "opticaldisc").resizable().scaledToFit().foregroundStyle(.white.opacity(0.35))

@@ -18,17 +18,19 @@ struct LastFMApp: App {
     }
 }
 
-// Five tabs: Now, Charts, Library, You and Discover. System tabs, so the Duo puts them on the side folded and open flat,
-// and across the foot open upright. Each tab keeps its own stack of pages.
+// Four tabs: you (Start: him, his figures, what's on, lately, his story), charts, library and discover. System tabs, so
+// the Duo puts them on the side folded and open flat, and across the foot open upright. Each tab keeps its own stack of
+// pages. A tick as he changes tab; links from the widgets land on the tab, section or page they name.
 struct RootView: View {
     @State private var tab = Pose.tab
     @State private var tops: [Int: Int] = [:]
+    private var links: Links { Links.shared }
     var body: some View {
         PaneReader {
             TabView(selection: TabReset.binding($tab) { t in tops[t, default: 0] += 1 }) {
                 Tab(value: 0) {
-                    TabPage(tab: 0, active: tab == 0, top: tops[0, default: 0]) { NowTab(top: $0) }
-                } label: { tabLabel("now", "waveform") }
+                    TabPage(tab: 0, active: tab == 0, top: tops[0, default: 0]) { StartTab(top: $0) }
+                } label: { tabLabel("you", "person.crop.circle") }
                 Tab(value: 1) {
                     TabPage(tab: 1, active: tab == 1, top: tops[1, default: 0]) { ChartsTab(top: $0) }
                 } label: { tabLabel("charts", "chart.bar.xaxis") }
@@ -36,15 +38,15 @@ struct RootView: View {
                     TabPage(tab: 2, active: tab == 2, top: tops[2, default: 0]) { LibraryTab(top: $0) }
                 } label: { tabLabel("library", "square.stack") }
                 Tab(value: 3) {
-                    TabPage(tab: 3, active: tab == 3, top: tops[3, default: 0]) { YouTab(top: $0) }
-                } label: { tabLabel("you", "person.crop.circle") }
-                Tab(value: 4) {
-                    TabPage(tab: 4, active: tab == 4, top: tops[4, default: 0]) { DiscoverTab(top: $0) }
+                    TabPage(tab: 3, active: tab == 3, top: tops[3, default: 0]) { DiscoverTab(top: $0) }
                 } label: { tabLabel("discover", "sparkles") }
             }
             .tint(.white)
+            .sensoryFeedback(.tick, trigger: tab)
         }
-        .onAppear { TabTour.run([0, 1, 2, 3, 4]) { tab = $0 } }
+        .onAppear { TabTour.run([0, 1, 2, 3]) { tab = $0 } }
+        .onOpenURL { links.open($0) }
+        .onChange(of: links.tab) { _, t in if let t { tab = t; links.tab = nil } }
     }
 }
 
@@ -70,6 +72,12 @@ struct TabPage<C: View>: View {
         .environment(\.zoomSpace, space)
         .environment(\.openRoute) { g in path.append(g) }
         .onChange(of: top) { _, _ in if path.isEmpty { scrollTop += 1 } else { path.removeAll() } }
+        // A widget's link to a page: this tab's stack, from its root.
+        .onChange(of: Links.shared.push) { _, ask in
+            guard let ask, ask.tab == tab else { return }
+            Links.shared.push = nil
+            path = [ask.go]
+        }
         .task {
             // The build's poses: a page up over its tab.
             guard active, ["detail", "track", "artist", "album"].contains(Pose.name) else { return }
@@ -78,7 +86,7 @@ struct TabPage<C: View>: View {
             switch Pose.name {
             case "artist": path.append(Go(route: .artist(store.insights.week.first?.name ?? h.artist), zoom: nil))
             case "album": path.append(Go(route: .album(h.artist, h.album), zoom: nil))
-            default: path.append(Go(route: .track(h), zoom: tab == 0 ? "hero|\(h.id)" : nil))
+            default: path.append(Go(route: .track(h), zoom: nil))
             }
         }
     }

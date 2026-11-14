@@ -1,95 +1,48 @@
 import SwiftUI
 import Charts
 
-// You: who he is on Last.fm and what moves him. His name as the hub's title, the totals as big numbers, the streak, this
-// week against his usual, the artist taking over his week, the week's artists and what's new to him, and his years.
-// Every figure comes from his own plays on the phone; a figure that can't yet be known (the history still being read)
-// isn't shown rather than guessed.
-struct YouTab: View {
-    let top: Int
-    @Environment(\.paneLayout) private var pane
-    private var store: Store { Store.shared }
-    private var sync: HistorySync { HistorySync.shared }
-    var body: some View {
-        if pane {
-            FoldSplit {
-                Page(top: top) {
-                    VStack(alignment: .leading, spacing: S.section) { identity; if sync.complete { YearsSection() }; whole }.padding(.top, S.head)
-                }
-            } right: {
-                Page(top: top) { VStack(alignment: .leading, spacing: S.section) { listening; history }.padding(.top, S.section) }
-            }
-        } else {
-            Page(top: top) {
-                VStack(alignment: .leading, spacing: S.section) {
-                    identity
-                    listening
-                    history
-                    whole
-                    if sync.complete { YearsSection() }
-                }
-                .padding(.top, S.head)
-            }
-        }
-    }
-    @ViewBuilder private var identity: some View {
-        VStack(alignment: .leading, spacing: S.head) {
-            HubTitle(text: store.profile?.name ?? LastFM.shared.user, size: 80)
-            VStack(alignment: .leading, spacing: S.section) {
-                ProfileHead().padding(.horizontal, S.margin)
-                // The first read, high on the page while it runs: the moment the app is reading his years.
-                if !sync.complete { YearsSection() }
-                Totals().padding(.horizontal, S.margin)
-                StreakCard().padding(.horizontal, S.margin)
-            }
-        }
-    }
-    // This week and what's moving him now.
-    @ViewBuilder private var listening: some View {
-        PaceCard().padding(.horizontal, S.margin)
-        CanonCard().padding(.horizontal, S.margin)
-        RiverCard()
-        RisingCard().padding(.horizontal, S.margin)
-        WeekHub(title: "on repeat", list: store.insights.week)
-        ClockCard().padding(.horizontal, S.margin)
-        // A panorama when there are enough to run off the edge; one or two are a card, never a sparse row.
-        if store.insights.discoveries.count >= 3 { WeekHub(title: "new to you", list: store.insights.discoveries) }
-        else if !store.insights.discoveries.isEmpty { NewCard(list: store.insights.discoveries).padding(.horizontal, S.margin) }
-    }
-    // His story across the years.
-    @ViewBuilder private var history: some View {
-        ErasSection()
-        RecordsSection()
-        DiscoveriesSection()
-    }
-    // All of it in figures and months.
-    @ViewBuilder private var whole: some View {
-        TimeCard()
-        VolumeCard()
-        CarryCard()
-    }
-}
-
+// His face and how long he's been at it, under his name: when he began and how much a day since. His name is the
+// title above, so it isn't said again here (Richard's phone, 2026-11-14: the name twice, once in capitals).
 struct ProfileHead: View {
     private var store: Store { Store.shared }
     var body: some View {
         let p = store.profile
-        HStack(spacing: S.gap) {
+        HStack(spacing: S.inner) {
             ZStack {
                 Circle().fill(.white.opacity(0.08))
                 if let p {
                     ArtView(ArtRef(artist: p.name, album: "avatar", url: p.image), px: 240, corner: 40)
                 }
             }
-            .frame(width: 64, height: 64).clipShape(Circle())
+            .frame(width: 72, height: 72).clipShape(Circle())
             .overlay { Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1) }
             VStack(alignment: .leading, spacing: S.pair) {
-                Text(p.map { $0.realname.isEmpty ? $0.name : $0.realname } ?? " ").font(.title3.weight(.semibold)).foregroundStyle(.white)
-                if let p { Text("Scrobbling since \(p.registered.formatted(.dateTime.month(.wide).year()))").font(.subheadline).foregroundStyle(S.soft) }
+                if let p {
+                    Text("Scrobbling since \(p.registered.formatted(.dateTime.month(.wide).year()))").font(.title3.weight(.semibold)).foregroundStyle(.white)
+                        .lineLimit(2).minimumScaleFactor(0.85)
+                    if let pace = Self.pace(p) { Text(pace).font(.subheadline).monospacedDigit().foregroundStyle(S.soft) }
+                } else {
+                    Text(" ").font(.title3.weight(.semibold))
+                }
             }
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
+    }
+    // "8 years · 75 plays a day": how long, and how much a day on average since he joined.
+    static func pace(_ p: Profile) -> String? {
+        let days = Clock.now.timeIntervalSince(p.registered) / 86400
+        guard days >= 1, p.playcount > 0 else { return nil }
+        let years = Int(days / 365.25)
+        let span = years >= 1 ? "\(years) \(years == 1 ? "year" : "years")" : "\(Int(days)) \(Int(days) == 1 ? "day" : "days")"
+        return "\(span) · \(number(Int((Double(p.playcount) / days).rounded()))) plays a day"
+    }
+    // His name as the hub says it: his real name when he's given one that isn't just his user name again, else the user
+    // name as he writes it, lowercase.
+    @MainActor static var name: String {
+        guard let p = Store.shared.profile else { return LastFM.shared.user.lowercased() }
+        let real = p.realname.trimmingCharacters(in: .whitespaces)
+        return !real.isEmpty && real.lowercased() != p.name.lowercased() ? real : p.name.lowercased()
     }
 }
 
@@ -99,16 +52,19 @@ struct Totals: View {
         let p = store.profile
         VStack(alignment: .leading, spacing: S.inner) {
             VStack(alignment: .leading, spacing: S.pair) {
-                Text(p.map { number($0.playcount) } ?? "–").font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
-                    .lineLimit(1).minimumScaleFactor(0.6).contentTransition(.numericText())
+                Group {
+                    if let p { Counting(p.playcount, key: "scrobbles") } else { Text("–") }
+                }
+                .font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
+                .lineLimit(1).minimumScaleFactor(0.6)
                 Text("scrobbles").font(.title3.weight(.light)).foregroundStyle(S.soft)
             }
             .accessibilityElement(children: .combine)
-            HStack(alignment: .top, spacing: 0) {
-                Figure(value: p.map { number($0.artists) } ?? "–", label: "artists").frame(maxWidth: .infinity, alignment: .leading)
-                Figure(value: p.map { number($0.albums) } ?? "–", label: "albums").frame(maxWidth: .infinity, alignment: .leading)
-                Figure(value: p.map { number($0.tracks) } ?? "–", label: "tracks").frame(maxWidth: .infinity, alignment: .leading)
-            }
+            FigureGrid(items: [
+                (p.map { number($0.artists) } ?? "–", "artists"),
+                (p.map { number($0.albums) } ?? "–", "albums"),
+                (p.map { number($0.tracks) } ?? "–", "tracks"),
+            ])
         }
     }
 }
@@ -125,7 +81,8 @@ struct StreakCard: View {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Image(systemName: "flame.fill").font(.title2).foregroundStyle(LinearGradient(colors: [.yellow, .orange, S.accent], startPoint: .top, endPoint: .bottom))
                     .symbolEffect(.bounce, value: i.streak)
-                Text(i.streak.map { "\($0)" } ?? "–").font(.system(size: 44, weight: .light)).monospacedDigit().foregroundStyle(.white).contentTransition(.numericText())
+                Group { if let n = i.streak { Counting(n, key: "streak") { "\($0)" } } else { Text("–") } }
+                    .font(.system(size: 44, weight: .light)).monospacedDigit().foregroundStyle(.white)
                 Text(i.streak == 1 ? "day in a row" : "days in a row").font(.title3.weight(.light)).foregroundStyle(S.soft)
                 Spacer(minLength: 0)
                 if let best = i.best { Figure(value: "\(best)", label: "best", size: 22).fixedSize() }
@@ -155,6 +112,8 @@ struct StreakCard: View {
 // This week against his usual: plays so far, and how that compares with the weeks before at the same moment of the week.
 struct PaceCard: View {
     private var store: Store { Store.shared }
+    // A day held on the chart (rest a finger, then slide): its plays so far against the usual, a tick per day.
+    @State private var held: Int?
     var body: some View {
         if let p = store.insights.pace {
             let hero = ArtStore.shared.palette(Store.shared.hero?.art ?? ArtRef(artist: "", album: "", url: nil))?.vivid.color ?? S.accent
@@ -162,7 +121,13 @@ struct PaceCard: View {
                 SectionHead(text: "this week")
                 VStack(alignment: .leading, spacing: S.head) {
                 HStack(alignment: .top, spacing: S.figures) {
-                    Figure(value: number(p.now), label: "plays so far", size: 40)
+                    VStack(alignment: .leading, spacing: S.pair) {
+                        Counting(held.map { p.thisWeek[min($0, p.thisWeek.count - 1)] } ?? p.now, key: "week")
+                            .font(.system(size: 40, weight: .light)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
+                            .frame(height: 48, alignment: .bottom)
+                        Text(held.map { "by \(Self.dayName($0))" } ?? "plays so far").font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+                    }
+                    .accessibilityElement(children: .combine)
                     let up = p.delta >= 0
                     VStack(alignment: .leading, spacing: S.pair) {
                         HStack(spacing: 4) {
@@ -171,6 +136,10 @@ struct PaceCard: View {
                         }
                         .foregroundStyle(.white)
                         Text(up ? "more than usual by now" : "less than usual by now").font(.subheadline).foregroundStyle(S.soft)
+                            .opacity(held == nil ? 1 : 0)
+                            .overlay(alignment: .leading) {
+                                if let d = held { Text("usual \(number(p.usualBand[d].mid))").font(.subheadline).monospacedDigit().foregroundStyle(S.soft).fixedSize() }
+                            }
                     }
                     .accessibilityElement(children: .combine)
                     Spacer(minLength: 0)
@@ -190,7 +159,24 @@ struct PaceCard: View {
                         PointMark(x: .value("Day", p.thisWeek.count - 1), y: .value("This week", last))
                             .foregroundStyle(hero).symbolSize(110)
                     }
+                    if let d = held {
+                        RuleMark(x: .value("Day", d)).foregroundStyle(.white.opacity(0.5)).lineStyle(StrokeStyle(lineWidth: 1))
+                        PointMark(x: .value("Day", d), y: .value("Usual", p.usualBand[d].mid)).foregroundStyle(.white.opacity(0.8)).symbolSize(40)
+                        if d < p.thisWeek.count {
+                            PointMark(x: .value("Day", d), y: .value("This week", p.thisWeek[d])).foregroundStyle(hero).symbolSize(70)
+                        }
+                    }
                 }
+                .chartOverlay { proxy in
+                    GeometryReader { g in
+                        Color.clear.holdToScrub { pt in
+                            guard let pt, let plot = proxy.plotFrame else { held = nil; return }
+                            let x = pt.x - g[plot].origin.x
+                            if let v: Double = proxy.value(atX: x) { held = max(0, min(p.thisWeek.count - 1, 6, Int(v.rounded()))) }
+                        }
+                    }
+                }
+                .sensoryFeedback(.tick, trigger: held) { a, b in a != nil && b != nil }
                 .chartXScale(domain: -0.25...6.25)
                 .chartXAxis {
                     AxisMarks(values: Array(0..<7)) { v in
@@ -216,6 +202,10 @@ struct PaceCard: View {
         }
     }
     private func legend<V: View>(_ mark: V, _ text: String) -> some View { HStack(spacing: 6) { mark; Text(text) } }
+    static func dayName(_ i: Int) -> String {
+        let cal = Calendar.current
+        return cal.standaloneWeekdaySymbols[(cal.firstWeekday - 1 + i) % 7]
+    }
     static func weekday(_ i: Int) -> String {
         let cal = Calendar.current
         let syms = cal.veryShortStandaloneWeekdaySymbols
@@ -235,7 +225,13 @@ struct RisingCard: View {
                 Opens(route: .artist(r.artist), zoom: "rising|\(r.artist)") {
                 ZStack(alignment: .bottomLeading) {
                     GeometryReader { g in
-                        ArtView(ref, px: 900, corner: 0).frame(width: g.size.width, height: g.size.width).position(x: g.size.width / 2, y: g.size.height / 2)
+                        ArtView(ref, px: 900, corner: 0).frame(width: g.size.width, height: g.size.width).scaleEffect(1.14)
+                            // The cover drifts a little against the card as the page moves: a window onto it, not a sticker.
+                            .visualEffect { c, proxy in
+                                let y = proxy.frame(in: .scrollView(axis: .vertical)).minY
+                                return c.offset(y: max(-34, min(34, -y * 0.07)))
+                            }
+                            .position(x: g.size.width / 2, y: g.size.height / 2)
                     }
                     LinearGradient(colors: [.clear, .black.opacity(0.35), .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
                     VStack(alignment: .leading, spacing: S.gap) {
@@ -317,16 +313,23 @@ struct WeekHub: View {
 }
 
 // His years: plays in each, as bars. While the history is being read this is where it shows, the bars growing from the
-// newest year back as the pages come in, with how much is left; once it's all read it stays as his years.
+// newest year back as the pages come in, with how much is left; a year the read hasn't reached yet is drawn as a faint
+// dashed outline, waiting, never as an empty bar that reads as no plays (Richard's phone, 2026-11-14: 2018 to 2020
+// looked like nothing). Once it's all read it stays as his years. Rest a finger on the bars and slide to read each
+// year's exact count, a tick per year.
 struct YearsSection: View {
     private var sync: HistorySync { HistorySync.shared }
     private var store: Store { Store.shared }
+    @State private var held: Int?
     var body: some View {
         let years = sync.years.keys.sorted()
-        let first = store.profile.map { Calendar.current.component(.year, from: $0.registered) } ?? years.first ?? Calendar.current.component(.year, from: Clock.now)
-        let last = Calendar.current.component(.year, from: Clock.now)
+        let cal = Calendar.current
+        let first = store.profile.map { cal.component(.year, from: $0.registered) } ?? years.first ?? cal.component(.year, from: Clock.now)
+        let last = cal.component(.year, from: Clock.now)
         let all = Array(min(first, years.first ?? first)...last)
         let peak = max(sync.years.values.max() ?? 1, 1)
+        // The year the read has reached; every year before it is still to come.
+        let reached = sync.complete || sync.coveredFrom == .max ? (sync.complete ? first : last + 1) : cal.component(.year, from: Date(timeIntervalSince1970: TimeInterval(sync.coveredFrom)))
         VStack(alignment: .leading, spacing: S.head) {
             SectionHead(text: sync.complete ? "your years" : "reading your history",
                         trailing: sync.complete ? nil : "\(Int((sync.fraction * 100).rounded(.down)))%")
@@ -347,26 +350,56 @@ struct YearsSection: View {
                     HStack(alignment: .bottom, spacing: gap) {
                         ForEach(all, id: \.self) { y in
                             let v = sync.years[y] ?? 0
+                            let waiting = y < reached
+                            let dim = held != nil && held != y
                             VStack(spacing: 6) {
-                                Text(v > 0 ? compact(v) : "").font(.caption2.weight(.medium)).monospacedDigit().foregroundStyle(S.soft).lineLimit(1).minimumScaleFactor(0.6)
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(LinearGradient(colors: [S.accent, S.accent.opacity(0.45)], startPoint: .top, endPoint: .bottom))
-                                    .frame(width: w, height: max(3, (g.size.height - 40) * CGFloat(v) / CGFloat(peak)))
-                                    .opacity(v == 0 ? 0.25 : 1)
-                                Text("’" + String(String(y).suffix(2))).font(.caption.weight(.medium)).monospacedDigit().foregroundStyle(S.soft)
+                                Text(waiting ? "" : held == y ? number(v) : v > 0 ? compact(v) : "").font(.caption2.weight(held == y ? .bold : .medium)).monospacedDigit()
+                                    .foregroundStyle(held == y ? .white : S.soft).lineLimit(1).minimumScaleFactor(0.5).fixedSize(horizontal: held == y, vertical: false)
+                                if waiting {
+                                    WaitingBar().frame(width: w, height: (g.size.height - 40) * 0.42)
+                                } else {
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .fill(LinearGradient(colors: [S.accent, S.accent.opacity(0.45)], startPoint: .top, endPoint: .bottom))
+                                        .frame(width: w, height: max(3, (g.size.height - 40) * CGFloat(v) / CGFloat(peak)))
+                                        .opacity(v == 0 ? 0.25 : 1)
+                                }
+                                Text("\u{2019}" + String(String(y).suffix(2))).font(.caption.weight(.medium)).monospacedDigit().foregroundStyle(held == y ? .white : S.soft)
+                                    .opacity(waiting ? 0.5 : 1)
                             }
                             .frame(width: w)
+                            .opacity(dim ? 0.4 : 1)
                         }
                     }
                     .frame(height: g.size.height, alignment: .bottom)
                     .animation(.spring(response: 0.5, dampingFraction: 0.8), value: sync.read)
+                    .animation(.snappy(duration: 0.18), value: held)
+                    .holdToScrub { pt in
+                        guard let pt else { held = nil; return }
+                        let i = Int(pt.x / max(w + gap, 1))
+                        let y = all[max(0, min(all.count - 1, i))]
+                        held = y < reached ? nil : y
+                    }
                 }
                 .frame(height: 170)
+                .sensoryFeedback(.tick, trigger: held) { a, b in a != nil && b != nil }
             }
             .card()
         }
         .padding(.horizontal, S.margin)
         .accessibilityElement(children: .combine)
+    }
+}
+
+// A year still to be read: a faint dashed outline that breathes, so it reads as on its way, not as nothing.
+private struct WaitingBar: View {
+    @State private var glow = false
+    var body: some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .strokeBorder(.white.opacity(glow ? 0.34 : 0.16), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(.white.opacity(glow ? 0.06 : 0.02)))
+            .animation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true), value: glow)
+            .onAppear { glow = true }
+            .accessibilityLabel("Not read yet")
     }
 }
 

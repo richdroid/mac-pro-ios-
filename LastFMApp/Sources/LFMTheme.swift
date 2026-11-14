@@ -1,5 +1,10 @@
 import SwiftUI
 import Darwin
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
 
 // One scale for the whole app. Zune's spirit in Apple's grammar: very big, very thin lowercase titles that run off the
 // edge, bold lowercase section heads, numbers as the graphics, the cover's colours on a near-black ground.
@@ -21,16 +26,20 @@ enum S {
     static let accent = Color(red: 1.0, green: 0.36, blue: 0.36)
 }
 
-// The hub's title, Zune's way: huge and thin, lowercase, starting a little left of the content and running off the far
-// edge. A page's first line; never in a bar, never over rows.
+// The hub's title, Zune's way: huge and thin, lowercase, starting a little left of the content. It fits the page when
+// it can, shrinking to no less than 70 %; a name too long even for that runs on under the side bar and off the display
+// on purpose, never stopped at the bar's edge (Richard's phone, 2026-11-14: his name cut mid-word at the bar).
 struct HubTitle: View {
     let text: String
     var size: CGFloat = 80
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
+    @State private var room: CGFloat = 0
     var body: some View {
+        let base = size * min(max(k, 0.9), 1.25)
+        let scale = HubTitle.scale(text, base: base, room: room)
         Text(text.lowercased())
-            .font(.system(size: size * min(max(k, 0.9), 1.25), weight: .thin))
-            .tracking(-1.5)
+            .font(.system(size: base * scale, weight: .thin))
+            .tracking(-1.5 * scale)
             .lineLimit(1)
             .fixedSize()
             .foregroundStyle(.white.opacity(0.94))
@@ -38,9 +47,69 @@ struct HubTitle: View {
             // Both bounds, so the frame is the page's width however long the name: with only a maximum it took the
             // text's own width, and a long album's title pushed the whole page off the left edge (run 11).
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            .clipped()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { room = $0 }
             .accessibilityAddTraits(.isHeader)
     }
+    // How much a title shrinks to fit the room it's given (its own inset and the page's margin at the far side): to
+    // 70 % at the least; past that it keeps its size and runs off the edge.
+    static func scale(_ text: String, base: CGFloat, room: CGFloat, least: CGFloat = 0.7) -> CGFloat {
+        let natural = textWidth(text.lowercased(), size: base, tracking: -1.5)
+        let avail = room - (S.margin - 6) - S.margin
+        guard natural > 0, avail > 0 else { return 1 }
+        let fit = min(1, avail / natural)
+        return fit >= least ? fit : 1
+    }
+}
+
+// A line's width in the thin system face, worked out before it's drawn, so a title is the right size in its first frame.
+func textWidth(_ s: String, size: CGFloat, tracking: CGFloat = 0, weight: CGFloat? = nil) -> CGFloat {
+    #if canImport(UIKit)
+    let f = UIFont.systemFont(ofSize: size, weight: weight.map { UIFont.Weight(rawValue: $0) } ?? .thin)
+    #else
+    let f = NSFont.systemFont(ofSize: size, weight: weight.map { NSFont.Weight(rawValue: $0) } ?? .thin)
+    #endif
+    return ceil((s as NSString).size(withAttributes: [.font: f, .kern: tracking]).width)
+}
+
+// A figure that counts up to itself the first time it's shown after launch (never again on a return, so a tab come
+// back to is exactly as it was), and rolls to a new value when one arrives.
+struct Counting: View {
+    let value: Int
+    let key: String
+    var format: (Int) -> String = number
+    @State private var shown: Double
+    @MainActor static var counted: Set<String> = []
+    init(_ value: Int, key: String, format: @escaping (Int) -> String = number) {
+        self.value = value; self.key = key; self.format = format
+        _shown = State(initialValue: Counting.counted.contains(key) ? Double(value) : 0)
+    }
+    var body: some View {
+        Rolling(value: shown, format: format)
+            .onAppear {
+                guard !Counting.counted.contains(key) else { shown = Double(value); return }
+                Counting.counted.insert(key)
+                withAnimation(.timingCurve(0.16, 0.8, 0.3, 1, duration: 1.15).delay(0.1)) { shown = Double(value) }
+            }
+            .onChange(of: value) { _, v in withAnimation(.smooth(duration: 0.6)) { shown = Double(v) } }
+            .accessibilityLabel(format(value))
+    }
+    private struct Rolling: View, Animatable {
+        var value: Double
+        let format: (Int) -> String
+        var animatableData: Double { get { value } set { value = newValue } }
+        var body: some View { Text(format(Int(value.rounded()))) }
+    }
+}
+
+// The app's haptics: the six words every one of his iPhone apps shares (manifesto, 2026-11-14), each only ever in answer
+// to his own touch. SwiftUI's sensoryFeedback follows the system's haptics switch by itself.
+extension SensoryFeedback {
+    static let tick = SensoryFeedback.selection
+    static let snap = SensoryFeedback.impact(flexibility: .soft, intensity: 0.5)
+    static let tap = SensoryFeedback.impact(weight: .light)
+    static let thunk = SensoryFeedback.impact(weight: .medium)
+    static let done = SensoryFeedback.success
+    static let warn = SensoryFeedback.warning
 }
 
 struct SectionHead: View {
@@ -226,13 +295,15 @@ extension View {
     }
 }
 
-// A press that answers at once: the row dips a little under the finger.
+// A press with weight: what's under the finger sinks a little and darkens, and springs back with a small overshoot when
+// let go, so a card feels like a thing pressed rather than a picture tapped.
 struct Press: ButtonStyle {
+    var depth: CGFloat = 0.965
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.975 : 1)
-            .opacity(configuration.isPressed ? 0.85 : 1)
-            .animation(.snappy(duration: 0.18), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? depth : 1)
+            .brightness(configuration.isPressed ? -0.08 : 0)
+            .animation(configuration.isPressed ? .easeOut(duration: 0.1) : .spring(response: 0.34, dampingFraction: 0.52), value: configuration.isPressed)
     }
 }
 
@@ -240,6 +311,7 @@ struct Press: ButtonStyle {
 enum Pose {
     static let name = UserDefaults.standard.string(forKey: "pose") ?? ""
     static var tab: Int { UserDefaults.standard.integer(forKey: "tab") }
+    static var panel: Int { UserDefaults.standard.integer(forKey: "panel") }
 }
 
 // For the build's films (-launchLog YES, never on the phone): how long after the process began each step of a launch

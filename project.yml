@@ -209,6 +209,9 @@ targets:
       - path: LastFMApp/Mock
         type: folder
       - path: Shared/Duo.swift
+      - path: LastFMWidget/LFMShared.swift
+    dependencies:
+      - target: LastFMWidget
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: local.macpro.LastFM
@@ -220,9 +223,43 @@ targets:
         CFBundleDisplayName: Rotation
         LastFMKey: ""
         LastFMUser: ""
+        # The widgets' links into the app (rotation://you, /now, /artist?name=…; LinkScheme).
+        CFBundleURLTypes: [{ CFBundleURLName: rotation, CFBundleURLSchemes: [rotation] }]
         CADisableMinimumFrameDurationOnPhone: true
         UILaunchScreen: { UIColorName: LaunchColor }
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+  # Rotation's widgets. The key and user are baked in at signing (preset-ipa.sh does every PlugIn's Info.plist); the
+  # streak and his usual week come from the app through the shared Keychain group (WidgetFacts).
+  LastFMWidget:
+    type: app-extension
+    platform: iOS
+    sources: [LastFMWidget]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.LastFM.Widget
+    info:
+      path: LastFMWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Rotation Widgets
+        LastFMKey: ""
+        LastFMUser: ""
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  GalleryLastFM:
+    type: application
+    platform: iOS
+    sources:
+      - path: LastFMWidget
+        excludes: [Info.plist]
+      - ci/gallery-lastfm
+      - ci/widget-sheet
+      - path: LastFMApp/Mock
+        type: folder
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.macpro.GalleryLastFM
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: GALLERY
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
   GalleryMac:
     type: application
     platform: iOS

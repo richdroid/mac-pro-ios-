@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WidgetKit
 
 struct Scrobble: Identifiable, Hashable, Sendable {
     let id: String
@@ -111,9 +112,12 @@ struct Profile: Sendable {
             // The first look takes a full page (and is kept, for the next launch's first frame); after that, only the top.
             let j = try await LastFM.shared.call("user.getrecenttracks", ["limit": polled ? "30" : "200", "extended": "1"], keep: !polled)
             polled = true
-            let before = recent.first?.id
+            let before = recent.first?.id, playingBefore = nowPlaying?.id
             apply(j)
             failingSince = nil
+            if recent.first?.id != before || nowPlaying?.id != playingBefore {
+                WidgetCenter.shared.reloadTimelines(ofKind: "now")
+            }
             if recent.first?.id != before {
                 await sync.keep(Array(recent.prefix(200)))
                 workInsights()
@@ -156,13 +160,25 @@ struct Profile: Sendable {
             if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
             let s = await Insights.work(coveredFrom: sync.coveredFrom, complete: sync.complete)
             insights = s
-            if s.coveredFrom != .max { s.keep() }
+            if s.coveredFrom != .max { s.keep(); shareWithWidgets(s) }
             if !s.hours.isEmpty { UserDefaults.standard.set(s.dayStart, forKey: "dayStart") }
             lastInsight = Date()
             insightTask = nil
             workToday()
             if s.complete { workDeep() }
         }
+    }
+
+    // The widgets' share of what only the history knows (the streak, his usual week); they redraw when it changes.
+    private func shareWithWidgets(_ s: Insights) {
+        guard !LastFM.shared.mock, s.streak != nil || s.pace != nil else { return }
+        let start = Calendar.current.dateInterval(of: .weekOfYear, for: Clock.now)?.start.timeIntervalSince1970 ?? 0
+        let p = s.pace
+        let f = WidgetFacts(at: Date().timeIntervalSince1970, day: LocalDay.today, playedThatDay: (s.days[LocalDay.today] ?? 0) > 0,
+                            streak: s.streak, best: s.best, weekStart: start, weekPlays: p?.now, usual: p?.usual, weeks: p?.weeks,
+                            thisWeek: p?.thisWeek ?? [], usualMid: p?.usualBand.map(\.mid) ?? [], usualLo: p?.usualBand.map(\.lo) ?? [],
+                            usualHi: p?.usualBand.map(\.hi) ?? [])
+        if f.write() { WidgetCenter.shared.reloadAllTimelines() }
     }
 
     // Today's listening time: the lengths known, the rest at the middle length, shown once most are known.
