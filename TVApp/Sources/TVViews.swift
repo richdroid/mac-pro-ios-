@@ -2530,6 +2530,8 @@ struct NowControls: View {
             // The one transport, the same five as for a film: one way to play anything in this app (r17).
             // At the song's end with the TV still saying playing: an old word, shown stopped there, as a film's is (r18).
             Transport(ended: model.songEnded(music), playing: .some(model.songPlaying(music)))
+            // Shuffle and repeat, as Mint has them.
+            PlayModes().padding(.top, 4)
         }
     }
 }
@@ -2638,6 +2640,7 @@ struct PlayingTab: View {
     @State private var pending = false
     @State private var pendingWait: Task<Void, Never>?
     @FocusState private var playFocused: Bool
+    @State private var flickHeight: CGFloat = 0
     // Never Mint's last song while the phone plays something else of its own.
     var music: TVStatus.Music? { model.nowMusic }
     var otherAppIsActive: Bool { model.videoIsCurrent }
@@ -2720,6 +2723,8 @@ struct PlayingTab: View {
     // music or nothing, and after what's next and what was flicked under a film. Its place is kept while Mint's home
     // comes, and closed if Mint couldn't be asked or has no such row, so no gap is left for it.
     static let recentTitle = "Recently played"
+    // Where both panes begin, under the page's heading: one top line for the cover and the right pane's first heading.
+    static let paneTop: CGFloat = 6
     var showsRecent: Bool {
         mintHome.rows.isEmpty ? !mintHome.failed : mintHome.rows.contains { $0.title == Self.recentTitle && !$0.items.isEmpty }
     }
@@ -2756,8 +2761,12 @@ struct PlayingTab: View {
         return nil
     }
     var send: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 24) {
+            // Mostly nothing but a 1 pt picker: its place in the stack would leave 19 pt above the first heading, so while
+            // it has no card it takes none (the right pane's first line is the cover's line).
             FlickCard()
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { flickHeight = $0 }
+                .padding(.bottom, flickHeight <= 2 ? -(flickHeight + 24) : 0)
             // Mint's own screen, here: the song's words, the sung line leading, and what plays after it. First under
             // what's on (open flat, level with the cover), ahead of what he played before.
             // On the page only when Mint has words or a queue for this song, so a song with neither leaves it as it was.
@@ -2862,7 +2871,7 @@ struct PlayingTab: View {
             now.padding(.horizontal, 20)
             if watching && showsEpisodes && showsRecent { Shelf(source: .mint, title: Self.recentTitle).transition(.opacity) }
         }
-        .padding(.vertical, 20)
+        .padding(.top, Self.paneTop).padding(.bottom, 20)
         .settledAnimation(.easeOut(duration: 0.3), value: watching)
     }
     var body: some View {
@@ -2872,7 +2881,7 @@ struct PlayingTab: View {
                 FoldSplit { ScrollView { nowPane }.backToTop() } right: {
                     // The same 20 pt from the top as the picture beside it, so the picture's top and "Season" sit level
                     // (r21; gate 276: the right pane was 40 pt down, the picture's top 20 above the season chips).
-                    ScrollView { Group { if watching { upNext.padding(.top, 20) } else { send.padding(20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching) }.backToTop()
+                    ScrollView { Group { if watching { upNext.padding(.top, Self.paneTop) } else { send.padding(.horizontal, 20).padding(.top, Self.paneTop).padding(.bottom, 20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching) }.backToTop().modifier(PaneFoot())
                 }
             } else {
                 // The rows under a film run to the screen's edges, as rows do everywhere else.

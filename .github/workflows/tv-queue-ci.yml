@@ -1,0 +1,92 @@
+name: TV queue shots
+# Temporary: the Playing tab's spacing and the editable queue, in the postures he holds. Pushed to tv-queue only; deleted on SHIP.
+on:
+  push:
+    branches: [tv-queue]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tv-queue
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 35
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          xcrun simctl privacy "$DEVICE" grant media-library local.macpro.TV
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          shot() {
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          film() {
+            local name=$1 display=$2 address=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep 30
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            sleep 2
+          }
+          # Open landscape first, then open portrait; the queue edits filmed in both, then the folded outer display.
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 3; sleep 5
+          shot playing-open 3 14 $M/rmint -tab 2
+          shot playing-open-all 3 20 $M/rmint -tab 2 -queueSheet YES
+          curl -s $M/rmint/api/tv/queue-reset > /dev/null
+          film queue-open 3 $M/rmint -tab 2 -queueDemo YES
+          $D "$DEVICE" rotate 1; sleep 5
+          shot playing-portrait 3 14 $M/rmint -tab 2
+          shot playing-portrait-all 3 20 $M/rmint -tab 2 -queueSheet YES
+          film queue-portrait 3 $M/rmint -tab 2 -queueDemo YES
+          $D "$DEVICE" pose closed; sleep 5
+          $D "$DEVICE" rotate 1; sleep 3
+          shot playing-folded 1 14 $M/rmint -tab 2
+          film queue-folded 1 $M/rmint -tab 2 -queueDemo YES
+          cp /tmp/tv-home-applied.log dist/queue-ops.log 2>/dev/null || true
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../queue.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../queue.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-queue >/dev/null 2>&1 || gh release create tv-queue --prerelease --title "TV queue shots" --notes "Playing tab spacing and the editable queue."
+          for f in queue.zip status.txt; do
+            for i in 1 2 3; do gh release upload tv-queue "$f" --clobber && break; sleep 15; done
+          done

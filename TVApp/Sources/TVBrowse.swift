@@ -388,6 +388,7 @@ struct MediaList: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .contextMenu { QueueMenu(item: item, source: source) }
                 .accessibilityLabel(item.shownSubtitle.isEmpty ? item.title : "\(item.title), \(item.shownSubtitle)")
             }
         }
@@ -511,7 +512,10 @@ struct FlickCardButton: View {
             // comes on screen, so its page opens on them rather than on grey rows.
             .onAppear { if source == .stremio, item.progress != nil { NextUp.prefetch(item) } }
             // Held: the same title on this phone instead, from his own add-ons.
-            .contextMenu { if hasInfo { Button("Play on iPhone", systemImage: "iphone") { model.tick(); PhoneOpen.open(item, model: model) } } }
+            .contextMenu {
+                if hasInfo { Button("Play on iPhone", systemImage: "iphone") { model.tick(); PhoneOpen.open(item, model: model) } }
+                QueueMenu(item: item, source: source)
+            }
     }
 }
 final class FrameBox { var rect: CGRect? }

@@ -255,6 +255,11 @@ const homeStill = paint(960, 540, (x, y) => {
 });
 const pictures = { wide: png(284, 160, [200, 40, 60], [240, 150, 40]), square: png(160, 160, [230, 230, 240], [120, 200, 240]), poster: png(234, 352, [40, 70, 120], [220, 120, 70]), art: png(300, 300, [190, 40, 120], [30, 90, 200]) };
 const tvBase = 'http://127.0.0.1:9002';
+// Mint's queue as the mock holds it (see /api/tv/queue-op): 242 songs, the first dozen with real names.
+const mockQueue = ['Lazy Days', 'To the Moon', 'Orinoco Flow', 'Sail Away', 'Evening Falls', 'Anywhere Is', 'Caribbean Blue', 'Book of Days', 'Only Time', 'Wild Child', 'Storms in Africa', 'Exile']
+  .map((title, i) => ({ id: 'i.' + (1000 + i), title, artist: i % 2 ? 'Smokepurpp' : 'Enya', album: 'Sample Album', art: tvBase + '/art.png', duration_ms: 200000 }))
+  .concat(Array.from({ length: 230 }, (_, i) => ({ id: 'i.' + (2000 + i), title: 'Queued Song ' + (i + 1), artist: 'Sample Artist', album: 'Sample Album', art: tvBase + '/art.png', duration_ms: 190000 })));
+const mockModes = { shuffle: 0, repeat: 0 };
 const tvApps = [['com.codex.musicwebtv', 'Mint Music', 1], ['com.mint.letterboxd', 'Letterboxd', 1], ['com.stremio.one', 'Stremio', 1], ['com.google.android.youtube.tv', 'YouTube', 1], ['com.google.android.youtube.tvmusic', 'YouTube Music', 1], ['com.netflix.ninja', 'Netflix', 1], ['com.plexapp.android', 'Plex', 1], ['com.apple.atve.androidtv.appletv', 'Apple TV', 1], ['com.android.tv.settings', 'Settings', 1], ['com.google.android.play.games', 'Google Play Games', 1], ['flar2.homebutton', 'Button Mapper', 1]];
 const tvStatus = JSON.stringify({ online: true, screen: 'on', app: 'com.stremio.one', volume: 12, volumeMax: 25,
   music: { title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', art: tvBase + '/art.png', playing: true, position: 40000, duration: 180000, sampledAt: Date.now() },
@@ -320,13 +325,34 @@ function tvRoute(q, s) {
   // The TV's settings and its apps, for Settings' pages (TV settings, Apps on the TV).
   if (q.url === '/api/tv/manage') { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ settings: { sleep_after: 3600000, screensaver_after: 600000, animations: 0.5, cec_auto_off: 1 }, volume: 8, volumeMax: 15, canArrange: true, apps: tvApps.filter(a => a[0] !== 'com.google.android.play.games').map((a, i) => ({ pkg: a[0], name: a[1], hasIcon: true, wide: true, removable: !['com.codex.musicwebtv', 'com.android.tv.settings', 'flar2.homebutton'].includes(a[0]), row: 'APPS' })) })); }
   if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' }))) })); }
+  // Mint's queue and the phone's edits to it (Mint 0.9.109): a list kept here, so a film of a drag, a swipe and a jump
+  // shows the list changing as the real one does. The play modes too.
+  if (q.url.startsWith('/api/tv/music-queue')) {
+    s.setHeader('content-type', 'application/json');
+    const limit = Math.max(1, Math.min(500, +new URL(q.url, 'http://x').searchParams.get('limit') || 60));
+    return s.end(JSON.stringify({ ok: true, items: mockQueue.slice(0, limit), total: mockQueue.length, shuffle: mockModes.shuffle, repeat: mockModes.repeat, asked_at: Date.now() }));
+  }
+  if (q.method === 'POST' && q.url === '/api/tv/queue-op') {
+    let b = ''; q.on('data', c => b += c); q.on('end', () => {
+      let j = {}; try { j = JSON.parse(b); } catch {}
+      const at = Math.max(0, Math.min(mockQueue.length - 1, +j.at || 0));
+      if (j.op === 'remove') mockQueue.splice(at, 1);
+      else if (j.op === 'jump') mockQueue.splice(0, at + 1);
+      else if (j.op === 'move') { const [m] = mockQueue.splice(+j.from, 1); mockQueue.splice(+j.to, 0, m); }
+      else if (j.op === 'shuffle') mockModes.shuffle = +j.value ? 1 : 0;
+      else if (j.op === 'repeat') mockModes.repeat = +j.value || 0;
+      try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' POST /api/tv/queue-op ' + b.slice(0, 200) + '\n'); } catch {}
+      s.setHeader('content-type', 'application/json'); s.end('{"ok":true}');
+    });
+    return;
+  }
   // Mint's own screen for the song on: its words, timed, and what plays after it (the Playing tab mirrors both).
   if (q.url.startsWith('/api/tv/music-detail')) {
     s.setHeader('content-type', 'application/json');
     const words = ['The first line of a sample song', 'A second line that runs a little longer than the first', '', 'Here the chorus comes around', 'And says the same thing twice', 'And says the same thing twice', 'A quiet line', 'The last line of a sample song'];
     return s.end(JSON.stringify({ ok: true, title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', playing: true, position_ms: 40000, duration_ms: 180000, airplay: false, asked_at: Date.now(),
       lyrics: { status: '', synced: true, line: 3, lines: words.map((w, i) => [25000 + i * 5000, 30000 + i * 5000, w]) },
-      queue: { remaining: 7, items: ['Next Song', 'Another Song', 'Third Song'].map(title => ({ title, artist: 'Sample Artist', album: 'Sample Album', duration_ms: 200000, art: tvBase + '/art.png' })) } }));
+      queue: { remaining: mockQueue.length, items: mockQueue.slice(0, 12) } }));
   }
   if (q.url.startsWith('/api/tv/recs')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ films: ['Rope', 'Match Point', 'Blue Velvet', 'Klute'].map(title => ({ title, year: '1990', slug: title.toLowerCase(), imdb: 'tt1234567', art: tvBase + '/poster.png', why: 'Because you liked Heat' })) })); }
   // A search for the show on the TV finds it, as the real catalogue would (the app looks a series up by name when its

@@ -198,11 +198,16 @@ struct MusicDetailWatch: View {
                 guard watching else { return }
                 store.follow(song)
                 await store.read(playing: playing)
+                await QueueStore.shared.read()
                 // Paused, it still asks until the song on the page has had its own answer (or is given up on).
+                var round = 0
                 while playing || store.unanswered, !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     if Task.isCancelled { return }
                     await store.read(playing: playing)
+                    // The queue and the play modes about every four seconds: they change only when he or the song does.
+                    round += 1
+                    if round % 2 == 0 { await QueueStore.shared.read() }
                 }
             }
             .onDisappear { store.leave() }
@@ -228,45 +233,66 @@ struct MusicExtras: View {
     @State private var appearedAt = Date()
     @Environment(\.scenePhase) private var phase
     // Open flat the words' window holds the sung line and a wrapped next one whole, so Up next shows two there.
-    var shown: Int { tall ? 2 : 5 }
+    var shown: Int { tall ? 2 : 4 }
+    @ObservedObject private var queue = QueueStore.shared
+    @State private var showAll = false
+    // Mint's own list when it has read one; else what its screen said of the next songs.
+    var hasUpNext: Bool { (queue.loaded && !queue.items.isEmpty) || store.detail?.queue.isEmpty == false }
+    var upNextTotal: Int { queue.loaded && !queue.items.isEmpty ? queue.total : store.detail?.remaining ?? 0 }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 24) {
             if let d = store.detail, !d.lines.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     RowTitle("Lyrics")
                     Group {
                         // A fixed window, 12 pt clear of the heading so no line is ever cut under it. Open flat it stays
                         // short enough that Recently played and Play on TV are still in the pane (gate dd1a, 276).
-                        if d.synced { SyncedLyrics(lines: d.lines, line: store.line, height: tall ? 236 : 250, quiet: Date().timeIntervalSince(appearedAt) < 0.4).padding(.top, 12) }
+                        if d.synced { SyncedLyrics(lines: d.lines, line: store.line, height: tall ? 224 : 250, quiet: Date().timeIntervalSince(appearedAt) < 0.4).padding(.top, 12) }
                         else { PlainLyrics(lines: d.lines, showsAll: $store.showsAll) }
                     }
                     .opacity(store.waiting ? 0 : 1)
                 }
                 .transition(.opacity)
             }
-            if let d = store.detail, !d.queue.isEmpty {
+            if hasUpNext {
                 VStack(alignment: .leading, spacing: 0) {
-                    RowTitle("Up next")
-                    VStack(alignment: .leading, spacing: 0) {
-                        VStack(spacing: 10) {
-                            ForEach(d.queue.prefix(shown)) { item in
-                                HStack(spacing: 12) {
-                                    Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: {
-                                        // No cover yet, or none: a note on the tile, never an empty box.
-                                        ZStack { Color.white.opacity(0.08); Image(systemName: "music.note").font(.system(size: 18)).foregroundStyle(.secondary) }
-                                    }
-                                    .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                                        if !item.artist.isEmpty { Text(item.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
-                                    }
-                                    Spacer(minLength: 0)
-                                }
-                                .accessibilityElement(children: .combine)
+                    HStack(alignment: .firstTextBaseline) {
+                        RowTitle("Up next")
+                        Spacer(minLength: 12)
+                        // The whole queue as a list of its own, in place of a count of what isn't shown.
+                        if upNextTotal > shown {
+                            Button { Haptic.fire(.tap); showAll = true } label: {
+                                Text("Show all \(upNextTotal)").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent)
+                                    .frame(minHeight: 44).contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain).padding(.bottom, 8).padding(.top, -8)
                         }
-                        if d.remaining > min(d.queue.count, shown) {
-                            Text("and \(d.remaining - min(d.queue.count, shown)) more").font(.footnote.weight(.medium)).foregroundStyle(.secondary).padding(.top, 10)
+                    }
+                    Group {
+                        if queue.loaded, !queue.items.isEmpty {
+                            // Editable: the handle drags a row, a swipe removes it, a tap plays it.
+                            QueueRows(items: Array(queue.items.prefix(shown)), rowHeight: 56,
+                                      move: { queue.move($0, to: $1) }, remove: { queue.remove($0) },
+                                      jump: { queue.jump($0) }, toTop: { queue.moveToTop($0) })
+                        } else if let d = store.detail {
+                            VStack(spacing: 0) {
+                                ForEach(d.queue.prefix(shown)) { item in
+                                    HStack(spacing: 12) {
+                                        Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: {
+                                            // No cover yet, or none: a note on the tile, never an empty box.
+                                            ZStack { Color.white.opacity(0.08); Image(systemName: "music.note").font(.system(size: 18)).foregroundStyle(.secondary) }
+                                        }
+                                        .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(item.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                                            if !item.artist.isEmpty { Text(item.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .frame(height: 56)
+                                    .accessibilityElement(children: .combine)
+                                }
+                            }
                         }
                     }
                     .opacity(store.waiting ? 0 : 1)
@@ -277,6 +303,27 @@ struct MusicExtras: View {
         // The words and the queue arrive, change with the song and go with a fade, once the page has settled.
         .settledAnimation(.easeOut(duration: 0.25), value: store.detail?.lines.map(\.text))
         .settledAnimation(.easeOut(duration: 0.25), value: store.detail?.queue)
+        .settledAnimation(.easeOut(duration: 0.25), value: hasUpNext)
+        .sheet(isPresented: $showAll) { QueueSheet() }
+        // CI only (launch arguments no one sets): the full list up from the start, and the edits made in turn so a film shows
+        // the list answering them.
+        .task {
+            let defaults = UserDefaults.standard
+            if defaults.bool(forKey: "queueSheet") { try? await Task.sleep(nanoseconds: 6_000_000_000); showAll = true }
+            guard defaults.bool(forKey: "queueDemo") else { return }
+            let q = QueueStore.shared
+            for step in 0..<6 {
+                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                switch step {
+                case 0: q.move(2, to: 0)
+                case 1: q.remove(1)
+                case 2: q.setShuffle(true)
+                case 3: q.cycleRepeat()
+                case 4: q.jump(0)
+                default: q.moveToTop(1)
+                }
+            }
+        }
         .settledAnimation(.easeOut(duration: 0.2), value: store.waiting)
         // Coming to the page (or back to it): the sung line is where the song is from the first frame.
         .onAppear { appearedAt = Date(); store.settle(fresh: true) }
@@ -303,7 +350,7 @@ private struct SyncedLyrics: View {
     // of the window the line above sat half in the fade and showed as the foot of its letters under "Lyrics").
     static let lead: CGFloat = 82
     // Clear, then the fade: everything above `fadeEnd` is on its way out, nothing at the very edge shows at all.
-    static let clearTop: CGFloat = 10, fadeEnd: CGFloat = 60
+    static let clearTop: CGFloat = 10, fadeEnd: CGFloat = 60, fadeFoot: CGFloat = 52
     var anchor: UnitPoint { UnitPoint(x: 0.5, y: min(Self.lead / max(height, 1), 0.6)) }
     var body: some View {
         ScrollView {
@@ -339,7 +386,8 @@ private struct SyncedLyrics: View {
                 Color.clear.frame(height: Self.clearTop)
                 LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.fadeEnd - Self.clearTop)
                 Color.black
-                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 20)
+                // A long fade at the foot: the next line comes up into it and is never seen cut off at the edge.
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: Self.fadeFoot)
             }
         }
         .onChange(of: line, initial: true) { _, now in
