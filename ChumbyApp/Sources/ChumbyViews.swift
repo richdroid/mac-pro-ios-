@@ -2897,7 +2897,8 @@ struct SkipCard: View {
             Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold))
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .overlay { StrikeLine(progress: struck ? 1 : 0) }
-            Text("\(day(at)) · \(label(name))" + (moved != nil ? usual.map { " · usually \(time($0))" } ?? "" : "")).font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
+            // Moved for one ring, the usual time is on the button ("Back to 6:45 AM"), so it isn't said twice.
+            Text("\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
         }
         .foregroundStyle(.white)
     }
@@ -2930,7 +2931,7 @@ struct SkipCard: View {
                     // Moved for one ring, "Back to 6:45 AM" is a row of its own under the words: beside them it
                     // squeezed the heading, time and day to "Just this on… / 6:55… / Today · Wo…" folded and open
                     // (build 218).
-                    VStack(alignment: .trailing, spacing: moved != nil ? 10 : 0) {
+                    VStack(alignment: .center, spacing: moved != nil ? 10 : 0) {
                         HStack(spacing: 14) {
                             SleepyOctopus(asleep: asleep, tint: .white)
                             lines(next.0, next.1, struck: asleep)
