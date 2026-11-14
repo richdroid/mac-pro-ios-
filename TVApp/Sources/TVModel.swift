@@ -548,9 +548,15 @@ final class TVModel {
     func mirrorShown(_ on: Bool) {
         mirrorViewers = max(0, mirrorViewers + (on ? 1 : -1))
         if on {
+            // Back on screen where it was: its place is known at once (it's only measured again if it moves), so a thrown
+            // card aims at it from the release and lands on it. Forgotten on the way out and never measured again, a card
+            // thrown from a shelf rose a little, hung there two seconds and vanished (CI b01326d: "landed, no slot",
+            // 2.6-2.9 s from the release).
+            if mirrorSlot == nil, let l = lastLanded, l.window == RenderFlight.windowSize { mirrorSlot = l.rect }
             warmMirror()
             if mirrorLive && !liveShowing && !flickHandoff && !remoteWarming { Task { await loadMirror() } }
         } else if mirrorViewers == 0 {
+            if let s = mirrorSlot, s.width > 20 { lastLanded = (s, RenderFlight.windowSize) }
             mirrorSlot = nil
             #if os(iOS)
             live.stop(after: 5)

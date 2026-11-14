@@ -68,9 +68,9 @@ jobs:
             xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
             sleep 3
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose flick-stage -swipeLog YES
-            sleep 12
-            local at x y
-            at=$(grep -o 'what=row&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            local at x y n
+            for n in $(seq 1 24); do sleep 1; at=$(grep -o 'what=row&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1); [ -n "$at" ] && break; done
+            sleep 4
             x=${at#*x=}; x=${x%%&*}; y=${at##*y=}
             if [ -n "$x" ] && [ -n "$y" ]; then
               case $how in
@@ -97,9 +97,10 @@ jobs:
             sleep 3
             rm -f /tmp/tv-home-applied.log
             xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 3 -pose shelf -swipeLog YES
-            sleep 11
-            local at x y
-            at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            local at x y n
+            # The app says where the card is once it has held still (up to 14 s in); then a moment more, at rest.
+            for n in $(seq 1 24); do sleep 1; at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1); [ -n "$at" ] && break; done
+            sleep 3
             x=${at#*x=}; x=${x%%&*}; y=${at##*y=}
             if [ -n "$x" ] && [ -n "$y" ]; then
               case $how in
