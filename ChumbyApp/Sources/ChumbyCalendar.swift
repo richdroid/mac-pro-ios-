@@ -296,6 +296,7 @@ struct CalendarSettingsSections: View {
         Group {
             Section {
                 Toggle(isOn: $wake.rules.enabled) { TwoLine("Wake me from my calendar", CalendarWake.what) }
+                    .padding(.trailing, 2)
                     .soloCard()
             }
             Section {
@@ -319,6 +320,7 @@ struct CalendarSettingsSections: View {
                         TwoLine("Calendar days skip my other alarms", on == 1 ? "On a day your calendar wakes you, your repeating alarms stay quiet. They ring as usual the day after."
                                 : "Your repeating alarms ring as usual, even on days your calendar wakes you.")
                     }
+                    .padding(.trailing, 2)
                     .soloCard(on: model.failed("calover") == nil)
                     if let f = model.failed("calover") { FailNote(text: f) }
                 } header: { SectionHead(icon: "bell.slash.fill", text: "Skipping other alarms") }
@@ -518,6 +520,7 @@ struct CalendarDaySheet: View {
             }
             Section {
                 Picker("Wake", selection: Binding(get: { item.exact }, set: { exact in
+                    Haptic.fire(.tick)
                     problem = nil
                     setEdit { $0.wakeAt = exact ? (item.wake.timeIntervalSince1970 / 60).rounded() * 60 : nil }
                 })) {
@@ -580,6 +583,7 @@ struct CalendarDaySheet: View {
     @ViewBuilder func soundSection(_ item: PlannedWake) -> some View {
         Section {
             Picker("Sound", selection: Binding(get: { edit.own != nil }, set: { on in
+                Haptic.fire(.tick)
                 if on { var a = Alarm(); a.takeSettings(from: shared); setEdit { $0.own = a } } else { setEdit { $0.own = nil } }
                 loadOwn()
             })) {

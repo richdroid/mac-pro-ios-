@@ -15,7 +15,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 140
+    timeout-minutes: 200
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,11 +30,13 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p dist
-          xcodebuild -project MacPro.xcodeproj -scheme Chumby -configuration Debug -sdk iphonesimulator \
-            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+          for APP in Chumby GalleryChumby; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | tail -1
+          done
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 125
+        timeout-minutes: 185
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -141,9 +143,12 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pick-before$x.png
             $D "$DEVICE" tap "What 11:00 AM plays" || echo "open failed"; sleep 2
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pick-menu$x.png
+            $D "$DEVICE" drag $px 0.8 $px 0.3 0.8 || echo "list scroll failed"; sleep 1
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pick-menulow$x.png
             $D "$DEVICE" tap "My Bloody Valentine and Shoegaze Essentials Radio" || echo "pick failed"; sleep 5
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pick-two$x.png
             $D "$DEVICE" tap "What 11:00 AM plays" || echo "open again failed"; sleep 2
+            $D "$DEVICE" drag $px 0.8 $px 0.3 0.8 || echo "list scroll failed"; sleep 1
             $D "$DEVICE" tap "Sunny Day Real Estate Radio" || echo "pick back failed"; sleep 5
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pick-back$x.png
             kill -INT $REC; wait $REC; echo "pick$x exit $?"
@@ -157,26 +162,74 @@ jobs:
             sleep 14
             $D "$DEVICE" drag $px 0.85 $px 0.35 1.0 || echo "scroll failed"; sleep 3
             $D "$DEVICE" tap "What 11:00 AM plays" || echo "open failed"; sleep 2
+            $D "$DEVICE" drag $px 0.8 $px 0.3 0.8 || echo "list scroll failed"; sleep 1
             $D "$DEVICE" tap "My Bloody Valentine and Shoegaze Essentials Radio" || echo "pick failed"; sleep 6
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pickfail-own$x.png
             $D "$DEVICE" drag $px 0.8 $px 0.45 1.0 || echo "scroll failed"; sleep 3
             $D "$DEVICE" tap "What Calendar alarms plays" || echo "open cal failed"; sleep 2
+            $D "$DEVICE" drag $px 0.8 $px 0.3 0.8 || echo "list scroll failed"; sleep 1
             $D "$DEVICE" tap "Sunny Day Real Estate Radio" || echo "pick cal failed"; sleep 1
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pickfail-calpicked$x.png
             sleep 6
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-pickfail-cal$x.png
+            $D "$DEVICE" drag $px 0.8 $px 0.3 0.8 || echo "scroll to fade failed"; sleep 2
             $D "$DEVICE" tap "Fade in" || echo "open fade failed"; sleep 2
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-fade-menu$x.png
             $D "$DEVICE" tap "1 minute" || echo "pick fade failed"; sleep 2
             xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-fade-picked$x.png
             kill -INT $REC; wait $REC; echo "pickfail$x exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            # Film: a pick and a Fade in pick on a Chumby that answers after 4 s: the value never goes new, old, new.
+            fresh $M/soundsslow
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-slowpick$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/soundsslow -tab 3
+            sleep 14
+            $D "$DEVICE" drag $px 0.85 $px 0.35 1.0 || echo "scroll failed"; sleep 3
+            $D "$DEVICE" tap "What 11:00 AM plays" || echo "open failed"; sleep 2
+            $D "$DEVICE" drag $px 0.8 $px 0.3 0.8 || echo "list scroll failed"; sleep 1
+            $D "$DEVICE" tap "My Bloody Valentine and Shoegaze Essentials Radio" || echo "pick failed"
+            for i in 1 2 3 4 5 6 7 8; do sleep 1; xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-slowpick-$i$x.png; done
+            $D "$DEVICE" drag $px 0.8 $px 0.3 1.0 || echo "scroll to fade failed"; sleep 2
+            $D "$DEVICE" tap "Fade in" || echo "open fade failed"; sleep 2
+            $D "$DEVICE" tap "1 minute" || echo "pick fade failed"
+            for i in 1 2 3 4 5 6 7 8; do sleep 1; xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-slowfade-$i$x.png; done
+            kill -INT $REC; wait $REC; echo "slowpick$x exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          backfilm() { # display, suffix, the pushed list's page only (folded, open portrait): Back, the edge swipe, a first open and a second
+            local d=$1 x=$2 px=$3
+            fresh $M/soundsreal
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$d --force dist/chumby-listback$x.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M/soundsreal -tab 3
+            sleep 14
+            $D "$DEVICE" drag $px 0.85 $px 0.35 1.0 || echo "scroll failed"; sleep 3
+            $D "$DEVICE" tap "What 11:00 AM plays" || echo "first open failed"; sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-listback-first$x.png
+            $D "$DEVICE" tap "Back" || $D "$DEVICE" tap "Sounds" || echo "back tap failed"; sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-listback-tapped$x.png
+            $D "$DEVICE" tap "What 11:00 AM plays" || echo "second open failed"; sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-listback-second$x.png
+            $D "$DEVICE" drag 0.01 0.5 0.7 0.5 0.4 || echo "edge swipe failed"; sleep 2
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-listback-swiped$x.png
+            kill -INT $REC; wait $REC; echo "listback$x exit $?"
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          sheets() { # the widgets' sheets (GalleryChumby -sheets YES), copied out as they are written
+            xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryChumby.app
+            xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -sheets YES
+            sleep 25
+            mkdir -p dist/sheets
+            cp "$(xcrun simctl get_app_container "$DEVICE" local.macpro.GalleryChumby data)"/Documents/sheets/*.png dist/sheets/ || echo "no sheets"
+            xcrun simctl terminate "$DEVICE" local.macpro.GalleryChumby || true
           }
           polish() { # display, suffix: the polish pass (2026-11-14): Home in each state, Tinker, the nap editor
             local d=$1 x=$2
             # Home: default, moved for one ring, the re-skip warning (the editor's sheet), skipped, a nap set, ringing, snoozed.
             for V in "home 0 -" "home-moved 0 moved" "home-skipped 0 skipped" "home-nap 0 nap" "home-ringing 0 ringing" "home-snoozed 0 snoozed" \
-                     "home-justonce 0 - -pose justonce" "reskip 2 skipped -pose reskip" "napeditor 2 nap -pose napeditor" "tinker 4 -"; do
+                     "home-justonce 0 - -pose justonce" "reskip 2 skipped -pose reskip" "napeditor 2 nap -pose napeditor" "tinker 4 -" \
+                     "moved-alarms 2 moved" "napset 2 nap -pose napset" "channels 1 -" "caldayedit 2 - -pose caldayedit"; do
               set -- "$d" "$x" $V
               ADDR=$M; [ "$5" != "-" ] && ADDR=$M/$5
               fresh $ADDR
@@ -194,12 +247,15 @@ jobs:
           }
           $D "$DEVICE" pose closed; sleep 5
           posture 1 "" 0.64 0.72 0.1 0.3 "0.45 0.6 0.75"
+          backfilm 1 "" 0.3
           polish 1 ""
+          sheets
           $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
           posture 3 -open 0.67 0.42 0.05 0.7 "0.3 0.45 0.6"
           polish 3 -open
           $D "$DEVICE" rotate 1; sleep 5
           posture 3 -portrait 0.55 0.85 0.08 0.3 "0.45 0.6 0.75"
+          backfilm 3 -portrait 0.3
           polish 3 -portrait
       - name: Collect crash reports
         if: always()

@@ -434,9 +434,7 @@ final class ChumbyModel: ObservableObject {
     // The ✕ for a note that stays; nil for one that clears itself.
     func dismissal(_ id: String) -> (() -> Void)? { kept[id] == nil ? nil : { [weak self] in self?.tick(); self?.letGo(id) } }
     func fail(_ id: String, _ text: String) {
-        #if canImport(UIKit)
-        Haptics.note.notificationOccurred(.error)
-        #endif
+        Haptic.fire(.warn)
         if Self.keptNotes.contains(id) { withAnimation(.snappy) { kept[id] = text }; return }
         // The note's row comes and goes in one spring, never in one frame.
         withAnimation(.snappy) { failure = Failure(id: id, text: text, at: Date()) }
@@ -623,9 +621,7 @@ final class ChumbyModel: ObservableObject {
                 marks[mark] = .failed(head: p.change.failHead, why: why)
             }
             relay()
-            #if canImport(UIKit)
-            Haptics.note.notificationOccurred(.error)
-            #endif
+            Haptic.fire(.warn)
         }
     }
     private func landed(_ r: AlarmWriter.Result, mark: String?) {
@@ -638,7 +634,7 @@ final class ChumbyModel: ObservableObject {
             // A retried change landing takes its note away: words first, then the row (clearNote), the bubble after.
             // then the landing bubble, as for any change that lands.
             if case .retrying = marks[mark] { retryAt[mark] = nil; clearNote(mark, then: .landed(at)) } else { marks[mark] = .landed(at) }
-            tick()
+            Haptic.fire(.done)
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 1_400_000_000)
                 if self?.marks[mark] == .landed(at) { self?.marks[mark] = nil }

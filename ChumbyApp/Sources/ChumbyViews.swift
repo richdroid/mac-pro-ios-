@@ -321,7 +321,7 @@ struct MenuRow<V: Hashable, Options: View>: View {
             HStack(spacing: 12) {
                 Text(title)
                 Spacer(minLength: 8)
-                Picker(title, selection: $selection, content: options).labelsHidden().pickerStyle(.menu).layoutPriority(1)
+                Picker(title, selection: $selection.ticking(), content: options).labelsHidden().pickerStyle(.menu).layoutPriority(1)
             }
             Text(note).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
@@ -401,16 +401,22 @@ struct TwoPane<L: View, R: View>: View {
             FoldSplit {
                 List { Group { left }.listRowBackground(GlassRow()) }
             } right: {
-                Group {
-                    if let rightPage { rightPage }
-                    else {
-                        // A title row, blank unless the pane holds a page, so both panes start level. A real title (Calendar
-                        // settings, with Done) stays pinned once the pane is scrolled.
-                        let pinned = rightTitle.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
-                        List { if let rightTitle { PageTitle(rightTitle, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
-                            .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
-                    }
+                // The pane's own list stays alive under a page that covers it (a sound list, the song picker, an editor), so
+                // coming back finds it where it was left, never at its top; the pages cross-fade (gate, 11-14: a hard cut).
+                ZStack {
+                    // A title row, blank unless the pane holds a page, so both panes start level. A real title (Calendar
+                    // settings, with Done) stays pinned once the pane is scrolled.
+                    // Under a page the row stays as it was (blank), so the list keeps its place.
+                    let title = rightTitle ?? (rightPage != nil ? " " : nil)
+                    let pinned = title.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
+                    List { if let title { PageTitle(title, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
+                        .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
+                        .opacity(rightPage == nil ? 1 : 0)
+                        .allowsHitTesting(rightPage == nil)
+                        .accessibilityHidden(rightPage != nil)
+                    if let rightPage { rightPage.transition(.opacity) }
                 }
+                .animation(.easeInOut(duration: 0.2), value: rightPage != nil)
                 .opacity(rightShown ? 1 : 0)
             }
             .seaList()
@@ -547,6 +553,11 @@ struct TabBarFade: ViewModifier {
 }
 
 extension View {
+    // The room a scroll page has for its content: its height less the safe areas (the status bar, the tab bar or the home
+    // indicator), read from the page itself, whichever of them its frame already leaves out.
+    func homeRoom(_ set: @escaping (CGFloat) -> Void) -> some View {
+        onGeometryChange(for: CGFloat.self) { $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom } action: { set($0) }
+    }
     // Each tab paints its own sea: the system tab view is opaque behind its content. Only the tab on screen drifts.
     func overSea(active: Bool = true, shown: Bool = true) -> some View {
         self.background { if shown { ZStack { SeaBackground(active: active); GhostOctopus(active: active) }.ignoresSafeArea() } }
@@ -599,7 +610,7 @@ struct RootView: View {
                     Tab(value: 3) { NavigationStack { SoundsTab().tabPage(3, model) }.id(resets[3, default: 0]) } label: { tabLabel("sounds", "music.note") }
                     Tab(value: 4) { NavigationStack { TinkerTab().tabPage(4, model) }.id(resets[4, default: 0]) } label: { tabLabel("tinker", "wrench.adjustable") }
                 }
-                .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab"); if t == 2 { ChumbyNotify.shared.clearDelivered() } }
+                .onChange(of: model.tab) { _, t in Haptic.fire(.tick); UserDefaults.standard.set(t, forKey: "tab"); if t == 2 { ChumbyNotify.shared.clearDelivered() } }
             }
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
@@ -812,21 +823,27 @@ struct HomeTab: View {
     }
 
     // The web app's proportions: the octopus is 92 wide on a 380 stage and sits 58 above its top edge.
-    // Folded and open upright the device is sized from the room: wide as 330 pt when everything under it fits, narrower
-    // (never under 250) until the last control ends at least 16 pt above the bottom, in every state (a moved ring's card,
-    // the re-skip note, a nap, a ring). Measured, not guessed: the controls' foot against the room (fitWidth).
+    // The device is sized from the room, one width per posture, for the tallest everyday state (a moved ring's card, the
+    // re-skip note, a nap, a ring), so Skip and Undo never resize it. It is wide as it can be until the caption under the
+    // controls ends at least 16 pt above the bottom of the room (never under 250). Measured, not guessed: the caption's
+    // foot against the room, which only ever narrows the width within a posture (a new room starts over).
     @State private var fitWidth: CGFloat?
+    @State private var fitRoom: CGFloat = 0
     @State private var controlsFoot: CGFloat = 0
     @State private var room: CGFloat = 0
-    static let footMargin: CGFloat = 16, minStage: CGFloat = 250, maxStage: CGFloat = 330
-    // How far the controls' foot moves per point of stage width: the octopus's lift (58/380) and the device's own height.
+    static let footMargin: CGFloat = 16, minStage: CGFloat = 250, maxStage: CGFloat = 330, wideStage: CGFloat = 340
+    // Allowance for the tallest everyday state over the one measured.
+    static let tallestExtra: CGFloat = 40
+    // How far the caption's foot moves per point of stage width: the octopus's lift (58/380) and the device's own height.
     static let footPerWidth: CGFloat = 58.0 / 380 + 325.0 / 371
-    var stageWidth: CGFloat { wide ? 340 : (fitWidth ?? Self.maxStage) }
+    var maxWidth: CGFloat { wide ? Self.wideStage : Self.maxStage }
+    var stageWidth: CGFloat { min(fitWidth ?? maxWidth, maxWidth) }
     func refit() {
-        guard !wide, room > 0, controlsFoot > 0 else { return }
+        guard room > 0, controlsFoot > 0 else { return }
+        if abs(fitRoom - room) > 1 { fitRoom = room; fitWidth = nil }
         let w = stageWidth
-        let target = min(Self.maxStage, max(Self.minStage, w - (controlsFoot + Self.footMargin - room) / Self.footPerWidth))
-        if abs(target - w) > 0.6 { fitWidth = target.rounded(.down) }
+        let target = min(maxWidth, max(Self.minStage, w - (controlsFoot + Self.tallestExtra + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
+        if target < w - 0.6 { fitWidth = target }
     }
     var k: CGFloat { stageWidth / 380 }
     var ringSize: CGFloat { 92 * k * 1.15 }
@@ -1004,8 +1021,18 @@ struct HomeTab: View {
     var serial: String { Bundle.main.object(forInfoDictionaryKey: "ChumbySerial") as? String ?? "" }
     var about: some View {
         VStack(spacing: 0) {
-            Text("Chumby Classic").font(.custom("Trebuchet MS", size: 30).weight(.bold))
-            Text("Black, 3.5-inch, 2008").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).padding(.top, 2).padding(.bottom, 16)
+            // The caption (and the first-run welcome) is what the fit ends on: whole, with air, or not shown at all.
+            VStack(spacing: 0) {
+                Text("Chumby Classic").font(.custom("Trebuchet MS", size: 30).weight(.bold))
+                Text("Black, 3.5-inch, 2008").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).padding(.top, 2)
+                // Said the first time only.
+                if !welcomed {
+                    Text("Welcome. Tap the screen to touch it; tap the octopus to say hi.").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.center).padding(.top, 12).padding(.horizontal, 16)
+                        .onDisappear { welcomed = true }
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { controlsFoot = $0; refit() }
+            .padding(.bottom, 16)
             Grid(horizontalSpacing: 12, verticalSpacing: 5) {
                 if !name.isEmpty { spec("Name", name) }
                 spec("Chip", "Freescale i.MX21, ARM926EJ-S")
@@ -1017,11 +1044,6 @@ struct HomeTab: View {
             if !wide {
                 Button(moreInfo ? "Less Info…" : "More Info…") { withAnimation(.spring(duration: 0.4, bounce: 0.3)) { moreInfo.toggle() } }
                     .font(.custom("Trebuchet MS", size: 16).weight(.bold)).buttonStyle(.glass).padding(.top, 16)
-            }
-            // Said the first time only.
-            if !welcomed {
-                Text("Welcome. Tap the screen to touch it; tap the octopus to say hi.").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.center).padding(.top, 12).padding(.horizontal, 16)
-                    .onDisappear { welcomed = true }
             }
             Color.clear.frame(height: 20)
         }
@@ -1193,7 +1215,8 @@ struct HomeTab: View {
                 FoldSplit {
                     // The wordmark is part of the stage, so it is spaced off the octopus the same way in both layouts.
                     // The reach line arriving or going moves what's under it in one spring, never in one frame.
-                    ScrollView { VStack(spacing: 0) { stage; status; about.padding(.top, Self.sectionGap) }.padding(.horizontal, 12).animation(.snappy, value: model.unreachable) }.roomyIndicators()
+                    ScrollView { VStack(spacing: 0) { stage; status; about.padding(.top, Self.sectionGap) }.padding(.horizontal, 12).coordinateSpace(name: "homeContent").animation(.snappy, value: model.unreachable) }.roomyIndicators()
+                        .homeRoom { room = $0; refit() }
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
@@ -1216,17 +1239,14 @@ struct HomeTab: View {
                         VStack(spacing: 0) { controls }
                             .frame(maxWidth: Self.column)
                             .padding(.top, Self.underDevice)
-                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { controlsFoot = $0; refit() }
                         Color.clear.frame(height: 1).id("homebar")
                         about.padding(.top, Self.sectionGap)
                         if moreInfo { more.frame(maxWidth: Self.column) }
                     }.padding(.horizontal, 16)
                     .coordinateSpace(name: "homeContent")
                     .animation(.snappy, value: model.unreachable)
-                    .animation(.snappy, value: fitWidth)
                 }.roomyIndicators()
-                // The room: the scroll's own height less its insets (the status bar, the home indicator).
-                .onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height - $0.contentInsets.top - $0.contentInsets.bottom } action: { _, r in room = r; refit() }
+                .homeRoom { room = $0; refit() }
                 // For the build's shot: Home scrolled so the device's caption sits right at the tab bar, where Richard saw
                 // "Chumby Classic" through it. homecard: Home scrolled to its Playing card (the playing scene), folded.
                 .task {
@@ -1412,21 +1432,9 @@ struct NightButton: View {
             guard !Task.isCancelled, pressing, !committed else { return }
             commit()
         }
-        #if canImport(UIKit)
-        Haptics.light.impactOccurred(intensity: 0.45); Haptics.light.prepare(); Haptics.heavy.prepare()
-        #endif
+        // A hold: tap on touch, thunk when it completes, nothing on an early release (the haptic vocabulary).
+        Haptic.fire(.tap)
         withAnimation(.linear(duration: Self.hold)) { progress = 1 }
-        // The pressure building: two firmer ticks on the way to the thunk.
-        ticks?.cancel()
-        ticks = Task { @MainActor in
-            for k in [0.6, 0.8] as [CGFloat] {
-                try? await Task.sleep(nanoseconds: 170_000_000)
-                guard !Task.isCancelled else { return }
-                #if canImport(UIKit)
-                Haptics.medium.impactOccurred(intensity: k); Haptics.medium.prepare()
-                #endif
-            }
-        }
     }
     func release() {
         pressing = false
@@ -1438,9 +1446,7 @@ struct NightButton: View {
     func commit() {
         ticks?.cancel()
         committed = true
-        #if canImport(UIKit)
-        Haptics.heavy.impactOccurred(); Haptics.heavy.prepare()
-        #endif
+        Haptic.fire(.thunk)
         turned += 1
         withAnimation(.spring(duration: 0.4, bounce: 0.35)) { model.setNight(on ? "off" : model.nightStyle) }
         withAnimation(.spring(duration: 0.45, bounce: 0.5)) { progress = 0 }
@@ -1770,7 +1776,7 @@ struct ChannelsTab: View {
             Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
             Menu {
-                Picker("Time on screen", selection: rowBinding(w.id, \.secs, w.secs)) {
+                Picker("Time on screen", selection: rowBinding(w.id, \.secs, w.secs).ticking()) {
                     Text(w.own > 0 ? "Auto · \(timeText(w.own))" : "Auto").tag(0)
                     ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
                 }
@@ -2151,7 +2157,14 @@ struct SoundsTab: View {
         // Held to the row's top while the list grows or shrinks the row, so the alarm's time never jumps and drifts
         // back on a pick that changes the value's lines (gate on cd1ebc6: it centred, 10 pt off, then settled).
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onChange(of: a.soundText) { picked[a.key] = nil }
+    }
+    // What he picked stays drawn until the model says it too (or a few seconds pass: a refused save goes back to what the
+    // Chumby has), so a slow Chumby never shows new, old, new (gate, 11-14).
+    func release(_ key: String, until matches: @escaping @MainActor () -> Bool) {
+        Task { @MainActor in
+            for _ in 0..<60 { if matches() { break }; try? await Task.sleep(nanoseconds: 100_000_000) }
+            picked[key] = nil
+        }
     }
     static let fades = [(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")]
     // The alarm (his own, or the calendar's) a chooser was opened for.
@@ -2164,7 +2177,7 @@ struct SoundsTab: View {
                           current: "\(model.state.fade)", pane: pane, pick: { t in
                 guard let v = Int(t), v != model.state.fade else { return }
                 picked["fade"] = Self.fades.first { $0.0 == v }?.1
-                MenuClose.then { model.change(.fade(v)); picked["fade"] = nil }
+                MenuClose.then { model.change(.fade(v)); release("fade") { model.state.fade == v } }
             }, done: back)
         } else if let a = alarm(for: c.id) {
             let tag = a.soundTag(streams: model.state.streams)
@@ -2180,7 +2193,7 @@ struct SoundsTab: View {
         if !model.pandoraStations.isEmpty { sections.append(PickSection(title: "Pandora", options: model.pandoraStations.map { PickOption(tag: "pandora:" + $0.id, label: $0.name) })) }
         // A sound that isn't among the options (lists not loaded yet, a station since removed) is the page's first row.
         if tag.isEmpty { sections.insert(PickSection(title: "Now", options: [PickOption(tag: "", label: a.soundText)]), at: 0) }
-        return sections + [PickSection(title: "Silent", options: [PickOption(tag: "none", label: "Silent")])]
+        return sections + [PickSection(title: nil, options: [PickOption(tag: "none", label: "Silent")])]
     }
     // The pick lands as the value at once (the page is still up, so the tab under it changes unseen), and the save and
     // the rows it moves wait until the page has gone back.
@@ -2191,7 +2204,7 @@ struct SoundsTab: View {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 450_000_000)
             withAnimation(.snappy) {
-                if mark != nil { model.change(.replace(a, b)); picked[a.key] = nil }
+                if mark != nil { model.change(.replace(a, b)); release(a.key) { alarm(for: a.key)?.soundText == b.soundText } }
                 else { commitCalendar(b, key: a.key) }
             }
         }
@@ -2237,6 +2250,7 @@ struct SoundsTab: View {
                 Toggle(isOn: Binding(get: { model.sys.airplayOn }, set: { on in model.sys.airplayOn = on; model.cmd("airplay", on ? "1" : "0", id: "airplay") })) {
                     Label("Accept AirPlay", systemImage: "airplayaudio")
                 }
+                .padding(.trailing, 2)
                 if let f = model.failed("airplay") { FailNote(text: f) }
                 // Any song in his Mac's Music library, played here by the Mac: only where the app knows the Mac, and
                 // while the Chumby accepts AirPlay, which is how the Mac reaches it.
@@ -2264,7 +2278,8 @@ struct SoundsTab: View {
                     // Retry and ✕ (as his own alarms' notes do) until it's sent again or put away.
                     if let f = model.failed("calsound") {
                         FailNote(text: f, dismiss: { model.clearFailedCalendarPick(); model.dismissal("calsound")?() },
-                                 retry: model.failedCalendarPick.map { t in { picked[t.key] = t.soundText; model.clearFailedCalendarPick(); commitCalendar(t, key: t.key) } })
+                                 retry: model.failedCalendarPick.map { t in { picked[t.key] = t.soundText; model.clearFailedCalendarPick(); commitCalendar(t, key: t.key) } },
+                                 head: "Couldn’t change the sound")
                             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
                     }
                 }
@@ -2422,7 +2437,7 @@ struct TinkerTab: View {
     }
     // The order the widget shows each account's tweets in, saved the moment it's picked.
     static let orders: [(id: String, name: String, says: String)] = [
-        ("latest", "Latest", "Newest first."),
+        ("latest", "Latest", ""),
         ("popular", "Most popular", "Most liked and reposted, the last few weeks first."),
         ("random", "Random", "Shuffled; nothing repeats until every tweet has shown."),
     ]
@@ -2466,14 +2481,15 @@ struct TinkerTab: View {
             } icon: { Image(systemName: "plus.circle.fill").font(.body.weight(.semibold)).foregroundStyle(ChumbyPalette.acc(dark)) }
                 .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
             if let f = model.failed("twset") { FailNote(text: f) }
-            Picker("Tweet order", selection: order) {
+            Picker("Tweet order", selection: order.ticking()) {
                 ForEach(Self.orders, id: \.id) { Text($0.name).tag($0.id) }
                 if model.sys.xorder == "oldest" { Text("Oldest first").tag("oldest") }
             }
             .pickerStyle(.menu)
             if let f = model.failed("xorder") { FailNote(text: f) }
-        } header: { SectionHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X widget", color: ChumbyPalette.sub(dark)) }
-        footer: { SectionFoot(Self.orders.first { $0.id == model.sys.xorder }?.says ?? "Oldest first.") }
+        } header: { SectionHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X widget", color: ChumbyPalette.sub(dark), small: true) }
+        // Said only for an order that isn't the usual one; the usual one needs no footnote.
+        footer: { if model.sys.xorder != "latest" { SectionFoot(Self.orders.first { $0.id == model.sys.xorder }?.says ?? "Oldest first.") } }
     }
     var body: some View {
         TwoPane {
@@ -2733,6 +2749,7 @@ struct NightSettings: View {
                         // row is found again by what it held, since a time's place can move in the meantime.
                         Picker("What happens", selection: Binding(get: { tag(e) }, set: { v in
                             guard v != tag(e) else { return }
+                            Haptic.fire(.tick)
                             let was = e
                             MenuClose.then {
                                 guard let i = model.state.schedule.firstIndex(of: was) else { return }

@@ -48,17 +48,20 @@ struct SoundListPage: View {
             FailNote(text: f).listRowBackground(Color.clear)
         }
         ForEach(sections) { s in
-            Section {
-                ForEach(s.options) { o in row(o) }
-            } header: {
-                if let t = s.title { Text(t).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).textCase(nil) }
+            // A section with no title (Silent, alone) has no header, so no empty band sits over its row.
+            if let t = s.title {
+                Section {
+                    ForEach(s.options) { o in row(o) }
+                } header: { Text(t).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary).textCase(nil) }
+                .listRowBackground(GlassRow())
+            } else {
+                Section { ForEach(s.options) { o in row(o) } }.listRowBackground(GlassRow())
             }
-            .listRowBackground(GlassRow())
         }
     }
     private func row(_ o: PickOption) -> some View {
         HStack(spacing: 0) {
-            Button { pick(o.tag); done() } label: {
+            Button { Haptic.fire(.tick); pick(o.tag); done() } label: {
                 HStack(spacing: 12) {
                     Text(o.label).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
@@ -77,7 +80,8 @@ struct SoundListPage: View {
                 }
                 .buttonStyle(.borderless).disabled(model.unreachable)
                 .accessibilityLabel("Try \(o.label) on the Chumby")
-                .padding(.vertical, -5)
+                // The 44 pt target reaches past the row's edge, so the glyph, the checkmark and the divider share one edge.
+                .padding(.vertical, -5).padding(.trailing, -11)
             }
         }
         .accessibilityElement(children: .contain)
