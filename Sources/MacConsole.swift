@@ -23,7 +23,7 @@ struct MacLink: Decodable, Identifiable, Equatable {
     var name: String {
         switch id {
         case "serve": return "Phone link"
-        case "funnel": return "Public sharing"
+        case "funnel": return "Fixed public address"
         case "bridge": return "Mac dashboard"
         case "public": return "Public link"
         case "novnc": return "Screen link"
@@ -46,21 +46,38 @@ struct MacLink: Decodable, Identifiable, Equatable {
     // for is still said as the Mac says it, since it is news.
     var plainDetail: String? {
         let d = detail ?? ""
+        // A second line only when it adds a fact: "Working" or "Answering" beside "Up", "Off, as it should be" beside "Off"
+        // said the state twice (designer gate, 2026-11-14).
+        let filler: Set<String> = ["connected", "working", "answering", "running", "up", "off", "ok", "listening", "off, as it should be"]
         switch (id, state) {
-        case ("serve", "up"): return "Lets this app reach the Mac"
+        case ("serve", "up"): return nil
         case ("serve", "down"): return "This app’s link isn’t set up"
         case ("funnel", "look"): return "On: the Mac dashboard is open to the internet"
-        case ("public", "up"), ("novnc", "up"), ("letterboxd", "up") where !d.contains("not listening"): return "Working"
+        case ("funnel", "off"): return nil
+        case ("public", "up"), ("novnc", "up"), ("letterboxd", "up") where !d.contains("not listening"): return nil
         case ("letterboxd", "up"): return "Running, but not answering"
         case ("public", "starting"): return "Starting, no address yet"
-        case ("bridge", _): return d.contains("TestFlight") ? "Answering · sending a build to TestFlight" : d
+        case ("bridge", _):
+            if d.contains("TestFlight") { return "Sending a build to TestFlight" }
+            return state == "up" ? nil : d
+        case ("tv", "down"):
+            // The Mac's reason ("no adb server is running") is behind the tap with the other parts.
+            if let c = d.range(of: ": ") { return String(d[..<c.lowerBound]) }
+            return d.isEmpty ? nil : d
         case ("sessions", _):
             if let r = d.range(of: #"(\d+) of (\d+) kept running"#, options: .regularExpression) {
                 let n = d[r].split(separator: " "); return n[0] == n[2] ? "All \(n[2]) running" : "\(n[0]) of \(n[2]) running"
             }
             return d
-        default: return d.isEmpty ? nil : d.replacingOccurrences(of: "the bridge", with: "the Mac dashboard").replacingOccurrences(of: "Tailscale didn’t", with: "Remote access didn’t")
+        default:
+            if state != "down", filler.contains(d.lowercased()) { return nil }
+            return d.isEmpty ? nil : d.replacingOccurrences(of: "the bridge", with: "the Mac dashboard").replacingOccurrences(of: "Tailscale didn’t", with: "Remote access didn’t")
         }
+    }
+    // What a row keeps behind its tap beside the addresses: the Mac's reason for a TV link that is down.
+    var reason: String? {
+        guard id == "tv", state == "down", let d = detail, let c = d.range(of: ": ") else { return nil }
+        let t = String(d[c.upperBound...]); return t.prefix(1).uppercased() + t.dropFirst()
     }
     // Off is a state of its own (Funnel is meant to be off), not a fault.
     var down: Bool { state == "down" }
@@ -218,6 +235,18 @@ enum MacConsole {
         if !unsure.isEmpty { return (false, named(unsure, "not known")) }
         return (true, "All \(f.links.filter(\.up).count) working")
     }
+    // What a row's summary gives up when it can't fit whole, longest first: a part goes by design, never a cut with an
+    // ellipsis (designer gate, 2026-11-14: "1184 rpm ·…").
+    static func shorter(_ t: String) -> [String] {
+        var out = [t]
+        var cur = t
+        while let r = cur.range(of: " · ", options: .backwards) { cur = String(cur[..<r.lowerBound]); out.append(cur) }
+        if let r = t.range(of: ": ") { out.append(String(t[..<r.lowerBound])) }
+        else if t.contains(", "), let last = t.split(separator: " ").last { out.append("\(t.components(separatedBy: ", ").count) \(last)") }
+        if t.hasSuffix(" waiting"), !(t.first?.isNumber ?? false) { out.append("1 waiting") }
+        var seen = Set<String>()
+        return out.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
     static func exitText(_ code: Int) -> String {
         code < 0 ? "stopped by signal \(-code)" : code == 0 ? "exited cleanly" : "exited with code \(code)"
     }
@@ -229,7 +258,7 @@ extension MacPage {
     // The build's shots of each page, opened on the Control tab.
     static func consolePosed(_ pose: String) -> MacPage? {
         switch pose {
-        case "links", "linksbad", "linkconfirm", "linkdone", "linkstarting", "linkrestartfilm": return .links
+        case "links", "linksbad", "linkconfirm", "linkdone", "linkstarting", "linkrestartfilm", "linkopenfilm": return .links
         case "fans", "fanready": return .fans
         case "updates", "updateswaiting": return .updates
         case "storage": return .storage
@@ -261,7 +290,7 @@ struct MacConsoleSections: View {
     var quiet: Bool { model.problem != nil }
     var anything: Bool { [mp, links.value != nil, fans.value != nil, updates.value != nil, storage.value != nil, startup.value != nil].contains(true) }
 
-    func row(_ title: String, _ symbol: String, _ page: MacPage, summary: String?, good: Bool? = nil) -> some View {
+    func row(_ title: String, _ symbol: String, _ page: MacPage, summary: String?, good: Bool? = nil, alts: [String]? = nil) -> some View {
         Button { model.macPage = page } label: {
             HStack(spacing: 10) {
                 // The row's name is never cut; its summary gives way first (CI 9abf65f: "Fans & tem…"). An icon column and a
@@ -272,7 +301,10 @@ struct MacConsoleSections: View {
                 if let summary, !quiet {
                     HStack(spacing: 6) {
                         if let good { Circle().fill(good ? Color.green : Color.red).frame(width: 8, height: 8) }
-                        Text(summary).lineLimit(1).monospacedDigit()
+                        // The longest that fits whole.
+                        ViewThatFits(in: .horizontal) {
+                            ForEach(alts ?? MacConsole.shorter(summary), id: \.self) { t in Text(t).lineLimit(1).fixedSize().monospacedDigit() }
+                        }
                     }
                     .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -297,7 +329,8 @@ struct MacConsoleSections: View {
         if u.macos.pending == nil { return (u.macos.checking == true ? "Checking…" : "macOS \(u.macos.current.split(separator: " ").first ?? "")", nil) }
         if waiting == 0 { return ("Up to date", true) }
         let first = u.macos.pending?.first?.label ?? u.brew?.outdated?.first?.name ?? ""
-        return (waiting == 1 ? "\(first) waiting" : "\(waiting) waiting: \(first)…", nil)
+        // Never a string ending in an ellipsis: the row drops the name when the room is short (MacConsole.shorter).
+        return (waiting == 1 ? "\(first) waiting" : "\(waiting) waiting: \(first)", nil)
     }
     var storageLine: String? {
         guard let v = storage.value?.volumes.first(where: { $0.isInternal == true }) ?? storage.value?.volumes.first else { return nil }
@@ -430,6 +463,11 @@ struct LinkRow: View {
     // Not the first in its card: drawn with its own separator above (see body).
     var first = true
     let act: (String) -> Void
+    // The action the page is asking about for this link: the question hangs off the button that asked it.
+    var asked: String? = nil
+    var confirm: (String) -> Void = { _ in }
+    var dismiss: () -> Void = {}
+    var question: (String) -> String = { _ in "" }
     var color: Color { link.up ? .green : link.down ? .red : ["starting", "look"].contains(link.state) ? .orange : .secondary }
     var stateWord: String {
         switch link.state { case "up": return "Up"; case "down": return "Down"; case "off": return "Off"; case "starting": return "Starting"; case "look": return "Needs a look"; default: return "Not known" }
@@ -457,7 +495,8 @@ struct LinkRow: View {
     // Addresses, processes, the last error and the Mac's note only on a tap: he reads the state first, the parts behind it
     // when he asks (designer gate, 2026-11-13: "ports, pids and addresses go behind a tap").
     @State private var open = false
-    var more: Bool { !facts.isEmpty || link.lastError != nil || link.note != nil }
+    var actions: [String] { (link.can ?? []).filter { $0 != "bringup" } }
+    var more: Bool { !facts.isEmpty || link.lastError != nil || link.note != nil || link.reason != nil || !actions.isEmpty }
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: Self.symbol(link.id)).foregroundStyle(.secondary).frame(width: 26).padding(.top, 1)
@@ -472,6 +511,7 @@ struct LinkRow: View {
                 if let d = link.plainDetail, d != stateWord { Text(d).font(.footnote).foregroundStyle(link.down ? Color.red : Color.secondary).fixedSize(horizontal: false, vertical: true) }
                 if open {
                     if !facts.isEmpty { Text(facts.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
+                    if let r = link.reason { Text(r).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                     if let e = link.lastError {
                         Text("Last error\(e.t.map { " " + Format.ago(ms: $0) } ?? ""): \(e.text)").font(.footnote).foregroundStyle(.secondary).lineLimit(3)
                     }
@@ -480,11 +520,17 @@ struct LinkRow: View {
                 // Only what went wrong: a success shows in the row's own state and line, so saying it again was noise
                 // (designer, CI d9c229c), and a failure the row's line already says isn't repeated.
                 if let outcome, !outcome.done, outcome.error != link.detail { OutcomeLine(result: outcome) }
-                if let can = link.can?.filter({ $0 != "bringup" }), !can.isEmpty {
+                // A link that is up keeps its Restart behind the row's tap; one that isn't shows its action at once.
+                if !actions.isEmpty, open || !link.up || busy || asked != nil {
+                    let can = actions
                     HStack(spacing: 8) {
                         ForEach(can, id: \.self) { a in
                             Button(Self.actionName(a, link)) { act(a) }.buttonStyle(.bordered).controlSize(.small).disabled(busy)
                                 .modifier(FilmTarget(on: MacConsole.pose == "linkrestartfilm" && link.id == "public" && a == "restart"))
+                                .confirmationDialog("\(Self.actionName(a, link)) \(link.name)?", isPresented: Binding(get: { asked == a }, set: { if !$0, asked == a { dismiss() } }), titleVisibility: .visible) {
+                                    Button(Self.actionName(a, link), role: .destructive) { confirm(a) }
+                                    Button("Cancel", role: .cancel) {}
+                                } message: { Text(question(a)) }
                         }
                         if busy { ProgressView().controlSize(.small) }
                     }
@@ -494,6 +540,10 @@ struct LinkRow: View {
         }
         .padding(.vertical, 3)
         .contentShape(Rectangle())
+        .onAppear { if asked != nil || (MacConsole.pose == "linkrestartfilm" && link.id == "public") { open = true } }
+        .onChange(of: asked) { _, a in if a != nil { open = true } }
+        // The build's film of a row opening: the bridge's, a few seconds after the page is up.
+        .task { if MacConsole.pose == "linkopenfilm", link.id == "bridge" { try? await Task.sleep(nanoseconds: 3_000_000_000); withAnimation(.snappy(duration: 0.25)) { open = true } } }
         .onTapGesture { if more { withAnimation(.snappy(duration: 0.25)) { open.toggle() } } }
         .accessibilityAction(named: open ? "Fewer details" : "More details") { open.toggle() }
         .modifier(OwnSeparator(first: first))
@@ -546,11 +596,14 @@ struct LinksView: View {
     func section(_ title: String, _ list: [MacLink]) -> some View {
         Section(title) {
             ForEach(list) { l in
-                LinkRow(link: l, busy: busy.contains(l.id), outcome: outcomes[l.id], first: l.id == list.first?.id) { a in
+                LinkRow(link: l, busy: busy.contains(l.id), outcome: outcomes[l.id], first: l.id == list.first?.id, act: { a in
                     if film { FilmTarget.note("tapped \(l.id) \(a)") }
                     // Fix runs the Mac's own bring-up, which only starts what's down: no question. Anything that restarts asks.
                     if a == "bringup" { run(l, a) } else { asking = (l, a) }
-                }
+                }, asked: asking?.link.id == l.id ? asking?.action : nil,
+                   confirm: { a in asking = nil; run(l, a) },
+                   dismiss: { asking = nil },
+                   question: { Self.question(l, $0) })
                 .place(l.id)
                 .ownSeparatorRow()
             }
@@ -598,12 +651,6 @@ struct LinksView: View {
             section(groups[2].0, links(groups[2].1))
             if !others.isEmpty { section("Other", others) }
         }
-        .alert(asking.map { "\(LinkRow.actionName($0.action, $0.link)) \($0.link.name)?" } ?? "", isPresented: .init(get: { asking != nil }, set: { if !$0 { asking = nil } })) {
-            if let a = asking {
-                Button(LinkRow.actionName(a.action, a.link), role: .destructive) { run(a.link, a.action) }
-                Button("Cancel", role: .cancel) {}
-            }
-        } message: { Text(asking.map { Self.question($0.link, $0.action) } ?? "") }
         .task { await start() }
         // The film: the question his tap brought up stays long enough to read, then is answered as he would.
         .onChange(of: asking?.link.id) { _, id in
@@ -826,6 +873,11 @@ struct FansView: View {
                 ForEach(c.presets ?? []) { p in
                     Button { pick(p, c) } label: { floorRow(p.name, detail: "Never slower than \(p.rpm.formatted()) rpm", on: c.mode == "floor" && c.floor == p.rpm, spinning: pending == p.rpm) }
                         .buttonStyle(.plain).disabled(busy || away)
+                        // Hung off the row he tapped, so it points at it rather than the middle of the page.
+                        .confirmationDialog("Raise the slowest speed to \(p.rpm.formatted()) rpm?", isPresented: Binding(get: { askFloor?.rpm == p.rpm }, set: { if !$0, askFloor?.rpm == p.rpm { askFloor = nil } }), titleVisibility: .visible) {
+                            Button("Raise") { setFloor(p.rpm); askFloor = nil }
+                            Button("Cancel", role: .cancel) { askFloor = nil }
+                        } message: { Text("The fan gets louder and the Mac cooler. The Mac still speeds it up when it heats; Automatic or a restart puts it back.") }
                 }
                 if c.mode == "floor", let fl = c.floor, !(c.presets ?? []).contains(where: { $0.rpm == fl }) {
                     floorRow("Raised", detail: "Never slower than \(fl.formatted()) rpm", on: true, spinning: false)
@@ -895,7 +947,8 @@ struct FansView: View {
                 Section {
                     ForEach(t.all.filter { $0.group == g }) { s in
                         LabeledContent { Text(MacConsole.degrees(s.c)).monospacedDigit() } label: {
-                            VStack(alignment: .leading, spacing: 1) { Text(s.label.replacingOccurrences(of: "\(g) · ", with: "Sensor ")); Text(s.key).font(.caption).foregroundStyle(.secondary) }
+                            // The sensor's code (TC0P…) is hardware plumbing; the name says what it reads.
+                            Text(s.label.replacingOccurrences(of: "\(g) · ", with: "Sensor "))
                         }
                     }
                 } header: { Text(g == "Air" ? "Air" : g) }
@@ -909,10 +962,6 @@ struct FansView: View {
         } right: {
             allSections
         }
-        .alert(askFloor.map { "Raise the slowest speed to \($0.rpm.formatted()) rpm?" } ?? "", isPresented: Binding(get: { askFloor != nil }, set: { if !$0 { askFloor = nil } })) {
-            Button("Raise") { if let p = askFloor { setFloor(p.rpm) }; askFloor = nil }
-            Button("Cancel", role: .cancel) { askFloor = nil }
-        } message: { Text("The fan gets louder and the Mac cooler. The Mac still speeds it up when it heats; Automatic or a restart puts it back.") }
         .task {
             if MacConsole.pose == "fanready" { fans.set(Self.posedReady); return }
             await fans.loop(model, every: 3)
@@ -944,22 +993,21 @@ struct CopySetup: View {
         .foregroundStyle(macBlue)
     }
 }
+// A shell command is never printed: it sits behind a tap, "Copy command", for pasting at the Mac (designer gate,
+// 2026-11-14: "sudo launchctl bootout…" under a row).
 struct CommandRow: View {
     let command: String
     @State private var copied = false
     var body: some View {
-        HStack(spacing: 10) {
-            Text(command).font(.footnote.monospaced()).textSelection(.enabled).lineLimit(3)
-            Spacer(minLength: 8)
-            Button {
-                #if canImport(UIKit)
-                UIPasteboard.general.string = command
-                #endif
-                withAnimation(Motion.quick) { copied = true }
-                Task { try? await Task.sleep(nanoseconds: 1_500_000_000); withAnimation(Motion.quick) { copied = false } }
-            } label: { Image(systemName: copied ? "checkmark" : "doc.on.doc") }
-            .buttonStyle(.borderless).accessibilityLabel(copied ? "Copied" : "Copy the command")
-        }
+        Button {
+            #if canImport(UIKit)
+            UIPasteboard.general.string = command
+            #endif
+            withAnimation(Motion.quick) { copied = true }
+            Task { try? await Task.sleep(nanoseconds: 1_500_000_000); withAnimation(Motion.quick) { copied = false } }
+        } label: { Label(copied ? "Copied" : "Copy command", systemImage: copied ? "checkmark" : "doc.on.doc").font(.subheadline) }
+        .buttonStyle(.borderless).foregroundStyle(macBlue)
+        .accessibilityLabel(copied ? "Copied" : "Copy the command")
     }
 }
 
@@ -970,13 +1018,16 @@ struct UpdatesView: View {
     @State private var askBrew = false
     @State private var brewOutcome: MacActionResult?
 
+    // One name for it on every page (designer gate, 2026-11-14: "OCLP" here, the full name beside it).
+    static func plain(_ t: String) -> String { t.replacingOccurrences(of: "OCLP", with: "OpenCore Legacy Patcher") }
     @ViewBuilder var macosSection: some View {
         if let u = feed.value {
             let m = u.macos
             Section {
                 LabeledContent("Installed", value: "macOS \(m.current)")
                 if let p = m.pending {
-                    if p.isEmpty { Label("No macOS update waiting", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
+                    // A plain state word, not a green sentence.
+                    if p.isEmpty { LabeledContent("Update waiting", value: "None") }
                     ForEach(p) { x in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(x.label)
@@ -998,7 +1049,8 @@ struct UpdatesView: View {
                     Button { model.macPage = nil; model.tab = 4 } label: { HStack { Text("Install from the macOS tab"); Spacer(); RowChevron() } }
                 }
             } header: { Text("macOS") } footer: {
-                Text(m.risk ?? "")
+                // The one footnote on the page, and only when an update is waiting: the risk is about installing it.
+                if m.pending?.isEmpty == false { Text(Self.plain(m.risk ?? "")) }
             }
         } else if !feed.away {
             Section { HStack { ProgressView(); Text("Reading what’s installed…").foregroundStyle(.secondary) } }
@@ -1013,7 +1065,7 @@ struct UpdatesView: View {
                 if let p = o.patches {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: o.healthy == true ? "checkmark.circle.fill" : "exclamationmark.circle.fill").foregroundStyle(o.healthy == true ? Color.green : Color.red)
-                        Text(p.replacingOccurrences(of: "HEALTHY: ", with: "Patches healthy: ")).font(.footnote).fixedSize(horizontal: false, vertical: true)
+                        Text(Self.plain(p.replacingOccurrences(of: "HEALTHY: ", with: "Patches healthy: "))).font(.footnote).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 if let c = o.command, o.newer == true || o.healthy == false {
@@ -1021,7 +1073,10 @@ struct UpdatesView: View {
                     CommandRow(command: c)
                 }
             } header: { Text("OpenCore Legacy Patcher") } footer: {
-                Text(o.latest == nil ? "Couldn’t find out whether a newer OpenCore Legacy Patcher is out; the Mac looks again within half an hour." : o.newer == true ? "A newer OpenCore Legacy Patcher is out. Updating it is done at the Mac, and it patches again after." : "Up to date. Root patches are re-applied by the macOS tab after a macOS update.")
+                // Said only when there is news; "Up to date" and the re-patching note were a second footnote on a page that
+                // already had the macOS one.
+                if o.latest == nil { Text("Couldn’t find out whether a newer OpenCore Legacy Patcher is out; the Mac looks again within half an hour.") }
+                else if o.newer == true { Text("A newer OpenCore Legacy Patcher is out. Updating it is done at the Mac, and it patches again after.") }
             }
         }
     }
@@ -1030,7 +1085,7 @@ struct UpdatesView: View {
             if let b = u.brew {
                 Section {
                     if let list = b.outdated {
-                        if list.isEmpty { Label("Everything is up to date", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
+                        if list.isEmpty { LabeledContent("Outdated", value: "None") }
                         ForEach(list) { p in LabeledContent(p.name, value: [p.installed, p.latest].compactMap { $0 }.joined(separator: " → ")) }
                     }
                     if let e = b.error { FailText(e) }
@@ -1038,6 +1093,16 @@ struct UpdatesView: View {
                     else if let j = b.job { OutcomeLine(result: MacActionResult(ok: j.state == "done", say: j.say, error: j.say)) }
                     if let list = b.outdated, !list.isEmpty, b.job?.state != "running" {
                         Button("Upgrade \(list.count == 1 ? list[0].name : "\(list.count) packages")…") { askBrew = true }
+                            .confirmationDialog("Upgrade Homebrew’s packages?", isPresented: $askBrew, titleVisibility: .visible) {
+                                Button("Upgrade") {
+                                    Task {
+                                        do { brewOutcome = try await model.api.macDo("/api/mac/updates/brew", ["confirm": true]) }
+                                        catch { brewOutcome = MacActionResult(ok: false, error: MacFiles.unreachable(error) ? "The Mac didn’t answer; it’s not known whether the upgrade started." : error.localizedDescription) }
+                                        await feed.read(model.api)
+                                    }
+                                }
+                                Button("Cancel", role: .cancel) {}
+                            } message: { Text("The Mac runs brew upgrade. It takes a few minutes; this page shows when it’s done.") }
                     }
                     if let r = brewOutcome { OutcomeLine(result: r) }
                 } header: { Text("Homebrew") }
@@ -1045,7 +1110,8 @@ struct UpdatesView: View {
             // No Homebrew on the Mac: no card saying so (a lone "Not installed" card, designer CI d9c229c).
             if let apps = u.apps, !apps.isEmpty {
                 Section("Apps that update themselves") {
-                    ForEach(apps) { a in LabeledContent(a.name, value: [a.installed, a.how].compactMap { $0 }.joined(separator: " · ")) }
+                    // "Updates itself" restated the heading above; only a different way of updating is said.
+                    ForEach(apps) { a in LabeledContent(a.name, value: [a.installed, a.how.flatMap { $0 == "Updates itself" ? nil : $0 }].compactMap { $0 }.joined(separator: " · ")) }
                 }
             }
         }
@@ -1057,16 +1123,6 @@ struct UpdatesView: View {
             oclpSection
             brewSection
         }
-        .alert("Upgrade Homebrew’s packages?", isPresented: $askBrew) {
-            Button("Upgrade") {
-                Task {
-                    do { brewOutcome = try await model.api.macDo("/api/mac/updates/brew", ["confirm": true]) }
-                    catch { brewOutcome = MacActionResult(ok: false, error: MacFiles.unreachable(error) ? "The Mac didn’t answer; it’s not known whether the upgrade started." : error.localizedDescription) }
-                    await feed.read(model.api)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("The Mac runs brew upgrade. It takes a few minutes; this page shows when it’s done.") }
         .task {
             if MacConsole.pose == "updateswaiting" { feed.set(Self.posed); return }
             await feed.loop(model, every: 15)
@@ -1186,12 +1242,21 @@ struct StartupRow: View {
     let busy: Bool
     let outcome: MacActionResult?
     let ask: (String) -> Void
+    // The action the page is asking about for this row, and its two answers: the question hangs off the button that asked it,
+    // so it never lands across the fold.
+    var asked: String? = nil
+    var askedAgain: String? = nil
+    var confirm: (String) -> Void = { _ in }
+    var confirmAgain: (String) -> Void = { _ in }
+    var dismiss: () -> Void = {}
+    var question: (String) -> String = { _ in "" }
+    var questionAgain: String = ""
     @State private var open = false
     var stateText: String {
         if item.disabled == true { return "Disabled" }
         if item.running { return "Running" }
-        if item.loaded { return item.interval.map { "Every \(Format.span($0))" } ?? "Loaded" }
-        return "Not loaded"
+        if item.loaded { return item.interval.map { "Every \(Format.span($0))" } ?? "Idle" }
+        return "Stopped"
     }
     var actions: [String] {
         guard item.mine else { return [] }
@@ -1212,7 +1277,7 @@ struct StartupRow: View {
         "local.mac-dash": "Mac dashboard", "local.mac-dash-watchdog": "Mac dashboard keeper", "local.mac-dash-tunnel": "Public link",
         "local.chumby-remote": "Chumby link", "local.claude-sessions": "Claude sessions", "local.claude-remote-control": "Claude remote control",
         "local.keep-awake": "Keep awake", "local.macpro-console": "Console", "local.usbmux-kick": "iPhone cable link",
-        "com.mint.sync-youtube": "Mint YouTube sync", "local.oclp-tahoe.agent": "macOS patch check (daily)",
+        "com.mint.sync-youtube": "Mint YouTube sync", "local.oclp-tahoe.agent": "macOS patch check",
         "com.dortania.opencore-legacy-patcher.auto-patch": "Patch after macOS updates", "com.dortania.opencore-legacy-patcher.macos-update": "macOS update check",
         "com.dortania.opencore-legacy-patcher.os-caching": "macOS update caching", "com.google.keystone.agent": "Google updater",
         "com.google.keystone.xpcservice": "Google updater service", "com.google.GoogleUpdater.wake": "Google updater wake",
@@ -1235,22 +1300,36 @@ struct StartupRow: View {
                 }
                 .font(.footnote).foregroundStyle(.secondary).fixedSize()
             }
-            let plain = [item.keepAlive == true ? "Kept running" : nil, item.runAtLoad == true ? "starts at login" : nil, item.lastExit.flatMap { $0 != 0 && !item.running ? "last \(MacConsole.exitText($0))" : nil }].compactMap { $0 }.joined(separator: " · ")
+            // A second line only for what "Running" doesn't say: a running item's "Kept running · starts at login" repeated it
+            // (designer gate, 2026-11-14), so a running one has none here and the facts come on its tap.
+            let plain = item.running ? "" : [item.keepAlive == true ? "Meant to keep running" : nil, item.runAtLoad == true ? "starts at login" : nil, item.lastExit.flatMap { $0 != 0 ? "last \(MacConsole.exitText($0))" : nil }].compactMap { $0 }.joined(separator: " · ")
             if !plain.isEmpty { Text(plain.prefix(1).uppercased() + plain.dropFirst()).font(.footnote).foregroundStyle(.secondary) }
             // The Mac's own label, its command line and process number only on a tap.
             if open {
+                if item.running { let w = [item.keepAlive == true ? "Kept running" : nil, item.runAtLoad == true ? "starts at login" : nil].compactMap { $0 }.joined(separator: " · "); if !w.isEmpty { Text(w.prefix(1).uppercased() + w.dropFirst()).font(.footnote).foregroundStyle(.secondary) } }
                 Text(item.label).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 if let p = item.program, !p.isEmpty { Text(p).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(3) }
                 if let pid = item.pid { Text("Process \(pid)").font(.footnote).foregroundStyle(.secondary).monospacedDigit() }
             }
             if let outcome { OutcomeLine(result: outcome) }
-            if !item.mine, let c = item.command {
-                Text("Needs admin at the Mac:").font(.footnote).foregroundStyle(.secondary)
+            if open, !item.mine, let c = item.command {
+                Text("Changing it needs the Mac’s password, at the Mac.").font(.footnote).foregroundStyle(.secondary)
                 CommandRow(command: c)
             }
-            if !actions.isEmpty {
+            // The actions come with the tap, not thirteen capsules at once.
+            if !actions.isEmpty, open || busy || asked != nil || askedAgain != nil {
                 HStack(spacing: 8) {
-                    ForEach(actions, id: \.self) { a in Button(Self.word(a)) { ask(a) }.buttonStyle(.bordered).controlSize(.small).disabled(busy) }
+                    ForEach(actions, id: \.self) { a in
+                        Button(Self.word(a)) { ask(a) }.buttonStyle(.bordered).controlSize(.small).disabled(busy)
+                            .confirmationDialog("\(Self.word(a)) \(Self.name(item))?", isPresented: Binding(get: { asked == a }, set: { if !$0, asked == a { dismiss() } }), titleVisibility: .visible) {
+                                Button(Self.word(a), role: .destructive) { confirm(a) }
+                                Button("Cancel", role: .cancel) {}
+                            } message: { Text(question(a)) }
+                            .confirmationDialog("Are you sure?", isPresented: Binding(get: { askedAgain == a }, set: { if !$0, askedAgain == a { dismiss() } }), titleVisibility: .visible) {
+                                Button(Self.word(a), role: .destructive) { confirmAgain(a) }
+                                Button("Cancel", role: .cancel) {}
+                            } message: { Text(questionAgain) }
+                    }
                     if busy { ProgressView().controlSize(.small) }
                 }
                 .padding(.top, 3)
@@ -1259,6 +1338,8 @@ struct StartupRow: View {
         .padding(.vertical, 3)
         .contentShape(Rectangle())
         .onTapGesture { withAnimation(.snappy(duration: 0.25)) { open.toggle() } }
+        .onChange(of: asked) { _, a in if a != nil { open = true } }
+        .onAppear { if asked != nil { open = true } }
         .accessibilityAction(named: open ? "Fewer details" : "More details") { open.toggle() }
     }
 }
@@ -1275,9 +1356,18 @@ struct StartupView: View {
     var system: [StartupItem] { (feed.value?.items ?? []).filter { !$0.mine } }
     func rows(_ list: [StartupItem]) -> some View {
         ForEach(list) { i in
-            StartupRow(item: i, busy: busy.contains(i.label), outcome: outcomes[i.label]) { a in
+            StartupRow(item: i, busy: busy.contains(i.label), outcome: outcomes[i.label], ask: { a in
                 if a == "start" || a == "enable" { run(i, a, protectedOK: false) } else { asking = (i, a) }
-            }
+            }, asked: asking?.item.label == i.label ? asking?.action : nil,
+               askedAgain: askingAgain?.item.label == i.label ? askingAgain?.action : nil,
+               confirm: { a in
+                   asking = nil
+                   if i.protected != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { askingAgain = (i, a) } } else { run(i, a, protectedOK: false) }
+               },
+               confirmAgain: { a in askingAgain = nil; run(i, a, protectedOK: true) },
+               dismiss: { asking = nil; askingAgain = nil },
+               question: { Self.question(i, $0) },
+               questionAgain: i.protected == "claude" ? "This ends what keeps the Claude sessions running. Sessions on the Mac stop until it’s started again." : "This is part of how the app reaches the Mac.")
             .place(i.label)
         }
     }
@@ -1297,20 +1387,6 @@ struct StartupView: View {
                 }
             }
         }
-        .alert(asking.map { "\(StartupRow.word($0.action)) \(StartupRow.name($0.item))?" } ?? "", isPresented: .init(get: { asking != nil }, set: { if !$0 { asking = nil } })) {
-            if let a = asking {
-                Button(StartupRow.word(a.action), role: .destructive) {
-                    if a.item.protected != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { askingAgain = a } } else { run(a.item, a.action, protectedOK: false) }
-                }
-                Button("Cancel", role: .cancel) {}
-            }
-        } message: { Text(asking.map { Self.question($0.item, $0.action) } ?? "") }
-        .alert("Are you sure?", isPresented: .init(get: { askingAgain != nil }, set: { if !$0 { askingAgain = nil } })) {
-            if let a = askingAgain {
-                Button(StartupRow.word(a.action), role: .destructive) { run(a.item, a.action, protectedOK: true) }
-                Button("Cancel", role: .cancel) {}
-            }
-        } message: { Text(askingAgain.map { $0.item.protected == "claude" ? "This ends what keeps the Claude sessions running. Sessions on the Mac stop until it’s started again." : "This is part of how the app reaches the Mac." } ?? "") }
         .task {
             if MacConsole.pose == "startupconfirm" {
                 feed.set(Self.posed)

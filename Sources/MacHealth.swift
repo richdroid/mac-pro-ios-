@@ -549,8 +549,9 @@ struct MacHealthView: View {
         return ps.first.map { MacGroup.human(g, $0) } ?? "Running"
     }
     // Open flat: the part chosen on the left, said whole on the right.
-    // Unchosen, the first part that is running: a part that's down is already said whole in its card on the left.
-    var picked: MacGroup? { groups.first { $0.id == chosen } ?? groups.first { !isBad($0) } ?? groups.first }
+    // Unchosen, the part that is down (it opens on the problem), else the first. Open flat the list is beside it, so the part
+    // that needs a look is the one said whole (designer gate, 2026-11-14).
+    var picked: MacGroup? { groups.first { $0.id == chosen } ?? groups.first { isBad($0) } ?? groups.first }
     @ViewBuilder var detailCard: some View {
         if let g = picked {
             VStack(alignment: .leading, spacing: 8) {
@@ -560,10 +561,16 @@ struct MacHealthView: View {
                     Spacer(minLength: 8)
                     Circle().fill(dot(g)).frame(width: 10, height: 10)
                 }
-                Text(stateLine(g)).foregroundStyle(isBad(g) && !down ? Color.red : Color.primary).fixedSize(horizontal: false, vertical: true)
                 // What stands behind it, from Connections: each link's state in plain words and how long it has run,
                 // and the way there for its buttons and the rest.
                 let ls = (links.value?.links ?? []).filter { g.links.contains($0.id) }
+                // Said once: the links below carry the state when it is well; the line stays for a part with nothing
+                // under it, a part that is down and a Mac that is away (designer gate, 2026-11-14: state doubled).
+                if ls.isEmpty || isBad(g) || down {
+                    Text(stateLine(g)).foregroundStyle(isBad(g) && !down ? Color.red : Color.primary).fixedSize(horizontal: false, vertical: true)
+                }
+                // While the Mac is away what the links last said is last known, never current.
+                let lastKnown = down || links.away
                 if !ls.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(ls) { l in
@@ -571,9 +578,9 @@ struct MacHealthView: View {
                                 HStack(alignment: .firstTextBaseline) {
                                     Text(l.name).font(.subheadline)
                                     Spacer(minLength: 8)
-                                    Text(l.up ? "Up" : l.down ? "Down" : l.state == "off" ? "Off" : "Starting").font(.footnote).foregroundStyle(.secondary)
+                                    Text(lastKnown ? (l.up ? "Was up" : l.down ? "Was down" : l.state == "off" ? "Was off" : "Was starting") : (l.up ? "Up" : l.down ? "Down" : l.state == "off" ? "Off" : "Starting")).font(.footnote).foregroundStyle(.secondary)
                                 }
-                                let more = [l.plainDetail.flatMap { $0 == "Working" || $0 == "Answering" || $0 == "Running" ? nil : $0 }, l.uptime.map { "running \(Format.span($0))" }].compactMap { $0 }
+                                let more = [lastKnown ? nil : l.plainDetail, lastKnown ? nil : l.uptime.map { "running \(Format.span($0))" }].compactMap { $0 }
                                 if !more.isEmpty { Text(more.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                             }
                         }
@@ -594,6 +601,8 @@ struct MacHealthView: View {
             List {
                 Section { PaneHeading(title: title, shown: side != .right, roomAbove: false, onMac: "everything") }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+                    // The page's usual room under its name (the list's 16 pt put the hero 20 pt under it against 43 elsewhere).
+                    .listSectionSpacing(.default)
                 if side != .right {
                     Section { hero }
                         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
@@ -756,6 +765,9 @@ struct MacRestartView: View {
     // Once asked from this page, it stays the bring-up page until he leaves it.
     @State private var restarted = false
 
+    @ObservedObject private var health = HealthSummary.shared
+    // The programs the Mac says aren't responding that are open apps it can close.
+    var stuckApps: [Status.App] { health.stuck.compactMap { n in model.status?.apps.first { $0.name.caseInsensitiveCompare(n) == .orderedSame } } }
     var red: [MacPart] { checks?.parts.filter { $0.bad && $0.part != "restart" } ?? [] }
     var ready: Bool { checks != nil && red.isEmpty && !checking }
 
@@ -784,10 +796,17 @@ struct MacRestartView: View {
                             HStack { Text("Restart the Mac"); Spacer(); if sending { ProgressView() } }
                         }
                         .disabled(!ready || sending)
-                        .alert("Restart the Mac?", isPresented: $asking) {
+                        // Hung off the button, not centred across the fold. The program that isn't responding is offered a
+                        // clean close first, so nothing in it is lost.
+                        .confirmationDialog("Restart the Mac?", isPresented: $asking, titleVisibility: .visible) {
+                            ForEach(stuckApps) { a in
+                                Button("Quit \(a.name) first") { Task { _ = await model.run("app-quit", ["pid": a.pid]); await model.refresh() } }
+                            }
                             Button("Restart", role: .destructive) { Task { await restart() } }
                             Button("Cancel", role: .cancel) {}
-                        } message: { Text("The Mac restarts in a minute. The app reconnects by itself.") }
+                        } message: {
+                            Text(stuckApps.isEmpty ? "The Mac restarts in a minute. The app reconnects by itself." : "\(stuckApps.map(\.name).joined(separator: " and ")) isn’t responding; anything unsaved in it is lost in a restart. The Mac restarts in a minute.")
+                        }
                         if let refused { FailText(refused) }
                         if let failure { FailText(failure) }
                     } footer: {

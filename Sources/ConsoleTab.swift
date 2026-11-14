@@ -103,7 +103,11 @@ final class ConsoleRemote: ObservableObject {
         guard busy == nil else { return }
         withAnimation(Motion.quick) { busy = key; fail = nil }
         Task {
-            if Self.posed(model.pose) != nil { try? await Task.sleep(nanoseconds: 600_000_000); withAnimation(Motion.quick) { busy = nil }; return }
+            if Self.posed(model.pose) != nil {
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                withAnimation(Motion.quick) { busy = nil; if cmd == "glance" { state?.glance = arg == "on" } }
+                return
+            }
             let (e, st) = await model.api.consoleCommand(cmd, arg)
             withAnimation(Motion.quick) {
                 if let st { state = st }
@@ -116,7 +120,7 @@ final class ConsoleRemote: ObservableObject {
     // The build's shots: the Console up on a board, and not running.
     static func posed(_ pose: String) -> ConsoleState? {
         switch pose {
-        case "console": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "temps", board: nil, rotate: false, animations: "full", display: "awake")
+        case "console", "glancefilm": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "temps", board: nil, rotate: false, animations: "full", display: "awake")
         case "consoleboard": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "machine", rotate: true, animations: "gentle", display: "awake")
         case "consoleoff": return ConsoleState(running: false)
         default: return nil
@@ -274,6 +278,8 @@ struct ConsoleTab: View {
             .tint(macBlue)
         } footer: { failLine(["glance"]) }
         .disabled(!running || remote.busy != nil)
+        // The build's film of the switch: it is turned on by itself, a moment after the page is up.
+        .task { if model.pose == "glancefilm" { try? await Task.sleep(nanoseconds: 3_000_000_000); remote.send(model, "glance", "glance", "on") } }
     }
     var body: some View {
         Group {
@@ -355,21 +361,33 @@ struct ShowOnMacButton: View {
     let page: String
     @State private var phase = 0   // 0 idle, 1 waiting, 2 acked, 3 failed
     @State private var why: String?
+    @Environment(\.compactWindow) private var folded
     var body: some View {
         Button { go() } label: {
-            Group {
-                switch phase {
-                case 1: ProgressView()
-                case 2: Image(systemName: "checkmark").foregroundStyle(.green)
-                case 3: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
-                default: Image(systemName: "macwindow").foregroundStyle(macBlue)
+            HStack(spacing: 6) {
+                Group {
+                    switch phase {
+                    case 1: ProgressView()
+                    case 2: Image(systemName: "checkmark").foregroundStyle(.green)
+                    case 3: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                    default: Image(systemName: "arrow.up.forward.app").foregroundStyle(macBlue)
+                    }
+                }
+                .font(.title2).frame(width: 28, height: 44)
+                // Open postures have the room to say what it does; folded keeps the glyph alone.
+                if !folded {
+                    Text(phase == 2 ? "Shown" : phase == 3 ? "Not shown" : "Show on Mac")
+                        .font(.subheadline.weight(.medium)).foregroundStyle(phase == 3 ? .orange : phase == 2 ? .green : macBlue)
+                        .lineLimit(1).fixedSize()
                 }
             }
-            .font(.title2).frame(width: 44, height: 44).contentShape(Rectangle())
+            .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(phase == 1)
         .accessibilityLabel("Show on the Mac")
+        // The build's films of the button: pressed by itself, a moment after the page is up, and answered well or badly.
+        .task { if ["showonmacfilm", "showonmacfail"].contains(model.pose), page == "overview" || page == "updates" { try? await Task.sleep(nanoseconds: 3_000_000_000); go() } }
         .alert("Not shown on the Mac", isPresented: Binding(get: { why != nil }, set: { if !$0 { why = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(why ?? "") }
@@ -381,7 +399,10 @@ struct ShowOnMacButton: View {
             if model.pose.isEmpty {
                 if (try? await model.api.consoleState())??.running != true { e = await model.api.consoleCommand("show").error }
                 if e == nil { e = await model.api.consoleCommand("page", page).error }
-            } else { try? await Task.sleep(nanoseconds: 500_000_000) }
+            } else {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                if model.pose == "showonmacfail" { e = "The Console didn’t answer. Is the Mac asleep?" }
+            }
             withAnimation(Motion.quick) { phase = e == nil ? 2 : 3 }
             if let e { why = e }
             try? await Task.sleep(nanoseconds: 1_800_000_000)

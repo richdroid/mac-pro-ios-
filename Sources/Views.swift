@@ -607,7 +607,8 @@ struct PaneHeading: View {
         HStack(alignment: .center) {
             Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
             Spacer(minLength: 8)
-            if let onMac, shown { ShowOnMacButton(page: onMac).padding(.trailing, 4) }
+            // Drawn unseen in the pane that carries the name unseen, so both title rows are as tall and both first cards level.
+            if let onMac { ShowOnMacButton(page: onMac).padding(.trailing, 4).allowsHitTesting(shown) }
         }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, roomAbove ? Self.roomAbove(statusBarTop) : 0)
@@ -743,7 +744,10 @@ struct Screen<Content: View>: View {
                 // title collapsed into the bar, and the rows ran on under it ("Open on the Mac (13)" printed behind
                 // "Apps", 2026-11-07). The TV app does the same.
                 // At the cards' edge and as far down as the system's large title sat, so nothing moved but its behaviour.
-                Section { paneTitle(side).padding(.top, statusBarTop < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+                // The row's foot sits 14 pt below the title, out of the corner the list rounds off: the A of Apps lost its left foot to
+                // it (designer gate, 2026-11-14). The gap to the next block gives the 14 pt back.
+                Section { paneTitle(side).padding(.top, statusBarTop < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 14, trailing: 0)).listRowSeparator(.hidden)
+                    .listSectionSpacing(.custom(tab == 0 ? 14 : 21))
                 if side != .right, Notice.shows(model) { Section { Notice() } }
                 if let s = shown ?? model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
@@ -829,15 +833,17 @@ struct Screen<Content: View>: View {
             Text(title).font(.largeTitle.weight(.bold)).lineLimit(1)
             Spacer(minLength: 8)
             // The same page on the Mac's Console: Status is its overview, macOS its updates.
-            if side != .right, let page = [0: "overview", 4: "updates"][tab] { ShowOnMacButton(page: page) }
+            // (Unseen and untouchable in the right pane, which carries the row's height so both panes start level.)
+            if let page = [0: "overview", 4: "updates"][tab] { ShowOnMacButton(page: page).allowsHitTesting(side != .right) }
             // Settings, beside Status's name, the way the App Store keeps its account by its title.
-            if tab == 0, side != .right {
+            if tab == 0 {
                 Button { model.nav.settingsOpen = true } label: {
                     Image(systemName: "gearshape").font(.title2).foregroundStyle(macBlue).frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Settings")
                 .padding(.trailing, 4)
+                .allowsHitTesting(side != .right)
             }
         }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1670,8 +1676,16 @@ struct LimitsSection: View {
             .redacted(reason: api == nil ? .placeholder : [])
         }
     }
-    var body: some View {
-        Section {
+    // Whether there is a note under the card at all: an empty footer still takes its 10 pt, which made this section's gap to
+    // the next 41 pt against 31 on every other (designer gate, 2026-11-14).
+    var hasFooter: Bool {
+        if let p = u.plan, Format.staleAge(ms: p.at) != nil { return true }
+        if model.apiSetup { return true }
+        if let a = api, a.configured, a.estimated { return true }
+        if let at = api?.at, api?.configured == true, Format.staleAge(ms: at) != nil { return true }
+        return false
+    }
+    @ViewBuilder var limitsRows: some View {
             HStack(alignment: .top, spacing: 8) {
                 if u.plan?.fiveHour != nil { planDial("5 hours", u.plan?.fiveHour, u.plan?.fiveHourResets) }
                 planDial("This week", u.plan?.sevenDay, u.plan?.sevenDayResets)
@@ -1690,7 +1704,8 @@ struct LimitsSection: View {
             // What went wrong reading the API, said under the dials, without the Mac's "Couldn't read API usage:" lead-in.
             if let a = api, let e = a.error, !APIUsageNotes.refused(e) { Text(APIUsageNotes.plain(e)).font(.footnote).foregroundStyle(.red).lineLimit(3) }
             if model.apiSetup { APIKeyRow().transition(.opacity) }
-        } header: { Text("Limits") } footer: {
+    }
+    @ViewBuilder var limitsFooter: some View {
             VStack(alignment: .leading, spacing: 6) {
                 // Its age only once it's old enough to doubt: "Updated 43m ago" under a live reading read as stale (2026-11-07).
                 if let p = u.plan, let age = Format.staleAge(ms: p.at) { Text("Plan last read \(age)") }
@@ -1702,8 +1717,15 @@ struct LimitsSection: View {
                         .buttonStyle(.plain).foregroundStyle(macBlue).multilineTextAlignment(.leading)
                 } else if let at = api?.at, api?.configured == true, let age = Format.staleAge(ms: at) { Text("API last read \(age)") }
             }
+    }
+    var body: some View {
+        if hasFooter {
+            Section { limitsRows } header: { Text("Limits") } footer: { limitsFooter }
+                .id("usage")
+        } else {
+            Section { limitsRows } header: { Text("Limits") }
+                .id("usage")
         }
-        .id("usage")
     }
 }
 enum APIUsageNotes {
@@ -1920,7 +1942,8 @@ struct UpgradeTab: View {
         if !logShown, !s.upgrade.log.isEmpty { return ["Up to date", checked].compactMap { $0 }.joined(separator: " · ") }
         // Running: the step it's on, from the log's newest line. Failed: which step, as the Mac names it after its word
         // ("FAILED: root patch" → "Root patch").
-        let step = checking ? lastStep : statusParts.step.map(sentenceCase)
+        // While it checks the heading says so; a second "Checking for a newer macOS" under it said it twice.
+        let step = checking ? lastStep.flatMap { $0.hasPrefix("Checking") ? nil : $0 } : statusParts.step.map(sentenceCase)
         let line = [step, checked].compactMap { $0 }.joined(separator: " · ")
         return line.isEmpty ? nil : line.prefix(1).uppercased() + line.dropFirst()
     }
@@ -2026,7 +2049,9 @@ struct UpgradeTab: View {
     }
     // The Apps tab's section headings ("Updates", "On this iPhone"): bold, secondary, under the title rather than as loud
     // as it, in line with the text in the cards below. "Log" was white and semibold at the cards' very edge.
-    func header(_ t: String) -> some View { Text(t).font(.title3.weight(.bold)).foregroundStyle(.secondary).padding(.leading, 20) }
+    // The list tabs' own section heading: the system's size, 12 pt lower so its cap-top sits where theirs does under the title
+    // (designer gate, 2026-11-14: a size larger and 11 pt higher than every other tab's).
+    func header(_ t: String) -> some View { Text(t).font(.headline).foregroundStyle(.secondary).padding(.leading, 20).padding(.top, 12) }
     // The same edges as the system's list cards on every other tab: 20 pt in from the leading side, out to the trailing
     // edge of the space, and in the right pane open, from its leading edge.
     var body: some View {
@@ -2071,7 +2096,13 @@ struct UpgradeTab: View {
             // right pane was empty (designer, 2026-11-11: option 2, nothing across the fold).
             // The log beside them, the pane's full height, as in build 276.
             VStack(alignment: .leading, spacing: 12) {
-                if logShown { log } else { VStack(alignment: .leading, spacing: 8) { header("Details"); facts } }
+                if logShown { log } else {
+                    // The same frame as the left pane's scroll view, so both first cards start on one line.
+                    VStack(alignment: .leading, spacing: 8) {
+                        header("Details")
+                        ScrollView { facts }.scrollBounceBehavior(.basedOnSize).scrollEdgeEffectHidden(true, for: .top)
+                    }
+                }
             }
             .padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
@@ -2088,6 +2119,7 @@ struct UpdateLog: View {
     // How tall the lines are, so a short log gets a card its own size rather than an empty slab with one line at its foot.
     @State private var contentHeight: CGFloat?
     @State private var scrolledDown = false
+    @State private var atEnd = true
     static let bad = try? NSRegularExpression(pattern: #"\b(error|errors|failed|failure|fatal|cannot|couldn[’']t|panic)\b|✗"#, options: .caseInsensitive)
     static let good = try? NSRegularExpression(pattern: #"\b(finished|complete|completed|succeeded|success|healthy|installed|nothing to do|up to date)\b|✓"#, options: .caseInsensitive)
     static func matches(_ r: NSRegularExpression?, _ s: String) -> Bool { r?.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil }
@@ -2100,7 +2132,9 @@ struct UpdateLog: View {
         let lines = log.isEmpty ? ["No log yet"] : log.components(separatedBy: "\n")
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
+                // Not lazy: a lazy stack estimates the height of lines it hasn't laid out, so the scroll stopped short of the
+                // true end and the last line sat half under the card's foot (designer gate, 2026-11-14).
+                VStack(alignment: .leading, spacing: 3) {
                     ForEach(lines.indices, id: \.self) { i in
                         Text(lines[i].isEmpty ? " " : lines[i])
                             .font(.system(.footnote, design: .monospaced))
@@ -2113,6 +2147,7 @@ struct UpdateLog: View {
                 .padding(.horizontal, 20)
                 .textSelection(.enabled)
             }
+            .contentMargins(.bottom, 2, for: .scrollContent)
             // A line scrolled up fades out a full line deep, and only once the log is scrolled off its top, so a short
             // log's first line is untouched. The scroll view stops 14 pt inside the card's top and foot, so the fade has
             // reached nothing before any glyph meets the edge it's cut at.
@@ -2120,9 +2155,11 @@ struct UpdateLog: View {
                 VStack(spacing: 0) {
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: scrolledDown ? 30 : 0)
                     Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: atEnd ? 0 : 30)
                 }
             }
             .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y > 2 } action: { _, v in scrolledDown = v }
+            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.containerSize.height >= $0.contentSize.height - 2 } action: { _, v in atEnd = v }
             .defaultScrollAnchor(.bottom)
             .scrollEdgeEffectHidden(true, for: .top)
             .scrollBounceBehavior(.basedOnSize)
@@ -2140,19 +2177,49 @@ struct UpdateLog: View {
         }
     }
 }
-// The log's newest lines in the room it's given, each whole on one line, never a line cut through its glyphs.
+// The newest lines that fit a height, each whole: the height of every line is asked of the laid-out text at the width it
+// has, so the card is as tall as the lines it shows, never a character-count guess (designer gate, 2026-11-14).
+struct NewestLines: Layout {
+    let room: CGFloat
+    let gap: CGFloat
+    private func heights(_ subviews: Subviews, _ width: CGFloat) -> [CGFloat] {
+        subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }
+    }
+    // How many of the newest lines fit, and the height they take.
+    private func fit(_ h: [CGFloat]) -> (n: Int, height: CGFloat) {
+        var used: CGFloat = 0, n = 0
+        for x in h.reversed() {
+            let add = x + (n > 0 ? gap : 0)
+            if used + add > room, n > 0 { break }
+            used += add; n += 1
+        }
+        return (n, used)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let w = proposal.width ?? 320
+        return CGSize(width: w, height: fit(heights(subviews, w)).height)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let h = heights(subviews, bounds.width)
+        let first = subviews.count - fit(h).n
+        var y = bounds.minY
+        for (i, v) in subviews.enumerated() {
+            if i < first { v.place(at: CGPoint(x: bounds.minX, y: bounds.minY - 5000), anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: h[i])); continue }
+            v.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: h[i]))
+            y += h[i] + gap
+        }
+    }
+}
+// The log's newest lines in the room it's given, each whole, wrapped, never a line cut through its glyphs.
 struct LogPreview: View {
     let log: String
     // The height it may take, measured by the page around it.
     let room: CGFloat
-    @State private var width: CGFloat = 0
     #if canImport(UIKit)
     static let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
     static let lineHeight = ceil(font.lineHeight)
-    static let charWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
     #else
     static let lineHeight: CGFloat = 16
-    static let charWidth: CGFloat = 7.8
     #endif
     static let gap: CGFloat = 3
     static var twelveLines: CGFloat { 12 * lineHeight + 11 * gap + 28 }
@@ -2162,34 +2229,17 @@ struct LogPreview: View {
         return String(l.dropFirst(5).prefix(11)) + String(l.dropFirst(19))
     }
     var body: some View {
-        let all = log.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(Self.short)
-        // Every line whole, wrapped: the newest lines that fit the room in full, never one cut with an ellipsis
-        // (designer gate, 2026-11-13: "Checking softwareupdate cata…"). Rows per line from the card's width in characters.
-        let perRow = max(20, Int((width - 40) / Self.charWidth))
-        let rows: (String) -> Int = { max(1, Int(ceil(Double($0.count) / Double(perRow)))) }
-        let rowsRoom = max(2, Int((room - 28 + Self.gap) / (Self.lineHeight + Self.gap / 2)))
-        var shown: [String] = []
-        var used = 0
-        for l in all.reversed() {
-            let r = rows(l)
-            if used + r > rowsRoom, !shown.isEmpty { break }
-            shown.insert(l, at: 0); used += r
-        }
-        let height = CGFloat(used) * Self.lineHeight + CGFloat(max(shown.count - 1, 0)) * Self.gap + 28
-        return card(shown, height: height)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-    }
-    func card(_ shown: [String], height: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: Self.gap) {
-            ForEach(shown.indices, id: \.self) { i in
-                Text(shown[i]).font(.system(.footnote, design: .monospaced)).foregroundStyle(UpdateLog.tone(shown[i]))
+        // The last forty lines are plenty to choose from; the layout keeps the newest that fit.
+        let all = Array(log.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(Self.short).suffix(40))
+        NewestLines(room: max(Self.lineHeight, room - 28), gap: Self.gap) {
+            ForEach(all.indices, id: \.self) { i in
+                Text(all[i]).font(.system(.footnote, design: .monospaced)).foregroundStyle(UpdateLog.tone(all[i]))
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
-        // As tall as its lines need and no taller: a short log is a short card, not a slab with one line at its foot.
-        .frame(maxWidth: .infinity, maxHeight: max(height, Self.lineHeight + 28), alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(Color(white: 0.06), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
     }
@@ -2201,7 +2251,7 @@ struct FullLog: View {
     var body: some View {
         NavigationStack {
             UpdateLog(log: log, fills: true)
-                .padding(.horizontal, 16).padding(.bottom, 8)
+                .padding(.horizontal, 20).padding(.bottom, 8)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .background(groupedBackground.ignoresSafeArea())
                 .navigationTitle("Log")
@@ -2533,7 +2583,17 @@ final class HealthSummary: ObservableObject {
     // Asked, and the Mac had no answer to give.
     @Published private(set) var cantSay = false
     private var asked = Date.distantPast
-    func set(_ r: MacReport?) { let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n }; if r != nil, cantSay { cantSay = false } }
+    // The programs the Mac says aren't responding ("1 program stuck: Safari; a restart clears it"), by name, for the
+    // restart question to offer closing them first.
+    @Published private(set) var stuck: [String] = []
+    func set(_ r: MacReport?) {
+        let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n }; if r != nil, cantSay { cantSay = false }
+        var names: [String] = []
+        if let p = r?.parts.first(where: { $0.part == "stuck" && $0.bad }), let c = p.say.components(separatedBy: ";").first?.range(of: ": ") {
+            names = String(p.say.components(separatedBy: ";").first![c.upperBound...]).components(separatedBy: ", ").filter { !$0.isEmpty }
+        }
+        if names != stuck { stuck = names }
+    }
     // For Status, from a Mac whose status doesn't carry the count: asked once a minute at most.
     func refresh(_ api: API) {
         guard Date().timeIntervalSince(asked) > 60 else { return }

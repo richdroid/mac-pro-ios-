@@ -32,10 +32,11 @@ struct MacSettings: View {
         return "\(v) (\(b))"
     }
     @Environment(\.paneLayout) private var panes
+    @Environment(\.statusBarTop) private var statusBarTop
     // The page's name as its first line, going up with the page, as on every other tab; held blank over the right pane so
     // both panes' first cards start level.
     func heading(_ shown: Bool) -> some View {
-        Section { PaneHeading(title: "Settings", shown: shown) }
+        Section { PaneHeading(title: "Settings", shown: shown, roomAbove: false) }
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
     }
     // How the app looks and what it shows: on the left open flat.
@@ -139,6 +140,9 @@ struct MacSettings: View {
             if side != .right { looks }
             if side != .left { behaves }
         }
+        // The title's room under a side status bar is the list's margin, as on every pushed page (designer gate, 2026-11-14:
+        // Settings sat 10 pt high folded and 30 pt low upright against Connections).
+        .contentMargins(.top, 4 + PaneHeading.roomAbove(statusBarTop), for: .scrollContent)
         .scrollsUnder(side == .right ? 1 : 0)
     }
     // Behind the gear on Status since the Console took a tab (Richard, 2026-11-13: "consolidate or move settings if need
@@ -159,9 +163,6 @@ struct MacSettings: View {
                 if pose == "budget-custom" { try? await Task.sleep(nanoseconds: 600_000_000); budgetDraft = apiBudget; customBudget = true }
             }
         }
-        // The same top edge as every other tab, rather than the system's band and hairline.
-        .modifier(StatusBarFade())
-        .topEdge()
         .screenCover(isPresented: $connecting) { SignInView().environmentObject(model) }
         // New intervals take hold straight away rather than after the current wait.
         .onChange(of: liveEvery) { _, _ in model.start() }
@@ -173,10 +174,14 @@ struct MacSettings: View {
                 .holdsWhileMoving("settings")
                 .modifier(TabBarFade())
                 .background(groupedBackground.ignoresSafeArea())
+                .topEdge()
                 .pushedTitle()
         } else {
             NavigationStack {
+                // The same top edge as every other tab, rather than the system's band and hairline.
                 content
+                    .modifier(StatusBarFade())
+                    .topEdge()
                     .navigationTitle("Settings")
                     .toolbarVisibility(.hidden, for: .navigationBar)
             }

@@ -85,11 +85,25 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/power-$name-foot.png
             xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
           }
+          # A page filmed while a real finger drags it up twice: the log of the macOS tab, reached by dragging.
+          dragfilm() {
+            local name=$1 display=$2; shift 2
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/power-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep 8
+            /tmp/dh/.build/release/devicehubctl "$DEVICE" drag 0.3 0.78 0.3 0.3 0.7 || echo "drag failed"; sleep 3
+            /tmp/dh/.build/release/devicehubctl "$DEVICE" drag 0.3 0.78 0.3 0.2 0.7 || true; sleep 3
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
           # Every tab and page of the app (2026-11-13 sweep: the gate walks every page in every posture).
           everypage() {
             local d=$1 x=$2
             for T in 0 1 2 5 6; do dragshot tab$T$x $d 9 -tab $T; done
             shot tab4$x $d 9 -tab 4
+            # The macOS tab dragged up to its log, every posture (folded is the one that scrolls).
+            dragshot tab4log$x $d 9 -tab 4
             shot fulllog$x $d 10 -tab 4 -pose fulllog
             shot longlog$x $d 9 -tab 4 -pose longlog
             dragshot settings$x $d 14 -tab 0 -openLink macproapp://settings
@@ -160,6 +174,14 @@ jobs:
           film links-open-portrait 3 14 -tab 5 -pose links
           film fans-open-portrait 3 14 -tab 5 -pose fans
           restartfilm link-restart-portrait 3
+          # The new controls, filmed: Show on Mac (a tick, and a failure), the Glance switch, a Connections row opening, a
+          # cold open of Status (it must never open dimmed), the macOS tab dragged to its log.
+          film showonmac-portrait 3 12 -tab 0 -pose showonmacfilm
+          film showonmac-fail-portrait 3 12 -tab 0 -pose showonmacfail
+          film glance-portrait 3 12 -tab 6 -pose glancefilm
+          film linkopen-portrait 3 12 -tab 5 -pose linkopenfilm
+          film coldopen-status-portrait 3 10 -tab 0
+          dragfilm macos-log-portrait 3 -tab 4
           # A link from the Console (macproapp://…) lands on its page.
           shot deeplink-updates-portrait 3 9 -tab 0 -openLink macproapp://control/updates
           shot deeplink-cpu-portrait 3 9 -tab 0 -openLink macproapp://status/temps/CPU
@@ -170,6 +192,12 @@ jobs:
           # Closing can miss once (CI 3609ee9: "the outer display still isn't the live one"): tried twice.
           for i in 1 2; do /tmp/dh/.build/release/devicehubctl "$DEVICE" pose closed && break; sleep 10; done; sleep 5
           poses 1 -folded
+          film showonmac-folded 1 12 -tab 0 -pose showonmacfilm
+          film showonmac-fail-folded 1 12 -tab 0 -pose showonmacfail
+          film glance-folded 1 12 -tab 6 -pose glancefilm
+          film linkopen-folded 1 12 -tab 5 -pose linkopenfilm
+          film coldopen-status-folded 1 10 -tab 0
+          dragfilm macos-log-folded 1 -tab 4
           ls dist
       - name: Publish
         if: always()
