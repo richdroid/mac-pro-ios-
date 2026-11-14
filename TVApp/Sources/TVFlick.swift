@@ -393,6 +393,8 @@ struct FlickScreen: View {
     @State private var metaFailed = false
     @State private var lookups = 0
     @State private var season = 0
+    // An episode thrown from its row: its best stream is sent as soon as the list is in.
+    @State private var throwAt: String?
     @State private var episode: StremioEpisode?
     @State private var streams: [StremioStream] = []
     @State private var stream: StremioStream?
@@ -637,8 +639,8 @@ struct FlickScreen: View {
         case .streams: return isSeries ? .episodes : nil
         }
     }
-    func go(_ to: Step) {
-        model.tick()
+    func go(_ to: Step, felt: Bool = false) {
+        if !felt { model.tick() }
         forward = to.rawValue > step.rawValue
         withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { step = to }
         if to == .streams && streams.isEmpty { Task { await findStreams() } }
@@ -1114,9 +1116,19 @@ struct FlickScreen: View {
     }
     // An episode picked, from its row or the big key: its streams, which were asked for as the page opened, so the list
     // is there as the step slides in.
-    func choose(_ e: StremioEpisode) {
+    // An episode's row thrown to the TV: chosen as if tapped, and its best stream sent the moment its list is in.
+    // Felt once, at the throw itself (the row's own thunk): no tick for the step, no second thunk for the pick.
+    func throwEpisode(_ e: StremioEpisode) {
+        guard !flown else { return }
+        let had = episode == e && !streams.isEmpty
+        choose(e, felt: true)
+        throwAt = e.id
+        if had { throwPick(streams) }
+    }
+    func choose(_ e: StremioEpisode, felt: Bool = false) {
+        throwAt = nil
         if episode != e { episode = e; stream = nil; streams = []; noStreams = false; streamFilter = "All"; runtime = nil; startOverChoice = nil; choseOnTV = false }
-        go(.streams)
+        go(.streams, felt: felt)
     }
     func row<L: View>(selected: Bool, action: @escaping () -> Void, @ViewBuilder label: () -> L) -> some View {
         Button(action: action) {
@@ -1531,10 +1543,10 @@ struct FlickScreen: View {
     }
     // A stream picked: felt at once, and sent. What's already on the TV is never sent again; the pick goes straight to
     // the Remote (Richard, 2026-11-05: "the episode restarted i think because of the app").
-    func pick(_ s: StremioStream) {
+    func pick(_ s: StremioStream, felt: Bool = false) {
         guard !flown else { return }
         stream = s; choseOnTV = false
-        FlickHaptic.caught()
+        if !felt { FlickHaptic.caught() }
         if alreadyOn {
             // The stream that's on, or which one is on isn't known: the Remote, nothing sent (ruling 11). Another row
             // of the same list is a different stream picked on purpose (the dub that was Best, a file that stutters):
@@ -1547,9 +1559,12 @@ struct FlickScreen: View {
     // Thrown from its shelf: the stream he'd most likely pick (Best: the top one that hasn't failed and isn't a dub),
     // sent as if he'd thrown its row.
     func throwPick(_ found: [StremioStream]) {
-        guard target.thrown != nil, !flown, !leaving else { return }
+        let rowThrow = throwAt != nil && throwAt == episode?.id
+        guard target.thrown != nil || rowThrow, !flown, !leaving else { return }
+        throwAt = nil
         if let best = found.first(where: { !failedTokens.contains($0.token) && $0.stalled != true && $0.dubbed != true }) ?? found.first(where: { !failedTokens.contains($0.token) }) {
-            pick(best)
+            // A row's throw was felt as it left his hand: the pick it leads to is silent.
+            pick(best, felt: rowThrow)
         }
     }
     // Where a card thrown from its shelf was let go, in this screen's space.
@@ -2735,6 +2750,11 @@ struct ShelfFlick: ViewModifier {
     let width: CGFloat
     // Where the card is, as its button measures it.
     let rect: () -> CGRect
+    // On a page that is itself the flick's choosing (the episodes there): the throw is the page's to make, with the list
+    // it already holds, instead of another flick opened over it.
+    var onThrow: (() -> Void)?
+    // Held and let go where it was: the page's own choosing, not a second flick opened over it.
+    var onTap: (() -> Void)?
     @State private var hands = HandBox()
     @State private var lock = ScrollLockBox()
     @State private var up = false
@@ -2841,7 +2861,7 @@ struct ShelfFlick: ViewModifier {
             .onEnded { _ in
                 // In the hand: from here the finger is followed off the window's own events, as a stream row's is, so
                 // the shelf and the page under it scroll freely under any swipe that isn't a hold.
-                guard !up, model.flicking == nil || model.flickRetired else { return }
+                guard !up, model.flicking == nil || model.flickRetired || onThrow != nil else { return }
                 hands.base = Date().addingTimeInterval(-rules.hold); hands.hand = FlickHand(rules)
                 _ = hands.hand.down(.zero, at: 0)
                 hands.hand.realLift = TouchLedger.sinceDown()
@@ -2874,6 +2894,8 @@ struct ShelfFlick: ViewModifier {
         let r = rect()
         guard r.width > 4, let image = Self.picture(item, source, width) else { return false }
         HandTrace.note("shelf-lifted")
+        // A card lifted out of the search results takes the keyboard down with it.
+        if model.tab == 6 || model.typingIn != nil { SearchStore.shared.putKeyboardAway() }
         FlickMeter.shared.lifted("shelf", hold: hands.hand.realLift)
         RenderFlight.pick(image, at: r, cover: min(r.height, width / source.coverAspect), corner: width > 200 ? 8 : 6, wide: item.isYouTube)
         up = true
@@ -2916,7 +2938,7 @@ struct ShelfFlick: ViewModifier {
             // Held and let go where it was: a tap, its page, as on any button.
             RenderFlight.cancel(); home()
             if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
-            FlickCardButton.tap(model, item, source, origin: rect(), held: true)
+            if let onTap { onTap() } else { FlickCardButton.tap(model, item, source, origin: rect(), held: true) }
         default:
             FlickHaptic.settle()
             if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
@@ -2925,7 +2947,14 @@ struct ShelfFlick: ViewModifier {
         }
     }
     func throwIt(velocity: CGSize, translation: CGSize) {
+        // The one thunk of the throw, whoever sends it.
         FlickHaptic.caught()
+        if let onThrow {
+            if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
+            RenderFlight.cancel(); home()
+            onThrow()
+            return
+        }
         var from = rect().offsetBy(dx: translation.width, dy: translation.height)
         // What's on already: the Remote, nothing sent (as a tap on it does).
         if model.isOnTV(item, source) { RenderFlight.cancel(); home(); model.showOnRemote(); return }
