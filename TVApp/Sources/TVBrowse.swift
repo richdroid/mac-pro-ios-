@@ -468,7 +468,7 @@ struct FlickCardButton: View {
     // What a tap on a card does; the build's real-data flows tap through here too.
     @MainActor static func tap(_ model: TVModel, _ item: MediaItem, _ source: MediaSource, ready: Bool = false, origin: CGRect? = nil, held: Bool = false) {
         // A card picked from anywhere (a search result, Return on the field) takes the keyboard down with it (gate of 0472bce).
-        Keyboard.dismiss(); SendDraft.shared.wantsFocus = false
+        SearchStore.shared.putKeyboardAway()
         // The tap iOS reports with the release of a card that was held (thrown, put back, or let go as a tap) is that.
         // The held card's own release (`held`) is the one that counts.
         if !held, Date().timeIntervalSince(ShelfHand.shared.handledAt) < 0.35 { return }
