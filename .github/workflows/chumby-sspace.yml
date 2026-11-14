@@ -15,7 +15,7 @@ concurrency:
 jobs:
   shots:
     runs-on: xcode-27
-    timeout-minutes: 110
+    timeout-minutes: 140
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,7 +34,7 @@ jobs:
             -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
       - name: Shots
         continue-on-error: true
-        timeout-minutes: 90
+        timeout-minutes: 125
         run: |
           set +e
           exec > >(tee dist/sim.log) 2>&1
@@ -172,12 +172,35 @@ jobs:
             kill -INT $REC; wait $REC; echo "pickfail$x exit $?"
             xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
           }
+          polish() { # display, suffix: the polish pass (2026-11-14): Home in each state, Tinker, the nap editor
+            local d=$1 x=$2
+            # Home: default, moved for one ring, the re-skip warning (the editor's sheet), skipped, a nap set, ringing, snoozed.
+            for V in "home 0 -" "home-moved 0 moved" "home-skipped 0 skipped" "home-nap 0 nap" "home-ringing 0 ringing" "home-snoozed 0 snoozed" \
+                     "home-justonce 0 - -pose justonce" "reskip 2 skipped -pose reskip" "napeditor 2 nap -pose napeditor" "tinker 4 -"; do
+              set -- "$d" "$x" $V
+              ADDR=$M; [ "$5" != "-" ] && ADDR=$M/$5
+              fresh $ADDR
+              xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $ADDR -tab $4 "${@:6}"
+              sleep 12
+              xcrun simctl io "$DEVICE" screenshot --display=$1 dist/chumby-$3$2.png
+              xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            done
+            xcrun simctl ui "$DEVICE" appearance dark
+            fresh $M
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $M -tab 0; sleep 12
+            xcrun simctl io "$DEVICE" screenshot --display=$d dist/chumby-home-dark$x.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+            xcrun simctl ui "$DEVICE" appearance light
+          }
           $D "$DEVICE" pose closed; sleep 5
           posture 1 "" 0.64 0.72 0.1 0.3 "0.45 0.6 0.75"
+          polish 1 ""
           $D "$DEVICE" pose open; echo "unfold exit $?"; sleep 5
           posture 3 -open 0.67 0.42 0.05 0.7 "0.3 0.45 0.6"
+          polish 3 -open
           $D "$DEVICE" rotate 1; sleep 5
           posture 3 -portrait 0.55 0.85 0.08 0.3 "0.45 0.6 0.75"
+          polish 3 -portrait
       - name: Collect crash reports
         if: always()
         run: |

@@ -454,6 +454,7 @@ private struct PushedPage: ViewModifier {
 struct CalendarDaySheet: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openCalendarSettings) private var openCalendarSettings
     @ObservedObject private var wake = CalendarWake.shared
     @Environment(\.colorScheme) private var scheme
     // Folded: measured on first layout, a first guess until then.
@@ -591,9 +592,14 @@ struct CalendarDaySheet: View {
                 // The shared set, as information: dimmed, nothing to tap, and where it's changed (Richard, 2026-11-10:
                 // read-only rows look read-only).
                 let r = wake.ringsWith(model.state)
-                LabeledContent("Plays", value: r.sound).lineLimit(1).foregroundStyle(.secondary).background { foot }
+                LabeledContent("Plays", value: r.sound).foregroundStyle(.secondary).background { foot }
                 if let z = r.snooze { LabeledContent("Snooze", value: "\(z) min").foregroundStyle(.secondary).background { foot } }
-                Text("How every calendar alarm rings; change it in Calendar settings.").font(.footnote).foregroundStyle(.secondary).background { foot }
+                // Where it's changed is a row that goes there, not a sentence saying to.
+                Button { openCalendarSettings?() } label: {
+                    Text("Change in Calendar settings").font(.body.weight(.semibold)).foregroundStyle(.tint)
+                        .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).background { foot }
             }
             if let j = model.state.justOnce(for: item) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -676,6 +682,9 @@ extension ChumbyState {
     }
 }
 
+// Opens Calendar settings from a day (the pushed page swaps to it; open flat the pane does).
+private struct OpenCalSettingsKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
+extension EnvironmentValues { var openCalendarSettings: (() -> Void)? { get { self[OpenCalSettingsKey.self] } set { self[OpenCalSettingsKey.self] = newValue } } }
 // Opens the calendar alarms' settings in the open Duo's right pane; unset, they open as a sheet.
 private struct OpenTemplateKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
 extension EnvironmentValues { var openTemplate: (() -> Void)? { get { self[OpenTemplateKey.self] } set { self[OpenTemplateKey.self] = newValue } } }

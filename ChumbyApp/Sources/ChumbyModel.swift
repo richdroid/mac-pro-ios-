@@ -425,7 +425,7 @@ final class ChumbyModel: ObservableObject {
     // Notes about whether tonight's alarm is as he left it (a skip or an undo the Chumby didn't confirm), and one that
     // arrives up to a minute after the tap (a station looked up), stay until he puts them away or the Chumby agrees:
     // one that cleared itself after six seconds was gone before a locked phone was looked at again.
-    static let keptNotes: Set<String> = ["skip", "pandora", "macmusic"]
+    static let keptNotes: Set<String> = ["skip", "pandora", "macmusic", "calsound"]
     @Published private(set) var kept: [String: String] = [:]
     func letGo(_ id: String) {
         if kept[id] != nil { withAnimation(.snappy) { kept[id] = nil } }
@@ -701,22 +701,31 @@ final class ChumbyModel: ObservableObject {
     // Kept on the phone too, so calendar alarms made before the Chumby has a set of its own ring this way.
     // Nil once it's saved or waiting for a ringing alarm to pass; otherwise why it couldn't be.
     func saveCalendarTemplate(_ t: Alarm) async -> String? {
+        // A newer pick takes over from one still waiting for a ringing alarm to pass: the older one must never go out
+        // after it, and what the screen shows if this one fails is what the Chumby held before the first of them.
+        calendarRetry?.cancel()
+        if heldCalendar == nil { calendarBefore = CalendarWake.shared.storedSettings }
         CalendarWake.shared.storedSettings = t
         heldCalendar = t
-        return await sendCalendarTemplate()
+        return await sendCalendarTemplate(silent: false)
     }
     private var heldCalendar: Alarm?
+    private var calendarBefore: Alarm?
+    // The pick the Chumby turned down, so the note's Retry can send it again (nil once it lands or is put away).
+    @Published private(set) var failedCalendarPick: Alarm?
+    func clearFailedCalendarPick() { failedCalendarPick = nil }
     private var calendarRetry: Task<Void, Never>?
     @Published var calendarWaiting = false
     @discardableResult
-    private func sendCalendarTemplate() async -> String? {
+    private func sendCalendarTemplate(silent: Bool) async -> String? {
         guard let t = heldCalendar, let api else { return nil }
         do {
             let r = try await AlarmWriter.shared.edit(api, quiet: true, force: true, template: { $0.alarms.contains { $0.isCalendar } }, permit: SavePermit()) { (s: inout ChumbyState) -> Void in
                 // A day with its own sound keeps it; the Chumby leaves those alone too.
                 for i in s.alarms.indices where s.alarms[i].isCalendar && !s.alarms[i].isOwn { s.alarms[i].takeSettings(from: t) }
             }
-            heldCalendar = nil; calendarWaiting = false
+            heldCalendar = nil; calendarBefore = nil; calendarWaiting = false
+            failedCalendarPick = nil
             landed(r, mark: nil)
             return nil
         } catch ChumbyError.waiting {
@@ -725,12 +734,21 @@ final class ChumbyModel: ObservableObject {
             calendarRetry?.cancel()
             calendarRetry = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
-                if !Task.isCancelled { await self?.sendCalendarTemplate() }
+                if !Task.isCancelled { await self?.sendCalendarTemplate(silent: true) }
             }
             return nil
         } catch {
+            // Turned down: the pick is given up here, so no later retry can send what the screen takes back. What the
+            // Chumby held goes back as the stored set, and Retry (on the note) asks for the pick again.
+            let why = AlarmWriter.explain(error)
             calendarWaiting = false
-            return AlarmWriter.explain(error)
+            calendarRetry?.cancel()
+            CalendarWake.shared.storedSettings = calendarBefore
+            heldCalendar = nil; calendarBefore = nil
+            failedCalendarPick = t
+            // A silent retry has no caller waiting on the answer, so the note is raised here.
+            if silent { fail("calsound", why) }
+            return why
         }
     }
 

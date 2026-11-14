@@ -504,7 +504,7 @@ struct ChumbyStatusBody: View {
             Circle().fill(entry.reachable ? Color.green : Color.white.opacity(0.4)).frame(width: 8, height: 8)
             // Not answering: "Last seen" over the time (with its day when not today), so it never reads as an alarm time.
             if entry.reachable {
-                Text("Up \(entryDuration(sys.up))").font(.trebuchet(15, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+                Text("Awake \(entryDuration(sys.up))").font(.trebuchet(15, .bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(entry.lastSeen == nil ? "Not answering" : "Last seen").font(.trebuchet(11)).opacity(0.75)

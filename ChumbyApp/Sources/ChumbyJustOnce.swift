@@ -23,7 +23,7 @@ extension ChumbyModel {
         let t = s.date.formatted(date: .omitted, time: .shortened)
         let name = s.name.hasPrefix(Alarm.calendarPrefix) ? String(s.name.dropFirst(Alarm.calendarPrefix.count)) : (s.name.isEmpty ? "your \(t) alarm" : s.name)
         if let j = state.justOnce(), j.pinned {
-            return "This replaces your “just this once” for \(name): \(name) rings at \(t) again and its \(j.at.formatted(date: .omitted, time: .shortened)) one-off is removed."
+            return "This replaces your “just this once” for \(name): \(name) rings at \(t) again and its \(j.at.formatted(date: .omitted, time: .shortened)) ring is removed."
         }
         return "This replaces your skip of \(name) at \(t); that alarm will ring again."
     }
@@ -90,7 +90,7 @@ extension ChumbyModel {
         switch await onceInOne(original, due: due, one: one) {
         case .done:
             if let old, old.alarm.key != one.key, old.alarm.name != one.name {
-                if let why = await save(.delete(old.alarm)) { return "Set. But the earlier one-off at \(old.at.formatted(date: .omitted, time: .shortened)) couldn’t be removed, so it rings too: \(why)" }
+                if let why = await save(.delete(old.alarm)) { return "Set. But the earlier \(old.at.formatted(date: .omitted, time: .shortened)) ring couldn’t be removed, so it rings too: \(why)" }
             }
             return nil
         case .failed(let why): return why
@@ -111,7 +111,7 @@ extension ChumbyModel {
         // stops here, with the usual alarm untouched.
         guard let now = try? AlarmWriter.strict(await api.fresh("state")), now.alarms.contains(where: { $0.key == one.key && $0.isOn }) else {
             _ = await save(.delete(one))
-            return "The Chumby didn’t take the one-off, so nothing was changed. Your usual alarm rings."
+            return "The Chumby didn’t take the new time, so nothing was changed. Your usual alarm rings."
         }
         // 3. The usual ring skipped, checked against the Chumby's own answer.
         if let why = await skipFor(original, due: due) {
@@ -122,7 +122,7 @@ extension ChumbyModel {
         }
         // 4. The skip it replaced no longer stands, so its one-off goes and its alarm rings as usual.
         if let old {
-            if let why = await save(.delete(old.alarm)) { return "Set. But the earlier one-off at \(old.at.formatted(date: .omitted, time: .shortened)) couldn’t be removed, so it rings too: \(why)" }
+            if let why = await save(.delete(old.alarm)) { return "Set. But the earlier \(old.at.formatted(date: .omitted, time: .shortened)) ring couldn’t be removed, so it rings too: \(why)" }
         }
         return nil
     }
@@ -170,8 +170,8 @@ extension ChumbyModel {
         // is harmless.) Then the one-off, if it's there, so it's as it was.
         await unskip(settle: false)
         if !there(s) {
-            if skipped(s) { return .failed("The Chumby didn’t take the one-off, so the skip was taken back. Your usual alarm rings.") }
-            return .failed(lost ? ChumbyWords.notAnswering + ". Check the alarm before you sleep." : "The Chumby didn’t take the one-off. Nothing was changed.")
+            if skipped(s) { return .failed("The Chumby didn’t take the new time, so the skip was taken back. Your usual alarm rings.") }
+            return .failed(lost ? ChumbyWords.notAnswering + ". Check the alarm before you sleep." : "The Chumby didn’t take the new time. Nothing was changed.")
         }
         if let why = await save(.delete(one)) { return .failed("The Chumby didn’t confirm the skip, so both will ring: \(why)") }
         return .failed("The Chumby didn’t confirm the skip. Nothing was changed.")
@@ -280,7 +280,7 @@ struct JustOnceMenu: View {
         let t = j.at.formatted(date: .omitted, time: .shortened)
         VStack(alignment: .leading, spacing: 6) {
             if let o = j.original, let u = j.usual {
-                RowNote(icon: "exclamationmark.circle.fill", text: "Both will ring: \(alarmLabel(o).capitalizedFirst) at \(u.formatted(date: .omitted, time: .shortened)) and its one-off at \(t). The skip moved to another alarm.")
+                RowNote(icon: "exclamationmark.circle.fill", text: "Both will ring: \(alarmLabel(o).capitalizedFirst) at \(u.formatted(date: .omitted, time: .shortened)) and its ring at \(t). The skip moved to another alarm.")
             } else {
                 RowNote(icon: "exclamationmark.circle.fill", text: "\(j.alarm.name) still rings at \(t), though the alarm it stood in for is gone.")
             }
@@ -291,7 +291,7 @@ struct JustOnceMenu: View {
                             Button("Replace the skip") { run { await model.reskipJustOnce() } }
                         }
                 }
-                Button("Remove the one-off") { run { await model.save(.delete(j.alarm)) } }
+                Button("Remove the \(j.at.formatted(date: .omitted, time: .shortened)) ring") { run { await model.save(.delete(j.alarm)) } }
             }
             .font(.subheadline.weight(.semibold)).foregroundStyle(.tint).buttonStyle(.borderless).disabled(busy)
         }
@@ -304,7 +304,7 @@ struct JustOnceMenu: View {
         MenuClose.then { if busy { problem = nil; spinning = true } }
     }
     // "just today", "just tomorrow", "just Friday": the day in the sentence, a weekday keeping its capital.
-    func justDay(_ d: Date) -> String { let w = dayWord(d); return w == "Today" || w == "Tomorrow" ? w.lowercased() : w }
+    func justDay(_ d: Date) -> String { chumbyJustDay(d) }
 }
 
 // Another time or sound for one ring: how much later (a few presets or a time), and the editor's own sound rows. When the
@@ -418,3 +418,6 @@ struct JustOnceSheet: View {
         }
     }
 }
+
+// "today", "tomorrow", "Friday": the day in a sentence, a weekday keeping its capital (never "monday").
+func chumbyJustDay(_ d: Date) -> String { let w = dayWord(d); return w == "Today" || w == "Tomorrow" ? w.lowercased() : w }
