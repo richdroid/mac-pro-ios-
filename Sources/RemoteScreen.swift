@@ -207,7 +207,7 @@ final class RemoteScreen: ObservableObject {
         attempts = 0
         connect(base: base)
     }
-    func dropConnection() { socket?.cancel(with: .abnormalClosure, reason: nil) }
+    func dropConnection() { socket?.cancel(with: .abnormalClosure, reason: nil); forgetMovesInFlight() }
 
     private func watchSlowReconnect() {
         guard slowTimer == nil || slowTimer!.isCancelled else { return }
@@ -409,12 +409,13 @@ final class RemoteScreen: ObservableObject {
         return nil
     }
 
-    private func send(_ bytes: [UInt8]) {
+    private func send(_ bytes: [UInt8], written: (() -> Void)? = nil) {
         // Nothing of ours goes out until the handshake is done: a touch or key sent mid-handshake landed where the bridge
         // expected the phone's version, and the Mac ended the session at once ("mac side error … up 644", 2026-11-06).
-        guard phase == .connected else { return }
-        let task = socket
-        task?.send(.data(Data(bytes))) { [weak self] error in
+        guard phase == .connected else { written?(); return }
+        guard let task = socket else { written?(); return }
+        task.send(.data(Data(bytes))) { [weak self] error in
+            written?()
             // A send on a socket iOS already killed fails here; the receive loop reconnects, but nudge it.
             if error != nil { Task { @MainActor in if self?.socket === task { self?.dropConnection() } } }
         }
@@ -425,7 +426,7 @@ final class RemoteScreen: ObservableObject {
             width = w; height = h
             size = CGSize(width: w, height: h)
             cursor = CGPoint(x: w / 2, y: h / 2)
-            phase = .connected
+            phase = .connected; forgetMovesInFlight()
             slowTimer?.cancel(); slowReconnect = false
             attempts = 0
             // Tells the bridge this end speaks its extras; it answers in a text frame. A plain RFB bridge would pass the
@@ -473,9 +474,20 @@ final class RemoteScreen: ObservableObject {
         buttons = mask
         sendPointer(x: x, y: y, mask: mask)
     }
-    private func sendPointer(x: Int, y: Int, mask: UInt8) {
-        send([5, mask, UInt8((x >> 8) & 255), UInt8(x & 255), UInt8((y >> 8) & 255), UInt8(y & 255)])
+    private func sendPointer(x: Int, y: Int, mask: UInt8, move: Bool = false) {
+        let bytes: [UInt8] = [5, mask, UInt8((x >> 8) & 255), UInt8(x & 255), UInt8((y >> 8) & 255), UInt8(y & 255)]
+        if move { movesInFlight += 1; send(bytes) { [weak self] in Task { @MainActor in self?.movesDone() } } }
+        else { send(bytes) }
         movesThisSecond += 1
+    }
+    // Moves handed to the socket and not yet written out. Past two, the newest position waits (only it matters) instead
+    // of queueing behind the older ones on a slow link, so the pointer never replays the path it already took.
+    private var movesInFlight = 0 { didSet { if movesInFlight < 0 { movesInFlight = 0 } } }
+    // A dropped or new connection forgets sends that will never report back, so the pointer can't stay frozen.
+    func forgetMovesInFlight() { movesInFlight = 0; if pendingMove { flushMove() } }
+    private func movesDone() {
+        movesInFlight = max(0, movesInFlight - 1)
+        if pendingMove, movesInFlight < 2 { flushMove() }
     }
     func click(x: Int, y: Int, right: Bool = false) {
         let mask: UInt8 = right ? 4 : 1
@@ -503,8 +515,9 @@ final class RemoteScreen: ObservableObject {
     private var pendingMove = false
     private func flushMove() {
         guard pendingMove else { return }
+        guard movesInFlight < 2 else { return }
         pendingMove = false
-        sendPointer(x: Int(cursor.x), y: Int(cursor.y), mask: buttons)
+        sendPointer(x: Int(cursor.x), y: Int(cursor.y), mask: buttons, move: true)
     }
     #if canImport(UIKit)
     private final class Ticker: NSObject {
