@@ -2884,7 +2884,7 @@ struct PlayingTab: View {
                 FoldSplit { ScrollView { nowPane }.backToTop() } right: {
                     // The same 20 pt from the top as the picture beside it, so the picture's top and "Season" sit level
                     // (r21; gate 276: the right pane was 40 pt down, the picture's top 20 above the season chips).
-                    ScrollView { Group { if watching { upNext.padding(.top, Self.paneTop) } else { send.padding(.horizontal, 20).padding(.top, Self.paneTop).padding(.bottom, 20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching) }.backToTop().modifier(PaneFoot())
+                    QueueOr(content: ScrollView { Group { if watching { upNext.padding(.top, Self.paneTop) } else { send.padding(.horizontal, 20).padding(.top, Self.paneTop).padding(.bottom, 20) } }.settledAnimation(.easeOut(duration: 0.3), value: watching) }.backToTop().modifier(PaneFoot()))
                 }
             } else {
                 // The rows under a film run to the screen's edges, as rows do everywhere else.
@@ -2903,6 +2903,7 @@ struct PlayingTab: View {
             }
         }
         .environment(\.keysInScroll, true)
+        .modifier(QueueSheetHost(panes: panes))
         // Where he is in Stremio, for what's under a show while it's on.
         .task { await stremio.load() }
     }

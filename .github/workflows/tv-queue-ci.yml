@@ -80,6 +80,8 @@ jobs:
           curl -s $M/rmint/api/tv/queue-reset > /dev/null
           shot playing-folded 1 14 $M/rmint -tab 2
           curl -s $M/rmint/api/tv/queue-reset > /dev/null
+          shot playing-folded-all 1 20 $M/rmint -tab 2 -queueSheet YES
+          curl -s $M/rmint/api/tv/queue-reset > /dev/null
           film queue-folded 1 $M/rmint -tab 2 -queueDemo YES
           cp /tmp/tv-home-applied.log dist/queue-ops.log 2>/dev/null || true
           ls dist

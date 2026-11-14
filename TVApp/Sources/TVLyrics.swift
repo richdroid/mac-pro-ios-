@@ -235,7 +235,6 @@ struct MusicExtras: View {
     // Open flat the words' window holds the sung line and a wrapped next one whole, so Up next shows two there.
     var shown: Int { tall ? 2 : 4 }
     @ObservedObject private var queue = QueueStore.shared
-    @State private var showAll = false
     // Mint's own list when it has read one; else what its screen said of the next songs.
     var hasUpNext: Bool { (queue.loaded && !queue.items.isEmpty) || store.detail?.queue.isEmpty == false }
     var upNextTotal: Int { queue.loaded && !queue.items.isEmpty ? queue.total : store.detail?.remaining ?? 0 }
@@ -262,7 +261,7 @@ struct MusicExtras: View {
                         // its 44 pt target never makes the heading taller than the others.
                         .overlay(alignment: .trailing) {
                             if upNextTotal > shown {
-                                Button { Haptic.fire(.tap); showAll = true } label: {
+                                Button { Haptic.fire(.tap); withAnimation(.easeOut(duration: 0.25)) { QueueStore.shared.showing.on = true } } label: {
                                     Text("Show all \(upNextTotal)").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent)
                                         .frame(minHeight: 44).contentShape(Rectangle())
                                 }
@@ -305,12 +304,11 @@ struct MusicExtras: View {
         .settledAnimation(.easeOut(duration: 0.25), value: store.detail?.lines.map(\.text))
         .settledAnimation(.easeOut(duration: 0.25), value: store.detail?.queue)
         .settledAnimation(.easeOut(duration: 0.25), value: hasUpNext)
-        .sheet(isPresented: $showAll) { QueueSheet() }
         // CI only (launch arguments no one sets): the full list up from the start, and the edits made in turn so a film shows
         // the list answering them.
         .task {
             let defaults = UserDefaults.standard
-            if defaults.bool(forKey: "queueSheet") { guard (try? await Task.sleep(nanoseconds: 6_000_000_000)) != nil else { return }; showAll = true }
+            if defaults.bool(forKey: "queueSheet") { guard (try? await Task.sleep(nanoseconds: 6_000_000_000)) != nil else { return }; QueueStore.shared.showing.on = true }
             guard defaults.bool(forKey: "queueDemo") else { return }
             let q = QueueStore.shared
             for step in 0..<6 {
