@@ -260,6 +260,7 @@ const mockQueue = ['Lazy Days', 'To the Moon', 'Orinoco Flow', 'Sail Away', 'Eve
   .map((title, i) => ({ id: 'i.' + (1000 + i), title, artist: i % 2 ? 'Smokepurpp' : 'Enya', album: 'Sample Album', art: tvBase + '/art.png', duration_ms: 200000 }))
   .concat(Array.from({ length: 230 }, (_, i) => ({ id: 'i.' + (2000 + i), title: 'Queued Song ' + (i + 1), artist: 'Sample Artist', album: 'Sample Album', art: tvBase + '/art.png', duration_ms: 190000 })));
 const mockModes = { shuffle: 0, repeat: 0 };
+const mockQueue0 = JSON.stringify(mockQueue);
 const tvApps = [['com.codex.musicwebtv', 'Mint Music', 1], ['com.mint.letterboxd', 'Letterboxd', 1], ['com.stremio.one', 'Stremio', 1], ['com.google.android.youtube.tv', 'YouTube', 1], ['com.google.android.youtube.tvmusic', 'YouTube Music', 1], ['com.netflix.ninja', 'Netflix', 1], ['com.plexapp.android', 'Plex', 1], ['com.apple.atve.androidtv.appletv', 'Apple TV', 1], ['com.android.tv.settings', 'Settings', 1], ['com.google.android.play.games', 'Google Play Games', 1], ['flar2.homebutton', 'Button Mapper', 1]];
 const tvStatus = JSON.stringify({ online: true, screen: 'on', app: 'com.stremio.one', volume: 12, volumeMax: 25,
   music: { title: 'Sample Song', artist: 'Sample Artist', album: 'Sample Album', art: tvBase + '/art.png', playing: true, position: 40000, duration: 180000, sampledAt: Date.now() },
@@ -327,6 +328,7 @@ function tvRoute(q, s) {
   if (q.url.startsWith('/api/tv/stremio-meta')) { s.setHeader('content-type', 'application/json'); return s.end(JSON.stringify({ about: 'A sample series, for the screenshot.', episodes: [1, 2, 3, 4].flatMap(n => [1, 2].map(season => ({ id: 'tt1234567:' + season + ':' + n, season, episode: n, name: n % 2 ? 'Episode ' + n : 'Episode ' + n + ': The One Where Everybody Finally Comes Home for the Long Weekend', thumb: tvBase + '/still.png', runtime: 21 + (n % 3), overview: 'A made-up afternoon goes sideways when the family visits.' }))) })); }
   // Mint's queue and the phone's edits to it (Mint 0.9.109): a list kept here, so a film of a drag, a swipe and a jump
   // shows the list changing as the real one does. The play modes too.
+  if (q.url === '/api/tv/queue-reset') { mockQueue.splice(0, mockQueue.length, ...JSON.parse(mockQueue0)); mockModes.shuffle = 0; mockModes.repeat = 0; s.setHeader('content-type', 'application/json'); return s.end('{"ok":true}'); }
   if (q.url.startsWith('/api/tv/music-queue')) {
     s.setHeader('content-type', 'application/json');
     const limit = Math.max(1, Math.min(500, +new URL(q.url, 'http://x').searchParams.get('limit') || 60));

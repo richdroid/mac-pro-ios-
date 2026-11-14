@@ -70,12 +70,16 @@ jobs:
           curl -s $M/rmint/api/tv/queue-reset > /dev/null
           film queue-open 3 $M/rmint -tab 2 -queueDemo YES
           $D "$DEVICE" rotate 1; sleep 5
+          curl -s $M/rmint/api/tv/queue-reset > /dev/null
           shot playing-portrait 3 14 $M/rmint -tab 2
           shot playing-portrait-all 3 20 $M/rmint -tab 2 -queueSheet YES
+          curl -s $M/rmint/api/tv/queue-reset > /dev/null
           film queue-portrait 3 $M/rmint -tab 2 -queueDemo YES
           $D "$DEVICE" pose closed; sleep 5
           $D "$DEVICE" rotate 1; sleep 3
+          curl -s $M/rmint/api/tv/queue-reset > /dev/null
           shot playing-folded 1 14 $M/rmint -tab 2
+          curl -s $M/rmint/api/tv/queue-reset > /dev/null
           film queue-folded 1 $M/rmint -tab 2 -queueDemo YES
           cp /tmp/tv-home-applied.log dist/queue-ops.log 2>/dev/null || true
           ls dist
