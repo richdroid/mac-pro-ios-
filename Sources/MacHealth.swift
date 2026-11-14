@@ -465,10 +465,12 @@ struct MacHealthView: View {
             HeroCard(symbol: line.symbol, color: line.color, title: line.title, detail: line.detail) {
                 if watch.stuck(now) { Button("Stop waiting") { withAnimation(Motion.quick) { watch.done() } }.buttonStyle(.bordered) }
             }
-        } else if let a = macAction, a.by == "console", a.state == "running", a.kind != "send" {
-            HeroCard(symbol: nil, color: .secondary, title: a.kind == "restart" ? "Checking before the restart…" : "Bringing everything up…", detail: "Started on the Mac’s Console") { EmptyView() }
+        } else if let a = macAction, a.by == "console", a.state == "running" {
+            HeroCard(symbol: nil, color: .secondary, title: a.kind == "restart" ? "Checking before the restart…" : a.kind == "send" ? "Receiving a file…" : "Bringing everything up…", detail: "Started on the Mac’s Console") { MacActionProgress(action: a) }
         } else if let f = fixing {
-            HeroCard(symbol: nil, color: .secondary, title: "Fixing \(fixingWhat)…", detail: "This can take up to two minutes · \(Int(now.timeIntervalSince(f))) s") { EmptyView() }
+            HeroCard(symbol: nil, color: .secondary, title: "Fixing \(fixingWhat)…", detail: "This can take up to two minutes · \(Int(now.timeIntervalSince(f))) s") {
+                if let a = macAction, a.kind == "bringup", a.state == "running" { MacActionProgress(action: a) }
+            }
         } else if report == nil {
             HeroCard(symbol: nil, color: .secondary, title: "Checking the Mac…", detail: nil) { EmptyView() }
         } else if badGroups.isEmpty {
@@ -660,9 +662,10 @@ struct MacHealthView: View {
         }
         while !Task.isCancelled {
             // Not under the Mac's screen, which has the link to itself while it's open.
-            if fixing == nil, !model.screenOpen {
-                await read()
-                // What the Mac's Console set going (Bring Everything Up, a restart) shows here as it runs.
+            if !model.screenOpen {
+                if fixing == nil { await read() }
+                // What the Mac's Console set going (Bring Everything Up, a restart, a file) shows here as it runs, and a
+                // fix asked here shows each part as it comes back.
                 let a = await model.api.macActionNow()
                 if a != macAction { withAnimation(Motion.quick) { macAction = a } }
                 MacMirror.follow(a)

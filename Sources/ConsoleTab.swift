@@ -272,8 +272,32 @@ struct ConsoleTab: View {
 
 // Restart Safely, Bring Everything Up or Send to Mac under way or just over, whichever side started it.
 struct MacAction: Decodable, Equatable {
+    struct Part: Decodable, Equatable, Identifiable { let part: String; var label: String?; let state: String; var say: String?; var id: String { part } }
+    struct File: Decodable, Equatable { let name: String; var bytes: Double?; var total: Double? }
     let id: String; let kind: String; let by: String; let state: String
     var say: String?; let startedAt: Double; var endedAt: Double?
+    var parts: [Part]?; var file: File?
+}
+
+// An action's progress as the Mac reports it: each part by its name as it comes back, or a bar for a file landing.
+struct MacActionProgress: View {
+    let action: MacAction
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let f = action.file, let total = f.total, total > 0 {
+                ProgressView(value: min(f.bytes ?? 0, total), total: total).tint(macBlue)
+                Text("\(f.name) · \(MacSendSize.bytes(f.bytes ?? 0)) of \(MacSendSize.bytes(total))").font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).truncationMode(.middle)
+            }
+            ForEach(action.parts ?? []) { p in
+                HStack(spacing: 8) {
+                    Image(systemName: p.state == "bad" ? "exclamationmark.circle.fill" : "checkmark.circle.fill").foregroundStyle(p.state == "bad" ? Color.red : Color.green)
+                    Text(p.label ?? MacParts.name(p.part)).font(.subheadline)
+                    Spacer(minLength: 8)
+                    if p.state == "fixed" { Text("Brought back").font(.footnote).foregroundStyle(.secondary) }
+                }
+            }
+        }
+    }
 }
 extension API {
     func macActionNow() async -> MacAction? {
