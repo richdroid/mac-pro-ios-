@@ -257,6 +257,8 @@ struct MediaCard: View {
     let source: MediaSource
     var width: CGFloat
     var image: Image?   // for a song on this phone, whose cover has no address
+    // Drawn once, as a picture of itself (the card in the hand): nothing to wait for, so no waiting look.
+    var still = false
     // Room for a title on two lines and the line under it, the same on every card, so a row's cards stay even.
     static func band(_ width: CGFloat) -> CGFloat { width > 200 ? 82 : 62 }
     static func height(_ width: CGFloat, _ source: MediaSource) -> CGFloat { width / source.coverAspect + band(width) }
@@ -273,7 +275,7 @@ struct MediaCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Group {
                 if let image { image.resizable().scaledToFill() }
-                else if noArt { CoverFallback(title: item.title, tint: shownBand) }
+                else if noArt || still { CoverFallback(title: item.title, tint: shownBand) }
                 else { Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: { CoverWait().overlay { LoadingRing(radius: 0) } } }
             }
                 .frame(width: cardWidth, height: coverHeight)
@@ -498,20 +500,20 @@ struct FlickCardButton: View {
             // rounded corner and no Back, folded). On a page pushed by an item (an app's page) it opens through that
             // page's own route, as its rows do; elsewhere by value on the tab's path.
             .overlay(alignment: .topTrailing) {
-                Group {
+                // Lifts with the card: never left floating over its empty place while the card is in the hand or in the air.
+                // Read in a view of its own: read here, a lift redrew every card on the page.
+                HiddenInHand(id: item.id) {
                     if hasInfo {
                         if let openRow { InfoBadge { model.tick(); openRow(.info(item, source)) } }
                         else { NavigationLink(value: RowRoute.info(item, source)) { InfoBadge.mark }.buttonStyle(.plain).accessibilityLabel("Details").simultaneousGesture(TapGesture().onEnded { model.tick() }) }
                     }
                 }
-                // Lifts with the card: never left floating over its empty place while the card is in the hand or in the air.
-                .opacity(ShelfHand.shared.item?.id == item.id ? 0 : 1)
             }
             // A show he's part way through (Continue watching's tiles carry how far): its episodes asked for as the tile
             // comes on screen, so its page opens on them rather than on grey rows.
             .onAppear { if source == .stremio, item.progress != nil { NextUp.prefetch(item) } }
-            // Held: the same title on this phone instead, from his own add-ons.
-            .contextMenu { if hasInfo { Button("Play on iPhone", systemImage: "iphone") { model.tick(); PhoneOpen.open(item, model: model) } } }
+            // No context menu here: a hold on a card is the flick's (the system's menu took the card out of his hand half
+            // a second into every hold, 2026-11-14). "Play on iPhone" is on the title's own page, a tap away.
     }
 }
 final class FrameBox { var rect: CGRect? }

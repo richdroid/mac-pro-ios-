@@ -110,6 +110,10 @@ jobs:
                 long) $D "$DEVICE" path $x $y 1.1 $x $(up $y 0.25) 0.2 0 || echo "path failed" ;;
                 back) $D "$DEVICE" path $x $y 0.7 $(echo "$x + 0.2" | bc -l) $y 0.4 0 || echo "path failed" ;;
                 swipe) $D "$DEVICE" path $x $y 0.02 $x $(up $y 0.25) 0.15 0 || echo "path failed" ;;
+                # A plain tap: its page arrives (judged in frames: nothing on it may reflow as it comes).
+                tap) $D "$DEVICE" touch $x $y 0.08 || echo "touch failed" ;;
+                # Thrown up and to the side, fast: the flight leaves the way the finger did.
+                diagonal) $D "$DEVICE" path $x $y 0.5 $(echo "$x + 0.12" | bc -l) $(up $y 0.22) 0.12 0 || echo "path failed" ;;
               esac
             else echo "no card position for $name"; fi
             sleep 3
@@ -123,7 +127,7 @@ jobs:
           }
           posture() {
             local x=$1 d=$2
-            for H in quick flick throw long back swipe; do shelffilm shelf-$H$x $d $H; done
+            for H in quick flick throw long diagonal back swipe tap; do shelffilm shelf-$H$x $d $H; done
             for H in quick flick shortflick carry backdown swipe; do rowfilm row-$H$x $d $H; done
           }
           # Open upright first, the way he holds it; then open flat; then folded.

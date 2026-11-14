@@ -199,162 +199,6 @@ import UIKit
     }
 }
 
-// The pick's picture on its way into the Remote, moved by Core Animation in the render server: it leaves the row (or the
-// card) the moment he lets go and travels on its own spring however long the main thread is busy bringing the Remote up
-// under it (CI: a 440-670 ms turn at the pick; the SwiftUI move it replaces held the row still that long, then ran at 11
-// frames a second). It lands as the Remote's own stand-in looks (the poster framed on its soft ground) and gives way to it.
-@MainActor enum RenderFlight {
-    #if os(iOS)
-    private static var ground: UIView?
-    private static var poster: UIView?
-    private static var card: UIView?
-    private static var wide = false
-    private static var hasImage = false
-    #endif
-    #if os(iOS)
-    static var views: [UIView] { [ground, card, poster].compactMap { $0 } }
-    // The thing itself in the air, for the build's meter.
-    static var lead: UIView? { card ?? poster }
-    #endif
-    static var windowSize: CGSize {
-        #if os(iOS)
-        return window?.bounds.size ?? .zero
-        #else
-        return .zero
-        #endif
-    }
-    static var flying: Bool {
-        #if os(iOS)
-        return ground != nil
-        #else
-        return false
-        #endif
-    }
-    // Which flight is in the air: a throw that lets go of its own checks it's still the one flying.
-    static private(set) var serial = 0
-    #if os(iOS)
-    private static var window: UIWindow? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
-        return scene?.keyWindow ?? scene?.windows.first
-    }
-    // Where the framed poster sits in the Remote's picture: its height less 14 pt each side, 2:3, centred.
-    private static func inner(_ to: CGRect) -> CGRect {
-        if wide { return to }
-        let h = max(0, to.height - 28), w = (h * 2 / 3).rounded()
-        return CGRect(x: to.midX - w / 2, y: to.minY + 14, width: w, height: h)
-    }
-    #endif
-    // Up at `from` (window points): the thing in his hand as it looks there (a still of it), the poster over it.
-    static func launch(from: CGRect, image: TVImage?, soft: TVImage?, tint: Color?, wide isWide: Bool) {
-        #if os(iOS)
-        cancel()
-        serial += 1
-        guard let w = window, from.width > 4, from.height > 4 else { return }
-        wide = isWide
-        let g = UIView(frame: from)
-        g.backgroundColor = .black
-        g.layer.cornerRadius = 14; g.layer.cornerCurve = .continuous; g.clipsToBounds = true
-        g.alpha = 0
-        g.isUserInteractionEnabled = false
-        if let soft {
-            let v = UIImageView(image: soft)
-            v.contentMode = .scaleAspectFill; v.alpha = 0.7
-            v.frame = g.bounds; v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            g.addSubview(v)
-        } else {
-            g.backgroundColor = UIColor(tint ?? Color(white: 0.15)).withAlphaComponent(0.7)
-        }
-        // The row or card itself, as it is on screen, so the very first frame of the flight is what was under the finger.
-        let c = w.resizableSnapshotView(from: from, afterScreenUpdates: false, withCapInsets: .zero)
-        c?.frame = from
-        c?.isUserInteractionEnabled = false
-        let p = UIImageView(image: image)
-        p.contentMode = .scaleAspectFill
-        p.frame = from
-        p.layer.cornerRadius = 14; p.layer.cornerCurve = .continuous; p.clipsToBounds = true
-        // The poster comes up over the row's still as the shape opens, in the same spring (not cut in over the row in the
-        // first frame: a flat slab with the row's text clipped at its edge, then the text again, CI d5d94f4).
-        p.alpha = 0
-        p.isUserInteractionEnabled = false
-        w.addSubview(g)
-        if let c { w.addSubview(c) }
-        w.addSubview(p)
-        ground = g; poster = p; card = c
-        hasImage = image != nil
-        #endif
-    }
-    // Toward the Remote's picture, `to` in window points; again later, from wherever it is, if that place moves.
-    static func aim(_ to: CGRect, first: Bool, flush: Bool = true) {
-        #if os(iOS)
-        guard let g = ground, let p = poster, to.width > 20 else { return }
-        let end = inner(to)
-        let anim = {
-            g.frame = to; g.alpha = 1; g.layer.cornerRadius = TVLook.card
-            p.frame = end; p.layer.cornerRadius = wide ? TVLook.card : 8
-            // With no picture yet, the Remote's own stand-in (the app's purple, the title on it there) rather than the
-            // row squeezed into a poster's shape (the review of 94d0f11: a twisted sliver of the row in a grey box).
-            if !hasImage { p.backgroundColor = UIColor(red: 0x35 / 255, green: 0x2B / 255, blue: 0x4E / 255, alpha: 1) }
-            p.alpha = 1
-            if let c = card { c.frame = end; c.alpha = 0 }
-        }
-        if first {
-            // goRemote's own spring (response 0.36, damping 0.86).
-            UIView.animate(springDuration: 0.36, bounce: 0.14, initialSpringVelocity: 0, delay: 0, options: [.allowUserInteraction], animations: anim)
-        } else {
-            UIView.animate(springDuration: 0.3, bounce: 0.1, initialSpringVelocity: 0, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState], animations: anim)
-        }
-        // Sent to the render server now, not at the end of this turn: the turn that brings the Remote up is the long one.
-        if flush { CATransaction.flush() }
-        #endif
-    }
-    // On its way at once, toward where the Remote's picture is (or, not known yet, the top of the screen), for a thing
-    // thrown before its pick is made (a card from its shelf): it never sits still where it was let go while the pick is
-    // worked out (the review of ef52168: 1.5 s frozen half off the top edge). The pick re-aims it from wherever it is.
-    static func rise(toward slot: CGRect?) {
-        #if os(iOS)
-        guard let g = ground, let w = window else { return }
-        if let slot, slot.width > 20, w.bounds.contains(CGPoint(x: slot.midX, y: slot.midY)) { aim(slot, first: true, flush: true); return }
-        // Not known: only moved, as it is, on up the way it was thrown and kept whole on the screen (aimed at a stand-in
-        // place the width of the screen, it ballooned to 2.5 times its size open flat: 61f18fc).
-        let from = g.frame
-        let top = w.safeAreaInsets.top + 16
-        let dy = max(top, from.minY - 120) - from.minY
-        guard abs(dy) > 1 else { return }
-        UIView.animate(springDuration: 0.36, bounce: 0.1, initialSpringVelocity: 0, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-            views.forEach { $0.frame = $0.frame.offsetBy(dx: 0, dy: dy) }
-        }
-        CATransaction.flush()
-        #endif
-    }
-    // The picture, arrived after it left (not in memory at the pick: a link's page picture, YouTube's banner): it comes up
-    // over the still of the card wherever the flight has got to, so it never lands as an empty ground (item 5, 11-12).
-    static func picture(_ image: TVImage) {
-        #if os(iOS)
-        guard let p = poster as? UIImageView, !hasImage else { return }
-        p.image = image; hasImage = true
-        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
-            p.alpha = 1; card?.alpha = 0
-        }
-        CATransaction.flush()
-        #endif
-    }
-    // Landed: the Remote's own picture is coming up under it; it goes as that one arrives.
-    static func land(after delay: Double = 0.1) {
-        #if os(iOS)
-        let views = [ground, poster, card].compactMap { $0 }
-        ground = nil; poster = nil; card = nil
-        UIView.animate(withDuration: 0.15, delay: delay, options: [.curveEaseOut]) { views.forEach { $0.alpha = 0 } } completion: { _ in views.forEach { $0.removeFromSuperview() } }
-        #endif
-    }
-    static func cancel() {
-        #if os(iOS)
-        [ground, poster, card].compactMap { $0 }.forEach { $0.removeFromSuperview() }
-        ground = nil; poster = nil; card = nil
-        #endif
-    }
-}
-
 // One way to send anything to the TV: the thing's own page, its choices on it (an episode, then a stream), and the choice
 // he makes is the flick. Picking a stream, by a tap or by holding it and flicking it up, is the send: the request leaves
 // at once, and its picture goes straight into the Remote's own picture of the TV in one short move, the Remote coming up
@@ -673,6 +517,8 @@ struct FlickScreen: View {
     @GestureState private var touching: String?
     // The row or card just thrown: hidden where it was, as its picture is what flies.
     @State private var thrownID: String?
+    // Inside the release of a throw (not a tap): the flight leaves at the finger's speed.
+    @State private var thrownNow = false
     // The row going back to its place after a put-back.
     @State private var settling: String?
     // The row put back, while its picture travels home in the render server: hidden in its place until it's there.
@@ -1636,10 +1482,14 @@ struct FlickScreen: View {
             if id == "card", let full = rects.map["cardFull"] { rects.map["cardFull"] = full.offsetBy(dx: translation.width, dy: translation.height) }
             let v = hands.hand.leaving
             throwV = CGSize(width: v.dx, height: v.dy)
+            if id == "card" { FlickHaptic.caught() }
+            // The send first: its flight is handed to the render server before anything on this page is marked changed,
+            // so nothing is laid out again between the release and the flight's first frame.
+            thrownNow = true
+            send()
+            thrownNow = false
             var quiet = Transaction(); quiet.disablesAnimations = true
             withTransaction(quiet) { thrownID = id }
-            if id == "card" { FlickHaptic.caught() }
-            send()
         case .longTap:
             // A press that ran long and was let go where it landed is a tap, and a tap is the pick, however long it was
             // held: lifted and put straight back, it did nothing, and a deliberate press read as a dead row.
@@ -1946,16 +1796,22 @@ struct FlickScreen: View {
         // Remote's ground; the Remote comes up under it in the next turn, the long one, and the still fades off it once
         // that turn is over (goRemote).
         var aimTo: CGRect?
+        var aimedAtRelease = false
         let rendered = flies && fromRect.width > 4
         if rendered {
             ScreenVeil.cover()
             SwipeLog.note("send covered")
             // A card thrown from its shelf has been in the air since he let go: the same flight goes on to the Remote.
-            if !RenderFlight.flying { RenderFlight.launch(from: fromRect.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), image: image, soft: soft, tint: tint,
-                                wide: image.map(PosterOnBlur.isWide) ?? (shown.kind == "youtube" || isLink)) }
+            let fresh = !RenderFlight.flying
+            if fresh { RenderFlight.launch(from: fromRect.offsetBy(dx: flickOrigin.x, dy: flickOrigin.y), image: image, soft: soft, tint: tint,
+                                wide: image.map(PosterOnBlur.isWide) ?? (shown.kind == "youtube" || isLink),
+                                velocity: thrownNow ? CGVector(dx: throwV.width, dy: throwV.height) : .zero) }
             SwipeLog.note("send launched")
             if let aim = model.mirrorSlot.flatMap({ $0.width > 20 ? $0 : nil }) ?? model.rememberedSlot(slotKey) ?? model.rememberedSlot("warm" + slotKey) {
                 aimTo = aim
+                // Thrown: on its way now, from the finger's own speed, sent to the render server before this turn does
+                // anything else (it waited for the next turn before, still where he'd let go, then started from rest).
+                if fresh, thrownNow { RenderFlight.aim(aim, first: true, flush: true); aimedAtRelease = true }
             } else if flickFrame.width > 0 {
                 // Nowhere known yet (the first pick ever on a screen this size): up toward the top, where the picture is,
                 // and on to the real place the moment the Remote says it.
@@ -2000,7 +1856,8 @@ struct FlickScreen: View {
         // The Remote's tab is the long turn: it comes in the next one, after this one has been drawn and the flight and
         // the dissolve are running in the render server, so nothing he sees waits on it. (A timer, not a task: a task
         // queued on the main queue runs before the screen is drawn.)
-        let hand = { @MainActor in self.handOver(aim: aimTo) }
+        let later = aimedAtRelease ? nil : aimTo
+        let hand = { @MainActor in self.handOver(aim: later) }
         if rendered { Timer.scheduledTimer(withTimeInterval: 0, repeats: false) { _ in MainActor.assumeIsolated { hand() } } } else { hand() }
     }
     func handOver(aim: CGRect? = nil) {
@@ -2813,43 +2670,26 @@ struct AppBrowse: View {
 // is drawn over everything (ShelfLiftOverlay), as a shelf clips whatever leaves it.
 @MainActor @Observable final class ShelfHand {
     static let shared = ShelfHand()
+    // The card that's in the hand or in the air: its own place on the shelf is empty meanwhile, its "i" with it.
     var item: MediaItem?
     var source = MediaSource.stremio
-    var width: CGFloat = 0
-    var rect = CGRect.zero
-    var drag = CGSize.zero
-    var lean = 0.0
-    var armed = false
     // A tap iOS reports with the release of a held card is that release, not a second action.
     @ObservationIgnored var handledAt = Date.distantPast
 }
-// The card in the hand, over the whole window, where the finger has it.
+// Was the card in the hand, drawn by SwiftUI over the window and redrawn at every touch. The card in the hand is now its
+// own layer (RenderFlight.pick), moved directly; this draws nothing and stays only as the window's place for it.
 struct ShelfLiftOverlay: View {
-    @State private var hand = ShelfHand.shared
-    var body: some View {
-        GeometryReader { g in
-            if let item = hand.item {
-                let o = g.frame(in: .global).origin
-                let rise = max(0, -hand.drag.height)
-                MediaCard(item: item, source: hand.source, width: hand.width)
-                    .shadow(color: .black.opacity(0.55), radius: 26, y: 18)
-                    .overlay(alignment: .top) {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            // Lit when letting go sends it.
-                            .strokeBorder(TVLook.accent.opacity(hand.armed ? 1 : 0.45 * min(1, rise / 80)), lineWidth: hand.armed ? 2 : 1.5)
-                            .frame(width: hand.width, height: hand.rect.height > 0 ? min(hand.rect.height, hand.width * 1.5) : hand.width * 1.5)
-                    }
-                    .scaleEffect(1.06 + 0.06 * min(1, rise / 240), anchor: .center)
-                    .rotationEffect(.degrees(hand.lean))
-                    .position(x: hand.rect.midX - o.x + hand.drag.width, y: hand.rect.midY - o.y + hand.drag.height)
-                    .transition(.opacity)
-            }
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
+    var body: some View { Color.clear.allowsHitTesting(false).accessibilityHidden(true) }
 }
+// Something that leaves with a card while it's in the hand or in the air (its "i"): only this is redrawn when a card
+// lifts, not every card on the page (each card read the hand itself, so a lift redrew them all).
+struct HiddenInHand<Content: View>: View {
+    let id: String
+    @ViewBuilder var content: Content
+    var body: some View { content.opacity(ShelfHand.shared.item?.id == id ? 0 : 1) }
+}
+// The card's picture, made ready while the finger rests on it.
+final class PictureBox { var image: CGImage?; var task: Task<Void, Never>? }
 // The scroll views a held card sits in hold still while it's in the hand, as the streams page's list does.
 #if canImport(UIKit)
 final class ScrollLockBox { weak var view: UIView?; var locked: [UIScrollView] = [] }
@@ -2883,11 +2723,26 @@ struct ShelfFlick: ViewModifier {
     @State private var lock = ScrollLockBox()
     @State private var up = false
     @State private var receipt = ""
+    @State private var ready = PictureBox()
+    // A finger resting on the card, before the hold is done.
+    @GestureState private var pressing = false
     func body(content: Content) -> some View {
         content
             .opacity(up ? 0 : 1)
             .background(ScrollLock(box: lock).allowsHitTesting(false))
             .simultaneousGesture(gesture)
+            // The picture he'll lift is drawn while he's still holding (a tenth of a second in, so a scroll's touch never
+            // pays for it): the lift itself then has nothing to make.
+            .onChange(of: pressing) { _, on in
+                ready.task?.cancel()
+                ready.image = nil
+                guard on, !up else { return }
+                ready.task = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 110_000_000)
+                    guard !Task.isCancelled, !up else { return }
+                    ready.image = Self.picture(item, source, width)
+                }
+            }
             .accessibilityAction(named: "Flick to the TV") { hands.hand = FlickHand(.list); throwIt(velocity: CGSize(width: 0, height: -800), translation: .zero) }
             .task { TouchLedger.install(); Self.warmRemote(model); await reportPlace() }
     }
@@ -2963,9 +2818,18 @@ struct ShelfFlick: ViewModifier {
         }
         #endif
     }
+    // The card as it's drawn at rest, as one picture: what's lifted, carried and thrown. From the cover already in memory
+    // (never a fetch, never a capture of the screen, which had the press's squeeze and the "i" in it).
+    @MainActor static func picture(_ item: MediaItem, _ source: MediaSource, _ width: CGFloat) -> CGImage? {
+        let art = ImageStore.shared.cached(URL(string: item.art)).map { Image(tv: $0) }
+        let r = ImageRenderer(content: MediaCard(item: item, source: source, width: width, image: art, still: true).environment(\.colorScheme, .dark))
+        r.scale = RenderFlight.screenScale
+        return r.cgImage
+    }
     var gesture: some Gesture {
         let rules = FlickHand.Rules.list
         return LongPressGesture(minimumDuration: rules.hold, maximumDistance: rules.slop)
+            .updating($pressing) { now, state, _ in state = now }
             .onEnded { _ in
                 // In the hand: from here the finger is followed off the window's own events, as a stream row's is, so
                 // the shelf and the page under it scroll freely under any swipe that isn't a hold.
@@ -2974,21 +2838,19 @@ struct ShelfFlick: ViewModifier {
                 _ = hands.hand.down(.zero, at: 0)
                 hands.hand.realLift = TouchLedger.sinceDown()
                 _ = hands.hand.held(at: rules.hold)
-                lifted()
+                guard lifted() else { return }
                 let following = TouchLedger.follow { phase, d in
                     guard up else { return }
                     hands.hand.real = TouchLedger.feel()
                     switch phase {
                     case .moved:
                         for e in hands.hand.move(CGPoint(x: d.width, y: d.height), at: Date().timeIntervalSince(hands.base)) {
-                            if case .armed(let on) = e {
-                                ShelfHand.shared.armed = on
-                                if on { FlickHaptic.detent() }
-                            }
+                            if case .armed(let on) = e, on { FlickHaptic.detent() }
                         }
-                        ShelfHand.shared.drag = d
-                        let vx = TouchLedger.feel().map { FlickHand.speed($0).dx } ?? 0
-                        ShelfHand.shared.lean = max(-4, min(4, Double(vx) / 300 + Double(d.width) / 90))
+                        // Straight onto its layer: the card is where the finger is in the very next frame, and nothing
+                        // else is drawn again for it.
+                        let vx = hands.hand.real.map { FlickHand.speed($0).dx } ?? 0
+                        RenderFlight.carry(by: d, lean: max(-4, min(4, Double(vx) / 300 + Double(d.width) / 90)), armed: hands.hand.armed)
                     case .ended:
                         end(hands.hand.up(CGPoint(x: d.width, y: d.height), at: Date().timeIntervalSince(hands.base)), translation: d)
                     case .cancelled:
@@ -2998,20 +2860,29 @@ struct ShelfFlick: ViewModifier {
                 if !following { end(hands.hand.up(.zero, at: Date().timeIntervalSince(hands.base)), translation: .zero) }
             }
     }
-    // In the hand: felt, drawn over everything, the shelf held still, and the TV told what's coming.
-    func lifted() {
+    // In the hand: felt, its own picture up over everything, the shelf held still, and the TV told what's coming.
+    // False if there's nothing to lift (no picture could be made of it): it stays on its shelf.
+    func lifted() -> Bool {
+        let r = rect()
+        ready.task?.cancel()
+        guard r.width > 4, let image = ready.image ?? Self.picture(item, source, width) else { return false }
+        ready.image = nil
         HandTrace.note("shelf-lifted")
         FlickMeter.shared.lifted("shelf", hold: hands.hand.realLift)
+        RenderFlight.pick(image, at: r, cover: min(r.height, width / source.coverAspect), corner: width > 200 ? 8 : 6, wide: item.isYouTube)
         up = true
         FlickHaptic.lift(); FlickClock.touched()
         ScrollLock.set(lock, true)
         let h = ShelfHand.shared
-        h.item = item; h.source = source; h.width = width; h.rect = rect(); h.drag = .zero; h.lean = 0; h.armed = false
+        h.item = item; h.source = source
         if source == .stremio, !item.isYouTube { StreamCache.shared.prefetch(item) }
-        guard !model.isOnTV(item, source) else { receipt = ""; return }
+        guard !model.isOnTV(item, source) else { receipt = ""; return true }
         receipt = UUID().uuidString
         FlickReceipt.lift(Self.receipt(item, source, id: receipt), lands: source == .mint ? "mint" : nil)
+        return true
     }
+    // The card back on its shelf, as itself.
+    func home() { ShelfHand.shared.item = nil; up = false }
     // What the TV's receiving screen shows for this card.
     static func receipt(_ item: MediaItem, _ source: MediaSource, id: String) -> [String: Any] {
         let kind: String
@@ -3025,8 +2896,8 @@ struct ShelfFlick: ViewModifier {
     func end(_ outcome: FlickHand.Outcome, translation: CGSize) {
         HandTrace.note(String(format: "shelf-end %@ dy=%.0f ", "\(outcome)", translation.height) + hands.hand.realNote)
         do {
-            let r = rect(), s = 1.06 + 0.06 * min(1, max(0, -translation.height) / 240), v = hands.hand.leaving
-            FlickMeter.shared.released("\(outcome)", speed: hypot(v.dx, v.dy), hand: CGRect(x: r.midX - r.width * s / 2 + translation.width, y: r.midY - r.height * s / 2 + translation.height, width: r.width * s, height: r.height * s),
+            let r = rect(), v = hands.hand.leaving
+            FlickMeter.shared.released("\(outcome)", speed: hypot(v.dx, v.dy), hand: RenderFlight.seen() ?? r.offsetBy(dx: translation.width, dy: translation.height),
                                        note: hands.hand.realNote)
         }
         ShelfHand.shared.handledAt = Date()
@@ -3037,55 +2908,52 @@ struct ShelfFlick: ViewModifier {
             throwIt(velocity: CGSize(width: v.dx, height: v.dy), translation: translation)
         case .longTap:
             // Held and let go where it was: a tap, its page, as on any button.
-            put(back: false)
+            RenderFlight.cancel(); home()
             if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
             FlickCardButton.tap(model, item, source, origin: rect(), held: true)
         default:
             FlickHaptic.settle()
             if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
-            put(back: true)
-        }
-    }
-    func put(back: Bool) {
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.75)) { ShelfHand.shared.drag = .zero; ShelfHand.shared.lean = 0; ShelfHand.shared.armed = false }
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: back ? 300_000_000 : 0)
-            ShelfHand.shared.item = nil; up = false
+            // Home on a spring, from the speed he let it go at; the shelf's own card shows again as this one arrives.
+            RenderFlight.putBack(velocity: hands.hand.real.map { FlickHand.parting($0) } ?? .zero) { home() }
         }
     }
     func throwIt(velocity: CGSize, translation: CGSize) {
         FlickHaptic.caught()
-        let from = rect().offsetBy(dx: translation.width, dy: translation.height)
+        var from = rect().offsetBy(dx: translation.width, dy: translation.height)
         // What's on already: the Remote, nothing sent (as a tap on it does).
-        if model.isOnTV(item, source) { ShelfHand.shared.item = nil; up = false; model.showOnRemote(); return }
-        // A film or an episode with its list in hand: the request leaves first, before anything is drawn (the gate on
-        // be9f2bd: 0.75-0.9 s from the release to the send, the card frozen at the top meanwhile).
-        var direct: [StremioStream]?
+        if model.isOnTV(item, source) { RenderFlight.cancel(); home(); model.showOnRemote(); return }
+        // A film or an episode with its list in hand goes from here, no page.
+        var direct: (best: StremioStream, list: [StremioStream])?
+        if ShelfSend.ref(item, source) != nil, !startUnderWay, let list = ShelfSend.list(item, source), let best = ShelfSend.best(list) { direct = (best, list) }
         // The still raised under this throw, so only that one is lifted if he moves on before it sends.
         var veilOf = -1
-        if ShelfSend.ref(item, source) != nil, !startUnderWay, let list = ShelfSend.list(item, source), let best = ShelfSend.best(list) {
-            direct = list
-            startNow(best, list, velocity: velocity)
-        }
-        // In the air from the moment he lets go, in the render server: the shelf held as a still with the card's place
-        // empty, the card itself flying over it, and the same flight goes on into the Remote once the pick is made
-        // (d5d94f4: the flick page flashed up black between, with three copies of the card).
-        if from.width > 4 {
-            let u = URL(string: item.art)
+        // In the air from the moment he lets go, before anything else is done: the very picture that was under his finger
+        // goes on from where it is at the speed he threw it, in the render server, so nothing that follows (the request,
+        // the still, the Remote's long turn) can hold it at the release (it sat there from rest before, a smaller copy).
+        let slot = model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil } ?? model.lastLanded.flatMap { $0.window == RenderFlight.windowSize ? $0.rect : nil }
+        let u = URL(string: item.art)
+        if RenderFlight.inHand {
+            from = RenderFlight.throwCard(velocity: CGVector(dx: velocity.width, dy: velocity.height), soft: u.flatMap { ImageStore.shared.small($0, 16) },
+                                          tint: ImageStore.shared.cachedBand(u))
+            RenderFlight.rise(toward: slot)
+        } else if from.width > 4 {
+            // Thrown with no hand (the accessibility action): a still of it flies, as a row's does.
             RenderFlight.launch(from: from, image: u.flatMap { ImageStore.shared.cached($0) }, soft: u.flatMap { ImageStore.shared.small($0, 16) },
                                 tint: ImageStore.shared.cachedBand(u), wide: item.isYouTube)
-            ShelfHand.shared.item = nil
-            // The still of the shelf under it: for a send under way, taken in the next turn from what's already drawn
-            // (a fresh one forces the whole window to be drawn again first, here and now).
-            if direct == nil { ScreenVeil.cover(underFlight: true, for: 3); veilOf = ScreenVeil.serial }
-            // Set going now, before the page it opens is asked for, and sent to the render server at once: the long commit
-            // that builds that page then can't hold it (94d0f11: parked a second where it was let go). Straight into the
-            // Remote's picture when its place is known.
-            RenderFlight.rise(toward: model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil } ?? model.lastLanded.flatMap { $0.window == RenderFlight.windowSize ? $0.rect : nil })
+            RenderFlight.rise(toward: slot)
         }
+        if RenderFlight.flying {
+            // The still of the shelf under it, the card's place empty: for a send under way, taken in the next turn from
+            // what's already drawn (a fresh one forces the whole window to be drawn again first, here and now).
+            if direct == nil { ScreenVeil.cover(underFlight: true, for: 3); veilOf = ScreenVeil.serial }
+        }
+        // The request leaves in this same turn, the flight already running.
+        if let d = direct { startNow(d.best, d.list, velocity: velocity) }
         // A film or an episode: sent from here, no page, with the list in hand; a moment for a list on its way, the card
         // in the air meanwhile; the page only when there's nothing to send without it.
         HandTrace.note("shelf-flying")
+        let thrownFrom = from
         if direct != nil { toRemote(); return }
         if let r = ShelfSend.ref(item, source), !startUnderWay {
             HandTrace.note("shelf-waiting")
@@ -3114,14 +2982,14 @@ struct ShelfFlick: ViewModifier {
                     if RenderFlight.serial == flight { RenderFlight.land(after: 0) }
                     if ScreenVeil.serial == veilMine { ScreenVeil.lift(0.2) }
                     if !receipt.isEmpty { FlickReceipt.cancel(receipt) }
-                    up = false
+                    home()
                     return
                 }
-                viaPage(velocity: velocity, from: from)
+                viaPage(velocity: velocity, from: thrownFrom)
             }
             return
         }
-        viaPage(velocity: velocity, from: from)
+        viaPage(velocity: velocity, from: thrownFrom)
     }
     // The same title's start already under way (the card thrown again while the TV brings it up): model.flick takes it
     // straight to the Remote, nothing sent twice.
@@ -3151,7 +3019,7 @@ struct ShelfFlick: ViewModifier {
             ScreenVeil.cover(underFlight: true, fresh: false, for: 3)
             m.remoteFromThrow(art: art, title: title, tint: tint)
         } }
-        Task { @MainActor in try? await Task.sleep(nanoseconds: 60_000_000); ShelfHand.shared.item = nil; up = false }
+        Task { @MainActor in try? await Task.sleep(nanoseconds: 60_000_000); home() }
     }
     // The flick page, for a choice: it takes the card in the air on into the Remote once the pick is made.
     func viaPage(velocity: CGSize, from: CGRect) {
@@ -3167,7 +3035,7 @@ struct ShelfFlick: ViewModifier {
         // Not taken up (the same start already under way: the Remote shows it): the card in the air goes.
         if model.flicking?.id != t.id { RenderFlight.land(after: 0); ScreenVeil.lift(0.2) }
         // The flick screen's own picture takes over from here, from where it was let go.
-        Task { @MainActor in try? await Task.sleep(nanoseconds: 60_000_000); ShelfHand.shared.item = nil; up = false }
+        Task { @MainActor in try? await Task.sleep(nanoseconds: 60_000_000); home() }
     }
 }
 
@@ -3424,9 +3292,7 @@ extension TVModel {
     @objc private func tick(_ l: CADisplayLink) {
         defer { last = l.timestamp }
         guard phase != .idle else { return }
-        if phase == .flight, let layer = RenderFlight.lead?.layer {
-            trace.append((CACurrentMediaTime() - releaseAt, (layer.presentation() ?? layer).frame))
-        }
+        if phase == .flight, let r = RenderFlight.seen() { trace.append((CACurrentMediaTime() - releaseAt, r)) }
         guard last > 0 else { return }
         let gap = (l.timestamp - last) * 1000, due = max(4, (l.targetTimestamp - l.timestamp) * 1000)
         if phase == .drag { drag.frames += 1; if gap > due * 1.5 { drag.late += 1 }; drag.longest = max(drag.longest, gap) }

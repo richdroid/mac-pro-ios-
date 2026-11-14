@@ -32,9 +32,11 @@ struct FlickHand {
         // carried at least `carried` in all. A thumb resting on a row and then swiping the list up lifts the row just as
         // the swipe begins; that's a scroll that came late, and it never sends anything.
         var beat: Double = 0.08
-        // By the finger's own clock: the least time after the lift for a move to be an answer to it (seeing or feeling
-        // the row come up and then moving takes a person longer than this).
-        var react: Double = 0.2
+        // By the finger's own clock: a move this soon after the lift had begun before it (a scroll come late). The beat,
+        // no longer: the ruling is "moving more than 20 pt by 0.38 s after touch-down" (the hold plus a beat). At 0.2 s
+        // it also refused the flick itself: a thumb that knows the gesture goes the moment it feels the thunk, and was
+        // put back for it (Richard, 2026-11-14: "flicking suxks").
+        var react: Double = 0.08
         var carried: Double = 0.25
         static let list = Rules(hold: 0.3)
         static let card = Rules(hold: 0, beat: 0, carried: 0)
@@ -102,6 +104,13 @@ struct FlickHand {
             if v.dy < best.dy { best = v }
         }
         return best
+    }
+    // How the finger was really moving as it left, whichever way (a put-back goes home from that speed): over the last
+    // stretch it reported, and nothing if it had come to rest before it lifted.
+    static func parting(_ samples: [(t: Double, p: CGPoint)]) -> CGVector {
+        guard let last = samples.last, let from = samples.last(where: { last.t - $0.t >= 0.03 }), last.t - from.t <= 0.12 else { return .zero }
+        let dt = last.t - from.t
+        return CGVector(dx: (last.p.x - from.p.x) / dt, dy: (last.p.y - from.p.y) / dt)
     }
     // How it left, for the flight: the finger's own speed when that's the faster reading.
     var leaving: CGVector {
@@ -337,6 +346,11 @@ extension FlickHand {
                         steps: [(0, .down(200, 400)), (0.3, .held), (0.8, .move(200, 160)), (1.6, .up(200, 395))],
                         want: .putBack, what: "carried up then all the way back down: not sent",
                         real: feel(200, 400, from: 0.52, by: 0, -240, ms: 400) + feel(200, 160, from: 0, by: 0, 235, ms: 400).dropFirst(2).map { (t: $0.t + 0.85, p: $0.p) }))
+        // Flicked the moment the thunk is felt (0.12 s after the lift): the flick, not a scroll come late.
+        s.append(Script(name: "flick-on-the-thunk", rules: L,
+                        steps: [(0, .down(200, 400)), (0.3, .held), (0.47, .move(200, 370)), (0.49, .move(200, 345)), (0.52, .up(200, 330))],
+                        want: .thrown, what: "held, then flicked 70 pt up from 0.12 s after the lift: sent (was put back: within 0.2 s of the lift)",
+                        real: feel(200, 400, from: 0.42, by: 0, -70, ms: 90)))
         // Put back.
         s.append(Script(name: "hold-then-drag-down", rules: L,
                         steps: [(0, .down(200, 400)), (0.3, .held)] + stroke(from: 0.52, 200, 400, by: 0, 90, ms: 250) + [(0.72, .up(200, 490))],
@@ -397,6 +411,88 @@ extension FlickHand {
             let pass = outcome == script.want && (script.events == nil || script.events == events)
             lines.append(#"{"case":"\#(script.name)","out":"\#(outcome)","events":"\#(events.map { "\($0)" }.joined(separator: " "))","vy":\#(Int(v.dy)),"assert":"\#(script.what)","pass":\#(pass)}"#)
         }
+        return lines
+    }
+}
+
+// MARK: - The throw's spring
+// What's thrown travels on a spring that starts with the finger's own speed: one number (a place along one axis, a width,
+// a scale) drawn to its target, from wherever it is and however fast it's already going. Worked out here, exactly, so
+// the flight can be handed to the render server whole (it runs there however busy the app is) and re-aimed mid-air from
+// its true place and speed, never from rest. Plain numbers, no views: the build's Mac script checks it.
+struct FlickSpring: Equatable {
+    // How long one swing takes, in seconds, and how firmly it's damped (1: no overshoot at all).
+    var response = 0.36
+    var damping = 0.86
+    // Long enough for any throw to have come to rest.
+    static let time = 0.8
+    // How far from the target at `t`, having started `x0` from it moving at `v0` (the same units, a second).
+    func left(_ t: Double, from x0: Double, speed v0: Double) -> Double {
+        let w = 2 * Double.pi / response, a = damping * w
+        if damping >= 0.999 { return exp(-w * t) * (x0 + (v0 + w * x0) * t) }
+        let wd = w * (1 - damping * damping).squareRoot()
+        return exp(-a * t) * (x0 * cos(wd * t) + (v0 + a * x0) / wd * sin(wd * t))
+    }
+    // And how fast it's moving then.
+    func speed(_ t: Double, from x0: Double, speed v0: Double) -> Double {
+        let w = 2 * Double.pi / response, a = damping * w
+        if damping >= 0.999 { return exp(-w * t) * (v0 - w * (v0 + w * x0) * t) }
+        let wd = w * (1 - damping * damping).squareRoot()
+        return exp(-a * t) * (v0 * cos(wd * t) - (a * v0 + w * w * x0) / wd * sin(wd * t))
+    }
+    // The finger's speed as the throw may use it: a wild reading (a touch that jumped) can't fling the thing off the screen.
+    static func tamed(_ v: CGVector, most: CGFloat = 3200) -> CGVector {
+        let s = hypot(v.dx, v.dy)
+        guard s > most, s > 0 else { return v }
+        return CGVector(dx: v.dx * most / s, dy: v.dy * most / s)
+    }
+}
+// One number on its way: from `from` to `to`, leaving at `speed`, begun at `began` (any clock, seconds).
+struct FlickTravel: Equatable {
+    var from: Double, to: Double, speed: Double
+    var began: Double
+    var spring = FlickSpring()
+    func value(at now: Double) -> Double { to + spring.left(max(0, now - began), from: from - to, speed: speed) }
+    func speed(at now: Double) -> Double { spring.speed(max(0, now - began), from: from - to, speed: speed) }
+    // Aimed somewhere else, from where it is now and as fast as it's going now.
+    func aimed(at target: Double, now: Double) -> FlickTravel {
+        FlickTravel(from: value(at: now), to: target, speed: speed(at: now), began: now, spring: spring)
+    }
+    // Every frame of the rest of it, `rate` a second, for the render server.
+    func frames(rate: Double = 120) -> [Double] {
+        let n = Int(FlickSpring.time * rate)
+        return (0...n).map { i in i == n ? to : value(at: began + Double(i) / rate) }
+    }
+}
+extension FlickSpring {
+    // The spring's own checks, beside the scripted hands.
+    static func runChecks() -> [String] {
+        var lines: [String] = []
+        func check(_ name: String, _ pass: Bool, _ what: String) {
+            lines.append(#"{"case":"\#(name)","assert":"\#(what)","pass":\#(pass)}"#)
+        }
+        let s = FlickSpring()
+        // Thrown up at 2000 pt/s from 400 pt below: it leaves at the finger's speed and is there within 0.3 s.
+        let t = FlickTravel(from: 400, to: 0, speed: -2000, began: 0)
+        let first = (t.value(at: 1.0 / 120) - t.value(at: 0)) * 120
+        check("spring-leaves-at-the-fingers-speed", abs(first - -2000) < 300, "the first frame moves at the release speed (\(Int(first)) pt/s for -2000)")
+        check("spring-arrives", abs(t.value(at: 0.3)) < 12 && abs(t.value(at: FlickSpring.time)) < 0.5, "within 12 pt at 0.3 s (\(Int(t.value(at: 0.3)))), at rest by the end")
+        let past = (0...96).map { t.value(at: Double($0) / 120) }.min() ?? 0
+        check("spring-barely-overshoots", past > -30, "a hard throw passes its target by \(Int(-past)) pt at most")
+        // From rest (carried over the line and let go still): no jump, and it gets there.
+        let r = FlickTravel(from: 300, to: 0, speed: 0, began: 0)
+        check("spring-from-rest", abs(r.value(at: 0) - 300) < 0.001 && abs(r.value(at: 0.45)) < 10, "starts where it was, there by 0.45 s (\(Int(r.value(at: 0.45))))")
+        // Re-aimed mid-air: the same place and the same speed at the moment of the change.
+        let a = t.aimed(at: 60, now: 0.1)
+        check("spring-reaim-continuous", abs(a.value(at: 0.1) - t.value(at: 0.1)) < 0.001 && abs(a.speed(at: 0.1) - t.speed(at: 0.1)) < 0.001
+                && abs(a.value(at: 0.1 + FlickSpring.time) - 60) < 0.5, "no step in place or speed, and it ends on the new target")
+        // The speed it reports is the slope of where it is.
+        let slope = (t.value(at: 0.0505) - t.value(at: 0.0495)) / 0.001
+        check("spring-speed-is-its-slope", abs(slope - t.speed(at: 0.05)) < 2, "speed(t) matches the curve (\(Int(slope)) and \(Int(t.speed(at: 0.05))))")
+        let wild = tamed(CGVector(dx: 3000, dy: -9000))
+        check("spring-tames-a-wild-speed", abs(hypot(wild.dx, wild.dy) - 3200) < 1 && wild.dy < 0, "9500 pt/s is held to 3200, the same way")
+        check("spring-critical", abs(FlickSpring(response: 0.3, damping: 1).left(0, from: 50, speed: 0) - 50) < 0.001, "the fully damped case starts where it is")
+        _ = s
         return lines
     }
 }
