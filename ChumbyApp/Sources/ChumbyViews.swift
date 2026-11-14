@@ -834,6 +834,9 @@ struct HomeTab: View {
     static let footMargin: CGFloat = 16, minStage: CGFloat = 250, maxStage: CGFloat = 330, wideStage: CGFloat = 340
     // Allowance for the tallest everyday state over the one measured.
     static let tallestExtra: CGFloat = 40
+    // At the narrowest the caption may still not fit: then it is pushed wholly below the room (never half in it).
+    @State private var captionPush: CGFloat = 0
+    @State private var captionHeight: CGFloat = 0
     // How far the caption's foot moves per point of stage width: the octopus's lift (58/380) and the device's own height.
     static let footPerWidth: CGFloat = 58.0 / 380 + 325.0 / 371
     var maxWidth: CGFloat { wide ? Self.wideStage : Self.maxStage }
@@ -844,6 +847,12 @@ struct HomeTab: View {
         let w = stageWidth
         let target = min(maxWidth, max(Self.minStage, w - (controlsFoot + Self.tallestExtra + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
         if target < w - 0.6 { fitWidth = target }
+        // Where the caption would stand at the width it ends up with.
+        let end = min(target, w)
+        let foot = controlsFoot - (w - end) * Self.footPerWidth
+        let top = foot - captionHeight
+        let push: CGFloat = foot + Self.tallestExtra + Self.footMargin > room + 1 && captionHeight > 0 ? max(0, room - top + 4) : 0
+        if abs(push - captionPush) > 0.5 { captionPush = push }
     }
     var k: CGFloat { stageWidth / 380 }
     var ringSize: CGFloat { 92 * k * 1.15 }
@@ -1021,6 +1030,7 @@ struct HomeTab: View {
     var serial: String { Bundle.main.object(forInfoDictionaryKey: "ChumbySerial") as? String ?? "" }
     var about: some View {
         VStack(spacing: 0) {
+            Color.clear.frame(height: captionPush)
             // The caption (and the first-run welcome) is what the fit ends on: whole, with air, or not shown at all.
             VStack(spacing: 0) {
                 Text("Chumby Classic").font(.custom("Trebuchet MS", size: 30).weight(.bold))
@@ -1031,7 +1041,8 @@ struct HomeTab: View {
                         .onDisappear { welcomed = true }
                 }
             }
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { controlsFoot = $0; refit() }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { captionHeight = $0; refit() }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { controlsFoot = $0 - captionPush; refit() }
             .padding(.bottom, 16)
             Grid(horizontalSpacing: 12, verticalSpacing: 5) {
                 if !name.isEmpty { spec("Name", name) }
