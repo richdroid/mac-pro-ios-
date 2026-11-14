@@ -69,6 +69,7 @@ struct Pager: View {
                         .padding(.top, bars.top + S.head)
                         if let accessory { accessory.padding(.top, S.head) }
                     }
+                    ScrollViewReader { proxy in
                     ScrollView(.horizontal) {
                         Group {
                             if look == .pivot {
@@ -80,7 +81,11 @@ struct Pager: View {
                         .scrollTargetLayout()
                     }
                     .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
-                    .scrollPosition(id: $position)
+                    .scrollPosition(id: $position, anchor: .leading)
+                    // The last section comes to rest at the margin like the others, not pushed back by the peek.
+                    .contentMargins(.trailing, peek, for: .scrollContent)
+                    // A panorama's next section runs on under the side bar and off the display, never cut at the bar.
+                    .scrollClipDisabled(look == .panorama)
                     .scrollIndicators(.hidden)
                     .scrollDisabled(locked)
                     .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, v in motion.x = v }
@@ -93,7 +98,12 @@ struct Pager: View {
                         }
                     }
                     .padding(.top, look == .pivot ? S.pair : 0)
+                    // Opened on a section other than the first (a link, a pose): there from the first frame.
+                    .onAppear { if let first = panels.first?.id, page != first { proxy.scrollTo(page, anchor: .leading) } }
+                    }
                 }
+                // Never wider than the display's width for it, whatever a title or a row of names would take.
+                .frame(minWidth: w, maxWidth: w, maxHeight: .infinity, alignment: .topLeading)
             }
             .ignoresSafeArea(.container, edges: .vertical)
         }
@@ -200,9 +210,11 @@ private struct PivotHeaders: View {
         HStack(alignment: .firstTextBaseline, spacing: gap) {
             ForEach(names.indices, id: \.self) { i in
                 let near = max(0, 1 - abs(CGFloat(i) - f))
+                // The ones already passed fade as they leave, so no half a word waits at the left edge.
+                let gone = CGFloat(i) < f ? min(1, f - CGFloat(i)) : 0
                 Button { choose(i) } label: {
                     Text(names[i]).font(.system(size: size, weight: .light)).tracking(-0.8).fixedSize()
-                        .foregroundStyle(.white.opacity(0.36 + 0.6 * near))
+                        .foregroundStyle(.white.opacity((0.36 + 0.6 * near) * (1 - gone)))
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(near > 0.5 ? .isSelected : [])
@@ -210,7 +222,8 @@ private struct PivotHeaders: View {
         }
         .fixedSize()
         .offset(x: S.margin - 3 - shift)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Both bounds: with only a maximum the row took its own width and widened the pivot past the display.
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .frame(height: ceil(size * 1.2))
     }
 }

@@ -83,7 +83,9 @@ struct StreakCard: View {
                     .symbolEffect(.bounce, value: i.streak)
                 Group { if let n = i.streak { Counting(n, key: "streak") { "\($0)" } } else { Text("–") } }
                     .font(.system(size: 44, weight: .light)).monospacedDigit().foregroundStyle(.white)
+                // One line, shrinking a little where the card is narrow, never "days in / a row".
                 Text(i.streak == 1 ? "day in a row" : "days in a row").font(.title3.weight(.light)).foregroundStyle(S.soft)
+                    .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(-1)
                 Spacer(minLength: 0)
                 if let best = i.best { Figure(value: "\(best)", label: "best", size: 22).fixedSize() }
             }
