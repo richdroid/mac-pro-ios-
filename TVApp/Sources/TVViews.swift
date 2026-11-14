@@ -2766,7 +2766,8 @@ struct PlayingTab: View {
             // it has no card it takes none (the right pane's first line is the cover's line).
             FlickCard()
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { flickHeight = $0 }
-                .padding(.bottom, flickHeight <= 2 ? -(flickHeight + 24) : 0)
+            // (A stack takes no negative size, so the empty picker's gap is drawn back off the top of what follows.)
+            VStack(alignment: .leading, spacing: 24) {
             // Mint's own screen, here: the song's words, the sung line leading, and what plays after it. First under
             // what's on (open flat, level with the cover), ahead of what he played before.
             // On the page only when Mint has words or a queue for this song, so a song with neither leaves it as it was.
@@ -2817,6 +2818,8 @@ struct PlayingTab: View {
                 }
                 .transition(.opacity.combined(with: .offset(y: 10)))
             }
+            }
+            .padding(.top, flickHeight <= 2 ? -(flickHeight + 24) : 0)
         }
         .task { if mintHome.rows.isEmpty { await mintHome.load() } }
         // The asking for the words and the queue, which draws nothing and takes no room.

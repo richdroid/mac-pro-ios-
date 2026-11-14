@@ -309,11 +309,11 @@ struct MusicExtras: View {
         // the list answering them.
         .task {
             let defaults = UserDefaults.standard
-            if defaults.bool(forKey: "queueSheet") { try? await Task.sleep(nanoseconds: 6_000_000_000); showAll = true }
+            if defaults.bool(forKey: "queueSheet") { guard (try? await Task.sleep(nanoseconds: 6_000_000_000)) != nil else { return }; showAll = true }
             guard defaults.bool(forKey: "queueDemo") else { return }
             let q = QueueStore.shared
             for step in 0..<6 {
-                try? await Task.sleep(nanoseconds: 3_500_000_000)
+                guard (try? await Task.sleep(nanoseconds: 3_500_000_000)) != nil else { return }
                 switch step {
                 case 0: q.move(2, to: 0)
                 case 1: q.remove(1)
