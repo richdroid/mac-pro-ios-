@@ -599,10 +599,11 @@ struct MacHealthView: View {
         let flat = side != .all || roomy
         return ScrollViewReader { proxy in
             List {
-                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false, onMac: "everything") }
+                // 4 pt lower than the list puts it: it sat 4 pt above every other pushed page's title (CI eb0450b: 51 against 55).
+                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false, onMac: "everything").padding(.top, 4) }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                     // The page's usual room under its name (the list's 16 pt put the hero 20 pt under it against 43 elsewhere).
-                    .listSectionSpacing(.default)
+                    .listSectionSpacing(.custom(33))
                 if side != .right {
                     Section { hero }
                         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)

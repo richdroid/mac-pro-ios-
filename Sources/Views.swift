@@ -747,7 +747,7 @@ struct Screen<Content: View>: View {
                 // The row's foot sits 14 pt below the title, out of the corner the list rounds off: the A of Apps lost its left foot to
                 // it (designer gate, 2026-11-14). The gap to the next block gives the 14 pt back.
                 Section { paneTitle(side).padding(.top, statusBarTop < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 14, trailing: 0)).listRowSeparator(.hidden)
-                    .listSectionSpacing(.custom(tab == 0 ? 14 : 21))
+                    .listSectionSpacing(.custom(tab == 0 ? 14 : 3))
                 if side != .right, Notice.shows(model) { Section { Notice() } }
                 if let s = shown ?? model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
@@ -2051,7 +2051,7 @@ struct UpgradeTab: View {
     // as it, in line with the text in the cards below. "Log" was white and semibold at the cards' very edge.
     // The list tabs' own section heading: the system's size, 12 pt lower so its cap-top sits where theirs does under the title
     // (designer gate, 2026-11-14: a size larger and 11 pt higher than every other tab's).
-    func header(_ t: String) -> some View { Text(t).font(.headline).foregroundStyle(.secondary).padding(.leading, 20).padding(.top, 12) }
+    func header(_ t: String) -> some View { Text(t).font(.headline).foregroundStyle(.secondary).padding(.leading, 20).padding(.top, 12).padding(.bottom, 3) }
     // The same edges as the system's list cards on every other tab: 20 pt in from the leading side, out to the trailing
     // edge of the space, and in the right pane open, from its leading edge.
     var body: some View {
