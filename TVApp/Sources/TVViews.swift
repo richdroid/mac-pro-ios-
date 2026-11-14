@@ -7,6 +7,9 @@ import MediaPlayer
 @main
 struct TVApp: App {
     @State private var model = TVModel()
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(TVPushDelegate.self) private var pushDelegate
+    #endif
     @Environment(\.scenePhase) private var phase
     init() {
         // Neither is needed for the first frame, so neither holds it up.
@@ -34,7 +37,7 @@ struct TVApp: App {
                 // update automatically").
                 .onChange(of: phase, initial: true) { _, p in
                     switch p {
-                    case .active: model.start(); PhonePose.launch(model)
+                    case .active: model.start(); PhonePose.launch(model); TVNotify.shared.share()
                     case .background: model.background()
                     default: break
                     }
