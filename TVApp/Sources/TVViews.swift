@@ -1446,6 +1446,21 @@ struct RemoteTab: View {
         .onChange(of: model.status?.session != nil, initial: true) { _, has in if !unreachable { hadSession = has } }
         .onChange(of: model.starting?.line) { _, line in if let line { lastStartWasSeries = line.hasPrefix("S") } }
     }
+    // The pad with volume: − and + on its sides at the keys' size, a slim level bar under it. The pad is the ring that fits
+    // between them, in the height the posture gives it.
+    func padRow(_ grid: RemoteGrid) -> some View {
+        let d = grid.padWidth
+        return VStack(spacing: RemoteGrid.volGap) {
+            HStack(spacing: RemoteGrid.sideGap) {
+                VolumeKey(down: true, size: grid.key)
+                pad.frame(width: d, height: grid.pad)
+                VolumeKey(down: false, size: grid.key)
+            }
+            VolumeBar().frame(width: d)
+        }
+        .frame(width: grid.width)
+        .opacity(unreachable || asleep || away != nil ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
+    }
     // The pad, dimmed while the TV can't be reached. Asleep, its keys step back and the wake button sits in the empty ring.
     var pad: some View {
         DPad(bare: asleep || away != nil).opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable && !asleep && away == nil)
@@ -1516,14 +1531,14 @@ struct RemoteTab: View {
                 // 2026-11-11). Typing, the pad steps aside and the bar and keys sit just above the keyboard.
                 VStack(spacing: 14) {
                     Spacer(minLength: 0)
-                    if !lay { pad.frame(width: grid.width, height: grid.pad).transition(.opacity) }
+                    if !lay { padRow(grid).transition(.opacity) }
                     keysBlock(grid).frame(height: lay ? nil : grid.rows, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // Typing, the pad steps aside here too, rather than shrink to a 60 pt miniature (Remote gate 4).
                 VStack(spacing: 14) {
-                    if lay { Spacer(minLength: 0) } else { pad.frame(maxWidth: grid.width, maxHeight: grid.pad).frame(maxHeight: .infinity).transition(.opacity) }
+                    if lay { Spacer(minLength: 0) } else { padRow(grid).frame(maxHeight: .infinity).transition(.opacity) }
                     keysBlock(grid)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1642,7 +1657,7 @@ struct RemoteTab: View {
                         Spacer(minLength: 0)
                         Group {
                             // Typing, the pad steps aside: the bar and the keys' row sit at the foot, above the keyboard.
-                            if !lay { pad.frame(width: grid.width, height: grid.pad).transition(.opacity) }
+                            if !lay { padRow(grid).transition(.opacity) }
                             keysBlock(grid).frame(height: lay ? nil : grid.key + 12 + grid.play, alignment: .top)
                         }
                         .modifier(KeysArrive(gate: keysGate))
@@ -1759,6 +1774,10 @@ struct RemoteGrid: Equatable {
     var pad: CGFloat { padSet ?? max(110, (width * 0.54).rounded()) }
     // The keys' own room: the two rows (the keys, a gap, the transport with ⏯ a quarter bigger).
     var rows: CGFloat { key + 12 + play }
+    // The volume keys sit either side of the pad and its level bar under it: the ring is the width between the keys.
+    static let sideGap: CGFloat = 14, volGap: CGFloat = 10, barH: CGFloat = 6
+    static var volRoom: CGFloat { volGap + barH }
+    var padWidth: CGFloat { max(60, min(pad, width - 2 * key - 2 * Self.sideGap)) }
     // Five keys and four gaps make exactly the width: as big as the width allows (a gap of 8 pt at least), 88 pt at most,
     // 44 at least. Open and folded alike the keys are thumb-sized, not a remote's 54 pt on a wide screen (Richard, 2026-11-14).
     static func keys(_ width: CGFloat, maxKey: CGFloat = 88) -> RemoteGrid {
@@ -1771,9 +1790,9 @@ struct RemoteGrid: Equatable {
     // and between the pad and the keys.
     static func fit(width: CGFloat, height: CGFloat) -> RemoteGrid {
         var g = keys(width)
-        let kH = ((height - 28 - 12) / 4.26).rounded(.down)
+        let kH = ((height - 28 - volRoom - 12) / 4.26).rounded(.down)
         if kH < g.key { g = keys(width, maxKey: max(52, kH)) }
-        g.padSet = max(100, min(g.width, (height - 28 - g.rows).rounded(.down)))
+        g.padSet = max(100, min(g.width, (height - 28 - volRoom - g.rows).rounded(.down)))
         return g
     }
     // Folded, everything is in one column and its width is the unknown: the widest (to the room's own width) at which
@@ -1785,11 +1804,11 @@ struct RemoteGrid: Equatable {
         var g = keys(w)
         while w > 220 {
             g = keys(w)
-            let need = w * 9 / 16 + under + 14 + 110 + 14 + g.rows
+            let need = w * 9 / 16 + under + 14 + 110 + volRoom + 14 + g.rows
             if need <= height { break }
             w -= 2
         }
-        let spare = height - (w * 9 / 16 + under + 14 + 14 + g.rows)
+        let spare = height - (w * 9 / 16 + under + 14 + volRoom + 14 + g.rows)
         g.padSet = max(110, min(g.width, spare.rounded(.down)))
         return g
     }
