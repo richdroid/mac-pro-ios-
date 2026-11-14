@@ -29,15 +29,17 @@ final class QueueStore: ObservableObject {
     private var pending: [[String: Any]] = []
     private var sending = false
     private var editedAt = Date.distantPast
+    // A row is in the hand: nothing read from the TV may change the list under the finger.
+    var holding = false
 
     // How much of the queue is wanted from the next reading on: the page's few rows, or all of it for the full list.
     func want(_ n: Int) { wanted = max(12, n) }
 
     func read() async {
-        guard !sending, pending.isEmpty else { return }
+        guard !sending, pending.isEmpty, !holding else { return }
         let sent = Date()
         let data = await TVBridge.data(TVBridge.url("/api/tv/music-queue?limit=\(wanted)"), timeout: 9)
-        guard !Task.isCancelled, !sending, pending.isEmpty, editedAt < sent else { return }
+        guard !Task.isCancelled, !sending, pending.isEmpty, !holding, editedAt < sent else { return }
         guard let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any], j["ok"] as? Bool == true else {
             misses += 1
             if misses >= 3, loaded { items = []; total = 0; loaded = false }
@@ -52,7 +54,7 @@ final class QueueStore: ObservableObject {
             let n = seen[id, default: 0]; seen[id] = n + 1
             return QueueItem(uid: "\(id)#\(n)", qid: id, title: title, artist: x["artist"] as? String ?? "", art: x["art"] as? String ?? "")
         }
-        if next != items { items = next }
+        if next != items { withAnimation(.snappy(duration: 0.25)) { items = next } }
         let t = max((j["total"] as? NSNumber)?.intValue ?? 0, next.count)
         if t != total { total = t }
         if let s = (j["shuffle"] as? NSNumber)?.intValue, (s == 1) != shuffle { shuffle = s == 1 }
@@ -64,14 +66,14 @@ final class QueueStore: ObservableObject {
     func move(_ from: Int, to: Int) {
         guard items.indices.contains(from), from != to else { return }
         let to = min(max(to, 0), items.count - 1)
-        let item = items.remove(at: from)
-        items.insert(item, at: to)
+        let item = items[from]
+        withAnimation(.snappy(duration: 0.22)) { items.remove(at: from); items.insert(item, at: to) }
         send(["op": "move", "id": item.qid, "from": from, "to": to])
     }
     func remove(_ i: Int) {
         guard items.indices.contains(i) else { return }
-        let item = items.remove(at: i)
-        total = max(0, total - 1)
+        let item = items[i]
+        withAnimation(.snappy(duration: 0.22)) { items.remove(at: i); total = max(0, total - 1) }
         Haptic.fire(.tap)
         send(["op": "remove", "id": item.qid, "at": i])
     }
@@ -79,8 +81,7 @@ final class QueueStore: ObservableObject {
     func jump(_ i: Int) {
         guard items.indices.contains(i) else { return }
         let item = items[i]
-        items.removeFirst(i + 1)
-        total = max(0, total - i - 1)
+        withAnimation(.snappy(duration: 0.25)) { items.removeFirst(i + 1); total = max(0, total - i - 1) }
         send(["op": "jump", "id": item.qid, "at": i]) { Task { try? await Task.sleep(nanoseconds: 500_000_000); MusicDetailStore.shared.moved() } }
     }
     func moveToTop(_ i: Int) { move(i, to: 0) }
@@ -111,20 +112,26 @@ final class QueueStore: ObservableObject {
     }
     private var thens: [(() -> Void)?] = []
     private func drain() async {
-        var failed = false
+        var failed = false, slow = false
         while !pending.isEmpty {
             var body = pending.removeFirst(); let after = thens.removeFirst()
             let confirming = body.removeValue(forKey: "confirming") as? Bool ?? false
+            let op = body["op"] as? String ?? ""
+            if op == "jump" || op == "shuffle" { slow = true }
             do {
-                try await TVBridge.post("queue-op", body, timeout: 20)
+                try await TVBridge.post("queue-op", body, timeout: 30)
                 if confirming { Haptic.fire(.done) }
                 after?()
-            } catch { failed = true; Haptic.fire(.warn) }
+            } catch {
+                // The edits behind it were worked out against a list that never came to be: dropped, and the list read again.
+                failed = true; Haptic.fire(.warn); pending.removeAll(); thens.removeAll()
+            }
         }
         sending = false
         editedAt = Date()
-        // What Mint says now is the truth: after a failure it puts the list back as it is.
-        if failed { await read() } else { try? await Task.sleep(nanoseconds: 600_000_000); await read() }
+        // What Mint says now is the truth. A jump or a new shuffle takes a few seconds to settle on the TV (the song changes,
+        // the queue is laid out again), so those are read after it has.
+        if failed { await read() } else { try? await Task.sleep(nanoseconds: slow ? 2_500_000_000 : 600_000_000); await read() }
     }
 }
 
@@ -157,21 +164,29 @@ struct QueueRows: View {
                          up: i > 0 ? { move(i, i - 1) } : nil, down: i < items.count - 1 ? { move(i, i + 1) } : nil,
                          drag: .init(
                             changed: { dy in
-                                if dragging == nil { dragging = item.uid; target = i; shift = 0 }
+                                if dragging == nil { dragging = item.uid; target = i; shift = 0; QueueStore.shared.holding = true; Haptic.fire(.snap) }
                                 shift = dy
                                 let t = min(max(i + Int((dy / rowHeight).rounded()), 0), items.count - 1)
                                 if t != target { withAnimation(.snappy(duration: 0.2)) { target = t }; Haptic.fire(.tick) }
                             },
                             ended: {
+                                guard dragging == item.uid else { return }
                                 let f = i, t = target
-                                withAnimation(.snappy(duration: 0.22)) { dragging = nil; shift = 0 }
-                                if t != f { move(f, t) }
+                                QueueStore.shared.holding = false
+                                // The list takes its new order and the rows their rest in one move, so nothing jumps a row and back.
+                                withAnimation(.snappy(duration: 0.22)) { dragging = nil; shift = 0; if t != f { move(f, t) } }
                             }))
                     .offset(y: offset(i))
                     .zIndex(dragging == item.uid ? 1 : 0)
                     .animation(dragging == item.uid ? nil : .snappy(duration: 0.2), value: target)
             }
         }
+        .animation(.snappy(duration: 0.25), value: items.map(\.uid))
+        // The list changed so that the row in the hand is gone: let it go.
+        .onChange(of: items.map(\.uid)) { _, now in
+            if let d = dragging, !now.contains(d) { dragging = nil; shift = 0; QueueStore.shared.holding = false }
+        }
+        .onDisappear { if dragging != nil { dragging = nil; shift = 0; QueueStore.shared.holding = false } }
     }
 }
 
@@ -187,6 +202,7 @@ private struct QueueRow: View {
     let down: (() -> Void)?
     let drag: Drag
     @State private var x: CGFloat = 0
+    @GestureState private var handle: CGFloat? = nil
     @State private var swiping = false
     @State private var base: CGFloat = 0
     static let reveal: CGFloat = 88
@@ -198,7 +214,7 @@ private struct QueueRow: View {
             }
             .buttonStyle(.plain).padding(.trailing, 6).opacity(min(1, -x / 40)).allowsHitTesting(x < -20)
             HStack(spacing: 0) {
-                Button { if x < -1 { withAnimation(.snappy(duration: 0.2)) { x = 0 } } else { jump() } } label: {
+                Button { if x < -1 { withAnimation(.snappy(duration: 0.2)) { x = 0 } } else { Haptic.fire(.tap); jump() } } label: {
                     HStack(spacing: 12) {
                         Art(url: URL(string: item.art)) { $0.resizable().scaledToFill() } placeholder: {
                             ZStack { Color.white.opacity(0.08); Image(systemName: "music.note").font(.system(size: 16)).foregroundStyle(.secondary) }
@@ -229,9 +245,13 @@ private struct QueueRow: View {
                 // The handle: a touch on it takes the row at once, and the finger carries it.
                 Image(systemName: "line.3.horizontal").font(.system(size: 17, weight: .medium)).foregroundStyle(.secondary)
                     .frame(width: 44, height: height).contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                        .onChanged { drag.changed($0.translation.height) }
-                        .onEnded { _ in drag.ended() })
+                    // A short hold first, so a scroll that starts on the handle is still a scroll; the state goes back to nil when
+                    // the touch ends or is taken from us (a turn, a system gesture), and that is the drop.
+                    .gesture(LongPressGesture(minimumDuration: 0.12).sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
+                        .updating($handle) { v, state, _ in if case .second(true, let d) = v { state = d?.translation.height ?? 0 } })
+                    .onChange(of: handle) { old, now in
+                        if let now { drag.changed(now) } else if old != nil { drag.ended() }
+                    }
                     .accessibilityHidden(true)
             }
             .offset(x: x)
@@ -303,7 +323,8 @@ struct PlayModes: View {
                  value: queue.repeatMode == 0 ? "Off" : queue.repeatMode == 1 ? "One song" : "All") { queue.cycleRepeat() }
         }
         // Until Mint has said, the keys are there but quiet: they would be setting what isn't known.
-        .opacity(queue.loaded ? 1 : 0.45)
+        .opacity(queue.loaded ? 1 : 0.45).disabled(!queue.loaded)
+        .animation(.easeOut(duration: 0.2), value: queue.loaded)
     }
     private func mode(icon: String, on: Bool, label: String, value: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {

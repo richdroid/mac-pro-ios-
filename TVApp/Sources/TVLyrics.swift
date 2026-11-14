@@ -198,7 +198,7 @@ struct MusicDetailWatch: View {
                 guard watching else { return }
                 store.follow(song)
                 await store.read(playing: playing)
-                await QueueStore.shared.read()
+                if model.status?.airplay?.active != true { await QueueStore.shared.read() }
                 // Paused, it still asks until the song on the page has had its own answer (or is given up on).
                 var round = 0
                 while playing || store.unanswered, !Task.isCancelled {
@@ -207,7 +207,7 @@ struct MusicDetailWatch: View {
                     await store.read(playing: playing)
                     // The queue and the play modes about every four seconds: they change only when he or the song does.
                     round += 1
-                    if round % 2 == 0 { await QueueStore.shared.read() }
+                    if round % 2 == 0, model.status?.airplay?.active != true { await QueueStore.shared.read() }
                 }
             }
             .onDisappear { store.leave() }
@@ -256,22 +256,23 @@ struct MusicExtras: View {
             }
             if hasUpNext {
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack(alignment: .firstTextBaseline) {
-                        RowTitle("Up next")
-                        Spacer(minLength: 12)
-                        // The whole queue as a list of its own, in place of a count of what isn't shown.
-                        if upNextTotal > shown {
-                            Button { Haptic.fire(.tap); showAll = true } label: {
-                                Text("Show all \(upNextTotal)").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent)
-                                    .frame(minHeight: 44).contentShape(Rectangle())
+                    RowTitle("Up next")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        // The whole queue as a list of its own, in place of a count of what isn't shown. Over the heading's end, so
+                        // its 44 pt target never makes the heading taller than the others.
+                        .overlay(alignment: .trailing) {
+                            if upNextTotal > shown {
+                                Button { Haptic.fire(.tap); showAll = true } label: {
+                                    Text("Show all \(upNextTotal)").font(.subheadline.weight(.semibold)).foregroundStyle(TVLook.accent)
+                                        .frame(minHeight: 44).contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain).padding(.bottom, 8)
                             }
-                            .buttonStyle(.plain).padding(.bottom, 8).padding(.top, -8)
                         }
-                    }
                     Group {
                         if queue.loaded, !queue.items.isEmpty {
                             // Editable: the handle drags a row, a swipe removes it, a tap plays it.
-                            QueueRows(items: Array(queue.items.prefix(shown)), rowHeight: 56,
+                            QueueRows(items: Array(queue.items.prefix(shown)), rowHeight: 52,
                                       move: { queue.move($0, to: $1) }, remove: { queue.remove($0) },
                                       jump: { queue.jump($0) }, toTop: { queue.moveToTop($0) })
                         } else if let d = store.detail {
@@ -289,7 +290,7 @@ struct MusicExtras: View {
                                         }
                                         Spacer(minLength: 0)
                                     }
-                                    .frame(height: 56)
+                                    .frame(height: 52)
                                     .accessibilityElement(children: .combine)
                                 }
                             }
