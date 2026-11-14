@@ -857,7 +857,14 @@ struct RemoteScreenView: View {
         return CGSize(width: max(-overW, min(overW, p.width)), height: max(-overH, min(overH, p.height)))
     }
     // Measured only for the build's shot: how many pictures reach the display, and how many the Mac sent, each second.
-    var measuring: Bool { model.pose == "screenfps" || UserDefaults.standard.bool(forKey: "showFPS") }
+    // The frame-rate badge is for the build's shots and debug builds only: its words are plumbing (2026-11-13).
+    var measuring: Bool {
+        #if DEBUG
+        return model.pose == "screenfps" || UserDefaults.standard.bool(forKey: "showFPS")
+        #else
+        return model.pose == "screenfps"
+        #endif
+    }
     var showHint: Bool { model.pose == "screenhint" || (model.pose.isEmpty && !gesturesSeen) }
 
     // `always`: the pointer stays in view, as on a laptop, where there's a trackpad. Touched directly, it shows for a
@@ -1342,7 +1349,7 @@ struct RemoteScreenView: View {
             }
         case .reconnecting where screen.slowReconnect:
             VStack {
-                Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath").font(.footnote.weight(.medium)).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 6).background(.black.opacity(0.65), in: Capsule()).padding(.top, 10)
+                Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath").font(.footnote.weight(.medium)).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 6).glassEffect(.regular, in: Capsule()).padding(.top, 10)
                 Spacer()
             }
             .allowsHitTesting(false)
@@ -1836,7 +1843,9 @@ struct GestureClassifier {
             touches[id] = touch
         }
         maxFingers = max(maxFingers, fingers)
-        if let due = pendingUp, t >= due, !holding { pendingUp = nil; follower = nil; out.append(.button(down: false)) }
+        // A finger that landed inside the tap's window and is still down is the drag's own: its click waits for it, however
+        // long it takes to start moving (it used to be let go at the window's end, and the drag never began).
+        if let due = pendingUp, t >= due, !holding, follower == nil || touches[follower!] == nil || touches[follower!]?.palm == true { pendingUp = nil; follower = nil; out.append(.button(down: false)) }
         // The lifted drag's moment is up with no finger back: the button goes up where the pointer is.
         if let g = grace, t >= g, touches.isEmpty { grace = nil; holding = false; tapDrag = false; out.append(.button(down: false)) }
 
@@ -2012,6 +2021,15 @@ enum ScreenTrace {
             + [Step(t: 0.65, kind: "down", id: 2, p: CGPoint(x: 150, y: 120))]
             + (1...6).map { Step(t: 0.65 + Double($0) * 0.02, kind: "move", id: 2, p: CGPoint(x: 150 + CGFloat($0) * 8, y: 120)) }
             + [Step(t: 0.85, kind: "up", id: 2)] + ticks(0.9, 1.6)),
+        // The finger lands in time but waits past the tap window before moving: still a drag.
+        ("tap-drag-slow-start", [Step(t: 0, kind: "down", p: CGPoint(x: 200, y: 120)), Step(t: 0.1, kind: "up"),
+                                 Step(t: 0.2, kind: "down", id: 1, p: CGPoint(x: 200, y: 120))] + ticks(0.25, 0.55)
+            + (1...8).map { Step(t: 0.6 + Double($0) * 0.016, kind: "move", id: 1, p: CGPoint(x: 200 + CGFloat($0) * 6, y: 120)) }
+            + [Step(t: 0.8, kind: "up", id: 1)] + ticks(0.85, 1.6)),
+        // A thumb that rests at the edge right after a tap is a palm, not the drag's finger: the click lets go.
+        ("tap-then-edge-rest", [Step(t: 0, kind: "down", p: CGPoint(x: 200, y: 120)), Step(t: 0.1, kind: "up"),
+                                Step(t: 0.2, kind: "down", id: 1, p: CGPoint(x: 220, y: 245))] + ticks(0.25, 0.7)
+            + [Step(t: 0.8, kind: "up", id: 1)] + ticks(0.85, 1.2)),
         ("press-to-click-and-drag", [Step(t: 0, kind: "down", p: CGPoint(x: 200, y: 120))] + ticks(0.05, 0.45)
             + (1...8).map { Step(t: 0.45 + Double($0) * 0.02, kind: "move", p: CGPoint(x: 200, y: 120 + CGFloat($0) * 5)) }
             + [Step(t: 0.7, kind: "up")]),

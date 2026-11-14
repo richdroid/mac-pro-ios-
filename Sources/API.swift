@@ -105,6 +105,8 @@ struct Status: Decodable {
     let macLogin: Bool; let screen: String; let agentStale: Bool; let ios: IOSStatus
     var displayOn: Bool?
     var temps: [Temp]?
+    // The bridge's heat verdict (each sensor against its own limits); nil from a bridge older than 2026-11-12.
+    var heat: HeatVerdict?
     let services: [Service]?
     var iosApps: SeedStatus?
     var alerts: [Alert]?
@@ -124,7 +126,7 @@ struct Status: Decodable {
     // sessions, apps and alerts here, since a status that doesn't decode is dropped whole (audit, 2026-11-10).
     enum CodingKeys: String, CodingKey {
         case model, macos, build, uptime, load, cpuModel, cpu, mem, disk, net, hist, apps, installed, procs, tailscale, claude, usage, upgrade, oclp, sharing
-        case publicUrl, typing, iphone, iloader, macLogin, screen, agentStale, ios, displayOn, temps, services, iosApps, alerts, apiUsage, publicUp, healthBad, healthAt
+        case publicUrl, typing, iphone, iloader, macLogin, screen, agentStale, ios, displayOn, temps, heat, services, iosApps, alerts, apiUsage, publicUp, healthBad, healthAt
     }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -144,7 +146,7 @@ struct Status: Decodable {
         publicUrl = opt(.publicUrl) ?? ""; typing = opt(.typing) ?? ""; iphone = opt(.iphone) ?? false; iloader = opt(.iloader) ?? false
         macLogin = opt(.macLogin) ?? false; screen = opt(.screen) ?? ""; agentStale = opt(.agentStale) ?? false
         ios = opt(.ios) ?? IOSStatus(hasPhone: false, signedIn: true, ready: false, installedAt: 0, nextDue: 0, lastResult: "", resigning: false, job: IOSJob(state: "", message: ""))
-        displayOn = opt(.displayOn); temps = opt(.temps); services = opt(.services); iosApps = opt(.iosApps); alerts = opt(.alerts)
+        displayOn = opt(.displayOn); temps = opt(.temps); heat = opt(.heat); services = opt(.services); iosApps = opt(.iosApps); alerts = opt(.alerts)
         apiUsage = opt(.apiUsage); publicUp = opt(.publicUp); healthBad = opt(.healthBad); healthAt = opt(.healthAt)
     }
 }
@@ -155,7 +157,10 @@ struct LiveStatus: Decodable, Equatable {
     // The display's real state each second, so the Display key follows the Mac by itself (Richard, 2026-11-07: "should
     // self update not requiring refresh").
     var displayOn: Bool?
+    var heat: HeatVerdict?
 }
+// How the Mac is doing for heat, in the bridge's one rule: "Normal", "Warm" or "Hot", and the sensor nearest its limit.
+struct HeatVerdict: Decodable, Equatable { let verdict: String; let hottest: Status.Temp? }
 // Compared, so a reading that's the same as the last one doesn't redraw the live tiles.
 extension Status.CPU: Equatable {}
 extension Status.Memory: Equatable {}

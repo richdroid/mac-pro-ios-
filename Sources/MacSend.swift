@@ -36,7 +36,7 @@ enum MacFiles {
         let said = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
         switch code {
         case 404 where said?.contains("Tailscale") == true: return "The Mac takes files over Tailscale only. Turn Tailscale on and try again."
-        case 404: return "This Mac doesn’t take files yet. Its bridge needs updating."
+        case 404: return "This Mac doesn’t take files yet. Its Mac dashboard needs updating."
         case 413: return "That file is too big for the Mac to take."
         case 401, 403: return "The Mac didn’t accept this iPhone. Open the Mac Pro app and sign in."
         default: return said.map { $0.hasSuffix(".") ? $0 : $0 + "." } ?? "The Mac couldn’t save it (error \(code))."

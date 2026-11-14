@@ -579,7 +579,7 @@ struct VersionHistoryView: View {
         ScrollViewReader { proxy in
         List {
             // As a tab's paneTitle: at the cards' edge, the same height in both panes so their first cards start level.
-            Section { PaneHeading(title: "Version History", shown: header) }
+            Section { PaneHeading(title: "Version History", shown: header, nudgeSide: 6) }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
             if header, let app {
                 Section {

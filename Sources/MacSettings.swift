@@ -32,10 +32,11 @@ struct MacSettings: View {
         return "\(v) (\(b))"
     }
     @Environment(\.paneLayout) private var panes
+    @Environment(\.statusBarTop) private var statusBarTop
     // The page's name as its first line, going up with the page, as on every other tab; held blank over the right pane so
     // both panes' first cards start level.
     func heading(_ shown: Bool) -> some View {
-        Section { PaneHeading(title: "Settings", shown: shown) }
+        Section { PaneHeading(title: "Settings", shown: shown, roomAbove: false) }
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
     }
     // How the app looks and what it shows: on the left open flat.
@@ -94,7 +95,7 @@ struct MacSettings: View {
         Section {
             Picker("Open on", selection: $startTab) {
                 Text("The last tab used").tag(-1)
-                Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("macOS").tag(4); Text("Control").tag(5)
+                Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("macOS").tag(4); Text("Control").tag(5); Text("Console").tag(6)
             }
             Toggle("Haptics", isOn: $haptics)
             Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
@@ -139,11 +140,16 @@ struct MacSettings: View {
             if side != .right { looks }
             if side != .left { behaves }
         }
+        // The title's room under a side status bar is the list's margin, as on every pushed page (designer gate, 2026-11-14:
+        // Settings sat 10 pt high folded and 30 pt low upright against Connections).
+        .contentMargins(.top, 4 + PaneHeading.roomAbove(statusBarTop), for: .scrollContent)
         .scrollsUnder(side == .right ? 1 : 0)
     }
-    var body: some View {
-        NavigationStack {
-            ScrollViewReader { proxy in
+    // Behind the gear on Status since the Console took a tab (Richard, 2026-11-13: "consolidate or move settings if need
+    // be"): pushed there with the system's Back; a stack of its own only if shown alone.
+    var pushed = false
+    var content: some View {
+        ScrollViewReader { proxy in
             Group {
                 if panes { FoldSplit { list(.left) } right: { list(.right) } }
                 else { list(.all) }
@@ -156,16 +162,29 @@ struct MacSettings: View {
                 proxy.scrollTo("claude", anchor: .center)
                 if pose == "budget-custom" { try? await Task.sleep(nanoseconds: 600_000_000); budgetDraft = apiBudget; customBudget = true }
             }
+        }
+        .screenCover(isPresented: $connecting) { SignInView().environmentObject(model) }
+        // New intervals take hold straight away rather than after the current wait.
+        .onChange(of: liveEvery) { _, _ in model.start() }
+        .onChange(of: fullEvery) { _, _ in model.start() }
+    }
+    var body: some View {
+        if pushed {
+            content
+                .holdsWhileMoving("settings")
+                .modifier(TabBarFade())
+                .background(groupedBackground.ignoresSafeArea())
+                .topEdge()
+                .pushedTitle()
+        } else {
+            NavigationStack {
+                // The same top edge as every other tab, rather than the system's band and hairline.
+                content
+                    .modifier(StatusBarFade())
+                    .topEdge()
+                    .navigationTitle("Settings")
+                    .toolbarVisibility(.hidden, for: .navigationBar)
             }
-            // The same top edge as every other tab, rather than the system's band and hairline.
-            .modifier(StatusBarFade())
-            .topEdge()
-            .navigationTitle("Settings")
-            .toolbarVisibility(.hidden, for: .navigationBar)
-            .screenCover(isPresented: $connecting) { SignInView().environmentObject(model) }
-            // New intervals take hold straight away rather than after the current wait.
-            .onChange(of: liveEvery) { _, _ in model.start() }
-            .onChange(of: fullEvery) { _, _ in model.start() }
         }
     }
 }

@@ -25,9 +25,16 @@ struct MacProApp: App {
                     if p == .background { AlertWatch.shared.scheduleRefresh(); WidgetCenter.shared.reloadAllTimelines() }
                     #endif
                 }
+                // A restart asked on the Mac's Console is followed here too.
+                .task { await MacMirror.loop(model) }
                 .onAppear {
                     model.start(); openScreenIfAsked(); AlertWatch.shared.askOnce(); TabTour.run([0, 1, 2, 4, 5, 9]) { model.tab = $0 }
                     if let id = AlertWatch.pending { openAlert(id) }
+                    // The build's shots of a link from the Console landing (-openLink macproapp://…), without the system's
+                    // "Open in Mac Pro?" question that simctl openurl leaves over every later shot.
+                    if let l = UserDefaults.standard.string(forKey: "openLink"), let u = URL(string: l) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { _ = MacDeepLink.open(u, model) }
+                    }
                     TransitionTour.run(model)
                     #if DEBUG && canImport(UIKit)
                     FrameLog.shared.start()
@@ -35,7 +42,8 @@ struct MacProApp: App {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: AlertWatch.openAlert)) { n in openAlert(n.object as? String ?? "") }
                 .onReceive(NotificationCenter.default.publisher(for: ScreenRequest.notification)) { _ in openScreenIfAsked() }
-                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.show(tab: t) } }
+                // macproapp://tab/<n>, and the places the Console names (MacHandoff.swift).
+                .onOpenURL { _ = MacDeepLink.open($0, model) }
         }
         #if os(iOS)
         // iOS decides when, and may not for hours. The banner on Status is always current.
@@ -143,6 +151,8 @@ struct TopEdge: ViewModifier {
 // reading redrew the page, and the whole page dropped 14 pt seconds after the turn, untouched (designer, resize regate).
 private struct StatusBarTopKey: EnvironmentKey { static let defaultValue: CGFloat = 59 }
 private struct CompactWindowKey: EnvironmentKey { static let defaultValue = false }
+private struct HandTitleKey: EnvironmentKey { static let defaultValue: AnyView? = nil }
+extension EnvironmentValues { var handTitle: AnyView? { get { self[HandTitleKey.self] } set { self[HandTitleKey.self] = newValue } } }
 extension EnvironmentValues { var compactWindow: Bool { get { self[CompactWindowKey.self] } set { self[CompactWindowKey.self] = newValue } } }
 extension EnvironmentValues { var statusBarTop: CGFloat { get { self[StatusBarTopKey.self] } set { self[StatusBarTopKey.self] = newValue } } }
 struct StatusBarTopReader: ViewModifier {
@@ -494,9 +504,9 @@ struct RootView: View {
                 // system's animated pop (the pushed page holding its layout as it slides, NavTransit). The tab was rebuilt
                 // here too, which swapped the page for the tab's top with no motion at all (Richard, 2026-11-10: "press the
                 // button again it jankily goes back no animation"). Only a tab already at its start is rebuilt at the top.
-                let open = (t == 0 && (model.history != nil || model.processes != nil)) || (t == 1 && model.appHistory != nil) || (t == 2 && model.sessionScreen != nil) || (t == 5 && model.macPage != nil)
+                let open = (t == 0 && (model.history != nil || model.processes != nil || model.nav.settingsOpen)) || (t == 1 && model.appHistory != nil) || (t == 2 && model.sessionScreen != nil) || (t == 5 && model.macPage != nil)
                 if open {
-                    if t == 0 { model.history = nil; model.processes = nil }
+                    if t == 0 { model.history = nil; model.processes = nil; model.nav.settingsOpen = false }
                     if t == 1 { model.appHistory = nil }
                     if t == 2 { model.sessionScreen = nil }
                     if t == 5 { model.macPage = nil }
@@ -515,8 +525,9 @@ struct RootView: View {
                 // "macOS", not "Updates": the Mac's own system updates, kept apart from his apps' updates in Apps (designer, 2026-11-07).
                 Tab(value: 4) { Screen(tab: 4, title: "macOS", listed: false) { UpgradeTab($0, side: $1) }.id(key(4)) } label: { tabLabel("macOS", "arrow.up.circle") }
                 Tab(value: 5) { Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5)) } label: { tabLabel("Control", "display") }
-                // Last, so it sits at the foot of the side bar.
-                Tab(value: 9) { MacSettings().id(resets[9, default: 0]) } label: { tabLabel("Settings", "gearshape") }
+                // The Mac's own screen, the Console, driven from here (Richard, 2026-11-13: "separate tab"). Settings went
+                // behind the gear on Status to keep the bar at six.
+                Tab(value: 6) { Screen(tab: 6, title: "Console") { ConsoleTab($0, side: $1) }.id(key(6)) } label: { tabLabel("Console", "macwindow") }
             }
             .tint(macBlue)
             .onChange(of: model.tab) { _, t in
@@ -531,7 +542,7 @@ struct RootView: View {
         .onChange(of: accent) { _, _ in MacPrefs.shareWithWidgets() }
         .onChange(of: celsius) { _, _ in MacPrefs.shareWithWidgets() }
         .onChange(of: model.address) { _, _ in MacPrefs.shareWithWidgets() }
-        .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) } }
+        .screenCover(isPresented: $model.screenOpen) { NavigationStack { RemoteScreenView(model: model) }.modifier(ReportsScreen(model: model)) }
         .screenCover(isPresented: $model.signInSheet) { SignInView().environmentObject(model) }
         // Up here, so unfolding doesn't close it and lose what's typed.
         .sheet(isPresented: $model.signingIn) {
@@ -588,13 +599,58 @@ struct PaneHeading: View {
     @Environment(\.statusBarTop) private var statusBarTop
     let title: String
     var shown = true
+    // false in a List row: the list's top margin gives the room (PaneHeading.roomAbove), since inside the row it pushed the
+    // title into the row's rounded corner and notched its first letter (CI d9c229c: the F of Fans, the M of Mac).
+    var roomAbove = true
+    // The Console page that shows the same thing, for "Show on Mac" beside the name.
+    var onMac: String? = nil
+    // Where a page's own structure leaves its title off the others' line (CI 9e5c096, measured): always, or only where
+    // the clock is on the side (folded and open flat).
+    var nudge: CGFloat = 0
+    var nudgeSide: CGFloat = 0
+    static func roomAbove(_ statusBarTop: CGFloat) -> CGFloat { statusBarTop < 20 ? 14 : 0 }
     var body: some View {
-        Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
+        HStack(alignment: .center) {
+            Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
+            Spacer(minLength: 8)
+            // Drawn unseen in the pane that carries the name unseen, so both title rows are as tall and both first cards level.
+            if let onMac { ShowOnMacButton(page: onMac).padding(.trailing, 4).allowsHitTesting(shown) }
+        }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, statusBarTop < 20 ? 14 : 0)
+            .padding(.top, (roomAbove ? Self.roomAbove(statusBarTop) : 0) + nudge + (statusBarTop < 20 ? nudgeSide : 0))
             .opacity(shown ? 1 : 0)
             .accessibilityHidden(!shown)
             .accessibilityAddTraits(.isHeader)
+    }
+}
+
+// A row's own separator, under its name (`inset` from the row's leading edge), on the cell's top edge. The system's ran
+// the card's full width under one row or another wherever it fell on the screen (CI d9c229c and 43030e3: under Chumby
+// proxy on Connections, under Chumby on Health, in every posture). The row takes the list's usual 20 pt sides and its
+// usual 11 pt ends itself (`ends`), so it sits where it did. The first row of a card has none.
+struct OwnSeparator: ViewModifier {
+    let first: Bool
+    var inset: CGFloat = 38
+    var ends: CGFloat = 11
+    func body(content: Content) -> some View {
+        content
+            .padding(.vertical, ends)
+            .overlay(alignment: .top) { if !first { Divider().padding(.leading, inset) } }
+    }
+}
+extension View {
+    // The list's side of OwnSeparator, on the row's outermost view (after .place): inside it, under .place's wrapper, the
+    // List never saw them, and drew its own line and ends as well as ours (CI 3609ee9: two lines between rows).
+    func ownSeparatorRow() -> some View {
+        listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+    }
+}
+
+// The chevron at the end of a row that opens a page, as the Control tab draws it: footnote, semibold, tertiary label grey,
+// never the row’s tint, so the tertiary grey is drawn as a colour (designer, CI d9c229c: blue chevrons on Actions and Updates beside grey ones on Control).
+struct RowChevron: View {
+    var body: some View {
+        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Color.primary.opacity(0.3))
     }
 }
 
@@ -694,7 +750,10 @@ struct Screen<Content: View>: View {
                 // title collapsed into the bar, and the rows ran on under it ("Open on the Mac (13)" printed behind
                 // "Apps", 2026-11-07). The TV app does the same.
                 // At the cards' edge and as far down as the system's large title sat, so nothing moved but its behaviour.
-                Section { paneTitle(side).padding(.top, statusBarTop < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
+                // The row's foot sits 14 pt below the title, out of the corner the list rounds off: the A of Apps lost its left foot to
+                // it (designer gate, 2026-11-14). The gap to the next block gives the 14 pt back.
+                Section { paneTitle(side).padding(.top, statusBarTop < 20 ? 14 : 0).place("pagetop") }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 14, trailing: 0)).listRowSeparator(.hidden)
+                    .listSectionSpacing(.custom(tab == 0 ? 14 : 3))
                 if side != .right, Notice.shows(model) { Section { Notice() } }
                 if let s = shown ?? model.status { content(s, side) }
                 else if side != .right, !Notice.shows(model) { Section { connecting } }
@@ -716,13 +775,20 @@ struct Screen<Content: View>: View {
                 model.usageShown = model.usageAsked
                 withAnimation(Motion.quick) { proxy.scrollTo("usage", anchor: .top) }
             }
+            // The This Mac card's readings (MacConsole.swift, ConsoleSummary), from the Control tab's list itself: hung off a
+            // card down the page, a List never drew it until scrolled to, so the card came in late and the shots scrolled
+            // to nothing (CI 43030e3).
+            .task(id: tab) { if tab == 5, side != .left { await ConsoleSummary.shared.loop(model) } }
             .task {
                 // The build's shots of Apps and Claude scrolled part way, the title gone up with the page: Apps to its open
                 // apps (his 2026-11-07 screenshot), Claude to the usage.
                 // And of a state that sits down the page: Force Quit's question hangs off Apps' open apps, the secret being
                 // typed is in Control's Passwords, Claude's service card is at the foot of its pane.
-                if let (t, to) = ["forcequit": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart")][model.pose], t == tab {
+                if let (t, to) = ["forcequit": (1, "open"), "controlbusy": (5, "typebox"), "claudecard": (2, "cc-restart"), "macpower": (5, "macctl"), "oldbridge": (5, "power")][model.pose], t == tab {
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    // The This Mac card is drawn only once its first reads land: waited for, or the scroll found nothing
+                    // and the open portrait and folded shots never showed it (CI d9c229c).
+                    if to == "macctl" { for _ in 0..<40 where ConsoleSummary.shared.links.value == nil { try? await Task.sleep(nanoseconds: 250_000_000) } }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     proxy.scrollTo(to, anchor: .top)
                     return
@@ -732,6 +798,13 @@ struct Screen<Content: View>: View {
                     for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     proxy.scrollTo(to, anchor: .top)
+                    return
+                }
+                // The build's shot of the heat heading over the dials (the bridge's verdict), the heading in view.
+                if model.pose == "heat", tab == 0, side != .right {
+                    for _ in 0..<60 where model.status == nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    proxy.scrollTo("temps", anchor: UnitPoint(x: 0.5, y: 0.35))
                     return
                 }
                 // The build's shot of Status scrolled down to the dials and the disk.
@@ -762,7 +835,23 @@ struct Screen<Content: View>: View {
     // so both start level. It's not the system's large title: that collapses as either pane scrolls, and scrolling one
     // slid the other up and down (Richard, 2026-11-06: "the elements on status shrink and expand like on the side").
     func paneTitle(_ side: Side) -> some View {
-        Text(title).font(.largeTitle.weight(.bold)).lineLimit(1)
+        HStack(alignment: .center) {
+            Text(title).font(.largeTitle.weight(.bold)).lineLimit(1)
+            Spacer(minLength: 8)
+            // The same page on the Mac's Console: Status is its overview, macOS its updates.
+            // (Unseen and untouchable in the right pane, which carries the row's height so both panes start level.)
+            if let page = [0: "overview", 4: "updates"][tab] { ShowOnMacButton(page: page).allowsHitTesting(side != .right) }
+            // Settings, beside Status's name, the way the App Store keeps its account by its title.
+            if tab == 0 {
+                Button { model.nav.settingsOpen = true } label: {
+                    Image(systemName: "gearshape").font(.title2).foregroundStyle(macBlue).frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Settings")
+                .padding(.trailing, 4)
+                .allowsHitTesting(side != .right)
+            }
+        }
             .frame(maxWidth: .infinity, alignment: .leading)
             .opacity(side == .right ? 0 : 1)
             .accessibilityHidden(side == .right)
@@ -772,7 +861,9 @@ struct Screen<Content: View>: View {
         VStack(spacing: 12) {
             // As high as the listed tabs' titles (the list's 4 pt margin, and 14 pt more where the clock is on the side):
             // macOS's sat 18 pt above Apps' folded, so the title jumped going from one tab to the next.
-            paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 4)
+            // One column: the title goes up with the page, inside its scroll view (HandTitle), as on the list tabs; pinned
+            // above it, the content was cut flat under it (designer gate, 2026-11-14).
+            if side != .all { paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 2).padding(.bottom, 2) }
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             }
@@ -780,6 +871,7 @@ struct Screen<Content: View>: View {
             else if side != .right { connecting.frame(maxHeight: .infinity) }
         }
         .modifier(PageLead(on: side != .right))
+        .environment(\.handTitle, side == .all ? AnyView(paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 2).padding(.bottom, 2)) : nil)
     }
     var body: some View {
         let _ = SwipeLog.mark("screen \(tab) body")
@@ -832,13 +924,25 @@ struct StackPages: ViewModifier {
     func body(content: Content) -> some View {
         content
             .navigationDestination(item: tab == 0 ? $nav.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
+            // Settings, behind the gear beside Status's name.
+            .navigationDestination(isPresented: tab == 0 ? $nav.settingsOpen : .constant(false)) { MacSettings(pushed: true) }
             // All processes, from Status itself; from a history, that page opens them over itself.
             .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
             .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
             .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
             .navigationDestination(item: tab == 5 ? $nav.macPage : Binding<MacPage?>.constant(nil)) { p in
-                if p == .health { MacHealthView(model: model) } else { MacRestartView(model: model) }
+                switch p {
+                case .health: MacHealthView(model: model)
+                case .restart: MacRestartView(model: model)
+                // The Mac as a control surface (MacConsole.swift).
+                case .links: LinksView(model: model)
+                case .fans: FansView(model: model)
+                case .updates: UpdatesView(model: model)
+                case .storage: StorageView(model: model)
+                case .startup: StartupView(model: model)
+                case .actions: MacActionsView(model: model)
+                }
             }
     }
 }
@@ -952,7 +1056,8 @@ struct TempDials: View {
                     // "iterate on the features u removed and make it even better").
                     Text(t.name).font(.caption2.weight(t.name == hottest && temps.count > 1 ? .semibold : .regular))
                         .foregroundStyle(t.name == hottest && temps.count > 1 ? AnyShapeStyle(Heat.color(t.c) == .white ? Color.primary : Heat.color(t.c)) : AnyShapeStyle(.secondary))
-                        .lineLimit(1).minimumScaleFactor(0.8)
+                        // Its own width, centred under the dial, never shrunk: every name at the one size.
+                        .lineLimit(1).fixedSize()
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { model.history = .temperature(t.name) }
@@ -973,10 +1078,13 @@ struct EvenGrid: Layout {
     // A dial is never wider than this, centred in its column: sized by the column, it grew and shrank with every change of
     // the page's width (a turn into open portrait laid the dials out at 311 pt, then 343 as the side bar's inset went to the
     // foot; designer, resize regate). Wide pages had over-large dials anyway; folded and in a pane they're narrower than this.
-    var largest: CGFloat = 96
+    // 2026-11-13: as large as build 276 drew them (it filled the width open upright, 138 pt); 96 left the card sparse.
+    var largest: CGFloat = 160
     // To whole steps of 8 pt: the page's width settles a few points at a time after a turn (the side bar's inset arriving),
     // and each step resized the dials and their row (CI 7169d6b: 220.5, 212.5, 212.0, 211.5 pt).
-    static func dial(_ cell: CGFloat, _ largest: CGFloat) -> CGFloat { min((cell / 8).rounded(.down) * 8, largest) }
+    // Steps of 2 pt now, not 8: to 8 the folded dials were 64 pt in a 71 pt column, smaller than build 276's and with
+    // "Power supply" shrunk to fit them (Richard, 2026-11-13: spacing on Temperatures "the biggest problem").
+    static func dial(_ cell: CGFloat, _ largest: CGFloat) -> CGFloat { min((cell / 2).rounded(.down) * 2, largest) }
     static func columns(_ n: Int, width: CGFloat) -> Int {
         let fit = max(Int((width + 12) / 76), 1)
         guard n > fit else { return max(n, 1) }
@@ -1021,20 +1129,16 @@ struct EvenGrid: Layout {
     }
 }
 
-// Over the dials: which sensor is hottest and how the Mac is doing for heat, in words (normal, warm, hot) from the same
-// thresholds the dials colour by. A tap on any dial opens its 24 hours, as the tiles do.
+// Over the dials: how the Mac is doing for heat (normal, warm, hot) and the sensor nearest its limit, in the bridge's words:
+// each sensor against its own limits, the rule Fans & temperatures, alerts and the Console use (2026-11-12: a flat 75 °C
+// here said "Warm" at a normal 83 °C CPU while everything else said Normal). The flat rule is kept only for an older bridge.
+// A tap on any dial opens its 24 hours, as the tiles do.
 struct TempsHeader: View {
     @EnvironmentObject var store: LiveStore
     let s: Status
-    var body: some View {
-        let temps = store.live?.temps ?? s.temps ?? []
-        let top = temps.max(by: { $0.c < $1.c })
-        let word = (top?.c ?? 0) >= 90 ? "Hot" : (top?.c ?? 0) >= 75 ? "Warm" : "Normal"
-        let summary = top.map { Text("\(word) · hottest \(appleCased($0.name)) \(Heat.shown($0.c))°").foregroundStyle($0.c >= 75 ? Heat.color($0.c) : .secondary).monospacedDigit() }
-        // Always on its own line under the heading, in one size: chosen by what fit, it sat beside the heading at one reading
-        // and under it at another, and the dials moved (designer, 2026-11-12).
-        VStack(alignment: .leading, spacing: 2) { Text("Temperatures"); summary.lineLimit(1).minimumScaleFactor(0.8).font(.subheadline) }
-    }
+    // Just the heading: the dials' own colour and tinted names say how hot it is, and a real problem is an alert. The
+    // "Warm · hottest CPU 185°" line under it restated them (Richard, 2026-11-13: "ugly and unnecessary").
+    var body: some View { Text("Temperatures") }
 }
 
 struct Hero: View {
@@ -1296,7 +1400,7 @@ struct StatusTab: View {
                     LabeledContent(p.name, value: String(format: "%.0f%% · %.1f%% mem", p.cpu, p.mem)).lineLimit(1).place("proc-\(i)")
                 }
                 Button { model.processes = .cpu } label: {
-                    HStack { Text("All processes").foregroundStyle(.primary); Spacer(); Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                    HStack { Text("All processes").foregroundStyle(.primary); Spacer(); RowChevron() }
                         .contentShape(Rectangle())
                 }
                 .place("procs-all")
@@ -1371,10 +1475,21 @@ struct AppsTab: View {
                             Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
                         }
                         Spacer(minLength: 8)
-                        if working == a.pid { ProgressView().frame(width: 60) }
-                        else {
+                        // The button stays mounted while the quit is in flight, so the questions hung off it can present.
+                        Group {
                             Button("Quit") { pending = a }
                                 .rowCapsule(prominent: false)
+                                .opacity(working == a.pid ? 0 : 1)
+                                .overlay { if working == a.pid { ProgressView() } }
+                                // One question from the row's Quit, hung off it; Force Quit is a second, only for an app that didn't go.
+                                .confirmationDialog("Quit \(a.name)?", isPresented: .init(get: { pending?.pid == a.pid }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
+                                    Button("Quit", role: .destructive) { Task { await quit(a, force: false) } }
+                                    Button("Cancel", role: .cancel) {}
+                                } message: { Text("It’s asked to close. Unsaved work may be lost.") }
+                                .confirmationDialog("\(a.name) didn’t quit. Force it?", isPresented: .init(get: { forcing?.pid == a.pid }, set: { if !$0 { forcing = nil } }), titleVisibility: .visible) {
+                                    Button("Force Quit", role: .destructive) { Task { await quit(a, force: true) } }
+                                    Button("Cancel", role: .cancel) {}
+                                } message: { Text("Unsaved work is lost.") }
                                 .disabled(working != nil)
                                 .accessibilityLabel("Quit \(a.name)")
                         }
@@ -1390,19 +1505,7 @@ struct AppsTab: View {
                 } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
                 .place("launch")
             }
-            // One question from the row's Quit; Force Quit is a second question, only for an app that didn't go.
-            .alert(pending.map { "Quit \($0.name)?" } ?? "", isPresented: .init(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
-                if let p = pending {
-                    Button("Quit", role: .destructive) { Task { await quit(p, force: false) } }
-                    Button("Cancel", role: .cancel) {}
-                }
-            } message: { Text("It’s asked to close. Unsaved work may be lost.") }
-            .alert(forcing.map { "\($0.name) didn’t quit. Force it?" } ?? "", isPresented: .init(get: { forcing != nil }, set: { if !$0 { forcing = nil } })) {
-                if let p = forcing {
-                    Button("Force Quit", role: .destructive) { Task { await quit(p, force: true) } }
-                    Button("Cancel", role: .cancel) {}
-                }
-            } message: { Text("Unsaved work is lost.") }
+
             .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
             // The build's shot of the second question, for an app that was asked to quit and stayed.
             .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } } }
@@ -1444,7 +1547,7 @@ struct ClaudeTab: View {
                     // Through the model, so the side bar's Back knows a page is open over the tab.
                     // A tap on the row, not a button around it, so its own Restart and Start keep their taps.
                     if row.canOpen {
-                        HStack(spacing: 8) { row; Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
+                        HStack(spacing: 8) { row; RowChevron() }
                             .contentShape(Rectangle())
                             .onTapGesture { model.open(session: x) }
                             .accessibilityAddTraits(.isButton)
@@ -1581,8 +1684,16 @@ struct LimitsSection: View {
             .redacted(reason: api == nil ? .placeholder : [])
         }
     }
-    var body: some View {
-        Section {
+    // Whether there is a note under the card at all: an empty footer still takes its 10 pt, which made this section's gap to
+    // the next 41 pt against 31 on every other (designer gate, 2026-11-14).
+    var hasFooter: Bool {
+        if let p = u.plan, Format.staleAge(ms: p.at) != nil { return true }
+        if model.apiSetup { return true }
+        if let a = api, a.configured, a.estimated { return true }
+        if let at = api?.at, api?.configured == true, Format.staleAge(ms: at) != nil { return true }
+        return false
+    }
+    @ViewBuilder var limitsRows: some View {
             HStack(alignment: .top, spacing: 8) {
                 if u.plan?.fiveHour != nil { planDial("5 hours", u.plan?.fiveHour, u.plan?.fiveHourResets) }
                 planDial("This week", u.plan?.sevenDay, u.plan?.sevenDayResets)
@@ -1601,7 +1712,8 @@ struct LimitsSection: View {
             // What went wrong reading the API, said under the dials, without the Mac's "Couldn't read API usage:" lead-in.
             if let a = api, let e = a.error, !APIUsageNotes.refused(e) { Text(APIUsageNotes.plain(e)).font(.footnote).foregroundStyle(.red).lineLimit(3) }
             if model.apiSetup { APIKeyRow().transition(.opacity) }
-        } header: { Text("Limits") } footer: {
+    }
+    @ViewBuilder var limitsFooter: some View {
             VStack(alignment: .leading, spacing: 6) {
                 // Its age only once it's old enough to doubt: "Updated 43m ago" under a live reading read as stale (2026-11-07).
                 if let p = u.plan, let age = Format.staleAge(ms: p.at) { Text("Plan last read \(age)") }
@@ -1613,8 +1725,15 @@ struct LimitsSection: View {
                         .buttonStyle(.plain).foregroundStyle(macBlue).multilineTextAlignment(.leading)
                 } else if let at = api?.at, api?.configured == true, let age = Format.staleAge(ms: at) { Text("API last read \(age)") }
             }
+    }
+    var body: some View {
+        if hasFooter {
+            Section { limitsRows } header: { Text("Limits") } footer: { limitsFooter }
+                .id("usage")
+        } else {
+            Section { limitsRows } header: { Text("Limits") }
+                .id("usage")
         }
-        .id("usage")
     }
 }
 enum APIUsageNotes {
@@ -1740,6 +1859,7 @@ struct UpgradeTab: View {
     @State private var agentPassword = ""
     @State private var confirmRun = false
     @State private var trailingInset: CGFloat = 0
+    @Environment(\.handTitle) private var handTitle
     let s: Status
     var side: Side = .all
     init(_ s: Status, side: Side = .all) { self.s = s; self.side = side }
@@ -1771,9 +1891,31 @@ struct UpgradeTab: View {
         guard let l = s.upgrade.log.split(separator: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return nil }
         var t = String(l)
         if t.hasPrefix("["), let close = t.firstIndex(of: "]") { t = String(t[t.index(after: close)...]).trimmingCharacters(in: .whitespaces) }
+        if let r = t.range(of: #"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d "#, options: .regularExpression) { t.removeSubrange(r) }
+        // In his words while it runs: "Checking softwareupdate catalogue, pass 160 of 160" was plumbing, cut mid-word
+        // (designer gate, 2026-11-13).
+        let low = t.lowercased()
+        if low.contains("softwareupdate") || low.contains("catalog") || low.hasPrefix("tick") { return "Checking for a newer macOS" }
+        if low.contains("kdk") || low.contains("kernel debug") { return "Getting what the patches need" }
+        if low.contains("oclp") || low.contains("opencore") { return "Checking OpenCore Legacy Patcher" }
+        if low.contains("root patch") || low.contains("patching") { return "Patching" }
+        if low.contains("download") { return "Downloading" }
+        if low.contains("install") { return "Installing" }
         return t.isEmpty ? nil : t
     }
     var oclp: String { s.upgrade.state["oclp_tag"] ?? s.oclp.version }
+    // A newer macOS the service found and is holding back until OCLP can patch it, from its last run's lines
+    // ("macOS Tahoe 26.7.3-25G342 is too new or has no KDK yet, holding").
+    var held: String? {
+        let lines = s.upgrade.log.components(separatedBy: "\n")
+        let lastRun = lines.lastIndex { $0.contains("tick:") } ?? 0
+        for l in lines[lastRun...] {
+            guard l.contains("holding"), let r = l.range(of: #"macOS \S+ ([0-9.]+)-(\w+)"#, options: .regularExpression) else { continue }
+            let parts = l[r].split(separator: " ").last?.split(separator: "-") ?? []
+            if parts.count == 2 { return "\(parts[0]) (\(parts[1]))" }
+        }
+        return nil
+    }
     // A seal for how it stands: done, working, or something to look at.
     var seal: (String, Color) {
         let t = s.upgrade.status.lowercased()
@@ -1792,7 +1934,7 @@ struct UpgradeTab: View {
     var patchedThis: Bool { patchedBuild == s.build }
     var patchedFor: String {
         if s.oclp.patchedFor.isEmpty { return "None yet" }
-        if patchedThis { return "macOS \(s.macos) (\(s.build))" }
+        if patchedThis { return "This macOS" }
         return patchedBuild.map { "Build \($0), not this one" } ?? s.oclp.patchedFor
     }
     var patched: String {
@@ -1803,11 +1945,14 @@ struct UpgradeTab: View {
     // lone line, which at the cards' 26 pt corner read as a capsule (designer, 2026-11-11).
     var summaryLine: String? {
         guard s.upgrade.installed else { return nil }
-        let checked = statusParts.at.map { "checked \($0.formatted(.relative(presentation: .named)))" }
+        // When, in the app's style: the update service checks once a day at 3:30 AM, so "23 hours ago" was true but
+        // read as broken (Richard, 2026-11-13); "Yesterday, 3:30 AM" says the same plainly.
+        let checked = statusParts.at.map { "checked " + Format.when($0).replacingOccurrences(of: "Today", with: "today").replacingOccurrences(of: "Yesterday", with: "yesterday") }
         if !logShown, !s.upgrade.log.isEmpty { return ["Up to date", checked].compactMap { $0 }.joined(separator: " · ") }
         // Running: the step it's on, from the log's newest line. Failed: which step, as the Mac names it after its word
         // ("FAILED: root patch" → "Root patch").
-        let step = checking ? lastStep : statusParts.step.map(sentenceCase)
+        // While it checks the heading says so; a second "Checking for a newer macOS" under it said it twice.
+        let step = checking ? lastStep.flatMap { $0.hasPrefix("Checking") ? nil : $0 } : statusParts.step.map(sentenceCase)
         let line = [step, checked].compactMap { $0 }.joined(separator: " · ")
         return line.isEmpty ? nil : line.prefix(1).uppercased() + line.dropFirst()
     }
@@ -1818,7 +1963,7 @@ struct UpgradeTab: View {
             Image(systemName: seal.0).font(.system(size: 30)).foregroundStyle(seal.1).symbolRenderingMode(.hierarchical).frame(width: 36)
             VStack(alignment: .leading, spacing: 2) {
                 Text(headline).font(.headline).lineLimit(2)
-                if let line = summaryLine { Text(line).font(.footnote).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
+                if let line = summaryLine { Text(line).font(.footnote).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
             }
             Spacer(minLength: 0)
         }
@@ -1850,9 +1995,17 @@ struct UpgradeTab: View {
     }
     // The facts behind the summary, as rows, and at their foot the one thing to do here: run the update check. It was a
     // round arrow on the summary, which read as a refresh against staleness (designer, 2026-11-11).
+    var factRows: [(String, String)] {
+        let patchedAt: String = s.oclp.patchedAt.isEmpty ? "Not yet" : (Format.stamp(s.oclp.patchedAt).map(Format.when) ?? s.oclp.patchedAt)
+        var rows: [(String, String)] = [("Running", "\(s.macos) (\(s.build))"), ("OpenCore Legacy Patcher", oclp), ("Root patches for", patchedFor), ("Patched", patchedAt)]
+        // "Newest macOS: 26.7.3 (25G342), waiting for patches" was cut with an ellipsis folded (CI f3a3118): the label says
+        // the waiting, the value only the version.
+        if let held { rows.append(("Waiting for patches", held)) }
+        return rows
+    }
     var facts: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array([("Running", "\(s.macos) (\(s.build))"), ("OCLP", oclp), ("Root patches for", patchedFor), ("Patched", s.oclp.patchedAt.isEmpty ? "Not yet" : s.oclp.patchedAt)].enumerated()), id: \.offset) { i, row in
+            ForEach(Array(factRows.enumerated()), id: \.offset) { i, row in
                 // The list cards' insets: text 20 pt in, separators stopping 20 pt short of the right edge.
                 if i > 0 { Divider().padding(.horizontal, 20) }
                 LabeledContent(row.0, value: row.1).padding(.horizontal, 20).padding(.vertical, 12)
@@ -1882,26 +2035,63 @@ struct UpgradeTab: View {
         !s.upgrade.log.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     var log: some View { VStack(alignment: .leading, spacing: 8) { header("Log"); UpdateLog(log: s.upgrade.log) } }
+    // Folded and upright the log gets the room left under the facts: its newest lines, whole, as many as fit, and a tap
+    // opens the whole log full screen (Richard, 2026-11-13: "log is too small when folded"; five lines, the last cut).
+    @State private var fullLog = false
+    @State private var pageHeight: CGFloat = 0
+    @State private var aboveHeight: CGFloat = 0
+    // What's left under Details (less the Log heading and the gaps), and at least twelve lines.
+    var logRoom: CGFloat { max(LogPreview.twelveLines, pageHeight - aboveHeight - 26 - 44 - 12) }
+    var logPreview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                header("Log")
+                Spacer()
+                Button("Show all") { fullLog = true }.font(.body).foregroundStyle(macBlue).padding(.trailing, 20)
+            }
+            Button { fullLog = true } label: { LogPreview(log: s.upgrade.log, room: logRoom) }
+                .buttonStyle(PressStyle())
+                .accessibilityLabel("Log, newest lines").accessibilityHint("Opens the whole log")
+        }
+        .screenCover(isPresented: $fullLog) { FullLog(log: s.upgrade.log).environmentObject(model) }
+        .task { if model.pose == "fulllog" { try? await Task.sleep(nanoseconds: 1_200_000_000); fullLog = true } }
+    }
     // The Apps tab's section headings ("Updates", "On this iPhone"): bold, secondary, under the title rather than as loud
     // as it, in line with the text in the cards below. "Log" was white and semibold at the cards' very edge.
-    func header(_ t: String) -> some View { Text(t).font(.title3.weight(.bold)).foregroundStyle(.secondary).padding(.leading, 20) }
+    // The list tabs' own section heading: the system's size, 12 pt lower so its cap-top sits where theirs does under the title
+    // (designer gate, 2026-11-14: a size larger and 11 pt higher than every other tab's).
+    func header(_ t: String) -> some View { Text(t).font(.headline).foregroundStyle(.secondary).padding(.leading, 20).padding(.top, 12).padding(.bottom, 3) }
     // The same edges as the system's list cards on every other tab: 20 pt in from the leading side, out to the trailing
     // edge of the space, and in the right pane open, from its leading edge.
     var body: some View {
         switch side {
         case .all:
-            // Only the log's lines scroll; the summary and the rows stay put above them.
-            VStack(alignment: .leading, spacing: 12) {
-                // "This Mac" over the status card in every posture, as open flat (designer, 2026-11-11).
-                VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
-                agent
-                VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
-                if logShown { log }
+            // Sections 26 pt apart, the other pages' heading rhythm (designer gate, 2026-11-13: 19 pt here against 34 pt on
+            // Console, Connections and Storage, card foot to next heading).
+            // The log takes the room left under Details, and never less than twelve lines: folded that is more than the
+            // screen has, so the page scrolls to it (Richard, 2026-11-13: "log is too small when folded"; CI 35659b7 had
+            // room for one entry).
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let t = handTitle { t }
+                        VStack(alignment: .leading, spacing: 26) {
+                            // "This Mac" over the status card in every posture, as open flat (designer, 2026-11-11).
+                            VStack(alignment: .leading, spacing: 8) { header("This Mac"); summary }
+                            agent
+                            VStack(alignment: .leading, spacing: 8) { header("Details"); facts }
+                        }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { aboveHeight = $0 }
+                    if logShown { logPreview }
+                }
+                // With the side bar beside the page, the cards end at its edge, as the list cards do. Open in portrait the
+                // tabs are along the foot and nothing is there: the cards ran into the display's edge and lost their corners.
+                .padding(.trailing, trailingInset > 20 ? 0 : 20).padding(.bottom, 12)
             }
-            // With the side bar beside the page, the cards end at its edge, as the list cards do. Open in portrait the tabs
-            // are along the foot and nothing is there: the cards ran into the display's edge and lost their right corners.
-            .padding(.trailing, trailingInset > 20 ? 0 : 20).padding(.bottom, 12)
-            .frame(maxHeight: .infinity, alignment: .top)
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollEdgeEffectHidden(true, for: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { trailingInset = $0 }
         case .left:
             // A header of its own, like the details' beside it, so both panes' first cards start on one line.
@@ -1918,7 +2108,13 @@ struct UpgradeTab: View {
             // right pane was empty (designer, 2026-11-11: option 2, nothing across the fold).
             // The log beside them, the pane's full height, as in build 276.
             VStack(alignment: .leading, spacing: 12) {
-                if logShown { log } else { VStack(alignment: .leading, spacing: 8) { header("Details"); facts } }
+                if logShown { log } else {
+                    // The same frame as the left pane's scroll view, so both first cards start on one line.
+                    VStack(alignment: .leading, spacing: 8) {
+                        header("Details")
+                        ScrollView { facts }.scrollBounceBehavior(.basedOnSize).scrollEdgeEffectHidden(true, for: .top)
+                    }
+                }
             }
             .padding(.bottom, 12)
             .frame(maxHeight: .infinity, alignment: .top)
@@ -1930,9 +2126,12 @@ struct UpgradeTab: View {
 struct UpdateLog: View {
     @EnvironmentObject var model: AppModel
     let log: String
+    // Full screen: the card takes the whole height, however short the log.
+    var fills = false
     // How tall the lines are, so a short log gets a card its own size rather than an empty slab with one line at its foot.
     @State private var contentHeight: CGFloat?
     @State private var scrolledDown = false
+    @State private var atEnd = true
     static let bad = try? NSRegularExpression(pattern: #"\b(error|errors|failed|failure|fatal|cannot|couldn[’']t|panic)\b|✗"#, options: .caseInsensitive)
     static let good = try? NSRegularExpression(pattern: #"\b(finished|complete|completed|succeeded|success|healthy|installed|nothing to do|up to date)\b|✓"#, options: .caseInsensitive)
     static func matches(_ r: NSRegularExpression?, _ s: String) -> Bool { r?.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil }
@@ -1945,7 +2144,9 @@ struct UpdateLog: View {
         let lines = log.isEmpty ? ["No log yet"] : log.components(separatedBy: "\n")
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
+                // Not lazy: a lazy stack estimates the height of lines it hasn't laid out, so the scroll stopped short of the
+                // true end and the last line sat half under the card's foot (designer gate, 2026-11-14).
+                VStack(alignment: .leading, spacing: 3) {
                     ForEach(lines.indices, id: \.self) { i in
                         Text(lines[i].isEmpty ? " " : lines[i])
                             .font(.system(.footnote, design: .monospaced))
@@ -1958,6 +2159,7 @@ struct UpdateLog: View {
                 .padding(.horizontal, 20)
                 .textSelection(.enabled)
             }
+            .contentMargins(.bottom, 2, for: .scrollContent)
             // A line scrolled up fades out a full line deep, and only once the log is scrolled off its top, so a short
             // log's first line is untouched. The scroll view stops 14 pt inside the card's top and foot, so the fade has
             // reached nothing before any glyph meets the edge it's cut at.
@@ -1965,14 +2167,16 @@ struct UpdateLog: View {
                 VStack(spacing: 0) {
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: scrolledDown ? 30 : 0)
                     Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: atEnd ? 0 : 30)
                 }
             }
             .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y > 2 } action: { _, v in scrolledDown = v }
+            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.containerSize.height >= $0.contentSize.height - 2 } action: { _, v in atEnd = v }
             .defaultScrollAnchor(.bottom)
             .scrollEdgeEffectHidden(true, for: .top)
             .scrollBounceBehavior(.basedOnSize)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, h in contentHeight = h }
-            .frame(maxHeight: contentHeight ?? CGFloat(lines.count) * 21)
+            .frame(maxHeight: fills ? .infinity : contentHeight ?? CGFloat(lines.count) * 21)
             .padding(.vertical, 14)
             .background(Color(white: 0.06), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
@@ -1982,6 +2186,89 @@ struct UpdateLog: View {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 proxy.scrollTo(lines.count / 2, anchor: .center)
             }
+        }
+    }
+}
+// The newest lines that fit a height, each whole: the height of every line is asked of the laid-out text at the width it
+// has, so the card is as tall as the lines it shows, never a character-count guess (designer gate, 2026-11-14).
+struct NewestLines: Layout {
+    let room: CGFloat
+    let gap: CGFloat
+    private func heights(_ subviews: Subviews, _ width: CGFloat) -> [CGFloat] {
+        subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }
+    }
+    // How many of the newest lines fit, and the height they take.
+    private func fit(_ h: [CGFloat]) -> (n: Int, height: CGFloat) {
+        var used: CGFloat = 0, n = 0
+        for x in h.reversed() {
+            let add = x + (n > 0 ? gap : 0)
+            if used + add > room, n > 0 { break }
+            used += add; n += 1
+        }
+        return (n, used)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let w = proposal.width ?? 320
+        return CGSize(width: w, height: fit(heights(subviews, w)).height)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let h = heights(subviews, bounds.width)
+        let first = subviews.count - fit(h).n
+        var y = bounds.minY
+        for (i, v) in subviews.enumerated() {
+            if i < first { v.place(at: CGPoint(x: bounds.minX, y: bounds.minY - 5000), anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: h[i])); continue }
+            v.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: h[i]))
+            y += h[i] + gap
+        }
+    }
+}
+// The log's newest lines in the room it's given, each whole, wrapped, never a line cut through its glyphs.
+struct LogPreview: View {
+    let log: String
+    // The height it may take, measured by the page around it.
+    let room: CGFloat
+    #if canImport(UIKit)
+    static let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
+    static let lineHeight = ceil(font.lineHeight)
+    #else
+    static let lineHeight: CGFloat = 16
+    #endif
+    static let gap: CGFloat = 3
+    static var twelveLines: CGFloat { 12 * lineHeight + 11 * gap + 28 }
+    // Without the year and the seconds, so more of each line fits: "11-12 03:30 tick: macOS 26.7.2".
+    static func short(_ l: String) -> String {
+        guard l.count > 20, l.range(of: #"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d"#, options: .regularExpression) != nil else { return l }
+        return String(l.dropFirst(5).prefix(11)) + String(l.dropFirst(19))
+    }
+    var body: some View {
+        // The last forty lines are plenty to choose from; the layout keeps the newest that fit.
+        let all = Array(log.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(Self.short).suffix(40))
+        NewestLines(room: max(Self.lineHeight, room - 28), gap: Self.gap) {
+            ForEach(all.indices, id: \.self) { i in
+                Text(all[i]).font(.system(.footnote, design: .monospaced)).foregroundStyle(UpdateLog.tone(all[i]))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(Color(white: 0.06), in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+    }
+}
+// The whole log, full screen, wrapped, from its newest end.
+struct FullLog: View {
+    @Environment(\.dismiss) private var dismiss
+    let log: String
+    var body: some View {
+        NavigationStack {
+            UpdateLog(log: log, fills: true)
+                .padding(.horizontal, 20).padding(.bottom, 8)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(groupedBackground.ignoresSafeArea())
+                .navigationTitle("Log")
+                .toolbarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
 }
@@ -2184,8 +2471,11 @@ struct ControlTab: View {
             } header: { Text("Remote access") } footer: {
                 if !s.publicUrl.isEmpty { Text("The public link changes whenever the Mac restarts.") }
             }
+            // Connections, fans and temperatures, updates, storage and startup items, each its own page (2026-11-13).
+            MacConsoleSections()
             // Health and Restart the Mac, last and apart from the everyday buttons, each its own page.
             MacPowerSections()
+                .onReceive(model.nav.$macPage.dropFirst()) { p in if p == nil { Task { await ConsoleSummary.shared.readAll(model.api) } } }
         }
     }
 }
@@ -2305,7 +2595,17 @@ final class HealthSummary: ObservableObject {
     // Asked, and the Mac had no answer to give.
     @Published private(set) var cantSay = false
     private var asked = Date.distantPast
-    func set(_ r: MacReport?) { let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n }; if r != nil, cantSay { cantSay = false } }
+    // The programs the Mac says aren't responding ("1 program stuck: Safari; a restart clears it"), by name, for the
+    // restart question to offer closing them first.
+    @Published private(set) var stuck: [String] = []
+    func set(_ r: MacReport?) {
+        let n = r.map { $0.parts.filter(\.bad).count }; if n != bad { bad = n }; if r != nil, cantSay { cantSay = false }
+        var names: [String] = []
+        if let p = r?.parts.first(where: { $0.part == "stuck" && $0.bad }), let c = p.say.components(separatedBy: ";").first?.range(of: ": ") {
+            names = String(p.say.components(separatedBy: ";").first![c.upperBound...]).components(separatedBy: ", ").filter { !$0.isEmpty }
+        }
+        if names != stuck { stuck = names }
+    }
     // For Status, from a Mac whose status doesn't carry the count: asked once a minute at most.
     func refresh(_ api: API) {
         guard Date().timeIntervalSince(asked) > 60 else { return }
