@@ -161,7 +161,8 @@ struct RootView: View {
                 try? await Task.sleep(nanoseconds: 800_000_000)
                 SendDraft.shared.text = "Heat"
                 for _ in 0..<80 {
-                    if let r = SendDraft.shared.firstResult { try? await Task.sleep(nanoseconds: 1_200_000_000); FlickCardButton.tap(model, r.item, r.source); return }
+                    let st = SearchStore.shared
+                    if let h = st.results.top ?? st.results.groups.first?.hits.first { try? await Task.sleep(nanoseconds: 1_200_000_000); st.open(h, model: model, origin: nil); return }
                     try? await Task.sleep(nanoseconds: 100_000_000)
                 }
             }

@@ -420,12 +420,20 @@ final class SearchStore: ObservableObject {
     }
     // He's done something on the page (tapped, scrolled, sent): the keyboard is never brought back for him after that.
     var touched = false
+    // Bumped whenever a pick puts the keyboard away: the field clears its own focus on it, so SwiftUI's focus state never
+    // outlives the resign and hands the keyboard back over the page the pick pushed.
+    @Published var putAway = 0
+    @MainActor func putKeyboardAway() {
+        touched = true
+        SendDraft.shared.wantsFocus = false
+        putAway += 1
+        Keyboard.dismiss()
+    }
     func open(_ h: SearchHit, model: TVModel, origin: CGRect?) {
         touched = true
         // No keyboard asked for any more, by anything: it rose over the Remote open upright (the review of 2f4e35b).
-        SendDraft.shared.wantsFocus = false
         // Whatever was picked, the keyboard goes with the pick: it stayed up over the streams page (gate of 0472bce).
-        Keyboard.dismiss()
+        putKeyboardAway()
         remember()
         if h.kind == .app {
             // On the TV now: nothing left behind here, and the Remote to drive it, as every other "on the TV" does.
@@ -561,10 +569,14 @@ struct SearchPage: View {
         .onScrollPhaseChange { _, p in if p == .interacting { store.touched = true } }
         // Another tab: the field lets the keyboard go, so it never rises over the page he went to.
         .onChange(of: model.tab) { _, t in if t != 6, focused { focused = false } }
+        // A pick (a tap on a result, Return on the field): focus cleared on the field itself, then the responder resigned.
+        .onChange(of: store.putAway) { _, _ in focused = false; Keyboard.dismiss() }
+        // A page pushed over the field (the streams page) never gets the keyboard back from it.
+        .onChange(of: model.flicking != nil) { _, up in if up { focused = false; SendDraft.shared.wantsFocus = false; Keyboard.dismiss() } }
         // Continue watching there on the first frame, not cut in under the page later.
         .task { await BrowseStore.shared(.stremio).loadHome() }
         // The tab opened straight (at launch, or before anything asked for the keyboard): the field takes it.
-        .onAppear { if !draft.wantsFocus { draft.wantsFocus = true; draft.focusRequest += 1 } }
+        .onAppear { if !draft.wantsFocus, model.flicking == nil { draft.wantsFocus = true; draft.focusRequest += 1 } }
     }
     var link: Bool { SendBar.isLink(draft.text) }
     var field: some View {
@@ -597,7 +609,7 @@ struct SearchPage: View {
                 // (tv-search-ci 829e7c4: focus on, then off, in every open-upright pose), so it's held for the first
                 // three seconds, and given back if it goes.
                 .task(id: draft.focusRequest) {
-                    guard draft.wantsFocus else { return }
+                    guard draft.wantsFocus, model.flicking == nil else { return }
                     store.touched = false
                     focused = true
                     var held = 0
@@ -607,7 +619,7 @@ struct SearchPage: View {
                         // field is rebuilt): the request stays for the field that replaces it, which carries on with it.
                         if Task.isCancelled { return }
                         // Never once he's tapped, scrolled or sent something, and never while a flick is up.
-                        if store.touched || model.flicking != nil || model.tab != 6 { break }
+                        if store.touched || model.flicking != nil || model.tab != 6 { focused = false; break }
                         if !focused { focused = true; held = 0 } else { held += 1 }
                         if held >= 6 { break }
                     }

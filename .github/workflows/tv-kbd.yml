@@ -1,0 +1,69 @@
+name: TV search keyboard proof
+# Branch-only proof (tv-search-keyboard), deleted in the final commit: the realsearch pose, folded and open flat.
+on:
+  push:
+    branches: [tv-search-keyboard]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tv-kbd
+  cancel-in-progress: true
+jobs:
+  kbd:
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 25
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          node ci/mock-chumby.js &
+          sleep 2
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          real() {
+            curl -s http://127.0.0.1:9002/real/reset > /dev/null
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address http://127.0.0.1:9002/real -tab 3 -pose realsearch
+            sleep 18
+            xcrun simctl io "$DEVICE" screenshot --display=$1 dist/tv-realsearch-end$2.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          # A simulator's first keyboard is slow: one warm run first, folded, then the kept one.
+          real 1 -warm
+          real 1 ""
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          real 3 -portrait
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../kbd.zip . -i '*.png' '*.log' || zip -q ../kbd.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-search-keyboard >/dev/null 2>&1 || gh release create tv-search-keyboard --prerelease --title "TV search keyboard proof" --notes "Branch proof."
+          for f in kbd.zip status.txt; do
+            for i in 1 2 3; do gh release upload tv-search-keyboard "$f" --clobber && break; sleep 15; done
+          done
