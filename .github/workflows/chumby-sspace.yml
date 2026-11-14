@@ -165,9 +165,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.ips' '*.mp4' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr ../shots.zip . -i '*.png' '*.log' '*.ips' || zip -q ../shots.zip /dev/null)
+          # Films go up one by one: together they passed a release asset's 2 GB limit (11-13 run).
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view chumby-sspace-shots >/dev/null 2>&1 || gh release create chumby-sspace-shots --target chumby-sounds-spacing --prerelease --title "Chumby sounds spacing (branch)" --notes "Branch-only shots."
-          for f in shots.zip status.txt; do
+          for f in dist/*.mp4 shots.zip status.txt; do
             for i in 1 2 3 4; do gh release upload chumby-sspace-shots "$f" --clobber && break; echo "upload of $f failed, try $i"; sleep 20; done
           done
