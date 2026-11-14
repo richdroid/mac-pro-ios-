@@ -866,8 +866,21 @@ struct EpisodesLine: View {
                     }
                     HStack(spacing: 10) {
                         Image(systemName: "list.bullet.rectangle.portrait").foregroundStyle(TVLook.accent)
-                        Text(line).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text(line).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
                         Spacer(minLength: 8)
+                        Image(systemName: "chevron.up").font(.caption.weight(.bold)).foregroundStyle(TVLook.accent)
+                    }
+                    // Narrower still (folded, and folded sideways): "S1 E3" as a caption over the episode's whole name,
+                    // never "Episode T…" (the Remote's gate 3, 2026-11-11).
+                    HStack(spacing: 10) {
+                        Image(systemName: "list.bullet.rectangle.portrait").foregroundStyle(TVLook.accent)
+                        let parts = line.components(separatedBy: " · ")
+                        VStack(alignment: .leading, spacing: 0) {
+                            if parts.count > 1 { Text(parts[0]).font(.caption2.weight(.semibold)).foregroundStyle(.secondary) }
+                            Text(parts.count > 1 ? parts.dropFirst().joined(separator: " · ") : line)
+                                .font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                        }
+                        Spacer(minLength: 4)
                         Image(systemName: "chevron.up").font(.caption.weight(.bold)).foregroundStyle(TVLook.accent)
                     }
                     .accessibilityLabel("Episodes, \(line)")

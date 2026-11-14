@@ -666,7 +666,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage|fslowlist|freal)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|rcycle|ridle|repisode|rfilm|rjoin|rstall|rnoruntime|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage|fslowlist|freal)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; tvReal.long = false; return tvReal(q, s, path, query, json); }
@@ -739,31 +739,34 @@ function tvPose(q, s) {
     q.on('close', () => { clearTimeout(wait); clearInterval(timer); });
     return true;
   }
-  if (/^r(tvoff|tvawayfilm|tvaway|cecoff|asleep|offline|youtube|youtubebare|mint|mintplain|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
+  // /rcycle: what's on changes every 8 s, as it does on his TV (a show, a film, nothing, Mint, then an episode whose
+  // length isn't known), so the Remote is filmed for anything that moves or resizes as a state comes and goes.
+  const sc = scene === 'rcycle' ? ['repisode', 'rfilm', 'ridle', 'rmint', 'rnoruntime'][Math.floor(Date.now() / 8000) % 5] : scene;
+  if (/^r(tvoff|tvawayfilm|tvaway|cecoff|asleep|offline|youtube|youtubebare|mint|idle|episode|film|join|stall|noruntime)$/.test(sc || '') && path === '/api/tv/status') {
     const v = JSON.parse(tvStatus), now = Date.now();
-    // Which scene's status the app really asked for, so a shot showing the sample's song can be told apart from one that
-    // never reached its scene (review of dfd490e: ryoutubebare showed Mint's Sample Song).
-    try { fs.appendFileSync('/tmp/tv-scene-status.log', scene + '\n'); } catch {}
-    if (scene === 'rasleep') { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
-    if (scene === 'roffline') { v.online = false; delete v.session; }
+    // Which sc's status the app really asked for, so a shot showing the sample's song can be told apart from one that
+    // never reached its sc (review of dfd490e: ryoutubebare showed Mint's Sample Song).
+    try { fs.appendFileSync('/tmp/tv-sc-status.log', sc + '\n'); } catch {}
+    if (sc === 'rasleep') { v.screen = 'asleep'; v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
+    if (sc === 'roffline') { v.online = false; delete v.session; }
     // The television behind the box, over HDMI-CEC: turned off with its own remote while the box is awake; on another
     // device that names itself; and CEC off on the box (only Status says so).
-    if (scene === 'rtvoff') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'off', input: 'box', brand: 'Sony' }; }
-    if (scene === 'rtvaway') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'on', input: 'other', source: 'PlayStation 5', brand: 'Sony', keys: true, others: ['PlayStation 5'] }; }
+    if (sc === 'rtvoff') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'off', input: 'box', brand: 'Sony' }; }
+    if (sc === 'rtvaway') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'on', input: 'other', source: 'PlayStation 5', brand: 'Sony', keys: true, others: ['PlayStation 5'] }; }
     // His real case: a film left paused for the PlayStation. The bar and keys stay under the dark picture; play brings the TV back.
-    if (scene === 'rtvawayfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: false, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; v.cec = { enabled: true, tv: 'on', input: 'other', source: 'PlayStation 5', brand: 'Sony' }; }
-    if (scene === 'rcecoff') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: false }; }
+    if (sc === 'rtvawayfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: false, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; v.cec = { enabled: true, tv: 'on', input: 'other', source: 'PlayStation 5', brand: 'Sony' }; }
+    if (sc === 'rcecoff') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: false }; }
     // A video the Mac hasn't found yet: no still, no length, only where it's got to (the yt-dlp search can take half a
     // minute or miss; r35: the Playing tab showed an empty box).
-    if (scene === 'ryoutubebare') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Lil B - Gotham City [ Music Video ] [ Official ]', 'Lil B'], position: 83000, sampledAt: now, canSeek: false }; }
-    if (scene === 'ryoutube') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Sample Video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 610000, canSeek: false, art: tvBase + '/api/tv/shot' }; }
+    if (sc === 'ryoutubebare') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Lil B - Gotham City [ Music Video ] [ Official ]', 'Lil B'], position: 83000, sampledAt: now, canSeek: false }; }
+    if (sc === 'ryoutube') { v.app = 'com.google.android.youtube.tv'; delete v.music; v.session = { pkg: 'com.google.android.youtube.tv', playing: true, description: ['Sample Video', 'Sample Channel'], position: 95000, sampledAt: now, duration: 610000, canSeek: false, art: tvBase + '/api/tv/shot' }; }
     // The song mid-play as the shot is taken: the sample's own reading is stamped when the mock started, so by the shot
     // the song had run out (3:00 / -0:00, gate dd1a).
-    if (scene === 'rmint' || scene === 'rmintplain') { v.app = 'com.codex.musicwebtv'; delete v.session; v.music.sampledAt = now; }
-    if (scene === 'ridle') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
-    if (scene === 'rjoin' || scene === 'rstall') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
-    if (scene === 'rfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; }
-    if (scene === 'repisode') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Sample Series', 'S1E2 Episode Two'], position: 1260000, sampledAt: now, duration: 3480000, canSeek: true }; }
+    if (sc === 'rmint' || sc === 'rmintplain') { v.app = 'com.codex.musicwebtv'; delete v.session; v.music.sampledAt = now; }
+    if (sc === 'ridle') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
+    if (sc === 'rjoin' || sc === 'rstall') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; }
+    if (sc === 'rfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; }
+    if (sc === 'repisode') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: true, description: ['Sample Series', 'S1E2 Episode Two'], position: 1260000, sampledAt: now, duration: 3480000, canSeek: true }; }
     return json(v);
   }
   // /live: the readings change under his finger, as the real box's do: every two seconds the last three apps come and go

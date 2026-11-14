@@ -107,14 +107,67 @@ jobs:
             xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
             xcrun simctl terminate "$DEVICE" local.macpro.TV || true
           }
+          if has remote; then
+            # The Remote in every posture and state: folded (the cover display, the rail on the right), open upright,
+            # open flat, then folded and turned. One column: the keys' edges are the picture's, nothing under the rail.
+            remotes() { for S in repisode rfilm ridle rmint ryoutube roffline; do shot remote-$S$2 $1 8 $M/$S -tab 0; done; shot remote-type$2 $1 9 $M/repisode -tab 0 -pose type; }
+            remotes 1 ""
+            # In motion: the Remote left on a TV whose state changes every 8 s (a show, a film, nothing, Mint, an episode
+            # with no length), so nothing may move or resize as a state comes and goes. Folded, then open upright.
+            remotefilm() {
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$2 --force dist/tv-$1.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/rcycle -tab 0
+              sleep 48
+              kill -INT $REC; wait $REC
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            }
+            remotefilm remote-cycle 1
+            # Typing in and out every 5 s ("-typeCycle YES"), on a show: nothing may jump as the keyboard comes and goes.
+            typefilm() {
+              xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$2 --force dist/tv-$1.mp4 > /dev/null 2>&1 & REC=$!
+              sleep 3
+              xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/repisode -tab 0 -typeCycle YES
+              sleep 30
+              kill -INT $REC; wait $REC
+              xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            }
+            typefilm remote-typing 1
+            $D "$DEVICE" rotate 3 || true; sleep 4
+            shot remote-repisode-fland 1 8 $M/repisode -tab 0
+            $D "$DEVICE" rotate 1 || true; sleep 4
+            $D "$DEVICE" pose open; sleep 5
+            $D "$DEVICE" rotate 1; sleep 5
+            OPENED=1
+            remotes 3 -portrait
+            remotefilm remote-cycle-portrait 3
+            typefilm remote-typing-portrait 3
+            $D "$DEVICE" rotate 3 || true; sleep 5
+            remotes 3 -open
+            typefilm remote-typing-open 3
+            $D "$DEVICE" rotate 1 || true; sleep 5
+            # The fold closing and opening while typing: both displays filmed, the keyboard up from launch.
+            # (A display can only be filmed while it's lit: the main one throughout, the cover one while folded.)
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=3 --force dist/tv-remote-typing-fold-open.mp4 > /dev/null 2>&1 & REC3=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/repisode -tab 0 -pose type
+            sleep 10
+            $D "$DEVICE" pose closed || true; sleep 2
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=1 --force dist/tv-remote-typing-fold-cover.mp4 > /dev/null 2>&1 & REC1=$!
+            sleep 10
+            kill -INT $REC1; wait $REC1
+            $D "$DEVICE" pose open || true; sleep 5
+            $D "$DEVICE" rotate 1 || true; sleep 8
+            kill -INT $REC3; wait $REC3
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          fi
           if has pages; then
             # The searches, folded and then open upright: the Apps page's (films, shows and music found together) and
             # Watch's own with one film found. A simulator's first keyboard is slow, so the first search shot is retaken.
             shot search 1 12 $M -tab 1 -pose search
             shot search 1 12 $M -tab 1 -pose search
             shot watchsearch 1 10 $M -tab 3 -pose watchsearch
-            $D "$DEVICE" pose open; sleep 5
-            $D "$DEVICE" rotate 1; sleep 5
+            [ -z "$OPENED" ] && { $D "$DEVICE" pose open; sleep 5; $D "$DEVICE" rotate 1; sleep 5; }
             OPENED=1
             shot search-portrait 3 12 $M -tab 1 -pose search
             shot search-portrait 3 12 $M -tab 1 -pose search
