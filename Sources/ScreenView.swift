@@ -857,7 +857,14 @@ struct RemoteScreenView: View {
         return CGSize(width: max(-overW, min(overW, p.width)), height: max(-overH, min(overH, p.height)))
     }
     // Measured only for the build's shot: how many pictures reach the display, and how many the Mac sent, each second.
-    var measuring: Bool { model.pose == "screenfps" || UserDefaults.standard.bool(forKey: "showFPS") }
+    // The frame-rate badge is for the build's shots and debug builds only: its words are plumbing (2026-11-13).
+    var measuring: Bool {
+        #if DEBUG
+        return model.pose == "screenfps" || UserDefaults.standard.bool(forKey: "showFPS")
+        #else
+        return model.pose == "screenfps"
+        #endif
+    }
     var showHint: Bool { model.pose == "screenhint" || (model.pose.isEmpty && !gesturesSeen) }
 
     // `always`: the pointer stays in view, as on a laptop, where there's a trackpad. Touched directly, it shows for a
@@ -1342,7 +1349,7 @@ struct RemoteScreenView: View {
             }
         case .reconnecting where screen.slowReconnect:
             VStack {
-                Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath").font(.footnote.weight(.medium)).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 6).background(.black.opacity(0.65), in: Capsule()).padding(.top, 10)
+                Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath").font(.footnote.weight(.medium)).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 6).glassEffect(.regular, in: Capsule()).padding(.top, 10)
                 Spacer()
             }
             .allowsHitTesting(false)
