@@ -76,7 +76,7 @@ struct ProcessesView: View {
             // Under the name, as on a session and a history, and carried unseen in the right pane so both stay level.
             Section {
                 VStack(alignment: .leading, spacing: 6) {
-                    PaneHeading(title: "Processes", shown: !panes || by == .cpu)
+                    PaneHeading(title: "Processes", shown: !panes || by == .cpu, onMac: "processes")
                     if stale { StaleLine(lastRead: lastRead).opacity(!panes || by == .cpu ? 1 : 0).accessibilityHidden(panes && by != .cpu) }
                 }
             }

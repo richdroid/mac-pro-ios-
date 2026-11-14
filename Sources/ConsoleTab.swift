@@ -267,3 +267,82 @@ struct ConsoleTab: View {
         .task(id: side) { if side != .right { await remote.loop(model) } }
     }
 }
+
+// MARK: - The Mac and the app, linked (Richard, 2026-11-13: "make sure dashboard and app are inextricably linked")
+
+// Restart Safely, Bring Everything Up or Send to Mac under way or just over, whichever side started it.
+struct MacAction: Decodable, Equatable {
+    let id: String; let kind: String; let by: String; let state: String
+    var say: String?; let startedAt: Double; var endedAt: Double?
+}
+extension API {
+    func macActionNow() async -> MacAction? {
+        struct W: Decodable { let action: MacAction? }
+        guard let (d, r) = try? await session.data(for: consoleRequest("/api/mac/actions/current", timeout: 8)), (r as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return (try? JSONDecoder().decode(W.self, from: d))?.action
+    }
+    // Put away here, put away on the Mac's Console too (the bridge keeps it until the alert is news again).
+    func alertDismiss(_ id: String) async { _ = try? await session.data(for: consoleRequest("/api/mac/alerts/dismiss", body: ["id": id], timeout: 8)) }
+}
+
+@MainActor
+enum MacMirror {
+    private static var seenRestart: String?
+    // A restart asked on the Mac is followed here as if asked from the phone: Everything says it going down and coming back.
+    static func follow(_ a: MacAction?) {
+        guard let a, a.kind == "restart", a.by == "console", a.state == "done", seenRestart != a.id else { return }
+        seenRestart = a.id
+        let at = Date(timeIntervalSince1970: a.startedAt / 1000)
+        if let asked = RestartWatch.shared.askedAt, asked >= at.addingTimeInterval(-5) { return }
+        RestartWatch.shared.asked(); RestartWatch.shared.askedAt = at
+    }
+    static func loop(_ model: AppModel) async {
+        guard model.pose.isEmpty else { return }
+        while !Task.isCancelled {
+            if !model.screenOpen { follow(await model.api.macActionNow()) }
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+        }
+    }
+}
+
+// "Show on Mac": the page he is on, put on the Mac's Console (started first when it isn't open). The button says what the
+// Console answered: a tick when it acked, a mark and the reason when it didn't.
+struct ShowOnMacButton: View {
+    @EnvironmentObject var model: AppModel
+    let page: String
+    @State private var phase = 0   // 0 idle, 1 waiting, 2 acked, 3 failed
+    @State private var why: String?
+    var body: some View {
+        Button { go() } label: {
+            Group {
+                switch phase {
+                case 1: ProgressView()
+                case 2: Image(systemName: "checkmark").foregroundStyle(.green)
+                case 3: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                default: Image(systemName: "macwindow").foregroundStyle(macBlue)
+                }
+            }
+            .font(.title2).frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(phase == 1)
+        .accessibilityLabel("Show on the Mac")
+        .alert("Not shown on the Mac", isPresented: Binding(get: { why != nil }, set: { if !$0 { why = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(why ?? "") }
+    }
+    func go() {
+        phase = 1
+        Task {
+            var e: String?
+            if model.pose.isEmpty {
+                if (try? await model.api.consoleState())??.running != true { e = await model.api.consoleCommand("show").error }
+                if e == nil { e = await model.api.consoleCommand("page", page).error }
+            } else { try? await Task.sleep(nanoseconds: 500_000_000) }
+            withAnimation(Motion.quick) { phase = e == nil ? 2 : 3 }
+            if let e { why = e }
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            withAnimation(Motion.quick) { phase = 0 }
+        }
+    }
+}

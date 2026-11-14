@@ -41,6 +41,9 @@ const consoleState = { running: true, frontmost: true, fullscreen: true, page: '
 module.exports = (q, s) => {
   const u = new URL(q.url, 'http://x');
   if (u.pathname === '/api/mac/console' && q.method === 'GET') { s.end(JSON.stringify(consoleState)); return true; }
+  // The actions mirror and shared dismissals (2026-11-13): nothing under way; a dismissal is taken.
+  if (u.pathname === '/api/mac/actions/current') { s.end(JSON.stringify({ action: null })); return true; }
+  if (u.pathname === '/api/mac/alerts/dismiss' && q.method === 'POST') { s.end(JSON.stringify({ ok: true })); return true; }
   if (u.pathname === '/api/mac/console/command' && q.method === 'POST') {
     let body = ''; q.on('data', c => { body += c; }); q.on('end', () => {
       let b = {}; try { b = JSON.parse(body); } catch {}

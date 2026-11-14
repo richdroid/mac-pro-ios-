@@ -22,7 +22,7 @@ struct MacLink: Decodable, Identifiable, Equatable {
     private let rawName: String
     var name: String {
         switch id {
-        case "serve": return "Link for this app"
+        case "serve": return "Phone link"
         case "funnel": return "Public sharing"
         case "bridge": return "Mac dashboard"
         case "public": return "Public link"
@@ -373,7 +373,7 @@ struct ConsolePage<Left: View, Right: View>: View {
     func list(_ side: Side) -> some View {
         ScrollViewReader { proxy in
             List {
-                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false) }
+                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false, onMac: ["macfans": "temps", "macupdates": "updates", "macstorage": "storage", "macstartup": "startup"][place]) }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if away, side != .right { Section { StaleLine(lastRead: lastRead) } }
                 Group {

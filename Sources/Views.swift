@@ -25,6 +25,8 @@ struct MacProApp: App {
                     if p == .background { AlertWatch.shared.scheduleRefresh(); WidgetCenter.shared.reloadAllTimelines() }
                     #endif
                 }
+                // A restart asked on the Mac's Console is followed here too.
+                .task { await MacMirror.loop(model) }
                 .onAppear {
                     model.start(); openScreenIfAsked(); AlertWatch.shared.askOnce(); TabTour.run([0, 1, 2, 4, 5, 9]) { model.tab = $0 }
                     if let id = AlertWatch.pending { openAlert(id) }
@@ -598,9 +600,15 @@ struct PaneHeading: View {
     // false in a List row: the list's top margin gives the room (PaneHeading.roomAbove), since inside the row it pushed the
     // title into the row's rounded corner and notched its first letter (CI d9c229c: the F of Fans, the M of Mac).
     var roomAbove = true
+    // The Console page that shows the same thing, for "Show on Mac" beside the name.
+    var onMac: String? = nil
     static func roomAbove(_ statusBarTop: CGFloat) -> CGFloat { statusBarTop < 20 ? 14 : 0 }
     var body: some View {
-        Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
+        HStack(alignment: .center) {
+            Text(title).font(.largeTitle.weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
+            Spacer(minLength: 8)
+            if let onMac, shown { ShowOnMacButton(page: onMac).padding(.trailing, 4) }
+        }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, roomAbove ? Self.roomAbove(statusBarTop) : 0)
             .opacity(shown ? 1 : 0)
@@ -820,6 +828,8 @@ struct Screen<Content: View>: View {
         HStack(alignment: .center) {
             Text(title).font(.largeTitle.weight(.bold)).lineLimit(1)
             Spacer(minLength: 8)
+            // The same page on the Mac's Console: Status is its overview, macOS its updates.
+            if side != .right, let page = [0: "overview", 4: "updates"][tab] { ShowOnMacButton(page: page) }
             // Settings, beside Status's name, the way the App Store keeps its account by its title.
             if tab == 0, side != .right {
                 Button { model.nav.settingsOpen = true } label: {

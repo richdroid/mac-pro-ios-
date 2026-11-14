@@ -394,6 +394,7 @@ struct MacHealthView: View {
     @State private var expanded: Set<String> = []
     @State private var chosen: String?
     @StateObject private var links = FeedReader<LinksFeed>("/api/mac/links")
+    @State private var macAction: MacAction?
     // Open upright there's room under the parts: the chosen part is said whole there, as in the right pane open flat,
     // rather than an empty half page (Richard, 2026-11-12: open "feels barren").
     @State private var roomy = false
@@ -464,6 +465,8 @@ struct MacHealthView: View {
             HeroCard(symbol: line.symbol, color: line.color, title: line.title, detail: line.detail) {
                 if watch.stuck(now) { Button("Stop waiting") { withAnimation(Motion.quick) { watch.done() } }.buttonStyle(.bordered) }
             }
+        } else if let a = macAction, a.by == "console", a.state == "running", a.kind != "send" {
+            HeroCard(symbol: nil, color: .secondary, title: a.kind == "restart" ? "Checking before the restart…" : "Bringing everything up…", detail: "Started on the Mac’s Console") { EmptyView() }
         } else if let f = fixing {
             HeroCard(symbol: nil, color: .secondary, title: "Fixing \(fixingWhat)…", detail: "This can take up to two minutes · \(Int(now.timeIntervalSince(f))) s") { EmptyView() }
         } else if report == nil {
@@ -587,7 +590,7 @@ struct MacHealthView: View {
         let flat = side != .all || roomy
         return ScrollViewReader { proxy in
             List {
-                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false) }
+                Section { PaneHeading(title: title, shown: side != .right, roomAbove: false, onMac: "everything") }
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowSeparator(.hidden)
                 if side != .right {
                     Section { hero }
@@ -657,7 +660,13 @@ struct MacHealthView: View {
         }
         while !Task.isCancelled {
             // Not under the Mac's screen, which has the link to itself while it's open.
-            if fixing == nil, !model.screenOpen { await read() }
+            if fixing == nil, !model.screenOpen {
+                await read()
+                // What the Mac's Console set going (Bring Everything Up, a restart) shows here as it runs.
+                let a = await model.api.macActionNow()
+                if a != macAction { withAnimation(Motion.quick) { macAction = a } }
+                MacMirror.follow(a)
+            }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
     }

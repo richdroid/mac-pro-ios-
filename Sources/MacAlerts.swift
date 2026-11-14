@@ -62,7 +62,7 @@ struct AlertBanner: View {
     func dismiss(_ a: Status.Alert) {
         withAnimation(.snappy) { AlertDismissals.dismiss(a) }
         AlertWatch.shared.putAway(a.id)
-        Task { try? await model.api.pushSeen(a.id) }
+        Task { try? await model.api.pushSeen(a.id); await model.api.alertDismiss(a.id) }
     }
     @State private var restarting: String?
     @State private var fails: [String: String] = [:]
@@ -281,6 +281,13 @@ final class AlertWatch: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
         // The Mac's notifications carry the alert's id; one made here is named by it.
         let id = response.notification.request.content.userInfo["alert"] as? String ?? response.notification.request.identifier
+        // Handoff from the Mac's Console: the page it names, opened as its link would be.
+        if let l = response.notification.request.content.userInfo["link"] as? String, let u = URL(string: l), u.scheme == "macproapp" {
+            #if canImport(UIKit)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { UIApplication.shared.open(u) }
+            #endif
+            done(); return
+        }
         AlertDismissals.restore(id: id)
         UserDefaults.standard.set(id.hasPrefix("session:") || id.hasPrefix("usage:") ? 2 : id == OTAInstaller.alertID ? 1 : 0, forKey: "tab")
         if id == OTAInstaller.alertID { Task { @MainActor in OTAInstaller.shared.wanted = true } }
