@@ -212,7 +212,7 @@ enum MacActionChoice: String, AppEnum {
 
 struct MacRunActionIntent: AppIntent {
     static var title: LocalizedStringResource = "Run Mac Pro Action"
-    static var description = IntentDescription("Runs one of the Mac Pro’s actions and says what it did. Ones that change things ask first.")
+    static var description = IntentDescription("Runs one of the actions and says what it did. Ones that change things ask first.")
     @Parameter(title: "Action") var choice: MacActionChoice
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         guard let base = MacBridge.base else { throw MacIntentError.noAnswer }
