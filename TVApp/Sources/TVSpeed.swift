@@ -127,7 +127,7 @@ final class FlickClock {
     func mark(_ name: String) { events.append((name, Self.now())) }
     // The answer, or the failure: sent once the Remote's landing is in too (it may come either side).
     func finished(onStage: Bool = false) { answered = true; if landed || onStage { flush() } }
-    func remoteLanded() { mark("remote"); landed = true; if answered { flush() } }
+    func remoteLanded() { mark("remote"); landed = true; FlickMeter.shared.landed(); if answered { flush() } }
     func flush() {
         guard !sent, !events.isEmpty else { return }
         sent = true

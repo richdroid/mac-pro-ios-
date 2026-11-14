@@ -213,6 +213,8 @@ import UIKit
     #endif
     #if os(iOS)
     static var views: [UIView] { [ground, card, poster].compactMap { $0 } }
+    // The thing itself in the air, for the build's meter.
+    static var lead: UIView? { card ?? poster }
     #endif
     static var windowSize: CGSize {
         #if os(iOS)
@@ -1607,6 +1609,7 @@ struct FlickScreen: View {
             switch e {
             case .lifted:
                 homing = nil
+                FlickMeter.shared.lifted(id == "card" ? "card" : "row", hold: hands.hand.realLift)
                 lift.drag = .zero; lift.lean = 0; lift.armed = false; liftedID = id
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) { liftScale = scale }
             case .armed(let on):
@@ -1619,6 +1622,12 @@ struct FlickScreen: View {
     }
     func finish(_ outcome: FlickHand.Outcome, id: String, translation: CGSize, send: () -> Void) {
         HandTrace.note(String(format: "end %@ dy=%.0f vy=%.0f ", "\(outcome)", translation.height, hands.hand.velocity.dy) + hands.hand.realNote)
+        do {
+            let r = (rects.map[id] ?? .zero).offsetBy(dx: flickOrigin.x + translation.width, dy: flickOrigin.y + translation.height)
+            let s = liftScale + 0.03 * min(1, max(0, -translation.height) / 260), v = hands.hand.leaving
+            FlickMeter.shared.released("\(outcome)", speed: hypot(v.dx, v.dy), hand: CGRect(x: r.midX - r.width * s / 2, y: r.midY - r.height * s / 2, width: r.width * s, height: r.height * s),
+                                       note: hands.hand.realNote)
+        }
         hands.id = nil
         switch outcome {
         case .thrown:
@@ -2992,6 +3001,7 @@ struct ShelfFlick: ViewModifier {
     // In the hand: felt, drawn over everything, the shelf held still, and the TV told what's coming.
     func lifted() {
         HandTrace.note("shelf-lifted")
+        FlickMeter.shared.lifted("shelf", hold: hands.hand.realLift)
         up = true
         FlickHaptic.lift(); FlickClock.touched()
         ScrollLock.set(lock, true)
@@ -3013,7 +3023,12 @@ struct ShelfFlick: ViewModifier {
                                  shape: kind == "song" ? "square" : kind == "video" ? "wide" : "poster")
     }
     func end(_ outcome: FlickHand.Outcome, translation: CGSize) {
-        HandTrace.note(String(format: "shelf-end %@ dy=%.0f", "\(outcome)", translation.height))
+        HandTrace.note(String(format: "shelf-end %@ dy=%.0f ", "\(outcome)", translation.height) + hands.hand.realNote)
+        do {
+            let r = rect(), s = 1.06 + 0.06 * min(1, max(0, -translation.height) / 240), v = hands.hand.leaving
+            FlickMeter.shared.released("\(outcome)", speed: hypot(v.dx, v.dy), hand: CGRect(x: r.midX - r.width * s / 2 + translation.width, y: r.midY - r.height * s / 2 + translation.height, width: r.width * s, height: r.height * s),
+                                       note: hands.hand.realNote)
+        }
         ShelfHand.shared.handledAt = Date()
         ScrollLock.set(lock, false)
         switch outcome {
@@ -3357,3 +3372,105 @@ extension TVModel {
         }
     }
 }
+
+// MARK: - The flick's feel, in numbers
+// The build's films only (under a pose), never on his phone. One line per flick, sent with the flick's own timing lines:
+// how long the finger rested before the thing was in the hand; the frames the screen drew while he carried it (how many,
+// how many came late, the longest); how the hand's picture and the flight's first frame compare (a change of size or
+// place at the release is a jump); how fast the flight left against how fast the finger did; how long it stood still on
+// the way; and when it landed. Read off the flight's own layer as the render server shows it, frame by frame.
+#if os(iOS)
+@MainActor final class FlickMeter: NSObject {
+    static let shared = FlickMeter()
+    static let on = UserDefaults.standard.string(forKey: "pose") != nil
+    private enum Phase { case idle, drag, flight }
+    private var phase = Phase.idle
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0
+    private var kind = "", outcome = "", note = ""
+    private var hold = 0.0, liftAt = 0.0, releaseAt = 0.0, finger = 0.0
+    private var hand = CGRect.zero
+    private var drag = (frames: 0, late: 0, longest: 0.0)
+    private var air = (frames: 0, late: 0, longest: 0.0)
+    private var trace: [(t: Double, r: CGRect)] = []
+    private var serial = 0
+    // In the hand. `hold`: seconds from the touch to the lift, by the finger's own clock.
+    func lifted(_ kind: String, hold: Double?) {
+        guard Self.on else { return }
+        serial += 1
+        self.kind = kind; self.hold = hold ?? -1
+        phase = .drag; last = 0; liftAt = CACurrentMediaTime()
+        drag = (0, 0, 0); air = (0, 0, 0); trace = []
+        if link == nil {
+            let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+            l.add(to: .main, forMode: .common)
+            link = l
+        }
+    }
+    // Let go. `hand`: the thing as it was drawn under the finger (window points); `speed`: the finger's, points a second.
+    func released(_ outcome: String, speed: Double, hand: CGRect, note: String = "") {
+        guard Self.on, phase == .drag else { return }
+        self.outcome = outcome; self.hand = hand; finger = speed; self.note = note
+        releaseAt = CACurrentMediaTime()
+        guard outcome == "thrown" else { report(landed: false); return }
+        phase = .flight
+        let mine = serial
+        Task { try? await Task.sleep(nanoseconds: 5_000_000_000); if serial == mine, phase == .flight { report(landed: false) } }
+    }
+    func landed() {
+        guard Self.on, phase == .flight else { return }
+        report(landed: true)
+    }
+    @objc private func tick(_ l: CADisplayLink) {
+        defer { last = l.timestamp }
+        guard phase != .idle else { return }
+        if phase == .flight, let layer = RenderFlight.lead?.layer {
+            trace.append((CACurrentMediaTime() - releaseAt, (layer.presentation() ?? layer).frame))
+        }
+        guard last > 0 else { return }
+        let gap = (l.timestamp - last) * 1000, due = max(4, (l.targetTimestamp - l.timestamp) * 1000)
+        if phase == .drag { drag.frames += 1; if gap > due * 1.5 { drag.late += 1 }; drag.longest = max(drag.longest, gap) }
+        else { air.frames += 1; if gap > due * 1.5 { air.late += 1 }; air.longest = max(air.longest, gap) }
+    }
+    private func report(landed: Bool) {
+        let now = CACurrentMediaTime()
+        phase = .idle
+        link?.invalidate(); link = nil
+        var line = String(format: "feel %@ %@ hold=%.0f carry=%.0f frames=%d late=%d longest=%.0f finger=%.0f", kind, outcome, hold * 1000,
+                          (releaseAt - liftAt) * 1000, drag.frames, drag.late, drag.longest, finger)
+        if outcome == "thrown" {
+            // The first frame of the flight against the hand's last: a change of size, or of place.
+            var grow = -1.0, shift = -1.0, v0 = -1.0, first = -1.0, parked = 0.0
+            if let a = trace.first, hand.height > 1 {
+                first = a.t * 1000
+                grow = Double(a.r.height / hand.height)
+                shift = Double(hypot(a.r.midX - hand.midX, a.r.midY - hand.midY))
+                // How fast it left: over its first twentieth of a second in the air.
+                if let b = trace.first(where: { $0.t - a.t >= 0.045 }) { v0 = Double(hypot(b.r.midX - a.r.midX, b.r.midY - a.r.midY)) / (b.t - a.t) }
+                // Stood still on the way: the longest stretch without moving while still well short of where it ended.
+                if let end = trace.last {
+                    var from: Double?
+                    for i in 1..<max(1, trace.count) {
+                        let p = trace[i - 1].r, q = trace[i].r
+                        let still = hypot(q.midX - p.midX, q.midY - p.midY) < 0.5 && hypot(q.midX - end.r.midX, q.midY - end.r.midY) > 8
+                        if still { if from == nil { from = trace[i - 1].t }; parked = max(parked, trace[i].t - (from ?? 0)) } else { from = nil }
+                    }
+                }
+            }
+            line += String(format: " first=%.0f grow=%.2f shift=%.0f v0=%.0f parked=%.0f air=%d airlate=%d airlongest=%.0f land=%.0f", first, grow, shift, v0,
+                           parked * 1000, air.frames, air.late, air.longest, landed ? (now - releaseAt) * 1000 : -1)
+        }
+        if !note.isEmpty { line += " " + note }
+        print("FEEL " + line)
+        let e: [String: Any] = ["name": line, "at": Date().timeIntervalSince1970 * 1000]
+        Task { _ = try? await TVBridge.post("timing", ["events": [e]], timeout: 5) }
+    }
+}
+#else
+@MainActor final class FlickMeter {
+    static let shared = FlickMeter()
+    func lifted(_ kind: String, hold: Double?) {}
+    func released(_ outcome: String, speed: Double, hand: CGRect, note: String = "") {}
+    func landed() {}
+}
+#endif

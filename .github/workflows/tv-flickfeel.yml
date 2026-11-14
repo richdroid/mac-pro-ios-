@@ -1,0 +1,157 @@
+name: TV flick feel (temporary)
+# Branch-only proof for tv-flick-feel (deleted before the branch ships; never main). The flick itself, measured: a real
+# finger (Device Hub) holds a card on a shelf and a stream row and throws it, puts it back, or swipes past it, in each
+# posture he uses, open upright first. Every flick writes one "feel" line (FlickMeter): the hold, the frames drawn while
+# he carried it, the jump at the release, the flight's speed against the finger's, how long it stood still, the landing.
+on:
+  push:
+    branches: [tv-flick-feel]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tv-flickfeel
+  cancel-in-progress: true
+jobs:
+  feel:
+    runs-on: xcode-27
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Scripted hands
+        run: |
+          mkdir -p dist
+          swiftc TVApp/Sources/TVFlickHand.swift ci/flick-hands/main.swift -o /tmp/flick-hands
+          /tmp/flick-hands | tee dist/flick-hands.log
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project MacPro.xcodeproj -scheme TV -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | grep -E "error|BUILD" | tail -30
+      - name: Films
+        continue-on-error: true
+        timeout-minutes: 50
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/TV.app
+          rm -f /tmp/tv-hitches.log
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9002
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 \
+            && F=$(grep -rl 'args\[1\] == "touch" || args\[1\] == "drag"' Sources) \
+            && python3 -c 'import sys; f,p=sys.argv[1:]; m="if args[1] == \"touch\" || args[1] == \"drag\" {"; s=open(f).read(); assert m in s; open(f,"w").write(s.replace(m, open(p).read()+m, 1))' "$F" $GITHUB_WORKSPACE/ci/flick-hands/devicehub-path.swift \
+            && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          up() { echo "$1 - $2" | bc -l; }
+          keep() { # name: the app's main-thread log and its feel lines beside the film
+            local c; c=$(xcrun simctl get_app_container "$DEVICE" local.macpro.TV data 2>/dev/null) && [ -f "$c/Library/Caches/swipe-log.txt" ] && mv "$c/Library/Caches/swipe-log.txt" dist/tv-$1-main.log || true
+            { echo "== $1"; cat dist/tv-$1-sends.log 2>/dev/null | grep -o 'feel [^"]*' || echo "(no feel line)"; cat dist/tv-$1-sends.log 2>/dev/null | grep -o 'hand-[^"]*' | tr '\n' ';'; echo; grep -c 'play-stream' dist/tv-$1-sends.log | sed 's/^/play-stream lines: /'; } >> dist/feel.txt
+          }
+          # A real finger on the first stream row of a film's page (where the app says it is).
+          rowfilm() {
+            local name=$1 display=$2 how=$3
+            rm -f /tmp/tv-home-applied.log
+            curl -s $M/fnormal/reset > /dev/null
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M/fnormal -tab 1 -pose flick-stage -swipeLog YES
+            sleep 12
+            local at x y
+            at=$(grep -o 'what=row&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            x=${at#*x=}; x=${x%%&*}; y=${at##*y=}
+            if [ -n "$x" ] && [ -n "$y" ]; then
+              case $how in
+                # Pressed and flicked as soon as it's in the hand, the way a practised thumb does it.
+                quick) $D "$DEVICE" path $x $y 0.15 $x $(up $y 0.15) 0.12 0 || echo "path failed" ;;
+                flick) $D "$DEVICE" path $x $y 0.45 $x $(up $y 0.15) 0.12 0 || echo "path failed" ;;
+                shortflick) $D "$DEVICE" path $x $y 0.7 $x $(up $y 0.13) 0.09 0 || echo "path failed" ;;
+                carry) $D "$DEVICE" path $x $y 0.7 $x $(up $y 0.3) 0.6 0 $x $(up $y 0.3) 0.3 0 || echo "path failed" ;;
+                backdown) $D "$DEVICE" path $x $y 0.7 $x $(up $y 0.3) 0.4 0 $x $y 0.4 0 || echo "path failed" ;;
+                swipe) $D "$DEVICE" path $x $y 0.02 $x 0.2 0.15 0 || echo "path failed" ;;
+              esac
+            else echo "no row position for $name"; fi
+            sleep 9
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            cp /tmp/tv-flick-sends.log dist/tv-$name-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$name-sends.log
+            keep $name
+          }
+          # A card on a shelf (Watch: the first film's card fully in sight, where the app says it is).
+          shelffilm() {
+            local name=$1 display=$2 how=$3
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/tv-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            rm -f /tmp/tv-home-applied.log
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $M -tab 3 -pose shelf -swipeLog YES
+            sleep 11
+            local at x y
+            at=$(grep -o 'what=card&x=[0-9.]*&y=[0-9.]*' /tmp/tv-home-applied.log 2>/dev/null | tail -1)
+            x=${at#*x=}; x=${x%%&*}; y=${at##*y=}
+            if [ -n "$x" ] && [ -n "$y" ]; then
+              case $how in
+                quick) $D "$DEVICE" path $x $y 0.15 $x $(up $y 0.25) 0.14 0 || echo "path failed" ;;
+                flick) $D "$DEVICE" path $x $y 0.45 $x $(up $y 0.25) 0.14 0 || echo "path failed" ;;
+                throw) $D "$DEVICE" path $x $y 0.7 $x $(up $y 0.3) 0.3 0 $x $(up $y 0.3) 0.2 0 || echo "path failed" ;;
+                # Held a full second before the throw: nothing else may take the card out of his hand meanwhile.
+                long) $D "$DEVICE" path $x $y 1.1 $x $(up $y 0.25) 0.2 0 || echo "path failed" ;;
+                back) $D "$DEVICE" path $x $y 0.7 $(echo "$x + 0.2" | bc -l) $y 0.4 0 || echo "path failed" ;;
+                swipe) $D "$DEVICE" path $x $y 0.02 $x $(up $y 0.25) 0.15 0 || echo "path failed" ;;
+              esac
+            else echo "no card position for $name"; fi
+            sleep 3
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-mid.png
+            sleep 6
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+            cp /tmp/tv-home-applied.log dist/tv-$name-sends.log 2>/dev/null || echo "nothing sent" > dist/tv-$name-sends.log
+            keep $name
+          }
+          posture() {
+            local x=$1 d=$2
+            for H in quick flick throw long back swipe; do shelffilm shelf-$H$x $d $H; done
+            for H in quick flick shortflick carry backdown swipe; do rowfilm row-$H$x $d $H; done
+          }
+          # Open upright first, the way he holds it; then open flat; then folded.
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          posture -portrait 3
+          $D "$DEVICE" rotate 3 || true; sleep 5
+          posture -open 3
+          $D "$DEVICE" rotate 1 || true; sleep 3
+          $D "$DEVICE" pose closed || true; sleep 5
+          posture "" 1
+          cat dist/feel.txt
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          rm -rf build-sim ~/Library/Developer/Xcode/DerivedData 2>/dev/null
+          tail -c 20000 dist/sim.log > dist/sim-tail.txt 2>/dev/null
+          grep -E "error:" dist/build.log | head -40 > dist/build-errors.txt
+          (cd dist && zip -q ../feel.zip *.png *.log *.txt 2>/dev/null; zip -q ../feel-portrait.mp4.zip tv-*-portrait.mp4 2>/dev/null; zip -q ../feel-open.mp4.zip tv-*-open.mp4 2>/dev/null; ls tv-*.mp4 | grep -v -e '-portrait.mp4' -e '-open.mp4' | zip -q ../feel-folded.mp4.zip -@ 2>/dev/null; true)
+          ls -la *.zip
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view tv-flickfeel >/dev/null 2>&1 || gh release create tv-flickfeel --prerelease --title "TV flick feel checks" --notes "Branch-only films and numbers from tv-flick-feel."
+          for f in feel.zip feel-portrait.mp4.zip feel-open.mp4.zip feel-folded.mp4.zip status.txt; do
+            [ -f "$f" ] || { echo "no $f"; continue; }
+            for i in 1 2 3; do gh release upload tv-flickfeel "$f" --clobber && break; echo "upload of $f failed ($i)"; sleep 15; done
+          done
+          true

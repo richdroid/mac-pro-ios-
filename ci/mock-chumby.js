@@ -338,7 +338,7 @@ function tvRoute(q, s) {
   // The app says Continue watching is on screen (r27: asked for, but never applied, open).
   // What a held card sends from a shelf (the tv-flick shelf films): logged beside the app's own word of where it is.
   if (q.method === 'POST' && /^\/api\/tv\/(flick-lift|flick-cancel|timing|play-stream|send|stremio-open|mint-open|flick|prepare)$/.test(q.url)) {
-    let b = ''; q.on('data', c => b += c); q.on('end', () => { try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' POST ' + q.url + ' ' + b.slice(0, 300) + '\n'); } catch {} });
+    let b = ''; q.on('data', c => b += c); q.on('end', () => { try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' POST ' + q.url + ' ' + b.slice(0, 900) + '\n'); } catch {} });
   }
   if (q.url.startsWith('/api/tv/applied')) { try { require('fs').appendFileSync('/tmp/tv-home-applied.log', Date.now() + ' ' + q.url + '\n'); } catch {} s.setHeader('content-type', 'application/json'); return s.end('{"ok":true}'); }
   if (q.url.startsWith('/api/tv/stremio')) {
