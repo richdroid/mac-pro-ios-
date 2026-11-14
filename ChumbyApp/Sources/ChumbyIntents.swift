@@ -96,7 +96,7 @@ func chumbySetSkip(_ on: Bool) async throws -> String {
 // Reads the Chumby until it says no skip is set, in an answer made after `since` (its own clock when the undo was asked
 // for, so a copy from before the request is never taken as its answer). The panel takes a couple of seconds, longer
 // while it's loading a saved list. False when it never said so.
-let chumbyUnskipDoubt = "The skip wasn’t confirmed off, so the one-off was kept. Both may ring."
+let chumbyUnskipDoubt = "The skip wasn’t confirmed off, so the just-this-once ring was kept. Both may ring."
 func chumbyUnskipConfirmed(_ api: ChumbyAPI, since: Date?, tries: Int = 15) async -> Bool {
     for _ in 0..<tries {
         if let d = try? await api.fresh("state"), let s = try? AlarmWriter.strict(d), ChumbyState.answered(s, since: since) {

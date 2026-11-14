@@ -321,7 +321,7 @@ struct MenuRow<V: Hashable, Options: View>: View {
             HStack(spacing: 12) {
                 Text(title)
                 Spacer(minLength: 8)
-                Picker(title, selection: $selection, content: options).labelsHidden().pickerStyle(.menu).layoutPriority(1)
+                Picker(title, selection: $selection.ticking(), content: options).labelsHidden().pickerStyle(.menu).layoutPriority(1)
             }
             Text(note).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
@@ -401,16 +401,22 @@ struct TwoPane<L: View, R: View>: View {
             FoldSplit {
                 List { Group { left }.listRowBackground(GlassRow()) }
             } right: {
-                Group {
-                    if let rightPage { rightPage }
-                    else {
-                        // A title row, blank unless the pane holds a page, so both panes start level. A real title (Calendar
-                        // settings, with Done) stays pinned once the pane is scrolled.
-                        let pinned = rightTitle.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
-                        List { if let rightTitle { PageTitle(rightTitle, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
-                            .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
-                    }
+                // The pane's own list stays alive under a page that covers it (a sound list, the song picker, an editor), so
+                // coming back finds it where it was left, never at its top; the pages cross-fade (gate, 11-14: a hard cut).
+                ZStack {
+                    // A title row, blank unless the pane holds a page, so both panes start level. A real title (Calendar
+                    // settings, with Done) stays pinned once the pane is scrolled.
+                    // Under a page the row stays as it was (blank), so the list keeps its place.
+                    let title = rightTitle ?? (rightPage != nil ? " " : nil)
+                    let pinned = title.map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? nil
+                    List { if let title { PageTitle(title, pins: pinned != nil) { rightTrailing } }; Group { right }.listRowBackground(GlassRow()) }
+                        .pinsTitle(pinned != nil) { PageTitle(pinned ?? "") { rightTrailing } }
+                        .opacity(rightPage == nil ? 1 : 0)
+                        .allowsHitTesting(rightPage == nil)
+                        .accessibilityHidden(rightPage != nil)
+                    if let rightPage { rightPage.transition(.opacity) }
                 }
+                .animation(.easeInOut(duration: 0.2), value: rightPage != nil)
                 .opacity(rightShown ? 1 : 0)
             }
             .seaList()
@@ -547,6 +553,11 @@ struct TabBarFade: ViewModifier {
 }
 
 extension View {
+    // The room a scroll page has for its content: its height less the safe areas (the status bar, the tab bar or the home
+    // indicator), read from the page itself, whichever of them its frame already leaves out.
+    func homeRoom(_ set: @escaping (CGFloat) -> Void) -> some View {
+        onGeometryChange(for: CGFloat.self) { $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom } action: { set($0) }
+    }
     // Each tab paints its own sea: the system tab view is opaque behind its content. Only the tab on screen drifts.
     func overSea(active: Bool = true, shown: Bool = true) -> some View {
         self.background { if shown { ZStack { SeaBackground(active: active); GhostOctopus(active: active) }.ignoresSafeArea() } }
@@ -599,7 +610,7 @@ struct RootView: View {
                     Tab(value: 3) { NavigationStack { SoundsTab().tabPage(3, model) }.id(resets[3, default: 0]) } label: { tabLabel("sounds", "music.note") }
                     Tab(value: 4) { NavigationStack { TinkerTab().tabPage(4, model) }.id(resets[4, default: 0]) } label: { tabLabel("tinker", "wrench.adjustable") }
                 }
-                .onChange(of: model.tab) { _, t in model.tick(); UserDefaults.standard.set(t, forKey: "tab"); if t == 2 { ChumbyNotify.shared.clearDelivered() } }
+                .onChange(of: model.tab) { _, t in Haptic.fire(.tick); UserDefaults.standard.set(t, forKey: "tab"); if t == 2 { ChumbyNotify.shared.clearDelivered() } }
             }
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
@@ -812,16 +823,46 @@ struct HomeTab: View {
     }
 
     // The web app's proportions: the octopus is 92 wide on a 380 stage and sits 58 above its top edge.
-    var stageWidth: CGFloat { wide ? 340 : 330 }
+    // The device is sized from the room, one width per posture, for the tallest everyday state (a moved ring's card, the
+    // re-skip note, a nap, a ring), so Skip and Undo never resize it. It is wide as it can be until the caption under the
+    // controls ends at least 16 pt above the bottom of the room (never under 250). Measured, not guessed: the caption's
+    // foot against the room, which only ever narrows the width within a posture (a new room starts over).
+    @State private var fitWidth: CGFloat?
+    @State private var fitRoom: CGFloat = 0
+    @State private var controlsFoot: CGFloat = 0
+    @State private var room: CGFloat = 0
+    static let footMargin: CGFloat = 16, minStage: CGFloat = 250, maxStage: CGFloat = 330, wideStage: CGFloat = 340
+    // Allowance for the tallest everyday state over the one measured.
+    static let tallestExtra: CGFloat = 40
+    // At the narrowest the caption may still not fit: then it is pushed wholly below the room (never half in it).
+    @State private var captionPush: CGFloat = 0
+    @State private var captionHeight: CGFloat = 0
+    // How far the caption's foot moves per point of stage width: the octopus's lift (58/380) and the device's own height.
+    static let footPerWidth: CGFloat = 58.0 / 380 + 325.0 / 371
+    var maxWidth: CGFloat { wide ? Self.wideStage : Self.maxStage }
+    var stageWidth: CGFloat { min(fitWidth ?? maxWidth, maxWidth) }
+    func refit() {
+        guard room > 0, controlsFoot > 0 else { return }
+        if abs(fitRoom - room) > 1 { fitRoom = room; fitWidth = nil }
+        let w = stageWidth
+        let target = min(maxWidth, max(Self.minStage, w - (controlsFoot + Self.tallestExtra + Self.footMargin - room) / Self.footPerWidth)).rounded(.down)
+        if target < w - 0.6 { fitWidth = target }
+        // Where the caption would stand at the width it ends up with.
+        let end = min(target, w)
+        let foot = controlsFoot - (w - end) * Self.footPerWidth
+        let top = foot - captionHeight
+        let push: CGFloat = foot + Self.tallestExtra + Self.footMargin > room + 1 && captionHeight > 0 ? max(0, room - top + 4) : 0
+        if abs(push - captionPush) > 0.5 { captionPush = push }
+    }
     var k: CGFloat { stageWidth / 380 }
     var ringSize: CGFloat { 92 * k * 1.15 }
     var octHeight: CGFloat { 92 * k * ChumbyArt.octBox.height / ChumbyArt.octBox.width }
     var ringLift: CGFloat { -(ringSize - octHeight) / 2 - 2 }
     var snoozing: Bool { !model.unreachable && model.sys.ringing?.snoozed == true }
     // Top to bottom, all hung off the device so nothing outside can shift one against another:
-    // 6 pt margin, the 30 pt wordmark, 14 pt of clear air, the octopus (top 58k + 15 above the device), the device.
+    // 16 pt margin, the 30 pt wordmark, 14 pt of clear air, the octopus (top 58k + 15 above the device), the device.
     // Of those 14 pt the octopus may rise 8 at most (bob, wobble, hop, clamped in LiveOctopus), so 6 always stay clear.
-    static let wordTop: CGFloat = 6, wordHeight: CGFloat = 30, headroom: CGFloat = 8, clearance: CGFloat = 6
+    static let wordTop: CGFloat = 16, wordHeight: CGFloat = 30, headroom: CGFloat = 8, clearance: CGFloat = 6
     var restGap: CGFloat { Self.headroom + Self.clearance }
     var octLift: CGFloat { 58 * k + 15 }
     // The snooze ring stands this far above the octopus's top: its extra size, its 2 pt lift and half its 5 pt stroke.
@@ -989,8 +1030,20 @@ struct HomeTab: View {
     var serial: String { Bundle.main.object(forInfoDictionaryKey: "ChumbySerial") as? String ?? "" }
     var about: some View {
         VStack(spacing: 0) {
-            Text("Chumby Classic").font(.custom("Trebuchet MS", size: 30).weight(.bold))
-            Text("Black, 3.5-inch, 2008").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).padding(.top, 2).padding(.bottom, 16)
+            Color.clear.frame(height: captionPush)
+            // The caption (and the first-run welcome) is what the fit ends on: whole, with air, or not shown at all.
+            VStack(spacing: 0) {
+                Text("Chumby Classic").font(.custom("Trebuchet MS", size: 30).weight(.bold))
+                Text("Black, 3.5-inch, 2008").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).padding(.top, 2)
+                // Said the first time only.
+                if !welcomed {
+                    Text("Welcome. Tap the screen to touch it; tap the octopus to say hi.").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.center).padding(.top, 12).padding(.horizontal, 16)
+                        .onDisappear { welcomed = true }
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { captionHeight = $0; refit() }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("homeContent")).maxY } action: { controlsFoot = $0 - captionPush; refit() }
+            .padding(.bottom, 16)
             Grid(horizontalSpacing: 12, verticalSpacing: 5) {
                 if !name.isEmpty { spec("Name", name) }
                 spec("Chip", "Freescale i.MX21, ARM926EJ-S")
@@ -1002,11 +1055,6 @@ struct HomeTab: View {
             if !wide {
                 Button(moreInfo ? "Less Info…" : "More Info…") { withAnimation(.spring(duration: 0.4, bounce: 0.3)) { moreInfo.toggle() } }
                     .font(.custom("Trebuchet MS", size: 16).weight(.bold)).buttonStyle(.glass).padding(.top, 16)
-            }
-            // Said the first time only.
-            if !welcomed {
-                Text("Welcome. Tap the screen to touch it; tap the octopus to say hi.").font(.custom("Trebuchet MS", size: 15)).foregroundStyle(ChumbyPalette.sub(dark)).multilineTextAlignment(.center).padding(.top, 12).padding(.horizontal, 16)
-                    .onDisappear { welcomed = true }
             }
             Color.clear.frame(height: 20)
         }
@@ -1178,7 +1226,8 @@ struct HomeTab: View {
                 FoldSplit {
                     // The wordmark is part of the stage, so it is spaced off the octopus the same way in both layouts.
                     // The reach line arriving or going moves what's under it in one spring, never in one frame.
-                    ScrollView { VStack(spacing: 0) { stage; status; about.padding(.top, Self.sectionGap) }.padding(.horizontal, 12).animation(.snappy, value: model.unreachable) }.roomyIndicators()
+                    ScrollView { VStack(spacing: 0) { stage; status; about.padding(.top, Self.sectionGap) }.padding(.horizontal, 12).coordinateSpace(name: "homeContent").animation(.snappy, value: model.unreachable) }.roomyIndicators()
+                        .homeRoom { room = $0; refit() }
                 } right: {
                     ScrollView {
                         VStack(spacing: 0) {
@@ -1205,8 +1254,10 @@ struct HomeTab: View {
                         about.padding(.top, Self.sectionGap)
                         if moreInfo { more.frame(maxWidth: Self.column) }
                     }.padding(.horizontal, 16)
+                    .coordinateSpace(name: "homeContent")
                     .animation(.snappy, value: model.unreachable)
                 }.roomyIndicators()
+                .homeRoom { room = $0; refit() }
                 // For the build's shot: Home scrolled so the device's caption sits right at the tab bar, where Richard saw
                 // "Chumby Classic" through it. homecard: Home scrolled to its Playing card (the playing scene), folded.
                 .task {
@@ -1392,21 +1443,9 @@ struct NightButton: View {
             guard !Task.isCancelled, pressing, !committed else { return }
             commit()
         }
-        #if canImport(UIKit)
-        Haptics.light.impactOccurred(intensity: 0.45); Haptics.light.prepare(); Haptics.heavy.prepare()
-        #endif
+        // A hold: tap on touch, thunk when it completes, nothing on an early release (the haptic vocabulary).
+        Haptic.fire(.tap)
         withAnimation(.linear(duration: Self.hold)) { progress = 1 }
-        // The pressure building: two firmer ticks on the way to the thunk.
-        ticks?.cancel()
-        ticks = Task { @MainActor in
-            for k in [0.6, 0.8] as [CGFloat] {
-                try? await Task.sleep(nanoseconds: 170_000_000)
-                guard !Task.isCancelled else { return }
-                #if canImport(UIKit)
-                Haptics.medium.impactOccurred(intensity: k); Haptics.medium.prepare()
-                #endif
-            }
-        }
     }
     func release() {
         pressing = false
@@ -1418,9 +1457,7 @@ struct NightButton: View {
     func commit() {
         ticks?.cancel()
         committed = true
-        #if canImport(UIKit)
-        Haptics.heavy.impactOccurred(); Haptics.heavy.prepare()
-        #endif
+        Haptic.fire(.thunk)
         turned += 1
         withAnimation(.spring(duration: 0.4, bounce: 0.35)) { model.setNight(on ? "off" : model.nightStyle) }
         withAnimation(.spring(duration: 0.45, bounce: 0.5)) { progress = 0 }
@@ -1745,19 +1782,19 @@ struct ChannelsTab: View {
     // A widget in the channel: its name, its time on screen on the right, well clear of it, and the mark that takes it out
     // of the channel at the row's end (Richard, 2026-11-10: the ⊖, not a Remove in the time's menu too).
     func widgetRow(_ w: EditorRow) -> some View {
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .center, spacing: 16) {
             // A long name wraps to a second line rather than losing its end ("NYT Top Headlin…" folded, 11-11).
             Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
             Menu {
-                Picker("Time on screen", selection: rowBinding(w.id, \.secs, w.secs)) {
-                    Text(w.own > 0 ? "Auto (\(w.own)s)" : "Auto").tag(0)
+                Picker("Time on screen", selection: rowBinding(w.id, \.secs, w.secs).ticking()) {
+                    Text(w.own > 0 ? "Auto · \(timeText(w.own))" : "Auto").tag(0)
                     ForEach(widgetTimes, id: \.self) { Text(timeText($0)).tag($0) }
                 }
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "timer")
-                    Text(w.secs == 0 ? (w.own > 0 ? "Auto · \(w.own)s" : "Auto") : timeText(w.secs))
+                    Text(w.secs == 0 ? (w.own > 0 ? "Auto · \(timeText(w.own))" : "Auto") : timeText(w.secs))
                     Image(systemName: "chevron.up.chevron.down").imageScale(.small)
                 }
                 .font(.footnote.weight(.medium))
@@ -1773,12 +1810,7 @@ struct ChannelsTab: View {
     }
     // The end of the list: one row, tapped anywhere, that opens the picker.
     var addRow: some View {
-        Button { openAdd() } label: {
-            Label("Add widgets", systemImage: "plus.circle.fill").font(.body.weight(.semibold))
-                .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
-                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        AddRow("Add widgets") { openAdd() }
         .moveDisabled(true).deleteDisabled(true)
     }
     // For the build: a channel chosen in the header (chsync); then the picker opened and a widget added (chdemo), or the
@@ -2045,6 +2077,8 @@ struct SoundsTab: View {
     @State private var addStream = false
     @State private var addStation = false
     @State private var pickSong = false
+    // The value whose list page is open (a push folded and upright; the right pane open flat).
+    @State private var choosing: SoundChooser?
     @Environment(\.paneLayout) private var wide
     // Where the song picker opened (the right pane open flat, a cover otherwise), kept while the keyboard is up: open
     // upright the keyboard shortens the page until it reads as sideways, which closed the cover for a pane and back
@@ -2093,53 +2127,121 @@ struct SoundsTab: View {
     }
 
     // One alarm and what it plays, chosen from the same sources the editor offers, sent the careful way.
-    func soundRow(_ title: String, _ detail: String, _ a: Alarm, mark: String?, choose: @escaping (Alarm) -> Void) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.body.weight(.semibold)).lineLimit(1)
-                Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer(minLength: 12)
-            Menu {
-                // The capsule is the menu's anchor, and its words change its width: so the pick lands once the menu has
-                // gone (MenuClose), never while it closes, which cut the close short.
-                Picker("Plays", selection: Binding(get: { a.soundTag(streams: model.state.streams) }, set: { t in
-                    guard t != a.soundTag(streams: model.state.streams) else { return }
-                    var b = a; b.setSound(t, streams: model.state.streams, stations: model.pandoraStations)
-                    MenuClose.then { choose(b) }
-                })) {
-                    Section("Tones") { ForEach(model.state.tones, id: \.self) { Text($0).tag("beep:" + $0) } }
-                    if !model.state.streams.isEmpty { Section("Radio") { ForEach(model.state.streams, id: \.key) { Text($0.name.isEmpty ? $0.url : $0.name).tag("stream:" + $0.key) } } }
-                    if !model.pandoraStations.isEmpty { Section("Pandora") { ForEach(model.pandoraStations) { Text($0.name).tag("pandora:" + $0.id) } } }
-                    Text("Silent").tag("none")
-                    if a.soundTag(streams: model.state.streams).isEmpty { Text(a.soundText).tag("") }
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Text(a.soundText).lineLimit(1).contentTransition(.opacity)
-                    Image(systemName: "chevron.up.chevron.down").imageScale(.small)
-                }
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(.white.opacity(0.12), in: Capsule())
-                .animation(.snappy, value: a.soundText)
-            }
-            .accessibilityLabel("What \(title) plays")
-            .overlay(alignment: .top) { if let mark { LandBubble(mark: mark) } }
+    // What it plays sits under the alarm, the row's full width (Richard, 2026-11-13, build 281: the capsules beside the
+    // alarm cut every station to "Pandora: Sunny C…" and stood at three widths and three x positions). Every value now
+    // starts at the row's inset and ends at the same trailing edge with its chevron, and a long station name takes a
+    // second line rather than losing its words.
+    @State private var picked: [String: String] = [:]
+    // A chosen value, as every menu on Sounds draws it: its words on a soft box with the menu's chevron, left on the
+    // row's inset under its label. Shrink-wrapped to its words, so the menu's target is only the value (a full-width box
+    // caught page drags that began on it, and the menu's press-and-drag picked a station: gate on b849752). A long
+    // name takes more lines, never "…". A new value is drawn in place, never crossfaded over the old.
+    func valueBox(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(text).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+            Image(systemName: "chevron.up.chevron.down").imageScale(.small).foregroundStyle(.secondary)
         }
-        .padding(.vertical, 2)
+        .font(.subheadline.weight(.medium))
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        // 16 pt corners: a capsule on one line, and the same curve on two (not a 26 pt pill).
+        .background(Color.primary.opacity(dark ? 0.12 : 0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .transaction { $0.animation = nil }
+    }
+    func soundRow(_ title: String, _ detail: String, _ a: Alarm, mark: String?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                Text(detail).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            // A tap opens the list page (never a Menu: a slow press-and-drag on a value opened the menu and picked on
+            // release, and the open menu hopped when the value resized). The value is what he picked, drawn at once, so
+            // it is already the new words when the page has gone back.
+            Button { choosing = SoundChooser(id: a.key, title: title, calendar: mark == nil) } label: { valueBox(picked[a.key] ?? a.soundText) }
+                .buttonStyle(.plain)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("What \(title) plays")
+                .overlay(alignment: .top) { if let mark { LandBubble(mark: mark) } }
+        }
+        // A touch more under the value than over the time: the row reads level (the gate measured 23 pt over, 19 under).
+        .padding(.top, 4).padding(.bottom, 8)
+        // Held to the row's top while the list grows or shrinks the row, so the alarm's time never jumps and drifts
+        // back on a pick that changes the value's lines (gate on cd1ebc6: it centred, 10 pt off, then settled).
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    // What he picked stays drawn until the model says it too (or a few seconds pass: a refused save goes back to what the
+    // Chumby has), so a slow Chumby never shows new, old, new (gate, 11-14).
+    func release(_ key: String, until matches: @escaping @MainActor () -> Bool) {
+        Task { @MainActor in
+            for _ in 0..<60 { if matches() { break }; try? await Task.sleep(nanoseconds: 100_000_000) }
+            picked[key] = nil
+        }
+    }
+    static let fades = [(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")]
+    // The alarm (his own, or the calendar's) a chooser was opened for.
+    func alarm(for id: String) -> Alarm? { mine.first { $0.key == id } ?? calendarSound.flatMap { $0.key == id ? $0 : nil } }
+    // The page a value opens: Tones, Radio, Pandora, Silent, a check on the current one.
+    @ViewBuilder func chooserPage(_ c: SoundChooser, pane: Bool) -> some View {
+        let back = { choosing = nil }
+        if c.id == "fade" {
+            SoundListPage(name: "Fade in", sections: [PickSection(title: nil, options: Self.fades.map { PickOption(tag: "\($0.0)", label: $0.1) })],
+                          current: "\(model.state.fade)", pane: pane, pick: { t in
+                guard let v = Int(t), v != model.state.fade else { return }
+                picked["fade"] = Self.fades.first { $0.0 == v }?.1
+                MenuClose.then { model.change(.fade(v)); release("fade") { model.state.fade == v } }
+            }, done: back)
+        } else if let a = alarm(for: c.id) {
+            let tag = a.soundTag(streams: model.state.streams)
+            SoundListPage(name: c.title, sections: soundSections(a, tag: tag),
+                          current: tag, pane: pane, pick: { t in chooseSound(a, t, mark: c.calendar ? nil : a.key) }, done: back)
+        } else {
+            Color.clear.onAppear { choosing = nil }
+        }
+    }
+    func soundSections(_ a: Alarm, tag: String) -> [PickSection] {
+        var sections = [PickSection(title: "Tones", options: model.state.tones.map { PickOption(tag: "beep:" + $0, label: $0, tone: $0) })]
+        if !model.state.streams.isEmpty { sections.append(PickSection(title: "Radio", options: model.state.streams.map { PickOption(tag: "stream:" + $0.key, label: $0.name.isEmpty ? $0.url : $0.name) })) }
+        if !model.pandoraStations.isEmpty { sections.append(PickSection(title: "Pandora", options: model.pandoraStations.map { PickOption(tag: "pandora:" + $0.id, label: $0.name) })) }
+        // A sound that isn't among the options (lists not loaded yet, a station since removed) is the page's first row.
+        if tag.isEmpty { sections.insert(PickSection(title: "Now", options: [PickOption(tag: "", label: a.soundText)]), at: 0) }
+        return sections + [PickSection(title: nil, options: [PickOption(tag: "none", label: "Silent")])]
+    }
+    // The pick lands as the value at once (the page is still up, so the tab under it changes unseen), and the save and
+    // the rows it moves wait until the page has gone back.
+    func chooseSound(_ a: Alarm, _ t: String, mark: String?) {
+        guard t != a.soundTag(streams: model.state.streams) else { return }
+        var b = a; b.setSound(t, streams: model.state.streams, stations: model.pandoraStations)
+        picked[a.key] = b.soundText
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            withAnimation(.snappy) {
+                if mark != nil { model.change(.replace(a, b)); release(a.key) { alarm(for: a.key)?.soundText == b.soundText } }
+                else { commitCalendar(b, key: a.key) }
+            }
+        }
+    }
+    // Back to what the Chumby has, in one cut, if the save is turned down; the note keeps Retry and ✕.
+    func commitCalendar(_ b: Alarm, key: String) {
+        model.letGo("calsound")
+        Task {
+            if let why = await model.saveCalendarTemplate(b) { model.fail("calsound", why) }
+            picked[key] = nil
+        }
     }
 
     var body: some View {
         // Open flat, the song picker takes the right pane (its own title row and list), with the Now card live beside it.
-        TwoPane(rightTitle: pickSong && pickPane ? nil : " ", rightShown: !(wide && paneFaded),
-                rightPage: pickSong && pickPane ? AnyView(MacSongPicker(draft: draft, pane: { closePane() }).environmentObject(model)) : nil) {
+        TwoPane(rightTitle: (pickSong && pickPane) || (wide && choosing != nil) ? nil : " ", rightShown: !(wide && paneFaded),
+                rightPage: pickSong && pickPane ? AnyView(MacSongPicker(draft: draft, pane: { closePane() }).environmentObject(model))
+                    : wide ? choosing.map { c in AnyView(chooserPage(c, pane: true).environmentObject(model)) } : nil) {
             PageTitle("Sounds")
             ReachRow()
             // AirPlay in the Now card, under the volume: it's how music reaches the Chumby, and alone it was a one-row
             // capsule beside rounded cards (designer, 11-11).
             Section {
                 NowPlaying(tab: 3, failID: "sounds")
+                    // Its divider starts at the card's inset, as every other row's does, not under the song's words.
+                    .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
                     // For the build (the mock's fail scene): an alarm's sound, the alarm volume and the fade each turned
                     // down, so their notes are seen under their rows (soundsfail).
                     .task {
@@ -2159,6 +2261,7 @@ struct SoundsTab: View {
                 Toggle(isOn: Binding(get: { model.sys.airplayOn }, set: { on in model.sys.airplayOn = on; model.cmd("airplay", on ? "1" : "0", id: "airplay") })) {
                     Label("Accept AirPlay", systemImage: "airplayaudio")
                 }
+                .padding(.trailing, 2)
                 if let f = model.failed("airplay") { FailNote(text: f) }
                 // Any song in his Mac's Music library, played here by the Mac: only where the app knows the Mac, and
                 // while the Chumby accepts AirPlay, which is how the Mac reaches it.
@@ -2176,17 +2279,20 @@ struct SoundsTab: View {
             Section {
                 // A row arriving with a fresher reading slides into its place rather than reshuffling the list in a frame.
                 ForEach(mine, id: \.key) { a in
-                    soundRow("\(a.clock) \(a.meridiem)", [a.name, a.whenUnlessNamed].filter { !$0.isEmpty }.joined(separator: " · "), a, mark: a.key) { b in
-                        model.change(.replace(a, b))
-                    }
+                    soundRow("\(a.clock) \(a.meridiem)", [a.name, a.whenUnlessNamed].filter { !$0.isEmpty }.joined(separator: " · "), a, mark: a.key)
                     // Its own row, so it springs in and out as a row does (MarkNote).
                     MarkNote(mark: a.key).noteRow(lead: 0)
                 }
                 if let c = calendarSound {
-                    soundRow("Calendar alarms", "Every one your calendar sets", c, mark: nil) { b in
-                        Task { if let why = await model.saveCalendarTemplate(b) { model.fail("calsound", why) } }
+                    soundRow("Calendar alarms", "Set by your calendar", c, mark: nil)
+                    // The Chumby turned the pick down: the words went back to what it holds, and the note stays with
+                    // Retry and ✕ (as his own alarms' notes do) until it's sent again or put away.
+                    if let f = model.failed("calsound") {
+                        FailNote(text: f, dismiss: { model.clearFailedCalendarPick(); model.dismissal("calsound")?() },
+                                 retry: model.failedCalendarPick.map { t in { picked[t.key] = t.soundText; model.clearFailedCalendarPick(); commitCalendar(t, key: t.key) } },
+                                 head: "Couldn’t change the sound")
+                            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 12, trailing: 20))
                     }
-                    if let f = model.failed("calsound") { FailNote(text: f) }
                 }
                 if mine.isEmpty && calendarSound == nil { Text("No alarms yet.").foregroundStyle(.secondary) }
                 // How loud they ring: saved the careful way, and marked here if it doesn't reach the Chumby.
@@ -2206,9 +2312,18 @@ struct SoundsTab: View {
                 }
                 MarkNote(mark: "alarmVolume").noteRow(lead: 0)
                 }
-                Picker("Fade in", selection: Binding(get: { model.state.fade }, set: { model.change(.fade($0)) })) {
-                    ForEach([(-1, "Chumby default"), (0, "Off"), (5, "5 seconds"), (15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"), (300, "5 minutes")], id: \.0) { Text($0.1).tag($0.0) }
+                // Fade in draws its value as the alarms' values do: label, then the value box under it (lead, 11-13).
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Fade in").font(.subheadline.weight(.semibold))
+                    Button { choosing = SoundChooser(id: "fade", title: "Fade in") } label: {
+                        valueBox(picked["fade"] ?? Self.fades.first { $0.0 == model.state.fade }?.1 ?? "\(model.state.fade) seconds")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Fade in")
+                    .fixedSize(horizontal: false, vertical: true)
                 }
+                .padding(.top, 4).padding(.bottom, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 MarkNote(mark: "fade").noteRow(lead: 0)
             } header: { SectionHead(icon: "alarm", text: "Alarms play", color: ChumbyPalette.sub(dark)) }
             .animation(.snappy, value: mine.map(\.key))
@@ -2219,6 +2334,7 @@ struct SoundsTab: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         RowRemove(label: "Remove \(s.name.isEmpty ? "this stream" : s.name)") { pendingRemoval = s }
                     }
+                        .padding(.vertical, 4)
                         // The question hangs off the row it came from, so it points at what's going.
                         .confirmationDialog("Remove \(s.name.isEmpty ? "this stream" : s.name)?", isPresented: .init(get: { pendingRemoval?.key == s.key }, set: { if !$0 { pendingRemoval = nil } }), titleVisibility: .visible) {
                             Button("Remove", role: .destructive) {
@@ -2226,7 +2342,7 @@ struct SoundsTab: View {
                             }
                         }
                 }
-                Button { addStream = true } label: { Label("Add a radio stream", systemImage: "plus.circle.fill") }.foregroundStyle(.tint)
+                AddRow("Add a radio stream") { addStream = true }
                 if let f = model.failed("streams") { FailNote(text: f) }
                 // Pandora's stations come from the Chumby itself, once Pandora has been opened there.
                 Button {
@@ -2254,21 +2370,21 @@ struct SoundsTab: View {
                 if let f = model.failed("pscan") { FailNote(text: f) }
                 // A new station without getting up: made in Pandora on the phone, its link pasted here. The Chumby looks
                 // the station up itself (Richard, 2026-11-10: "at least add new pandora stations from apps").
-                Button { stationLink = ""; addStation = true } label: {
-                    HStack(spacing: 10) {
-                        Label("Add a Pandora station", systemImage: "plus.circle.fill")
-                        Spacer(minLength: 8)
-                        if model.addingStation { Text("Looking it up…").font(.subheadline).foregroundStyle(.secondary); ProgressView() }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .foregroundStyle(.tint).disabled(model.addingStation || model.unreachable)
+                AddRow(title: "Add a Pandora station", trailing: {
+                    if model.addingStation { Text("Looking it up…").font(.subheadline).foregroundStyle(.secondary); ProgressView() }
+                }) { stationLink = ""; addStation = true }
+                    .disabled(model.addingStation || model.unreachable)
                 if let f = model.failed("pandora") { FailNote(text: f, dismiss: model.dismissal("pandora")) }
             } header: { SectionHead(icon: "radio", text: "Stations", color: ChumbyPalette.sub(dark)) } footer: { if let scanNote { SectionFoot(scanNote) } }
         }
         .seaList()
         .task(id: model.state.volume) { if model.state.volume >= 0 { alarmVolume = Double(model.state.volume) } }
         .refreshable { await model.loadSys(); await model.loadState(); await model.loadSongs(force: true) }
+        // Folded and open upright a value's list is pushed (the system's Back); open flat it is the right pane. A turn
+        // keeps it: the binding only lets go when the page itself goes back.
+        .navigationDestination(isPresented: Binding(get: { choosing != nil && !wide }, set: { if !$0 && !wide { choosing = nil } })) {
+            if let c = choosing { chooserPage(c, pane: false).environmentObject(model) }
+        }
         .fillCover(isPresented: Binding(get: { pickSong && !pickPane }, set: { if !$0 && !pickPane { pickSong = false } })) { MacSongPicker(draft: draft, toPane: { pickPane = true }).environmentObject(model) }
         // The keyboard's flip comes before the keyboard says it's showing, so a change is only taken once it has held
         // for a moment with the keyboard down.
@@ -2307,6 +2423,7 @@ struct SoundsTab: View {
 // fun"). Nothing here is taken away by a swipe: a swipe slid the row's time off the card and left a square Delete inside
 // the rounded card ("looks fucked", 2026-11-05), so every removal is a control in the row itself.
 struct TinkerTab: View {
+    @Environment(\.paneLayout) private var wide
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.colorScheme) private var scheme
     @State private var newAccount = ""
@@ -2331,7 +2448,7 @@ struct TinkerTab: View {
     }
     // The order the widget shows each account's tweets in, saved the moment it's picked.
     static let orders: [(id: String, name: String, says: String)] = [
-        ("latest", "Latest", "Newest first."),
+        ("latest", "Latest", ""),
         ("popular", "Most popular", "Most liked and reposted, the last few weeks first."),
         ("random", "Random", "Shuffled; nothing repeats until every tweet has shown."),
     ]
@@ -2355,34 +2472,43 @@ struct TinkerTab: View {
         saveAccounts(model.sys.tw + [h])
     }
 
+    // The X widget's accounts and order. Folded it follows Night and alerts; open flat it heads the right pane's second card,
+    // under The Chumby, the credit last.
+    @ViewBuilder var xWidget: some View {
+        Section {
+            ForEach(model.sys.tw, id: \.self) { h in
+                HStack(spacing: 12) {
+                    Text("@" + h).lineLimit(1)
+                    Spacer(minLength: 8)
+                    RowRemove(label: "Stop showing @\(h)") { saveAccounts(model.sys.tw.filter { $0 != h }) }
+                }
+                .padding(.vertical, 4)
+            }
+            // The same icon column and accent as every add row; the prompt is the field itself.
+            Label {
+                TextField("", text: $newAccount, prompt: Text("Add an account").font(.body.weight(.semibold)).foregroundColor(ChumbyPalette.acc(dark)))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .submitLabel(.done).onSubmit(addAccount)
+            } icon: { Image(systemName: "plus.circle.fill").font(.body.weight(.semibold)).foregroundStyle(ChumbyPalette.acc(dark)) }
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            if let f = model.failed("twset") { FailNote(text: f) }
+            Picker("Tweet order", selection: order.ticking()) {
+                ForEach(Self.orders, id: \.id) { Text($0.name).tag($0.id) }
+                if model.sys.xorder == "oldest" { Text("Oldest first").tag("oldest") }
+            }
+            .pickerStyle(.menu)
+            if let f = model.failed("xorder") { FailNote(text: f) }
+        } header: { SectionHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X widget", color: ChumbyPalette.sub(dark), small: true) }
+        // Said only for an order that isn't the usual one; the usual one needs no footnote.
+        footer: { if model.sys.xorder != "latest" { SectionFoot(Self.orders.first { $0.id == model.sys.xorder }?.says ?? "Oldest first.") } }
+    }
     var body: some View {
         TwoPane {
             PageTitle("Enjoy tinkering?")
             ReachRow()
             NightSettings()
             NotifySettings()
-            Section {
-                ForEach(model.sys.tw, id: \.self) { h in
-                    HStack(spacing: 12) {
-                        Text("@" + h).lineLimit(1)
-                        Spacer(minLength: 8)
-                        RowRemove(label: "Stop showing @\(h)") { saveAccounts(model.sys.tw.filter { $0 != h }) }
-                    }
-                }
-                HStack(spacing: 12) {
-                    Image(systemName: "plus.circle.fill").font(.title3).foregroundStyle(ChumbyPalette.acc(dark))
-                    TextField("Add an account", text: $newAccount).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .submitLabel(.done).onSubmit(addAccount)
-                }
-                if let f = model.failed("twset") { FailNote(text: f) }
-                Picker("Tweet order", selection: order) {
-                    ForEach(Self.orders, id: \.id) { Text($0.name).tag($0.id) }
-                    if model.sys.xorder == "oldest" { Text("Oldest first").tag("oldest") }
-                }
-                .pickerStyle(.menu)
-                if let f = model.failed("xorder") { FailNote(text: f) }
-            } header: { SectionHead(icon: "bubble.left.and.text.bubble.right.fill", text: "X widget", color: ChumbyPalette.sub(dark)) }
-            footer: { SectionFoot(Self.orders.first { $0.id == model.sys.xorder }?.says ?? "Oldest first.") }
+            if !wide { xWidget }
             } right: {
             Section {
                 Button { confirm = "restart" } label: {
@@ -2420,6 +2546,7 @@ struct TinkerTab: View {
                     .padding(.vertical, 2)
                 }
             } header: { SectionHead(icon: "wrench.and.screwdriver.fill", text: "The Chumby") }
+            if wide { xWidget }
             Text("Black Chumby photo: Edward Yanquen, Wikimedia Commons, CC BY 2.0, cut out and retouched. Octopus and wordmark: Chumby’s own artwork, from this device.").font(.caption2).foregroundStyle(.secondary).listRowBackground(Color.clear)
         }
         .seaList()
@@ -2447,6 +2574,36 @@ struct SettingRow: View {
     }
 }
 
+// The one "add" row: a plus disc on the icon column, the title in body semibold in the accent, 34 pt at least, the whole
+// row the target. Add widgets, Add alarm, Add a time, Add a radio stream, Add a Pandora station and Add an account are all it.
+struct AddRow<Trailing: View>: View {
+    let title: String
+    var note: String?
+    @ViewBuilder var trailing: Trailing
+    let action: () -> Void
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Label {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).font(.body.weight(.semibold))
+                        if let note { Text(note).font(.subheadline).foregroundStyle(.secondary) }
+                    }
+                } icon: { Image(systemName: "plus.circle.fill").font(.body.weight(.semibold)) }
+                    .foregroundStyle(ChumbyPalette.acc(scheme == .dark))
+                Spacer(minLength: 8)
+                trailing
+            }
+            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+}
+extension AddRow where Trailing == EmptyView {
+    init(_ title: String, note: String? = nil, action: @escaping () -> Void) { self.title = title; self.note = note; self.trailing = EmptyView(); self.action = action }
+}
 // Taking a row out, in the row: a control he can see, never a swipe that slides the row off its card. Drawn at full
 // strength, a white mark on a coloured disc (red to remove, the accent to put a note away): grey on grey read as disabled
 // (Richard, 11-07: "greyed out xs when they r seemingly actionable r confusing"; designer, 11-11). 44 pt to hit.
@@ -2464,14 +2621,14 @@ struct RowRemove: View {
                     if icon.hasPrefix("minus") { Capsule().fill(.white).frame(width: 10, height: 2.5) }
                     else { Image(systemName: "xmark").font(.system(size: 9, weight: .heavy)).foregroundStyle(.white) }
                 }
-                // The target: 6 pt in toward the control beside it (never reaching it: rows space them 8 pt or more), 7 pt
-                // out into the card's own margin, 44 pt tall.
-                .padding(.leading, 6).padding(.trailing, 7).frame(height: 44).contentShape(Rectangle())
+                // The target: 44 pt square, 16 pt in toward the control beside it (rows with a capsule space them 16 pt, so it
+                // never reaches onto one), 7 pt out into the card's own margin.
+                .padding(.leading, 16).padding(.trailing, 7).frame(height: 44).contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
         // Laid out as the 21 pt disc alone, 36 pt tall: its right edge on the row's content margin, where switches and
         // steppers end, and no row taller than before.
-        .padding(.leading, -6).padding(.trailing, -7).padding(.vertical, -4)
+        .padding(.leading, -16).padding(.trailing, -7).padding(.vertical, -4)
         .accessibilityLabel(label)
     }
 }
@@ -2575,7 +2732,8 @@ struct NightSettings: View {
                     NightStyleTile(style: st.0, name: st.1, chosen: model.nightStyle == st.0) { model.tick(); choose(st.0) }
                 }
             }
-            .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14))
+            .listRowInsets(EdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20))
+            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
             ForEach($model.state.schedule) { $e in
                 HStack(spacing: 12) {
                     Image(systemName: e.cmd == "night" ? (e.val == "off" ? "sun.max.fill" : "moon.fill") : e.cmd == "screen" ? "sun.min" : "tv")
@@ -2602,6 +2760,7 @@ struct NightSettings: View {
                         // row is found again by what it held, since a time's place can move in the meantime.
                         Picker("What happens", selection: Binding(get: { tag(e) }, set: { v in
                             guard v != tag(e) else { return }
+                            Haptic.fire(.tick)
                             let was = e
                             MenuClose.then {
                                 guard let i = model.state.schedule.firstIndex(of: was) else { return }
@@ -2630,11 +2789,14 @@ struct NightSettings: View {
                     // "i should be able to delete an entry for the night time thing").
                     RowRemove(label: "Remove the \(words(e).lowercased()) time") { remove(e.id) }
                 }
+                .padding(.vertical, 4)
+                .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
             }
-            Button {
+            AddRow("Add a time") {
                 var e = ScheduleItem(); e.val = model.nightStyle
                 model.state.schedule.append(e); model.state.reindex(); Task { await model.saveSchedule() }
-            } label: { Label("Add a time", systemImage: "plus.circle.fill") }.foregroundStyle(.tint)
+            }
+            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
             if let f = model.failed("schedule") { FailNote(text: f) }
         // Named for all it holds: the night style, and the times the Chumby switches night, day, screen and channel by
         // itself. Headed "Night", a 7:00 AM "Day starts" or a channel switch read as being in the wrong section.
@@ -2670,7 +2832,7 @@ struct NightStyleTile: View {
                         }
                     }
                     .overlay(screen.strokeBorder(chosen ? acc : .white.opacity(0.18), lineWidth: chosen ? 2.5 : 1))
-                    .frame(maxWidth: 104)
+                    .frame(maxWidth: 190)
                 Text(name).font(.custom("Trebuchet MS", size: 14).weight(.bold))
                     .foregroundStyle(chosen ? acc : ChumbyPalette.sub(scheme == .dark))
             }
@@ -2763,7 +2925,8 @@ struct SkipCard: View {
             Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold))
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .overlay { StrikeLine(progress: struck ? 1 : 0) }
-            Text("\(day(at)) · \(label(name))" + (moved != nil ? usual.map { " · usually \(time($0))" } ?? "" : "")).font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
+            // Moved for one ring, the usual time is on the button ("Back to 6:45 AM"), so it isn't said twice.
+            Text("\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
         }
         .foregroundStyle(.white)
     }
@@ -2796,7 +2959,7 @@ struct SkipCard: View {
                     // Moved for one ring, "Back to 6:45 AM" is a row of its own under the words: beside them it
                     // squeezed the heading, time and day to "Just this on… / 6:55… / Today · Wo…" folded and open
                     // (build 218).
-                    VStack(alignment: .trailing, spacing: moved != nil ? 10 : 0) {
+                    VStack(alignment: .center, spacing: moved != nil ? 10 : 0) {
                         HStack(spacing: 14) {
                             SleepyOctopus(asleep: asleep, tint: .white)
                             lines(next.0, next.1, struck: asleep)
