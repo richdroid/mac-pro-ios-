@@ -853,6 +853,8 @@ function tvFlickStart(kind, q, s, path, json) {
   if (q.method === 'POST' && path === '/api/tv/key') return read(b => { log('key', b); json({ ok: true }); });
   if (q.method === 'POST' && /^\/api\/tv\/flick-(lift|cancel)$/.test(path)) return read(b => { log(path.slice(8), b); json({ ok: true }); });
   // The app's hand-off timing (frame hitches from release to landing), so the build's log has a line to read.
+  // Volume: only ever the "setting" (the box's own HDMI volume), never a CEC volume key.
+  if (q.method === 'POST' && path === '/api/tv/setting') return read(b => { log('setting', b); json({ ok: true }); });
   if (q.method === 'POST' && path === '/api/tv/timing') return read(b => { log('timing', b); json({ ok: true }); });
   if (q.method === 'POST' && /^\/api\/tv\/(flick|open|stremio-open|film|send|mint-open|music|stop-playing)$/.test(path)) return read(b => { log(path.slice(8), b); if (path.endsWith('stop-playing')) { st.result = 'stopped'; st.endedAt = Date.now(); } json({ ok: true }); });
   if (q.method === 'POST' && path === '/api/tv/play-stream') return read(b => {
