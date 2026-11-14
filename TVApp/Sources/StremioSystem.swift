@@ -156,8 +156,8 @@ struct PhoneTitleQuery: EntityStringQuery {
     }
 }
 struct PlayOnIPhone: AppIntent {
-    static var title: LocalizedStringResource = "Play on iPhone"
-    static var description = IntentDescription("Finds a film or show in your Stremio add-ons and plays it on this iPhone.")
+    static var title: LocalizedStringResource = "Play on This Phone"
+    static var description = IntentDescription("Finds a film or show in your Stremio add-ons and plays it on this phone.")
     static var openAppWhenRun = true
     @Parameter(title: "Film or show") var title: PhoneTitleEntity
     @MainActor func perform() async throws -> some IntentResult {
@@ -166,8 +166,8 @@ struct PlayOnIPhone: AppIntent {
     }
 }
 struct ResumeOnIPhone: AppIntent {
-    static var title: LocalizedStringResource = "Resume on iPhone"
-    static var description = IntentDescription("Carries on with what you last watched on this iPhone, from where you were.")
+    static var title: LocalizedStringResource = "Resume on This Phone"
+    static var description = IntentDescription("Carries on with what you last watched on this phone, from where you were.")
     static var openAppWhenRun = true
     @MainActor func perform() async throws -> some IntentResult {
         guard let r = PhoneRecents.all.first else { throw StremioError(message: "Nothing has played on this iPhone yet.") }
