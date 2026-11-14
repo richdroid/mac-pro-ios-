@@ -664,6 +664,8 @@ struct EpisodePicker: View {
     // The row that's on its way to the TV, with the light running round it.
     var busy: String?
     let choose: (StremioEpisode) -> Void
+    // Where given, every row but the one playing can be lifted and thrown to the TV (the shelves' flick).
+    var flickItem: ((StremioEpisode) -> MediaItem)? = nil
     // The season chips and the rows, or one of them, for a list whose chips stay put over its scrolling rows.
     enum Part { case all, header, rows }
     var part = Part.all
@@ -675,20 +677,30 @@ struct EpisodePicker: View {
         if e == c { return currentLabel != "Playing" && (progress ?? 0) > 0.9 }
         return (e.season, e.episode) < (c.season, c.episode)
     }
+    // Over pinned rows the chips are a row of their own, edge to edge in the panel, scrolling to the 8th and beyond with
+    // room after the last, never a chip cut at the edge it can't be scrolled past.
+    var pinned = false
     var header: some View {
-        HStack(spacing: 12) {
-            Text("Season").font(.title3.weight(.bold))
-            Chips(options: seasons.map { ($0, $0 == 0 ? "Specials" : "\($0)") }, selected: $season).rowEdge()
+        Group {
+            if pinned {
+                Chips(options: seasons.map { ($0, $0 == 0 ? "Specials" : "\($0)") }, selected: $season, inset: 20)
+                    .padding(.horizontal, -20)
+            } else {
+                HStack(spacing: 12) {
+                    Text("Season").font(.title3.weight(.bold))
+                    Chips(options: seasons.map { ($0, $0 == 0 ? "Specials" : "\($0)") }, selected: $season).rowEdge()
+                }
+            }
         }
     }
     // In a narrow pane the still gives way to the name, so a name is never cut to "Episod…" (r19).
     @State private var narrow = false
     var thumb: CGFloat { narrow ? 80 : 112 }
-    func row(_ e: StremioEpisode) -> some View {
+    func row(_ e: StremioEpisode) -> AnyView {
         let on = e.id == current
         let mins = info?.minutes[e.id] ?? e.runtime ?? info?.show
         let about = info?.about[e.id] ?? e.overview
-        return Button { choose(e) } label: {
+        let button = Button { choose(e) } label: {
             HStack(spacing: 12) {
                 Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                     .frame(width: thumb, height: thumb * 9 / 16)
@@ -729,6 +741,8 @@ struct EpisodePicker: View {
         // The press asks for its streams, so the list is on its way before the tap lands.
         .buttonStyle(PressCard(onPress: { StreamCache.shared.prefetch(episode: e.id) }))
         .disabled(busy != nil)
+        if let flickItem, !on { return AnyView(button.modifier(EpisodeFlick(item: flickItem(e), width: thumb))) }
+        return AnyView(button)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -830,10 +844,9 @@ struct RunningEdge: Shape {
 struct EpisodesLine: View {
     @Environment(TVModel.self) var model
     @ObservedObject private var nextUp = NextUp.shared
-    @State private var open = false
+    @ObservedObject private var panel = EpisodesPanel.shared
     // How far down the screen the line sits, so the list above it can stop below the page's title: grown to the top, it
     // covered "Remote" all but a sliver of its R, which read as a stray letter (r27, r28).
-    @State private var lineTop: CGFloat = 0
     var body: some View {
         // A start under way: its own episode, read from the start, never the one still reported from before it (2026-11-08:
         // the next episode thrown, and the line under its poster still named the last one until the TV caught up). The
@@ -853,7 +866,7 @@ struct EpisodesLine: View {
             }
         } else if model.videoIsCurrent, let s = model.status?.session, s.pkg == "com.stremio.one", let line = s.episodeLine, nextUp.series != nil {
           Group {
-            Button { model.tick(); open = true } label: {
+            Button { model.tick(); withAnimation(.easeOut(duration: 0.22)) { panel.open = true } } label: {
                 // Where the whole line doesn't fit (folded, beside the side bar), the word "Episodes" gives way before the
                 // episode's own name does (r33: "S1 E…  Episod/es").
                 ViewThatFits(in: .horizontal) {
@@ -888,24 +901,12 @@ struct EpisodesLine: View {
                 .padding(.horizontal, 16).frame(height: 46).contentShape(Capsule())
             }
             .buttonStyle(.plain).glassEffect(.regular.interactive(), in: Capsule())
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { lineTop = $0 }
             // Out of the way while a flick's screen moves onto the picture above it, like the bar.
             .opacity(model.flickHandoff ? 0 : 1)
             .transition(.opacity)
-            // Over the page, sized to it, not a page of its own: tap outside or pull it down and it's gone.
-            .popover(isPresented: $open, arrowEdge: .bottom) {
-                EpisodeSheet { open = false }
-                    // Clear of the title and its line under it (about 70 pt from the top, with the arrow), and over the whole
-                    // TV picture beneath, never leaving its top edge peeking out (r30): it always opens upward. Only above
-                    // a line lower than 340 pt was it capped before, and open the line sits at about 330, so the list still
-                    // reached the top and a sliver of "Remote" showed beside it (r29). Folded it's a sheet, where this is ignored.
-                    .frame(idealWidth: 440, idealHeight: min(560, max(220, lineTop - 92)))
-                    .presentationCompactAdaptation(.sheet)
-                    .presentationDetents([.medium, .large])
-            }
           }
           // The build's shot of the episodes over the Remote ("-pose episodes").
-          .task { if UserDefaults.standard.string(forKey: "pose") == "episodes" { try? await Task.sleep(nanoseconds: 3_000_000_000); open = true } }
+          .task { if UserDefaults.standard.string(forKey: "pose") == "episodes" { try? await Task.sleep(nanoseconds: 3_000_000_000); panel.open = true } }
         }
     }
 }
@@ -935,10 +936,10 @@ struct ShowEpisodes: View {
             busy = e.id
             model.flick(FlickTarget(item: NextUp.item(s, e), source: .stremio, ready: true, autoplay: true))
             Task { try? await Task.sleep(nanoseconds: 250_000_000); busy = nil; picked() }
-        }, part: part)
+        }, flickItem: pinsHeader ? { NextUp.item(s, $0) } : nil, part: part, pinned: pinsHeader)
     }
     @ViewBuilder var title: some View {
-        if titled, let s = nextUp.series { Text(s.title).font(.title2.weight(.bold)).lineLimit(2) }
+        if titled, let s = nextUp.series { Text(s.title).font(.title2.weight(.bold)).lineLimit(2).padding(.trailing, pinsHeader ? 48 : 0) }
     }
     @ViewBuilder func rows(_ part: EpisodePicker.Part) -> some View {
         if let meta, let s = nextUp.series { picker(meta, s, part) }
@@ -992,23 +993,47 @@ struct ShowEpisodes: View {
         }
     }
 }
-// The same, over the Remote: tap outside or pull it down and it's gone.
-struct EpisodeSheet: View {
-    let close: () -> Void
+// The episodes over the Remote: a real surface of the Remote's own page, not a popover. Open flat it takes the whole left
+// column, upright and folded nearly the whole page. It lives in the Remote's layout so a row lifted off it can be thrown
+// to the TV (the shelves' flick); the close key is its own.
+@MainActor
+final class EpisodesPanel: ObservableObject {
+    static let shared = EpisodesPanel()
+    @Published var open = false
+    func close() { withAnimation(.easeOut(duration: 0.22)) { open = false } }
+}
+struct EpisodePanel: View {
+    @Environment(TVModel.self) var model
+    @ObservedObject private var nextUp = NextUp.shared
+    @ObservedObject private var panel = EpisodesPanel.shared
     var body: some View {
-        // An opaque enough backdrop and its own top inset, so nothing of the page under it (the "Remote" title) shows at its
-        // top edge (r20).
-        // The show's name and the seasons held at the top, 28 pt down so the grabber is clear of them, and only the rows
-        // scroll, under them, so no row's words ever sit under the grabber. The same 20 pt each side: the side bar's inset
-        // isn't the sheet's, and kept, it left a 95 pt strip on the right (review of dfd490e, tv-episodes).
-        ShowEpisodes(titled: true, pinsHeader: true, picked: close)
-            .frame(maxWidth: 560).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.top, 28)
-            .ignoresSafeArea(.container, edges: [.leading, .trailing, .bottom])
-        // Opaque: the material let the Remote's title show through as a stray "F" behind its top, open (r27).
-        .presentationBackground(Color(white: 0.12))
-        // One corner shape all round, whether it's a popover or a sheet (r21: one square corner, one round).
-        .presentationCornerRadius(28)
+        ShowEpisodes(titled: true, pinsHeader: true, picked: { panel.close() })
+            .frame(maxWidth: 640).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.top, 18)
+            .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                Button { model.tick(); panel.close() } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 15, weight: .bold)).frame(width: 44, height: 44).contentShape(Circle())
+                }
+                .buttonStyle(.plain).background(.white.opacity(0.1), in: Circle()).padding(.top, 12).padding(.trailing, 14)
+                .accessibilityLabel("Close episodes")
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            // Thrown to the TV, or the show gone: nothing left to pick.
+            .onChange(of: model.flicking != nil) { _, on in if on { panel.close() } }
+            .onChange(of: nextUp.series == nil) { _, gone in if gone { panel.close() } }
+            .transition(.opacity)
+    }
+}
+// A row lifted off the list and thrown to the TV, the way a shelf's card is.
+struct EpisodeFlick: ViewModifier {
+    let item: MediaItem
+    let width: CGFloat
+    @State private var place = FrameBox()
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
+            .modifier(ShelfFlick(item: item, source: .stremio, width: width, rect: { [place] in place.rect ?? .zero }))
     }
 }
 

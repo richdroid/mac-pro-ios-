@@ -110,7 +110,7 @@ jobs:
           if has remote; then
             # The Remote in every posture and state: folded (the cover display, the rail on the right), open upright,
             # open flat, then folded and turned. One column: the keys' edges are the picture's, nothing under the rail.
-            remotes() { for S in repisode rfilm ridle rmint ryoutube roffline; do shot remote-$S$2 $1 8 $M/$S -tab 0; done; shot remote-type$2 $1 9 $M/repisode -tab 0 -pose type; }
+            remotes() { for S in repisode rfilm ridle rmint ryoutube roffline; do shot remote-$S$2 $1 8 $M/$S -tab 0; done; shot remote-type$2 $1 9 $M/repisode -tab 0 -pose type; shot remote-episodes$2 $1 10 $M/repisode -tab 0 -pose episodes; }
             remotes 1 ""
             # In motion: the Remote left on a TV whose state changes every 8 s (a show, a film, nothing, Mint, an episode
             # with no length), so nothing may move or resize as a state comes and goes. Folded, then open upright.

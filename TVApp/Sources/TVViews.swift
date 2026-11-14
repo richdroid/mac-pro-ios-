@@ -1270,6 +1270,11 @@ struct RemoteTab: View {
     // Read only inside KeysArrive, so the keys coming in redraws them alone, not the whole Remote: as a plain @State it
     // re-laid out both open panes mid-move, the 147–177 ms hitch at +0.72 s (r27).
     @State private var keysGate = KeysGate()
+    @ObservedObject private var epPanel = EpisodesPanel.shared
+    // The episodes, over what they're given: a page's whole width or the left column, with a margin the pad's size.
+    @ViewBuilder func episodesPanel() -> some View {
+        if epPanel.open && (session || model.status?.session != nil) { EpisodePanel().padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 12).transition(.opacity) }
+    }
     var state: String {
         // Not reaching it is said once, by the red note at the top; "Connecting…" under it contradicted it.
         if unreachable || !model.reachable { return "" }
@@ -1607,6 +1612,7 @@ struct RemoteTab: View {
                     }
                 }
                 .ignoresSafeArea(lay ? .keyboard : [], edges: .bottom)
+                .overlay { episodesPanel() }
             } else if size == .regular {
                 FoldSplit {
                     // The apps come along when there's room, and step aside when held in portrait.
@@ -1614,12 +1620,13 @@ struct RemoteTab: View {
                         // While typing on the TV the keyboard is for the other pane, so this one keeps its size under it
                         // rather than squeezing the screen and cutting its labels. Its own search box still lifts.
                         .ignoresSafeArea(lay ? .keyboard : [], edges: .bottom)
+                        .overlay { episodesPanel() }
                 } right: { keysColumn }
             } else if vSize == .compact {
                 // Folded and turned sideways: the picture beside the pad, as open. Not through FoldSplit, whose split
                 // arrangement shows only its first pane on the folded display (54832f8's shot: no pad and no keys at all).
                 HStack(spacing: 0) {
-                    side(apps: false).ignoresSafeArea(lay ? .keyboard : [], edges: .bottom).frame(maxWidth: .infinity)
+                    side(apps: false).ignoresSafeArea(lay ? .keyboard : [], edges: .bottom).overlay { episodesPanel() }.frame(maxWidth: .infinity)
                     keysColumn.frame(maxWidth: .infinity)
                 }
             } else {
@@ -1674,6 +1681,7 @@ struct RemoteTab: View {
                 .settledAnimation(.easeOut(duration: 0.25), value: session)
                 .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
                 .padding(.horizontal, 14).padding(.bottom, 12)
+                .overlay { episodesPanel() }
             }
         }
         // Always a line under the title, blank when there's nothing to say, so "Remote" never moves as a show starts or
@@ -1727,7 +1735,7 @@ struct RemoteTab: View {
         // he left it, for the next visit.
         .onAppear { model.remoteBuilt = true; model.warmMirror() }
         // Leaving the tab leaves the typing too, so coming back never finds the keyboard already up.
-        .onDisappear { typing = false }
+        .onDisappear { typing = false; epPanel.open = false }
         // The app tiles' banners fetched once, ahead, so the open Remote's tiles never show their stand-ins first.
         .task(id: model.status?.apps?.map(\.pkg) ?? []) {
             for a in AppsTab.watching(model.status?.apps ?? []).prefix(8) where a.hasIcon {
