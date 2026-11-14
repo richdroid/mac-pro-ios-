@@ -95,7 +95,7 @@ extension TrackInfo {
 // on Last.fm (asked once, kept a month).
 enum ArtistArt {
     static func ref(_ name: String) async -> ArtRef {
-        if let c = await HistoryDB.shared.cover(of: name), c.url != nil { return ArtRef(artist: name, album: c.album, url: c.url) }
+        if let c = await HistoryDB.reader.cover(of: name), c.url != nil { return ArtRef(artist: name, album: c.album, url: c.url) }
         if let j = try? await LastFM.shared.call("artist.gettopalbums", ["artist": name, "limit": "2", "autocorrect": "1"], fresh: 30 * 86400) {
             for a in j["topalbums"]["album"].array {
                 let album = a["name"].text
@@ -223,7 +223,7 @@ enum RemoteChart {
             out.append(Entry(kind: kind, artist: artist, album: album, track: kind == .tracks ? name : "", plays: x["playcount"].int ?? 0, image: Scrobble.bestImage(x["image"]), rank: out.count + 1))
         }
         if kind == .artists || kind == .tracks {
-            for i in out.indices { if let c = await HistoryDB.shared.cover(of: out[i].artist) { out[i] = out[i].with(album: c.album, image: c.url) } }
+            for i in out.indices { if let c = await HistoryDB.reader.cover(of: out[i].artist) { out[i] = out[i].with(album: c.album, image: c.url) } }
         }
         return out
     }

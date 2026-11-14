@@ -94,7 +94,7 @@ struct ChartSummary: Sendable {
         task = Task {
             let sync = HistorySync.shared
             let w = window(p)
-            let db = HistoryDB.shared
+            let db = HistoryDB.reader
             var list: [Entry] = []
             var sum: ChartSummary?
             if sync.complete || sync.coveredFrom <= w.from {
@@ -145,7 +145,7 @@ struct ChartSummary: Sendable {
                 return (Int(s.timeIntervalSince1970), min(Int(e.timeIntervalSince1970), now))
             }
             guard let first = weeks.first else { return }
-            let db = HistoryDB.shared
+            let db = HistoryDB.reader
             let top = await db.top(k, from: first.0, to: now, limit: 10, median: 215)
             let ranks = await db.weekly(k, weeks: weeks, depth: 20)
             bumpCache[k] = (top, ranks, weeks)
@@ -428,9 +428,9 @@ struct BumpSection: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Ranks over the last twelve weeks: " + m.bump.map { e in "\(e.title), now \(m.bumpRanks.last?[e.rankKey].map { "number \($0)" } ?? "out of the top 20")" }.joined(separator: "; "))
     }
-    // Followed: the one tapped, else whichever leads this week.
-    private var followed: String? { follow ?? byNow.first?.id }
-    private var byNow: [Entry] { m.bump.sorted { (m.bumpRanks.last?[$0.rankKey] ?? 99) < (m.bumpRanks.last?[$1.rankKey] ?? 99) } }
+    // Followed: the one tapped, else the most played across the twelve weeks (the longest line to follow).
+    private var followed: String? { follow ?? m.bump.first?.id }
+    private var byNow: [Entry] { m.bump }
     private var legend: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: S.figures)], alignment: .leading, spacing: S.pair * 2) {
             ForEach(byNow) { e in
@@ -507,6 +507,6 @@ struct WeekRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(Press())
-        .task(id: w.from) { top = await HistoryDB.shared.weekTop(from: w.from, to: w.to) }
+        .task(id: w.from) { top = await HistoryDB.reader.weekTop(from: w.from, to: w.to) }
     }
 }

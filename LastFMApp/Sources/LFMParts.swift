@@ -240,8 +240,11 @@ struct FigureGrid: View {
     var size: CGFloat = 30
     @State private var width: CGFloat = 360
     var body: some View {
-        let room: CGFloat = (width + S.figures) / (104 + S.figures)
-        let fit: Int = max(1, Int(room))
+        // A column is as wide as the longest figure needs, allowing it to shrink to 72 % (Figure's own limit is 70 %),
+        // so no figure is ever cut short ("Mar 14, 20…" open flat, run 12).
+        let longest: Int = items.map { $0.0.count }.max() ?? 3
+        let need: CGFloat = max(84, (CGFloat(longest) * size * 0.52 + 4) * 0.72)
+        let fit: Int = max(1, Int((width + S.figures) / (need + S.figures)))
         let n: Int = items.count
         let cols: Int = n <= fit ? max(n, 1) : Self.even(n, fit)
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: S.figures, alignment: .topLeading), count: cols), alignment: .leading, spacing: S.inner) {

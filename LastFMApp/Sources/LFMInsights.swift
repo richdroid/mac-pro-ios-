@@ -135,6 +135,8 @@ struct YearAxis: View {
         for y in first...last where (y - first) % step == 0 {
             let i = CGFloat(max(0, y * 12 - from))
             let x: CGFloat = min(max(12, i / span * width + 12), width - 12)
+            // A year that began a few months before the first gives way to the next rather than sit on it.
+            if let prev = out.last, x - prev.x < 30 { out.removeLast() }
             out.append(Mark(year: y, label: "’" + String(String(y).suffix(2)), x: x))
         }
         return out

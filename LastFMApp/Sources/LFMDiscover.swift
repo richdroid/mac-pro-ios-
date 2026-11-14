@@ -34,7 +34,7 @@ struct Rec: Codable, Hashable, Identifiable, Sendable {
         Task { await work(); working = false }
     }
     private func work() async {
-        let db = HistoryDB.shared
+        let db = HistoryDB.reader
         let now = Int(Clock.now.timeIntervalSince1970) + 1
         // Seeds: the twelve he's played most in three months, weighted by how much.
         let seeds = await db.top(.artists, from: now - 90 * 86400, to: now, limit: 12, median: 215)

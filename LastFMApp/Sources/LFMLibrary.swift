@@ -29,7 +29,7 @@ enum LibShelf: Int, CaseIterable, Sendable {
             lovedAsked = true
             Task {
                 if let l = await Loved.load() { withAnimation(.smooth) { loved = l } }
-                lovedPlays = await HistoryDB.shared.lovedPlays(loved.map { ($0.artist, $0.title) })
+                lovedPlays = await HistoryDB.reader.lovedPlays(loved.map { ($0.artist, $0.title) })
             }
         }
     }
@@ -39,7 +39,7 @@ enum LibShelf: Int, CaseIterable, Sendable {
         guard !loading.contains(k), lists[k] == nil || abs((stamp[k] ?? 0) - read) > 50 else { return }
         loading.insert(k)
         Task {
-            let db = HistoryDB.shared
+            let db = HistoryDB.reader
             var list = await db.library(k)
             if k == .artists {
                 let covers = await db.artistCovers()
@@ -94,7 +94,7 @@ struct LibraryTab: View {
             if pane {
                 // Open flat: the search and the shelves on the left, the list on the right; nothing crosses the fold.
                 FoldSplit {
-                    Page(top: top) { head.padding(.top, S.head) }
+                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { head; overview }.padding(.top, S.head) }
                 } right: {
                     Page(top: top) { LazyVStack(alignment: .leading, spacing: 0) { if m.query.isEmpty { shelf } else { results } }.padding(.top, S.section) }
                 }
@@ -131,6 +131,33 @@ struct LibraryTab: View {
                 .padding(.horizontal, S.margin)
             }
         }
+    }
+
+    // Open flat, the left pane's room: how big his library is, and the shelf's nine most played, each opening its page.
+    @ViewBuilder private var overview: some View {
+        let kind = Kind(rawValue: m.shelf.rawValue) ?? .artists
+        let top = m.shelf == .loved ? [] : Array((m.lists[kind] ?? []).prefix(9))
+        VStack(alignment: .leading, spacing: S.section) {
+            FigureGrid(items: [
+                (number(m.lists[.artists]?.count ?? 0), "artists"),
+                (number(m.lists[.albums]?.count ?? 0), "albums"),
+                (number(m.lists[.tracks]?.count ?? 0), "tracks"),
+                (number(m.loved.count), "loved"),
+            ])
+            if top.count == 9 {
+                VStack(alignment: .leading, spacing: S.head) {
+                    SectionHead(text: "most played")
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 3), spacing: 1) {
+                        ForEach(top) { e in
+                            Opens(route: e.route, zoom: "libtop|\(e.id)") { ArtView(e.art, px: 300, corner: 0).zoomSource("libtop|\(e.id)") }
+                                .accessibilityLabel("\(e.rank). \(e.title)")
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
+        }
+        .padding(.horizontal, S.margin)
     }
 
     private var search: some View {

@@ -187,14 +187,14 @@ struct ArtistPage: View {
     }
     private func load() async {
         let median = LengthFill.shared.median
-        async let st = HistoryDB.shared.story(artist: name, median: median)
+        async let st = HistoryDB.reader.story(artist: name, median: median)
         async let c = ArtistArt.ref(name)
         story = await st
         cover = await c
         let i = await ArtistInfo.load(name)
         info = i
         // Last.fm's top tracks, each with his own plays of it, and covers from his history where he has them.
-        let mine = await HistoryDB.shared.playsOf(artist: name, tracks: i.top.map(\.track))
+        let mine = await HistoryDB.reader.playsOf(artist: name, tracks: i.top.map(\.track))
         mineOnTheirs = mine
         var t = i.top
         for k in t.indices {
@@ -204,7 +204,7 @@ struct ArtistPage: View {
         theirs = t
         apple = await AppleMusic.shared.link(.artist, artist: name)
         // Similar artists, his plays of each, then their covers as they come.
-        let counts = await HistoryDB.shared.playsOf(artists: i.similar.map(\.name))
+        let counts = await HistoryDB.reader.playsOf(artists: i.similar.map(\.name))
         similar = i.similar.prefix(14).map { Entry(kind: .artists, artist: $0.name, album: "", track: "", plays: counts[$0.name.lowercased()] ?? 0) }
         for k in similar.indices {
             let r = await ArtistArt.ref(similar[k].artist)
@@ -311,8 +311,8 @@ struct AlbumPage: View {
         }
     }
     private func load() async {
-        image = await HistoryDB.shared.artURL(artist, album)
-        story = await HistoryDB.shared.story(artist: artist, album: album, median: LengthFill.shared.median)
+        image = await HistoryDB.reader.artURL(artist, album)
+        story = await HistoryDB.reader.story(artist: artist, album: album, median: LengthFill.shared.median)
         let i = await AlbumInfo.load(artist: artist, album: album)
         info = i
         if image == nil { image = i.image }
@@ -411,15 +411,15 @@ struct TrackPage: View {
         }
     }
     private func load() async {
-        async let st = HistoryDB.shared.story(artist: s.artist, track: s.title, median: LengthFill.shared.median)
+        async let st = HistoryDB.reader.story(artist: s.artist, track: s.title, median: LengthFill.shared.median)
         story = await st
         info = await TrackInfo.load(s)
         if let d = info?.duration { await HistoryDB.shared.keepLengths([(s.artist, s.title, d)]) }
         var sim = await TrackInfo.similar(s)
         for k in sim.indices {
-            let n = await HistoryDB.shared.playsOf(artist: sim[k].artist, tracks: [sim[k].track])[sim[k].track.lowercased()] ?? 0
+            let n = await HistoryDB.reader.playsOf(artist: sim[k].artist, tracks: [sim[k].track])[sim[k].track.lowercased()] ?? 0
             var e = Entry(kind: .tracks, artist: sim[k].artist, album: "", track: sim[k].track, plays: n, image: sim[k].image)
-            if e.image == nil, let c = await HistoryDB.shared.cover(of: e.artist) { e = e.with(album: c.album, image: c.url) }
+            if e.image == nil, let c = await HistoryDB.reader.cover(of: e.artist) { e = e.with(album: c.album, image: c.url) }
             sim[k] = e
         }
         similar = Array(sim.prefix(8))

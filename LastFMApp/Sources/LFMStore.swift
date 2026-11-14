@@ -169,7 +169,7 @@ struct Profile: Sendable {
     func workToday() {
         let from = Int(dayBegan.timeIntervalSince1970), to = Int(Clock.now.timeIntervalSince1970) + 1
         Task {
-            let db = HistoryDB.shared
+            let db = HistoryDB.reader
             let t = await db.time(from: from, to: to)
             let median = await db.medianLength()
             todaySecs = HistoryDB.listening(plays: t.plays, secs: t.secs, known: t.known, median: median)

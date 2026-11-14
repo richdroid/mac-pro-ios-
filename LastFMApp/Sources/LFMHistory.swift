@@ -36,13 +36,24 @@ enum LocalDay {
 
 actor HistoryDB {
     static let shared = HistoryDB()
+    // The screens' own connection, read only: what a screen asks (a chart, the library, a page) never waits behind the
+    // history being kept, the insights worked out or track lengths filled in on the one above (run 12: Charts still
+    // turning at 9 s). WAL lets the two read and write at once.
+    static let reader = HistoryDB(reader: true)
     private(set) var db: OpaquePointer?
+    private let isReader: Bool
+    static var url: URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return dir.appendingPathComponent(LastFM.shared.mock ? "history-mock.sqlite" : "history.sqlite")
+    }
 
-    init() {
+    init(reader: Bool = false) {
+        isReader = reader
+        // Opened on its first question, once the writer has made the file.
+        if reader { return }
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let name = LastFM.shared.mock ? "history-mock.sqlite" : "history.sqlite"
-        let url = dir.appendingPathComponent(name)
+        let url = Self.url
         // The build starts each launch it asks for afresh (-fresh YES), to film the first read.
         if UserDefaults.standard.bool(forKey: "fresh") { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + s) } }
         var h: OpaquePointer?
@@ -65,6 +76,10 @@ actor HistoryDB {
     }
 
     func prepare(_ sql: String) -> OpaquePointer? {
+        if db == nil, isReader {
+            var h: OpaquePointer?
+            if sqlite3_open_v2(Self.url.path, &h, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK { db = h } else { sqlite3_close(h) }
+        }
         var s: OpaquePointer?
         return sqlite3_prepare_v2(db, sql, -1, &s, nil) == SQLITE_OK ? s : nil
     }
