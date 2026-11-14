@@ -2097,6 +2097,7 @@ struct SoundsTab: View {
     // alarm cut every station to "Pandora: Sunny C…" and stood at three widths and three x positions). Every value now
     // starts at the row's inset and ends at the same trailing edge with its chevron, and a long station name takes a
     // second line rather than losing its words.
+    @State private var picked: [String: String] = [:]
     func soundRow(_ title: String, _ detail: String, _ a: Alarm, mark: String?, choose: @escaping (Alarm) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
@@ -2109,7 +2110,14 @@ struct SoundsTab: View {
                 Picker("Plays", selection: Binding(get: { a.soundTag(streams: model.state.streams) }, set: { t in
                     guard t != a.soundTag(streams: model.state.streams) else { return }
                     var b = a; b.setSound(t, streams: model.state.streams, stations: model.pandoraStations)
-                    MenuClose.then { choose(b) }
+                    // The new words are on the value at once, so it is the new value that lands as the menu folds into
+                    // it (as the editor's Sound row does); the save, and the rows it moves, wait for the close.
+                    picked[a.key] = b.soundText
+                    MenuClose.then {
+                        choose(b)
+                        // Let go once the alarm says it (below), or after a while if the save never lands.
+                        Task { @MainActor in try? await Task.sleep(nanoseconds: 8_000_000_000); picked[a.key] = nil }
+                    }
                 })) {
                     Section("Tones") { ForEach(model.state.tones, id: \.self) { Text($0).tag("beep:" + $0) } }
                     if !model.state.streams.isEmpty { Section("Radio") { ForEach(model.state.streams, id: \.key) { Text($0.name.isEmpty ? $0.url : $0.name).tag("stream:" + $0.key) } } }
@@ -2123,7 +2131,7 @@ struct SoundsTab: View {
                 // the menu's press-and-drag picked a station: gate on b849752). A long name takes more lines, never "…".
                 // The new value is drawn once the menu has gone (MenuClose), in place, never crossfaded over the old.
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(a.soundText).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                    Text(picked[a.key] ?? a.soundText).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                     Image(systemName: "chevron.up.chevron.down").imageScale(.small).foregroundStyle(.secondary)
                 }
                 .font(.subheadline.weight(.medium))
@@ -2139,6 +2147,10 @@ struct SoundsTab: View {
         }
         // A touch more under the value than over the time: the row reads level (the gate measured 23 pt over, 19 under).
         .padding(.top, 4).padding(.bottom, 8)
+        // Held to the row's top while the list grows or shrinks the row, so the alarm's time never jumps and drifts
+        // back on a pick that changes the value's lines (gate on cd1ebc6: it centred, 10 pt off, then settled).
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onChange(of: a.soundText) { picked[a.key] = nil }
     }
 
     var body: some View {
