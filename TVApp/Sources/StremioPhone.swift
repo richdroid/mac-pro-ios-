@@ -290,7 +290,7 @@ struct PhonePicker: View {
             }
             .tint(.white)
             .disabled(meta?.episodes.isEmpty != false)
-            .modifier(SeasonSwipeRows(seasons: seasons, season: pivot))
+            .modifier(SeasonSwipeRows(seasons: seasons, season: pivot, moves: false))
         }
     }
 
