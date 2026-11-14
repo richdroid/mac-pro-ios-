@@ -2989,9 +2989,10 @@ struct ShelfFlick: ViewModifier {
         // The still raised under this throw, so only that one is lifted if he moves on before it sends.
         var veilOf = -1
         if RenderFlight.flying {
-            // The still of the shelf under it, the card's place empty: for a send under way, taken in the next turn from
-            // what's already drawn (a fresh one forces the whole window to be drawn again first, here and now).
-            if direct == nil { ScreenVeil.cover(underFlight: true, for: 3); veilOf = ScreenVeil.serial }
+            // The still of the shelf under it, the card's place empty, from what's already drawn: the card has been off its
+            // shelf since the lift, so nothing needs drawing again for it (a fresh still drew the whole window first and
+            // held the release of a quick flick, whose list wasn't in yet, for 1.6 s: CI b3456ba, tv-shelf-flick-portrait).
+            if direct == nil { ScreenVeil.cover(underFlight: true, fresh: false, for: 3); veilOf = ScreenVeil.serial }
         }
         if let d = direct { startNow(d.best, d.list, velocity: velocity) }
         // A film or an episode: sent from here, no page, with the list in hand; a moment for a list on its way, the card

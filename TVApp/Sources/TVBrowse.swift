@@ -512,21 +512,11 @@ struct FlickCardButton: View {
             // A show he's part way through (Continue watching's tiles carry how far): its episodes asked for as the tile
             // comes on screen, so its page opens on them rather than on grey rows.
             .onAppear { if source == .stremio, item.progress != nil { NextUp.prefetch(item) } }
-            // No context menu here: a hold on a card is the flick's. "Play on iPhone" is on the title's own page, a tap away.
-            // (The build's films can put it back, -cardMenu YES, to show what it did to the hold.)
-            .modifier(CardMenuForFilms(on: hasInfo) { model.tick(); PhoneOpen.open(item, model: model) })
+            // Held: the same title on this phone instead, from his own add-ons.
+            .contextMenu { if hasInfo { Button("Play on iPhone", systemImage: "iphone") { model.tick(); PhoneOpen.open(item, model: model) } } }
     }
 }
 final class FrameBox { var rect: CGRect? }
-// Only under the build's own flag: the context menu the cards carried until 2026-11-14, for a before-and-after film.
-struct CardMenuForFilms: ViewModifier {
-    static let wanted = UserDefaults.standard.bool(forKey: "cardMenu")
-    let on: Bool
-    let play: () -> Void
-    @ViewBuilder func body(content: Content) -> some View {
-        if Self.wanted { content.contextMenu { if on { Button("Play on iPhone", systemImage: "iphone") { play() } } } } else { content }
-    }
-}
 
 // A row of cards that scrolls sideways. It stops where the page's other content stops, fading out there rather than cut
 // square, and fading in at the start too once it's been scrolled. Folded or open, nothing runs on under the clock or the
