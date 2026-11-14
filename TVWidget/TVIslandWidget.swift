@@ -80,7 +80,7 @@ struct IslandTitles: View {
             Text(state.title).font(.system(size: under ? 16 : 15, weight: .semibold)).foregroundStyle(.white).lineLimit(under ? 1 : 2)
                 .minimumScaleFactor(0.82)
                 .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-            if under { Text(state.subtitle).font(.system(size: 13)).foregroundStyle(.white.opacity(0.62)).lineLimit(1) }
+            if under { Text(state.subtitle).font(.system(size: 13)).foregroundStyle(.white.opacity(0.62)).lineLimit(2).minimumScaleFactor(0.85).fixedSize(horizontal: false, vertical: true) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

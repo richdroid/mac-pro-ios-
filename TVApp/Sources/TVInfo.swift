@@ -90,6 +90,7 @@ struct TitleInfoPage: View {
     var fromFlick = false
     @State private var info: TitleInfo?
     @State private var failed = false
+    @State private var posterPlace = FrameBox()
     var ref: (type: String, imdb: String, video: String?)? { item.stremioRef }
     var body: some View {
         ScrollView {
@@ -201,6 +202,9 @@ struct TitleInfoPage: View {
                 .frame(width: 84, height: 126).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
                 .padding(.leading, 22).offset(y: 30)
+                .measured(posterPlace)
+                // Held, the poster lifts off the page and goes to the TV like any card; the key at the foot stays the tap.
+                .modifier(InfoPosterFlick(item: item, source: source, place: posterPlace, on: !fromFlick))
         }
         .padding(.bottom, 30)
     }
@@ -209,6 +213,12 @@ struct TitleInfoPage: View {
             Text(label).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
             Text(value).font(.subheadline)
         }
+    }
+}
+private struct InfoPosterFlick: ViewModifier {
+    let item: MediaItem, source: MediaSource, place: FrameBox, on: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if on { content.modifier(RowFlick(item: item, source: source, width: 84, place: place)) } else { content }
     }
 }
 private struct PlaceholderLines: View {

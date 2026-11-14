@@ -650,6 +650,10 @@ extension StremioEpisode {
 @Observable @MainActor final class SeasonSwipe {
     static let shared = SeasonSwipe()
     var dx: CGFloat = 0
+    // The last moment a finger was pulling sideways: a row lifted at the end of that pull is the pull's, never a tap (a button
+    // fires on any release inside it, however far the finger travelled).
+    var pulledAt = Date.distantPast
+    var justPulled: Bool { Date().timeIntervalSince(pulledAt) < 0.45 }
 }
 // The season headers as a Zune pivot: the one he's on large and bright in the middle, the seasons either side of it
 // peeking in at the edges, dimmed and cut by the edge on purpose. A tap on one moves there; swiping the episodes moves
@@ -676,7 +680,8 @@ struct SeasonPivot: View {
         while i != to {
             let j = i + step
             let a = (widths[seasons[i]] ?? 90) * (i == from ? 1 : small), b = (widths[seasons[j]] ?? 90) * small
-            d += (a + b) / 2 + gap
+            // The one beside the chosen: its middle near the edge, so the edge cuts it by a fifth of its own width.
+            d += i == from && span > 0 ? max((a + b) / 2 + gap, span / 2 - b * 0.2) : (a + b) / 2 + gap
             i = j
         }
         return d * CGFloat(step)
@@ -724,6 +729,7 @@ struct SeasonSwipeRows: ViewModifier {
                     .onChanged { g in
                         guard ShelfHand.shared.item == nil, seasons.count > 1 else { return }
                         guard abs(g.translation.width) > abs(g.translation.height) * 1.4 else { if swipe.dx != 0 { swipe.dx = 0 }; return }
+                        swipe.pulledAt = Date()
                         let k = seasons.firstIndex(of: season) ?? 0
                         // Past either end, it gives, but only a little.
                         let blocked = (g.translation.width > 0 && k == 0) || (g.translation.width < 0 && k == seasons.count - 1)
@@ -802,7 +808,7 @@ struct EpisodePicker: View {
         let on = e.id == current
         let mins = info?.minutes[e.id] ?? e.runtime ?? info?.show
         let about = info?.about[e.id] ?? e.overview
-        return Button { choose(e) } label: {
+        return Button { guard !SeasonSwipe.shared.justPulled else { return }; choose(e) } label: {
             HStack(spacing: 12) {
                 Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
                     .frame(width: thumb, height: thumb * 9 / 16)
