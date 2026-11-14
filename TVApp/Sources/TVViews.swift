@@ -1273,11 +1273,11 @@ struct RemoteTab: View {
     @ObservedObject private var epPanel = EpisodesPanel.shared
     // The episodes, over what they're given: a page's whole width or the left column, with a margin the pad's size.
     @ViewBuilder func episodesPanel() -> some View {
-        if epPanel.open && (session || model.status?.session != nil) { EpisodePanel().padding(.horizontal, 12).padding(.top, -10).padding(.bottom, 12).transition(.opacity) }
+        if epPanel.open && (session || model.status?.session != nil) { EpisodePanel().padding(.horizontal, 12).padding(.top, 0).padding(.bottom, 12).transition(.opacity) }
     }
     var state: String {
         // Not reaching it is said once, by the red note at the top; "Connecting…" under it contradicted it.
-        if unreachable || !model.reachable { return "" }
+        if unreachable || !model.reachable || epPanel.open { return "" }
         // A start under way, or one that failed: its title from the first frame, kept through a failure, so the line never
         // appears late and pushes the title up (r19).
         if let st = model.starting, !st.played { return ([st.title] + (st.line.map { [String($0.prefix { $0 != "·" }).trimmingCharacters(in: .whitespaces)] } ?? [])).joined(separator: " · ") }
@@ -1541,7 +1541,7 @@ struct RemoteTab: View {
             let stacked = stackedUpright
             // The column's whole width and height, margins aside: keys and pad fill it (Richard, 2026-11-14: "the buttons
             // are so small"), the pad taking what height the two rows of keys leave.
-            let grid = RemoteGrid.fit(width: geo.size.width, height: geo.size.height)
+            let grid = RemoteGrid.fit(width: min(geo.size.width, stacked && pictureWidth > 120 ? pictureWidth : .infinity), height: geo.size.height)
             if stacked {
                 // Open upright, under the picture's pane: one pad diameter in every state, hung from the top with the keys
                 // under it and the spare room at the foot (gate 2: 160 pt with a show, 216 with Mint, and moving 28 pt).
@@ -1564,6 +1564,7 @@ struct RemoteTab: View {
             }
         }
         .padding(.horizontal, 12).padding(.bottom, 16)
+        .opacity(stackedUpright && epPanel.open ? 0 : 1).allowsHitTesting(!(stackedUpright && epPanel.open))
         .modifier(KeysArrive(gate: keysGate))
     }
     // The folded column as it was before typing began, kept while typing so the keys don't move or shrink.
@@ -1662,7 +1663,7 @@ struct RemoteTab: View {
                     let grid = lay ? (foldedGrid ?? fresh) : fresh
                     // Typing, the picture stays, at whatever width fits above the bar and the keys' row (gate 3: 150 pt of
                     // empty art where it had been).
-                    let typingPic = min(grid.width, max(0, geo.size.height - 30 - (14 + 50 + 12 + grid.key + 14)) * 16 / 9)
+                    let typingPic = min(grid.pic ?? grid.width, max(0, geo.size.height - 30 - (14 + 50 + 12 + grid.key + 14)) * 16 / 9)
                     VStack(spacing: 14) {
                         // The Remote's one rule (2026-11-11, with the designer, so it doesn't flip again): what's on hangs
                         // straight from the picture, with no place kept for what isn't there; the pad and the keys are
@@ -1671,8 +1672,8 @@ struct RemoteTab: View {
                         if !lay {
                             picture(closable: true).frame(width: grid.pic ?? grid.width, height: (grid.pic ?? grid.width) * 9 / 16).transition(.opacity)
                             if !musicShown { progress.frame(width: grid.pic ?? grid.width) }
-                            episodes.frame(width: grid.pic ?? grid.width); music.frame(width: grid.pic ?? grid.width)
-                        } else if typingPic >= grid.width * 0.5 {
+                            episodes.frame(width: grid.pic ?? grid.width); music.frame(width: grid.width)
+                        } else if typingPic >= (grid.pic ?? grid.width) * 0.5 {
                             picture(closable: true).frame(width: typingPic, height: typingPic * 9 / 16).transition(.opacity)
                         }
                         Spacer(minLength: 0)
@@ -1682,6 +1683,7 @@ struct RemoteTab: View {
                             keysBlock(grid).frame(height: lay ? nil : grid.key + 12 + grid.play, alignment: .top)
                         }
                         .modifier(KeysArrive(gate: keysGate))
+                        .opacity(epPanel.open ? 0 : 1).allowsHitTesting(!epPanel.open)
                     }
                     // Centred in the room left of the rail: on the title's inset it left a wide empty band before the
                     // rail (CI ee66d34).
@@ -1809,7 +1811,9 @@ struct RemoteGrid: Equatable {
     static func keys(_ width: CGFloat, maxKey: CGFloat = 96) -> RemoteGrid {
         let w = min(max(width, 212), 520)
         let k = min(maxKey, max(44, ((w - 32) / 5).rounded(.down)))
-        return RemoteGrid(width: w, key: k, play: (k * 68 / 54).rounded())
+        let gap = (w - 5 * k) / 4
+        // ⏯ a quarter bigger, but never so big that a gap beside it drops under 8 pt.
+        return RemoteGrid(width: w, key: k, play: min((k * 68 / 54).rounded(), k + 2 * max(0, gap - 8)).rounded(.down))
     }
     // Given the height left for the pad and the volume, choose where the volume goes and how big the pad is: the ring
     // as large as fits (100 pt at least, the column's width at most).
