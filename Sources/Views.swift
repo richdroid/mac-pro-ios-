@@ -1881,7 +1881,7 @@ struct UpgradeTab: View {
         for l in lines[lastRun...] {
             guard l.contains("holding"), let r = l.range(of: #"macOS \S+ ([0-9.]+)-(\w+)"#, options: .regularExpression) else { continue }
             let parts = l[r].split(separator: " ").last?.split(separator: "-") ?? []
-            if parts.count == 2 { return "\(parts[0]) (\(parts[1])), waiting for patches" }
+            if parts.count == 2 { return "\(parts[0]) (\(parts[1]))" }
         }
         return nil
     }
@@ -1966,7 +1966,9 @@ struct UpgradeTab: View {
     var factRows: [(String, String)] {
         let patchedAt: String = s.oclp.patchedAt.isEmpty ? "Not yet" : (Format.stamp(s.oclp.patchedAt).map(Format.when) ?? s.oclp.patchedAt)
         var rows: [(String, String)] = [("Running", "\(s.macos) (\(s.build))"), ("OpenCore Legacy Patcher", oclp), ("Root patches for", patchedFor), ("Patched", patchedAt)]
-        if let held { rows.append(("Newest macOS", held)) }
+        // "Newest macOS: 26.7.3 (25G342), waiting for patches" was cut with an ellipsis folded (CI f3a3118): the label says
+        // the waiting, the value only the version.
+        if let held { rows.append(("Waiting for patches", held)) }
         return rows
     }
     var facts: some View {
@@ -2004,6 +2006,7 @@ struct UpgradeTab: View {
     // Folded and upright the log gets the room left under the facts: its newest lines, whole, as many as fit, and a tap
     // opens the whole log full screen (Richard, 2026-11-13: "log is too small when folded"; five lines, the last cut).
     @State private var fullLog = false
+    @State private var logRoom: CGFloat = 0
     var logPreview: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
@@ -2011,9 +2014,15 @@ struct UpgradeTab: View {
                 Spacer()
                 Button("Show all") { fullLog = true }.font(.body).foregroundStyle(macBlue).padding(.trailing, 20)
             }
-            Button { fullLog = true } label: { LogPreview(log: s.upgrade.log) }
-                .buttonStyle(PressStyle())
-                .accessibilityLabel("Log, newest lines").accessibilityHint("Opens the whole log")
+            // The room is measured on an empty frame that takes all the height left; the card in it is only as tall as the
+            // lines it shows (CI f3a3118: measured on the button, it never saw the room and kept to two rows).
+            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { logRoom = $0 }
+                .overlay(alignment: .top) {
+                    Button { fullLog = true } label: { LogPreview(log: s.upgrade.log, room: logRoom) }
+                        .buttonStyle(PressStyle())
+                        .accessibilityLabel("Log, newest lines").accessibilityHint("Opens the whole log")
+                }
         }
         .screenCover(isPresented: $fullLog) { FullLog(log: s.upgrade.log).environmentObject(model) }
         .task { if model.pose == "fulllog" { try? await Task.sleep(nanoseconds: 1_200_000_000); fullLog = true } }
@@ -2128,7 +2137,9 @@ struct UpdateLog: View {
 // The log's newest lines in the room it's given, each whole on one line, never a line cut through its glyphs.
 struct LogPreview: View {
     let log: String
-    @State private var size: CGSize = .zero
+    // The height it may take, measured by the page around it.
+    let room: CGFloat
+    @State private var width: CGFloat = 0
     #if canImport(UIKit)
     static let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
     static let lineHeight = ceil(font.lineHeight)
@@ -2147,25 +2158,19 @@ struct LogPreview: View {
         let all = log.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(Self.short)
         // Every line whole, wrapped: the newest lines that fit the room in full, never one cut with an ellipsis
         // (designer gate, 2026-11-13: "Checking softwareupdate cata…"). Rows per line from the card's width in characters.
-        let perRow = max(20, Int((size.width - 40) / Self.charWidth))
+        let perRow = max(20, Int((width - 40) / Self.charWidth))
         let rows: (String) -> Int = { max(1, Int(ceil(Double($0.count) / Double(perRow)))) }
-        let room = max(3, Int((size.height - 28 + Self.gap) / (Self.lineHeight + Self.gap / 2)))
+        let rowsRoom = max(2, Int((room - 28 + Self.gap) / (Self.lineHeight + Self.gap / 2)))
         var shown: [String] = []
         var used = 0
         for l in all.reversed() {
             let r = rows(l)
-            if used + r > room, !shown.isEmpty { break }
+            if used + r > rowsRoom, !shown.isEmpty { break }
             shown.insert(l, at: 0); used += r
         }
         let height = CGFloat(used) * Self.lineHeight + CGFloat(max(shown.count - 1, 0)) * Self.gap + 28
-        // Measured on the room around the card (all the height left under Details), not on the card, which is only as
-        // tall as its lines.
-        return ZStack(alignment: .top) {
-            Color.clear
-            card(shown, height: height)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+        return card(shown, height: height)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
     func card(_ shown: [String], height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: Self.gap) {
