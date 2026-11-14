@@ -2667,7 +2667,7 @@ struct Chips<T: Hashable>: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(options, id: \.0) { value, label in
-                    Button { model.tick(); withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) { selected = value } } label: {
+                    Button { if selected != value { Haptic.fire(.tick) }; withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) { selected = value } } label: {
                         Text(label).font(.footnote.weight(.semibold)).padding(.horizontal, 13).frame(height: 32)
                             .foregroundStyle(selected == value ? .black : .white)
                             .background {

@@ -172,6 +172,7 @@ final class PassWindow: UIWindow {
             vc?.presentingViewController?.dismiss(animated: true)
         }
         s.start(at: at)
+        Haptic.fire(.done)
         let go = { PhoneLog.note("present player"); top?.present(vc, animated: true) }
         if let picker = top, picker is UIHostingController<PhonePicker> { picker.dismiss(animated: true) { go() } } else { go() }
     }
@@ -229,6 +230,7 @@ struct PhonePicker: View {
                                 Text("Start over").tag(true)
                             }
                             .pickerStyle(.segmented)
+                            .haptic(.tick, trigger: startOver)
                         }
                         streamList
                     }
@@ -266,7 +268,7 @@ struct PhonePicker: View {
             ForEach(seasons, id: \.self) { s in
                 Section(s == 0 ? "Specials" : "Season \(s)") {
                     ForEach((meta?.episodes ?? []).filter { $0.season == s }, id: \.id) { e in
-                        Button { video = e.id } label: {
+                        Button { if video != e.id { Haptic.fire(.tick) }; video = e.id } label: {
                             if e.id == video { Label("\(e.episode). \(e.name)", systemImage: "checkmark") } else { Text("\(e.episode). \(e.name)") }
                         }
                     }
@@ -294,7 +296,7 @@ struct PhonePicker: View {
             Spacer(minLength: 4)
             if qualities.count > 1 {
                 ForEach(["All"] + qualities, id: \.self) { q in
-                    Button(q) { withAnimation(.snappy) { only = q } }
+                    Button(q) { if only != q { Haptic.fire(.tick) }; withAnimation(.snappy) { only = q } }
                         .font(.caption.weight(.semibold)).padding(.horizontal, 10).frame(height: 30)
                         .background(only == q ? TVLook.accent.opacity(0.25) : .white.opacity(0.1), in: Capsule())
                         .foregroundStyle(only == q ? TVLook.accent : .primary).buttonStyle(.plain)

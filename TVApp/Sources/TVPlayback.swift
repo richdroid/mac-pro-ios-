@@ -90,9 +90,7 @@ final class SeekQueue: ObservableObject {
                 guard let self, self.generation == gen else { return }
                 if failed {
                     // Back to where the TV really is, at once, with the feel of a no.
-                    #if canImport(UIKit)
-                    UINotificationFeedbackGenerator().notificationOccurred(.error)
-                    #endif
+                    Haptic.fire(.fail)
                     self.pending -= n
                     model.say("Couldn’t move it")
                 } else if let ms = (answer?["position"] as? NSNumber)?.doubleValue {
@@ -459,7 +457,7 @@ struct ScrubBar: View {
                 .animation(.easeOut(duration: 0.15), value: scrub == nil)
         }
         .frame(height: 28)
-        .sensoryFeedback(.selection, trigger: scrub.map { Int($0 / tickEvery) })
+        .haptic(.tick, trigger: scrub.map { Int($0 / tickEvery) }, when: { $0 != nil && $1 != nil })
     }
 }
 
@@ -595,9 +593,7 @@ enum StremioBack {
                 let d = try await TVBridge.post("player-seek-to", ["ms": 0], timeout: 60)
                 if let ms = ((try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["position"] as? NSNumber)?.doubleValue { q.adopt(ms, for: s) }
             } catch {
-                #if canImport(UIKit)
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
-                #endif
+                Haptic.fire(.fail)
                 model.say("Couldn’t go back to the start")
             }
             await model.load()

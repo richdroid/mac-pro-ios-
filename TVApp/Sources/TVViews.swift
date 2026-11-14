@@ -240,7 +240,7 @@ struct RootView: View {
     var body: some View {
         let _ = SwipeLog.mark("body root")
         PaneReader {
-            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { model.tab = $0 })) { t in
+            TabView(selection: TabReset.binding(Binding(get: { model.tab }, set: { if $0 != model.tab { Haptic.fire(.tick) }; model.tab = $0 })) { t in
                 // Back to the tab's own start: anything opened on it closes, and its page goes back to the top. Nothing is
                 // rebuilt, so what was loaded, and the choices made on it, stay.
                 if t == 1 { model.browsing = nil }
@@ -2771,6 +2771,7 @@ struct PlayingTab: View {
                     ForEach([("Song", "song"), ("Album", "album"), ("Playlist", "playlist"), ("Artist", "artist"), ("Station", "station")], id: \.1) { Text($0.0).tag($0.1) }
                 }
                 .pickerStyle(.segmented).labelsHidden()
+                .haptic(.tick, trigger: kind)
                 HStack(spacing: 10) {
                     HStack(spacing: 8) {
                         TextField("What should play?", text: $query).autocorrectionDisabled().submitLabel(.go).onSubmit { play() }
@@ -3069,6 +3070,7 @@ struct DiscoverColumn: View {
         }
         Picker("Kind", selection: $kind) { Text("Films").tag("movie"); Text("Shows").tag("series") }
             .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 20)
+            .haptic(.tick, trigger: kind)
             // Whether Stremio's home had a Continue watching, for keeping its room next time before it's in.
             .onChange(of: home.rows.isEmpty || !store.query.isEmpty ? nil : continuing != nil, initial: true) { _, v in
                 if let v { UserDefaults.standard.set(v, forKey: "hadContinueWatching") }
@@ -3275,9 +3277,7 @@ struct VideoProgress: View {
                     let d = try await TVBridge.post("player-seek-to", ["ms": Int(sent)], timeout: 60)
                     landed = ((try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["position"] as? NSNumber)?.doubleValue
                 } catch {
-                    #if canImport(UIKit)
-                    UINotificationFeedbackGenerator().notificationOccurred(.error)
-                    #endif
+                    Haptic.fire(.fail)
                     model.say("Couldn’t move there"); landed = nil; break
                 }
                 guard let t = target, t != sent else { break }
