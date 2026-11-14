@@ -73,7 +73,7 @@ struct TabPage<C: View>: View {
         .environment(\.openRoute) { g in path.append(g) }
         .onChange(of: top) { _, _ in if path.isEmpty { scrollTop += 1 } else { path.removeAll() } }
         // A widget's link to a page: this tab's stack, from its root.
-        .onChange(of: Links.shared.push) { _, ask in
+        .onChange(of: Links.shared.push, initial: true) { _, ask in
             guard let ask, ask.tab == tab else { return }
             Links.shared.push = nil
             path = [ask.go]

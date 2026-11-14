@@ -45,7 +45,9 @@ struct Pager: View {
         self.look = look; self.title = title; self.panels = panels; _page = page; self.top = top
         self.accessory = accessory; self.locked = locked
         _position = State(initialValue: page.wrappedValue)
+        start = panels.firstIndex { $0.id == page.wrappedValue } ?? 0
     }
+    private let start: Int
 
     var body: some View {
         GeometryReader { g in
@@ -69,7 +71,6 @@ struct Pager: View {
                         .padding(.top, bars.top + S.head)
                         if let accessory { accessory.padding(.top, S.head) }
                     }
-                    ScrollViewReader { proxy in
                     ScrollView(.horizontal) {
                         Group {
                             if look == .pivot {
@@ -86,6 +87,9 @@ struct Pager: View {
                     .contentMargins(.trailing, peek, for: .scrollContent)
                     // A panorama's next section runs on under the side bar and off the display, never cut at the bar.
                     .scrollClipDisabled(look == .panorama)
+                    // Opened on a section other than the first (a link, a pose): there from the first frame. The content
+                    // is the sections plus the peek, so section i rests at i / (n - 1) of the way across.
+                    .defaultScrollAnchor(UnitPoint(x: panels.count > 1 ? CGFloat(start) / CGFloat(panels.count - 1) : 0, y: 0), for: .initialOffset)
                     .scrollIndicators(.hidden)
                     .scrollDisabled(locked)
                     .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, v in motion.x = v }
@@ -98,9 +102,6 @@ struct Pager: View {
                         }
                     }
                     .padding(.top, look == .pivot ? S.pair : 0)
-                    // Opened on a section other than the first (a link, a pose): there from the first frame.
-                    .onAppear { if let first = panels.first?.id, page != first { proxy.scrollTo(page, anchor: .leading) } }
-                    }
                 }
                 // Never wider than the display's width for it, whatever a title or a row of names would take.
                 .frame(minWidth: w, maxWidth: w, maxHeight: .infinity, alignment: .topLeading)

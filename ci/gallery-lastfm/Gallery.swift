@@ -86,6 +86,8 @@ struct LFMSheets: View {
                 SheetRow(name + ", continued") {
                     HomeCell(look, Fam.medium, bg: WS.ground) { CollageBody(family: .systemMedium, entry: e).foregroundStyle(.white) }
                     HomeCell(look, Fam.medium, margins: true, bg: WBlur(data: e.image(e.artists.first))) { ArtistBody(family: .systemMedium, entry: e).foregroundStyle(.white) }
+                }
+                SheetRow(name + ", top artist small") {
                     HomeCell(look, Fam.small, margins: false, bg: WBlur(data: e.image(e.artists.first))) { ArtistBody(family: .systemSmall, entry: e).foregroundStyle(.white) }
                 }
             }

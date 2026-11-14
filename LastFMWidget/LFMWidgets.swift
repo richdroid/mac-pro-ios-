@@ -65,22 +65,52 @@ struct WLine: View {
     }
 }
 
-// The status line: "Now playing", "Played 12 min ago", or when Last.fm was last heard from.
+// The status line: "Now playing", "Played 12 min ago", or when Last.fm was last heard from; on the Lock Screen's narrow
+// line the short form ("14 min ago", "Seen 8:59 AM"). Never an ellipsis.
 struct WStatus: View {
     let entry: LFMEntry
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            line(short: false)
+            line(short: true)
+        }
+    }
+    private func line(short: Bool) -> some View {
         HStack(spacing: 4) {
             if entry.seen == nil {
-                Image(systemName: "opticaldisc"); Text("Waiting for Last.fm")
+                Image(systemName: "opticaldisc"); Text(short ? "Waiting" : "Waiting for Last.fm")
             } else if entry.stale, let s = entry.seen {
-                Image(systemName: "clock"); Text(lastSeen(s, now: entry.date))
+                Image(systemName: "clock"); Text(short ? "Seen \(s.formatted(date: .omitted, time: .shortened))" : lastSeen(s, now: entry.date))
             } else if entry.playing {
                 Image(systemName: "waveform"); Text("Now playing")
             } else {
-                Image(systemName: "clock.arrow.circlepath"); Text(playedWhen(entry.songAt, now: entry.date))
+                Image(systemName: "clock.arrow.circlepath")
+                Text(short ? String(playedWhen(entry.songAt, now: entry.date).dropFirst("Played ".count)) : playedWhen(entry.songAt, now: entry.date))
             }
         }
         .lineLimit(1)
+        .fixedSize()
+    }
+}
+
+// A title on two lines when it fits there whole (measured in its own face against the room it has), else one line
+// fading at the edge: never an ellipsis.
+struct WTitle: View {
+    let text: String
+    let size: CGFloat
+    let width: CGFloat
+    var body: some View {
+        Group {
+            if Self.width(text, size) <= width * 2 * 0.9 { Text(text).lineLimit(2) } else { WLine(text: text) }
+        }
+        .font(.system(size: size, weight: .bold))
+    }
+    static func width(_ s: String, _ size: CGFloat) -> CGFloat {
+        #if canImport(UIKit)
+        return (s as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: size, weight: .bold)]).width
+        #else
+        return CGFloat(s.count) * size * 0.55
+        #endif
     }
 }
 
@@ -108,7 +138,7 @@ struct NowBody: View {
                     .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
                 VStack(alignment: .leading, spacing: 3) {
                     WStatus(entry: entry).font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85)).padding(.bottom, 3)
-                    Text(s?.title ?? "–").font(.system(size: 19, weight: .bold)).lineLimit(2).minimumScaleFactor(0.8).widgetAccentable()
+                    WTitle(text: s?.title ?? "–", size: 19, width: 166).widgetAccentable()
                     WLine(text: s?.artist ?? "").font(.subheadline).foregroundStyle(.white.opacity(0.85))
                     if let a = s?.album, !a.isEmpty { WLine(text: a).font(.footnote).foregroundStyle(WS.soft) }
                 }
@@ -347,7 +377,7 @@ struct PaceBody: View {
             }
         }
     }
-    private func change(_ p: WPace) -> String { "\(p.delta >= 0 ? "+" : "−")\(Int((abs(p.delta) * 100).rounded()))% on usual" }
+    private func change(_ p: WPace) -> String { "\(Int((abs(p.delta) * 100).rounded()))% \(p.delta >= 0 ? "above" : "below") usual" }
 }
 
 // MARK: Top artist this week
@@ -365,7 +395,7 @@ struct ArtistBody: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("top artist this week").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
-                    Text(a?.artist ?? "–").font(.system(size: 20, weight: .bold)).lineLimit(2).minimumScaleFactor(0.7).widgetAccentable()
+                    WTitle(text: a?.artist ?? "–", size: 20, width: 166).widgetAccentable()
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(a.map { "\($0.plays)" } ?? "–").font(.system(size: 26, weight: .light)).monospacedDigit().widgetAccentable()
                         Text("plays").font(.caption).foregroundStyle(WS.soft)
