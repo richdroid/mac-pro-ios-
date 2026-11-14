@@ -863,7 +863,7 @@ struct Screen<Content: View>: View {
             // macOS's sat 18 pt above Apps' folded, so the title jumped going from one tab to the next.
             // One column: the title goes up with the page, inside its scroll view (HandTitle), as on the list tabs; pinned
             // above it, the content was cut flat under it (designer gate, 2026-11-14).
-            if side != .all { paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 4) }
+            if side != .all { paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 2).padding(.bottom, 2) }
             if side != .right, Notice.shows(model) {
                 Notice().frame(maxWidth: .infinity, alignment: .leading).padding(16).background(cardFill, in: RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             }
@@ -871,7 +871,7 @@ struct Screen<Content: View>: View {
             else if side != .right { connecting.frame(maxHeight: .infinity) }
         }
         .modifier(PageLead(on: side != .right))
-        .environment(\.handTitle, side == .all ? AnyView(paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 4)) : nil)
+        .environment(\.handTitle, side == .all ? AnyView(paneTitle(side).padding(.top, (statusBarTop < 20 ? 14 : 0) + 2).padding(.bottom, 2)) : nil)
     }
     var body: some View {
         let _ = SwipeLog.mark("screen \(tab) body")
@@ -1475,10 +1475,12 @@ struct AppsTab: View {
                             Text(Self.figures(a)).font(.footnote).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
                         }
                         Spacer(minLength: 8)
-                        if working == a.pid { ProgressView().frame(width: 60) }
-                        else {
+                        // The button stays mounted while the quit is in flight, so the questions hung off it can present.
+                        Group {
                             Button("Quit") { pending = a }
                                 .rowCapsule(prominent: false)
+                                .opacity(working == a.pid ? 0 : 1)
+                                .overlay { if working == a.pid { ProgressView() } }
                                 // One question from the row's Quit, hung off it; Force Quit is a second, only for an app that didn't go.
                                 .confirmationDialog("Quit \(a.name)?", isPresented: .init(get: { pending?.pid == a.pid }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
                                     Button("Quit", role: .destructive) { Task { await quit(a, force: false) } }

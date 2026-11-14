@@ -572,7 +572,7 @@ struct MacHealthView: View {
                 // Said once: the links below carry the state when it is well; the line stays for a part with nothing
                 // under it, a part that is down and a Mac that is away (designer gate, 2026-11-14: state doubled).
                 if ls.isEmpty || isBad(g) || down {
-                    Text(stateLine(g)).foregroundStyle(isBad(g) && !down ? Color.red : Color.primary).fixedSize(horizontal: false, vertical: true)
+                    Text(stateLine(g)).foregroundStyle(isBad(g) && !down ? dot(g) : Color.primary).fixedSize(horizontal: false, vertical: true)
                 }
                 // While the Mac is away what the links last said is last known, never current.
                 let lastKnown = down || links.away

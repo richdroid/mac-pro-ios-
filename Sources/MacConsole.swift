@@ -353,7 +353,7 @@ struct MacConsoleSections: View {
             if anything {
                 Section {
                     if let l = links.value { let s = MacConsole.linkSummary(l); row("Connections", "point.3.connected.trianglepath.dotted", .links, summary: s.text, good: s.good).id("macctl") }
-                    if fans.value != nil || temps.value != nil { row("Fans & temperatures", "fan", .fans, summary: fanLine).id(links.value == nil ? "macctl" : "macfansrow") }
+                    if fans.value != nil || temps.value != nil { row("Fans & heat", "fan", .fans, summary: fanLine).id(links.value == nil ? "macctl" : "macfansrow") }
                     if updates.value != nil { row("Updates", "arrow.down.circle", .updates, summary: updateLine?.0, good: updateLine?.1) }
                     if storage.value != nil { row("Storage", "internaldrive", .storage, summary: storageLine) }
                     if startup.value != nil { row("Startup items", "power", .startup, summary: startupLine?.0, good: startupLine?.1) }

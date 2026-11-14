@@ -175,7 +175,7 @@ struct ConsoleTab: View {
                     Button { remote.send(model, "show", "show") } label: { busyLabel("Start", "show") }.buttonStyle(.borderedProminent).tint(macBlue)
                 }
             }
-        } header: { Text("On the Mac") } footer: { failLine(["show", "hide", "display"]) }
+        } header: { Text("On the Mac").padding(.leading, 20).padding(.top, 7).padding(.bottom, 5) } footer: { failLine(["show", "hide", "display"]) }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
     }
     func busyLabel(_ t: String, _ key: String) -> some View {
@@ -246,6 +246,8 @@ struct ConsoleTab: View {
                     .accessibilityAddTraits(on ? .isSelected : [])
                 }
             }
+            // Dead while the Console is closed, and drawn so.
+            .opacity(running ? 1 : 0.4)
             .padding(.vertical, 12)
         } header: { Text("Pages") } footer: { failLine(["page"]) }
         .disabled(!running || remote.busy != nil)
