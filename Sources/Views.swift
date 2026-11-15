@@ -527,7 +527,9 @@ struct RootView: View {
                 Tab(value: 5) { Screen(tab: 5, title: "Control") { ControlTab($0, side: $1) }.id(key(5)) } label: { tabLabel("Control", "display") }
                 // The Mac's own screen, the Console, driven from here (Richard, 2026-11-13: "separate tab"). Settings went
                 // behind the gear on Status to keep the bar at six.
-                Tab(value: 6) { Screen(tab: 6, title: "Console") { ConsoleTab($0, side: $1) }.id(key(6)) } label: { tabLabel("Console", "macwindow") }
+                // Dashboard: the Mac's Console on the phone, its screen's keys folded in (Richard, 2026-11-14: "a version of the
+                // dashboard on my phone ... consolidate console into it"). It took the Console tab's place.
+                Tab(value: 6) { Screen(tab: 6, title: "Dashboard") { DashboardTab($0, side: $1) }.id(key(6)) } label: { tabLabel("Dashboard", "rectangle.3.group") }
             }
             .tint(macBlue)
             .onChange(of: model.tab) { _, t in
@@ -923,15 +925,16 @@ struct StackPages: ViewModifier {
     @ObservedObject var nav: NavStore
     func body(content: Content) -> some View {
         content
-            .navigationDestination(item: tab == 0 ? $nav.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
+            // Status's histories, and the Dashboard's (on whichever of the two is in front, so only one stack takes it).
+            .navigationDestination(item: (tab == 0 && model.tab != 6) || (tab == 6 && model.tab == 6) ? $nav.history : Binding<HistoryMetric?>.constant(nil)) { HistoryView(metric: $0) }
             // Settings, behind the gear beside Status's name.
             .navigationDestination(isPresented: tab == 0 ? $nav.settingsOpen : .constant(false)) { MacSettings(pushed: true) }
             // All processes, from Status itself; from a history, that page opens them over itself.
-            .navigationDestination(item: tab == 0 && nav.history == nil ? $nav.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
+            .navigationDestination(item: ((tab == 0 && model.tab != 6) || (tab == 6 && model.tab == 6)) && nav.history == nil ? $nav.processes : Binding<ProcessSort?>.constant(nil)) { ProcessesView(first: $0, model: model) }
             .navigationDestination(item: tab == 2 ? $nav.sessionScreen : Binding<Status.Session?>.constant(nil)) { SessionTerminal(session: $0, model: model) }
             .navigationDestination(item: tab == 1 ? $nav.appHistory : Binding<String?>.constant(nil)) { AppPage(file: $0, model: model) }
             // Everything on the Mac, or Restart the Mac, from the Control tab.
-            .navigationDestination(item: tab == 5 ? $nav.macPage : Binding<MacPage?>.constant(nil)) { p in
+            .navigationDestination(item: (tab == 5 && model.tab != 6) || (tab == 6 && model.tab == 6) ? $nav.macPage : Binding<MacPage?>.constant(nil)) { p in
                 switch p {
                 case .health: MacHealthView(model: model)
                 case .restart: MacRestartView(model: model)

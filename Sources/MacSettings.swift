@@ -95,7 +95,7 @@ struct MacSettings: View {
         Section {
             Picker("Open on", selection: $startTab) {
                 Text("The last tab used").tag(-1)
-                Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("macOS").tag(4); Text("Control").tag(5); Text("Console").tag(6)
+                Text("Status").tag(0); Text("Apps").tag(1); Text("Claude").tag(2); Text("macOS").tag(4); Text("Control").tag(5); Text("Dashboard").tag(6)
             }
             Toggle("Haptics", isOn: $haptics)
             Toggle("Natural scrolling on the screen", isOn: $naturalScroll)
