@@ -55,7 +55,7 @@ struct Pager: View {
             // The bars above and below (the clock; the tab bar across the foot open upright): the sections scroll on under
             // them, faded there by the page's BarFade, as a single page does, never cut off at their edge.
             let bars = (top: g.safeAreaInsets.top, bottom: g.safeAreaInsets.bottom)
-            let peek: CGFloat = look == .panorama ? min(max((w * 0.09).rounded(), 28), 56) : 0
+            let peek: CGFloat = look == .panorama ? min(max((w * 0.05).rounded(), 22), 40) : 0  // 24 pt folded: the peek hints, the content keeps its width (review 2026-11-14, item 6)
             let pw = max(w - peek, 1)
             let titleSize = titleFont(w)
             ZStack(alignment: .topLeading) {

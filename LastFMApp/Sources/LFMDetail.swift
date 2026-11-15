@@ -83,10 +83,12 @@ struct StoryFigures: View {
         let st = story
         VStack(alignment: .leading, spacing: S.inner) {
             VStack(alignment: .leading, spacing: S.pair) {
-                Text(st.map { number($0.plays) } ?? "–").font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
+                // Its place held until known, never a big dash (review 2026-11-14, item 4); none yet is a first listen.
+                Text(st.map { $0.plays > 0 ? number($0.plays) : "first listen" } ?? "0").font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
                     .lineLimit(1).minimumScaleFactor(0.6).contentTransition(.numericText())
-                Text(st?.plays == 1 ? "your play" : "your plays").font(.title3.weight(.light)).foregroundStyle(S.soft)
+                Text(st?.plays == 1 ? "your play" : "your plays").font(.title3.weight(.light)).foregroundStyle(S.soft).opacity(st?.plays == 0 ? 0 : 1)
             }
+            .opacity(st == nil ? 0 : 1).animation(.easeOut(duration: 0.2), value: st == nil)
             .accessibilityElement(children: .combine)
             if let st, st.plays > 0 {
                 FigureGrid(items: [

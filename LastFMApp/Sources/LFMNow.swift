@@ -17,7 +17,8 @@ struct TodayFigures: View {
             FigureGrid(items: [
                 store.todaySecs.map { (duration($0), "listening") },
                 (number(Set(today.map(\.artist)).count), Set(today.map(\.artist)).count == 1 ? "artist" : "artists"),
-                store.insights.streak.map { ("\($0)", $0 == 1 ? "day in a row" : "days in a row") },
+                // Albums, not the streak: the streak has its own card on the same screen (review 2026-11-14, item 2).
+                { (n: Int) in (number(n), n == 1 ? "album" : "albums") }(Set(today.filter { !$0.album.isEmpty }.map { $0.artist + "\u{1F}" + $0.album }).count),
             ].compactMap { $0 })
         }
     }
@@ -33,8 +34,9 @@ struct LastPlayed: View {
                 VStack(alignment: .leading, spacing: S.pair) {
                     HStack(spacing: 6) {
                         Image(systemName: "clock.arrow.circlepath")
-                        Text("Last played \(when(s.date))")
+                        Text("Played \(when(s.date))")
                     }
+                    .lineLimit(1).minimumScaleFactor(0.85)
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
                     Text(s.title).font(.title3.weight(.bold)).foregroundStyle(.white).lineLimit(2)
                     Text(s.artist).font(.body).foregroundStyle(S.soft).lineLimit(1)
