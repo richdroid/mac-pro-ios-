@@ -87,7 +87,9 @@ struct StartTab: View {
     private var story: Panel {
         Panel(3, "your story") {
             VStack(alignment: .leading, spacing: S.section) {
-                if sync.complete { YearsSection() }
+                // Always here: the story is made from the whole history, so until it's read the years being read are the
+                // story so far, never a blank page (Richard's screenshot, 2026-11-14: "your story" and nothing under it).
+                YearsSection()
                 RiverCard()
                 ErasSection()
                 RecordsSection()
