@@ -86,7 +86,9 @@ struct Pager: View {
                             if look == .pivot {
                                 LazyHStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars).frame(width: pw).id(p.id) } }
                             } else {
-                                HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars).frame(width: pw).id(p.id) } }
+                                // Each section held to its own width: a row of covers running off one section's edge stopped showing at
+                                // the leading edge of the next (run 25: "Cassio V" from lately at the side of your story).
+                                HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars).frame(width: pw).clipped().id(p.id) } }
                             }
                         }
                         .scrollTargetLayout()
@@ -113,7 +115,7 @@ struct Pager: View {
                             if look == .panorama {
                                 HStack(spacing: 0) {
                                     Color.black
-                                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black.opacity(0.5), location: 0.22), .init(color: .clear, location: 1)],
+                                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black.opacity(0.3), location: 0.2), .init(color: .clear, location: 0.85)],
                                                    startPoint: .leading, endPoint: .trailing).frame(width: peek + 8)
                                 }
                             } else { Color.black }

@@ -32,13 +32,15 @@ struct LastPlayed: View {
     var body: some View {
         Opens(route: .track(s), zoom: "last|\(s.id)") {
             HStack(spacing: S.inner) {
-                ArtView(s.art, px: 300, corner: 10).frame(width: 96).zoomSource("last|\(s.id)")
+ArtView(s.art, px: 300, corner: 10).frame(width: 80).zoomSource("last|\(s.id)")
                 VStack(alignment: .leading, spacing: S.pair) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "clock.arrow.circlepath")
-                        Text("Played \(when(s.date))")
+                    // Whole on one line, never "Played 52 min…" (run 25, folded): the long way when it fits, else the time alone.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 6) { Image(systemName: "clock.arrow.circlepath"); Text("Played \(when(s.date))") }
+                        HStack(spacing: 6) { Image(systemName: "clock.arrow.circlepath"); Text(when(s.date)) }
+                        Text(when(s.date))
                     }
-                    .lineLimit(1).minimumScaleFactor(0.85)
+                    .lineLimit(1)
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
                     Text(s.title).font(.title3.weight(.bold)).foregroundStyle(.white).lineLimit(2)
                     Text(s.artist).font(.body).foregroundStyle(S.soft).lineLimit(1)

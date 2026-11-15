@@ -494,8 +494,8 @@ struct ArtistBody: View {
         default:
             ZStack(alignment: .bottomLeading) {
                 WArt(cover: a, data: entry.image(a))
-                // About 55 % black over the cover's lower 45 %, under the words, so they read on any lettering.
-                LinearGradient(stops: [.init(color: .clear, location: 0.55), .init(color: .black.opacity(0.55), location: 1)], startPoint: .top, endPoint: .bottom)
+                // Darkening over the cover's lower part, under the words, so they read on any lettering (run 25: "86 plays" sat on a cover's own title at 55 %).
+                LinearGradient(stops: [.init(color: .clear, location: 0.4), .init(color: .black.opacity(0.45), location: 0.62), .init(color: .black.opacity(0.78), location: 1)], startPoint: .top, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: 1) {
                     if entry.seen == nil { WWait() }
                     else {

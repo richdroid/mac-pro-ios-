@@ -220,7 +220,7 @@ struct ChartsTab: View {
                 FoldSplit {
                     Page(top: top) {
                         VStack(alignment: .leading, spacing: S.section) {
-                            VStack(alignment: .leading, spacing: S.head) { HubTitle(text: "charts", size: 80); periods; HStack(spacing: S.gap) { kindPicker; anyWeek }.padding(.horizontal, S.margin) }
+                            VStack(alignment: .leading, spacing: S.head) { HubTitle(text: "charts", size: 80); periods; kindRow.padding(.horizontal, S.margin) }
                             content(m.period, onlyLeft: true)
                         }
                         .padding(.top, S.head)
@@ -230,7 +230,7 @@ struct ChartsTab: View {
                 }
             } else {
                 Pager(.pivot, page: $page, top: top,
-                      accessory: AnyView(HStack(spacing: S.gap) { kindPicker; anyWeek }.padding(.horizontal, S.margin)),
+                      accessory: AnyView(kindRow.padding(.horizontal, S.margin)),
                       panels: pages.enumerated().map { i, p in
                           Panel(i, p.name.lowercased()) {
                               VStack(alignment: .leading, spacing: S.section) {
@@ -268,13 +268,27 @@ struct ChartsTab: View {
         Segments(items: Kind.allCases, selection: Binding(get: { m.kind }, set: { m.kind = $0 }), fill: true) { $0.name }
     }
 
-    private var anyWeek: some View {
+    // The kind and the way to any week, on one row: "Any week" in words when there's room for them beside the kinds, its
+    // calendar alone when not (run 25, folded: the row ran on under the clock).
+    private var kindRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: S.gap) { kindPicker; anyWeek(words: true) }
+            HStack(spacing: S.gap) { kindPicker; anyWeek(words: false) }
+        }
+    }
+
+    private func anyWeek(words: Bool) -> some View {
         Button { picking = true } label: {
-            Label("Any week", systemImage: "calendar").font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1).fixedSize()
-                .padding(.horizontal, 16).frame(height: 44)
-                .glassEffect(.regular, in: Capsule())
+            Group {
+                if words { Label("Any week", systemImage: "calendar").padding(.horizontal, 16) }
+                else { Image(systemName: "calendar").frame(width: 44) }
+            }
+            .font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1).fixedSize()
+            .frame(height: 44)
+            .glassEffect(.regular, in: Capsule())
         }
         .buttonStyle(Press())
+        .accessibilityLabel("Any week")
     }
 
     // Open flat: the stretches in the same glass bar as every other choice (a past week among them once chosen),
