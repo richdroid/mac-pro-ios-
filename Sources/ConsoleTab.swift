@@ -114,6 +114,11 @@ final class ConsoleRemote: ObservableObject {
                 busy = nil
                 if let e { fail = (key, e) }
             }
+            // An error is read once: gone after a few seconds, unless a newer one has taken its place.
+            if let e {
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                if fail?.text == e, busy == nil { withAnimation(Motion.quick) { fail = nil } }
+            }
             if e == nil, st == nil { await refresh(model) }
         }
     }
@@ -179,7 +184,10 @@ struct ConsoleTab: View {
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
     }
     func busyLabel(_ t: String, _ key: String) -> some View {
-        HStack(spacing: 6) { if remote.busy == key { ProgressView().controlSize(.small) }; Text(t) }
+        // The label never changes width while busy: the wait is drawn over its text, which stays in place unseen, so the
+        // button keeps its exact size (the Start button shifted right when a spinner joined its row).
+        let wait = remote.busy == key
+        return Text(t).opacity(wait ? 0 : 1).overlay { if wait { ProgressView().controlSize(.small) } }
     }
     // Only what the Console has said: before its first word about itself, nothing.
     func facts(_ st: ConsoleState) -> String? {
