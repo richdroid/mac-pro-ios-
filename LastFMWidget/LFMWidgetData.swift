@@ -42,6 +42,7 @@ struct LFMEntry: TimelineEntry {
     var streak: Int?
     var best: Int?
     var pace: WPace?
+    var days: [Int?] = []             // plays on each of the last 28 days, oldest first; nil where Last.fm's page doesn't reach
     var images: [String: Data] = [:]  // covers, by address
     var stale: Bool { seen.map { date.timeIntervalSince($0) > 30 * 60 } ?? false }
     func image(_ c: WCover?) -> Data? { c?.url.flatMap { images[$0] } }
@@ -158,6 +159,10 @@ enum WClient {
                 let days = tracks.compactMap { $0["date"]["uts"].int }.map { WidgetFacts.localDay(Date(timeIntervalSince1970: TimeInterval($0))) }
                 let today = WidgetFacts.localDay(Date())
                 e.today = days.filter { $0 == today }.count
+                var perDay: [Int: Int] = [:]
+                for d in days { perDay[d, default: 0] += 1 }
+                let edge = tracks.count >= 200 ? (days.min() ?? today) + 1 : (days.min() ?? today)
+                e.days = (0..<28).map { i in let d = today - 27 + i; return d >= edge ? (perDay[d] ?? 0) : nil }
                 // A full page reaches back to its oldest day; that day itself may be only partly on it.
                 let covered = tracks.count >= 200 ? (days.min() ?? today) + 1 : (days.min() ?? today)
                 e.streak = facts?.streakNow(played: Set(days), covered: covered)

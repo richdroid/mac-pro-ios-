@@ -48,6 +48,10 @@ enum LFMSample {
         if !noFacts {
             e.streak = 1_412
             e.best = 1_412
+            let sample: [Int] = [12, 41, 7, 22, 3, 30, 18]
+            var dd: [Int?] = []
+            for i in 0..<28 { dd.append(i < 6 ? nil : sample[i % 7]) }
+            e.days = dd
             let mid = [38, 79, 118, 161, 205, 252, 301], lo = [25, 58, 92, 130, 171, 210, 252], hi = [52, 101, 149, 199, 248, 300, 352]
             e.pace = WPace(now: 214, usual: 186, weeks: 8, line: [44, 97, 151, 214], mid: mid, lo: lo, hi: hi)
             e.weekPlays = 214
