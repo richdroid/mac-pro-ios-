@@ -85,6 +85,8 @@ struct Rec: Codable, Hashable, Identifiable, Sendable {
 struct DiscoverTab: View {
     let top: Int
     @Environment(\.paneLayout) private var pane
+    // Artists he loved and left: from his own history, no asking Last.fm.
+    @State private var back: [Entry] = []
     private var m: DiscoverModel { DiscoverModel.shared }
     var body: some View {
         Group {
@@ -92,15 +94,32 @@ struct DiscoverTab: View {
                 FoldSplit {
                     Page(top: top) { VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); artists }.padding(.top, S.head) }
                 } right: {
-                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { tracks }.padding(.top, S.section) }
+                    Page(top: top) { VStack(alignment: .leading, spacing: S.section) { comebacks; tracks }.padding(.top, S.section) }
                 }
             } else {
                 Page(top: top) {
-                    VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); artists; tracks }.padding(.top, S.head)
+                    VStack(alignment: .leading, spacing: S.section) { HubTitle(text: "discover", size: 80); artists; comebacks; tracks }.padding(.top, S.head)
                 }
             }
         }
         .onAppear { m.appear() }
+        .task(id: HistorySync.shared.complete) {
+            // Only from the whole of his history: part of it would call an artist quiet who isn't.
+            guard HistorySync.shared.complete else { return }
+            let quiet = Int(Clock.now.timeIntervalSince1970) - 182 * 86400
+            let list = await HistoryDB.reader.comebacks(quietSince: quiet)
+            withAnimation(.smooth) { back = list }
+        }
+    }
+
+    // "Comebacks": artists he played a lot and hasn't for six months or more, his most played first.
+    @ViewBuilder private var comebacks: some View {
+        if back.count >= 3 {
+            Panorama(title: "comebacks", items: back) { e in
+                let y = e.last.map { Calendar.current.component(.year, from: Date(timeIntervalSince1970: TimeInterval($0))) }
+                return "\(number(e.plays)) plays" + (y.map { " · last \(String($0))" } ?? "")
+            }
+        }
     }
 
     @ViewBuilder private var artists: some View {

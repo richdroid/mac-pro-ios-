@@ -247,6 +247,18 @@ extension HistoryDB {
         }
         return st
     }
+    // Artists he played a lot who have gone quiet: at least `least` plays, none since `quietSince`; most played first,
+    // each with his most played album's cover and when he last played them.
+    func comebacks(quietSince: Int, least: Int = 40, limit: Int = 12) -> [Entry] {
+        var out: [Entry] = []
+        rows("SELECT artist, COUNT(*) c, MAX(uts) l FROM plays GROUP BY artist HAVING c >= ? AND l < ? ORDER BY c DESC LIMIT ?", [least, quietSince, limit]) {
+            out.append(Entry(kind: .artists, artist: text($0, 0), album: "", track: "", plays: int($0, 1), last: int($0, 2)))
+        }
+        return out.map { e in
+            guard let c = cover(of: e.artist) else { return e }
+            return Entry(kind: .artists, artist: e.artist, album: c.album, track: "", plays: e.plays, image: c.url, last: e.last)
+        }
+    }
     // His plays of each name in a list (an artist's top tracks on Last.fm, similar artists), by name, case aside.
     func playsOf(artists: [String]) -> [String: Int] {
         var out: [String: Int] = [:]
