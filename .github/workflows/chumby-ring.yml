@@ -1,0 +1,99 @@
+name: Chumby ring checks
+# A short run for the ringing-alarm work on the chumby-ring branch (never main, and never main's queue): the app and its
+# widgets built for iOS (the Lock Screen card's code is iOS-only, so only this build compiles it), then the ringing page,
+# the card as the gallery draws it, and the Alarms pages. Published to the chumby-ring release. Temporary: goes when the
+# branch merges.
+on:
+  push:
+    branches: [chumby-ring]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: chumby-ring
+  cancel-in-progress: true
+jobs:
+  quick:
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Chumby launch sea and wordmark
+        run: swift ci/chumby-launch.swift ChumbyApp/Assets.xcassets
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          for APP in Chumby GalleryChumby; do
+            xcodebuild -project MacPro.xcodeproj -scheme $APP -configuration Debug -sdk iphonesimulator \
+              -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee -a dist/build.log | grep -E "error:|warning: unre|BUILD" | tail -40
+          done
+      - name: Shots
+        continue-on-error: true
+        timeout-minutes: 30
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/Chumby.app
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/GalleryChumby.app
+          node ci/mock-chumby.js &
+          sleep 2
+          M=http://127.0.0.1:9000
+          shot() { # name, display, wait, address, args
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/ring-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          set_() { # display, suffix
+            shot screen$2 $1 9 $M/ringing -tab 0 -pose ringscreen
+            shot screen-snoozed$2 $1 9 $M/snoozed -tab 0 -pose ringscreen
+            shot alarms$2 $1 9 $M -tab 2
+            shot alarms-ringing$2 $1 9 $M/ringing -tab 2
+            shot editor$2 $1 9 $M -tab 2 -pose editor
+            shot editor-ringing$2 $1 9 $M/ringing -tab 2 -pose editor
+          }
+          xcrun simctl ui "$DEVICE" appearance light
+          set_ 1 ""
+          xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page 4
+          sleep 8
+          xcrun simctl io "$DEVICE" screenshot --display=1 dist/ring-card.png
+          xcrun simctl terminate "$DEVICE" local.macpro.GalleryChumby || true
+          xcrun simctl ui "$DEVICE" appearance dark
+          shot screen-dark 1 9 $M/ringing -tab 0 -pose ringscreen
+          shot screen-snoozed-dark 1 9 $M/snoozed -tab 0 -pose ringscreen
+          # Open and upright, the way he holds it.
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          $D "$DEVICE" pose open; sleep 5
+          xcrun simctl ui "$DEVICE" appearance light
+          shot screen-open 3 9 $M/ringing -tab 0 -pose ringscreen
+          shot alarms-open 3 9 $M -tab 2
+          $D "$DEVICE" rotate 1; sleep 5
+          set_ 3 "-portrait"
+          xcrun simctl ui "$DEVICE" appearance dark
+          shot screen-dark-portrait 3 9 $M/ringing -tab 0 -pose ringscreen
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../ring.zip . -i '*.png' '*.log' || zip -q ../ring.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view chumby-ring >/dev/null 2>&1 || gh release create chumby-ring --prerelease --title "Chumby ring checks" --notes "Work in progress on the ringing alarm: shots and logs from the chumby-ring branch."
+          for f in ring.zip status.txt; do
+            for i in 1 2 3; do gh release upload chumby-ring "$f" --clobber && break; sleep 15; done
+          done

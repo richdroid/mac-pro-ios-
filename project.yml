@@ -106,6 +106,8 @@ targets:
         CFBundleDisplayName: Chumby
         CFBundleURLTypes: [{ CFBundleURLName: chumbyapp, CFBundleURLSchemes: [chumbyapp] }]
         CADisableMinimumFrameDurationOnPhone: true
+        # The ringing alarm's card on the Lock Screen and in the Dynamic Island (ChumbyRingActivity.swift).
+        NSSupportsLiveActivities: true
         # The sea and the wordmark from the first frame, the wordmark pinned where Home draws it (ChumbyLaunch.storyboard).
         UILaunchStoryboardName: ChumbyLaunch
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
@@ -230,6 +232,7 @@ targets:
     platform: iOS
     sources:
       - ChumbyWidget/ChumbyWidgets.swift
+      - ChumbyWidget/ChumbyRingActivity.swift
       - ChumbyApp/Sources/ChumbyAPI.swift
       - ChumbyApp/Sources/ChumbyArt.swift
       - ChumbyApp/Sources/ChumbyIntents.swift

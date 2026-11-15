@@ -274,3 +274,121 @@ extension ChumbyState {
     // nightly time switches to, so the widget and Control Center, which can't read the app's settings, night the same way.
     var nightStyle: String? { schedule.first { $0.cmd == "night" && $0.val != "off" }?.val }
 }
+
+// MARK: - The ringing alarm, on the Lock Screen and in the Dynamic Island
+// Richard, 2026-11-14: "i feel like i should be able to turn an alarm off from my phone like could u have a notif go off
+// that the alarm is ringing with details make it beautiful and full screen chumby esque". The Mac sees the ring and
+// starts this card by push (push.js, "A ringing alarm on the phone"); Stop and Snooze on it, on the notification beside
+// it and on the app's ringing screen are all the Chumby's own (cmd ringoff / ringsnooze, the panel's stop and snooze).
+struct ChumbyRingAttributes: Codable, Hashable {
+    // Plain numbers (seconds since 1970) and words, as the Mac sends them; `problem` is only ever set here on the phone.
+    struct ContentState: Codable, Hashable {
+        var name: String
+        var sound: String
+        var at: Double
+        var snoozed: Bool
+        var until: Double?
+        var problem: String?
+        var rang: Date { Date(timeIntervalSince1970: at) }
+        var again: Date? { until.flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0) : nil } }
+        // "CR Shift", or the time it's for when it has no name of its own.
+        var title: String { name.isEmpty ? "\(rang.formatted(date: .omitted, time: .shortened)) alarm" : name }
+    }
+    var id: String
+}
+
+#if os(iOS)
+import ActivityKit
+import UserNotifications
+extension ChumbyRingAttributes: ActivityAttributes {}
+
+// The cards themselves. There is only ever one ring, so every card this phone holds is that ring's.
+enum ChumbyRingCard {
+    static var all: [Activity<ChumbyRingAttributes>] { Activity<ChumbyRingAttributes>.activities.filter { $0.activityState == .active || $0.activityState == .stale } }
+    static func over() async {
+        for a in Activity<ChumbyRingAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
+        await clearNotice()
+    }
+    // What it shows now; out of date half an hour on (an alarm's usual length), or that long after a snooze ends, should
+    // nothing more reach the phone.
+    static func show(_ s: ChumbyRingAttributes.ContentState) async {
+        let stale = (s.snoozed ? s.again ?? Date() : Date()).addingTimeInterval(31 * 60)
+        for a in all { await a.update(ActivityContent(state: s, staleDate: stale)) }
+    }
+    static func change(_ edit: (inout ChumbyRingAttributes.ContentState) -> Void) async {
+        for a in all { var s = a.content.state; edit(&s); await a.update(ActivityContent(state: s, staleDate: a.content.staleDate)) }
+    }
+    // The ring's notification, by what the Mac marked it with (its identifier is Apple's to choose).
+    static func clearNotice() async {
+        let c = UNUserNotificationCenter.current()
+        let ids = await c.deliveredNotifications().filter { ($0.request.content.userInfo["alert"] as? String) == ChumbyRingActions.noticeID || $0.request.identifier == ChumbyRingActions.noticeID }.map(\.request.identifier)
+        c.removeDeliveredNotifications(withIdentifiers: ids + [ChumbyRingActions.noticeID])
+    }
+}
+#else
+enum ChumbyRingCard {
+    static func over() async {}
+    static func show(_ s: ChumbyRingAttributes.ContentState) async {}
+    static func change(_ edit: (inout ChumbyRingAttributes.ContentState) -> Void) async {}
+    static func clearNotice() async {}
+}
+#endif
+
+// Stop and Snooze from outside the app's own pages (the card, the notification): pressed on the Chumby, and the card put
+// right at once rather than when the Mac next looks. Each answers nil when done, or why not.
+enum ChumbyRingActions {
+    static let noticeID = "chumby-ring"
+    @discardableResult static func stop() async -> String? {
+        do { try await chumbyTry { try await $0.cmd("ringoff") } }
+        // Nothing was ringing any more: stopped is what he wanted.
+        catch ChumbyError.message("not delivered") {}
+        catch {
+            let why = AlarmWriter.explain(error)
+            await ChumbyRingCard.change { $0.problem = "Didn’t stop. \(why)" }
+            return why
+        }
+        await ChumbyRingCard.over()
+        return nil
+    }
+    @discardableResult static func snooze() async -> String? {
+        do {
+            let minutes = try await chumbyTry { api -> Double? in
+                // How long its snooze is, from the alarm that's ringing, read before it's pressed.
+                let sys = try? JSONDecoder().decode(Sys.self, from: await api.raw("sys").data)
+                let state = try? JSONDecoder().decode(ChumbyState.self, from: await api.raw("state").data)
+                try await api.cmd("ringsnooze")
+                return sys?.ringing.flatMap { r in state?.alarms.first { $0.name == r.name }?.snooze }.flatMap(Double.init)
+            }
+            let until = Date().addingTimeInterval((minutes ?? 9) * 60).timeIntervalSince1970
+            await ChumbyRingCard.change { $0.snoozed = true; $0.until = until; $0.problem = nil }
+            await ChumbyRingCard.clearNotice()
+            return nil
+        }
+        catch ChumbyError.message("not delivered") { await ChumbyRingCard.over(); return nil }
+        catch {
+            let why = AlarmWriter.explain(error)
+            await ChumbyRingCard.change { $0.problem = "Didn’t snooze. \(why)" }
+            return why
+        }
+    }
+}
+
+// The card's two keys. They run in the app, woken behind the Lock Screen, never opening it. (Only iOS has such keys; the
+// Mac's typecheck of these files reads them as plain intents.)
+#if os(iOS)
+typealias ChumbyRingKey = LiveActivityIntent
+#else
+typealias ChumbyRingKey = AppIntent
+#endif
+struct ChumbyRingStopIntent: ChumbyRingKey {
+    static var title: LocalizedStringResource = "Stop the alarm"
+    static var description = IntentDescription("Stops the alarm that’s ringing or snoozing.")
+    static var isDiscoverable = false
+    func perform() async throws -> some IntentResult { await ChumbyRingActions.stop(); return .result() }
+}
+struct ChumbyRingSnoozeIntent: ChumbyRingKey {
+    static var title: LocalizedStringResource = "Snooze the alarm"
+    static var description = IntentDescription("Snoozes the alarm that’s ringing.")
+    static var isDiscoverable = false
+    func perform() async throws -> some IntentResult { await ChumbyRingActions.snooze(); return .result() }
+}

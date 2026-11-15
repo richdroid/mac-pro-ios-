@@ -34,7 +34,25 @@ struct ChumbyApp: App {
                     Task { await model.loadSongs(); SongArt.shared.prefetch(model.songs, model.state.alarms, model.rings) }
                     TabTour.run([0, 1, 2, 3, 4]) { model.tab = $0 }
                 }
-                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
+                .onOpenURL {
+                    if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t }
+                    // The ringing alarm's Lock Screen card, tapped.
+                    if $0.host == "ring" { model.ringScreen = true }
+                }
+                // The ringing alarm's notification, tapped: its page, over whichever tab was showing, with what the
+                // notification said until the Chumby's own reading is in.
+                .onReceive(NotificationCenter.default.publisher(for: ChumbyNotify.openedRing)) { n in
+                    model.ringHint = n.object as? ChumbyRingAttributes.ContentState
+                    model.ringScreen = true
+                }
+                // An alarm starting to sound (or sounding again after a snooze) with the app in front: its page comes up
+                // by itself, since stopping it is what the phone is for just then. Never over an alarm being edited, and
+                // closed, it stays closed until the alarm next sounds. The build's posed shots keep their pages.
+                .onChange(of: model.sys.ringing) { was, now in
+                    let sounding = now.map { !$0.snoozed } ?? false, before = was.map { !$0.snoozed } ?? false
+                    if sounding && !before && phase == .active && !model.unreachable && !model.editingAlarm && !ChumbyNotify.shared.staged { model.ringScreen = true }
+                    if now == nil { model.ringHint = nil }
+                }
                 // A tapped notification: Alarms, and the calendar alarm that wasn't set is tried again at once.
                 .onReceive(NotificationCenter.default.publisher(for: ChumbyNotify.opened)) { n in
                     model.tab = 2
@@ -615,6 +633,8 @@ struct RootView: View {
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
         }
+        .fillCover(isPresented: $model.ringScreen) { RingScreen().environmentObject(model) }
+        .onAppear { if ChumbyModel.pose == "ringscreen" { model.ringScreen = true } }
         .fillCover(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
     }
 }

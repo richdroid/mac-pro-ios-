@@ -48,6 +48,11 @@ final class ChumbyModel: ObservableObject {
     // The width of the side bar's column on the Duo (0 when the bars run across), and a tap on + placed in it.
     @Published var railWidth: CGFloat = 0
     @Published var addAlarm: Date?
+    // The full-screen ringing page (ChumbyRing.swift): up when the ring's notification or its Lock Screen card is tapped,
+    // and by itself when the app is in front as an alarm starts to sound. `ringHint` is what the tap itself said, shown
+    // until the Chumby's own reading arrives.
+    @Published var ringScreen = false
+    var ringHint: ChumbyRingAttributes.ContentState?
     // Folded, Calendar settings pushed inside Alarms. Kept here so its Back can sit in the rail, outside the page that slides.
     // A page opening over Alarms gets anything parked at once (see parks).
     // The "just this once" sheet, open or not: on the model, not in the menu's own state, because Home lays its
@@ -507,7 +512,9 @@ final class ChumbyModel: ObservableObject {
     static let stopFade = 0.12
     static let stopSpring = ringSpring.delay(stopFade + 1.0 / 60)
     static func ringChange(to r: Sys.Ringing?) -> Animation { r == nil ? stopSpring : ringSpring }
-    func ringOff() {
+    func ringOff() { ringOffTask() }
+    // The same, for a page that waits on the answer (the ringing screen): true once the Chumby took it.
+    @discardableResult func ringOffTask() -> Task<Bool, Never> {
         #if canImport(UIKit)
         Haptics.medium.impactOccurred(); Haptics.medium.prepare()
         #endif
@@ -515,14 +522,30 @@ final class ChumbyModel: ObservableObject {
         withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
         hold(5)
         let tapped = Date().timeIntervalSince1970
-        Task { do { try await api?.cmd("ringoff"); RingSeen.stopped(at: tapped) } catch { withAnimation(Self.ringSpring) { sys.ring = was }; fail("ring", "The Chumby didn’t stop. \(AlarmWriter.explain(error))") } }
+        return Task {
+            do {
+                try await api?.cmd("ringoff"); RingSeen.stopped(at: tapped)
+                // The Lock Screen's card and the ring's notification go with it, not when the Mac next looks.
+                await ChumbyRingCard.over()
+                return true
+            } catch { withAnimation(Self.ringSpring) { sys.ring = was }; fail("ring", "The Chumby didn’t stop. \(AlarmWriter.explain(error))"); return false }
+        }
     }
-    func ringSnooze() {
+    func ringSnooze() { ringSnoozeTask() }
+    @discardableResult func ringSnoozeTask() -> Task<Bool, Never> {
         tick()
         let was = sys.ring
         if let r = sys.ringing { withAnimation(Self.ringSpring) { sys.ring = "s\t\(r.name)\t\(r.sound)"; snoozedAt = Date() } }
         hold(5)
-        Task { do { try await api?.cmd("ringsnooze") } catch { withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "The Chumby didn’t snooze. \(AlarmWriter.explain(error))") } }
+        return Task {
+            do {
+                try await api?.cmd("ringsnooze")
+                let until = snoozeEnds?.timeIntervalSince1970
+                await ChumbyRingCard.change { $0.snoozed = true; $0.until = until; $0.problem = nil }
+                await ChumbyRingCard.clearNotice()
+                return true
+            } catch { withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "The Chumby didn’t snooze. \(AlarmWriter.explain(error))"); return false }
+        }
     }
     // When a snooze ends: the panel's own time when it reports one, else from when it began and that alarm's snooze length.
     var snoozeEnds: Date? {

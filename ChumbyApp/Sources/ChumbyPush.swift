@@ -11,7 +11,10 @@ import UIKit
 // - quietly, that it's back with the alarm set.
 // One is made here on the phone: a calendar alarm the background update couldn't put on the Chumby.
 // A second one made here: a skip or an undo of his that the Chumby never confirmed, found out after he'd left the app.
-// Never sent, by ruling: an alarm ringing or ringing late (he's there), skips and naps (his own doing), and no badges.
+// And, from 2026-11-14, an alarm that is ringing (Richard: "i should be able to turn an alarm off from my phone like could u
+// have a notif go off that the alarm is ringing with details"): Time Sensitive, with Snooze and Stop that work from the
+// Lock Screen, beside the ring's own card there (ChumbyRing.swift). A snooze takes it away; ringing again brings it back.
+// Never sent, by ruling: an alarm that rang late (he was there), skips and naps (his own doing), and no badges.
 final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
     static let shared = ChumbyNotify()
     static let enabledKey = "chumbyNotifications"
@@ -28,8 +31,13 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
         return args["address"] != nil || args["pose"] != nil
     }
 
+    // The ringing alarm's notification: Snooze and Stop on it, pressed without unlocking or opening the app.
+    static let ringCategory = "CHUMBY_RING", ringStop = "RING_STOP", ringSnooze = "RING_SNOOZE"
     func install() {
         center.delegate = self
+        let snooze = UNNotificationAction(identifier: Self.ringSnooze, title: "Snooze", options: [], icon: UNNotificationActionIcon(systemImageName: "water.waves"))
+        let stop = UNNotificationAction(identifier: Self.ringStop, title: "Stop", options: [], icon: UNNotificationActionIcon(systemImageName: "stop.fill"))
+        center.setNotificationCategories([UNNotificationCategory(identifier: Self.ringCategory, actions: [snooze, stop], intentIdentifiers: [], options: [])])
         guard !staged else { return }
         if enabled, !UserDefaults.standard.bool(forKey: Self.askedKey) { Task { await ask() } }
     }
@@ -43,23 +51,25 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
     // forward, so the Mac always holds the current one. Off in Settings: the Mac is told to forget it.
     func got(_ token: String) { UserDefaults.standard.set(token, forKey: Self.tokenKey); share() }
     func share() {
-        guard !staged, let token = UserDefaults.standard.string(forKey: Self.tokenKey), !token.isEmpty,
-              let bundle = Bundle.main.bundleIdentifier,
-              let mac = Bundle.main.object(forInfoDictionaryKey: "MacAddress") as? String,
-              let base = URL(string: mac), let host = base.host,
-              let url = URL(string: mac.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/push/token") else { return }
+        guard !staged, let token = UserDefaults.standard.string(forKey: Self.tokenKey), !token.isEmpty else { return }
         let on = enabled, stamp = "\(token)|\(on)"
         guard stamp != sent else { return }
+        Task { if await tellMac(["token": token, "off": !on]) { await MainActor.run { self.sent = stamp } } }
+    }
+    // One note to the Mac's notification desk (the alert token above, and the ringing card's tokens): true if it took it.
+    @discardableResult func tellMac(_ fields: [String: Any]) async -> Bool {
+        guard !staged, let bundle = Bundle.main.bundleIdentifier,
+              let mac = Bundle.main.object(forInfoDictionaryKey: "MacAddress") as? String,
+              let base = URL(string: mac), let host = base.host,
+              let url = URL(string: mac.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/push/token") else { return false }
         var r = URLRequest(url: url); r.httpMethod = "POST"; r.timeoutInterval = 15
         // The Mac turns away requests from other sites, so this says which site it is, as its own app does.
         r.setValue("\(base.scheme ?? "https")://\(host)\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
         r.setValue("1", forHTTPHeaderField: "x-dash")
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        r.httpBody = try? JSONSerialization.data(withJSONObject: ["app": "chumby", "bundle": bundle, "token": token, "off": !on])
-        Task {
-            guard let (_, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200 else { return }
-            await MainActor.run { self.sent = stamp }
-        }
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["app": "chumby", "bundle": bundle].merging(fields) { _, new in new })
+        guard let (_, resp) = try? await URLSession.shared.data(for: r) else { return false }
+        return (resp as? HTTPURLResponse)?.statusCode == 200
     }
 
     // Opening Alarms is reading them: nothing stays behind on the Lock Screen.
@@ -117,13 +127,42 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
     func skipSettled() { center.removeDeliveredNotifications(withIdentifiers: [Self.skipID]) }
 
     // Every one of them is about an alarm: a tap opens Alarms, and the one about an alarm not set tries again at once.
+    // The ringing alarm's is its own case: Snooze and Stop are pressed on the Chumby from here, behind the Lock Screen, and
+    // a tap on it opens the ringing page over whichever tab was showing.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
-        let id = response.notification.request.content.userInfo["alert"] as? String ?? response.notification.request.identifier
+        let info = response.notification.request.content.userInfo
+        let id = info["alert"] as? String ?? response.notification.request.identifier
+        if id == ChumbyRingActions.noticeID {
+            switch response.actionIdentifier {
+            case Self.ringStop: Task { await self.ringAnswered(ChumbyRingActions.stop(), stop: true); done() }
+            case Self.ringSnooze: Task { await self.ringAnswered(ChumbyRingActions.snooze(), stop: false); done() }
+            case UNNotificationDismissActionIdentifier: done()
+            default:
+                let hint = RingLink.state(info["ring"])
+                DispatchQueue.main.async { NotificationCenter.default.post(name: Self.openedRing, object: hint) }
+                done()
+            }
+            return
+        }
         UserDefaults.standard.set(2, forKey: "tab")
         DispatchQueue.main.async { NotificationCenter.default.post(name: Self.opened, object: id) }
         done()
     }
     static let opened = Notification.Name("chumbyOpenedNotification")
+    static let openedRing = Notification.Name("chumbyOpenedRing")
+    // Stop or Snooze pressed on the notification, and the Chumby didn't take it: said in its place, with the same two
+    // keys to try again, since nothing else on a locked phone would say so and the alarm is still going.
+    func ringAnswered(_ why: String?, stop: Bool) async {
+        guard let why else { return }
+        let content = UNMutableNotificationContent()
+        content.title = stop ? "The alarm didn’t stop" : "The alarm didn’t snooze"
+        content.body = why
+        content.sound = .default
+        content.interruptionLevel = .timeSensitive
+        content.categoryIdentifier = Self.ringCategory
+        content.userInfo = ["alert": ChumbyRingActions.noticeID]
+        try? await center.add(UNNotificationRequest(identifier: ChumbyRingActions.noticeID, content: content, trigger: nil))
+    }
 }
 
 // Tinker's "Notifications": one switch, as the Mac Pro app has.
@@ -141,7 +180,7 @@ struct NotifySettings: View {
     var body: some View {
         Section {
             // What it sends, said in the row (it was the footer, under a one-row capsule: designer, 11-11).
-            Toggle(isOn: $enabled) { TwoLine("Notify this iPhone", "Only when an alarm was missed, silent or may not ring.") }
+            Toggle(isOn: $enabled) { TwoLine("Notify this iPhone", "When an alarm rings, was missed or may not ring.") }
                 .padding(.trailing, 2)
                 .onChange(of: enabled) { _, on in
                     if on { Task { denied = !(await ChumbyNotify.shared.ask()) } }
@@ -164,7 +203,16 @@ final class ChumbyPushDelegate: NSObject, UIApplicationDelegate {
     // Asked for at every launch: iOS answers with the current token, which can change after a restore.
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         if !ChumbyNotify.shared.staged { application.registerForRemoteNotifications() }
+        // The ringing card's tokens, watched from every launch, the ones iOS makes behind the Lock Screen included.
+        RingLink.start()
         return true
+    }
+    // The Mac's quiet word that the ring changed (snoozed, ringing again, over): the card and the notification are put
+    // right here, for when the card's own push hasn't a token yet.
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
+        guard userInfo["ring"] != nil else { return .noData }
+        await RingLink.fromMac(userInfo["ring"])
+        return .newData
     }
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         ChumbyNotify.shared.got(deviceToken.map { String(format: "%02x", $0) }.joined())

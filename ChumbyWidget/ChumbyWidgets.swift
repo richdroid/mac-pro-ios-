@@ -582,6 +582,17 @@ struct ChumbyRemoteWidget: Widget {
     }
 }
 #if !GALLERY
+// A bundle's list holds ten at most, so Control Center's six are a list of their own, set into the main one.
+struct ChumbyControls: WidgetBundle {
+    var body: some Widget {
+        ChumbySkipControl()
+        ChumbyNightControl()
+        ChumbyStopAlarmControl()
+        ChumbyNextControl()
+        ChumbyNapControl()
+        ChumbyOpenControl()
+    }
+}
 @main
 struct ChumbyWidgets: WidgetBundle {
     var body: some Widget {
@@ -589,12 +600,10 @@ struct ChumbyWidgets: WidgetBundle {
         ChumbyBuddyWidget()
         ChumbyRemoteWidget()
         ChumbyStatusWidget()
-        ChumbySkipControl()
-        ChumbyNightControl()
-        ChumbyStopAlarmControl()
-        ChumbyNextControl()
-        ChumbyNapControl()
-        ChumbyOpenControl()
+        #if os(iOS)
+        ChumbyRingActivityWidget()
+        #endif
+        ChumbyControls().body
     }
 }
 #endif

@@ -30,6 +30,10 @@ extension View { func flattened() -> some View { self.colorMultiply(.black).colo
     var nightOnly: ChumbyEntry { var s = ChumbyProvider.sample; s.sys.night = 1; return s }
     var playing: ChumbyEntry { var s = ChumbyProvider.sample; s.playing = true; return s }
     var lost: ChumbyEntry { var s = ChumbyEntry(date: Date()); s.lastSeen = Date().addingTimeInterval(-25 * 60); return s }
+    func ringCard(_ s: ChumbyRingAttributes.ContentState, stale: Bool = false) -> some View {
+        RingLockCard(state: s, stale: stale).frame(width: 370)
+            .background(RingCardLook.sea.opacity(0.82), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+    }
     var page: Int { UserDefaults.standard.integer(forKey: "page") }
     var body: some Scene { WindowGroup {
         if UserDefaults.standard.bool(forKey: "sheets") { ChumbySheets() } else {
@@ -61,6 +65,14 @@ extension View { func flattened() -> some View { self.colorMultiply(.black).colo
                     accessory(170, 76) { AlarmBody(family: .accessoryRectangular, entry: skipped) }
                 }
                 accessory(300, 24) { AlarmBody(family: .accessoryInline, entry: e) }
+            case 4:
+                // The ringing alarm's Lock Screen card as iOS frames it: ringing, snoozed, a Stop that didn't land, an alarm
+                // with no name, and one nothing has reached in half an hour.
+                ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false))
+                ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 120, snoozed: true, until: Date().timeIntervalSince1970 + 431))
+                ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false, problem: "Didn’t stop. The Chumby isn’t answering."))
+                ringCard(.init(name: "", sound: "Beep", at: Date().timeIntervalSince1970 - 40, snoozed: false))
+                ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 2400, snoozed: false), stale: true)
             default:
                 HStack(spacing: 14) { card(158, 158) { AlarmBody(family: .systemSmall, entry: e) }; card(158, 158) { AlarmBody(family: .systemSmall, entry: skipped) } }
                 HStack(spacing: 14) { card(158, 158) { AlarmBody(family: .systemSmall, entry: lost) }; card(158, 158) { BuddyBody(entry: e) } }
@@ -69,7 +81,7 @@ extension View { func flattened() -> some View { self.colorMultiply(.black).colo
             }
         }
         .padding(10).frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(page == 3 ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.86, green: 0.55, blue: 0.72), Color(red: 0.72, green: 0.42, blue: 0.62)], startPoint: .top, endPoint: .bottom)) : page == 2 ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.12, green: 0.2, blue: 0.35), Color(red: 0.35, green: 0.25, blue: 0.4)], startPoint: .top, endPoint: .bottom)) : AnyShapeStyle(Color(white: 0.8)))
+        .background(page == 4 ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.16, green: 0.2, blue: 0.34), Color(red: 0.05, green: 0.06, blue: 0.12)], startPoint: .top, endPoint: .bottom)) : page == 3 ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.86, green: 0.55, blue: 0.72), Color(red: 0.72, green: 0.42, blue: 0.62)], startPoint: .top, endPoint: .bottom)) : page == 2 ? AnyShapeStyle(LinearGradient(colors: [Color(red: 0.12, green: 0.2, blue: 0.35), Color(red: 0.35, green: 0.25, blue: 0.4)], startPoint: .top, endPoint: .bottom)) : AnyShapeStyle(Color(white: 0.8)))
         }
     } }
 }
