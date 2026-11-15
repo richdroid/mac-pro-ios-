@@ -208,8 +208,11 @@ struct LibraryTab: View {
         if isLoved {
             ForEach(m.loved) { l in lovedRow(l).padding(.horizontal, S.margin) }
         } else {
+            // His plays as a bar on every row against the shelf's most played, so a wide row isn't a name, a gulf and a
+            // number (review 2026-11-14, item 17).
+            let peak = m.sort == .plays ? list.first?.plays : list.lazy.map(\.plays).max()
             ForEach(list.prefix(limit)) { e in
-                EntryRow(e: e, showRank: m.sort == .plays, context: "lib", trailing: trailing(e))
+                EntryRow(e: e, showRank: m.sort == .plays, context: "lib", trailing: trailing(e), peak: peak)
                     .padding(.horizontal, S.margin)
                     .onAppear { if e.id == list.prefix(limit).last?.id, limit < list.count { self.shown[sh] = limit + 300 } }
             }

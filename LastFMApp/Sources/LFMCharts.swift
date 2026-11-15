@@ -248,7 +248,7 @@ struct ChartsTab: View {
         .onChange(of: page) { _, i in if i < pages.count, pages[i] != m.period { m.period = pages[i] } }
         .onChange(of: m.period) { _, p in all = false; if let i = pages.firstIndex(of: p), i != page { page = i } }
         .onChange(of: m.kind) { _, _ in all = false }
-        .cover(isPresented: $picking) { WeekPicker() }
+        .cover(isPresented: $picking) { PaneReader { WeekPicker() } }
         .task {
             guard Pose.name == "weeks" else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -475,23 +475,59 @@ struct BumpSection: View {
 // Any of his weeks, newest first, a year at a time, each with its most played cover and its plays.
 struct WeekPicker: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.paneLayout) private var pane
+    @State private var year: Int?
     private var m: ChartsModel { ChartsModel.shared }
     var body: some View {
         let byYear = Dictionary(grouping: m.weeks, by: \.year)
         let years = byYear.keys.sorted(by: >)
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
-                    HubTitle(text: "any week", size: 72).padding(.bottom, S.head)
-                    ForEach(years, id: \.self) { y in
-                        SectionHead(text: String(y)).padding(.horizontal, S.margin).padding(.top, y == years.first ? 0 : S.section).padding(.bottom, S.head)
-                        ForEach(byYear[y] ?? []) { w in WeekRow(w: w) { m.period = .week(w); dismiss() } .padding(.horizontal, S.margin) }
+            Group {
+                if pane {
+                    // Open flat: his years on the left, the chosen year's weeks on the right, so no row runs across the
+                    // fold with a pane of air between its name and its count (review 2026-11-14, item 16).
+                    FoldSplit {
+                        Page {
+                            VStack(alignment: .leading, spacing: S.head) {
+                                HubTitle(text: "any week", size: 72)
+                                VStack(alignment: .leading, spacing: 0) {
+                                    ForEach(years, id: \.self) { y in yearRow(y, weeks: byYear[y]?.count ?? 0, on: y == (year ?? years.first)) }
+                                }
+                                .padding(.horizontal, S.margin)
+                                if m.weeks.isEmpty { ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, S.section) }
+                            }
+                            .padding(.top, S.head)
+                        }
+                    } right: {
+                        if let y = year ?? years.first {
+                            Page {
+                                VStack(alignment: .leading, spacing: S.head) {
+                                    SectionHead(text: String(y), trailing: "\(byYear[y]?.count ?? 0) weeks")
+                                    VStack(spacing: 0) { ForEach(byYear[y] ?? []) { w in WeekRow(w: w) { m.period = .week(w); dismiss() } } }
+                                }
+                                .padding(.horizontal, S.margin)
+                                .padding(.top, S.section + S.head)
+                            }
+                            .id(y)
+                            .transition(.opacity)
+                        }
                     }
-                    if m.weeks.isEmpty { ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, S.section) }
+                    .sensoryFeedback(.tick, trigger: year)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
+                            HubTitle(text: "any week", size: 72).padding(.bottom, S.head)
+                            ForEach(years, id: \.self) { y in
+                                SectionHead(text: String(y)).padding(.horizontal, S.margin).padding(.top, y == years.first ? 0 : S.section).padding(.bottom, S.head)
+                                ForEach(byYear[y] ?? []) { w in WeekRow(w: w) { m.period = .week(w); dismiss() } .padding(.horizontal, S.margin) }
+                            }
+                            if m.weeks.isEmpty { ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, S.section) }
+                        }
+                        .padding(.bottom, S.section)
+                    }
+                    .scrollIndicators(.hidden)
                 }
-                .padding(.bottom, S.section)
             }
-            .scrollIndicators(.hidden)
             .modifier(BarFade())
             .background { Backdrop(ref: Store.shared.hero?.art, moving: false, dim: 0.2) }
             .toolbar {
@@ -500,6 +536,21 @@ struct WeekPicker: View {
             .toolbarBackground(.hidden, for: .navigationBar)
         }
         .task { if m.weeks.isEmpty { m.weeks = await ChartWeek.load() } }
+    }
+    // A year on the left pane: large and thin, its weeks beside it; the chosen one lit with a bar at its edge.
+    private func yearRow(_ y: Int, weeks: Int, on: Bool) -> some View {
+        Button { withAnimation(.smooth(duration: 0.3)) { year = y } } label: {
+            HStack(alignment: .firstTextBaseline, spacing: S.gap) {
+                Text(String(y)).font(.system(size: 44, weight: .thin)).monospacedDigit().foregroundStyle(.white.opacity(on ? 1 : 0.55))
+                Text(weeks == 1 ? "1 week" : "\(weeks) weeks").font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
+                Spacer(minLength: 0)
+                if on { Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.85)) }
+            }
+            .padding(.vertical, S.pair)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(Press())
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 
