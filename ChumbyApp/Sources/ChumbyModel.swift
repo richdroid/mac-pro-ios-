@@ -51,8 +51,24 @@ final class ChumbyModel: ObservableObject {
     // The full-screen ringing page (ChumbyRing.swift): up when the ring's notification or its Lock Screen card is tapped,
     // and by itself when the app is in front as an alarm starts to sound. `ringHint` is what the tap itself said, shown
     // until the Chumby's own reading arrives.
-    @Published var ringScreen = false
+    @Published var ringScreen = false { didSet { if ringScreen != oldValue { RingPresenter.sync(self) } } }
     var ringHint: ChumbyRingAttributes.ContentState?
+    // Counts the Chumby's fresh readings of what's ringing, so the ringing page can tell "not heard from yet" from "heard,
+    // and nothing is ringing".
+    @Published private(set) var ringReadings = 0
+    private var ringSwept = false
+    private var ringStoppedAt: Date?
+    private var readingAt = Date()
+    // Opens the ringing page for a tap on the ring's notification or card. With a reading seconds old in hand that says
+    // nothing is ringing, there is no page to show: what was tapped is cleared away instead.
+    func openRing(hint: ChumbyRingAttributes.ContentState?) {
+        if sys.ringing == nil, !unreachable, let seen = seenAt, Date().timeIntervalSince(seen) < 8, running {
+            Task { await ChumbyRingCard.over() }
+            return
+        }
+        ringHint = hint
+        ringScreen = true
+    }
     // Folded, Calendar settings pushed inside Alarms. Kept here so its Back can sit in the rail, outside the page that slides.
     // A page opening over Alarms gets anything parked at once (see parks).
     // The "just this once" sheet, open or not: on the model, not in the menu's own state, because Home lays its
@@ -169,6 +185,7 @@ final class ChumbyModel: ObservableObject {
         let left = stoppedAt
         stop()
         running = true
+        ringSwept = false
         stateConfirmed = false      // it may have been hours; the list could have changed from elsewhere
         // Opening starts afresh: what was kept is shown at once, and only a failure that lasts from here is mentioned.
         // Back within five minutes of leaving with a verdict already said, it stands (a frozen Chumby must not look alive
@@ -242,6 +259,10 @@ final class ChumbyModel: ObservableObject {
             let fresh = r.age <= 10
             var s = try JSONDecoder().decode(Sys.self, from: r.data)
             if !fresh { s.ring = sys.ring }
+            // A copy taken before a Stop the Chumby has since taken still says "ringing": it isn't believed (the Mac's
+            // copy can be ten seconds old, twice the hold a Stop puts on readings).
+            if s.ringing != nil, let stopped = ringStoppedAt, Date().addingTimeInterval(-r.age) < stopped.addingTimeInterval(2) { s.ring = "" }
+            readingAt = Date().addingTimeInterval(-r.age)
             // Not while a page is moving: a row changing height mid-bounce snaps the page back. A ring starting,
             // snoozing or ending never waits.
             if parks, s.ringing == sys.ringing { SwipeLog.note("sys held"); heldSys = (r.data, fresh); return }
@@ -280,6 +301,22 @@ final class ChumbyModel: ObservableObject {
             if fresh {
                 if let r = s.ringing { RingSeen.saw(snoozed: r.snoozed, until: r.snoozed ? state.ringingNow?.until.flatMap { $0 > 0 ? $0 : nil } : nil) }
                 else if sys.ringing != nil || !sys.ring.isEmpty { RingSeen.quiet() }
+            }
+            if fresh {
+                // An alarm starting to sound (or sounding again after a snooze), read from the Chumby with the app in
+                // front: its page comes up by itself, over whatever is showing, since stopping it is what the phone is
+                // for just then. Only from a reading, never from a Stop or Snooze taken back; closed, it stays closed
+                // until the alarm next sounds. The build's posed shots keep their pages.
+                let sounding = s.ringing.map { !$0.snoozed } ?? false, before = sys.ringing.map { !$0.snoozed } ?? false
+                if sounding && !before && running && !ChumbyNotify.shared.staged { ringScreen = true }
+                // Nothing ringing: a card or notification left from a ring that ended where the phone wasn't told (stopped
+                // on the Chumby, the Mac's push not delivered) goes now. Once per opening and at each ring's end.
+                if s.ringing == nil, sys.ringing != nil || !ringSwept {
+                    ringSwept = true; ringHint = nil
+                    let asOf = readingAt
+                    Task { await ChumbyRingCard.sweep(asOf: asOf) }
+                }
+                ringReadings += 1
             }
             // A ring starting, snoozing or ending on the Chumby moves the page as one, never in a single frame.
             if s.ringing != sys.ringing { withAnimation(Self.ringChange(to: s.ringing)) { sys = s } } else if s != sys { sys = s }
@@ -525,6 +562,7 @@ final class ChumbyModel: ObservableObject {
         return Task {
             do {
                 try await api?.cmd("ringoff"); RingSeen.stopped(at: tapped)
+                ringStoppedAt = Date()
                 // The Lock Screen's card and the ring's notification go with it, not when the Mac next looks.
                 await ChumbyRingCard.over()
                 return true

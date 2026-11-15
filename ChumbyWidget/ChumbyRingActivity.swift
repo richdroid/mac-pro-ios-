@@ -12,14 +12,17 @@ enum RingCardLook {
     static func face(_ size: CGFloat, bold: Bool = true) -> Font { .custom("Trebuchet MS", size: size).weight(bold ? .bold : .regular) }
     static func time(_ d: Date) -> String { d.formatted(date: .omitted, time: .shortened) }
     // "Ringing", "Snoozed until 2:49 PM", and for a card nothing has reached in a long while, only what is known.
+    // Each time is said once: a snooze's end is the countdown beside it, and a stale card's time is its headline.
     static func headline(_ s: ChumbyRingAttributes.ContentState, stale: Bool) -> String {
         if stale { return "Rang at \(time(s.rang))" }
-        if s.snoozed { return s.again.map { "Snoozed until \(time($0))" } ?? "Snoozed" }
+        if let w = s.working { return w }
+        if s.snoozed { return "Snoozed" }
         return "Ringing"
     }
-    // Under the name: the time it's for (unless that is the name) and what it plays.
-    static func detail(_ s: ChumbyRingAttributes.ContentState) -> String {
-        [s.name.isEmpty ? "" : time(s.rang), s.sound].filter { !$0.isEmpty }.joined(separator: " · ")
+    // Under the name, whole or not at all (never cut short): the time it's for and what it plays, then the sound alone.
+    static func details(_ s: ChumbyRingAttributes.ContentState, stale: Bool) -> [String] {
+        let at = s.name.isEmpty || stale ? "" : time(s.rang)
+        return [[at, s.sound].filter { !$0.isEmpty }.joined(separator: " · "), s.sound, at].filter { !$0.isEmpty }
     }
 }
 
@@ -34,8 +37,22 @@ struct RingOctopus: View {
 struct RingCountdown: View {
     let until: Date
     var body: some View {
+        // Drawn only while there is time left. (A card can't redraw itself at the end: if the Mac's word that it rings
+        // again is late, the clock rests at 0:00 until it comes.)
         if until > Date() {
             Text(timerInterval: Date()...until, countsDown: true).monospacedDigit().multilineTextAlignment(.trailing)
+        }
+    }
+}
+// The line under the name: the fullest form that fits whole.
+struct RingDetail: View {
+    let forms: [String]
+    var body: some View {
+        if !forms.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                ForEach(forms, id: \.self) { Text($0).lineLimit(1).fixedSize() }
+                Color.clear.frame(width: 1, height: 1)
+            }
         }
     }
 }
@@ -44,7 +61,10 @@ struct RingCountdown: View {
 struct RingKeys: View {
     let snoozed: Bool
     var height: CGFloat = 46
-    var body: some View {
+    // A key pressed and not yet answered: both dim, so the press is seen to have landed.
+    var working = false
+    var body: some View { keys.opacity(working ? 0.45 : 1).allowsHitTesting(!working) }
+    var keys: some View {
         HStack(spacing: 10) {
             if !snoozed {
                 Button(intent: ChumbyRingSnoozeIntent()) {
@@ -74,9 +94,9 @@ struct RingLockCard: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(RingCardLook.headline(state, stale: stale)).font(RingCardLook.face(14))
                         .foregroundStyle(state.snoozed || stale ? RingCardLook.soft : ChumbyPalette.hex(0xffb38f))
-                    Text(state.title).font(RingCardLook.face(22)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.8)
-                    let d = RingCardLook.detail(state)
-                    if !d.isEmpty { Text(d).font(RingCardLook.face(14, bold: false)).foregroundStyle(RingCardLook.soft).lineLimit(1) }
+                    // The name whole: smaller before a second line, never an ellipsis.
+                    Text(state.title).font(RingCardLook.face(22)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.7)
+                    RingDetail(forms: RingCardLook.details(state, stale: stale)).font(RingCardLook.face(14, bold: false)).foregroundStyle(RingCardLook.soft)
                 }
                 Spacer(minLength: 4)
                 if state.snoozed, !stale, let again = state.again {
@@ -85,10 +105,10 @@ struct RingLockCard: View {
             }
             if let p = state.problem, !stale {
                 Label(p, systemImage: "exclamationmark.circle.fill").font(RingCardLook.face(14, bold: false))
-                    .foregroundStyle(ChumbyPalette.warn(true)).lineLimit(2)
+                    .foregroundStyle(ChumbyPalette.warn(true)).fixedSize(horizontal: false, vertical: true)
             }
             // A card nothing has reached in half an hour can't say what the Chumby is doing: no keys that may do nothing.
-            if !stale { RingKeys(snoozed: state.snoozed) }
+            if !stale { RingKeys(snoozed: state.snoozed, working: state.working != nil) }
         }
         .padding(16)
     }
@@ -113,22 +133,20 @@ struct ChumbyRingActivityWidget: Widget {
                     VStack(spacing: 1) {
                         Text(RingCardLook.headline(s, stale: context.isStale)).font(RingCardLook.face(13))
                             .foregroundStyle(quiet ? RingCardLook.soft : ChumbyPalette.hex(0xffb38f)).lineLimit(1)
-                        Text(s.title).font(RingCardLook.face(18)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.8)
+                        Text(s.title).font(RingCardLook.face(18)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.7).multilineTextAlignment(.center)
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     if s.snoozed, !context.isStale, let again = s.again {
                         RingCountdown(until: again).font(RingCardLook.face(17)).foregroundStyle(.white).frame(maxWidth: 60).padding(.trailing, 4)
-                    } else {
-                        Text(RingCardLook.time(s.rang)).font(RingCardLook.face(15)).foregroundStyle(RingCardLook.soft).padding(.trailing, 4)
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 8) {
                         if let p = s.problem, !context.isStale {
-                            Text(p).font(RingCardLook.face(13, bold: false)).foregroundStyle(ChumbyPalette.warn(true)).lineLimit(2)
+                            Text(p).font(RingCardLook.face(13, bold: false)).foregroundStyle(ChumbyPalette.warn(true)).fixedSize(horizontal: false, vertical: true)
                         }
-                        if !context.isStale { RingKeys(snoozed: s.snoozed, height: 42) }
+                        if !context.isStale { RingKeys(snoozed: s.snoozed, height: 42, working: s.working != nil) }
                     }
                     .padding(.top, 4)
                 }

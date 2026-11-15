@@ -1165,32 +1165,24 @@ struct AlarmsTab: View {
                             color: fromCalendar ? ChumbyPalette.cal(scheme == .dark) : ChumbyPalette.acc(scheme == .dark))
                 // The time opens the alarm it belongs to, as its row below does (Richard, 2026-11-14: "when editing alarms be
                 // able to tap to edit"): the largest thing on the page was the one alarm that couldn't be tapped.
-                Button { openNext(shownAlarm) } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 3) {
-                        let c = clockParts(n.at)
-                        Text(c.0).font(.custom("Trebuchet MS", size: 52).weight(.bold)).monospacedDigit().contentTransition(.numericText())
-                        Text(c.1).font(.custom("Trebuchet MS", size: 22).weight(.bold)).contentTransition(.numericText())
-                        Spacer(minLength: 0)
-                    }
-                    .contentShape(Rectangle())
+                // One target for the whole card (below), never a button that could draw itself dimmed.
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    let c = clockParts(n.at)
+                    Text(c.0).font(.custom("Trebuchet MS", size: 52).weight(.bold)).monospacedDigit().contentTransition(.numericText())
+                    Text(c.1).font(.custom("Trebuchet MS", size: 22).weight(.bold)).contentTransition(.numericText())
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.plain).disabled(!canOpen(shownAlarm))
-                .accessibilityHint(canOpen(shownAlarm) ? "Opens this alarm" : "")
                 HStack(alignment: .center, spacing: 10) {
                     // How long until it rings sits under the time, with the day: at the time's right, the card's top
                     // corner, the status bar's clock and Wi-Fi covered it once the page scrolled (gate dd1a, 276).
                     // Moved for one ring, the day line says so in few words ("Monday · Work · just this once"); the
                     // button beside it carries the usual time ("Back to 6:45 AM"), so it isn't said twice. Both lines
                     // keep one pitch, and the button centres on the two as Skip does.
-                    Button { openNext(shownAlarm) } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst)" + (moved?.usual != nil ? " · just this once" : ""))
-                                .foregroundStyle(.secondary).lineLimit(2).contentTransition(.numericText())
-                            Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(dayWord(n.at)) · \(alarmLabel(shownAlarm).capitalizedFirst)" + (moved?.usual != nil ? " · just this once" : ""))
+                            .foregroundStyle(.secondary).lineLimit(2).contentTransition(.numericText())
+                        Text(n.at, style: .relative).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).monospacedDigit().contentTransition(.numericText())
                     }
-                    .buttonStyle(.plain).disabled(!canOpen(shownAlarm)).accessibilityHidden(true)
                     Spacer(minLength: 8)
                     if let moved, let u = moved.usual {
                         // Back to the usual: the skip taken back and the one-off removed, in that order (undoJustOnce).
@@ -1232,6 +1224,11 @@ struct AlarmsTab: View {
                 // No "just this once" door here: Home's card and the alarm's own editor have it (Richard, 2026-11-10).
             }
             .padding(.vertical, 2)
+            // The whole card opens the alarm; Skip, Undo and "Back to" on it keep their own taps.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { openNext(shownAlarm) }
+            .accessibilityAction(named: "Open this alarm") { openNext(shownAlarm) }
             // A nap starting or called off rolls the time over rather than swapping it.
             .animation(.snappy, value: n.at)
         } else {
@@ -1265,12 +1262,11 @@ struct AlarmsTab: View {
     func planned(_ a: Alarm) -> PlannedWake? {
         wake.plan.first { CalendarWake.alarmName($0) == a.name && CalendarWake.minutes($0.wake) == a.time } ?? wake.plan.first { CalendarWake.alarmName($0) == a.name }
     }
-    func canOpen(_ a: Alarm) -> Bool { a.name == "Nap" || (a.isCalendar ? planned(a) != nil : a.name != "Catch-up" && !a.isPlaceholder) }
     func openNext(_ a: Alarm) {
-        guard canOpen(a) else { return }
         if a.name == "Nap" { editNap(model.napAlarm ?? a) }
-        else if a.isCalendar { if let w = planned(a) { openDay(w.key) } }
-        else { edit(a) }
+        // A calendar alarm the plan doesn't hold (not loaded yet, or an old one): the calendar's own page.
+        else if a.isCalendar { if let w = planned(a) { openDay(w.key) } else { openSettings() } }
+        else if a.name != "Catch-up" && !a.isPlaceholder { edit(a) }
     }
     // What kind of alarm it is, in a few words, for the hero's heading.
     func kindWord(_ a: Alarm) -> String {
@@ -1711,7 +1707,7 @@ struct AlarmEditor: View {
     @FocusState private var labelFocused: Bool
     // The Chumby takes no change to its alarms while one rings or snoozes (a save restarts its alarm panel): said before
     // Save is pressed, not only after.
-    var ringingNow: Bool { model.sys.ringing != nil && !model.unreachable }
+    var ringingNow: Bool { model.sys.ringing != nil && !model.unreachable && !calendarTemplate }
 
     var stations: [NamedID] { model.pandoraStations }
     var afterOptions: [(String, String)] {
@@ -1769,7 +1765,7 @@ struct AlarmEditor: View {
             // fold. The title row stays pinned once the page is scrolled, so Save is always in reach.
             let buttons = HStack(spacing: 16) {
                 Button("Cancel") { stopTest(); close() }.disabled(saving)
-                if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
+                if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold).disabled(ringingNow) }
             }
             .foregroundStyle(.tint)
             List {
@@ -1797,7 +1793,7 @@ struct AlarmEditor: View {
                         Button { stopTest(); dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold) }
+                        if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold).disabled(ringingNow) }
                     }
                 }
                 .interactiveDismissDisabled(saving)
@@ -1827,7 +1823,13 @@ struct AlarmEditor: View {
                         if saving { HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) } }
                         if let problem { FailNote(text: problem) }
                         if ringingNow && !saving && problem == nil {
-                            RowNote(icon: "alarm.waves.left.and.right.fill", text: model.sys.ringing?.snoozed == true ? "An alarm is snoozed. The Chumby takes changes once it’s stopped." : "An alarm is ringing. The Chumby takes changes once it’s stopped.")
+                            // Not a dead end: the ringing page (Snooze, Stop) comes up over this one and leaves what
+                            // was typed here as it was.
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                RowNote(icon: "alarm.waves.left.and.right.fill", text: model.sys.ringing?.snoozed == true ? "An alarm is snoozed. Save once it’s stopped." : "An alarm is ringing. Save once it’s stopped.")
+                                Spacer(minLength: 4)
+                                Button("Stop it") { model.ringScreen = true }.buttonStyle(.borderless).font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
+                            }
                         }
                         let off = switchesOff
                         if !off.isEmpty { RowNote(icon: "alarm", text: "Saving turns off \(Self.list(off)).") }
@@ -1910,7 +1912,7 @@ struct AlarmEditor: View {
                         Section {
                             Button { justOnce = true } label: {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Later or another sound, just this once").foregroundStyle(.tint)
+                                    Text("Set this ring’s time or sound").foregroundStyle(.tint)
                                     Text("\(dayWord(due)) at \(due.formatted(date: .omitted, time: .shortened)) only. It repeats as usual after.").font(.subheadline).foregroundStyle(.secondary)
                                 }
                             }

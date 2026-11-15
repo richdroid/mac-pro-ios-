@@ -63,6 +63,12 @@ jobs:
             shot alarms-ringing$2 $1 9 $M/ringing -tab 2
             shot editor$2 $1 9 $M -tab 2 -pose editor
             shot editor-ringing$2 $1 9 $M/ringing -tab 2 -pose editor
+            shot screen-fail$2 $1 9 $M/ringing -tab 0 -pose ringfail
+            shot home$2 $1 9 $M -tab 0
+            shot home-skipped$2 $1 9 $M/skipped -tab 0
+            shot home-moved$2 $1 9 $M/moved -tab 0
+            shot home-nap$2 $1 9 $M/nap -tab 0
+            shot once$2 $1 10 $M -tab 0 -pose justonce
           }
           xcrun simctl ui "$DEVICE" appearance light
           set_ 1 ""

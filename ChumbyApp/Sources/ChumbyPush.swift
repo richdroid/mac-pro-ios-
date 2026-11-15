@@ -138,8 +138,9 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
             case Self.ringSnooze: Task { await self.ringAnswered(ChumbyRingActions.snooze(), stop: false); done() }
             case UNNotificationDismissActionIdentifier: done()
             default:
+                // Kept until the page's host is there to take it: a tap that launched the app arrives before any view listens.
                 let hint = RingLink.state(info["ring"])
-                DispatchQueue.main.async { NotificationCenter.default.post(name: Self.openedRing, object: hint) }
+                DispatchQueue.main.async { self.ringTap = RingTap(hint: hint); NotificationCenter.default.post(name: Self.openedRing, object: nil) }
                 done()
             }
             return
@@ -150,6 +151,9 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
     }
     static let opened = Notification.Name("chumbyOpenedNotification")
     static let openedRing = Notification.Name("chumbyOpenedRing")
+    struct RingTap { var hint: ChumbyRingAttributes.ContentState? }
+    private var ringTap: RingTap?
+    func takeRingTap() -> RingTap? { defer { ringTap = nil }; return ringTap }
     // Stop or Snooze pressed on the notification, and the Chumby didn't take it: said in its place, with the same two
     // keys to try again, since nothing else on a locked phone would say so and the alarm is still going.
     func ringAnswered(_ why: String?, stop: Bool) async {

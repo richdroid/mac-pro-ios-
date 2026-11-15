@@ -56,7 +56,9 @@ extension ChumbyModel {
         guard let api else { return "No Chumby address set." }
         tick()
         let late = at.timeIntervalSince(due)
-        guard late >= 0, late <= Double(JustOnce.longest * 60) else { return "Pick a time from \(due.formatted(date: .omitted, time: .shortened)), on the same night." }
+        // One of his own alarms only ever later (its usual ring is skipped and a one-off stands in for it); a calendar
+        // day's alarm is moved by the calendar's own update, which has its own limits (before the event, not too soon).
+        guard original.isCalendar || late >= 0, late <= Double(JustOnce.longest * 60) else { return "Pick a time from \(due.formatted(date: .omitted, time: .shortened)), on the same night." }
         // A calendar day is one alarm of its own already: that day's time (and sound) simply change, through the
         // calendar's own update, in one save. No skip, no second alarm, nothing for the panel's reload to lose (11-08:
         // his "just this once" on the shift's alarm went through the skip path and came back with an error).
@@ -66,6 +68,7 @@ extension ChumbyModel {
             if day() == nil { wake.refreshPlan() }     // from Home before Alarms has been opened, the plan may not be worked out yet
             if let item = day() { return await wake.moveDay(item, to: at, settings: settings, current: deviceState.alarms.first { $0.key == original.key }) }
         }
+        guard late >= 0 else { return "It can ring later than usual, not earlier. Nothing was changed." }
         // Fresh from the Chumby: that ring is still ahead and not about to ring, and what the one skip is on now.
         var old: JustOnceNow?
         do {
@@ -234,44 +237,18 @@ extension ChumbyModel {
     }
 }
 
-// From the next alarm on Home and in Alarms: later by a few minutes with the same sound, in one tap; or the sheet for
-// another time or sound. A "just this once" that no longer stands behind its skip is shown here instead, with the fix.
+// Under Home's card: a "just this once" that no longer stands behind its skip, with the fix. (Until 2026-11-14 this was
+// also a link, "Later or another sound, just tomorrow", with a menu of +10/+20/+30; Richard: "later or another sound is
+// stupid and redundant -- i should be able to tap and set the time pressely". The time on the card opens the sheet now.)
 struct JustOnceMenu: View {
     @EnvironmentObject var model: ChumbyModel
     @State private var busy = false
-    // The menu's own label shows it's working only once its menu has gone: the glyph turning into a spinner (and the
-    // label dimming) the instant a time was picked changed the anchor under the closing menu and cut the close (MenuClose).
     @State private var spinning = false
     @State private var problem: String?
-    @State private var posed = false
     @State private var confirmReskip = false
     var body: some View {
         Group {
             if let j = model.state.justOnce(), j.orphan { orphan(j) }
-            else if case .ok(let a, let due, _) = model.justOnceOffer() {
-                Menu {
-                    Section("Ring later, just \(justDay(due))") {
-                        ForEach([10, 20, 30], id: \.self) { m in
-                            let at = due.addingTimeInterval(Double(m * 60))
-                            Button("+\(m) min · \(at.formatted(date: .omitted, time: .shortened))") { run { await model.justOnce(a, due: due, at: at, settings: a) } }
-                        }
-                    }
-                    Button { model.justOnceSheetOpen = true } label: { Label("Another time or sound…", systemImage: "slider.horizontal.3") }
-                } label: {
-                    HStack(spacing: 6) {
-                        if spinning { ProgressView().controlSize(.small) } else { Image(systemName: "clock.arrow.circlepath") }
-                        // Said as the two things he'd do, scoped to the day: "Later or different, just this once" named neither
-                        // (Richard, 2026-11-09: "the alarm stuff is still a bit unintuitive and confusing at points").
-                        Text("Later or another sound, just \(justDay(due))")
-                    }
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
-                    .frame(minHeight: 30).contentShape(Rectangle())
-                }
-                .disabled(spinning)
-                .accessibilityHint("Moves the \(due.formatted(date: .omitted, time: .shortened)) alarm later, or changes its sound, for this time only")
-                .fillCover(isPresented: $model.justOnceSheetOpen) { JustOnceSheet(original: a, due: due).environmentObject(model) }
-                .onAppear { if ChumbyModel.pose == "justonce" && model.tab == 0 && !posed { posed = true; model.justOnceSheetOpen = true } }
-            }
             if let problem { FailNote(text: problem) }
         }
     }
@@ -307,16 +284,22 @@ struct JustOnceMenu: View {
     func justDay(_ d: Date) -> String { chumbyJustDay(d) }
 }
 
-// Another time or sound for one ring: how much later (a few presets or a time), and the editor's own sound rows. When the
-// Chumby's one skip is already on another alarm, it says what Set will replace before it does.
+// One ring's own time and sound: a time wheel, +5 and +10 from wherever it stands, and the editor's own sound rows
+// (Richard, 2026-11-14: "i should be able to tap and set the time pressely however maybe have + 5 or +10 shortcuts").
+// One of his own alarms can only ring later than usual (the usual ring is skipped and a one-off rings in its place); a
+// calendar day's alarm is simply moved, so it can ring earlier too. `adjusting`: this ring was already moved just this
+// once, and Set puts the usual one back first and then sets the new time, so there is never a moment with neither.
+// When the Chumby's one skip is already on another alarm, it says what Set will replace before it does.
 struct JustOnceSheet: View {
     @EnvironmentObject var model: ChumbyModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     let original: Alarm
     let due: Date
-    var later = 10
-    @State private var minutes = 10
+    var later = 0
+    var adjusting = false
+    @State private var minutes = 0
+    @State private var loadedSound = ""
     @State private var alarm = Alarm()
     @State private var sound = SoundChoice()
     @State private var saving = false
@@ -324,6 +307,26 @@ struct JustOnceSheet: View {
     @State private var loaded = false
     @State private var confirm = false
     var at: Date { due.addingTimeInterval(Double(minutes * 60)) }
+    // How far it may go: his own alarms from the usual time to twelve hours on; a calendar day's from a few minutes from
+    // now (never more than six hours early) to twelve hours on, and the calendar's own check keeps it before the event.
+    var earliest: Int { original.isCalendar ? max(-360, Int((Date().addingTimeInterval(240).timeIntervalSince(due) / 60).rounded(.up))) : 0 }
+    func step(_ by: Int) { Haptic.fire(.tick); withAnimation(.snappy) { minutes = min(max(minutes + by, min(earliest, 0)), JustOnce.longest) } }
+    // "25 min later than usual", "At its usual time"
+    var offsetText: String {
+        if minutes == 0 { return "At its usual time" }
+        let m = abs(minutes), words = m >= 60 ? "\(m / 60) h\(m % 60 > 0 ? " \(m % 60) min" : "")" : "\(m) min"
+        return "\(words) \(minutes > 0 ? "later" : "earlier") than usual"
+    }
+    func soundKey(_ a: Alarm) -> String { [a.type, a.arg, a.param, a.param_description, a.duration, a.snooze, a.auto_dismiss].joined(separator: "\u{1}") }
+    // The same pill as the nap's lengths: outlined in the accent.
+    func stepChip(_ title: String, label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).fixedSize()
+                .padding(.horizontal, 6).frame(maxWidth: .infinity, minHeight: 36)
+                .foregroundStyle(.tint).overlay { Capsule().stroke(.tint, lineWidth: 1) }.contentShape(Capsule())
+        }
+        .buttonStyle(.plain).accessibilityLabel(label)
+    }
     var name: String { original.isCalendar ? String(original.name.dropFirst(Alarm.calendarPrefix.count)) : alarmLabel(original).capitalizedFirst }
     var body: some View {
         NavigationStack {
@@ -336,7 +339,7 @@ struct JustOnceSheet: View {
                     ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving) }
                     ToolbarItem(placement: .confirmationAction) {
                         if saving { ProgressView() } else {
-                            Button { if !original.isCalendar, model.pinWarning != nil { confirm = true } else { save(replacing: false) } } label: { Label("Set", systemImage: "checkmark") }.fontWeight(.semibold)
+                            Button { if !original.isCalendar, !adjusting, model.pinWarning != nil { confirm = true } else { save(replacing: false) } } label: { Label("Set", systemImage: "checkmark") }.fontWeight(.semibold)
                                 // What it replaces is said once, in the note at the top of the sheet; this only asks
                                 // (Richard, 2026-11-10: the same sentence twice).
                                 .confirmationDialog("Replace that skip?", isPresented: $confirm, titleVisibility: .visible) {
@@ -355,7 +358,7 @@ struct JustOnceSheet: View {
         .tint(ChumbyPalette.acc(scheme == .dark))
     }
     @ViewBuilder var sections: some View {
-        let warning = original.isCalendar ? nil : model.pinWarning
+        let warning = original.isCalendar || adjusting ? nil : model.pinWarning
         if saving || problem != nil || warning != nil {
             Section {
                 if saving { HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) } }
@@ -373,48 +376,59 @@ struct JustOnceSheet: View {
             .padding(.vertical, 4)
         }
         Section {
+            // The time itself. A time on the clock is taken as the one nearest the usual time; one this ring can't have
+            // (earlier than usual for his own alarms, already gone for a calendar day) settles on the nearest it can.
+            DatePicker("Rings at", selection: Binding(get: { at }, set: { d in
+                var m = Int((d.timeIntervalSince(due) / 60).rounded()) % 1440
+                if m > 720 { m -= 1440 } else if m < -720 { m += 1440 }
+                minutes = min(max(m, min(earliest, 0)), JustOnce.longest)
+            }), displayedComponents: .hourAndMinute)
+                .datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity)
+            // Five or ten more from wherever it stands, and the way back to the usual time once it has left it.
             HStack(spacing: 8) {
-                ForEach([0, 10, 20, 30], id: \.self) { m in
-                    Button { withAnimation(.snappy) { minutes = m } } label: {
-                        Text(m == 0 ? "On time" : "+\(m) min").font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
-                            .frame(maxWidth: .infinity, minHeight: 34)
-                            .foregroundStyle(minutes == m ? AnyShapeStyle(.white) : AnyShapeStyle(.tint))
-                            .background { Capsule().fill(minutes == m ? AnyShapeStyle(.tint) : AnyShapeStyle(.clear)) }
-                            .overlay { Capsule().stroke(.tint, lineWidth: 1) }
-                    }
-                    .buttonStyle(.plain)
+                stepChip("+5 min", label: "Five minutes later") { step(5) }
+                stepChip("+10 min", label: "Ten minutes later") { step(10) }
+                if minutes != 0 {
+                    stepChip("Usual", label: "Back to the usual time") { Haptic.fire(.tick); withAnimation(.snappy) { minutes = 0 } }
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
-            // The line under the chips starts at the chips' own left edge, the text column every other row's line starts at.
-            .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
-            DatePicker("Rings at", selection: Binding(get: { at }, set: { d in
-                // A time on the clock, the next one from the usual time.
-                var t = d
-                while t < due { t = t.addingTimeInterval(86400) }
-                while t.timeIntervalSince(due) >= 86400 { t = t.addingTimeInterval(-86400) }
-                minutes = min(max(Int((t.timeIntervalSince(due) / 60).rounded()), 0), JustOnce.longest)
-            }), displayedComponents: .hourAndMinute)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 11, leading: 20, bottom: 0, trailing: 20))
+            Text(offsetText).font(.subheadline).foregroundStyle(.secondary).monospacedDigit().contentTransition(.numericText())
+                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 11, trailing: 20))
         } header: { SectionHead(icon: "clock", text: "When") }
         Section { SoundRows(choice: $sound, alarm: $alarm) } header: { SectionHead(icon: "music.note", text: "Sound") }
         Section {} footer: {
-            SectionFoot(original.isCalendar ? "That day’s alarm moves to \(at.formatted(date: .omitted, time: .shortened)). The other days are as they were."
-                 : "The usual one is skipped and this rings in its place. It repeats as usual after.")
+            SectionFoot(original.isCalendar ? "Only that day’s alarm changes. The other days are as they were."
+                 : "For this ring only, and never earlier than usual. It repeats as usual after.")
         }
     }
     func load() {
         minutes = later
-        // How it rings now, as the Chumby holds it (a calendar alarm with the calendar's set, or its own).
+        // How it rings now, as the Chumby holds it (a calendar alarm with the calendar's set, or its own); a ring already
+        // moved just this once opens with the sound it was given then.
         alarm = model.deviceState.alarms.first { $0.key == original.key } ?? original
+        if adjusting, let j = model.state.justOnce() { alarm.takeSettings(from: j.alarm) }
         sound = SoundChoice(alarm, state: model.state, stations: model.pandoraStations)
+        var a = alarm
+        if sound.apply(to: &a, state: model.state, stations: model.pandoraStations) == nil { loadedSound = soundKey(a) }
     }
     func save(replacing: Bool) {
         var a = alarm
         if let why = sound.apply(to: &a, state: model.state, stations: model.pandoraStations) { problem = why.errorDescription; return }
+        // Nothing changed: nothing to send.
+        if minutes == later && soundKey(a) == loadedSound { dismiss(); return }
         saving = true; problem = nil
         Task {
+            // A ring already moved goes back to its usual time first (the skip taken back, the one-off removed), so the
+            // new time is set from the same footing as the first; a failure in between leaves the usual alarm ringing.
+            if adjusting, let why = await model.undoJustOnce() { saving = false; problem = why; return }
+            // Back at its usual time with its usual sound is all he asked for.
+            if adjusting && minutes == 0 && soundKey(a) == soundKey(model.deviceState.alarms.first { $0.key == original.key } ?? original) { saving = false; dismiss(); return }
             let why = await model.justOnce(original, due: due, at: at, settings: a, replacing: replacing)
             saving = false
-            if let why { problem = why } else { dismiss() }
+            if let why { problem = adjusting ? "It’s back at its usual time. \(why)" : why } else { dismiss() }
         }
     }
 }

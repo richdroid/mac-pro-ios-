@@ -288,10 +288,14 @@ struct ChumbyRingAttributes: Codable, Hashable {
         var at: Double
         var snoozed: Bool
         var until: Double?
+        // How long this alarm's snooze is, in minutes, when the Mac knows: the card can say until when without asking.
+        var snooze: Int?
         var problem: String?
+        // "Stopping…" or "Snoozing…": a key was pressed and the Chumby hasn't answered yet.
+        var working: String?
         var rang: Date { Date(timeIntervalSince1970: at) }
         var again: Date? { until.flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0) : nil } }
-        // "CR Shift", or the time it's for when it has no name of its own.
+        // "Work", or the time it's for when it has no name of its own.
         var title: String { name.isEmpty ? "\(rang.formatted(date: .omitted, time: .shortened)) alarm" : name }
     }
     var id: String
@@ -324,6 +328,21 @@ enum ChumbyRingCard {
         let ids = await c.deliveredNotifications().filter { ($0.request.content.userInfo["alert"] as? String) == ChumbyRingActions.noticeID || $0.request.identifier == ChumbyRingActions.noticeID }.map(\.request.identifier)
         c.removeDeliveredNotifications(withIdentifiers: ids + [ChumbyRingActions.noticeID])
     }
+    // The Chumby, read at `asOf`, says nothing is ringing: whatever is left of a ring from before then goes. A ring is
+    // only told once it has begun, within seconds of its minute, so half a minute past that a reading is newer than it;
+    // a reading older than that could be a copy from before the ring, and ends nothing.
+    static func sweep(asOf: Date) async {
+        let cut = asOf.timeIntervalSince1970 - 30
+        for a in Activity<ChumbyRingAttributes>.activities where a.content.state.at < cut && (a.content.state.until ?? 0) < cut { await a.end(nil, dismissalPolicy: .immediate) }
+        let c = UNUserNotificationCenter.current()
+        let old = await c.deliveredNotifications().filter { n in
+            let info = n.request.content.userInfo
+            guard (info["alert"] as? String) == ChumbyRingActions.noticeID else { return false }
+            let at = ((info["ring"] as? [String: Any])?["at"] as? NSNumber)?.doubleValue ?? n.date.timeIntervalSince1970
+            return at < cut && n.date.timeIntervalSince1970 < cut
+        }.map(\.request.identifier)
+        if !old.isEmpty { c.removeDeliveredNotifications(withIdentifiers: old) }
+    }
 }
 #else
 enum ChumbyRingCard {
@@ -331,6 +350,7 @@ enum ChumbyRingCard {
     static func show(_ s: ChumbyRingAttributes.ContentState) async {}
     static func change(_ edit: (inout ChumbyRingAttributes.ContentState) -> Void) async {}
     static func clearNotice() async {}
+    static func sweep(asOf: Date) async {}
 }
 #endif
 
@@ -338,37 +358,35 @@ enum ChumbyRingCard {
 // right at once rather than when the Mac next looks. Each answers nil when done, or why not.
 enum ChumbyRingActions {
     static let noticeID = "chumby-ring"
+    // The command goes first and alone (a real read takes the Chumby seconds, and the alarm is sounding); the card says
+    // "Stopping…" from the press until the answer. On the card a failure is said short; the reason is the app's to give.
     @discardableResult static func stop() async -> String? {
+        await ChumbyRingCard.change { $0.working = "Stopping…"; $0.problem = nil }
         do { try await chumbyTry { try await $0.cmd("ringoff") } }
         // Nothing was ringing any more: stopped is what he wanted.
         catch ChumbyError.message("not delivered") {}
         catch {
-            let why = AlarmWriter.explain(error)
-            await ChumbyRingCard.change { $0.problem = "Didn’t stop. \(why)" }
-            return why
+            await ChumbyRingCard.change { $0.working = nil; $0.problem = "Didn’t stop. Try again." }
+            return AlarmWriter.explain(error)
         }
         await ChumbyRingCard.over()
         return nil
     }
     @discardableResult static func snooze() async -> String? {
+        await ChumbyRingCard.change { $0.working = "Snoozing…"; $0.problem = nil }
         do {
-            let minutes = try await chumbyTry { api -> Double? in
-                // How long its snooze is, from the alarm that's ringing, read before it's pressed.
-                let sys = try? JSONDecoder().decode(Sys.self, from: await api.raw("sys").data)
-                let state = try? JSONDecoder().decode(ChumbyState.self, from: await api.raw("state").data)
-                try await api.cmd("ringsnooze")
-                return sys?.ringing.flatMap { r in state?.alarms.first { $0.name == r.name }?.snooze }.flatMap(Double.init)
-            }
-            let until = Date().addingTimeInterval((minutes ?? 9) * 60).timeIntervalSince1970
-            await ChumbyRingCard.change { $0.snoozed = true; $0.until = until; $0.problem = nil }
+            try await chumbyTry { try await $0.cmd("ringsnooze") }
+            // Until when: by this alarm's own snooze length, which the Mac sent with the card (9 minutes is the Chumby's
+            // usual); the Mac's next word carries the panel's own time.
+            let now = Date()
+            await ChumbyRingCard.change { $0.working = nil; $0.snoozed = true; $0.until = now.addingTimeInterval(Double($0.snooze ?? 9) * 60).timeIntervalSince1970 }
             await ChumbyRingCard.clearNotice()
             return nil
         }
         catch ChumbyError.message("not delivered") { await ChumbyRingCard.over(); return nil }
         catch {
-            let why = AlarmWriter.explain(error)
-            await ChumbyRingCard.change { $0.problem = "Didn’t snooze. \(why)" }
-            return why
+            await ChumbyRingCard.change { $0.working = nil; $0.problem = "Didn’t snooze. Try again." }
+            return AlarmWriter.explain(error)
         }
     }
 }

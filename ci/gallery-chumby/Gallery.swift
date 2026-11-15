@@ -70,7 +70,8 @@ extension View { func flattened() -> some View { self.colorMultiply(.black).colo
                 // with no name, and one nothing has reached in half an hour.
                 ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false))
                 ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 120, snoozed: true, until: Date().timeIntervalSince1970 + 431))
-                ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false, problem: "Didn’t stop. The Chumby isn’t answering."))
+                ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 40, snoozed: false, problem: "Didn’t stop. Try again."))
+                ringCard(.init(name: "Morning shift at the shop", sound: "Pandora: Today’s Hits Radio", at: Date().timeIntervalSince1970 - 120, snoozed: true, until: Date().timeIntervalSince1970 + 431))
                 ringCard(.init(name: "", sound: "Beep", at: Date().timeIntervalSince1970 - 40, snoozed: false))
                 ringCard(.init(name: "Work", sound: "Pandora: Today’s Hits", at: Date().timeIntervalSince1970 - 2400, snoozed: false), stale: true)
             default:
