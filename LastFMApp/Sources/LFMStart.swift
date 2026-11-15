@@ -20,7 +20,7 @@ struct StartTab: View {
             if pane {
                 FoldSplit {
                     Page(top: top) {
-                        VStack(alignment: .leading, spacing: S.head) { HubTitle(text: ProfileHead.name, size: 80); stats }.padding(.top, S.head)
+                        VStack(alignment: .leading, spacing: S.head) { HubTitle(text: ProfileHead.name, size: 80, least: 0.3); stats(wide: false) }.padding(.top, S.head)
                     }
                 } right: {
                     Pager(.panorama, page: Binding(get: { max(page, 1) }, set: { page = $0 }), top: top,
@@ -28,21 +28,33 @@ struct StartTab: View {
                 }
             } else {
                 Pager(.panorama, title: ProfileHead.name, page: $page, top: top,
-                      panels: [Panel(0, "") { stats }, nowPanel(sideways ? .short : size == .regular ? .wide : .column), lately, story])
+                      panels: [Panel(0, "") { stats(wide: size == .regular && !sideways) }, nowPanel(sideways ? .short : size == .regular ? .wide : .column), lately, story])
             }
         }
         .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height * 1.15 } action: { sideways = $0 }
         .onChange(of: links.panel) { _, p in if let p { page = p; links.panel = nil } }
     }
 
-    private var stats: some View {
+    private func stats(wide: Bool) -> some View {
         VStack(alignment: .leading, spacing: S.section) {
             ProfileHead().padding(.horizontal, S.margin)
             // The first read, high on the page while it runs: the moment the app is reading his years.
             if !sync.complete { YearsSection() }
-            Totals().padding(.horizontal, S.margin)
+            if wide {
+                // Open upright there's room beside the count: today so far and who's on repeat (it was one number in
+                // half a page; review 2026-11-14, item 21).
+                HStack(alignment: .top, spacing: S.figures) {
+                    Totals()
+                    Spacer(minLength: 0)
+                    TodayGlance().frame(width: 292, alignment: .leading)
+                }
+                .padding(.horizontal, S.margin)
+            } else {
+                Totals().padding(.horizontal, S.margin)
+            }
             StreakCard().padding(.horizontal, S.margin)
             PaceCard().padding(.horizontal, S.margin)
+            MilestoneCard().padding(.horizontal, S.margin)
             TimeCard()
         }
     }
@@ -63,7 +75,7 @@ struct StartTab: View {
                 }
                 if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
                 DaySection(lead: !playing)
-                RecentSection()
+                RecentSection(skipFirst: !playing && !store.recent.isEmpty)
             }
         }
     }

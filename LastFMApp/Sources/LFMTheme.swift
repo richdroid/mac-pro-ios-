@@ -32,11 +32,13 @@ enum S {
 struct HubTitle: View {
     let text: String
     var size: CGFloat = 80
+    // How far it may shrink to fit. His own name is always whole (0.3); other titles keep their size past 70 %.
+    var least: CGFloat = 0.7
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
     @State private var room: CGFloat = 0
     var body: some View {
         let base = size * min(max(k, 0.9), 1.25)
-        let scale = HubTitle.scale(text, base: base, room: room)
+        let scale = HubTitle.scale(text, base: base, room: room, least: least)
         Text(text.lowercased())
             .font(.system(size: base * scale, weight: .thin))
             .tracking(-1.5 * scale)
@@ -81,7 +83,9 @@ struct Counting: View {
     @MainActor static var counted: Set<String> = []
     init(_ value: Int, key: String, format: @escaping (Int) -> String = number) {
         self.value = value; self.key = key; self.format = format
-        _shown = State(initialValue: Counting.counted.contains(key) ? Double(value) : 0)
+        // Counted up over its last tenth, never from nothing: a first frame caught mid-count must not read "0 scrobbles",
+        // a zero he doesn't have (review 2026-11-14, item 3).
+        _shown = State(initialValue: Counting.counted.contains(key) ? Double(value) : (Double(value) * 0.9).rounded(.down))
     }
     var body: some View {
         Rolling(value: shown, format: format)

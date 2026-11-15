@@ -48,23 +48,33 @@ struct ProfileHead: View {
 
 struct Totals: View {
     private var store: Store { Store.shared }
+    // Once all of his history is on the phone, its own counts: the same ones the library and every page say, never
+    // Last.fm's a little apart from them (review 2026-11-14, item 23).
+    @State private var own: (artists: Int, albums: Int, tracks: Int)?
     var body: some View {
         let p = store.profile
         VStack(alignment: .leading, spacing: S.inner) {
             VStack(alignment: .leading, spacing: S.pair) {
                 Group {
-                    if let p { Counting(p.playcount, key: "scrobbles") } else { Text("–") }
+                    if let p { Counting(p.playcount, key: "scrobbles") } else { Text(" ") }
                 }
                 .font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white)
                 .lineLimit(1).minimumScaleFactor(0.6)
                 Text("scrobbles").font(.title3.weight(.light)).foregroundStyle(S.soft)
             }
             .accessibilityElement(children: .combine)
-            FigureGrid(items: [
-                (p.map { number($0.artists) } ?? "–", "artists"),
-                (p.map { number($0.albums) } ?? "–", "albums"),
-                (p.map { number($0.tracks) } ?? "–", "tracks"),
-            ])
+            if let p {
+                FigureGrid(items: [
+                    (number(own?.artists ?? p.artists), "artists"),
+                    (number(own?.albums ?? p.albums), "albums"),
+                    (number(own?.tracks ?? p.tracks), "tracks"),
+                ])
+            }
+        }
+        .task(id: HistorySync.shared.complete) {
+            guard HistorySync.shared.complete else { own = nil; return }
+            let c = await HistoryDB.reader.distinct(from: 0, to: Int(Int32.max))
+            if c.artists > 0 { own = c }
         }
     }
 }
@@ -296,12 +306,12 @@ struct WeekHub: View {
             ZStack(alignment: .bottomLeading) {
                 ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 400, corner: 10).frame(width: S.tile).zoomSource("\(title)|\(a.name)")
                 if title != "new to you" {
-                    Text("\(k + 1)").font(.system(size: 64, weight: .ultraLight)).foregroundStyle(.white).shadow(color: .black.opacity(0.5), radius: 8)
+                    RankShade().frame(width: S.tile, height: S.tile)
+                    Text("\(k + 1)").font(.system(size: 64, weight: .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
                         .offset(x: -2, y: 18)
                 }
                 if a.isNew && title != "new to you" {
-                    Text("new").font(.caption.weight(.bold)).foregroundStyle(.black).padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(Capsule().fill(.white)).offset(x: 88, y: -104)
+                    NewMark().frame(width: S.tile - 16, height: S.tile - 16, alignment: .topTrailing).padding(8)
                 }
             }
             .padding(.bottom, title == "new to you" ? S.pair : S.gap)
@@ -554,6 +564,71 @@ struct NewCard: View {
                 }
             }
             .card()
+        }
+    }
+}
+
+// Open upright, beside his scrobbles: today so far, and this week's five most played, each opening its artist.
+struct TodayGlance: View {
+    private var store: Store { Store.shared }
+    var body: some View {
+        let n = store.today.filter { !$0.nowPlaying }.count
+        VStack(alignment: .leading, spacing: S.inner) {
+            VStack(alignment: .leading, spacing: S.pair) {
+                Counting(n, key: "glance").font(.system(size: 64, weight: .thin)).monospacedDigit().foregroundStyle(.white).lineLimit(1)
+                Text(n == 1 ? "play today" : "plays today").font(.title3.weight(.light)).foregroundStyle(S.soft)
+            }
+            .accessibilityElement(children: .combine)
+            if !store.insights.week.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(Array(store.insights.week.prefix(5).enumerated()), id: \.element.id) { k, a in
+                        Opens(route: .artist(a.name), zoom: "glance|\(a.name)") {
+                            ArtView(ArtRef(artist: a.name, album: a.album, url: a.image), px: 160, corner: 6).frame(width: S.art).zoomSource("glance|\(a.name)")
+                        }
+                        .accessibilityLabel("\(k + 1). \(a.name), \(a.plays) plays this week")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The next round number, how far off it is, and when he'd reach it at the pace of his last four weeks. Only once that
+// pace is known; never a guess from nothing.
+struct MilestoneCard: View {
+    private var store: Store { Store.shared }
+    static func step(_ n: Int) -> Int { n >= 100_000 ? 10_000 : n >= 10_000 ? 5_000 : n >= 1_000 ? 1_000 : 100 }
+    var body: some View {
+        let today = LocalDay.today
+        let month = (1...28).reduce(0) { $0 + (store.insights.days[today - $1] ?? 0) }
+        if let p = store.profile, p.playcount > 0, month >= 28 {
+            let step = Self.step(p.playcount)
+            let next = (p.playcount / step + 1) * step
+            let left = next - p.playcount
+            let perDay = Double(month) / 28
+            let days = Int((Double(left) / perDay).rounded(.up))
+            let on = Calendar.current.date(byAdding: .day, value: days, to: Clock.now) ?? Clock.now
+            let sameYear = Calendar.current.isDate(on, equalTo: Clock.now, toGranularity: .year)
+            VStack(alignment: .leading, spacing: S.head) {
+                SectionHead(text: "next milestone")
+                VStack(alignment: .leading, spacing: S.inner) {
+                    FigureGrid(items: [
+                        (number(next), "scrobbles"),
+                        (number(left), "to go"),
+                        (sameYear ? on.formatted(.dateTime.month(.abbreviated).day()) : on.formatted(.dateTime.month(.abbreviated).year()), "at this month's pace"),
+                    ], size: 40)
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.white.opacity(0.12))
+                            Capsule().fill(S.accent).frame(width: max(6, g.size.width * CGFloat(step - left) / CGFloat(step)))
+                        }
+                    }
+                    .frame(height: 8)
+                    .accessibilityHidden(true)
+                }
+                .card()
+            }
+            .accessibilityElement(children: .combine)
         }
     }
 }

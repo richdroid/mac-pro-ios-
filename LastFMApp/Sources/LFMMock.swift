@@ -25,6 +25,7 @@ final class MockLastFM: @unchecked Sendable {
     var profileName: String { profile["name"] as? String ?? "listener" }
     // His name alone, from the catalog, without making the history (which takes seconds, and never on the main thread).
     static var catalogName: String {
+        if let n = UserDefaults.standard.string(forKey: "mockName"), !n.isEmpty { return n }
         guard let u = Bundle.main.url(forResource: "catalog", withExtension: "json", subdirectory: "Mock"),
               let d = try? Data(contentsOf: u), let o = try? JSONSerialization.jsonObject(with: d) else { return "listener" }
         return J(o)["profile"]["name"].string ?? "listener"
@@ -44,6 +45,8 @@ final class MockLastFM: @unchecked Sendable {
             }, listeners: a["listeners"].int ?? 50_000, tags: a["tags"].array.map(\.text))
         }
         profile = (j["profile"].v as? [String: Any]) ?? [:]
+        // The build's pose for a long user name with no real name set (-mockName), to see the hub's title hold it whole.
+        if let n = UserDefaults.standard.string(forKey: "mockName"), !n.isEmpty { profile["name"] = n; profile["realname"] = "" }
         rising = artists.firstIndex { $0.name == j["rising"].text } ?? 0
         discovery = artists.firstIndex { $0.name == j["discovery"].text } ?? 0
         LaunchLog.mark("mock making")

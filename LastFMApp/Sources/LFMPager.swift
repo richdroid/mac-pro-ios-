@@ -25,6 +25,8 @@ struct Panel: Identifiable {
 @MainActor @Observable final class PagerMotion {
     var x: CGFloat = 0
     var lifts: [Int: CGFloat] = [:]
+    // How many sections across the pager is (1.0 = resting on the second), kept beside x for the opening placement.
+    var f: CGFloat = 0
 }
 
 struct Pager: View {
@@ -39,6 +41,9 @@ struct Pager: View {
     @State private var motion = PagerMotion()
     @State private var position: Int?
     @State private var landed = 0
+    // Opened on a section other than the first (a widget's link, a build's pose): not settled, and nothing read from
+    // where the scroll is, until it has really been put there.
+    @State private var placed = false
     @ScaledMetric(relativeTo: .largeTitle) private var k: CGFloat = 1
 
     init(_ look: Look, title: String? = nil, page: Binding<Int>, top: Int, locked: Bool = false, accessory: AnyView? = nil, panels: [Panel]) {
@@ -58,9 +63,10 @@ struct Pager: View {
             let peek: CGFloat = look == .panorama ? min(max((w * 0.05).rounded(), 22), 40) : 0  // 24 pt folded: the peek hints, the content keeps its width (review 2026-11-14, item 6)
             let pw = max(w - peek, 1)
             let titleSize = titleFont(w)
+            let headSize = headFont(pw)
             ZStack(alignment: .topLeading) {
                 if look == .panorama, let title {
-                    PanoramaTitle(text: title, size: titleSize, motion: motion, pw: pw, rate: rate(title, titleSize, w: w, pw: pw), count: panels.count)
+                    PanoramaTitle(text: title, size: titleSize, small: Self.eyebrow, motion: motion, pw: pw, count: panels.count)
                         .padding(.top, bars.top)
                 }
                 VStack(alignment: .leading, spacing: 0) {
@@ -68,15 +74,19 @@ struct Pager: View {
                         PivotHeaders(names: panels.map(\.header), motion: motion, pw: pw) { i in
                             withAnimation(.snappy(duration: 0.4)) { position = i }
                         }
+                        // The names run on to the right and fade out before the page's edge: never a word cut at the
+                        // side bar or lying under the camera (review 2026-11-14, item 7).
+                        .mask { HStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 44); Color.clear.frame(width: 4) } }
                         .padding(.top, bars.top + S.head)
                         if let accessory { accessory.padding(.top, S.head) }
                     }
+                    ScrollViewReader { reader in
                     ScrollView(.horizontal) {
                         Group {
                             if look == .pivot {
-                                LazyHStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, bars).frame(width: pw).id(p.id) } }
+                                LazyHStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars).frame(width: pw).id(p.id) } }
                             } else {
-                                HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, bars).frame(width: pw).id(p.id) } }
+                                HStack(alignment: .top, spacing: 0) { ForEach(panels) { p in panel(p, titleSize, headSize, bars).frame(width: pw).id(p.id) } }
                             }
                         }
                         .scrollTargetLayout()
@@ -85,21 +95,30 @@ struct Pager: View {
                     .scrollPosition(id: $position, anchor: .leading)
                     // The last section comes to rest at the margin like the others, not pushed back by the peek.
                     .contentMargins(.trailing, peek, for: .scrollContent)
-                    // A panorama's next section runs on under the side bar and off the display, never cut at the bar.
-                    .scrollClipDisabled(look == .panorama)
-                    // Opened on a section other than the first (a link, a pose): there from the first frame. The content
-                    // is the sections plus the peek, so section i rests at i / (n - 1) of the way across.
-                    .defaultScrollAnchor(UnitPoint(x: panels.count > 1 ? CGFloat(start) / CGFloat(panels.count - 1) : 0, y: 0), for: .initialOffset)
                     .scrollIndicators(.hidden)
                     .scrollDisabled(locked)
-                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, v in motion.x = v }
+                    .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, v in motion.x = v; motion.f = v / pw }
                     .onScrollPhaseChange { _, phase in if phase == .idle { settle(pw) } }
-                    // A pivot's pages slide up under its names: faded there, not cut.
+                    // Opened on a section other than the first (a link, a pose): put there before anything shows it
+                    // elsewhere, and checked, since a scroll asked to move before it has laid out doesn't (run 20: every
+                    // posed section showed the first).
+                    .task { await place(reader) }
+                    // A pivot's pages slide up under its names: faded there, not cut. A panorama's next section is a
+                    // hint at the far edge: it fades to nothing across the peek, so no half word or cut picture sits
+                    // there, nothing runs under the side bar, and the section left behind stops at the leading edge
+                    // (review 2026-11-14, item 5).
                     .mask {
                         VStack(spacing: 0) {
                             if look == .pivot { LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: S.head) }
-                            Color.black
+                            if look == .panorama {
+                                HStack(spacing: 0) {
+                                    Color.black
+                                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black.opacity(0.5), location: 0.22), .init(color: .clear, location: 1)],
+                                                   startPoint: .leading, endPoint: .trailing).frame(width: peek + 8)
+                                }
+                            } else { Color.black }
                         }
+                    }
                     }
                     .padding(.top, look == .pivot ? S.pair : 0)
                 }
@@ -117,17 +136,19 @@ struct Pager: View {
     }
 
     // Each section scrolls on its own. A panorama's leaves room at its top for the title behind it, then its header.
-    private func panel(_ p: Panel, _ titleSize: CGFloat, _ bars: (top: CGFloat, bottom: CGFloat)) -> some View {
+    private func panel(_ p: Panel, _ titleSize: CGFloat, _ headSize: CGFloat, _ bars: (top: CGFloat, bottom: CGFloat)) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 Color.clear.frame(height: 0).id("top")
                 VStack(alignment: .leading, spacing: 0) {
                     if look == .panorama, !p.header.isEmpty || title != nil {
-                        if title != nil { Color.clear.frame(height: ceil(titleSize * 1.18)) }
+                        // The first section sits under his name at its full size; the others under his name small, each
+                        // with its own name as large and thin as his (the same title, one per section).
+                        if title != nil { Color.clear.frame(height: p.header.isEmpty ? ceil(titleSize * 1.18) : ceil(Self.eyebrow * 1.5)) }
                         if !p.header.isEmpty {
-                            Text(p.header).font(.system(size: 34, weight: .light)).tracking(-0.6).foregroundStyle(.white.opacity(0.94))
+                            Text(p.header).font(.system(size: headSize, weight: .thin)).tracking(-1.2).foregroundStyle(.white.opacity(0.94))
                                 .lineLimit(1).fixedSize()
-                                .padding(.leading, S.margin - 2).padding(.bottom, S.head)
+                                .padding(.leading, S.margin - 4).padding(.bottom, S.head)
                                 .accessibilityAddTraits(.isHeader)
                         }
                     }
@@ -146,48 +167,78 @@ struct Pager: View {
         }
     }
 
+    private func place(_ reader: ScrollViewProxy) async {
+        guard start > 0, start < panels.count else { placed = true; return }
+        for _ in 0..<20 {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { reader.scrollTo(panels[start].id, anchor: .leading) }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            if abs(motion.f - CGFloat(start)) < 0.02 { break }
+        }
+        placed = true
+    }
+
     private func settle(_ pw: CGFloat) {
+        guard placed else { return }
         let i = max(0, min(panels.count - 1, Int((motion.x / pw).rounded())))
         let id = panels[i].id
         if id != page { page = id; landed += 1 }
     }
 
-    // The title as large as the panorama's first section allows, from 88 pt (shrinking to 70 % before running off).
+    // His name small, over every section but the first.
+    static let eyebrow: CGFloat = 22
+    // The title as large as the panorama's first section allows, from 88 pt, and always whole: a long name is set
+    // smaller until all of it fits, never run off an edge (Richard, 2026-11-14: his name cut at the side bar, then cut at
+    // the left as the panorama moved; "his name must never look broken").
     private func titleFont(_ w: CGFloat) -> CGFloat {
         guard let title else { return 0 }
         let base = 88 * min(max(k, 0.9), 1.25)
-        return base * HubTitle.scale(title, base: base, room: w)
+        return base * HubTitle.scale(title, base: base, room: w, least: 0.3)
     }
-    // How fast the title slides against the sections: so its end comes to rest a little under halfway across by the last.
-    private func rate(_ text: String, _ size: CGFloat, w: CGFloat, pw: CGFloat) -> CGFloat {
-        let travel = max(CGFloat(panels.count) * pw - w, 1)
-        let t = textWidth(text.lowercased(), size: size, tracking: -1.5)
-        return min(max((S.margin - 6 + t - w * 0.45) / travel, 0.08), 0.45)
+    // A section's own name: as thin and nearly as large, fitting its section.
+    private func headFont(_ pw: CGFloat) -> CGFloat {
+        let base = 56 * min(max(k, 0.9), 1.2)
+        let longest = panels.map(\.header).max { $0.count < $1.count } ?? ""
+        return base * HubTitle.scale(longest, base: base, room: pw, least: 0.5)
     }
 }
 
-// The hub's title behind a panorama: slower than the sections, rising with the section he's in.
+// His name over a panorama. On the first section it is the title, huge and thin. As he moves on it doesn't slide away
+// and get cut (a name with its first letters gone reads as broken): it stays where it starts, whole, and settles into a
+// small line over the section's own title, so every section reads "his name, then where he is". It rises with the
+// section's scroll.
 private struct PanoramaTitle: View {
     let text: String
     let size: CGFloat
+    let small: CGFloat
     let motion: PagerMotion
     let pw: CGFloat
-    let rate: CGFloat
     let count: Int
     var body: some View {
         let f = max(0, motion.x / pw)
         let i0 = min(count - 1, Int(f.rounded(.down)))
         let t = min(1, f - CGFloat(i0))
         let lift = (motion.lifts[i0] ?? 0) * (1 - t) + (motion.lifts[min(i0 + 1, count - 1)] ?? 0) * t
-        Text(text.lowercased())
-            .font(.system(size: size, weight: .thin))
-            .tracking(-1.5)
-            .lineLimit(1)
-            .fixedSize()
-            .foregroundStyle(.white.opacity(0.94))
-            .offset(x: S.margin - 6 - motion.x * rate, y: -lift)
-            .allowsHitTesting(false)
-            .accessibilityAddTraits(.isHeader)
+        // 0 on the first section, 1 from the second on.
+        let away = min(1, f)
+        let name = text.lowercased()
+        ZStack(alignment: .topLeading) {
+            Text(name)
+                .font(.system(size: size, weight: .thin)).tracking(-1.5)
+                .lineLimit(1).fixedSize()
+                .foregroundStyle(.white.opacity(0.94 * (1 - away)))
+                .scaleEffect(1 - away * (1 - small / size), anchor: .topLeading)
+                .offset(x: S.margin - 6 + 4 * away, y: 6 * away)
+                .accessibilityAddTraits(.isHeader)
+            Text(name)
+                .font(.system(size: small, weight: .regular))
+                .lineLimit(1).fixedSize()
+                .foregroundStyle(.white.opacity(0.66 * away))
+                .offset(x: S.margin - 2, y: 6)
+                .accessibilityHidden(true)
+        }
+        .offset(y: -lift)
+        .allowsHitTesting(false)
     }
 }
 

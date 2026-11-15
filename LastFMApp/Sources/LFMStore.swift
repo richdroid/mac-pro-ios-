@@ -188,7 +188,10 @@ struct Profile: Sendable {
             let db = HistoryDB.reader
             let t = await db.time(from: from, to: to)
             let median = await db.medianLength()
-            todaySecs = HistoryDB.listening(plays: t.plays, secs: t.secs, known: t.known, median: median)
+            // For the plays the day's figure counts, so the two can't disagree (the phone's history can hold a few more or
+            // fewer than the list on screen; 119 plays read as 12 hours, review 2026-11-14, item 2).
+            let shown = today.filter { !$0.nowPlaying }.count
+            todaySecs = HistoryDB.listening(plays: t.plays, secs: t.secs, known: t.known, median: median).map { t.plays > 0 ? Int(Double($0) / Double(t.plays) * Double(shown)) : $0 }
         }
     }
 

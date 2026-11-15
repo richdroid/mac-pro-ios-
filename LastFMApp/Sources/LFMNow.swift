@@ -19,6 +19,8 @@ struct TodayFigures: View {
                 (number(Set(today.map(\.artist)).count), Set(today.map(\.artist)).count == 1 ? "artist" : "artists"),
                 // Albums, not the streak: the streak has its own card on the same screen (review 2026-11-14, item 2).
                 { (n: Int) in (number(n), n == 1 ? "album" : "albums") }(Set(today.filter { !$0.album.isEmpty }.map { $0.artist + "\u{1F}" + $0.album }).count),
+                // When his day's music began.
+                today.first?.date.map { ($0.formatted(date: .omitted, time: .shortened), "first play") },
             ].compactMap { $0 })
         }
     }
@@ -115,6 +117,9 @@ struct NowHero: View {
     var titled = true
     @Environment(\.openRoute) private var open
     @State private var breathe = false
+    // His history with the song on now: his plays of it and of the artist, and when he first heard it.
+    @State private var depth: Depth?
+    struct Depth: Equatable { let id: String; let track: Int; let artist: Int; let first: Int? }
     init(layout: Layout, titled: Bool = true) { self.layout = layout; self.titled = titled; LaunchLog.mark("hero built") }
     private var store: Store { Store.shared }
     var body: some View {
@@ -126,9 +131,21 @@ struct NowHero: View {
                         .id(s.artist).transition(.opacity)
                 }
                 Group {
-                    if layout == .wide || layout == .short {
+                    if layout == .wide {
+                        // Open upright: the cover, and beside it his history with the song over its words, the column
+                        // as tall as the cover (it was three lines under 250 pt of nothing; review 2026-11-14, item 20).
+                        HStack(alignment: .top, spacing: S.figures) {
+                            art(s, playing).frame(width: 300)
+                            VStack(alignment: .leading, spacing: S.inner) {
+                                if let d = depth, d.id == s.id { FigureGrid(items: figures(s, d, playing)).transition(.opacity) }
+                                Spacer(minLength: 0)
+                                words(s, playing, line: false).padding(.bottom, 6)
+                            }
+                            .frame(height: 300)
+                        }
+                    } else if layout == .short {
                         HStack(alignment: .bottom, spacing: S.figures) {
-                            art(s, playing).frame(width: layout == .short ? 250 : 300)
+                            art(s, playing).frame(width: 250)
                             words(s, playing).padding(.bottom, 6)
                         }
                     } else {
@@ -141,6 +158,15 @@ struct NowHero: View {
                 .padding(.horizontal, S.margin)
             }
             .animation(.smooth(duration: 0.5), value: s.id)
+            .animation(.easeOut(duration: 0.3), value: depth)
+            .task(id: "\(s.id)|\(HistorySync.shared.complete)") {
+                // Only from the whole of his history: a count from part of it would be a guess.
+                guard HistorySync.shared.complete else { depth = nil; return }
+                let median = LengthFill.shared.median
+                let t = await HistoryDB.reader.story(artist: s.artist, track: s.title, median: median)
+                let a = await HistoryDB.reader.story(artist: s.artist, median: median)
+                depth = Depth(id: s.id, track: t.plays, artist: a.plays, first: t.first)
+            }
         } else {
             VStack(alignment: .leading, spacing: S.head) {
                 if titled { HubTitle(text: "listening", size: 72) }
@@ -172,7 +198,31 @@ struct NowHero: View {
         .accessibilityLabel("\(s.title) by \(s.artist)")
         .accessibilityHint("Shows the song")
     }
-    private func words(_ s: Scrobble, _ playing: Bool) -> some View {
+    // Which play of the song this is. While it plays it isn't scrobbled yet, so it's one more than his plays so far.
+    private func nth(_ d: Depth, _ playing: Bool) -> Int { d.track + (playing ? 1 : 0) }
+    private func today(_ s: Scrobble, _ playing: Bool) -> Int {
+        store.today.filter { !$0.nowPlaying && $0.artist == s.artist && $0.title == s.title }.count + (playing ? 1 : 0)
+    }
+    private static func ordinal(_ n: Int) -> String {
+        let f = NumberFormatter(); f.numberStyle = .ordinal
+        return f.string(from: NSNumber(value: n)) ?? "\(n)"
+    }
+    private func figures(_ s: Scrobble, _ d: Depth, _ playing: Bool) -> [(String, String)] {
+        let n = nth(d, playing), t = today(s, playing)
+        return [
+            (Self.ordinal(max(n, 1)), "play of this song"),
+            t > 1 ? (Self.ordinal(t), "time today") : nil,
+            d.artist > 0 ? (number(d.artist), "plays of the artist") : nil,
+            d.first.map { (dateShort($0), "first heard") },
+        ].compactMap { $0 }
+    }
+    private func depthLine(_ s: Scrobble, _ playing: Bool) -> String? {
+        guard let d = depth, d.id == s.id else { return nil }
+        let n = nth(d, playing), t = today(s, playing)
+        if n <= 1 { return "First listen" }
+        return "Your \(Self.ordinal(n)) play" + (t > 1 ? " · \(Self.ordinal(t)) today" : "")
+    }
+    private func words(_ s: Scrobble, _ playing: Bool, line: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: S.pair) {
             HStack(spacing: 7) {
                 if playing {
@@ -189,6 +239,11 @@ struct NowHero: View {
             Text(s.title).font(.system(.title, weight: .bold)).foregroundStyle(.white).lineLimit(2)
             Text(s.artist).font(.title3).foregroundStyle(.white.opacity(0.85)).lineLimit(1)
             if !s.album.isEmpty { Text(s.album).font(.body).foregroundStyle(S.soft).lineLimit(1) }
+            // A line of its own, its place held so the page doesn't jump when it's known.
+            if line {
+                Text(depthLine(s, playing) ?? " ").font(.subheadline.weight(.medium)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1).padding(.top, S.pair)
+            }
         }
         .contentTransition(.opacity)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -340,25 +395,93 @@ struct DaySection: View {
     }
 }
 
-// Every scrobble, newest first, under the day it was played; more come as he nears the end.
+// Every scrobble, newest first, under the day it was played; more come as he nears the end. Three or more in a row
+// from one album are one row (the album, how many songs, when), which opens in place to its songs: an album played
+// through no longer floods the list with one cover (review 2026-11-14, item 24).
 struct RecentSection: View {
+    // The last song is already the card above (nothing playing): the list starts at the one before it.
+    var skipFirst = false
+    @State private var open: Set<String> = []
     private var store: Store { Store.shared }
+    private enum Item: Identifiable {
+        case one(Scrobble), run([Scrobble])
+        var id: String { switch self { case .one(let s): return s.id; case .run(let r): return "run|" + (r.last?.id ?? "") } }
+    }
+    private func items(_ list: [Scrobble]) -> [Item] {
+        var out: [Item] = [], run: [Scrobble] = []
+        func flush() {
+            if run.count >= 3 { out.append(.run(run)) } else { out.append(contentsOf: run.map { .one($0) }) }
+            run = []
+        }
+        for s in list {
+            if let f = run.first, !s.nowPlaying, !s.album.isEmpty, f.album == s.album, f.artist == s.artist { run.append(s) }
+            else { flush(); if s.nowPlaying || s.album.isEmpty { out.append(.one(s)) } else { run = [s] } }
+        }
+        flush()
+        return out
+    }
     var body: some View {
-        let groups = Dictionary(grouping: store.recent) { Calendar.current.startOfDay(for: $0.date ?? Clock.now) }
+        let all = skipFirst ? Array(store.recent.dropFirst()) : store.recent
+        let groups = Dictionary(grouping: all) { Calendar.current.startOfDay(for: $0.date ?? Clock.now) }
         let days = groups.keys.sorted(by: >)
+        let lastID = store.recent.last?.id
         LazyVStack(alignment: .leading, spacing: 0) {
-            SectionHead(text: "recent").padding(.bottom, S.head)
+            SectionHead(text: skipFirst ? "earlier" : "recent").padding(.bottom, S.head)
             ForEach(days, id: \.self) { day in
                 Text(dayName(day)).font(.headline).foregroundStyle(S.soft)
                     .padding(.top, day == days.first ? 0 : S.inner).padding(.bottom, S.pair)
-                ForEach(groups[day] ?? []) { s in
-                    TrackRow(s: s)
-                        .onAppear { if s.id == store.recent.last?.id { Task { await store.loadMore() } } }
+                ForEach(items(groups[day] ?? [])) { item in
+                    switch item {
+                    case .one(let s):
+                        TrackRow(s: s).onAppear { if s.id == lastID { Task { await store.loadMore() } } }
+                    case .run(let r):
+                        let on = open.contains(item.id)
+                        RunRow(run: r, open: on) { withAnimation(.smooth(duration: 0.3)) { if on { open.remove(item.id) } else { open.insert(item.id) } } }
+                            .onAppear { if r.contains(where: { $0.id == lastID }) { Task { await store.loadMore() } } }
+                        if on { ForEach(r) { s in TrackRow(s: s).padding(.leading, S.gap).transition(.opacity) } }
+                    }
                 }
             }
             if store.loadingMore { ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, 16) }
         }
         .padding(.horizontal, S.margin)
+    }
+}
+
+// An album played through: its cover, how many songs, and when, opening in place to the songs.
+struct RunRow: View {
+    let run: [Scrobble]        // newest first
+    let open: Bool
+    let toggle: () -> Void
+    var body: some View {
+        if let newest = run.first, let oldest = run.last {
+            Button(action: toggle) {
+                HStack(spacing: S.gap) {
+                    ArtView(newest.art, px: 156, corner: 6).frame(width: S.art)
+                    VStack(alignment: .leading, spacing: S.pair / 2) {
+                        Text(newest.album).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                        Text("\(run.count) songs · \(newest.artist)").font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Text(Self.span(oldest.date, newest.date)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).fixedSize()
+                    Image(systemName: "chevron.down").font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
+                        .rotationEffect(.degrees(open ? 180 : 0))
+                }
+                .padding(.vertical, S.row / 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(Press())
+            .accessibilityElement(children: .combine)
+            .accessibilityHint(open ? "Hides the songs" : "Shows the songs")
+        }
+    }
+    // "3:02 – 3:39 PM": the first time without its AM or PM when both share it.
+    static func span(_ a: Date?, _ b: Date?) -> String {
+        guard let a, let b else { return "" }
+        let fa = a.formatted(date: .omitted, time: .shortened), fb = b.formatted(date: .omitted, time: .shortened)
+        let pa = fa.split(separator: " "), pb = fb.split(separator: " ")
+        if pa.count == 2, pb.count == 2, pa[1] == pb[1] { return "\(pa[0]) – \(fb)" }
+        return "\(fa) – \(fb)"
     }
 }
 
