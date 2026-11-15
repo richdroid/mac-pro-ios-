@@ -127,6 +127,7 @@ struct DeviceTab: View {
         guard let s = model.status else { return "Awake" }
         if s.screen == "asleep" { return "Asleep" }
         if let a = s.away { return a.line }
+        if s.comingOn { return TVStatus.comingOnLine }
         if s.screen == "screensaver" { return "Screensaver" }
         return "Awake"
     }
