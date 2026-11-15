@@ -784,22 +784,52 @@ struct SeasonSwipeRows: ViewModifier {
 }
 final class AxisBox { var sideways: Bool? }
 
-// An episode's row, held anywhere on it, lifts its picture and throws it to the TV: the stream he'd most likely pick, as
-// a shelf's card sends. The tap stays as it was.
+// An episode's row, held anywhere on it, lifts its own still (the very picture in the row, 16:9, from where it sits) and
+// throws it to the TV: the stream he'd most likely pick, as a shelf's card sends. The rest of the row stays; the tap
+// stays as it was. (It lifted a poster made for the hand, another picture in another shape: Richard, 2026-11-14.)
 struct EpisodeFlick: ViewModifier {
     let item: MediaItem?
+    // The still: its address and how wide the row draws it, 8 pt in from the row's leading edge, centred on its height.
+    var still = ""
+    var width: CGFloat = 112
     var onThrow: (() -> Void)?
     var onTap: (() -> Void)?
+    // The build's films: a row that isn't the one playing says where its still is, for a real finger to land on it.
+    var reports = false
     @State private var place = FrameBox()
+    static func stillRect(_ row: CGRect?, _ width: CGFloat) -> CGRect {
+        guard let r = row else { return .zero }
+        let h = width * 9 / 16
+        return CGRect(x: r.minX + 8, y: r.midY - h / 2, width: width, height: h)
+    }
     func body(content: Content) -> some View {
         if let item {
             content.measured(place)
-                .modifier(ShelfFlick(item: item, source: .stremio, width: 56, rect: { [place] in
-                    // The picture that comes up is the poster's size, at the row's leading edge.
-                    let r = place.rect ?? .zero
-                    return CGRect(x: r.minX + 8, y: r.midY - 42, width: 56, height: 84)
-                }, onThrow: onThrow, onTap: onTap))
+                .modifier(ShelfFlick(item: item, source: .stremio, width: width, rect: { [place] in Self.stillRect(place.rect, width) },
+                                     onThrow: onThrow, onTap: onTap, still: still))
+                .task { await report() }
         } else { content }
+    }
+    @MainActor static var reported = false
+    func report() async {
+        #if canImport(UIKit)
+        guard reports, UserDefaults.standard.string(forKey: "pose") == "episodes" else { return }
+        var last = CGRect.zero
+        for _ in 0..<60 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled || Self.reported { return }
+            guard EpisodesPanel.shared.open, let screen = (UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene)?.screen.bounds,
+                  screen.width > 0 else { continue }
+            let r = Self.stillRect(place.rect, width)
+            defer { last = r }
+            guard r == last, r.width > 0 else { continue }
+            let x = r.midX / screen.width, y = r.midY / screen.height
+            guard y > 0.35, y < 0.8 else { continue }
+            Self.reported = true
+            _ = await TVBridge.data(TVBridge.url(String(format: "/api/tv/applied?what=eprow&x=%.3f&y=%.3f&w=%.0f&h=%.0f", x, y, r.width, r.height)), timeout: 3)
+            return
+        }
+        #endif
     }
 }
 
@@ -834,9 +864,6 @@ struct EpisodePicker: View {
         if e == c { return currentLabel != "Playing" && (progress ?? 0) > 0.9 }
         return (e.season, e.episode) < (c.season, c.episode)
     }
-    // Over pinned rows the chips are a row of their own, edge to edge in the panel, scrolling to the 8th and beyond with
-    // room after the last, never a chip cut at the edge it can't be scrolled past.
-    var pinned = false
     var header: some View {
         // One season has nothing to swipe to: its name stands alone, still large.
         SeasonPivot(seasons: seasons, selected: $season, size: part == .header ? 20 : 30)
@@ -844,13 +871,16 @@ struct EpisodePicker: View {
     // In a narrow pane the still gives way to the name, so a name is never cut to "Episod…" (r19).
     @State private var narrow = false
     var thumb: CGFloat { narrow ? 80 : 112 }
-    func row(_ e: StremioEpisode) -> AnyView {
+    func row(_ e: StremioEpisode) -> some View {
         let on = e.id == current
         let mins = info?.minutes[e.id] ?? e.runtime ?? info?.show
         let about = info?.about[e.id] ?? e.overview
         return Button { guard !SeasonSwipe.shared.justPulled, Date().timeIntervalSince(ShelfHand.shared.handledAt) >= 0.35 else { return }; choose(e) } label: {
             HStack(spacing: 12) {
-                Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
+                // In the hand or in the air, the still is gone from its row: it's the one picture, not a copy of it.
+                HiddenInHand(id: flickItem?(e).id ?? "") {
+                    Art(url: URL(string: e.thumb)) { $0.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
+                }
                     .frame(width: thumb, height: thumb * 9 / 16)
                     .overlay(alignment: .bottomLeading) {
                         // How far into it he is, as on Stremio's own cards. The still's width is fixed, so no reader.
@@ -889,7 +919,7 @@ struct EpisodePicker: View {
         // The press asks for its streams, so the list is on its way before the tap lands.
         .buttonStyle(PressCard(onPress: { StreamCache.shared.prefetch(episode: e.id) }))
         .disabled(busy != nil)
-        .modifier(EpisodeFlick(item: flickItem?(e), onThrow: onThrow.map { f in { f(e) } }, onTap: { choose(e) }))
+        .modifier(EpisodeFlick(item: flickItem?(e), still: e.thumb, width: thumb, onThrow: onThrow.map { f in { f(e) } }, onTap: { choose(e) }, reports: !on))
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1088,7 +1118,7 @@ struct ShowEpisodes: View {
         }, flickItem: { NextUp.item(s, $0) }, part: part)
     }
     @ViewBuilder var title: some View {
-        if titled, let s = nextUp.series { Text(s.title).font(.title2.weight(.bold)).lineLimit(2).padding(.trailing, pinsHeader ? 48 : 0) }
+        if titled, let s = nextUp.series { Text(s.title).font(.title2.weight(.bold)).lineLimit(2).padding(.trailing, pinsHeader ? 56 : 0) }
     }
     @ViewBuilder func rows(_ part: EpisodePicker.Part) -> some View {
         if let meta, let s = nextUp.series { picker(meta, s, part) }
@@ -1162,28 +1192,17 @@ struct EpisodePanel: View {
             .padding(.top, 18)
             .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
             .overlay(alignment: .topTrailing) {
-                Button { model.tick(); panel.close() } label: {
-                    Image(systemName: "chevron.down").font(.system(size: 15, weight: .bold)).frame(width: 44, height: 44).contentShape(Circle())
-                }
-                .buttonStyle(.plain).background(.white.opacity(0.1), in: Circle()).padding(.top, 12).padding(.trailing, 14)
-                .accessibilityLabel("Close episodes")
+                // The system's own close key (its glyph, its glass, its size), as on a sheet: not one drawn by hand.
+                Button(role: .close) { model.tick(); panel.close() }
+                    .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
+                    .padding(.top, 12).padding(.trailing, 14)
+                    .accessibilityLabel("Close episodes")
             }
             .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
             // Thrown to the TV, or the show gone: nothing left to pick.
             .onChange(of: model.flicking != nil) { _, on in if on { panel.close() } }
             .onChange(of: nextUp.series == nil) { _, gone in if gone { panel.close() } }
             .transition(.opacity)
-    }
-}
-// A row lifted off the list and thrown to the TV, the way a shelf's card is.
-struct EpisodeFlick: ViewModifier {
-    let item: MediaItem
-    let width: CGFloat
-    @State private var place = FrameBox()
-    func body(content: Content) -> some View {
-        content
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { place.rect = $0 }
-            .modifier(ShelfFlick(item: item, source: .stremio, width: width, rect: { [place] in place.rect ?? .zero }))
     }
 }
 

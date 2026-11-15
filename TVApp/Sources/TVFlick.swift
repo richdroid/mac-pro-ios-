@@ -2757,13 +2757,16 @@ struct ShelfFlick: ViewModifier {
     var onThrow: (() -> Void)?
     // Held and let go where it was: the page's own choosing, not a second flick opened over it.
     var onTap: (() -> Void)?
+    // A row whose own picture is a wide still (an episode's): that still is what lifts, at its own size from its own
+    // place (`rect` is the still's), never a poster made for the hand. The rest of the row stays where it is.
+    var still: String? = nil
     @State private var hands = HandBox()
     @State private var lock = ScrollLockBox()
     @State private var up = false
     @State private var receipt = ""
     func body(content: Content) -> some View {
         content
-            .opacity(up ? 0 : 1)
+            .opacity(up && still == nil ? 0 : 1)
             .background(ScrollLock(box: lock).allowsHitTesting(false))
             .simultaneousGesture(gesture)
             .accessibilityAction(named: "Flick to the TV") { hands.hand = FlickHand(.list); throwIt(velocity: CGSize(width: 0, height: -800), translation: .zero) }
@@ -2857,6 +2860,23 @@ struct ShelfFlick: ViewModifier {
         pictures[key] = made
         return made
     }
+    // A row's own still as it's drawn in the row (filled, its corners rounded), at the row's size.
+    @MainActor static func stillPicture(_ url: String, _ size: CGSize, corner: CGFloat) -> CGImage? {
+        let cover = ImageStore.shared.cached(URL(string: url))
+        let key = "still|\(url)|\(Int(size.width))x\(Int(size.height))|\(cover != nil)"
+        if let kept = pictures[key] { return kept }
+        let r = ImageRenderer(content: ZStack {
+            Color(white: 0.16)
+            if let cover { Image(tv: cover).resizable().scaledToFill() }
+        }
+        .frame(width: size.width, height: size.height)
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous)))
+        r.scale = RenderFlight.screenScale
+        guard let made = r.cgImage else { return nil }
+        if pictures.count > 12 { pictures.removeAll() }
+        pictures[key] = made
+        return made
+    }
     var gesture: some Gesture {
         let rules = FlickHand.Rules.list
         return LongPressGesture(minimumDuration: rules.hold, maximumDistance: rules.slop)
@@ -2894,12 +2914,13 @@ struct ShelfFlick: ViewModifier {
     // False if there's nothing to lift (no picture could be made of it): it stays on its shelf.
     func lifted() -> Bool {
         let r = rect()
-        guard r.width > 4, let image = Self.picture(item, source, width) else { return false }
+        guard r.width > 4, let image = still.map({ Self.stillPicture($0, r.size, corner: 7) }) ?? Self.picture(item, source, width) else { return false }
         HandTrace.note("shelf-lifted")
         // A card lifted out of the search results takes the keyboard down with it.
         if model.tab == 6 || model.typingIn != nil { SearchStore.shared.putKeyboardAway() }
         FlickMeter.shared.lifted("shelf", hold: hands.hand.realLift)
-        RenderFlight.pick(image, at: r, cover: min(r.height, width / source.coverAspect), corner: width > 200 ? 8 : 6, wide: item.isYouTube)
+        if still != nil { RenderFlight.pick(image, at: r, cover: r.height, corner: 7, wide: true) }
+        else { RenderFlight.pick(image, at: r, cover: min(r.height, width / source.coverAspect), corner: width > 200 ? 8 : 6, wide: item.isYouTube) }
         up = true
         FlickHaptic.lift(); FlickClock.touched()
         ScrollLock.set(lock, true)
@@ -2967,7 +2988,7 @@ struct ShelfFlick: ViewModifier {
         // goes on from where it is at the speed he threw it, in the render server, so nothing that follows (the request,
         // the still, the Remote's long turn) can hold it at the release (it sat there from rest before, a smaller copy).
         let slot = model.mirrorSlot.flatMap { $0.width > 20 ? $0 : nil } ?? model.lastLanded.flatMap { $0.window == RenderFlight.windowSize ? $0.rect : nil }
-        let u = URL(string: item.art)
+        let u = URL(string: still ?? item.art)
         if RenderFlight.inHand {
             from = RenderFlight.throwCard(velocity: CGVector(dx: velocity.width, dy: velocity.height), soft: u.flatMap { ImageStore.shared.small($0, 16) },
                                           tint: ImageStore.shared.cachedBand(u))
@@ -2975,7 +2996,7 @@ struct ShelfFlick: ViewModifier {
         } else if from.width > 4 {
             // Thrown with no hand (the accessibility action): a still of it flies, as a row's does.
             RenderFlight.launch(from: from, image: u.flatMap { ImageStore.shared.cached($0) }, soft: u.flatMap { ImageStore.shared.small($0, 16) },
-                                tint: ImageStore.shared.cachedBand(u), wide: item.isYouTube)
+                                tint: ImageStore.shared.cachedBand(u), wide: item.isYouTube || still != nil)
             RenderFlight.rise(toward: slot)
         }
         // Everything else (the request, the still, the Remote) in the next turn: this one ends with nothing changed but

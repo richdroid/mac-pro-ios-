@@ -1390,10 +1390,6 @@ struct RemoteTab: View {
             // Laid out first, at the full width, so the bar or a player coming in under it never shrinks it, and a flick's
             // screen moving onto it lands where it stays.
             .layoutPriority(1)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in
-                if abs(w - pictureWidth) > 0.5 { pictureWidth = w }
-                if !lay, abs(w - calmPictureWidth) > 0.5 { calmPictureWidth = w }
-            }
     }
     // Asleep, one big way to wake it over the pad, which wakes it too.
     @ViewBuilder var wake: some View {
@@ -1410,7 +1406,7 @@ struct RemoteTab: View {
     // The two rows of keys, on the Remote's one column: five equal places across exactly the column's width, the keys
     // sized to it (never five fixed keys spread wider than the picture above them, as on his folded phone, 2026-11-11:
     // "look at the controls fucked"), each key over the one below it. The outer keys' edges are the column's edges.
-    func keys(_ grid: RemoteGrid) -> some View {
+    func keys(_ grid: RemoteGrid, transport: Bool = true) -> some View {
         VStack(spacing: 12) {
             // Power joins the top row like a real remote's, rather than sitting alone under everything.
             HStack(spacing: 0) {
@@ -1431,7 +1427,9 @@ struct RemoteTab: View {
             // Only with something on to play: idle on the home screen, five transport keys did nothing.
             // The one transport, the same as Playing's, on the top row's five places.
             // Never under Mint's own player, online or dimmed out of reach: one condition in every state (gate, 2026-11-11).
-            if session && !musicShown && !lay { Transport(glow: !lay, size: grid.key, playSize: grid.play).transition(.opacity) }
+            // Open upright it's under the scrub bar in the picture's pane instead (2026-11-14), so the pad and this one row
+            // have the whole lower pane.
+            if transport && session && !musicShown && !lay { Transport(glow: !lay, size: grid.key, playSize: grid.play).transition(.opacity) }
             // No volume here: the TV refuses volume over HDMI, so only its own remote can change it.
         }
         // Five places of a key and a gap each: the first and last keys' edges land on the column's.
@@ -1443,24 +1441,24 @@ struct RemoteTab: View {
         // or ended on the TV. It fades, like the lines under the picture (the 2026-11-10 motion pass).
         .settledAnimation(.easeOut(duration: 0.25), value: session)
     }
-    func keysBlock(_ grid: RemoteGrid) -> some View {
+    func keysBlock(_ grid: RemoteGrid, transport: Bool = true) -> some View {
         VStack(spacing: 12) {
             // Above the keys, and up for as long as it's wanted, so typing and moving between boxes go together.
             if typing { TypeBar(open: $typing).frame(width: grid.width).transition(.move(edge: .bottom).combined(with: .opacity)) }
-            keys(grid)
+            keys(grid, transport: transport)
         }
         .opacity(unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
         // Whether something was on when the TV was last heard: kept through a drop, so its keys stay (dimmed).
         .onChange(of: model.status?.session != nil, initial: true) { _, has in if !unreachable { hadSession = has } }
         .onChange(of: model.starting?.line) { _, line in if let line { lastStartWasSeries = line.hasPrefix("S") } }
     }
-    // The pad with volume: − and + on its sides at the keys' size, a slim level bar under it. The pad is the ring that fits
-    // between them, in the height the posture gives it.
+    // The pad with volume, across the column's whole width: − and + at the column's two edges (over the first and last
+    // keys of the row below) with the pad between them and a slim level bar under it; or, where the column is tall, the
+    // pad as wide as the column with − bar + on a row under it. The pad is the ring that fits the height it's given.
     func padRow(_ grid: RemoteGrid) -> some View {
         let d = grid.padWidth
         return Group {
             if grid.volBelow {
-                // A tall column: the pad as wide as the column, − bar + on a row under it, the keys' own size.
                 VStack(spacing: 14) {
                     pad.frame(width: d, height: grid.pad)
                     HStack(spacing: RemoteGrid.sideGap) {
@@ -1471,9 +1469,11 @@ struct RemoteTab: View {
                 }
             } else {
                 VStack(spacing: RemoteGrid.volGap) {
-                    HStack(spacing: RemoteGrid.sideGap) {
+                    HStack(spacing: 0) {
                         VolumeKey(down: true, size: grid.key)
+                        Spacer(minLength: 0)
                         pad.frame(width: d, height: grid.pad)
+                        Spacer(minLength: 0)
                         VolumeKey(down: false, size: grid.key)
                     }
                     VolumeBar().frame(width: d)
@@ -1502,14 +1502,37 @@ struct RemoteTab: View {
     // The bar and the episode line under the picture, with their spacing: the picture is sized as if they're always there,
     // folded and open.
     static let underRoom = barSlot + 46 + 28
-    // The transport row and the keys' spacing above it: folded it sits in the picture's column, and only while something's on.
-    static let transportRoom: CGFloat = 68 + 12
+    // Open upright, the transport's keys in the picture's pane: 64 pt (the least a key is), ⏯ a little bigger, on the
+    // column's five places, so each sits over the key under it across the fold.
+    static let upperKey: CGFloat = 64, upperPlay: CGFloat = 72
+    func upperGrid(_ width: CGFloat) -> RemoteGrid {
+        var g = RemoteGrid.keys(width, maxKey: Self.upperKey)
+        g.play = min(g.play, Self.upperPlay)
+        return g
+    }
     func side(apps: Bool) -> some View {
-        PictureColumn(spacing: 14, under: Self.underRoom) {
+        // Open upright the lines under the picture are the keys' column (the pane's width, 520 pt at most), whatever
+        // width the pane's height leaves the picture; elsewhere they're the picture's own width.
+        let upper = stackedUpright && !lay
+        return PictureColumn(spacing: 14, under: Self.underRoom + (upper ? Self.upperPlay + 14 : 0), lines: stackedUpright ? RemoteGrid.most : nil) {
             picture(closable: true).columnRole(.picture)
             // Mint's player is what's on when it shows: no bar's place above it, online or out of reach (upright offline the
             // kept place shrank the picture and left 83 pt empty, Remote gate 3).
             if !musicShown { progress.columnRole(.under) }
+            // Open upright: prev, −10, ⏯, +10, next right under the scrub bar (Richard, 2026-11-14: "the buttons r so
+            // small"; this overturns the 11-11 rule that the transport is anchored from the foot with the keys). The pad
+            // and the keys' row then have the whole lower pane. Its room is kept while nothing's on, like the bar's.
+            if upper && session && !musicShown {
+                GeometryReader { g in
+                    let grid = upperGrid(g.size.width)
+                    Transport(size: grid.key, playSize: grid.play)
+                        .frame(width: grid.width + grid.gap).frame(width: g.size.width, height: Self.upperPlay)
+                }
+                .frame(height: Self.upperPlay)
+                .opacity(model.flickHandoff ? 0 : unreachable ? Self.dim : 1).allowsHitTesting(!unreachable)
+                .transition(.opacity)
+                .columnRole(.under)
+            }
             // Typing, the episode line and Mint's player step aside, in every posture: open flat they sat half under the
             // keyboard, and upright the picture's pane gives its height to the bar and the keys (an episode line at the
             // shrunken picture's width read "Episo…", CI 69af3dc). Folded does the same.
@@ -1533,7 +1556,9 @@ struct RemoteTab: View {
         // out here rather than popped (the 2026-11-10 motion pass). Their room is kept either way (PictureColumn).
         .settledAnimation(.easeOut(duration: 0.25), value: session)
         .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
-        .padding(.horizontal, 20).padding(.bottom, 16)
+        // Open upright, the keys' column's own margins (12 pt), so its edges are theirs across the fold; the fold's own
+        // band is under it there, so less at the foot.
+        .padding(.horizontal, stackedUpright ? 12 : 20).padding(.bottom, stackedUpright ? 8 : 16)
     }
     // The pad and the keys, the second column wherever the Remote has two.
     // Its width is the Remote's column: a remote's width at most (380 pt), and open upright, where the picture's pane
@@ -1543,18 +1568,17 @@ struct RemoteTab: View {
         GeometryReader { geo in
             let stacked = stackedUpright
             // The column's whole width and height, margins aside: keys and pad fill it (Richard, 2026-11-14: "the buttons
-            // are so small"), the pad taking what height the two rows of keys leave.
-            let grid = RemoteGrid.fit(width: min(geo.size.width, stacked && pictureWidth > 120 ? pictureWidth : .infinity), height: geo.size.height)
+            // are so small"), the pad taking what height the keys leave. Open upright that's one row of keys, the
+            // transport being in the picture's pane.
+            let grid = RemoteGrid.fit(width: geo.size.width, height: geo.size.height, transport: !stacked)
             if stacked {
-                // Open upright, under the picture's pane: one pad diameter in every state, hung from the top with the keys
-                // under it and the spare room at the foot (gate 2: 160 pt with a show, 216 with Mint, and moving 28 pt).
-                // Typing, it gives way so the bar and the keys stay above the keyboard.
-                // Anchored from the foot, where the thumbs are, the transport's row always counted (Remote rule,
-                // 2026-11-11). Typing, the pad steps aside and the bar and keys sit just above the keyboard.
+                // Open upright, the whole pane under the fold: the pad as big as fits over the one row of keys, the spare
+                // room shared above and below the pad. Typing, the pad steps aside so the bar and the keys stay above
+                // the keyboard.
                 VStack(spacing: 0) {
                     Spacer(minLength: 14)
                     if !lay { padRow(grid).transition(.opacity); Spacer(minLength: 14) }
-                    keysBlock(grid).frame(height: lay ? nil : grid.rows, alignment: .top)
+                    keysBlock(grid, transport: false).frame(height: lay ? nil : grid.key, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -1566,7 +1590,9 @@ struct RemoteTab: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(.horizontal, 12).padding(.bottom, 16)
+        // Beside the picture (open flat, folded sideways) the pane is narrow: 6 pt margins leave five 64 pt keys their
+        // 8 pt gaps (at 12 they were 62 pt, gate 2026-11-14).
+        .padding(.horizontal, stackedUpright ? 12 : 6).padding(.bottom, 16)
         .opacity(stackedUpright && epPanel.open ? 0 : 1).allowsHitTesting(!(stackedUpright && epPanel.open))
         .modifier(KeysArrive(gate: keysGate))
     }
@@ -1598,9 +1624,8 @@ struct RemoteTab: View {
     }
     // Where the keyboard's top is on screen (infinity while it's down).
     @State private var keyboardTop: CGFloat = .infinity
-    // How wide the picture is drawn, for the keys in the pane under it to take the same width.
-    @State private var pictureWidth: CGFloat = 0
-    @State private var calmPictureWidth: CGFloat = 0
+    // The build's check of a narrower open phone ("-narrow 375"): the upright page laid out at that width.
+    static let narrow: CGFloat? = { let v = UserDefaults.standard.double(forKey: "narrow"); return v > 0 ? CGFloat(v) : nil }()
     var body: some View {
         let _ = SwipeLog.mark("body remote")
         Group {
@@ -1614,7 +1639,7 @@ struct RemoteTab: View {
                         // Typing, the keyboard covers nearly all of the pane under the fold, so the bar and the keys' row
                         // come up above it, under the picture's pane (CI 219df47: under the fold they sat beneath the keyboard).
                         // At the column's width from before typing: the picture shrinks to give up the height, the keys don't.
-                        let tg = RemoteGrid.keys(min(g.size.width - 40, 380, calmPictureWidth > 120 ? calmPictureWidth : .infinity), maxKey: 54)
+                        let tg = RemoteGrid.keys(g.size.width - 24, maxKey: 64)
                         let rows = 50 + 12 + tg.key
                         VStack(spacing: 14) {
                             side(apps: false).frame(height: max(0, crease.minY - 14 - rows - 8))
@@ -1631,6 +1656,7 @@ struct RemoteTab: View {
                 }
                 .ignoresSafeArea(lay ? .keyboard : [], edges: .bottom)
                 .overlay { episodesPanel() }
+                .frame(maxWidth: Self.narrow)
             } else if size == .regular {
                 FoldSplit {
                     // The apps come along when there's room, and step aside when held in portrait.
@@ -1662,25 +1688,28 @@ struct RemoteTab: View {
                 // player in it, so nothing moves as a song or a show starts; the pad is one diameter, and spare height is
                 // space either side of it, never pad. Typing keeps the column it had, so the keys stay where they were.
                 GeometryReader { geo in
-                    let fresh = RemoteGrid.folded(width: geo.size.width, height: geo.size.height, under: Self.underRoom + 30)
+                    let fresh = RemoteGrid.folded(width: geo.size.width, height: geo.size.height, under: Self.barSlot + 46 + 2 * RemoteGrid.foldedGap)
                     let grid = lay ? (foldedGrid ?? fresh) : fresh
                     // Typing, the picture stays, at whatever width fits above the bar and the keys' row (gate 3: 150 pt of
                     // empty art where it had been).
-                    let typingPic = min(grid.pic ?? grid.width, max(0, geo.size.height - 30 - (14 + 50 + 12 + grid.key + 14)) * 16 / 9)
-                    VStack(spacing: 14) {
+                    let typingPic = min(grid.width, max(0, geo.size.height - 30 - (14 + 50 + 12 + grid.key + 14)) * 16 / 9)
+                    VStack(spacing: 0) {
+                      VStack(spacing: RemoteGrid.foldedGap) {
                         // The Remote's one rule (2026-11-11, with the designer, so it doesn't flip again): what's on hangs
                         // straight from the picture, with no place kept for what isn't there; the pad and the keys are
                         // anchored from the foot, where the thumbs are, the transport's row always counted; the spare room is
                         // the one gap between them. Nothing moves either way as something starts or stops.
                         if !lay {
-                            picture(closable: true).frame(width: grid.pic ?? grid.width, height: (grid.pic ?? grid.width) * 9 / 16).transition(.opacity)
-                            if !musicShown { progress.frame(width: grid.pic ?? grid.width) }
-                            episodes.frame(width: grid.pic ?? grid.width); music.frame(width: grid.width)
-                        } else if typingPic >= (grid.pic ?? grid.width) * 0.5 {
+                            picture(closable: true).frame(width: grid.width, height: grid.width * 9 / 16).transition(.opacity)
+                            if !musicShown { progress.frame(width: grid.width) }
+                            episodes.frame(width: grid.width); music.frame(width: grid.width)
+                        } else if typingPic >= grid.width * 0.5 {
                             picture(closable: true).frame(width: typingPic, height: typingPic * 9 / 16).transition(.opacity)
                         }
-                        Spacer(minLength: 0)
-                        Group {
+                      }
+                        Spacer(minLength: RemoteGrid.foldedGap)
+                        // The level bar under the pad sits midway to the keys: 8 pt either side of it.
+                        VStack(spacing: RemoteGrid.volGap) {
                             // Typing, the pad steps aside: the bar and the keys' row sit at the foot, above the keyboard.
                             if !lay { padRow(grid).transition(.opacity) }
                             keysBlock(grid).frame(height: lay ? nil : grid.key + 12 + grid.play, alignment: .top)
@@ -1699,7 +1728,7 @@ struct RemoteTab: View {
                 // As open: the lines under the picture fade with the TV's status rather than pop.
                 .settledAnimation(.easeOut(duration: 0.25), value: session)
                 .settledAnimation(.easeOut(duration: 0.25), value: seriesOn)
-                .padding(.horizontal, 14).padding(.bottom, 12)
+                .padding(.horizontal, 14).padding(.bottom, 8)
                 .overlay { episodesPanel() }
             }
         }
@@ -1797,22 +1826,22 @@ struct RemoteGrid: Equatable {
     var width: CGFloat, key: CGFloat, play: CGFloat
     // The pad's one diameter, when the posture works it out from its height; otherwise a little over half the column.
     var padSet: CGFloat?
-    // Folded, the picture and what hangs from it can be narrower than the keys' column (the height decides it).
-    var pic: CGFloat?
     // Volume: − and + either side of the pad (a short column), or on a row of their own under it (a tall one).
     var volBelow = false
     var gap: CGFloat { (width - 5 * key) / 4 }
     var pad: CGFloat { padSet ?? max(110, (width * 0.54).rounded()) }
-    // The keys' own room: the two rows (the keys, a gap, the transport with ⏯ a quarter bigger).
+    // The keys' own room with the transport under them: the two rows (the keys, a gap, the transport with ⏯ bigger).
     var rows: CGFloat { key + 12 + play }
-    static let sideGap: CGFloat = 14, volGap: CGFloat = 10, barH: CGFloat = 6
+    static let sideGap: CGFloat = 14, volGap: CGFloat = 8, barH: CGFloat = 6
     static var volRoom: CGFloat { volGap + barH }
+    // The widest the column ever is, so a wide screen never spreads the keys; the least a key is where five fit.
+    static let most: CGFloat = 520, least: CGFloat = 64
     var padWidth: CGFloat { volBelow ? min(pad, width) : max(60, min(pad, width - 2 * key - 2 * Self.sideGap)) }
-    // Five keys and four gaps make exactly the width: as big as the width allows (a gap of 8 pt at least), 96 pt at most,
-    // 44 at least; the column is 520 pt at most, so a wide screen never spreads them. Thumb-sized, not a remote's 54 pt
-    // (Richard, 2026-11-14).
+    // Five keys and four gaps make exactly the width: as big as the width allows (a gap of 8 pt at least), 96 pt at most;
+    // the column is 520 pt at most. Thumb-sized, not a remote's 54 pt (Richard, 2026-11-14). 64 pt needs 352 pt; in a
+    // narrower column they come down with it, the 8 pt gaps kept, never under 44.
     static func keys(_ width: CGFloat, maxKey: CGFloat = 96) -> RemoteGrid {
-        let w = min(max(width, 212), 520)
+        let w = min(max(width, 212), most)
         let k = min(maxKey, max(44, ((w - 32) / 5).rounded(.down)))
         let gap = (w - 5 * k) / 4
         // ⏯ a quarter bigger, but never so big that a gap beside it drops under 8 pt.
@@ -1826,24 +1855,32 @@ struct RemoteGrid: Equatable {
         if below > side * 1.2, below >= 100 { volBelow = true; padSet = below.rounded(.down) }
         else { volBelow = false; padSet = max(100, side.rounded(.down)) }
     }
-    // A column with a height to fill: the keys take what the width gives but leave the pad room, and the pad takes all
-    // the rest. The gaps are 14 pt: above the pad, and between the pad and the keys.
-    static func fit(width: CGFloat, height: CGFloat) -> RemoteGrid {
+    // A column with a height to fill: the keys take what the width gives but leave the pad room (about two and a half
+    // keys of it; never under 64 pt for that where the width gives 64), and the pad takes all the rest. The gaps are
+    // 14 pt: above the pad, and between the pad and the keys. With the transport, two rows of keys; without, one.
+    static func fit(width: CGFloat, height: CGFloat, transport: Bool) -> RemoteGrid {
         var g = keys(width)
-        let kH = ((height - 28 - volRoom - 12) / 4.26).rounded(.down)
-        if kH < g.key { g = keys(width, maxKey: max(52, kH)) }
-        g.place(room: height - 28 - g.rows)
+        let kH = ((height - 28 - volRoom - (transport ? 12 : 0)) / (transport ? 4.26 : 3.4)).rounded(.down)
+        if kH < g.key { g = keys(width, maxKey: max(min(g.key, least), kH)) }
+        g.place(room: height - 28 - (transport ? g.rows : g.key))
         return g
     }
-    // Folded, the keys are as big as the column's width allows, and the picture, the room for the bar and the episode
-    // line and the pad share the height: the picture as wide as fits (the column's width at most, 200 pt at least), the
-    // pad the rest. Fixed per posture, never by what's on.
+    // Folded, one width for everything in the column: the picture, the bar and the episode line under it, the pad's row
+    // and both rows of keys share it and its edges (gate 2026-11-14: a 203 pt picture over a 255 pt pad row over 354 pt
+    // of keys were three columns). The height is all spoken for (the picture, the two lines under it, the pad, two rows
+    // of keys), so it's the widest that still leaves the pad a little over a third of it; never under 280 pt, the
+    // picture's width before. Fixed per posture, never by what's on. `under` is the bar and the episode line with the
+    // gaps over them; after them a gap, the pad with its level bar, the bar's gap to the keys, and the keys' two rows.
+    static let foldedGap: CGFloat = 12
     static func folded(width: CGFloat, height: CGFloat, under: CGFloat) -> RemoteGrid {
-        var g = keys(width)
-        let avail = height - (under + 14 + 14 + g.rows)
-        let pic = min(g.width, max(200, ((avail - 110 - volRoom) * 16 / 9).rounded(.down)))
-        g.place(room: avail - pic * 9 / 16)
-        g.pic = pic
+        func room(_ w: CGFloat) -> (grid: RemoteGrid, pad: CGFloat) {
+            let g = keys(w)
+            return (g, height - (g.width * 9 / 16 + under + foldedGap + volRoom + volGap + g.rows))
+        }
+        var w = min(max(width, 212), most)
+        while w > 280, room(w).pad < max(112, w * 0.36) { w -= 2 }
+        var (g, r) = room(w)
+        g.place(room: r + volRoom)
         return g
     }
 }
@@ -1853,6 +1890,9 @@ struct PictureColumn: Layout {
     var spacing: CGFloat = 14
     // The most the lines under the picture take in normal use, spacing included: kept for them while they're away.
     var under: CGFloat = 0
+    // Where given, the lines under the picture are this wide (the column's width at most) rather than the picture's
+    // width: open upright the picture is as wide as its pane's height lets it be, and the keys under it need the column.
+    var lines: CGFloat? = nil
     private func plan(_ width: CGFloat, _ height: CGFloat?, _ subviews: Subviews) -> (frames: [CGRect], height: CGFloat) {
         let roles = subviews.map { $0[RoleKey.self] }
         let lined: (Int) -> Bool = { roles[$0] == .under || roles[$0] == .aligned }
@@ -1870,7 +1910,7 @@ struct PictureColumn: Layout {
             let underNow = shown.filter { roles[$0] == .under }.reduce(0) { $0 + sizes[$1].lo + spacing }
             let full = width * 9 / 16
             pictureH = height.map { min(full, max(0, $0 - fixed() - max(0, under - underNow))) } ?? full
-            lineW = pictureH * 16 / 9
+            lineW = lines.map { min(width, $0) } ?? pictureH * 16 / 9
             for i in subviews.indices where lined(i) { sizes[i] = measure(i, lineW) }
         }
         let room = max(0, (height ?? 0) - fixed() - pictureH)
@@ -1880,7 +1920,7 @@ struct PictureColumn: Layout {
         var y: CGFloat = 0
         for i in shown {
             let h = roles[i] == .picture ? pictureH : sizes[i].lo + (growing.contains(i) ? min(share, sizes[i].hi - sizes[i].lo) : 0)
-            let w = roles[i] == .picture || lined(i) ? lineW : width
+            let w = roles[i] == .picture ? pictureH * 16 / 9 : lined(i) ? lineW : width
             frames[i] = CGRect(x: (width - w) / 2, y: y, width: w, height: h)
             y += h + spacing
         }
