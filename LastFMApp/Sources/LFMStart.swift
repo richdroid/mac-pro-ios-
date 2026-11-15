@@ -74,7 +74,7 @@ struct StartTab: View {
                     .padding(.horizontal, S.margin)
                 }
                 if store.trouble { TroubleNote().padding(.horizontal, S.margin) }
-                DaySection(lead: !playing)
+                DaySection(lead: !playing).id("day")
                 RecentSection(skipFirst: !playing && !store.recent.isEmpty)
             }
         }

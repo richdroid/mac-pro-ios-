@@ -166,6 +166,11 @@ struct Pager: View {
                 if look == .panorama, title != nil { motion.lifts[p.id] = v }
             }
             .onChange(of: top) { _, _ in if page == p.id { withAnimation(.smooth) { proxy.scrollTo("top", anchor: .top) } } }
+            .task {
+                guard let a = Pose.anchor, page == p.id else { return }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                withAnimation(.smooth) { proxy.scrollTo(a, anchor: .top) }
+            }
         }
     }
 
