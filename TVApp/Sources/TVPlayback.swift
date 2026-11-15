@@ -679,7 +679,7 @@ struct SeasonPivot: View {
         // The season changes in one quiet step with the pull carried over, then everything glides home in the next.
         var q = Transaction(); q.disablesAnimations = true
         withTransaction(q) { selected.wrappedValue = s; SeasonSwipe.shared.land(forward: to > from) }
-        Task { @MainActor in withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { SeasonSwipe.shared.dx = 0 } }
+        Task { @MainActor in withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { SeasonSwipe.shared.dx = 0 } }
     }
     private let gap: CGFloat = 18, small: CGFloat = 0.62
     private var height: CGFloat { size * 1.5 }
@@ -750,7 +750,7 @@ struct SeasonSwipeRows: ViewModifier {
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if moves { swipe.width = $0 } }
             .contentShape(Rectangle())
             .simultaneousGesture(
-                DragGesture(minimumDistance: 16)
+                DragGesture(minimumDistance: 10)
                     .updating($active) { _, s, _ in s = true }
                     .onChanged { g in
                         guard ShelfHand.shared.item == nil, seasons.count > 1 else { return }
@@ -760,25 +760,25 @@ struct SeasonSwipeRows: ViewModifier {
                         let k = seasons.firstIndex(of: season) ?? 0
                         // Past either end, it gives, but only a little.
                         let blocked = (g.translation.width > 0 && k == 0) || (g.translation.width < 0 && k == seasons.count - 1)
-                        swipe.dx = blocked ? g.translation.width * 0.2 : g.translation.width
+                        swipe.dx = blocked ? g.translation.width * 0.5 : g.translation.width
                     }
                     .onEnded { g in
                         let sideways = axis.sideways == true
                         axis.sideways = nil
                         if sideways { swipe.pulledAt = Date() }
                         let k = seasons.firstIndex(of: season) ?? 0
-                        let far = abs(g.predictedEndTranslation.width) > 140 || abs(g.translation.width) > 70
+                        let far = abs(g.predictedEndTranslation.width) > 90 || abs(g.translation.width) > 45
                         let to = g.translation.width < 0 ? k + 1 : k - 1
                         // A card carried across and put back is no season swipe.
                         let free = ShelfHand.shared.item == nil && Date().timeIntervalSince(ShelfHand.shared.handledAt) >= 0.35
                         if sideways, free, far, seasons.count > 1, seasons.indices.contains(to) { SeasonPivot.move(seasons, $season, to: seasons[to]) }
-                        else { withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { swipe.dx = 0 } }
+                        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { swipe.dx = 0 } }
                     }
             )
             // A pull the scroll view took over lets go without an end: the headers and rows come home all the same.
             .onChange(of: active) { _, on in
                 // Only a pull that never reached its end (onEnded clears the axis first).
-                if !on, axis.sideways != nil { axis.sideways = nil; withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { swipe.dx = 0 } }
+                if !on, axis.sideways != nil { axis.sideways = nil; withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { swipe.dx = 0 } }
             }
     }
 }
