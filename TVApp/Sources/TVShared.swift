@@ -130,8 +130,16 @@ struct TVStatus: Decodable, Equatable {
         }
         var glyph: String { self == .off ? "moon.fill" : "rectangle.2.swap" }
     }
+    // The box is awake and the television has said it's coming on (a Sony takes 12 to 20 s, black all the while). Said
+    // in the one line where "Asleep" was, so the seconds after "Wake the TV" or the power key aren't a silence in which
+    // a second press looks needed (that press used to turn it off again; the Mac now leaves it alone, 11-14).
+    var comingOn: Bool { online && screen != "asleep" && cec?.enabled == true && cec?.tv == "waking" }
+    static let comingOnLine = "Coming on"
     var away: Away? {
         guard online, screen != "asleep", let c = cec, c.enabled else { return nil }
+        // Coming on, the Sony shows its last input for a few seconds before it takes the box's: that is not him on
+        // another input, and "On PlayStation 5" with its key must not flash up and go (seen on the line, 11-11).
+        if c.tv == "waking" { return nil }
         if c.tv == "off" || c.tv == "sleeping" { return .off }
         if c.input == "other" { return .elsewhere(c.source?.isEmpty == false ? c.source : nil) }
         if c.input == "tv" { return .elsewhere(nil) }

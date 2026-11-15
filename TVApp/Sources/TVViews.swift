@@ -1269,6 +1269,8 @@ struct RemoteTab: View {
         if s.screen == "asleep" { return "Asleep" }
         // The box is up but the television isn't showing it (HDMI-CEC): that is what's true, not what the box has on.
         if let a = s.away { return a.line }
+        // The television has been asked on and isn't lit yet: said, where "Asleep" was a moment ago.
+        if s.comingOn { return TVStatus.comingOnLine }
         if s.screen == "screensaver" { return "Screensaver" }
         // What's playing, by name, rather than the app it's playing in. Only while it's what's on, never one left behind.
         if model.videoIsCurrent, let p = s.session, !p.showName.isEmpty {

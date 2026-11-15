@@ -730,7 +730,7 @@ function chumbyScene(q, s) {
 function tvPose(q, s) {
   const fs = require('fs');
   const json = v => { s.setHeader('content-type', 'application/json'); s.end(typeof v === 'string' ? v : JSON.stringify(v)); return true; };
-  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage|fslowlist|freal)(?=\/)/) || [])[1];
+  const scene = (q.url.match(/^\/(tour|flickstream|blankbanner|cold|rtvoff|rtvwaking|rtvawayfilm|rtvaway|rcecoff|rasleep|roffline|ryoutubebare|ryoutube|rmintplain|rmint|ridle|repisode|rfilm|rjoin|rstall|realscrub|reallong|real|live|fnormal|fslow|ffail|foffline|falready|fbridgeon|fjoined|slowdev|outage|fslowlist|freal)(?=\/)/) || [])[1];
   if (scene) q.url = q.url.slice(scene.length + 1);
   const path = q.url.split('?')[0], query = new URL(q.url, 'http://x').searchParams;
   if (scene === 'real') { tvReal.known = false; tvReal.long = false; return tvReal(q, s, path, query, json); }
@@ -803,7 +803,7 @@ function tvPose(q, s) {
     q.on('close', () => { clearTimeout(wait); clearInterval(timer); });
     return true;
   }
-  if (/^r(tvoff|tvawayfilm|tvaway|cecoff|asleep|offline|youtube|youtubebare|mint|mintplain|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
+  if (/^r(tvoff|tvwaking|tvawayfilm|tvaway|cecoff|asleep|offline|youtube|youtubebare|mint|mintplain|idle|episode|film|join|stall)$/.test(scene || '') && path === '/api/tv/status') {
     const v = JSON.parse(tvStatus), now = Date.now();
     // Which scene's status the app really asked for, so a shot showing the sample's song can be told apart from one that
     // never reached its scene (review of dfd490e: ryoutubebare showed Mint's Sample Song).
@@ -813,6 +813,8 @@ function tvPose(q, s) {
     // The television behind the box, over HDMI-CEC: turned off with its own remote while the box is awake; on another
     // device that names itself; and CEC off on the box (only Status says so).
     if (scene === 'rtvoff') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'off', input: 'box', brand: 'Sony' }; }
+    // Coming on (a Sony takes 12 to 20 s), showing its last input meanwhile as his does: "Coming on", never "On PlayStation 5" and its key for a moment.
+    if (scene === 'rtvwaking') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'waking', input: 'other', source: 'PlayStation 5', brand: 'Sony', others: ['PlayStation 5'] }; }
     if (scene === 'rtvaway') { v.app = 'com.google.android.tvlauncher'; delete v.session; delete v.music; v.cec = { enabled: true, tv: 'on', input: 'other', source: 'PlayStation 5', brand: 'Sony', keys: true, others: ['PlayStation 5'] }; }
     // His real case: a film left paused for the PlayStation. The bar and keys stay under the dark picture; play brings the TV back.
     if (scene === 'rtvawayfilm') { v.app = 'com.stremio.one'; delete v.music; v.session = { pkg: 'com.stremio.one', playing: false, description: ['Heat'], position: 3000000, sampledAt: now, duration: 10200000, canSeek: true, art: tvBase + '/poster.png' }; v.cec = { enabled: true, tv: 'on', input: 'other', source: 'PlayStation 5', brand: 'Sony' }; }
