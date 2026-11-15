@@ -382,16 +382,16 @@ struct JustOnceSheet: View {
                 var m = Int((d.timeIntervalSince(due) / 60).rounded()) % 1440
                 if m > 720 { m -= 1440 } else if m < -720 { m += 1440 }
                 minutes = min(max(m, min(earliest, 0)), JustOnce.longest)
-            }), displayedComponents: .hourAndMinute)
+            }), in: due.addingTimeInterval(Double(min(earliest, 0) * 60))...due.addingTimeInterval(Double(JustOnce.longest * 60)), displayedComponents: .hourAndMinute)
                 .datePickerStyle(.wheel).labelsHidden().frame(maxWidth: .infinity)
             // Five or ten more from wherever it stands, and the way back to the usual time once it has left it.
             HStack(spacing: 8) {
                 stepChip("+5 min", label: "Five minutes later") { step(5) }
                 stepChip("+10 min", label: "Ten minutes later") { step(10) }
-                if minutes != 0 {
-                    stepChip("Usual", label: "Back to the usual time") { Haptic.fire(.tick); withAnimation(.snappy) { minutes = 0 } }
-                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                }
+                // Always in its place (appearing, it squeezed +5 and +10 sideways), dimmed while it's already usual.
+                stepChip("Usual", label: "Back to the usual time") { Haptic.fire(.tick); withAnimation(.snappy) { minutes = 0 } }
+                    .disabled(minutes == 0).opacity(minutes == 0 ? 0.4 : 1)
+                    .animation(.easeOut(duration: 0.15), value: minutes == 0)
             }
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 11, leading: 20, bottom: 0, trailing: 20))

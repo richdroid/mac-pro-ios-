@@ -134,7 +134,7 @@ struct RingScreen: View {
     var dark: Bool { scheme == .dark }
     // Out of reach: the page says so and offers no key that can't land (as the small card does).
     var away: Bool { model.unreachable && !stopping }
-    var failure: String? { ChumbyModel.pose == "ringfail" ? "The Chumby didn’t stop. \(ChumbyWords.notAnswering)." : model.failed("ring") }
+    var failure: String? { ChumbyModel.pose == "ringfail" ? "Didn’t stop. \(ChumbyWords.notAnswering)." : model.failed("ring") }
     func close() { model.ringHint = nil; model.ringScreen = false }
 
     var status: String {
@@ -169,12 +169,14 @@ struct RingScreen: View {
                 Group {
                     if let c = fold, c.width >= c.height {
                         // Open and upright (how he holds it): the fold runs across. The clock has the upper half and the
-                        // keys the lower, each centred in its own half, nothing on the crease.
-                        let top = max(c.midY - air, 0)
+                        // keys the lower, one column of one width, gathered at the fold from either side (centred in their
+                        // halves, the two floated apart over a band of bare sea), nothing on the crease.
+                        let top = max(c.midY - air, 0), column = min(g.size.width - 40, 500)
                         VStack(spacing: 0) {
-                            face(big: min(g.size.width * 0.2, top * 0.26, 120)).frame(maxWidth: 520).frame(maxWidth: .infinity, maxHeight: .infinity).frame(height: top)
+                            face(big: min(column * 0.24, top * 0.3, 128)).frame(width: column)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom).frame(height: top)
                             Color.clear.frame(height: air * 2)
-                            keys.frame(maxWidth: 460).frame(maxWidth: .infinity, maxHeight: .infinity)
+                            keys.frame(width: column).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         }
                     } else if let c = fold {
                         // Open flat: the fold runs down. The clock left of it, the keys right of it.
@@ -336,8 +338,9 @@ struct RingScreen: View {
             async let held: Void? = try? await Task.sleep(nanoseconds: 600_000_000)
             let ok = await model.ringOffTask().value
             _ = await held
-            withAnimation(.easeOut(duration: 0.2)) { stopping = false }
-            if ok { close() }
+            // Taken: the page goes with the key still at the far end (springing it back as the page leaves read as a
+            // Stop undone). Not taken: the key returns, ready to slide again, and the status line says why.
+            if ok { close() } else { withAnimation(.easeOut(duration: 0.2)) { stopping = false } }
         }
     }
     func snooze() {
@@ -371,7 +374,9 @@ struct SlideToStop: View {
                 RoundedRectangle(cornerRadius: 19, style: .continuous).fill(.white)
                     .shadow(color: ChumbyPalette.hex(0x9c2c08).opacity(0.35), radius: 3, y: 2)
                     .overlay {
-                        if busy { ProgressView().tint(ChumbyPalette.orange) }
+                        // Landed, it holds the stop mark (the status line says "Stopping…"); a spinner here left the
+                        // page with one turning on the key.
+                        if busy && !landed { ProgressView().tint(ChumbyPalette.orange) }
                         else { Image(systemName: k > 0.02 ? "stop.fill" : "chevron.right.2").font(.system(size: 22, weight: .heavy)).foregroundStyle(ChumbyPalette.orange) }
                     }
                     .frame(width: Self.key, height: Self.key)

@@ -22,7 +22,9 @@ enum RingCardLook {
     // Under the name, whole or not at all (never cut short): the time it's for and what it plays, then the sound alone.
     static func details(_ s: ChumbyRingAttributes.ContentState, stale: Bool) -> [String] {
         let at = s.name.isEmpty || stale ? "" : time(s.rang)
-        return [[at, s.sound].filter { !$0.isEmpty }.joined(separator: " · "), s.sound, at].filter { !$0.isEmpty }
+        let forms = [[at, s.sound].filter { !$0.isEmpty }.joined(separator: " · "), s.sound, at].filter { !$0.isEmpty }
+        // Each form once (a nameless or stale card has only the sound, twice over): ViewThatFits keys them by their words.
+        return forms.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
     }
 }
 
@@ -64,17 +66,23 @@ struct RingKeys: View {
     // A key pressed and not yet answered: both dim, so the press is seen to have landed.
     var working = false
     var body: some View { keys.opacity(working ? 0.45 : 1).allowsHitTesting(!working) }
+    // The CI gallery draws the card in a plain app, where the Lock Screen's intent keys have nothing to run in.
+    #if GALLERY
+    func key<L: View>(_ intent: some AppIntent, @ViewBuilder _ label: () -> L) -> some View { Button {} label: { label() } }
+    #else
+    func key<L: View>(_ intent: some AppIntent, @ViewBuilder _ label: () -> L) -> some View { Button(intent: intent) { label() } }
+    #endif
     var keys: some View {
         HStack(spacing: 10) {
             if !snoozed {
-                Button(intent: ChumbyRingSnoozeIntent()) {
+                key(ChumbyRingSnoozeIntent()) {
                     Label("Snooze", systemImage: "water.waves").font(RingCardLook.face(17)).foregroundStyle(.white)
                         .frame(maxWidth: .infinity, minHeight: height)
                         .background(Color.white.opacity(0.2), in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
-            Button(intent: ChumbyRingStopIntent()) {
+            key(ChumbyRingStopIntent()) {
                 Label("Stop", systemImage: "stop.fill").font(RingCardLook.face(17)).foregroundStyle(.white)
                     .frame(maxWidth: .infinity, minHeight: height)
                     .background(ChumbyPalette.orange, in: Capsule())

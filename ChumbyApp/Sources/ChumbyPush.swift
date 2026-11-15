@@ -132,7 +132,10 @@ final class ChumbyNotify: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
         let id = info["alert"] as? String ?? response.notification.request.identifier
-        if id == ChumbyRingActions.noticeID {
+        // The Mac's quiet word that the ring moved on without the phone ("Snoozed until…", "over") is a ring notice too,
+        // but a tap on one that says it's over opens Alarms like any other.
+        let over = (info["ring"] as? [String: Any])?["over"] != nil
+        if id == ChumbyRingActions.noticeID, !(over && response.actionIdentifier == UNNotificationDefaultActionIdentifier) {
             switch response.actionIdentifier {
             case Self.ringStop: Task { await self.ringAnswered(ChumbyRingActions.stop(), stop: true); done() }
             case Self.ringSnooze: Task { await self.ringAnswered(ChumbyRingActions.snooze(), stop: false); done() }

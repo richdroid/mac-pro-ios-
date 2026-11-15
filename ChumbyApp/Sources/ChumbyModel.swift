@@ -48,6 +48,8 @@ final class ChumbyModel: ObservableObject {
     // The width of the side bar's column on the Duo (0 when the bars run across), and a tap on + placed in it.
     @Published var railWidth: CGFloat = 0
     @Published var addAlarm: Date?
+    // An alarm another page asked Alarms to open (by Alarm.key, or "Nap"): Home's card, tapped on a nap or a skipped ring.
+    @Published var openAlarm: String?
     // The full-screen ringing page (ChumbyRing.swift): up when the ring's notification or its Lock Screen card is tapped,
     // and by itself when the app is in front as an alarm starts to sound. `ringHint` is what the tap itself said, shown
     // until the Chumby's own reading arrives.
@@ -562,11 +564,12 @@ final class ChumbyModel: ObservableObject {
         return Task {
             do {
                 try await api?.cmd("ringoff"); RingSeen.stopped(at: tapped)
+                Task { await ChumbyRingCard.handled() }
                 ringStoppedAt = Date()
                 // The Lock Screen's card and the ring's notification go with it, not when the Mac next looks.
                 await ChumbyRingCard.over()
                 return true
-            } catch { withAnimation(Self.ringSpring) { sys.ring = was }; fail("ring", "The Chumby didn’t stop. \(AlarmWriter.explain(error))"); return false }
+            } catch { withAnimation(Self.ringSpring) { sys.ring = was }; fail("ring", "Didn’t stop. \(AlarmWriter.explain(error))"); return false }
         }
     }
     func ringSnooze() { ringSnoozeTask() }
@@ -578,11 +581,12 @@ final class ChumbyModel: ObservableObject {
         return Task {
             do {
                 try await api?.cmd("ringsnooze")
+                Task { await ChumbyRingCard.handled() }
                 let until = snoozeEnds?.timeIntervalSince1970
                 await ChumbyRingCard.change { $0.snoozed = true; $0.until = until; $0.problem = nil }
                 await ChumbyRingCard.clearNotice()
                 return true
-            } catch { withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "The Chumby didn’t snooze. \(AlarmWriter.explain(error))"); return false }
+            } catch { withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(AlarmWriter.explain(error))"); return false }
         }
     }
     // When a snooze ends: the panel's own time when it reports one, else from when it began and that alarm's snooze length.

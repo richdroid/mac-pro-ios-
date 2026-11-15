@@ -350,6 +350,10 @@ struct RingingCard: View {
                     .font(.custom("Trebuchet MS", size: 24).weight(.bold))
                     Text(name(s.ring)).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
                 }
+                // The way back to the full-screen ringing page once it was closed.
+                .frame(maxWidth: .infinity).contentShape(Rectangle())
+                .onTapGesture { model.ringScreen = true }
+                .accessibilityAddTraits(.isButton).accessibilityHint("Opens the ringing alarm full screen")
                 // Snooze narrows to nothing while Stop widens into the room it leaves. Its glass is its own capsule, sized by
                 // the frame, so the glass narrows with it rather than vanishing; the word fades out before the frame reaches
                 // it. Never narrower than "Snooze" until it goes.
@@ -370,8 +374,14 @@ struct RingingCard: View {
                     .frame(minWidth: snoozed ? 0 : snoozeMin, maxWidth: snoozed ? 0 : .infinity)
                     .padding(.trailing, snoozed ? 0 : 14)
                     .allowsHitTesting(!snoozed).accessibilityHidden(snoozed)
-                    Button { model.ringOff() } label: { Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity, minHeight: 56) }
-                        .buttonStyle(.glassProminent).tint(ChumbyPalette.orange)
+                    // The same capsule as Snooze's, in the app's orange: the system's prominent style padded it taller.
+                    Button { model.ringOff() } label: {
+                        Label("Stop", systemImage: "stop.fill").lineLimit(1).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                            .contentShape(Capsule())
+                            .glassEffect(.regular.tint(ChumbyPalette.orange).interactive(), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
                 .font(.custom("Trebuchet MS", size: 20).weight(.bold))
                 if let f = model.failed("ring") { FailNote(text: f) }
@@ -1038,6 +1048,7 @@ struct AlarmsTab: View {
         // Pulled down, the calendar is read again too, so "Pull down to try again" under Calendar is true.
         .refreshable { await model.loadState(); if wake.rules.enabled, wake.note != nil { await wake.sync() } }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
+        .onChange(of: model.openAlarm) { _, k in openAsked(k) }
         // The hinge or a turn mid-page keeps the page (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios
         // across everything"): opened flat, what was pushed over the one list (Calendar settings, a day) moves to the
         // right pane, and an editor opened there goes back to a sheet when the phone is folded or turned upright; a
@@ -1060,6 +1071,7 @@ struct AlarmsTab: View {
         }
         .onAppear {
             wake.refreshPlan()
+            openAsked(model.openAlarm)
             guard !posed else { return }
             posed = true
             switch ChumbyModel.pose {
@@ -1261,6 +1273,13 @@ struct AlarmsTab: View {
     // calendar alarm is changed). The Chumby's own helpers (the catch-up) have nothing to open.
     func planned(_ a: Alarm) -> PlannedWake? {
         wake.plan.first { CalendarWake.alarmName($0) == a.name && CalendarWake.minutes($0.wake) == a.time } ?? wake.plan.first { CalendarWake.alarmName($0) == a.name }
+    }
+    // Asked from another page (model.openAlarm): opened once the tab has come in, so the editor isn't lost to the switch.
+    func openAsked(_ k: String?) {
+        guard let k else { return }
+        model.openAlarm = nil
+        guard let a = model.state.alarms.first(where: { $0.key == k }) ?? (k == "Nap" ? model.napAlarm : nil) else { return }
+        Task { try? await Task.sleep(nanoseconds: 350_000_000); openNext(a) }
     }
     func openNext(_ a: Alarm) {
         if a.name == "Nap" { editNap(model.napAlarm ?? a) }
@@ -1708,6 +1727,12 @@ struct AlarmEditor: View {
     // The Chumby takes no change to its alarms while one rings or snoozes (a save restarts its alarm panel): said before
     // Save is pressed, not only after.
     var ringingNow: Bool { model.sys.ringing != nil && !model.unreachable && !calendarTemplate }
+    // "Work is ringing. Save once it’s stopped."
+    var ringingNote: String {
+        guard let r = model.sys.ringing else { return "" }
+        let n = r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name
+        return "\(n.isEmpty ? "An alarm" : n) is \(r.snoozed ? "snoozed" : "ringing"). Save once it’s stopped."
+    }
 
     var stations: [NamedID] { model.pandoraStations }
     var afterOptions: [(String, String)] {
@@ -1826,7 +1851,7 @@ struct AlarmEditor: View {
                             // Not a dead end: the ringing page (Snooze, Stop) comes up over this one and leaves what
                             // was typed here as it was.
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                RowNote(icon: "alarm.waves.left.and.right.fill", text: model.sys.ringing?.snoozed == true ? "An alarm is snoozed. Save once it’s stopped." : "An alarm is ringing. Save once it’s stopped.")
+                                RowNote(icon: "alarm.waves.left.and.right.fill", text: ringingNote)
                                 Spacer(minLength: 4)
                                 Button("Stop it") { model.ringScreen = true }.buttonStyle(.borderless).font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
                             }

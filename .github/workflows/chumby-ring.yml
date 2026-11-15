@@ -68,14 +68,24 @@ jobs:
             shot home-skipped$2 $1 9 $M/skipped -tab 0
             shot home-moved$2 $1 9 $M/moved -tab 0
             shot home-nap$2 $1 9 $M/nap -tab 0
-            shot once$2 $1 10 $M -tab 0 -pose justonce
+            shot once$2 $1 12 $M -tab 0 -pose justonce
+            shot once-moved$2 $1 12 $M/moved -tab 0 -pose justoncemoved
+          }
+          gallery() { # page, display, name
+            xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page $1
+            sleep 8
+            if xcrun simctl spawn "$DEVICE" launchctl list | grep -q GalleryChumby; then
+              xcrun simctl io "$DEVICE" screenshot --display=$2 dist/ring-$3.png
+            else
+              echo "GalleryChumby page $1 is not running"; ls -t ~/Library/Logs/DiagnosticReports/ | head -5
+              cp "$(ls -t ~/Library/Logs/DiagnosticReports/GalleryChumby* 2>/dev/null | head -1)" dist/gallery-crash-$1.txt 2>/dev/null || true
+            fi
+            xcrun simctl terminate "$DEVICE" local.macpro.GalleryChumby || true
           }
           xcrun simctl ui "$DEVICE" appearance light
           set_ 1 ""
-          xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page 4
-          sleep 8
-          xcrun simctl io "$DEVICE" screenshot --display=1 dist/ring-card.png
-          xcrun simctl terminate "$DEVICE" local.macpro.GalleryChumby || true
+          gallery 4 1 card
+          gallery 5 1 island
           xcrun simctl ui "$DEVICE" appearance dark
           shot screen-dark 1 9 $M/ringing -tab 0 -pose ringscreen
           shot screen-snoozed-dark 1 9 $M/snoozed -tab 0 -pose ringscreen
@@ -86,7 +96,11 @@ jobs:
           $D "$DEVICE" pose open; sleep 5
           xcrun simctl ui "$DEVICE" appearance light
           shot screen-open 3 9 $M/ringing -tab 0 -pose ringscreen
+          shot screen-snoozed-open 3 9 $M/snoozed -tab 0 -pose ringscreen
           shot alarms-open 3 9 $M -tab 2
+          shot alarms-ringing-open 3 9 $M/ringing -tab 2
+          shot home-open 3 9 $M -tab 0
+          shot once-open 3 12 $M -tab 0 -pose justonce
           $D "$DEVICE" rotate 1; sleep 5
           set_ 3 "-portrait"
           xcrun simctl ui "$DEVICE" appearance dark

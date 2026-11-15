@@ -322,6 +322,19 @@ enum ChumbyRingCard {
     static func change(_ edit: (inout ChumbyRingAttributes.ContentState) -> Void) async {
         for a in all { var s = a.content.state; edit(&s); await a.update(ActivityContent(state: s, staleDate: a.content.staleDate)) }
     }
+    // Stop or Snooze pressed on this phone and taken: the Mac is told, so it doesn't put a "Snoozed" or "over" notice in
+    // place of the one this phone has already put away (push.js, ringRestate). Only a signed build knows the Mac.
+    static func handled() async {
+        guard let bundle = Bundle.main.bundleIdentifier, let mac = Bundle.main.object(forInfoDictionaryKey: "MacAddress") as? String,
+              let base = URL(string: mac), let host = base.host,
+              let url = URL(string: mac.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/push/token") else { return }
+        var r = URLRequest(url: url); r.httpMethod = "POST"; r.timeoutInterval = 10
+        r.setValue("\(base.scheme ?? "https")://\(host)\(base.port.map { ":\($0)" } ?? "")", forHTTPHeaderField: "Origin")
+        r.setValue("1", forHTTPHeaderField: "x-dash")
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.httpBody = try? JSONSerialization.data(withJSONObject: ["app": "chumby", "bundle": bundle, "kind": "ring-handled"])
+        _ = try? await URLSession.shared.data(for: r)
+    }
     // The ring's notification, by what the Mac marked it with (its identifier is Apple's to choose).
     static func clearNotice() async {
         let c = UNUserNotificationCenter.current()
@@ -346,6 +359,7 @@ enum ChumbyRingCard {
 }
 #else
 enum ChumbyRingCard {
+    static func handled() async {}
     static func over() async {}
     static func show(_ s: ChumbyRingAttributes.ContentState) async {}
     static func change(_ edit: (inout ChumbyRingAttributes.ContentState) -> Void) async {}
@@ -370,6 +384,7 @@ enum ChumbyRingActions {
             return AlarmWriter.explain(error)
         }
         await ChumbyRingCard.over()
+        await ChumbyRingCard.handled()
         return nil
     }
     @discardableResult static func snooze() async -> String? {
@@ -381,6 +396,7 @@ enum ChumbyRingActions {
             let now = Date()
             await ChumbyRingCard.change { $0.working = nil; $0.snoozed = true; $0.until = now.addingTimeInterval(Double($0.snooze ?? 9) * 60).timeIntervalSince1970 }
             await ChumbyRingCard.clearNotice()
+            await ChumbyRingCard.handled()
             return nil
         }
         catch ChumbyError.message("not delivered") { await ChumbyRingCard.over(); return nil }

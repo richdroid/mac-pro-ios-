@@ -2933,13 +2933,17 @@ struct SkipCard: View {
                 Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold))
                     .lineLimit(1).minimumScaleFactor(0.7)
                     .overlay { StrikeLine(progress: struck ? 1 : 0) }
-                // The mark that the time can be set, there only while it can.
-                Image(systemName: "pencil").font(.system(size: 15, weight: .bold)).opacity(editable ? 0.85 : 0)
-                    .animation(.easeOut(duration: 0.15), value: editable)
-                    .accessibilityHidden(true)
+                // The mark that the time can be set, there only while it can (and taking no room when it can't: kept
+                // invisible, it cut a nap's time to "4:06…" folded).
+                if editable {
+                    Image(systemName: "pencil").font(.system(size: 15, weight: .bold)).opacity(0.85)
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
+                }
             }
             // Moved for one ring, the usual time is on the button ("Back to 6:45 AM"), so it isn't said twice.
-            Text("\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
+            // The nap's heading already says "Nap": its line is the day alone.
+            Text(napNext && !struck ? day(at) : "\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
         }
         .foregroundStyle(.white)
     }
@@ -2977,6 +2981,12 @@ struct SkipCard: View {
     private var ownDay: PlannedWake? {
         guard moved == nil, skipped == nil, let n = model.nextRing(), n.alarm.isCalendar else { return nil }
         return wake.plan.first { $0.exact && CalendarWake.alarmName($0) == n.alarm.name && abs($0.wake.timeIntervalSince(n.at)) < 60 }
+    }
+    // What a tap on the card's words opens in Alarms when the time itself can't be set here: the nap, a skipped ring.
+    private func opener(_ name: String) -> String? {
+        if napNext { return "Nap" }
+        guard let a = model.state.alarms.first(where: { $0.name == name }), a.name != "Catch-up", !a.isPlaceholder else { return nil }
+        return a.key
     }
     private func heading(struck: Bool) -> String {
         if struck { return "Skipped" }
@@ -3018,7 +3028,12 @@ struct SkipCard: View {
                     VStack(alignment: .center, spacing: moved != nil || ownDay != nil ? 10 : 0) {
                         HStack(spacing: 14) {
                             // The octopus and the words are one target: the time, tapped, is set.
-                            Button { if let c = editable { change = c } } label: {
+                            // Anything else that shows an alarm (the nap, a skipped ring) opens it in Alarms instead.
+                            let opens = editable == nil ? opener(next.1) : nil
+                            Button {
+                                if let c = editable { change = c }
+                                else if let k = opens { model.openAlarm = k; model.tab = 2 }
+                            } label: {
                                 HStack(spacing: 14) {
                                     SleepyOctopus(asleep: asleep, tint: .white)
                                     lines(next.0, next.1, struck: asleep, editable: editable != nil)
@@ -3026,10 +3041,10 @@ struct SkipCard: View {
                                 }
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(GelPress(enabled: editable != nil))
-                            .allowsHitTesting(editable != nil)
-                            .accessibilityLabel("\(heading(struck: asleep)), \(time(next.0)), \(day(next.0)), \(label(next.1))")
-                            .accessibilityHint(editable != nil ? "Sets this ring’s time or sound" : "")
+                            .buttonStyle(GelPress(enabled: editable != nil || opens != nil))
+                            .allowsHitTesting(editable != nil || opens != nil)
+                            .accessibilityLabel("\(heading(struck: asleep)), \(time(next.0)), \(day(next.0))\(napNext ? "" : ", \(label(next.1))")")
+                            .accessibilityHint(editable != nil ? "Sets this ring’s time or sound" : opens != nil ? "Opens this alarm" : "")
                             // The slab's one key: Skip while there's a ring to let pass, Undo once it's skipped.
                             ZStack(alignment: .trailing) {
                                 if asleep {
@@ -3054,10 +3069,14 @@ struct SkipCard: View {
             }
             .animation(.easeOut(duration: 0.12), value: pending)
             .onChange(of: skipped != nil) { _, now in withAnimation(.easeInOut(duration: 0.35)) { shown = now } }
-            .onAppear {
-                shown = skipped != nil
-                // For the shot: the ring's sheet open from Home.
-                if ChumbyModel.pose == "justonce" && model.tab == 0 && !posed, let c = changeable { posed = true; change = c }
+            .onAppear { shown = skipped != nil }
+            // For the shot: the ring's sheet open from Home, once the Chumby's list is in (on appearing there's nothing
+            // to change yet). "justoncemoved": the same, opened on a ring already moved.
+            .task(id: changeable?.id) {
+                guard ChumbyModel.pose.hasPrefix("justonce"), model.tab == 0, !posed, let c = changeable else { return }
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                guard !Task.isCancelled, !posed else { return }
+                posed = true; change = c
             }
             .fillCover(item: $change) { c in JustOnceSheet(original: c.original, due: c.due, later: c.later, adjusting: c.adjusting).environmentObject(model) }
             // For the build's film: skip the next alarm, then undo it.
@@ -3087,7 +3106,7 @@ struct SkipCard: View {
         } label: {
             HStack(spacing: 8) {
                 if backing { ProgressView().controlSize(.small).tint(ChumbyPalette.hex(0x1f2f5c)) }
-                Text("Back to the usual time").font(.custom("Trebuchet MS", size: 16).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
+                Text("Back to the calendar’s time").font(.custom("Trebuchet MS", size: 16).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
             }
             .lineLimit(1).fixedSize()
             .padding(.horizontal, 16).padding(.vertical, 10)
