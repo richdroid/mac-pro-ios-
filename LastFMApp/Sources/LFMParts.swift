@@ -48,14 +48,34 @@ struct MoveMark: View {
     var body: some View {
         Group {
             switch move {
-            case .up(let n): HStack(spacing: 1) { Image(systemName: "arrowtriangle.up.fill").font(.system(size: 7)); Text("\(n)") }.accessibilityLabel("Up \(n)")
-            case .down(let n): HStack(spacing: 1) { Image(systemName: "arrowtriangle.down.fill").font(.system(size: 7)); Text("\(n)") }.foregroundStyle(S.soft).accessibilityLabel("Down \(n)")
-            case .new: Text("new").font(.caption2.weight(.bold)).foregroundStyle(.black).padding(.horizontal, 5).padding(.vertical, 1).background(Capsule().fill(.white)).accessibilityLabel("New")
-            case .same: Image(systemName: "minus").font(.system(size: 8, weight: .bold)).foregroundStyle(S.soft.opacity(0.7)).accessibilityLabel("Same place")
+            case .up(let n): HStack(spacing: 2) { Image(systemName: "arrowtriangle.up.fill").font(.system(size: 10)); Text("\(n)") }.accessibilityLabel("Up \(n)")
+            case .down(let n): HStack(spacing: 2) { Image(systemName: "arrowtriangle.down.fill").font(.system(size: 10)); Text("\(n)") }.foregroundStyle(S.soft).accessibilityLabel("Down \(n)")
+            case .new: NewMark()
+            case .same: Image(systemName: "minus").font(.system(size: 10, weight: .bold)).foregroundStyle(S.soft.opacity(0.7)).accessibilityLabel("Same place")
             case nil: EmptyView()
             }
         }
-        .font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+        .font(.footnote.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+    }
+}
+
+// New to a chart or to him: white words on glass, never a solid white block.
+struct NewMark: View {
+    var body: some View {
+        Text("new").font(.caption.weight(.bold)).foregroundStyle(.white).fixedSize()
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .glassEffect(.regular, in: Capsule())
+            .accessibilityLabel("New")
+    }
+}
+
+// A rank on a cover: the corner under it darkened, so the numeral reads on any picture (review 2026-11-14, item 8).
+struct RankShade: View {
+    var corner: CGFloat = 10
+    var body: some View {
+        RadialGradient(colors: [.black.opacity(0.62), .black.opacity(0.3), .clear], center: .bottomLeading, startRadius: 0, endRadius: 96)
+            .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+            .allowsHitTesting(false)
     }
 }
 
@@ -65,6 +85,7 @@ struct EntryRow: View {
     var showRank = true
     var context = "row"
     var trailing: String? = nil       // replaces the plays on the right (a date, when sorted by one)
+    var peak: Int? = nil              // the list's most played: with it, each row draws its plays as a bar against that
     var body: some View {
         Opens(route: e.route, zoom: "\(context)|\(e.id)") {
             HStack(spacing: S.gap) {
@@ -74,14 +95,26 @@ struct EntryRow: View {
                             .lineLimit(1).minimumScaleFactor(0.6)
                         MoveMark(move: e.move)
                     }
-                    .frame(width: 36)
+                    .frame(width: 40)
                 }
                 ArtView(e.art, px: 156, corner: 6).frame(width: S.art).zoomSource("\(context)|\(e.id)")
                 VStack(alignment: .leading, spacing: S.pair / 2) {
-                    Text(e.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                    // Two lines before a name is ever cut short (review 2026-11-14, item 6).
+                    Text(e.title).font(.body.weight(.semibold)).foregroundStyle(.white).lineLimit(2).multilineTextAlignment(.leading)
                     if e.kind != .artists { Text(e.artist).font(.subheadline).foregroundStyle(S.soft).lineLimit(1) }
                     else if let s = e.secs { Text(duration(s)).font(.subheadline).monospacedDigit().foregroundStyle(S.soft).lineLimit(1) }
+                    if let peak, peak > 0, e.plays > 0 {
+                        // His plays as a bar in the cover's colour against the list's most played: the row's width shows
+                        // something (review 2026-11-14, item 17).
+                        let tint = (ArtStore.shared.palette(e.art) ?? Palette.from(name: e.artist + e.album)).vivid.color
+                        GeometryReader { g in
+                            Capsule().fill(tint).frame(width: max(4, g.size.width * CGFloat(e.plays) / CGFloat(peak)), height: 4)
+                        }
+                        .frame(height: 4).padding(.top, S.pair)
+                        .accessibilityHidden(true)
+                    }
                 }
+                .layoutPriority(1)
                 Spacer(minLength: 8)
                 // His plays, the number alone (the list says what it counts); sorted by a date, the date leads.
                 VStack(alignment: .trailing, spacing: S.pair / 2) {
@@ -134,7 +167,8 @@ struct Panorama: View {
                 ZStack(alignment: .bottomLeading) {
                     ArtView(e.art, px: 400, corner: 10).frame(width: S.tile).zoomSource("\(title)|\(e.id)")
                     if ranks {
-                        Text("\(k + 1)").font(.system(size: 64, weight: .ultraLight)).foregroundStyle(.white).shadow(color: .black.opacity(0.5), radius: 8)
+                        RankShade().frame(width: S.tile, height: S.tile)
+                        Text("\(k + 1)").font(.system(size: 64, weight: .thin)).foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 6)
                             .offset(x: -2, y: 18)
                     }
                 }
@@ -148,30 +182,46 @@ struct Panorama: View {
     }
 }
 
-// A row of choices as glass capsules, the chosen one filled.
-struct Chips<T: Hashable>: View {
+// A row of choices: one glass bar, the chosen one lit inside it (white type on a brighter pill, never a solid white
+// block). One control for every such choice in the app (review 2026-11-14, items 15 and 25). It scrolls sideways when
+// its choices outrun the room, fading at the far edge; with room, `fill` spreads them evenly across the width.
+struct Segments<T: Hashable>: View {
     let items: [T]
     @Binding var selection: T
+    var fill = false
     let label: (T) -> String
+    @Namespace private var lit
     var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: S.gap / 1.5) {
-                ForEach(items, id: \.self) { t in
-                    let on = t == selection
-                    Button { withAnimation(.snappy(duration: 0.25)) { selection = t } } label: {
-                        Text(label(t)).font(.subheadline.weight(.semibold)).foregroundStyle(on ? .black : .white)
-                            .padding(.horizontal, 14).frame(height: 36)
-                            .background { if on { Capsule().fill(.white) } }
-                            .glassEffect(.regular, in: Capsule())
-                    }
-                    .buttonStyle(Press())
-                    .accessibilityAddTraits(on ? .isSelected : [])
-                }
+        if fill {
+            bar.frame(maxWidth: .infinity)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) { bar.padding(.horizontal, S.margin) }
+                    .scrollIndicators(.hidden)
+                    .mask { HStack(spacing: 0) { Color.black; LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: S.margin) } }
+                    .onChange(of: selection) { _, t in withAnimation(.snappy) { proxy.scrollTo(t, anchor: .center) } }
             }
-            .padding(.horizontal, S.margin)
         }
-        .scrollIndicators(.hidden)
-        .clipped()
+    }
+    private var bar: some View {
+        HStack(spacing: 0) {
+            ForEach(items, id: \.self) { t in
+                let on = t == selection
+                Button { withAnimation(.snappy(duration: 0.25)) { selection = t } } label: {
+                    Text(label(t)).font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(on ? 1 : 0.7))
+                        .lineLimit(1).fixedSize()
+                        .padding(.horizontal, 14).frame(height: 36).frame(maxWidth: fill ? .infinity : nil)
+                        .background { if on { Capsule().fill(.white.opacity(0.24)).matchedGeometryEffect(id: "lit", in: lit) } }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .id(t)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .glassEffect(.regular, in: Capsule())
+        .sensoryFeedback(.tick, trigger: selection)
     }
 }
 

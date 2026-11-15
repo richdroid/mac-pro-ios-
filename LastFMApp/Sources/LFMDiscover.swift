@@ -120,7 +120,8 @@ struct DiscoverTab: View {
         } else {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "artists for you")
-                VStack(spacing: S.gap) { ForEach(m.recs) { r in ArtistRec(r: r) } }
+                let mixed = m.recs.contains { $0.plays > 0 }
+                VStack(spacing: S.gap) { ForEach(m.recs) { r in ArtistRec(r: r, say: mixed) } }
             }
             .padding(.horizontal, S.margin)
         }
@@ -140,20 +141,23 @@ struct DiscoverTab: View {
 
 struct ArtistRec: View {
     let r: Rec
+    // Said only when it tells one from another: on a page where every artist is new it's the same words on every card.
+    var say = true
     var body: some View {
-        HStack(spacing: S.gap) {
+        // The way out sits under the words, in line with them: beside them it squeezed the reason to a sliver folded.
+        VStack(alignment: .leading, spacing: S.gap) {
             Opens(route: .artist(r.name), zoom: "rec|\(r.id)") {
                 HStack(spacing: S.inner) {
                     ArtView(ArtRef(artist: r.name, album: r.album, url: r.image), px: 300, corner: 10).frame(width: 84).zoomSource("rec|\(r.id)")
                     VStack(alignment: .leading, spacing: S.pair) {
                         Text(r.name).font(.title3.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
                         Text("Because you play \(r.because.joined(separator: " and "))").font(.subheadline).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true)
-                        Text(r.plays == 0 ? "New to you" : "You: \(plays(r.plays))").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85))
+                        if say { Text(r.plays == 0 ? "New to you" : "You: \(plays(r.plays))").font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.85)) }
                     }
                     Spacer(minLength: 0)
                 }
             }
-            AppleMusicButton(what: .artist, artist: r.name)
+            AppleMusicButton(what: .artist, artist: r.name).padding(.leading, 84 + S.inner)
         }
         .card()
         .accessibilityElement(children: .contain)
@@ -189,8 +193,11 @@ struct AppleMusicButton: View {
     @Environment(\.openURL) private var openURL
     var body: some View {
         Button { Task { openURL(await AppleMusic.shared.link(what, artist: artist, title: title)) } } label: {
-            Image(systemName: "music.note").font(.body.weight(.semibold)).foregroundStyle(.white).frame(width: 44, height: 44)
-                .glassEffect(.regular.interactive(), in: Circle())
+            // Says where it goes: Apple's mark and "Music", not a bare note in a circle (review 2026-11-14, item 18).
+            HStack(spacing: 3) { Image(systemName: "apple.logo"); Text("Music") }
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.white).fixedSize()
+                .padding(.horizontal, 14).frame(height: 44)
+                .glassEffect(.regular.interactive(), in: Capsule())
         }
         .buttonStyle(Press())
         .accessibilityLabel("Open in Apple Music")

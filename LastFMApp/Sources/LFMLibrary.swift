@@ -13,7 +13,8 @@ enum LibShelf: Int, CaseIterable, Sendable {
 
 @MainActor @Observable final class LibraryModel {
     static let shared = LibraryModel()
-    var shelf: LibShelf = .artists
+    // (-shelf N: the build's pose for a shelf other than the first.)
+    var shelf: LibShelf = LibShelf(rawValue: UserDefaults.standard.integer(forKey: "shelf")) ?? .artists
     var sort: LibSort = .plays
     var query = ""
     private(set) var lists: [Kind: [Entry]] = [:]
@@ -130,12 +131,8 @@ struct LibraryTab: View {
             HubTitle(text: "library", size: 80)
             search(m.shelf).padding(.horizontal, S.margin)
             if m.query.isEmpty {
-                Picker("Show", selection: Binding(get: { m.shelf }, set: { m.shelf = $0 })) {
-                    ForEach(LibShelf.allCases, id: \.self) { Text($0.name).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, S.margin)
-                .sensoryFeedback(.tick, trigger: m.shelf)
+                Segments(items: LibShelf.allCases, selection: Binding(get: { m.shelf }, set: { m.shelf = $0 }), fill: true) { $0.name }
+                    .padding(.horizontal, S.margin)
             }
         }
     }

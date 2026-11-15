@@ -53,9 +53,10 @@ struct ChartSummary: Sendable {
 
 @MainActor @Observable final class ChartsModel {
     static let shared = ChartsModel()
-    var period: Period = .days(7) { didSet { reload() } }
-    var kind: Kind = .albums { didSet { reload(); reloadBump() } }
-    var size = 4
+    // (-period N, -kind N, -grid N: the build's poses for a stretch, a kind and a collage other than the first.)
+    var period: Period = Period.rolling[min(max(UserDefaults.standard.integer(forKey: "period"), 0), Period.rolling.count - 1)] { didSet { reload() } }
+    var kind: Kind = UserDefaults.standard.object(forKey: "kind").flatMap { _ in Kind(rawValue: UserDefaults.standard.integer(forKey: "kind")) } ?? .albums { didSet { reload(); reloadBump() } }
+    var size = [3, 4, 5].contains(UserDefaults.standard.integer(forKey: "grid")) ? UserDefaults.standard.integer(forKey: "grid") : 4
     var entries: [Entry] = []
     var summary: ChartSummary?
     var weeks: [ChartWeek] = []
@@ -219,7 +220,7 @@ struct ChartsTab: View {
                 FoldSplit {
                     Page(top: top) {
                         VStack(alignment: .leading, spacing: S.section) {
-                            VStack(alignment: .leading, spacing: S.head) { HubTitle(text: "charts", size: 80); periods; kindPicker }
+                            VStack(alignment: .leading, spacing: S.head) { HubTitle(text: "charts", size: 80); periods; HStack(spacing: S.gap) { kindPicker; anyWeek }.padding(.horizontal, S.margin) }
                             content(m.period, onlyLeft: true)
                         }
                         .padding(.top, S.head)
@@ -247,7 +248,6 @@ struct ChartsTab: View {
         .onChange(of: page) { _, i in if i < pages.count, pages[i] != m.period { m.period = pages[i] } }
         .onChange(of: m.period) { _, p in all = false; if let i = pages.firstIndex(of: p), i != page { page = i } }
         .onChange(of: m.kind) { _, _ in all = false }
-        .sensoryFeedback(.tick, trigger: m.kind)
         .cover(isPresented: $picking) { WeekPicker() }
         .task {
             guard Pose.name == "weeks" else { return }
@@ -265,48 +265,22 @@ struct ChartsTab: View {
     }
 
     private var kindPicker: some View {
-        Picker("Show", selection: Binding(get: { m.kind }, set: { m.kind = $0 })) {
-            ForEach(Kind.allCases, id: \.self) { Text($0.name).tag($0) }
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, pane ? S.margin : 0)
+        Segments(items: Kind.allCases, selection: Binding(get: { m.kind }, set: { m.kind = $0 }), fill: true) { $0.name }
     }
 
     private var anyWeek: some View {
         Button { picking = true } label: {
-            Label("Any week", systemImage: "calendar").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                .padding(.horizontal, 14).frame(height: 32)
+            Label("Any week", systemImage: "calendar").font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1).fixedSize()
+                .padding(.horizontal, 16).frame(height: 44)
                 .glassEffect(.regular, in: Capsule())
         }
         .buttonStyle(Press())
     }
 
-    // Open flat: the stretches as glass capsules, a past week among them once chosen, and the way to choose one.
+    // Open flat: the stretches in the same glass bar as every other choice (a past week among them once chosen),
+    // scrolling with a fade when they outrun the pane, and the way to choose a week under it with the kind.
     private var periods: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal) {
-                HStack(spacing: S.gap / 1.5) {
-                    ForEach(pages, id: \.self) { p in
-                        let on = p == m.period
-                        Button { withAnimation(.snappy(duration: 0.25)) { m.period = p } } label: {
-                            Text(p.name).font(.subheadline.weight(.semibold)).foregroundStyle(on ? .black : .white)
-                                .padding(.horizontal, 14).frame(height: 36)
-                                .background { if on { Capsule().fill(.white) } }
-                                .glassEffect(.regular, in: Capsule())
-                        }
-                        .buttonStyle(Press())
-                        .id(p)
-                        .accessibilityAddTraits(on ? .isSelected : [])
-                    }
-                    anyWeek
-                }
-                .padding(.horizontal, S.margin)
-            }
-            .scrollIndicators(.hidden)
-            .clipped()
-            .sensoryFeedback(.tick, trigger: m.period)
-            .onChange(of: m.period) { _, p in withAnimation(.smooth) { proxy.scrollTo(p, anchor: .center) } }
-        }
+        Segments(items: pages, selection: Binding(get: { m.period }, set: { m.period = $0 })) { $0.name }
     }
 
     @ViewBuilder private func figures(_ s: ChartSummary?, _ p: Period) -> some View {
@@ -350,19 +324,17 @@ struct ChartsTab: View {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "collage")
                 HStack(spacing: S.gap) {
-                    Picker("Grid", selection: Binding(get: { m.size }, set: { m.size = $0; m.render() })) {
-                        ForEach([3, 4, 5], id: \.self) { Text("\($0)×\($0)").tag($0) }
-                    }
-                    .pickerStyle(.segmented)
+                    Segments(items: [3, 4, 5], selection: Binding(get: { m.size }, set: { m.size = $0; m.render() }), fill: true) { "\($0)×\($0)" }
                     if current, let img = m.shareImage {
                         ShareLink(item: img, preview: SharePreview("Your \(m.period.name.lowercased()) in \(m.kind.noun)", image: img)) {
-                            Label("Share", systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold))
-                                .padding(.horizontal, 14).frame(height: 32)
+                            Label("Share", systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                                .padding(.horizontal, 16).frame(height: 44)
+                                .glassEffect(.regular.interactive(), in: Capsule())
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(Press())
                     } else {
                         Label("Share", systemImage: "square.and.arrow.up").font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 14).frame(height: 32).foregroundStyle(S.soft)
+                            .padding(.horizontal, 16).frame(height: 44).foregroundStyle(S.soft)
                             .glassEffect(.regular, in: Capsule())
                             .accessibilityLabel("Share, getting the picture ready")
                     }
@@ -378,7 +350,6 @@ struct ChartsTab: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .animation(.smooth(duration: 0.35), value: n)
             }
-            .sensoryFeedback(.tick, trigger: m.size)
             .padding(.horizontal, S.margin)
         }
     }
@@ -389,7 +360,7 @@ struct ChartsTab: View {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "top \(m.kind.noun)")
                 VStack(spacing: 0) {
-                    ForEach(shown) { e in EntryRow(e: e, context: "chart") }
+                    ForEach(shown) { e in EntryRow(e: e, context: "chart", peak: entries.first?.plays) }
                 }
                 if entries.count > 10 {
                     Button { withAnimation(.smooth) { all.toggle() } } label: {
@@ -410,6 +381,7 @@ struct ChartsTab: View {
 // the top), falling off the foot when out of the top 20. Tap a name to follow its line.
 struct BumpSection: View {
     @State private var follow: String?
+    @State private var picked = 0
     private var m: ChartsModel { ChartsModel.shared }
     var body: some View {
         if !m.bump.isEmpty, m.bumpRanks.count >= 2 {
@@ -421,6 +393,7 @@ struct BumpSection: View {
                     legend
                 }
                 .card()
+                .sensoryFeedback(.tick, trigger: picked)
             }
             .padding(.horizontal, S.margin)
         }
@@ -452,7 +425,7 @@ struct BumpSection: View {
                     for pts in runs {
                         var path = Path()
                         smooth(&path, pts, move: true)
-                        ctx.stroke(path, with: .color(c), style: StrokeStyle(lineWidth: on ? 4 : 1.8, lineCap: .round, lineJoin: .round))
+                        ctx.stroke(path, with: .color(c), style: StrokeStyle(lineWidth: on ? 4.5 : 1.8, lineCap: .round, lineJoin: .round))
                         for p in pts {
                             let d: CGFloat = on ? 9 : 4
                             ctx.fill(Path(ellipseIn: CGRect(x: p.x - d / 2, y: p.y - d / 2, width: d, height: d)), with: .color(c))
@@ -479,15 +452,17 @@ struct BumpSection: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: S.figures)], alignment: .leading, spacing: S.pair * 2) {
             ForEach(byNow) { e in
                 let on = followed == e.id
-                Button { withAnimation(.snappy) { follow = e.id } } label: {
+                Button { withAnimation(.snappy) { follow = e.id }; picked += 1 } label: {
                     HStack(spacing: 8) {
-                        Capsule().fill(colour(e)).frame(width: 14, height: 4)
+                        // Every name at full strength with its line's colour (dimmed read as switched off; review
+                        // 2026-11-14, item 13); the one followed is bold with a heavier mark. Its rank now says what it is.
+                        Capsule().fill(colour(e)).frame(width: on ? 18 : 14, height: on ? 6 : 4).frame(width: 18)
                         Text(e.title).font(.subheadline.weight(on ? .bold : .medium)).foregroundStyle(.white).lineLimit(1)
                         Spacer(minLength: 0)
-                        Text(m.bumpRanks.last?[e.rankKey].map { "\($0)" } ?? "–").font(.subheadline).monospacedDigit().foregroundStyle(S.soft)
+                        Text(m.bumpRanks.last?[e.rankKey].map { "#\($0)" } ?? "off").font(.subheadline.weight(on ? .semibold : .regular)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
+                            .accessibilityLabel(m.bumpRanks.last?[e.rankKey].map { "number \($0) this week" } ?? "off the chart this week")
                     }
-                    .frame(minHeight: 32)
-                    .opacity(on ? 1 : 0.6)
+                    .frame(minHeight: 36)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(Press())
@@ -543,7 +518,16 @@ struct WeekRow: View {
                 VStack(alignment: .leading, spacing: S.pair / 2) {
                     Text(w.label).font(.body.weight(.semibold)).foregroundStyle(.white)
                     Text(top.map { $0.artist.isEmpty ? " " : $0.artist } ?? " ").font(.subheadline).foregroundStyle(S.soft).lineLimit(1)
+                    // The week's plays against twice his usual week: a long bar was a big week (review 2026-11-14, item 16).
+                    if let usual = Store.shared.insights.pace?.usualBand.last?.mid, usual > 0 {
+                        GeometryReader { g in
+                            Capsule().fill(S.accent.opacity(top == nil ? 0 : 0.9)).frame(width: max(4, g.size.width * min(1, CGFloat(top?.plays ?? 0) / CGFloat(usual * 2))), height: 4)
+                        }
+                        .frame(height: 4).padding(.top, S.pair)
+                        .accessibilityHidden(true)
+                    }
                 }
+                .layoutPriority(1)
                 Spacer(minLength: 8)
                 Text(top.map { number($0.plays) } ?? "").font(.body.weight(.medium)).monospacedDigit().foregroundStyle(.white)
             }

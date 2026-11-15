@@ -104,6 +104,90 @@ struct StoryFigures: View {
     }
 }
 
+// One head for all three pages: the name, then the cover with its byline and his figures. Upright open the cover is
+// beside them; folded it is above them; open flat the left pane holds all of it, the cover at the pane's width.
+struct PageHead<Byline: View>: View {
+    let title: String
+    let ref: ArtRef
+    let wide: Bool
+    let story: Story?
+    let noun: String
+    var extra: [(String, String)] = []
+    @ViewBuilder let byline: () -> Byline
+    @Environment(\.paneLayout) private var pane
+    var body: some View {
+        VStack(alignment: .leading, spacing: S.head) {
+            HubTitle(text: title, size: 72)
+            Group {
+                if wide && !pane {
+                    HStack(alignment: .top, spacing: S.figures) {
+                        BigCover(ref: ref, zoom: nil).frame(width: 280)
+                        VStack(alignment: .leading, spacing: S.inner) { byline(); figures }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: S.inner) {
+                        BigCover(ref: ref, zoom: nil).frame(maxWidth: pane ? 360 : 300)
+                        byline()
+                        figures
+                    }
+                }
+            }
+            .padding(.horizontal, S.margin)
+        }
+    }
+    private var figures: some View { StoryFigures(story: story, noun: noun, extra: extra) }
+}
+
+// The tide section: the spikes when there are years of plays, a dot for each month when there are few.
+struct YourTide: View {
+    let story: Story
+    let tint: Color
+    var body: some View {
+        let few = story.plays < 50 || story.months.values.filter { $0 > 0 }.count < 6
+        VStack(alignment: .leading, spacing: S.head) {
+            SectionHead(text: "your tide")
+            if few { SparseTide(months: story.months, tint: tint).card() } else { Tide(months: story.months, tint: tint).card() }
+        }
+        .padding(.horizontal, S.margin)
+    }
+}
+
+// Few plays: one dot for each month played on the same time axis, its size the month's plays.
+struct SparseTide: View {
+    let months: [Int: Int]
+    let tint: Color
+    var height: CGFloat = 64
+    var body: some View {
+        if let first = months.keys.min() {
+            let last = max(LocalDay.month(LocalDay.today), months.keys.max() ?? first)
+            let span = max(last - first + 1, 2)
+            let peak = max(months.values.max() ?? 1, 1)
+            let busiest = months.max { $0.value < $1.value }?.key ?? first
+            VStack(alignment: .leading, spacing: S.pair * 2) {
+                Canvas { ctx, size in
+                    let mid = size.height / 2
+                    ctx.fill(Path(roundedRect: CGRect(x: 0, y: mid - 0.5, width: size.width, height: 1), cornerRadius: 0.5), with: .color(.white.opacity(0.14)))
+                    for m in months.keys.sorted() where (months[m] ?? 0) > 0 {
+                        let x = 11 + CGFloat(m - first) / CGFloat(span - 1) * (size.width - 22)
+                        let d = 6 + 16 * CGFloat(sqrt(Double(months[m] ?? 0) / Double(peak)))
+                        ctx.fill(Path(ellipseIn: CGRect(x: x - d / 2, y: mid - d / 2, width: d, height: d)), with: .color(tint))
+                    }
+                }
+                .frame(height: height)
+                YearAxis(from: first, months: span)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Your plays by month since \(monthName(first)). Busiest: \(monthName(busiest)), \(months[busiest] ?? 0) plays.")
+        }
+    }
+}
+
+// The tags as one quiet line: they open nothing, so they don't look like they do.
+struct TagLine: View {
+    let tags: [String]
+    var body: some View { Text(tags.joined(separator: " · ")).font(.subheadline).foregroundStyle(S.soft).fixedSize(horizontal: false, vertical: true) }
+}
+
 // MARK: - Artist
 
 struct ArtistPage: View {
@@ -119,19 +203,12 @@ struct ArtistPage: View {
     var body: some View {
         let ref = cover ?? ArtRef(artist: name, album: "", url: nil)
         PageLayout(ref: cover) { wide in
-            VStack(alignment: .leading, spacing: S.head) {
-                HubTitle(text: name, size: 72)
-                Group {
-                    if wide {
-                        HStack(alignment: .top, spacing: S.figures) { BigCover(ref: ref, zoom: nil).frame(width: 260); figures }
-                    } else {
-                        VStack(alignment: .leading, spacing: S.inner) { BigCover(ref: ref, zoom: nil).frame(maxWidth: 300); figures }
-                    }
-                }
-                .padding(.horizontal, S.margin)
-            }
+            PageHead(title: name, ref: ref, wide: wide, story: story, noun: "artists", extra: [
+                info?.listeners.map { (compact($0), "listeners") },
+                info?.plays.map { (compact($0), "plays on Last.fm") },
+            ].compactMap { $0 }) { EmptyView() }
         } rest: {
-            if let st = story, st.plays > 0 { tide(st, ref) }
+            if let st = story, st.plays > 0 { YourTide(story: st, tint: ArtStore.shared.palette(ref)?.vivid.color ?? S.accent) }
             topTracks
             if let st = story { Panorama(title: "your albums", items: st.albums) }
             about
@@ -140,30 +217,14 @@ struct ArtistPage: View {
         }
         .task(id: name) { await load() }
     }
-    private var figures: some View {
-        StoryFigures(story: story, noun: "artists", extra: [
-            info?.listeners.map { (compact($0), "listeners") },
-            info?.plays.map { (compact($0), "plays on Last.fm") },
-        ].compactMap { $0 })
-    }
-    private func tide(_ st: Story, _ ref: ArtRef) -> some View {
-        VStack(alignment: .leading, spacing: S.head) {
-            SectionHead(text: "your tide")
-            Tide(months: st.months, tint: ArtStore.shared.palette(ref)?.vivid.color ?? S.accent).card()
-        }
-        .padding(.horizontal, S.margin)
-    }
     @ViewBuilder private var topTracks: some View {
         let mine = story?.top ?? []
         if !mine.isEmpty || !theirs.isEmpty {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "top tracks")
-                Picker("Top tracks", selection: $which) {
-                    Text("Yours").tag(0)
-                    Text("On Last.fm").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .padding(.bottom, S.pair)
+                Segments(items: [0, 1], selection: $which, fill: true) { $0 == 0 ? "Yours" : "On Last.fm" }
+                    
+                    .padding(.bottom, S.pair)
                 if which == 0 {
                     ForEach(mine) { e in EntryRow(e: e, context: "mine") }
                 } else {
@@ -182,7 +243,7 @@ struct ArtistPage: View {
             VStack(alignment: .leading, spacing: S.head) {
                 SectionHead(text: "about")
                 if let bio = info.bio { MoreText(text: bio) }
-                if !info.tags.isEmpty { FlowTags(tags: info.tags) }
+                if !info.tags.isEmpty { TagLine(tags: info.tags) }
             }
             .padding(.horizontal, S.margin)
         }
@@ -227,31 +288,18 @@ struct AlbumPage: View {
     var body: some View {
         let ref = ArtRef(artist: artist, album: album, url: image)
         PageLayout(ref: ref) { wide in
-            VStack(alignment: .leading, spacing: S.head) {
-                HubTitle(text: album, size: 72)
-                Group {
-                    if wide {
-                        HStack(alignment: .top, spacing: S.figures) { BigCover(ref: ref, zoom: nil).frame(width: 300); VStack(alignment: .leading, spacing: S.inner) { by; figures } }
-                    } else {
-                        VStack(alignment: .leading, spacing: S.inner) { BigCover(ref: ref, zoom: nil).frame(maxWidth: 440); by; figures }
-                    }
-                }
-                .padding(.horizontal, S.margin)
-            }
+            PageHead(title: album, ref: ref, wide: wide, story: story, noun: "albums", extra: [
+                info?.listeners.map { (compact($0), "listeners") },
+                info?.plays.map { (compact($0), "plays on Last.fm") },
+            ].compactMap { $0 }) { by }
         } rest: {
-            if let st = story, st.plays > 0 {
-                VStack(alignment: .leading, spacing: S.head) {
-                    SectionHead(text: "your tide")
-                    Tide(months: st.months, tint: ArtStore.shared.palette(ref)?.vivid.color ?? S.accent).card()
-                }
-                .padding(.horizontal, S.margin)
-            }
+            if let st = story, st.plays > 0 { YourTide(story: st, tint: ArtStore.shared.palette(ref)?.vivid.color ?? S.accent) }
             tracks(ref)
             if let info, info.wiki != nil || !info.tags.isEmpty {
                 VStack(alignment: .leading, spacing: S.head) {
                     SectionHead(text: "about")
                     if let w = info.wiki { MoreText(text: w) }
-                    if !info.tags.isEmpty { FlowTags(tags: info.tags) }
+                    if !info.tags.isEmpty { TagLine(tags: info.tags) }
                 }
                 .padding(.horizontal, S.margin)
             }
@@ -267,12 +315,6 @@ struct AlbumPage: View {
             }
         }
         .accessibilityHint("Opens the artist")
-    }
-    private var figures: some View {
-        StoryFigures(story: story, noun: "albums", extra: [
-            info?.listeners.map { (compact($0), "listeners") },
-            info?.plays.map { (compact($0), "plays on Last.fm") },
-        ].compactMap { $0 })
     }
     // The album's tracks in order, each with his plays as a bar; tracks only he has (a deluxe, a single) after them.
     @ViewBuilder private func tracks(_ ref: ArtRef) -> some View {
@@ -335,33 +377,17 @@ struct TrackPage: View {
     @State private var apple: URL?
     var body: some View {
         PageLayout(ref: s.art) { wide in
-            Group {
-                if wide {
-                    HStack(alignment: .bottom, spacing: S.figures) { BigCover(ref: s.art, zoom: nil).frame(width: 300); titles }
-                } else {
-                    VStack(alignment: .leading, spacing: S.inner) { BigCover(ref: s.art, zoom: nil).frame(maxWidth: 440); titles }
-                }
-            }
-            .padding(.horizontal, S.margin)
-            .padding(.top, S.inner)
-        } rest: {
-            StoryFigures(story: story, noun: "tracks", extra: [
+            PageHead(title: s.title, ref: s.art, wide: wide, story: story, noun: "tracks", extra: [
                 info?.listeners.map { (compact($0), "listeners") },
                 info?.duration.map { (String(format: "%d:%02d", $0 / 60, $0 % 60), "length") },
-            ].compactMap { $0 })
-            .padding(.horizontal, S.margin)
-            if let st = story, st.plays > 1 {
-                VStack(alignment: .leading, spacing: S.head) {
-                    SectionHead(text: "your tide")
-                    Tide(months: st.months, tint: ArtStore.shared.palette(s.art)?.vivid.color ?? S.accent).card()
-                }
-                .padding(.horizontal, S.margin)
-            }
+            ].compactMap { $0 }) { titles }
+        } rest: {
+            if let st = story, st.plays > 0 { YourTide(story: st, tint: ArtStore.shared.palette(s.art)?.vivid.color ?? S.accent) }
             if let info, info.summary != nil || !info.tags.isEmpty {
                 VStack(alignment: .leading, spacing: S.head) {
                     SectionHead(text: "about")
                     if let w = info.summary { MoreText(text: w) }
-                    if !info.tags.isEmpty { FlowTags(tags: info.tags) }
+                    if !info.tags.isEmpty { TagLine(tags: info.tags) }
                 }
                 .padding(.horizontal, S.margin)
             }
@@ -379,14 +405,13 @@ struct TrackPage: View {
     private var titles: some View {
         VStack(alignment: .leading, spacing: S.pair) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(s.title).font(.system(.largeTitle, weight: .bold)).foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
-                if info?.loved ?? s.loved { Image(systemName: "heart.fill").font(.title2).foregroundStyle(S.accent).accessibilityLabel("Loved") }
-            }
-            Opens(route: .artist(s.artist)) {
-                HStack(spacing: 6) {
-                    Text(s.artist).font(.title3.weight(.semibold)).foregroundStyle(.white.opacity(0.9))
-                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(S.soft)
+                Opens(route: .artist(s.artist)) {
+                    HStack(spacing: 6) {
+                        Text(s.artist).font(.title2.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                        Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(S.soft)
+                    }
                 }
+                if info?.loved ?? s.loved { Image(systemName: "heart.fill").font(.title3).foregroundStyle(S.accent).accessibilityLabel("Loved") }
             }
             .accessibilityHint("Opens the artist")
             if !s.album.isEmpty {
@@ -428,44 +453,6 @@ struct TrackPage: View {
         apple = await AppleMusic.shared.link(.song, artist: s.artist, title: s.title)
     }
 }
-
-struct FlowTags: View {
-    let tags: [String]
-    var body: some View {
-        FlowLayout(spacing: S.gap / 1.5) {
-            ForEach(tags, id: \.self) { t in
-                Text(t).font(.subheadline.weight(.medium)).foregroundStyle(.white)
-                    .padding(.horizontal, 12).padding(.vertical, 7)
-                    .glassEffect(.regular, in: Capsule())
-            }
-        }
-    }
-}
-
-// Lays its children out in rows, wrapping when a row is full.
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let w = proposal.width ?? 400
-        var x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0
-        for v in subviews {
-            let s = v.sizeThatFits(.unspecified)
-            if x + s.width > w && x > 0 { x = 0; y += row + spacing; row = 0 }
-            x += s.width + spacing; row = max(row, s.height)
-        }
-        return CGSize(width: w, height: y + row)
-    }
-    func placeSubviews(in b: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = b.minX, y = b.minY, row: CGFloat = 0
-        for v in subviews {
-            let s = v.sizeThatFits(.unspecified)
-            if x + s.width > b.maxX && x > b.minX { x = b.minX; y += row + spacing; row = 0 }
-            v.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(s))
-            x += s.width + spacing; row = max(row, s.height)
-        }
-    }
-}
-
 
 // Words that grow in place: three lines, and "More" only when there's more than three lines of them.
 struct MoreText: View {

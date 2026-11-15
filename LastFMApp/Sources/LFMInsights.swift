@@ -83,16 +83,20 @@ struct RiverCard: View {
                 var placed: [CGRect] = []
                 for l in layers {
                     let thick = (0..<n).map { CGFloat(l.values[$0]) * k }
-                    let label = ctx.resolve(Text(l.artist).font(.caption2.weight(.bold)).foregroundStyle(.black.opacity(0.78)))
+                    // White on a dark edge, readable on any band's colour, and only where the band is tall enough for
+                    // it (dark words on bright bands ran together; review 2026-11-14, item 12).
+                    let label = ctx.resolve(Text(l.artist).font(.caption.weight(.semibold)).foregroundStyle(.white))
+                    let edge = ctx.resolve(Text(l.artist).font(.caption.weight(.semibold)).foregroundStyle(.black.opacity(0.55)))
                     let sz = label.measure(in: CGSize(width: 300, height: 40))
                     let order = thick.indices.sorted { thick[$0] > thick[$1] }.prefix(12)
                     let halfW: CGFloat = sz.width / 2, halfH: CGFloat = sz.height / 2
-                    for i in order where thick[i] >= sz.height + 4 {
+                    for i in order where thick[i] >= max(sz.height + 4, 18) {
                         let lo: CGFloat = halfW + 4, hi: CGFloat = size.width - halfW - 4
                         let cx: CGFloat = min(max(x(i), lo), hi)
                         let cy: CGFloat = mid + lowerAgain[i] + thick[i] / 2
-                        let r = CGRect(x: cx - halfW - 4, y: cy - halfH, width: sz.width + 8, height: sz.height)
+                        let r = CGRect(x: cx - halfW - 8, y: cy - halfH - 2, width: sz.width + 16, height: sz.height + 4)
                         guard !placed.contains(where: { $0.intersects(r) }) else { continue }
+                        ctx.draw(edge, at: CGPoint(x: cx + 0.5, y: r.midY + 1))
                         ctx.draw(label, at: CGPoint(x: cx, y: r.midY))
                         placed.append(r)
                         break
