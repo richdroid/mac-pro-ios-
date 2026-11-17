@@ -1,0 +1,99 @@
+name: Mac Pro QoL shots
+# Temporary, branch-only: the Dashboard tab and the Console controls of the Mac Pro app, shot folded, open upright
+# and open flat, for the qol-macpro branch's gate. Published to the qol-macpro release. Removed before merge.
+on:
+  push:
+    branches: [qol-macpro]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: qol-macpro
+  cancel-in-progress: true
+jobs:
+  shots:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Draw the Mac Pro launch glow
+        run: swift ci/launch-glow.swift Assets.xcassets/LaunchHero.imageset
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for the simulator
+        run: |
+          set -o pipefail
+          mkdir -p dist
+          xcodebuild -project MacPro.xcodeproj -scheme MacPro -configuration Debug -sdk iphonesimulator \
+            -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO build 2>&1 | tee dist/build.log | tail -1
+      - name: Shots and films
+        continue-on-error: true
+        timeout-minutes: 40
+        run: |
+          set +e
+          exec > >(tee dist/sim.log) 2>&1
+          DEVICE=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | test("^iPhone"))] | (map(select(.name | test("Duo"))) + .)[0].udid')
+          xcrun simctl list devices available | grep -m1 "$DEVICE"
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" build-sim/Build/Products/Debug-iphonesimulator/MacPro.app
+          node ci/mock-chumby.js &
+          sleep 2
+          git clone -q https://github.com/ChrisThoma/devicehubctl.git /tmp/dh && (cd /tmp/dh && git checkout -q 3e58be2932794e47ee533ef2b992753bfc1c7337 && swift build -c release 2>&1 | tail -1)
+          D=/tmp/dh/.build/release/devicehubctl
+          open -a DeviceHub; sleep 10
+          shot() {
+            local name=$1 display=$2 wait=$3; shift 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          # A film with scripted touches: name, display, length, "touches" (devicehubctl lines, ; between), app args.
+          film() {
+            local name=$1 display=$2 length=$3 touches=$4; shift 4
+            xcrun simctl io "$DEVICE" recordVideo --codec=h264 --display=$display --force dist/macpro-$name.mp4 > /dev/null 2>&1 & REC=$!
+            sleep 3
+            xcrun simctl launch "$DEVICE" local.macpro.MacPro -address http://127.0.0.1:9001 "$@"
+            sleep 7
+            ( IFS=';'; for t in $touches; do eval "$D \"$DEVICE\" $t" || echo "touch failed: $t"; sleep 2.5; done )
+            sleep $length
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/macpro-$name-end.png
+            kill -INT $REC; wait $REC
+            xcrun simctl terminate "$DEVICE" local.macpro.MacPro || true
+          }
+          dash() {
+            local d=$1 x=$2
+            shot dash$x $d 8 -tab 6
+            shot dash-off$x $d 8 -tab 6 -pose consoleoff
+            shot dash-console$x $d 8 -tab 6 -pose console
+            shot dash-board$x $d 8 -tab 6 -pose consoleboard
+            for P in $(cat ci/qol-poses.txt 2>/dev/null); do shot dash-$P$x $d 8 -tab 6 -pose $P; done
+            film dash-scroll$x $d 4 "drag 0.5 0.8 0.5 0.2;drag 0.5 0.8 0.5 0.2;drag 0.5 0.25 0.5 0.85" -tab 6
+            [ -f ci/qol-touches-$d.txt ] && while IFS='|' read -r n t a; do film "$n$x" $d 4 "$t" $a; done < ci/qol-touches-$d.txt
+          }
+          # Folded first (the outer display), then open upright, then open flat.
+          dash 1 ""
+          $D "$DEVICE" pose open; sleep 5
+          $D "$DEVICE" rotate 1; sleep 5
+          dash 3 -portrait
+          $D "$DEVICE" rotate 3; sleep 5
+          dash 3 -open
+          ls dist
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && zip -qr ../shots.zip . -i '*.png' || zip -q ../shots.zip /dev/null)
+          (cd dist && zip -qr0 ../films.zip . -i '*.mp4' || zip -q ../films.zip /dev/null)
+          (cd dist && zip -qr ../logs.zip . -i '*.log' || zip -q ../logs.zip /dev/null)
+          echo "$GITHUB_SHA ${{ job.status }}" > status.txt
+          gh release view qol-macpro >/dev/null 2>&1 || gh release create qol-macpro --prerelease --title "Mac Pro QoL shots" --notes "Temporary shots for the qol-macpro branch."
+          for f in shots.zip films.zip logs.zip status.txt; do
+            for i in 1 2 3; do gh release upload qol-macpro "$f" --clobber && break; sleep 15; done
+          done
