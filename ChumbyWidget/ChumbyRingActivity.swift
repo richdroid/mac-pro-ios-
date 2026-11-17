@@ -16,7 +16,8 @@ enum RingCardLook {
     static func headline(_ s: ChumbyRingAttributes.ContentState, stale: Bool) -> String {
         if stale { return "Rang at \(time(s.rang))" }
         if let w = s.working { return w }
-        if s.snoozed { return "Snoozed" }
+        // The countdown beside it is a length, never a clock time: "Snoozed" over a bare "7:02" read as 7:02 (gate, 11-17).
+        if s.snoozed { return s.until.map { Date(timeIntervalSince1970: $0) > Date() } == true ? "Snoozed, rings in" : "Snoozed" }
         return "Ringing"
     }
     // Under the name, whole or not at all (never cut short): the time it's for and what it plays, then the sound alone.
