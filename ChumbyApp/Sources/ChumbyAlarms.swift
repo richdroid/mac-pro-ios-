@@ -350,6 +350,10 @@ struct RingingCard: View {
                     .font(.custom("Trebuchet MS", size: 24).weight(.bold))
                     Text(name(s.ring)).font(.custom("Trebuchet MS", size: 16)).foregroundStyle(.secondary).lineLimit(1)
                 }
+                // The way back to the full-screen ringing page once it was closed.
+                .frame(maxWidth: .infinity).contentShape(Rectangle())
+                .onTapGesture { model.ringScreen = true }
+                .accessibilityAddTraits(.isButton).accessibilityHint("Opens the ringing alarm full screen")
                 // Snooze narrows to nothing while Stop widens into the room it leaves. Its glass is its own capsule, sized by
                 // the frame, so the glass narrows with it rather than vanishing; the word fades out before the frame reaches
                 // it. Never narrower than "Snooze" until it goes.
@@ -370,8 +374,14 @@ struct RingingCard: View {
                     .frame(minWidth: snoozed ? 0 : snoozeMin, maxWidth: snoozed ? 0 : .infinity)
                     .padding(.trailing, snoozed ? 0 : 14)
                     .allowsHitTesting(!snoozed).accessibilityHidden(snoozed)
-                    Button { model.ringOff() } label: { Label("Stop", systemImage: "stop.fill").frame(maxWidth: .infinity, minHeight: 56) }
-                        .buttonStyle(.glassProminent).tint(ChumbyPalette.orange)
+                    // The same capsule as Snooze's, in the app's orange: the system's prominent style padded it taller.
+                    Button { model.ringOff() } label: {
+                        Label("Stop", systemImage: "stop.fill").lineLimit(1).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                            .contentShape(Capsule())
+                            .glassEffect(.regular.tint(ChumbyPalette.orange).interactive(), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
                 .font(.custom("Trebuchet MS", size: 20).weight(.bold))
                 if let f = model.failed("ring") { FailNote(text: f) }
@@ -1038,6 +1048,7 @@ struct AlarmsTab: View {
         // Pulled down, the calendar is read again too, so "Pull down to try again" under Calendar is true.
         .refreshable { await model.loadState(); if wake.rules.enabled, wake.note != nil { await wake.sync() } }
         .onChange(of: model.addAlarm) { _, _ in edit(nil) }
+        .onChange(of: model.openAlarm) { _, k in openAsked(k) }
         // The hinge or a turn mid-page keeps the page (Richard, 2026-11-08: "reactivity to diff modes and folding scenarios
         // across everything"): opened flat, what was pushed over the one list (Calendar settings, a day) moves to the
         // right pane, and an editor opened there goes back to a sheet when the phone is folded or turned upright; a
@@ -1060,6 +1071,7 @@ struct AlarmsTab: View {
         }
         .onAppear {
             wake.refreshPlan()
+            openAsked(model.openAlarm)
             guard !posed else { return }
             posed = true
             switch ChumbyModel.pose {
@@ -1163,6 +1175,9 @@ struct AlarmsTab: View {
                 SectionHead(icon: fromCalendar ? "calendar" : "alarm.fill",
                             text: (skippedNow && moved == nil ? "Then" : "Next alarm") + " · " + { let k = kindWord(shownAlarm); return k.prefix(1).uppercased() + k.dropFirst() }(),
                             color: fromCalendar ? ChumbyPalette.cal(scheme == .dark) : ChumbyPalette.acc(scheme == .dark))
+                // The time opens the alarm it belongs to, as its row below does (Richard, 2026-11-14: "when editing alarms be
+                // able to tap to edit"): the largest thing on the page was the one alarm that couldn't be tapped.
+                // One target for the whole card (below), never a button that could draw itself dimmed.
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     let c = clockParts(n.at)
                     Text(c.0).font(.custom("Trebuchet MS", size: 52).weight(.bold)).monospacedDigit().contentTransition(.numericText())
@@ -1221,6 +1236,11 @@ struct AlarmsTab: View {
                 // No "just this once" door here: Home's card and the alarm's own editor have it (Richard, 2026-11-10).
             }
             .padding(.vertical, 2)
+            // The whole card opens the alarm; Skip, Undo and "Back to" on it keep their own taps.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { openNext(shownAlarm) }
+            .accessibilityAction(named: "Open this alarm") { openNext(shownAlarm) }
             // A nap starting or called off rolls the time over rather than swapping it.
             .animation(.snappy, value: n.at)
         } else {
@@ -1249,6 +1269,24 @@ struct AlarmsTab: View {
         }
     }
 
+    // What the hero's alarm opens: his own in its editor, the nap in the nap's, the calendar's in that day's page (where a
+    // calendar alarm is changed). The Chumby's own helpers (the catch-up) have nothing to open.
+    func planned(_ a: Alarm) -> PlannedWake? {
+        wake.plan.first { CalendarWake.alarmName($0) == a.name && CalendarWake.minutes($0.wake) == a.time } ?? wake.plan.first { CalendarWake.alarmName($0) == a.name }
+    }
+    // Asked from another page (model.openAlarm): opened once the tab has come in, so the editor isn't lost to the switch.
+    func openAsked(_ k: String?) {
+        guard let k else { return }
+        model.openAlarm = nil
+        guard let a = model.state.alarms.first(where: { $0.key == k }) ?? (k == "Nap" ? model.napAlarm : nil) else { return }
+        Task { try? await Task.sleep(nanoseconds: 350_000_000); openNext(a) }
+    }
+    func openNext(_ a: Alarm) {
+        if a.name == "Nap" { editNap(model.napAlarm ?? a) }
+        // A calendar alarm the plan doesn't hold (not loaded yet, or an old one): the calendar's own page.
+        else if a.isCalendar { if let w = planned(a) { openDay(w.key) } else { openSettings() } }
+        else if a.name != "Catch-up" && !a.isPlaceholder { edit(a) }
+    }
     // What kind of alarm it is, in a few words, for the hero's heading.
     func kindWord(_ a: Alarm) -> String {
         if a.isCalendar { return "from your calendar" }
@@ -1685,6 +1723,16 @@ struct AlarmEditor: View {
     @State private var problem: String?
     @State private var loaded = false
     @State private var justOnce = false
+    @FocusState private var labelFocused: Bool
+    // The Chumby takes no change to its alarms while one rings or snoozes (a save restarts its alarm panel): said before
+    // Save is pressed, not only after.
+    var ringingNow: Bool { model.sys.ringing != nil && !model.unreachable && !calendarTemplate }
+    // "Work is ringing. Save once it’s stopped."
+    var ringingNote: String {
+        guard let r = model.sys.ringing else { return "" }
+        let n = r.name.hasPrefix(Alarm.calendarPrefix) ? String(r.name.dropFirst(Alarm.calendarPrefix.count)) : r.name
+        return "\(n.isEmpty ? "An alarm" : n) is \(r.snoozed ? "snoozed" : "ringing"). Save once it’s stopped."
+    }
 
     var stations: [NamedID] { model.pandoraStations }
     var afterOptions: [(String, String)] {
@@ -1742,7 +1790,7 @@ struct AlarmEditor: View {
             // fold. The title row stays pinned once the page is scrolled, so Save is always in reach.
             let buttons = HStack(spacing: 16) {
                 Button("Cancel") { stopTest(); close() }.disabled(saving)
-                if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold) }
+                if saving { ProgressView() } else { Button("Save") { save() }.fontWeight(.semibold).disabled(ringingNow) }
             }
             .foregroundStyle(.tint)
             List {
@@ -1770,7 +1818,7 @@ struct AlarmEditor: View {
                         Button { stopTest(); dismiss() } label: { Label("Cancel", systemImage: "xmark") }.disabled(saving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold) }
+                        if saving { ProgressView() } else { Button { save() } label: { Label("Save", systemImage: "checkmark") }.fontWeight(.semibold).disabled(ringingNow) }
                     }
                 }
                 .interactiveDismissDisabled(saving)
@@ -1795,10 +1843,19 @@ struct AlarmEditor: View {
     var sections: some View {
             Group {
                 // Above everything, beside Save: why it couldn't save, or what saving will do that isn't obvious.
-                if saving || problem != nil || !switchesOff.isEmpty || (original.map { !$0.isOn } ?? false) && !calendarTemplate {
+                if saving || problem != nil || ringingNow || !switchesOff.isEmpty || (original.map { !$0.isOn } ?? false) && !calendarTemplate {
                     Section {
                         if saving { HStack(spacing: 10) { ProgressView(); Text("Reaching the Chumby…").foregroundStyle(.secondary) } }
                         if let problem { FailNote(text: problem) }
+                        if ringingNow && !saving && problem == nil {
+                            // Not a dead end: the ringing page (Snooze, Stop) comes up over this one and leaves what
+                            // was typed here as it was.
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                RowNote(icon: "alarm.waves.left.and.right.fill", text: ringingNote)
+                                Spacer(minLength: 4)
+                                Button("Stop it") { model.ringScreen = true }.buttonStyle(.borderless).font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
+                            }
+                        }
                         let off = switchesOff
                         if !off.isEmpty { RowNote(icon: "alarm", text: "Saving turns off \(Self.list(off)).") }
                         if !calendarTemplate && !nap, let o = original, !o.isOn { RowNote(icon: "alarm.fill", text: "Saving turns this alarm on.", color: .secondary) }
@@ -1841,10 +1898,14 @@ struct AlarmEditor: View {
                         DatePicker("Date", selection: $date, displayedComponents: .date)
                         Text("Rings \(onceAt.formatted(.dateTime.weekday(.wide).month(.abbreviated).day().hour().minute()))").font(.subheadline).foregroundStyle(.secondary)
                     }
+                    // The whole row is the field: tapped on its name, it still starts typing.
                     HStack {
                         Text("Label")
                         TextField("Optional", text: $alarm.name).multilineTextAlignment(.trailing).foregroundStyle(.secondary)
+                            .focused($labelFocused).submitLabel(.done)
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture { labelFocused = true }
                 }
                 }
                 Section { SoundRows(choice: $sound, alarm: $alarm) } header: { SectionHead(icon: "music.note", text: "Sound") }
@@ -1876,7 +1937,7 @@ struct AlarmEditor: View {
                         Section {
                             Button { justOnce = true } label: {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Later or another sound, just this once").foregroundStyle(.tint)
+                                    Text("Set this ring’s time or sound").foregroundStyle(.tint)
                                     Text("\(dayWord(due)) at \(due.formatted(date: .omitted, time: .shortened)) only. It repeats as usual after.").font(.subheadline).foregroundStyle(.secondary)
                                 }
                             }

@@ -18,7 +18,7 @@ struct ChumbyApp: App {
                 .font(.custom("Trebuchet MS", size: 16))
                 .toggleStyle(SwitchToggleStyle(tint: ChumbyPalette.on))
                 .onChange(of: phase) { _, p in
-                    if p == .active { model.start(); CalendarWake.shared.syncIfDue(); ChumbyNotify.shared.share(); if model.tab == 2 { ChumbyNotify.shared.clearDelivered() }; Task { await model.loadSongs(force: true); await model.loadMacPlaying() } } else { model.stop() }
+                    if p == .active { model.start(); RingPresenter.sync(model); if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }; CalendarWake.shared.syncIfDue(); ChumbyNotify.shared.share(); if model.tab == 2 { ChumbyNotify.shared.clearDelivered() }; Task { await model.loadSongs(force: true); await model.loadMacPlaying() } } else { model.stop() }
                     #if os(iOS)
                     if p == .background { CalendarWake.shared.scheduleRefresh() }
                     #endif
@@ -34,12 +34,15 @@ struct ChumbyApp: App {
                     Task { await model.loadSongs(); SongArt.shared.prefetch(model.songs, model.state.alarms, model.rings) }
                     TabTour.run([0, 1, 2, 3, 4]) { model.tab = $0 }
                 }
-                .onOpenURL { if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t } }
-                // A tapped notification: Alarms, and the calendar alarm that wasn't set is tried again at once.
-                .onReceive(NotificationCenter.default.publisher(for: ChumbyNotify.opened)) { n in
-                    model.tab = 2
-                    ChumbyNotify.shared.clearDelivered()
-                    if let id = n.object as? String, id == ChumbyNotify.unsetID || id == ChumbyNotify.noAlarmID { Task { await CalendarWake.shared.sync() } }
+                .onOpenURL {
+                    if $0.host == "tab", let t = Int($0.lastPathComponent) { model.tab = t }
+                    // The ringing alarm's Lock Screen card, tapped.
+                    if $0.host == "ring" { model.openRing(hint: nil) }
+                }
+                // The ringing alarm's notification, tapped: its page, over whatever was showing, with what the notification
+                // said until the Chumby's own reading is in. (A tap that launched the app is kept until this is listening.)
+                .onReceive(NotificationCenter.default.publisher(for: ChumbyNotify.openedRing)) { _ in
+                    if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }
                 }
                 // While music plays on the Chumby, "Woke up to" and its widget follow it song by song, on any tab.
                 .task(id: model.state.musicPlaying) {
@@ -595,15 +598,7 @@ struct RootView: View {
                 ChumbyPalette.sea(scheme == .dark)[0].ignoresSafeArea()
                 // The Duo's side column (clock, Wi-Fi and the tab bar) is the trailing safe area.
                 Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { model.railWidth = $0 }
-                TabView(selection: TabReset.binding($model.tab) { t in
-                    // With a page pushed (Alarms' Calendar settings or a day), the tap pops it, sliding as the system does;
-                    // starting the tab over as well cut that to a jump (ruling 11-10: "navigation always animates"). The
-                    // next tap, at the root, goes back to the top.
-                    if t == 2 && model.alarmsPage { model.alarmsPage = false; return }
-                    resets[t, default: 0] += 1
-                    // Home again: the octopus answers, as it does to a tap.
-                    if t == 0 { model.homePoke = Date() }
-                }) {
+                TabView(selection: TabReset.binding($model.tab) { retap($0) }) {
                     Tab(value: 0) { NavigationStack { HomeTab().tabPage(0, model) }.id(resets[0, default: 0]) } label: { tabLabel("my chumby", asset: "OctoTab", fit: 34) }
                     Tab(value: 1) { NavigationStack { ChannelsTab().tabPage(1, model) }.id(resets[1, default: 0]) } label: { tabLabel("channels", "tv") }
                     Tab(value: 2) { NavigationStack { AlarmsTab().tabPage(2, model) }.id(resets[2, default: 0]) } label: { tabLabel("alarms", "alarm") }
@@ -615,9 +610,77 @@ struct RootView: View {
             .tint(ChumbyPalette.acc(scheme == .dark))
             .foregroundStyle(ChumbyPalette.ink(scheme == .dark))
         }
+        .onAppear {
+            if ChumbyModel.pose == "ringscreen" || ChumbyModel.pose == "ringfail" { model.ringScreen = true }
+            if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }
+        }
         .fillCover(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
+        // For the build's film of a second tap on the tab (never on the phone): the tab scrolled down, then tapped again.
+        .task {
+            guard ChumbyModel.pose == "retap" else { return }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            TabTop.scrollDown()
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            retap(model.tab)
+        }
+    }
+    // The tab he's on, tapped again (Richard, 2026-11-14: "have a natural go back to top when press tab button like how
+    // other apple apps do it"). With a page pushed (Alarms' Calendar settings or a day) the tap pops it, sliding as the
+    // system does (ruling 11-10: "navigation always animates"). Scrolled down, the page glides back to its top as Apple's
+    // apps do, keeping everything on it; it was rebuilt, which cut to the top with no motion. Only a tab already at its top
+    // and root is started over.
+    func retap(_ t: Int) {
+        if t == 2 && model.alarmsPage { model.alarmsPage = false; return }
+        if TabTop.scroll() { if t == 0 { model.homePoke = Date() }; return }
+        resets[t, default: 0] += 1
+        // Home again: the octopus answers, as it does to a tap.
+        if t == 0 { model.homePoke = Date() }
     }
 }
+
+#if canImport(UIKit)
+// The lists showing on the tab in front, found the way UIKit's own second tap finds them: the tab bar's selected page and
+// every vertical scroll view in it (both panes open flat). Horizontal strips (Woke up to) and text fields are left alone.
+@MainActor enum TabTop {
+    static func tabPage() -> UIView? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let root = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.keyWindow?.rootViewController else { return nil }
+        func find(_ c: UIViewController) -> UITabBarController? {
+            if let t = c as? UITabBarController { return t }
+            for k in c.children { if let t = find(k) { return t } }
+            return nil
+        }
+        return find(root)?.selectedViewController?.view
+    }
+    static func lists(in v: UIView, _ each: (UIScrollView) -> Void) {
+        if let s = v as? UIScrollView, !(s is UITextView), s.isScrollEnabled, !s.isHidden, s.alpha > 0.01,
+           s.contentSize.height + s.adjustedContentInset.top + s.adjustedContentInset.bottom > s.bounds.height + 1 { each(s) }
+        for k in v.subviews { lists(in: k, each) }
+    }
+    // Glides each list that isn't at its top back there; true if any moved.
+    static func scroll() -> Bool {
+        guard let page = tabPage() else { return false }
+        var moved = false
+        lists(in: page) { s in
+            let top = -s.adjustedContentInset.top
+            guard s.contentOffset.y > top + 1 else { return }
+            s.setContentOffset(CGPoint(x: s.contentOffset.x, y: top), animated: true)
+            moved = true
+        }
+        return moved
+    }
+    // The film's setup: each list a good way down.
+    static func scrollDown() {
+        guard let page = tabPage() else { return }
+        lists(in: page) { s in
+            let bottom = s.contentSize.height + s.adjustedContentInset.bottom - s.bounds.height
+            s.setContentOffset(CGPoint(x: s.contentOffset.x, y: max(-s.adjustedContentInset.top, min(bottom, 600))), animated: true)
+        }
+    }
+}
+#else
+@MainActor enum TabTop { static func scroll() -> Bool { false }; static func scrollDown() {} }
+#endif
 // "Can’t reach the Mac · last seen 7:12" (or "Not answering") as a row under a page's title, never floating over the list; a tap says what to do.
 struct ReachRow: View {
     @EnvironmentObject var model: ChumbyModel
@@ -2912,21 +2975,31 @@ struct SkipCard: View {
     // The time and its line stay put; only the heading changes (the old one out before the new one in), and the
     // strike draws across the time, left to right. The time never wraps: in a narrow pane (open, beside Undo) it
     // shrinks a little, and the day line gives way before it (2026-11-07: "6:45 A / M" open in landscape).
-    private func lines(_ at: Date, _ name: String, struck: Bool) -> some View {
+    private func lines(_ at: Date, _ name: String, struck: Bool, editable: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 7) {
                 ZStack(alignment: .leading) {
                     if struck { Text("Skipped").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
-                    else { Text(moved != nil ? "Just this once" : napNext ? "Cancel nap" : "Skip next alarm").transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
+                    else { Text(heading(struck: false)).transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.12)))) }
                 }
                 .font(.custom("Trebuchet MS", size: 15).weight(.bold)).lineLimit(1).minimumScaleFactor(0.8)
                 if pending { ProgressView().controlSize(.mini).tint(.white.opacity(0.85)).transition(.opacity) }
             }
-            Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold))
-                .lineLimit(1).minimumScaleFactor(0.7)
-                .overlay { StrikeLine(progress: struck ? 1 : 0) }
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text(time(at)).font(.custom("Trebuchet MS", size: 30).weight(.bold))
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .overlay { StrikeLine(progress: struck ? 1 : 0) }
+                // The mark that the time can be set, there only while it can (and taking no room when it can't: kept
+                // invisible, it cut a nap's time to "4:06…" folded).
+                if editable {
+                    Image(systemName: "pencil").font(.system(size: 15, weight: .bold)).opacity(0.85)
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
+                }
+            }
             // Moved for one ring, the usual time is on the button ("Back to 6:45 AM"), so it isn't said twice.
-            Text("\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
+            // The nap's heading already says "Nap": its line is the day alone.
+            Text(napNext && !struck ? day(at) : "\(day(at)) · \(label(name))").font(.custom("Trebuchet MS", size: 14)).lineLimit(1).minimumScaleFactor(0.85)
         }
         .foregroundStyle(.white)
     }
@@ -2941,65 +3014,127 @@ struct SkipCard: View {
         .buttonStyle(GelPress())
         .accessibilityLabel("Back to the usual \(usual.map(time) ?? "") alarm")
     }
+    // The one ring's own time (Richard, 2026-11-14: "later or another sound is stupid and redundant -- i should be able to
+    // tap and set the time pressely however maybe have + 5 or +10 shortcuts"). The link that stood under the card is gone:
+    // the time on the card is the door. Tapped, it opens that ring's sheet (a time wheel, +5 and +10, its sound), which
+    // keeps the "just this once" it always made. So the slab itself no longer skips; Skip is its own key at its end, a
+    // white capsule as Undo and "Back to" are.
+    struct Change: Identifiable { let original: Alarm; let due: Date; var later = 0; var adjusting = false; var id: String { original.key + (adjusting ? "+" : "") } }
+    @State private var change: Change?
+    @State private var posed = false
+    @State private var backing = false
+    @ObservedObject private var wake = CalendarWake.shared
+    // What a tap on the time would change, when there is something it can: the next ring, or the ring already moved
+    // just this once (changed again from its usual time). Nil while it's skipped, ringing, about to ring, or a nap.
+    private var changeable: Change? {
+        if let j = movedOne, let o = j.original, let u = j.usual, u.timeIntervalSinceNow >= 180, !model.unreachable {
+            return Change(original: o, due: u, later: Int((j.at.timeIntervalSince(u) / 60).rounded()), adjusting: true)
+        }
+        if case .ok(let a, let due, _) = model.justOnceOffer() { return Change(original: a, due: due) }
+        return nil
+    }
+    // The next alarm's calendar day, when that day rings at a time set for it alone: said on the card, with the way back.
+    private var ownDay: PlannedWake? {
+        guard moved == nil, skipped == nil, let n = model.nextRing(), n.alarm.isCalendar else { return nil }
+        return wake.plan.first { $0.exact && CalendarWake.alarmName($0) == n.alarm.name && abs($0.wake.timeIntervalSince(n.at)) < 60 }
+    }
+    // What a tap on the card's words opens in Alarms when the time itself can't be set here: the nap, a skipped ring.
+    private func opener(_ name: String) -> String? {
+        if napNext { return "Nap" }
+        guard let a = model.state.alarms.first(where: { $0.name == name }), a.name != "Catch-up", !a.isPlaceholder else { return nil }
+        return a.key
+    }
+    private func heading(struck: Bool) -> String {
+        if struck { return "Skipped" }
+        if moved != nil { return "Just this once" }
+        if napNext { return "Nap" }
+        return ownDay != nil ? "Set for this day" : "Next alarm"
+    }
+    // A white capsule on the slab: Skip, Undo, Cancel.
+    private func key(_ title: String, _ icon: String? = nil, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if let icon { Image(systemName: icon).font(.system(size: 14, weight: .heavy)) }
+                Text(title).font(.custom("Trebuchet MS", size: 18).weight(.bold))
+            }
+            .foregroundStyle(ChumbyPalette.hex(0x1f2f5c)).lineLimit(1).fixedSize()
+            .padding(.horizontal, 18).padding(.vertical, 11)
+            .background(.white, in: Capsule())
+        }
+        .buttonStyle(GelPress())
+        .disabled(model.offline).opacity(model.offline ? 0.45 : 1)
+        .accessibilityLabel(label)
+    }
     var body: some View {
         // Kept on a route failure, showing the kept next alarm with nothing to press; gone only when the Chumby is.
         if model.stateKnown && model.state.skipKnown && !model.dead && model.sys.ringing == nil,
            let next = movedOne.flatMap({ j in j.original.map { (j.at, $0.name) } }) ?? skipped.map({ ($0.date, $0.name) }) ?? model.nextRing().map({ ($0.at, $0.alarm.name) }) {
             // Moved for one ring, the card stays awake: it isn't a skip.
             let asleep = (shown ?? (skipped != nil)) && moved == nil
+            let editable = asleep ? nil : changeable
             VStack(alignment: .leading, spacing: 8) {
                 // One slab that only changes colour, night laid over day, so it never thins to the sea between states;
                 // only what's written on it crossfades.
-                // Awake, the whole slab is the button; asleep it does nothing, and only Undo (laid on it, not inside it)
-                // answers.
-                Button { if !asleep && !pending && moved == nil { send(true) } } label: {
                 ZStack {
                     ChumbyGel(colors: Self.day, rim: 0x1f4589)
                     ChumbyGel(colors: Self.night, rim: 0x172447).opacity(asleep ? 1 : 0)
-                    // Moved for one ring, "Back to 6:45 AM" is a row of its own under the words: beside them it
-                    // squeezed the heading, time and day to "Just this on… / 6:55… / Today · Wo…" folded and open
-                    // (build 218).
-                    VStack(alignment: .center, spacing: moved != nil ? 10 : 0) {
+                    // A ring moved for once, or a day with its own time, has its way back as a row of its own under the
+                    // words: beside them it squeezed the heading, time and day to "Just this on… / 6:55… / Today · Wo…"
+                    // folded and open (build 218).
+                    VStack(alignment: .center, spacing: moved != nil || ownDay != nil ? 10 : 0) {
                         HStack(spacing: 14) {
-                            SleepyOctopus(asleep: asleep, tint: .white)
-                            lines(next.0, next.1, struck: asleep)
-                            Spacer(minLength: 8)
-                            Image(systemName: napNext ? "xmark" : "forward.end.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white)
-                                .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
-                                .opacity(asleep || moved != nil ? 0 : model.offline ? 0.4 : 1)
-                                // Room for Undo, which sits over this end of the slab.
-                                .frame(minWidth: moved != nil ? 0 : asleep ? 92 : 0, alignment: .trailing)
+                            // The octopus and the words are one target: the time, tapped, is set.
+                            // Anything else that shows an alarm (the nap, a skipped ring) opens it in Alarms instead.
+                            let opens = editable == nil ? opener(next.1) : nil
+                            Button {
+                                if let c = editable { change = c }
+                                else if let k = opens { model.openAlarm = k; model.tab = 2 }
+                            } label: {
+                                HStack(spacing: 14) {
+                                    SleepyOctopus(asleep: asleep, tint: .white)
+                                    lines(next.0, next.1, struck: asleep, editable: editable != nil)
+                                    Spacer(minLength: 0)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(GelPress(enabled: editable != nil || opens != nil))
+                            .allowsHitTesting(editable != nil || opens != nil)
+                            .accessibilityLabel("\(heading(struck: asleep)), \(time(next.0)), \(day(next.0))\(napNext ? "" : ", \(label(next.1))")")
+                            .accessibilityHint(editable != nil ? "Sets this ring’s time or sound" : opens != nil ? "Opens this alarm" : "")
+                            // The slab's one key: Skip while there's a ring to let pass, Undo once it's skipped.
+                            ZStack(alignment: .trailing) {
+                                if asleep {
+                                    key("Undo", label: "Undo the skip, so the \(time(next.0)) alarm rings") { send(false) }
+                                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                                } else if moved == nil {
+                                    key(napNext ? "Cancel" : "Skip", napNext ? "xmark" : "forward.end.fill",
+                                        label: napNext ? "Cancel the nap" : "Skip the \(time(next.0)) alarm, \(day(next.0))") { if !pending { send(true) } }
+                                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                                }
+                            }
                         }
                         if moved != nil { backCapsule(next.0) }
+                        else if let d = ownDay { backToUsual(d) }
                     }
                     .padding(.horizontal, 18).padding(.vertical, 16)
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-                }
-                .buttonStyle(GelPress(enabled: !asleep && moved == nil && !model.offline))
-                .disabled(asleep || moved != nil || model.offline)
-                .accessibilityLabel(moved != nil ? "Just this once, \(time(next.0)) alarm" : asleep ? "Skipped, \(time(next.0)) alarm" : napNext ? "Cancel the nap" : "Skip the \(time(next.0)) alarm, \(day(next.0))")
-                .overlay(alignment: .trailing) {
-                    if asleep && moved == nil {
-                        Button { send(false) } label: {
-                            Text("Undo").font(.custom("Trebuchet MS", size: 18).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
-                                .padding(.horizontal, 20).padding(.vertical, 11)
-                                .background(.white, in: Capsule())
-                        }
-                        .buttonStyle(GelPress())
-                        .disabled(model.offline).opacity(model.offline ? 0.45 : 1)
-                        .padding(.trailing, 18)
-                        .accessibilityLabel("Undo the skip, so the \(time(next.0)) alarm rings")
-                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                    }
-                }
                 if let f = model.failed("skip") { FailNote(text: f, dismiss: model.dismissal("skip")) }
-                // Later or another sound for that one ring, under the slab it belongs to.
+                // A "just this once" that no longer stands behind its skip, with its fix, under the slab it belongs to.
                 JustOnceMenu().padding(.leading, 18).transition(.opacity)
             }
             .animation(.easeOut(duration: 0.12), value: pending)
             .onChange(of: skipped != nil) { _, now in withAnimation(.easeInOut(duration: 0.35)) { shown = now } }
             .onAppear { shown = skipped != nil }
+            // For the shot: the ring's sheet open from Home, once the Chumby's list is in (on appearing there's nothing
+            // to change yet). "justoncemoved": the same, opened on a ring already moved.
+            .task(id: changeable?.id) {
+                guard ChumbyModel.pose.hasPrefix("justonce"), model.tab == 0, !posed, let c = changeable else { return }
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                guard !Task.isCancelled, !posed else { return }
+                posed = true; change = c
+            }
+            .fillCover(item: $change) { c in JustOnceSheet(original: c.original, due: c.due, later: c.later, adjusting: c.adjusting).environmentObject(model) }
             // For the build's film: skip the next alarm, then undo it.
             .task {
                 guard ChumbyModel.pose == "skipdemo", !Self.demoed else { return }
@@ -3008,6 +3143,33 @@ struct SkipCard: View {
                 try? await Task.sleep(nanoseconds: 4_000_000_000); send(false)
             }
         }
+    }
+    // A calendar day ringing at its own time goes back to the calendar's rule for it: that day's time is let go and the
+    // calendar's update puts the usual one on the Chumby (its label and sound for the day, if any, stay).
+    private func backToUsual(_ d: PlannedWake) -> some View {
+        Button {
+            guard !backing else { return }
+            backing = true
+            Task {
+                var e = wake.rules.dayEdits[d.key] ?? DayEdit()
+                e.wakeAt = nil
+                wake.rules.dayEdits[d.key] = e.isEmpty ? nil : e
+                wake.note = nil
+                _ = await wake.sync()
+                if let why = wake.note { model.fail("skip", why) }
+                backing = false
+            }
+        } label: {
+            HStack(spacing: 8) {
+                if backing { ProgressView().controlSize(.small).tint(ChumbyPalette.hex(0x1f2f5c)) }
+                Text("Back to the calendar’s time").font(.custom("Trebuchet MS", size: 16).weight(.bold)).foregroundStyle(ChumbyPalette.hex(0x1f2f5c))
+            }
+            .lineLimit(1).fixedSize()
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(.white, in: Capsule())
+        }
+        .buttonStyle(GelPress())
+        .disabled(backing || model.offline).opacity(model.offline ? 0.45 : 1)
     }
     @MainActor static var demoed = false
 }

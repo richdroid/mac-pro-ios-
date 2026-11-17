@@ -634,6 +634,12 @@ function chumbyScene(q, s) {
   // Work rings with Beep, so that's what the card says.
   if (scene === 'ringing' && a === 'sys') return json({ ...data.sys, ring: 'r\tWork\tBeep' });
   if (scene === 'snoozed' && a === 'sys') return json({ ...data.sys, ring: 's\tWork\tBeep' });
+  // The panel's own word on the ring, as the real a=state carries it: when it began (rang) and, snoozed, until when.
+  if ((scene === 'ringing' || scene === 'snoozed') && a === 'state') {
+    const t = Math.floor(Date.now() / 1000), began = t - (scene === 'ringing' ? 40 : 160);
+    return json({ ...stateNow(data.state), rang: { t: began, name: 'Work' },
+      ringing: scene === 'ringing' ? { state: 'ringing', name: 'Work', sound: 'Beep' } : { state: 'snoozing', name: 'Work', sound: 'Beep', until: t + 431 } });
+  }
   if (scene === 'skipped' && a === 'state') return json({ ...stateNow(data.state), skipped: nextWork() });
   // Work moved for one ring by "just this once": its one-off ten minutes after the usual time, the Chumby's skip pinned
   // to the usual ring.
