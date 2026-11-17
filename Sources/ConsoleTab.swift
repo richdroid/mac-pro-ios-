@@ -16,6 +16,8 @@ struct ConsoleState: Decodable, Equatable {
     var display: String?
     // Glance from bed: big, dim figures to read across the room (Richard, 2026-11-13).
     var glance: Bool?
+    // The Console has stepped out of the way while the phone's Screen is open (the bridge says).
+    var screenStepAside: Bool?
 }
 
 enum ConsolePlace {
@@ -33,6 +35,8 @@ enum ConsolePlace {
         ("work", "Work", "hammer", "Claude sessions, builds, tests and TestFlight"),
     ]
     static func name(_ s: ConsoleState) -> (String, String) {
+        // Glance draws over every page and board on the Mac, so it is what the screen shows while it's on.
+        if s.glance == true { return ("Glance", "bed.double") }
         if let b = s.board, let x = boards.first(where: { $0.id == b }) { return (x.name, x.symbol) }
         if let p = s.page, let x = pages.first(where: { $0.id == p }) { return (x.name, x.symbol) }
         if s.page == "boards" { return ("Boards", "rectangle.on.rectangle.angled") }
@@ -86,7 +90,11 @@ final class ConsoleRemote: ObservableObject {
     @Published var busy: String?
     @Published var fail: (key: String, text: String)?
     func refresh(_ model: AppModel) async {
-        if let posed = Self.posed(model.pose) { state = posed; read = true; return }
+        // A posed Console keeps what the posed buttons did to it; it is set once, as a real one would be read.
+        if let posed = Self.posed(model.pose) {
+            if !read { state = posed; read = true; if model.pose == "consolestarting" { busy = "show" } }
+            return
+        }
         do {
             let s = try await model.api.consoleState()
             unsupported = s == nil; state = s; read = true
@@ -104,8 +112,22 @@ final class ConsoleRemote: ObservableObject {
         withAnimation(Motion.quick) { busy = key; fail = nil }
         Task {
             if Self.posed(model.pose) != nil {
-                try? await Task.sleep(nanoseconds: 600_000_000)
-                withAnimation(Motion.quick) { busy = nil; if cmd == "glance" { state?.glance = arg == "on" } }
+                // As the stand-in Mac answers: the Console's ack after a moment (Start takes longer), and its state after.
+                try? await Task.sleep(nanoseconds: cmd == "show" ? 1_500_000_000 : 600_000_000)
+                withAnimation(Motion.quick) {
+                    busy = nil
+                    switch cmd {
+                    case "show": state = ConsoleState(running: true, frontmost: true, fullscreen: true, page: state?.page ?? "home", board: state?.board, rotate: state?.rotate ?? false, animations: state?.animations ?? "full", display: "awake", glance: state?.glance ?? false)
+                    case "hide": state?.frontmost = false
+                    case "glance": state?.glance = arg == "on"
+                    case "display": state?.display = arg == "wake" ? "awake" : "asleep"
+                    case "page": state?.page = arg; state?.board = nil
+                    case "board": state?.board = arg == "off" ? nil : arg
+                    case "rotate": state?.rotate = arg == "on"
+                    case "animations": state?.animations = arg
+                    default: break
+                    }
+                }
                 return
             }
             let (e, st) = await model.api.consoleCommand(cmd, arg)
@@ -127,7 +149,11 @@ final class ConsoleRemote: ObservableObject {
         switch pose {
         case "console", "glancefilm": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "temps", board: nil, rotate: false, animations: "full", display: "awake")
         case "consoleboard": return ConsoleState(running: true, frontmost: true, fullscreen: true, page: "boards", board: "machine", rotate: true, animations: "gentle", display: "awake")
-        case "consoleoff": return ConsoleState(running: false)
+        case "consoleoff", "consolestarting": return ConsoleState(running: false)
+        // Open but not in front (another app is), and the display asleep under Glance, as the Mac was on 2026-11-16.
+        case "consolebehind": return ConsoleState(running: true, frontmost: false, fullscreen: true, page: "everything", board: nil, rotate: true, animations: "full", display: "awake", glance: false)
+        case "consoleasleep": return ConsoleState(running: true, frontmost: false, fullscreen: true, page: "everything", board: nil, rotate: true, animations: "full", display: "asleep", glance: true)
+        case "consoleaside": return ConsoleState(running: true, frontmost: false, fullscreen: true, page: "home", board: nil, rotate: false, animations: "full", display: "awake", glance: false, screenStepAside: true)
         default: return nil
         }
     }

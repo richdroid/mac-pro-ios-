@@ -35,23 +35,41 @@ struct DashboardTab: View {
 
     // MARK: The Mac's screen
 
+    // The Console's state in one line under its name, with a light (Richard, 2026-11-15: "I NEED INDICATOR"): green while
+    // it is on the Mac's screen, orange while it runs but can't be seen there, grey while it isn't running. Only what the
+    // Console itself last said; never a guess.
+    var light: (say: String, color: Color) {
+        if remote.unsupported { return ("Not on this Mac yet", .secondary) }
+        if !remote.read { return ("Looking at the Mac…", .secondary) }
+        if !running { return remote.busy == "show" ? ("Starting on the Mac…", macBlue) : ("Not running", Color(white: 0.45)) }
+        guard let st else { return ("Not running", Color(white: 0.45)) }
+        if st.screenStepAside == true { return ("Stepped aside while Screen is open", .orange) }
+        if st.display == "asleep" { return ("Running · the display is asleep", .orange) }
+        if st.frontmost == false { return ("Running behind other apps", .orange) }
+        if st.fullscreen == false { return ("In a window on the Mac’s screen", .green) }
+        return ("On the Mac’s screen", .green)
+    }
+
     var screenCard: some View {
         Section {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
-                    let (name, symbol) = running ? ConsolePlace.name(st!) : ("Not open", "moon.zzz")
+                    let (name, symbol) = running ? ConsolePlace.name(st!) : ("Console", "macwindow")
                     Image(systemName: symbol).font(.title3).foregroundStyle(running ? macBlue : .secondary)
                         .frame(width: 44, height: 44).background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("On the Mac’s screen").font(.footnote).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 3) {
                         Text(remote.read ? name : " ").font(.headline).lineLimit(1)
+                        HStack(spacing: 6) {
+                            Circle().fill(light.color).frame(width: 8, height: 8)
+                            Text(light.say).font(.footnote).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
+                        }
+                        .accessibilityElement(children: .combine)
                     }
                     Spacer(minLength: 0)
-                    if running, st?.display == "asleep" {
-                        Text("Display asleep").font(.footnote).foregroundStyle(.secondary).lineLimit(1).fixedSize()
-                    }
                 }
+                .animation(Motion.quick, value: light.say)
                 HStack(spacing: 10) {
+                    // Before the Mac has said, the keys wait (greyed) in their places, so none changes under his finger.
                     if !running {
                         Key("Start", "play.fill", busy: remote.busy == "show", on: false) { remote.send(model, "show", "show") }
                     } else if st?.frontmost != true || st?.fullscreen != true {
@@ -70,7 +88,9 @@ struct DashboardTab: View {
                     }
                     .disabled(!running)
                 }
-                .disabled(remote.busy != nil || remote.unsupported)
+                // A key waiting on the Console's answer shows its own wait; the others stay as they are (one command at
+                // a time is the remote's own rule), so nothing greys or flickers under a tap.
+                .disabled(!remote.read || remote.unsupported)
                 if let f = remote.fail, ["show", "hide", "display", "glance"].contains(where: { f.key.hasPrefix($0) }) { FailText(f.text) }
             }
             .padding(16)
@@ -140,7 +160,7 @@ struct DashboardTab: View {
             t.append(TileData(id: "startup", title: "Startup", symbol: "power", figure: stopped == 0 ? "All running" : "\(stopped)", line: stopped == 0 ? "\(items.filter(\.mine).count) of his own" : "stopped", good: stopped == 0, page: "startup") { model.macPage = .startup })
         }
         if let w = s.usage.plan?.sevenDay {
-            t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week · \(s.claude.sessions.count) sessions", good: w < 90, page: nil) { model.tab = 2 })
+            t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week · \(s.claude.sessions.count) session\(s.claude.sessions.count == 1 ? "" : "s")", good: w < 90, page: nil) { model.tab = 2 })
         }
         return t
     }
@@ -247,7 +267,7 @@ struct DashboardTab: View {
                 .padding(.horizontal, 20).padding(.top, 4)
                 if let f = remote.fail, ["board", "page", "rotate", "animations"].contains(where: { f.key.hasPrefix($0) }) { FailText(f.text).padding(.horizontal, 20) }
             }
-            .disabled(!running || remote.busy != nil)
+            .disabled(!running)
             .opacity(running ? 1 : 0.4)
         } header: { Text("For the Mac’s screen").padding(.leading, 20) }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
