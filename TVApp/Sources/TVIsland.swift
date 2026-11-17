@@ -277,7 +277,9 @@ enum TVIsland {
     // launches included, as iOS asks.
     private static var startsWatched = false
     static func watchStarts() {
-        guard !sample, !TVNotify.shared.staged, !startsWatched else { return }
+        // Not for the build's staged launches (an address or a pose given on launch): no Mac there to hand a token to.
+        let args = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        guard !sample, args["address"] == nil, args["pose"] == nil, !startsWatched else { return }
         startsWatched = true
         Task {
             for await t in Activity<TVIslandAttributes>.pushToStartTokenUpdates {
