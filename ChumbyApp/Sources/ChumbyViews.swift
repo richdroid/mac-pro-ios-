@@ -598,15 +598,7 @@ struct RootView: View {
                 ChumbyPalette.sea(scheme == .dark)[0].ignoresSafeArea()
                 // The Duo's side column (clock, Wi-Fi and the tab bar) is the trailing safe area.
                 Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.trailing } action: { model.railWidth = $0 }
-                TabView(selection: TabReset.binding($model.tab) { t in
-                    // With a page pushed (Alarms' Calendar settings or a day), the tap pops it, sliding as the system does;
-                    // starting the tab over as well cut that to a jump (ruling 11-10: "navigation always animates"). The
-                    // next tap, at the root, goes back to the top.
-                    if t == 2 && model.alarmsPage { model.alarmsPage = false; return }
-                    resets[t, default: 0] += 1
-                    // Home again: the octopus answers, as it does to a tap.
-                    if t == 0 { model.homePoke = Date() }
-                }) {
+                TabView(selection: TabReset.binding($model.tab) { retap($0) }) {
                     Tab(value: 0) { NavigationStack { HomeTab().tabPage(0, model) }.id(resets[0, default: 0]) } label: { tabLabel("my chumby", asset: "OctoTab", fit: 34) }
                     Tab(value: 1) { NavigationStack { ChannelsTab().tabPage(1, model) }.id(resets[1, default: 0]) } label: { tabLabel("channels", "tv") }
                     Tab(value: 2) { NavigationStack { AlarmsTab().tabPage(2, model) }.id(resets[2, default: 0]) } label: { tabLabel("alarms", "alarm") }
@@ -623,8 +615,72 @@ struct RootView: View {
             if let t = ChumbyNotify.shared.takeRingTap() { model.openRing(hint: t.hint) }
         }
         .fillCover(isPresented: $model.needsAddress) { ConnectionView().environmentObject(model).interactiveDismissDisabled(model.api == nil) }
+        // For the build's film of a second tap on the tab (never on the phone): the tab scrolled down, then tapped again.
+        .task {
+            guard ChumbyModel.pose == "retap" else { return }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            TabTop.scrollDown()
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            retap(model.tab)
+        }
+    }
+    // The tab he's on, tapped again (Richard, 2026-11-14: "have a natural go back to top when press tab button like how
+    // other apple apps do it"). With a page pushed (Alarms' Calendar settings or a day) the tap pops it, sliding as the
+    // system does (ruling 11-10: "navigation always animates"). Scrolled down, the page glides back to its top as Apple's
+    // apps do, keeping everything on it; it was rebuilt, which cut to the top with no motion. Only a tab already at its top
+    // and root is started over.
+    func retap(_ t: Int) {
+        if t == 2 && model.alarmsPage { model.alarmsPage = false; return }
+        if TabTop.scroll() { if t == 0 { model.homePoke = Date() }; return }
+        resets[t, default: 0] += 1
+        // Home again: the octopus answers, as it does to a tap.
+        if t == 0 { model.homePoke = Date() }
     }
 }
+
+#if canImport(UIKit)
+// The lists showing on the tab in front, found the way UIKit's own second tap finds them: the tab bar's selected page and
+// every vertical scroll view in it (both panes open flat). Horizontal strips (Woke up to) and text fields are left alone.
+@MainActor enum TabTop {
+    static func tabPage() -> UIView? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let root = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.keyWindow?.rootViewController else { return nil }
+        func find(_ c: UIViewController) -> UITabBarController? {
+            if let t = c as? UITabBarController { return t }
+            for k in c.children { if let t = find(k) { return t } }
+            return nil
+        }
+        return find(root)?.selectedViewController?.view
+    }
+    static func lists(in v: UIView, _ each: (UIScrollView) -> Void) {
+        if let s = v as? UIScrollView, !(s is UITextView), s.isScrollEnabled, !s.isHidden, s.alpha > 0.01,
+           s.contentSize.height + s.adjustedContentInset.top + s.adjustedContentInset.bottom > s.bounds.height + 1 { each(s) }
+        for k in v.subviews { lists(in: k, each) }
+    }
+    // Glides each list that isn't at its top back there; true if any moved.
+    static func scroll() -> Bool {
+        guard let page = tabPage() else { return false }
+        var moved = false
+        lists(in: page) { s in
+            let top = -s.adjustedContentInset.top
+            guard s.contentOffset.y > top + 1 else { return }
+            s.setContentOffset(CGPoint(x: s.contentOffset.x, y: top), animated: true)
+            moved = true
+        }
+        return moved
+    }
+    // The film's setup: each list a good way down.
+    static func scrollDown() {
+        guard let page = tabPage() else { return }
+        lists(in: page) { s in
+            let bottom = s.contentSize.height + s.adjustedContentInset.bottom - s.bounds.height
+            s.setContentOffset(CGPoint(x: s.contentOffset.x, y: max(-s.adjustedContentInset.top, min(bottom, 600))), animated: true)
+        }
+    }
+}
+#else
+@MainActor enum TabTop { static func scroll() -> Bool { false }; static func scrollDown() {} }
+#endif
 // "Can’t reach the Mac · last seen 7:12" (or "Not answering") as a row under a page's title, never floating over the list; a tap says what to do.
 struct ReachRow: View {
     @EnvironmentObject var model: ChumbyModel

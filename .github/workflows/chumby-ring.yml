@@ -71,6 +71,25 @@ jobs:
             shot once$2 $1 12 $M -tab 0 -pose justonce
             shot once-moved$2 $1 12 $M/moved -tab 0 -pose justoncemoved
           }
+          film() { # name, display, address, args: a second tap on the tab, scrolled down first (pose retap)
+            local name=$1 display=$2 address=$3; shift 3
+            xcrun simctl io "$DEVICE" recordVideo --display=$display --codec=h264 --force dist/retap-$name.mp4 &
+            local rec=$!
+            sleep 1
+            xcrun simctl launch "$DEVICE" local.macpro.Chumby -address $address -pose retap "$@"
+            sleep 6
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/retap-$name-down.png
+            sleep 3.5
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/retap-$name-top.png
+            kill -INT $rec; wait $rec
+            xcrun simctl terminate "$DEVICE" local.macpro.Chumby || true
+          }
+          retaps() { # display, suffix
+            film alarms$2 $1 $M -tab 2
+            film sounds$2 $1 $M -tab 3
+            film home$2 $1 $M -tab 0
+            film tinker$2 $1 $M -tab 4
+          }
           gallery() { # page, display, name
             xcrun simctl launch "$DEVICE" local.macpro.GalleryChumby -page $1
             sleep 8
@@ -84,6 +103,7 @@ jobs:
           }
           xcrun simctl ui "$DEVICE" appearance light
           set_ 1 ""
+          retaps 1 ""
           gallery 4 1 card
           gallery 5 1 island
           xcrun simctl ui "$DEVICE" appearance dark
@@ -101,8 +121,10 @@ jobs:
           shot alarms-ringing-open 3 9 $M/ringing -tab 2
           shot home-open 3 9 $M -tab 0
           shot once-open 3 12 $M -tab 0 -pose justonce
+          retaps 3 "-open"
           $D "$DEVICE" rotate 1; sleep 5
           set_ 3 "-portrait"
+          retaps 3 "-portrait"
           xcrun simctl ui "$DEVICE" appearance dark
           shot screen-dark-portrait 3 9 $M/ringing -tab 0 -pose ringscreen
           ls dist
@@ -111,7 +133,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          (cd dist && zip -qr ../ring.zip . -i '*.png' '*.log' || zip -q ../ring.zip /dev/null)
+          (cd dist && zip -qr ../ring.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../ring.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
           gh release view chumby-ring >/dev/null 2>&1 || gh release create chumby-ring --prerelease --title "Chumby ring checks" --notes "Work in progress on the ringing alarm: shots and logs from the chumby-ring branch."
           for f in ring.zip status.txt; do
