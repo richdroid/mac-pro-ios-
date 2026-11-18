@@ -1454,21 +1454,30 @@ struct StatusTab: View {
 struct AppsTab: View {
     @EnvironmentObject var model: AppModel
     @State private var pending: Status.App?
-    @State private var alert: String?
+    // What didn't happen, under the row it happened on (the app's one way of saying a failure, FailText), gone after a
+    // few seconds; it was a modal "That did not work" alert here and nowhere else (2026-11-18, consistency).
+    @State private var failed: (key: String, text: String)?
+    @State private var fails = 0
+    func say(_ key: String, _ text: String?) {
+        guard let text else { return }
+        withAnimation(Motion.quick) { failed = (key, text) }; fails += 1
+        Task { try? await Task.sleep(nanoseconds: 6_000_000_000); if failed?.text == text { withAnimation(Motion.quick) { failed = nil } } }
+    }
+    @ViewBuilder func failLine(_ key: String) -> some View { if let f = failed, f.key == key { FailText(f.text) } }
     // Quitting, the way the Processes page does it: asked to close first, and Force Quit offered only for an app that
     // was asked and stayed. The two were offered side by side in one alert here (audit, 2026-11-10).
     @State private var forcing: Status.App?
     @State private var working: Int?
     func quit(_ a: Status.App, force: Bool) async {
         working = a.pid; defer { working = nil }
-        if let e = await model.run(force ? "app-kill" : "app-quit", ["pid": a.pid]) { alert = e; return }
+        if let e = await model.run(force ? "app-kill" : "app-quit", ["pid": a.pid]) { say("\(a.pid)", "\(a.name) didn’t quit: " + e); return }
         // The Mac gives it a few seconds, and so does this: gone from the list says it quit.
         for _ in 0..<5 {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             await model.refresh()
             if !(model.status?.apps.contains { $0.pid == a.pid && $0.mem != nil } ?? false) { return }
         }
-        if force { alert = "\(a.name) is still running." } else { forcing = a }
+        if force { say("\(a.pid)", "\(a.name) is still running.") } else { forcing = a }
     }
     let s: Status
     var side: Side = .all
@@ -1497,6 +1506,7 @@ struct AppsTab: View {
                     // Quitting is a full-strength Quit capsule at the row's end, the same control as Update above it: a
                     // dim grey ✕ read as unavailable though it worked (Richard, 2026-11-07: "the greyed out xs when they r
                     // seemingly actionable r confusing and fucked"). Never a swipe (no swipe-to-delete on glass cards).
+                    VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading) {
                             // One line each, so the CPU figure coming and going with each reading never changes the row's height.
@@ -1523,6 +1533,8 @@ struct AppsTab: View {
                                 .accessibilityLabel("Quit \(a.name)")
                         }
                     }
+                    failLine("\(a.pid)")
+                    }
                     // The first app is where the build's scrolled shot stops, its heading gone up under the top.
                     .place(open.first?.id == a.id ? AnyHashable("open") : AnyHashable(a.id))
                 }
@@ -1530,12 +1542,12 @@ struct AppsTab: View {
             Section {
                 Menu {
                     // What isn't already open, the Mac's own apps included (Terminal, Calendar and the rest).
-                    ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button(name) { Task { alert = await model.run("app-open", ["name": name]) } } }
+                    ForEach(s.installed.filter { n in !open.contains { $0.name == n } }, id: \.self) { name in Button(name) { Task { say("launch", await model.run("app-open", ["name": name]).map { "\(name) didn’t open: " + $0 }) } } }
                 } label: { Label("Launch another app", systemImage: "plus.square.on.square") }
                 .place("launch")
+                failLine("launch")
             }
-
-            .alert("That did not work", isPresented: .init(get: { alert != nil }, set: { if !$0 { alert = nil } })) { Button("OK") {} } message: { Text(alert ?? "") }
+            .haptic(.warn, trigger: fails)
             // The build's shot of the second question, for an app that was asked to quit and stayed.
             .task { if model.pose == "forcequit" { try? await Task.sleep(nanoseconds: 2_000_000_000); forcing = model.status?.apps.first { $0.mem != nil } } }
         }
