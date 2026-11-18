@@ -89,6 +89,9 @@ final class ConsoleRemote: ObservableObject {
     // The button waiting for the Console's answer, and what it said when it said no.
     @Published var busy: String?
     @Published var fail: (key: String, text: String)?
+    // Counted when the Console's answer comes: the Dashboard's done and warn haptics (manifesto, haptic vocabulary).
+    @Published var answered = 0
+    @Published var refused = 0
     func refresh(_ model: AppModel) async {
         // A posed Console keeps what the posed buttons did to it; it is set once, as a real one would be read.
         if let posed = Self.posed(model.pose) {
@@ -115,7 +118,7 @@ final class ConsoleRemote: ObservableObject {
                 // As the stand-in Mac answers: the Console's ack after a moment (Start takes longer), and its state after.
                 try? await Task.sleep(nanoseconds: cmd == "show" ? 1_500_000_000 : 600_000_000)
                 withAnimation(Motion.quick) {
-                    busy = nil
+                    busy = nil; answered += 1
                     switch cmd {
                     case "show": state = ConsoleState(running: true, frontmost: true, fullscreen: true, page: state?.page ?? "home", board: state?.board, rotate: state?.rotate ?? false, animations: state?.animations ?? "full", display: "awake", glance: state?.glance ?? false)
                     case "hide": state?.frontmost = false
@@ -134,7 +137,7 @@ final class ConsoleRemote: ObservableObject {
             withAnimation(Motion.quick) {
                 if let st { state = st }
                 busy = nil
-                if let e { fail = (key, e) }
+                if let e { fail = (key, e); refused += 1 } else { answered += 1 }
             }
             // An error is read once: gone after a few seconds, unless a newer one has taken its place.
             if let e {

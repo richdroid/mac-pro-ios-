@@ -30,6 +30,9 @@ struct DashboardTab: View {
             }
         }
         .task(id: side) { if side != .right { await remote.loop(model) } }
+        // Done when the Console answers yes, warn when it says no or can't be reached: once per tap, on the answer.
+        .sensoryFeedback(trigger: remote.answered) { _, _ in MacPrefs.haptics && side != .right ? .success : nil }
+        .sensoryFeedback(trigger: remote.refused) { _, _ in MacPrefs.haptics && side != .right ? .warning : nil }
         .task { if model.pose.isEmpty { await ConsoleSummary.shared.readAll(model.api) } }
         // Back from one of its pages (an update installed, a startup item started), the tiles read the Mac again.
         .onReceive(model.nav.$dashPage.dropFirst()) { p in if p == nil, side != .right, model.pose.isEmpty { Task { await ConsoleSummary.shared.readAll(model.api) } } }
@@ -124,7 +127,6 @@ struct DashboardTab: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressStyle())
-            .sensoryFeedback(.impact(weight: .light), trigger: busy) { _, now in now }
             .accessibilityAddTraits(on ? .isSelected : [])
         }
     }
@@ -140,13 +142,20 @@ struct DashboardTab: View {
     var tileData: [TileData] {
         let cpu = store.live?.cpu ?? s.cpu, mem = store.live?.mem ?? s.mem, net = store.live?.net ?? s.net
         let temps = store.live?.temps ?? s.temps ?? []
-        let hottest = s.heat?.hottest ?? temps.max { $0.c < $1.c }
+        // The figure is the warmest reading; the line says whether any sensor is near its own limit (the bridge's verdict,
+        // whose "hottest" is the one nearest its limit: on 2026-11-18 that was the intake air at 28.8 °C beside a 69 °C
+        // CPU, and the tile read "28.8°, Intake air, the hottest").
+        let warmest = temps.max { $0.c < $1.c }
+        let verdict = s.heat?.verdict
+        let near = s.heat?.hottest
         let memPct = mem.total > 0 ? Int((mem.used / mem.total * 100).rounded()) : 0
         let top = s.procs.max { $0.cpu < $1.cpu }
         let bad = s.healthBad
         var t: [TileData] = [
             TileData(id: "mac", title: "Mac Pro", symbol: "gauge.with.dots.needle.67percent", figure: "\(cpu.total)%", line: "CPU · memory \(memPct)%", page: "overview") { model.history = .cpu },
-            TileData(id: "temps", title: "Temperatures", symbol: "thermometer.medium", figure: hottest.map { MacConsole.degrees($0.c) }, line: hottest.map { "\($0.name), the hottest" }, page: "temps") { model.macPage = .fans },
+            TileData(id: "temps", title: "Temperatures", symbol: "thermometer.medium", figure: warmest.map { MacConsole.degrees($0.c) },
+                     line: verdict.map { v in v == "Normal" || near == nil ? warmest.map { "\($0.name), the warmest" } ?? v : "\(v) · \(near!.name) \(MacConsole.degrees(near!.c))" } ?? warmest.map { "\($0.name), the warmest" },
+                     good: verdict.map { $0 == "Normal" }, page: "temps") { model.macPage = .fans },
             TileData(id: "everything", title: "Everything", symbol: "checklist", figure: bad.map { $0 == 0 ? "All well" : "\($0)" }, line: bad.map { $0 == 0 ? "Every part answering" : $0 == 1 ? "part needs a look" : "parts need a look" }, good: bad.map { $0 == 0 }, page: "everything") { model.macPage = .health },
             TileData(id: "activity", title: "Network", symbol: "arrow.up.arrow.down", figure: Format.rate(net.rxRate), line: "down · up \(Format.rate(net.txRate))", page: "activity") { model.history = .download },
             TileData(id: "processes", title: "Processes", symbol: "cpu", figure: top.map { "\(Int($0.cpu.rounded()))%" }, line: top?.name, page: "processes") { model.processes = .cpu },

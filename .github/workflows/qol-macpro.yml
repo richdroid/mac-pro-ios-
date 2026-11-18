@@ -3,7 +3,7 @@ name: Mac Pro QoL shots
 # and open flat, for the qol-macpro branch's gate. Published to the qol-macpro release. Removed before merge.
 on:
   push:
-    branches: [qol-macpro]
+    branches: [qol-macpro-b]
   workflow_dispatch:
 permissions:
   contents: write
