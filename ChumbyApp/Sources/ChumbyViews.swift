@@ -1616,6 +1616,8 @@ struct ChannelsTab: View {
     // readings of what's playing in that time say nothing about a channel he chose.
     @State private var savedAt = Date.distantPast
     @State private var heldForAlarm = false
+    // The widget just jumped to, said under the menu for a few seconds.
+    @State private var jumped: String?
     @State private var rows: [EditorRow] = []
     @State private var saveTask: Task<Void, Never>?
     @State private var unsent: (rows: [EditorRow], id: String)?
@@ -1883,19 +1885,20 @@ struct ChannelsTab: View {
     // sliding in from the row's end, is the half-swiped row he ruled out ("looks fucked", 11-05), so there's no swipe either.
     func widgetRow(_ w: EditorRow) -> some View {
         HStack(alignment: .center, spacing: 16) {
-            if reordering {
-                // A 44 pt target laid out as the 21 pt disc, so the row is no taller and the name no further in than the
-                // disc needs.
-                Button { model.tick(); remove(w.id) } label: {
-                    Circle().fill(ChumbyPalette.remove(scheme == .dark)).frame(width: 21, height: 21)
-                        .overlay { Capsule().fill(.white).frame(width: 10, height: 2.5) }
-                        .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .padding(.vertical, -11.5).padding(.trailing, -23)
-                .transition(.move(edge: .leading).combined(with: .opacity))
-                .accessibilityLabel("Remove \(w.name) from \(pickedTitle)")
+            // Always in the row, opening from no width as Edit comes in: the disc slides and fades in step with the name
+            // moving over, in the same spring, never drawn whole over the name for a frame (gate, 11-18). A 44 pt target
+            // laid out as the 21 pt disc, so the row is no taller and the name no further in than the disc needs.
+            Button { model.tick(); remove(w.id) } label: {
+                Circle().fill(ChumbyPalette.remove(scheme == .dark)).frame(width: 21, height: 21)
+                    .overlay { Capsule().fill(.white).frame(width: 10, height: 2.5) }
+                    .frame(width: 44, height: 44, alignment: .leading).contentShape(Rectangle())
             }
+            .buttonStyle(.borderless)
+            .frame(width: reordering ? 44 : 0, alignment: .trailing).clipped()
+            .opacity(reordering ? 1 : 0)
+            .padding(.vertical, -11.5).padding(.trailing, reordering ? -23 : -16)
+            .allowsHitTesting(reordering).accessibilityHidden(!reordering)
+            .accessibilityLabel("Remove \(w.name) from \(pickedTitle)")
             // A long name wraps to a second line rather than losing its end ("NYT Top Headlin…" folded, 11-11).
             Text(w.name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
@@ -1918,8 +1921,11 @@ struct ChannelsTab: View {
                     .background(.white.opacity(0.12), in: Capsule())
                 }
                 .accessibilityLabel("Time on screen")
+                // Crossfades with the grip: out quickly as Edit comes in, back only once the grip has gone on Done.
+                .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.16)), removal: .opacity.animation(.easeOut(duration: 0.1))))
             }
         }
+        .animation(.snappy, value: reordering)
         // One height in and out of Edit: the time capsule's (gate, 11-18: rows grew 11 pt on Edit).
         .frame(minHeight: 30)
         .padding(.vertical, 4)
@@ -2009,14 +2015,42 @@ struct ChannelsTab: View {
         Section {
             // Open flat and open in portrait (the posture he holds, whose page was half bare sea); folded, Home has it.
             if wide || size == .regular { ScreenRow() }
+            // Only what plays in the channel showing, in its order (Richard, 11-18: "jump to widget and widget management in
+            // general is buggy"): the Chumby's list holds every widget it has loaded, his own included, and a jump to one
+            // the channel leaves out of its rotation, or one of his own kept to other channels, showed it for a moment and
+            // bounced on to the next. Said when it's done; nothing switches under an alarm (model.cmd).
             Menu("Jump to a widget") {
-                ForEach(model.state.widgetNames.sorted(), id: \.self) { n in Button(n) { model.cmd("widget", n, id: "nowPlaying") } }
+                ForEach(jumpable, id: \.self) { n in
+                    Button { jump(n) } label: { if n == jumped { Label(n, systemImage: "checkmark") } else { Text(n) } }
+                }
             }.foregroundStyle(.tint)
+            .disabled(jumpable.isEmpty)
+            if let j = jumped { RowNote(icon: "checkmark.circle", text: "Showing \(j) on the Chumby", color: .secondary).transition(.opacity) }
             Toggle("Shuffle", isOn: Binding(get: { model.state.shuffle == 1 }, set: { on in model.state.shuffle = on ? 1 : 0; model.cmd("shuffle", on ? "1" : "0", id: "nowPlaying") }))
         } header: {
             // Open, as tall as the channel header across the fold, so the two panes' cards start level.
             SectionHead(icon: "tv", text: "On screen")
                 .frame(minHeight: wide ? 32 : 0, alignment: .bottomLeading)
+        }
+    }
+
+    // The widgets a jump can land on: the channel showing's own rotation (as edited here), else the Chumby's list.
+    var jumpable: [String] {
+        let names = Set(model.state.widgetNames)
+        if let ch = channels.first(where: { $0.id == picked }), title(ch).trimmingCharacters(in: .whitespaces) == showing.trimmingCharacters(in: .whitespaces) {
+            let here = shown.map(\.name).filter { names.isEmpty || names.contains($0) }
+            if !here.isEmpty { return here }
+        }
+        return model.state.widgetNames.sorted()
+    }
+    func jump(_ name: String) {
+        let sent = model.cmd("widget", name, id: "nowPlaying")
+        Task {
+            // Said once the Chumby has taken it, never before (a refusal under an alarm, or no answer, says why instead).
+            guard await sent.value else { return }
+            withAnimation(.snappy) { jumped = name }
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if jumped == name { withAnimation(.snappy) { jumped = nil } }
         }
     }
 
@@ -2052,9 +2086,11 @@ struct ChannelsTab: View {
         .onChange(of: wide) { _, _ in adding = false }
         .onAppear {
             startFromCache()
-            guard !posed, ["chsync", "chdemo", "chadd", "chedit", "cheditdemo"].contains(ChumbyModel.pose) else { return }
+            guard !posed, ["chsync", "chdemo", "chadd", "chedit", "cheditdemo", "jumpdemo"].contains(ChumbyModel.pose) else { return }
             posed = true
             Task {
+                // For the build's film: a jump to the channel's second widget, said once the Chumby has taken it.
+                if ChumbyModel.pose == "jumpdemo" { try? await Task.sleep(nanoseconds: 3_000_000_000); if jumpable.count > 1 { jump(jumpable[1]) }; return }
                 // For the build: the channel's list in Edit, its delete controls and grips.
                 if ChumbyModel.pose == "chedit" { try? await Task.sleep(nanoseconds: 2_500_000_000); withAnimation(.snappy) { reordering = true }; return }
                 // For the build's film: Edit, the last widget moved to the top, the second taken out, Done (the save goes, and the
@@ -3203,8 +3239,8 @@ struct SkipCard: View {
             .onAppear { shown = skipped != nil }
             // For the shot: the ring's sheet open from Home, once the Chumby's list is in (on appearing there's nothing
             // to change yet). "justoncemoved": the same, opened on a ring already moved.
-            .task(id: changeable?.id) {
-                guard ChumbyModel.pose.hasPrefix("justonce"), model.tab == 0, !posed, let c = changeable else { return }
+            .task(id: (changeable?.id ?? "") + (model.stateConfirmed ? "!" : "")) {
+                guard ChumbyModel.pose.hasPrefix("justonce"), model.tab == 0, !posed, let c = changeable, model.stateConfirmed else { return }
                 try? await Task.sleep(nanoseconds: 800_000_000)
                 guard !Task.isCancelled, !posed else { return }
                 posed = true; change = c

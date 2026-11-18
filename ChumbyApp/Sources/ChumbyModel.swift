@@ -525,13 +525,14 @@ final class ChumbyModel: ObservableObject {
             }
         }
     }
-    func cmd(_ c: String, _ v: String? = nil, id: String, holdFor: Double = 5) {
+    // True once the Chumby took it, for a caller that says so.
+    @discardableResult func cmd(_ c: String, _ v: String? = nil, id: String, holdFor: Double = 5) -> Task<Bool, Never> {
         // The ones that reload or switch the channel wait out an alarm (alarmBusy).
-        if ["channel", "shuffle", "widget", "reload"].contains(c), let why = alarmBusy { fail(id, "Not while \(why)."); return }
+        if ["channel", "shuffle", "widget", "reload"].contains(c), let why = alarmBusy { fail(id, "Not while \(why)."); return Task { false } }
         tick()
         hold(holdFor)
-        Task {
-            do { try await api?.cmd(c, v) } catch { fail(id, "The Chumby didn’t get that. \(AlarmWriter.explain(error))") }
+        return Task {
+            do { try await api?.cmd(c, v); return true } catch { fail(id, "The Chumby didn’t get that. \(AlarmWriter.explain(error))"); return false }
         }
     }
     // A channel chosen to play, from Home or Channels. Kept here, so the channel editor moves to it whichever screen it came
@@ -621,10 +622,15 @@ final class ChumbyModel: ObservableObject {
         return Task {
             let out = await RingDesk.shared.press(.snooze, send: { c in try await api.cmd(c) }, read: { try await api.raw("sys") })
             hold(0)
-            withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil }
+            // "Snoozing…" giving way and the card turning snoozed are one change in the card's one spring, so Stop widens
+            // into Snooze's room with it rather than in a frame (gate, 11-18).
+            if case .confirmed = out {} else { withAnimation(.easeOut(duration: 0.2)) { ringWorking = nil } }
             switch out {
             case .confirmed(let until):
-                if let r = sys.ringing { withAnimation(Self.ringSpring) { sys.ring = "s\t\(r.name)\t\(r.sound)" + (until.map { "\t\(Int($0))" } ?? ""); snoozedAt = Date() } }
+                withAnimation(Self.ringSpring) {
+                    ringWorking = nil
+                    if let r = sys.ringing { sys.ring = "s\t\(r.name)\t\(r.sound)" + (until.map { "\t\(Int($0))" } ?? ""); snoozedAt = Date() }
+                }
                 Task { await ChumbyRingCard.handled() }
                 let end = until ?? snoozeEnds?.timeIntervalSince1970
                 await ChumbyRingCard.change { $0.working = nil; $0.snoozed = true; $0.until = end; $0.problem = nil }

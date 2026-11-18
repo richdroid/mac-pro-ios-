@@ -88,6 +88,9 @@ jobs:
             remock; film ringdemo$2 $1 14 $M/liveringing -tab 0 -pose ringdemo
             # Channels: Edit, the last widget moved to the top, one taken out, Done; the stand-in reloads its channel.
             remock; film cheditdemo$2 $1 18 $M/live -tab 1 -pose cheditdemo
+            # Jump to a widget (the channel's own rotation, said once taken), and Add widgets: picker, one added, back.
+            remock; film jumpdemo$2 $1 8 $M/live -tab 1 -pose jumpdemo
+            remock; film chdemo$2 $1 12 $M/live -tab 1 -pose chdemo
           }
           xcrun simctl ui "$DEVICE" appearance light
           set_ 1 ""
