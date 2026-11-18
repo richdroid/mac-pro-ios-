@@ -69,16 +69,23 @@ struct VolumeKey: View {
     }
 }
 
-// The level, as a slim bar the pad's width.
+// The level, as a slim bar the pad's width, between a quiet and a loud speaker as the Music app's own volume bar is: a
+// bare white bar under the pad read as the system's home indicator or a scroll bar (the 2026-11-18 audit).
 struct VolumeBar: View {
     @Environment(TVModel.self) var model
     @ObservedObject private var vol = VolumeModel.shared
     var body: some View {
         let known = VolumeModel.known(model.status?.volume, model.status?.volumeMax)
         let mx = Double(max(1, model.status?.volumeMax ?? 25)), v = Double(max(0, vol.shown(model.status?.volume) ?? 0))
-        Capsule().fill(.white.opacity(0.16)).frame(height: 6)
-            .overlay(alignment: .leading) { GeometryReader { g in Capsule().fill(.white.opacity(0.85)).frame(width: g.size.width * min(1, v / mx)) } }
-            .opacity(known ? 1 : 0)
+        HStack(spacing: 10) {
+            Image(systemName: "speaker.fill").font(.caption2.weight(.semibold))
+            Capsule().fill(.white.opacity(0.16)).frame(height: 6)
+                .overlay(alignment: .leading) { GeometryReader { g in Capsule().fill(.white.opacity(0.85)).frame(width: g.size.width * min(1, v / mx)) } }
+                .frame(height: 6)
+            Image(systemName: "speaker.wave.3.fill").font(.caption2.weight(.semibold))
+        }
+        .foregroundStyle(.white.opacity(0.55))
+        .opacity(known ? 1 : 0)
             .accessibilityElement().accessibilityLabel("Volume").accessibilityValue("\(Int(v)) of \(Int(mx))")
             .onChange(of: model.status?.volume) { _, s in vol.sync(s) }
     }

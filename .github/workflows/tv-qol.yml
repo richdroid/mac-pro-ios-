@@ -1,16 +1,16 @@
-name: TV qol checks (temporary, branch qol-tv)
+name: TV qol checks (temporary, branch qol-tv2)
 # A short run for the TV app's work in progress, pushed to the tv-quick branch (never main): the Now Playing card in
 # every state (the gallery's drawing of it, and the real island and Lock Screen card where the simulator will show
 # them), and the tab tour with its slow-frame log, in minutes rather than the full run's hour and a half. Published to
 # the tv-quick release.
 on:
   push:
-    branches: [qol-tv]
+    branches: [qol-tv2]
   workflow_dispatch:
 permissions:
   contents: write
 concurrency:
-  group: tv-qol
+  group: tv-qol2
   cancel-in-progress: true
 jobs:
   quick:
@@ -87,6 +87,20 @@ jobs:
             xcrun simctl terminate "$DEVICE" com.apple.mobilesafari || true
             date
           fi
+          # The Remote with the volume bar between its speakers: folded, then open upright (the posture he holds).
+          shot() {
+            local name=$1 display=$2 wait=$3 address=$4; shift 4
+            xcrun simctl launch "$DEVICE" local.macpro.TV -address $address "$@"
+            sleep $wait
+            xcrun simctl io "$DEVICE" screenshot --display=$display dist/tv-$name.png
+            xcrun simctl terminate "$DEVICE" local.macpro.TV || true
+          }
+          shot remote-repisode 1 9 $M/repisode -tab 0
+          shot remote-rmint 1 9 $M/rmint -tab 0
+          $D "$DEVICE" pose open; sleep 5; $D "$DEVICE" rotate 1; sleep 5
+          shot remote-repisode-portrait 3 9 $M/repisode -tab 0
+          shot remote-rmint-portrait 3 9 $M/rmint -tab 0
+          shot remote-ridle-portrait 3 9 $M/ridle -tab 0
           cp /tmp/tv-hitches.log dist/tv-hitches.log 2>/dev/null || true
           ls dist
       - name: Publish
@@ -96,7 +110,7 @@ jobs:
         run: |
           (cd dist && zip -qr ../quick.zip . -i '*.png' '*.log' '*.mp4' || zip -q ../quick.zip /dev/null)
           echo "$GITHUB_SHA ${{ job.status }}" > status.txt
-          gh release view tv-qol >/dev/null 2>&1 || gh release create tv-qol --prerelease --title "TV quick checks" --notes "Work in progress on the TV app: shots and logs from the qol-tv branch."
+          gh release view tv-qol2 >/dev/null 2>&1 || gh release create tv-qol2 --prerelease --title "TV quick checks" --notes "Work in progress on the TV app: shots and logs from the qol-tv branch."
           for f in quick.zip status.txt; do
-            for i in 1 2 3; do gh release upload tv-qol "$f" --clobber && break; sleep 15; done
+            for i in 1 2 3; do gh release upload tv-qol2 "$f" --clobber && break; sleep 15; done
           done
