@@ -142,6 +142,15 @@ struct StartupItem: Decodable, Identifiable, Equatable {
     var mine: Bool { editable == true }
 }
 struct StartupFeed: Decodable, Equatable { var t: Double?; var items: [StartupItem] }
+// The TV as the bridge reads it (GET /api/tv/status), only what the Dashboard's tile says.
+struct TVGlance: Decodable, Equatable {
+    struct Session: Decodable, Equatable { var playing: Bool?; var description: [String]? }
+    struct Music: Decodable, Equatable { var title: String?; var artist: String?; var playing: Bool? }
+    var online: Bool?
+    var screen: String?
+    var session: Session?
+    var music: Music?
+}
 
 // What the Mac said an action did: done with its words, or why not.
 struct MacActionResult: Decodable, Equatable {
@@ -284,6 +293,8 @@ final class ConsoleSummary: ObservableObject {
     let updates = FeedReader<UpdatesFeed>("/api/mac/updates")
     let storage = FeedReader<StorageFeed>("/api/mac/storage")
     let startup = FeedReader<StartupFeed>("/api/mac/startup")
+    // The TV, for the Dashboard's tile (Richard, 2026-11-13: "integrate all work into it including chumby and google tv status").
+    let tv = FeedReader<TVGlance>("/api/tv/status")
     @Published var mp = false
     func readAll(_ api: API) async {
         // Asked again until it answers: a Mac away at the first look mustn't hide Actions for good.
@@ -291,6 +302,7 @@ final class ConsoleSummary: ObservableObject {
         await withTaskGroup(of: Void.self) { g in
             g.addTask { await self.links.read(api) }; g.addTask { await self.fans.read(api) }; g.addTask { await self.temps.read(api) }
             g.addTask { await self.updates.read(api) }; g.addTask { await self.storage.read(api) }; g.addTask { await self.startup.read(api) }
+            g.addTask { await self.tv.read(api) }
         }
     }
     func loop(_ model: AppModel) async {

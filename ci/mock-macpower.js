@@ -29,6 +29,8 @@ const feeds = {
     apps: [{ name: 'Tailscale', installed: '1.104.4', latest: null, how: 'Updates itself' }] }),
   '/api/mac/storage': () => ({ t: now(), volumes: [{ name: 'Macintosh HD', mount: '/System/Volumes/Data', total: 250790436864, free: 37826465792, kind: 'APFS', internal: true }],
     home: [['Library', 91e9], ['code', 48e9], ['.cache', 12e9], ['Applications', 9.8e9], ['.local', 6.1e9]].map(([name, bytes]) => ({ path: '/Users/you/' + name, name, bytes })), homeAt: now() - 300e3, cleanup: [] }),
+  // The TV as the bridge says it (tv.js /api/tv/status): on, an episode playing in Stremio.
+  '/api/tv/status': () => ({ online: true, at: now(), screen: 'on', app: 'com.stremio.one', session: { playing: true, description: ['Severance', 'Season 2 · Episode 4'] }, music: null }),
   '/api/mac/startup': () => ({ t: now(), items: [
     ['local.mac-dash', '/usr/local/bin/node ~/code/Tools/mac-dash/server.js', 4012, 'bridge'], ['local.mac-dash-tunnel', '/bin/bash ~/code/Tools/mac-dash/keep-tunnel.sh', 841, null],
     ['local.chumby-remote', '/usr/bin/python3 -I ~/code/chumby-remote/chumby_remote.py', 40432, null], ['local.keep-awake', '/usr/bin/caffeinate -ims', 702, null], ['local.claude-sessions', '/bin/bash ~/code/Tools/keep-sessions.sh', null, 'claude'],

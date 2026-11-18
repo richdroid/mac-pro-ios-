@@ -13,6 +13,8 @@ struct DashboardTab: View {
     @ObservedObject private var updates = ConsoleSummary.shared.updates
     @ObservedObject private var startup = ConsoleSummary.shared.startup
     @ObservedObject private var summary = ConsoleSummary.shared
+    @ObservedObject private var tv = ConsoleSummary.shared.tv
+    @Environment(\.openURL) private var openURL
     @ObservedObject private var watch = RestartWatch.shared
     @Environment(\.horizontalSizeClass) private var size
     let s: Status
@@ -174,6 +176,13 @@ struct DashboardTab: View {
         if let items = startup.value?.items {
             let stopped = StartupView.stopped(items.filter(\.mine)).count
             t.append(TileData(id: "startup", title: "Startup", symbol: "power", figure: stopped == 0 ? "All running" : "\(stopped)", line: stopped == 0 ? "\(items.filter(\.mine).count) of his own" : "stopped", good: stopped == 0, page: "startup") { model.macPage = .startup })
+        }
+        // The TV, as the Console's Home has it: what's playing, or whether it's on. A tap opens the TV app.
+        if let v = tv.value {
+            let ep = v.session?.description?.first, song = v.music?.playing == true ? v.music?.title : nil
+            let fig = v.online == false ? "Away" : ep != nil ? (v.session?.playing == false ? "Paused" : "Playing") : song != nil ? "Music" : v.screen == "asleep" ? "Asleep" : v.screen == "on" ? "On" : "Off"
+            let line = v.online == false ? "Not answering" : ep.map { [$0, v.session?.description?.dropFirst().first].compactMap { $0 }.joined(separator: " · ") } ?? song.map { [$0, v.music?.artist].compactMap { $0 }.joined(separator: " · ") } ?? "Nothing playing"
+            t.append(TileData(id: "tv", title: "Google TV", symbol: "tv", figure: fig, line: line, page: "tv") { if let u = URL(string: "tvremoteapp://") { openURL(u) } })
         }
         if let w = s.usage.plan?.sevenDay {
             t.append(TileData(id: "claude", title: "Claude", symbol: "sparkle", figure: "\(Int(w.rounded()))%", line: "of the week · \(s.claude.sessions.count) session\(s.claude.sessions.count == 1 ? "" : "s")", good: w < 90, page: "activity") { model.tab = 2 })

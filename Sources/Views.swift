@@ -1004,10 +1004,12 @@ struct WebTile: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
                     if let symbol { Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(macBlue).frame(width: 18) }
-                    Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+                    // Whole, never "Temperatu…" (CI c4f3c64, folded): a little smaller first.
+                    Text(title).font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: 0)
+                    // The page on the Mac's screen now takes the chevron's place, so the name keeps its room.
                     if onMac { Image(systemName: "macwindow").font(.caption.weight(.semibold)).foregroundStyle(macBlue).accessibilityLabel("On the Mac’s screen") }
-                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                    else { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary) }
                 }
                 // Only the figure animates as it changes; the little chart just steps along, which costs nothing.
                 // The number large and its unit smaller beside it, at one size always: shrunk to fit, the figure changed size
