@@ -233,34 +233,41 @@ struct ChumbyStatusIntent: AppIntent {
         return .result(value: text, dialog: IntentDialog(stringLiteral: text))
     }
 }
-// The ringing alarm's own Stop, from Control Center or Siri: the same as pressing it on the Chumby.
+// The ringing alarm's own Stop, from Control Center or Siri: the same as pressing it on the Chumby, through the same desk
+// as the card's keys, and answered when the Chumby confirms. Allowed on a locked phone, as the card's keys are.
 struct ChumbyStopAlarmIntent: AppIntent {
     static var title: LocalizedStringResource = "Stop Chumby Alarm"
     static var description = IntentDescription("Stops the alarm that’s ringing or snoozing.")
-    func perform() async throws -> some IntentResult {
-        do { try await chumbyTry { try await $0.cmd("ringoff") } }
-        catch ChumbyError.message("not delivered") { throw ChumbyError.message("No Chumby alarm is ringing.") }
-        catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
-        return .result()
+    static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
+    static var supportedModes: IntentModes { .background }
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        switch await RingDesk.shared.press(.stop) {
+        case .confirmed:
+            await ChumbyRingCard.over(); await ChumbyRingCard.handled()
+            return .result(dialog: "Stopped.")
+        case .nothingRinging: throw ChumbyError.message("No Chumby alarm is ringing.")
+        case .unconfirmed: return .result(dialog: "Sent. The Chumby hasn’t confirmed yet.")
+        case .failed(let why): throw ChumbyError.message(why)
+        }
     }
 }
-// The ringing alarm's own Snooze, by voice from bed: the same as pressing it on the Chumby. Says when it rings again.
+// The ringing alarm's own Snooze, by voice from bed: the same as pressing it on the Chumby. Says when it rings again,
+// by the Chumby's own clock.
 struct ChumbySnoozeAlarmIntent: AppIntent {
     static var title: LocalizedStringResource = "Snooze Chumby Alarm"
     static var description = IntentDescription("Snoozes the alarm that’s ringing.")
+    static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
+    static var supportedModes: IntentModes { .background }
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        do {
-            let minutes = try await chumbyTry { api -> String? in
-                // How long its snooze is, from the alarm that's ringing, read before it's pressed.
-                let sys = try? JSONDecoder().decode(Sys.self, from: await api.fresh("sys"))
-                let state = try? JSONDecoder().decode(ChumbyState.self, from: await api.raw("state").data)
-                try await api.cmd("ringsnooze")
-                return sys?.ringing.flatMap { r in state?.alarms.first { $0.name == r.name }?.snooze }
-            }
-            return .result(dialog: IntentDialog(stringLiteral: minutes.map { "Snoozed for \($0) minutes." } ?? "Snoozed."))
+        switch await RingDesk.shared.press(.snooze) {
+        case .confirmed(let until):
+            await ChumbyRingCard.handled()
+            let at = until.map { Date(timeIntervalSince1970: $0).formatted(date: .omitted, time: .shortened) }
+            return .result(dialog: IntentDialog(stringLiteral: at.map { "Snoozed. It rings again at \($0)." } ?? "Snoozed."))
+        case .nothingRinging: throw ChumbyError.message("No Chumby alarm is ringing.")
+        case .unconfirmed: return .result(dialog: "Sent. The Chumby hasn’t confirmed yet.")
+        case .failed(let why): throw ChumbyError.message(why)
         }
-        catch ChumbyError.message("not delivered") { throw ChumbyError.message("No Chumby alarm is ringing.") }
-        catch { throw ChumbyError.message(AlarmWriter.explain(error)) }
     }
 }
 struct ChumbyOpenIntent: AppIntent {
@@ -368,41 +375,111 @@ enum ChumbyRingCard {
 }
 #endif
 
-// Stop and Snooze from outside the app's own pages (the card, the notification): pressed on the Chumby, and the card put
-// right at once rather than when the Mac next looks. Each answers nil when done, or why not.
+// Stop and Snooze, from wherever they're pressed (the card, the notification, the app's ringing page, Siri), all go
+// through one desk (Richard, 2026-11-18: "stop or snooze looks good but doesnt work all the way through and is a bit
+// janky"). What went wrong before:
+//  - a press counted as done the moment the Chumby took the command, before the Chumby had stopped or snoozed: the card
+//    ended, or said "Snoozed" with a guessed time, whatever the Chumby then did;
+//  - two presses in a second (11-17 and 11-18: the card and the notification, or a press repeated) sent two taps.
+// Now one press is on its way at a time (a second joins it), and it is done when the Chumby itself says so: a reading of
+// what's ringing taken after the press shows nothing ringing (Stop) or the snooze with its own time (Snooze).
+enum RingOutcome: Equatable {
+    // The Chumby says it's done. `until`: when a snooze rings again, by the Chumby's own clock.
+    case confirmed(until: Double?)
+    // Nothing was ringing when it arrived (another press, or the Chumby's own button, got there first).
+    case nothingRinging
+    // The Chumby took it but hasn't said so yet (it said nothing within the wait, or its readings didn't come).
+    case unconfirmed
+    case failed(String)
+}
+actor RingDesk {
+    static let shared = RingDesk()
+    enum Kind: String { case stop = "ringoff", snooze = "ringsnooze" }
+    private var running: (kind: Kind, at: Date, id: UUID, task: Task<RingOutcome, Never>)?
+    // How long the Chumby is given to show the change: its hook notes a stop or snooze within 2 s, and a reading takes it 3
+    // to 5 s (the Mac's copy is marked old by the press and read again).
+    static let patience: TimeInterval = 14
+    // `send` and `read` default to the routes every intent uses; the app's own page passes its own connection.
+    func press(_ kind: Kind, send: (@Sendable (String) async throws -> Void)? = nil, read: (@Sendable () async throws -> (data: Data, age: Double))? = nil) async -> RingOutcome {
+        if let r = running, Date().timeIntervalSince(r.at) < Self.patience + 6 {
+            // The same press already on its way: its answer is this one's.
+            if r.kind == kind { return await r.task.value }
+            // A Snooze behind a Stop: once the Stop is through, nothing is left to snooze.
+            if kind == .snooze { let o = await r.task.value; return o == .confirmed(until: nil) ? .nothingRinging : o }
+            // A Stop behind a Snooze goes once the Snooze has had its answer (a snoozed alarm is stopped for good).
+            _ = await r.task.value
+        }
+        let send = send ?? { c in try await chumbyTry { try await $0.cmd(c) } }
+        let read = read ?? { try await chumbyTry { try await $0.raw("sys") } }
+        let id = UUID(), task = Task { await Self.run(kind, send: send, read: read) }
+        running = (kind, Date(), id, task)
+        let out = await task.value
+        if running?.id == id { running = nil }
+        return out
+    }
+    private static func run(_ kind: Kind, send: @Sendable (String) async throws -> Void, read: @Sendable () async throws -> (data: Data, age: Double)) async -> RingOutcome {
+        let sent = Date()
+        do { try await send(kind.rawValue) }
+        catch ChumbyError.message("not delivered") { return .nothingRinging }
+        catch { return .failed(AlarmWriter.explain(error)) }
+        while Date().timeIntervalSince(sent) < patience {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard let r = try? await read(), let sys = try? JSONDecoder().decode(Sys.self, from: r.data) else { continue }
+            // Only a reading taken after the press says anything about it.
+            guard r.age < Date().timeIntervalSince(sent) - 0.5 else { continue }
+            switch (kind, sys.ringing) {
+            case (_, nil): return kind == .stop ? .confirmed(until: nil) : .nothingRinging
+            case (.snooze, let n?) where n.snoozed:
+                let f = sys.ring.components(separatedBy: "\t")
+                return .confirmed(until: f.count > 3 ? Double(f[3]).flatMap { $0 > 0 ? $0 : nil } : nil)
+            default: continue
+            }
+        }
+        return .unconfirmed
+    }
+}
+
+// The card and the notification's side of it: the card says "Stopping…" from the press until the Chumby's answer, then
+// ends (Stop) or shows the snooze by the Chumby's own time. A press that didn't get through, or that the Chumby hasn't
+// confirmed, is said on the card with the keys back. Each answers nil when done, or why not.
 enum ChumbyRingActions {
     static let noticeID = "chumby-ring"
-    // The command goes first and alone (a real read takes the Chumby seconds, and the alarm is sounding); the card says
-    // "Stopping…" from the press until the answer. On the card a failure is said short; the reason is the app's to give.
     @discardableResult static func stop() async -> String? {
         await ChumbyRingCard.change { $0.working = "Stopping…"; $0.problem = nil }
-        do { try await chumbyTry { try await $0.cmd("ringoff") } }
-        // Nothing was ringing any more: stopped is what he wanted.
-        catch ChumbyError.message("not delivered") {}
-        catch {
+        switch await RingDesk.shared.press(.stop) {
+        case .confirmed, .nothingRinging:
+            await ChumbyRingCard.over()
+            await ChumbyRingCard.handled()
+            return nil
+        case .unconfirmed:
+            // It may well have stopped (the Mac ends the card when it sees so); the keys are back in case it didn't.
+            await ChumbyRingCard.change { $0.working = nil; $0.problem = "Sent. The Chumby hasn’t confirmed yet." }
+            return nil
+        case .failed(let why):
             await ChumbyRingCard.change { $0.working = nil; $0.problem = "Didn’t stop. Try again." }
-            return AlarmWriter.explain(error)
+            return why
         }
-        await ChumbyRingCard.over()
-        await ChumbyRingCard.handled()
-        return nil
     }
     @discardableResult static func snooze() async -> String? {
         await ChumbyRingCard.change { $0.working = "Snoozing…"; $0.problem = nil }
-        do {
-            try await chumbyTry { try await $0.cmd("ringsnooze") }
-            // Until when: by this alarm's own snooze length, which the Mac sent with the card (9 minutes is the Chumby's
-            // usual); the Mac's next word carries the panel's own time.
+        switch await RingDesk.shared.press(.snooze) {
+        case .confirmed(let until):
+            // Until when: the Chumby's own time; failing that, this alarm's snooze length from now (9 minutes is the
+            // Chumby's usual), and the Mac's next word carries the panel's time.
             let now = Date()
-            await ChumbyRingCard.change { $0.working = nil; $0.snoozed = true; $0.until = now.addingTimeInterval(Double($0.snooze ?? 9) * 60).timeIntervalSince1970 }
+            await ChumbyRingCard.change { $0.working = nil; $0.problem = nil; $0.snoozed = true; $0.until = until ?? now.addingTimeInterval(Double($0.snooze ?? 9) * 60).timeIntervalSince1970 }
             await ChumbyRingCard.clearNotice()
             await ChumbyRingCard.handled()
             return nil
-        }
-        catch ChumbyError.message("not delivered") { await ChumbyRingCard.over(); return nil }
-        catch {
+        case .nothingRinging:
+            await ChumbyRingCard.over()
+            return nil
+        case .unconfirmed:
+            await ChumbyRingCard.change { $0.working = nil; $0.problem = "Sent. The Chumby hasn’t confirmed yet." }
+            return nil
+        case .failed(let why):
             await ChumbyRingCard.change { $0.working = nil; $0.problem = "Didn’t snooze. Try again." }
-            return AlarmWriter.explain(error)
+            return why
         }
     }
 }
@@ -414,15 +491,21 @@ typealias ChumbyRingKey = LiveActivityIntent
 #else
 typealias ChumbyRingKey = AppIntent
 #endif
+// Richard, 2026-11-18: "i dont want to have to unlock to stop an alarm". Said outright rather than left to the defaults:
+// they run on a locked phone (alwaysAllowed) and only in the background (never bringing the app forward to the unlock).
 struct ChumbyRingStopIntent: ChumbyRingKey {
     static var title: LocalizedStringResource = "Stop the alarm"
     static var description = IntentDescription("Stops the alarm that’s ringing or snoozing.")
     static var isDiscoverable = false
+    static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
+    static var supportedModes: IntentModes { .background }
     func perform() async throws -> some IntentResult { await ChumbyRingActions.stop(); return .result() }
 }
 struct ChumbyRingSnoozeIntent: ChumbyRingKey {
     static var title: LocalizedStringResource = "Snooze the alarm"
     static var description = IntentDescription("Snoozes the alarm that’s ringing.")
     static var isDiscoverable = false
+    static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
+    static var supportedModes: IntentModes { .background }
     func perform() async throws -> some IntentResult { await ChumbyRingActions.snooze(); return .result() }
 }

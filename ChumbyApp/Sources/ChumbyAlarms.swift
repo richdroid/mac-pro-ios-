@@ -343,8 +343,8 @@ struct RingingCard: View {
                 VStack(spacing: 3) {
                     // Ringing hands over to Snoozed one at a time: the old title is gone before the new one fades in.
                     ZStack {
-                        Text(snoozed ? s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing")
-                            .id(snoozed)
+                        Text(model.ringStopping ? "Stopping…" : snoozed ? s.until.map { "Snoozed until \($0.formatted(date: .omitted, time: .shortened))" } ?? "Snoozed" : "Ringing")
+                            .id(model.ringStopping ? 2 : snoozed ? 1 : 0)
                             .transition(.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.12)), removal: .opacity.animation(.easeOut(duration: 0.1))))
                     }
                     .font(.custom("Trebuchet MS", size: 24).weight(.bold))
@@ -384,6 +384,8 @@ struct RingingCard: View {
                     .buttonStyle(.plain)
                 }
                 .font(.custom("Trebuchet MS", size: 20).weight(.bold))
+                // Pressed and not yet confirmed: both keys dim and rest, so the press is seen to have landed (as on the card).
+                .opacity(model.ringStopping ? 0.45 : 1).allowsHitTesting(!model.ringStopping)
                 if let f = model.failed("ring") { FailNote(text: f) }
             }
             .padding(16)

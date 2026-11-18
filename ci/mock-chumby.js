@@ -564,7 +564,7 @@ function chumbyScene(q, s) {
       q.on('data', c => body += c);
       q.on('end', () => {
         const qs = new URL(q.url, 'http://x').searchParams, f = new URLSearchParams(body);
-        if (a === 'cmd' && qs.get('c') === 'ringsnooze') live.sys.ring = live.sys.ring.replace(/^r/, 's');
+        if (a === 'cmd' && qs.get('c') === 'ringsnooze') live.sys.ring = live.sys.ring.replace(/^r/, 's') + '\t' + (Math.floor(Date.now() / 1000) + 540);   // the hook's line: rings again at EPOCH
         if (a === 'cmd' && qs.get('c') === 'ringoff') live.sys.ring = '';
         // The panel's own skip, as the Chumby answers it: pinned by name (and the ring at or after `at`, epoch minutes)
         // since chumby 2c90cc9, an unknown name leaving no skip; without a name, the next Work. One pin only: a new skip

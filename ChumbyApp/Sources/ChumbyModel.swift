@@ -60,6 +60,9 @@ final class ChumbyModel: ObservableObject {
     @Published private(set) var ringReadings = 0
     private var ringSwept = false
     private var ringStoppedAt: Date?
+    // A Stop on its way and not yet confirmed by the Chumby: Home's ringing card says "Stopping…" with its keys dimmed,
+    // as the Lock Screen card does.
+    @Published private(set) var ringStopping = false
     private var readingAt = Date()
     // Opens the ringing page for a tap on the ring's notification or card. With a reading seconds old in hand that says
     // nothing is ringing, there is no page to show: what was tapped is cleared away instead.
@@ -552,46 +555,84 @@ final class ChumbyModel: ObservableObject {
     static let stopSpring = ringSpring.delay(stopFade + 1.0 / 60)
     static func ringChange(to r: Sys.Ringing?) -> Animation { r == nil ? stopSpring : ringSpring }
     func ringOff() { ringOffTask() }
-    // The same, for a page that waits on the answer (the ringing screen): true once the Chumby took it.
+    // The same, for a page that waits on the answer (the ringing screen): true once the Chumby says it has stopped. It goes
+    // through the one desk the card, the notification and Siri use (RingDesk), so a press here and one on the Lock Screen
+    // are one press; the page holds "Stopping…" until the Chumby's own reading shows nothing ringing.
     @discardableResult func ringOffTask() -> Task<Bool, Never> {
         #if canImport(UIKit)
         Haptics.medium.impactOccurred(); Haptics.medium.prepare()
         #endif
         let was = sys.ring
-        withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
-        hold(5)
+        hold(RingDesk.patience + 2)
         let tapped = Date().timeIntervalSince1970
+        withAnimation(.easeOut(duration: 0.2)) { ringStopping = true }
+        guard let api else { ringStopping = false; fail("ring", "Didn’t stop. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
-            do {
-                try await api?.cmd("ringoff"); RingSeen.stopped(at: tapped)
-                Task { await ChumbyRingCard.handled() }
+            let out = await RingDesk.shared.press(.stop, send: { c in try await api.cmd(c) }, read: { try await api.raw("sys") })
+            hold(0)
+            withAnimation(.easeOut(duration: 0.2)) { ringStopping = false }
+            switch out {
+            case .confirmed, .nothingRinging:
+                withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
+                RingSeen.stopped(at: tapped)
                 ringStoppedAt = Date()
                 // The Lock Screen's card and the ring's notification go with it, not when the Mac next looks.
                 await ChumbyRingCard.over()
+                Task { await ChumbyRingCard.handled() }
                 return true
-            } catch { withAnimation(Self.ringSpring) { sys.ring = was }; fail("ring", "Didn’t stop. \(AlarmWriter.explain(error))"); return false }
+            case .unconfirmed:
+                withAnimation(Self.ringSpring) { sys.ring = was }
+                fail("ring", "Sent, but the Chumby hasn’t confirmed it stopped.")
+                Task { await self.loadSys() }
+                return false
+            case .failed(let why):
+                withAnimation(Self.ringSpring) { sys.ring = was }
+                fail("ring", "Didn’t stop. \(why)")
+                return false
+            }
         }
     }
     func ringSnooze() { ringSnoozeTask() }
+    // Snooze: shown snoozed at once (the page's key answers the thumb), then by the Chumby's own time once it confirms.
     @discardableResult func ringSnoozeTask() -> Task<Bool, Never> {
         tick()
         let was = sys.ring
         if let r = sys.ringing { withAnimation(Self.ringSpring) { sys.ring = "s\t\(r.name)\t\(r.sound)"; snoozedAt = Date() } }
-        hold(5)
+        hold(RingDesk.patience + 2)
+        guard let api else { withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(ChumbyWords.notAnswering)."); return Task { false } }
         return Task {
-            do {
-                try await api?.cmd("ringsnooze")
+            let out = await RingDesk.shared.press(.snooze, send: { c in try await api.cmd(c) }, read: { try await api.raw("sys") })
+            hold(0)
+            switch out {
+            case .confirmed(let until):
+                if let until, let r = sys.ringing { sys.ring = "s\t\(r.name)\t\(r.sound)\t\(Int(until))" }
                 Task { await ChumbyRingCard.handled() }
-                let until = snoozeEnds?.timeIntervalSince1970
-                await ChumbyRingCard.change { $0.snoozed = true; $0.until = until; $0.problem = nil }
+                let end = until ?? snoozeEnds?.timeIntervalSince1970
+                await ChumbyRingCard.change { $0.working = nil; $0.snoozed = true; $0.until = end; $0.problem = nil }
                 await ChumbyRingCard.clearNotice()
                 return true
-            } catch { withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }; fail("ring", "Didn’t snooze. \(AlarmWriter.explain(error))"); return false }
+            case .nothingRinging:
+                withAnimation(Self.stopSpring) { sys.ring = ""; snoozedAt = nil }
+                await ChumbyRingCard.over()
+                return true
+            case .unconfirmed:
+                withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }
+                fail("ring", "Sent, but the Chumby hasn’t confirmed the snooze.")
+                Task { await self.loadSys() }
+                return false
+            case .failed(let why):
+                withAnimation(Self.ringSpring) { sys.ring = was; snoozedAt = nil }
+                fail("ring", "Didn’t snooze. \(why)")
+                return false
+            }
         }
     }
     // When a snooze ends: the panel's own time when it reports one, else from when it began and that alarm's snooze length.
     var snoozeEnds: Date? {
         guard let r = sys.ringing, r.snoozed else { return nil }
+        // The hook's own line carries the time: "s<TAB>name<TAB>sound<TAB>rings again at EPOCH".
+        let f = sys.ring.components(separatedBy: "\t")
+        if f.count > 3, let u = Double(f[3]), u > Date().timeIntervalSince1970 { return Date(timeIntervalSince1970: u) }
         if let p = state.ringingNow, p.state == "snoozing", p.name == r.name, let u = p.until, u > Date().timeIntervalSince1970 { return Date(timeIntervalSince1970: u) }
         guard let snoozedAt else { return nil }
         let minutes = Double(state.alarms.first { $0.name == r.name }?.snooze ?? "") ?? 9
